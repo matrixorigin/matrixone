@@ -414,6 +414,37 @@ func IsRuntimeConstant(expr *plan.Expr) bool {
 	return isConstant(expr, true, true, constantForRuntime)
 }
 
+// IsTemporalBoundFunction identifies the execution-scoped index helpers.
+func IsTemporalBoundFunction(fid int32) bool {
+	return fid == TEMPORAL_DATETIME_BOUND || fid == TEMPORAL_TIMESTAMP_BOUND || fid == TEMPORAL_BOUND_NOT_EMPTY
+}
+
+// ContainsTemporalBound identifies a runtime-bound expression tree.
+func ContainsTemporalBound(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := DecodeOverloadID(fn.Func.GetObj())
+		if IsTemporalBoundFunction(fid) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if ContainsTemporalBound(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsTemporalBound(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type constantPurpose uint8
 
 const (
@@ -448,6 +479,9 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
+		if IsTemporalBoundFunction(fid) && purpose != constantForRuntime {
+			return false
+		}
 		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}

@@ -67,6 +67,28 @@ func ewmParam(pos int32) *plan.Expr {
 // must rebuild the configuration at every EXECUTE — the statement is not
 // a prepare-compile-cache candidate. A marker confined to the value
 // column is configuration-independent and stays cacheable.
+func TestPreparedEWMAndTemporalCacheExclusions(t *testing.T) {
+	for _, tc := range []struct {
+		name                                string
+		ewmParam, temporalReplan, cacheable bool
+	}{
+		{"literal config", false, false, true},
+		{"EWM parameter", true, false, false},
+		{"temporal replan", false, true, false},
+		{"both", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decay := plan2.MakePlan2Float64ConstExprWithType(0.5)
+			if tc.ewmParam {
+				decay = ewmParam(0)
+			}
+			p := ewmWindowPlan(ewmCall(plan2.NameEwmMean, ewmColumn(t), decay))
+			p.GetQuery().TemporalIndexNeedsReplan = tc.temporalReplan
+			require.Equal(t, tc.cacheable, shouldCachePrepareCompile(p))
+		})
+	}
+}
+
 func TestShouldCachePrepareCompileRejectsEwmParameter(t *testing.T) {
 	// the real plan shape: the prepared decay marker inside the window
 	prepared := ewmWindowPlan(ewmCall(plan2.NameEwmMean, ewmColumn(t), ewmParam(0)))

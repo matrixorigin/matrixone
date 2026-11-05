@@ -4527,12 +4527,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		idxColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
 		if err == nil {
+			builder.qry.Steps[i] = rootID
 			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
 		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
+		builder.qry.Steps[i] = rootID
 		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
 		if needsLate {
 			builder.mergeFiltersOnCompositeKey(rootID, false)

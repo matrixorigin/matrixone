@@ -883,7 +883,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 
 		if builder.canApplyRegularIndex(secondScanNode) {
-			secondScanNodeID = builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			var err error
+			secondScanNodeID, err = builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			if err != nil {
+				return 0, nil, nil, nil, err
+			}
 			secondScanNode = builder.qry.Nodes[secondScanNodeID]
 		}
 

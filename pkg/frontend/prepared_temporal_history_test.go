@@ -111,7 +111,7 @@ func TestPreparedCalendarTypedSources(t *testing.T) {
 func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25302, "select date_add(?, interval 1 day) as v")
 	prepared.proc = cw.proc
-	t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
+	t.Cleanup(func() { cw.replaceTemporalScope(nil); cw.proc.SetPrepareParams(nil); ses.Close() })
 	original := prepared.PreparePlan.String()
 	setParams := func(typ defines.MysqlType, value string) {
 		cw.discardRuntimeCacheCandidate()
@@ -152,12 +152,21 @@ func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 	_, err := bind()
 	require.ErrorContains(t, err, "temporal metadata failure")
 	require.Nil(t, prepared.temporalTypes)
+	require.Nil(t, cw.temporalScope, "failed metadata must retire the tentative execution scope")
 	writer.makeColumnDefDataFunc = nil
 
 	setParams(defines.MYSQL_TYPE_DATE, "2024-02-28")
 	datePlan, err := bind()
 	require.NoError(t, err)
 	assertResult(datePlan, types.T_date, "2024-02-29")
+	dateScope := cw.temporalScope
+	require.NotNil(t, dateScope, "binding must transfer its scope as well as temporal type history")
+	require.True(t, dateScope.Usable())
+	require.True(t, dateScope.MatchesQuery(datePlan.GetQuery()))
+	// Direct binding tests do not run Compile's lexical cleanup. End this
+	// attempt before checking that logical-cache reuse borrows no old scope.
+	cw.replaceTemporalScope(nil)
+	require.False(t, dateScope.Usable())
 	// Install through the same logical-cache owner and exercise its lookup.
 	require.NotNil(t, cw.runtimeCachePlan)
 	prepared.installRuntimeSpecializationCache(cw.runtimeCacheKey, cw.runtimeCachePlan, nil, cw.runtimeCacheDiagnostics, cw.runtimeCacheDecimalFloatProofs, cw.runtimeCacheColDefData)
@@ -165,11 +174,16 @@ func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 	cached, err := bind()
 	require.NoError(t, err)
 	require.Same(t, datePlan, cached)
+	require.Nil(t, cw.temporalScope)
 
 	setParams(defines.MYSQL_TYPE_DATETIME, "2024-02-28 00:00:00")
 	p, err := bind()
 	require.NoError(t, err)
 	assertResult(p, types.T_datetime, "2024-02-29 00:00:00.000000")
+	widenedScope := cw.temporalScope
+	require.NotNil(t, widenedScope)
+	require.True(t, widenedScope.Usable())
+	require.True(t, widenedScope.MatchesQuery(p.GetQuery()))
 	history := prepared.temporalTypes
 	require.Equal(t, uint64(1), history.Revision())
 	retry := cw.preparedExecutionRetry()
@@ -180,6 +194,10 @@ func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NotSame(t, datePlan, p, "a pre-widening typed-DATE cache entry is stale")
 	assertResult(p, types.T_datetime, "2024-02-29 00:00:00.000000")
+	require.False(t, widenedScope.Usable(), "a fresh binding retires the prior scope without discarding widened history")
+	require.NotNil(t, cw.temporalScope)
+	require.True(t, cw.temporalScope.Usable())
+	require.True(t, cw.temporalScope.MatchesQuery(p.GetQuery()))
 	require.Equal(t, original, prepared.PreparePlan.String())
 
 	prepared.NativeMode = !prepared.NativeMode
@@ -192,14 +210,20 @@ func TestPreparedTemporalHistoryPublicationAndCache(t *testing.T) {
 		return nil, nil
 	}
 	t.Cleanup(func() { writer.makeColumnDefDataFunc = nil })
+	priorScope := cw.temporalScope
 	_, err = bind()
 	require.ErrorContains(t, err, "temporal generation metadata failure")
+	require.False(t, priorScope.Usable())
+	require.Nil(t, cw.temporalScope)
 	require.Same(t, history, prepared.temporalTypes)
 	require.True(t, prepared.temporalTypesResetPending)
 	writer.makeColumnDefDataFunc = nil
 	p, err = bind()
 	require.NoError(t, err)
 	assertResult(p, types.T_date, "2024-02-29")
+	require.NotNil(t, cw.temporalScope)
+	require.True(t, cw.temporalScope.Usable())
+	require.True(t, cw.temporalScope.MatchesQuery(p.GetQuery()))
 	require.Nil(t, prepared.temporalTypes)
 	require.False(t, prepared.temporalTypesResetPending)
 	prepared.Close()

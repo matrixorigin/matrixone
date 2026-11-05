@@ -73,6 +73,7 @@ func resolvesUdfInCallerTxn(ctx context.Context) bool {
 }
 
 type TxnCompilerContext struct {
+	temporal             temporalCompilerScopes
 	dbName               string
 	buildAlterView       bool
 	viewBinding          bool
@@ -183,13 +184,14 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 	if err != nil {
 		return nil, nil, err
 	}
-	_, p, st, _, owned, err := initExecuteStmtParamInSession(
+	_, p, st, _, owned, err := initExecuteStmtParamInSessionWithTemporal(
 		tcc.execCtx,
 		owner,
 		tcc.execCtx.ses,
 		tcc.tcw.(*TxnComputationWrapper),
 		execPlan,
 		"",
+		false, // EXPLAIN EXECUTE compiles with the outer statement's scheduling.
 	)
 	if err == nil && !tcc.execCtx.ses.IsBackgroundSession() {
 		// EXPLAIN delegates EXECUTE binding here rather than through the ordinary
@@ -807,6 +809,8 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		}
 	}
 
+	nativeCapture := tcc.beginTemporalNativeResolve(temporalNativeSnapshotOverride(snapshot) || sub != nil || isTmpTable)
+	defer nativeCapture.finish()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -853,6 +857,7 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 			TenantId: pubAccountId,
 		}
 	}
+	nativeCapture.capture(ctx, table, obj, tableDef)
 	return obj, tableDef, nil
 }
 
@@ -889,6 +894,8 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
+	nativeCapture := tcc.beginTemporalNativeResolve(temporalNativeSnapshotOverride(snapshot) || subMeta != nil || isTmpTable || ref.SubscriptionName != "")
+	defer nativeCapture.finish()
 	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -922,6 +929,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		tableDef.Name = tblName
 	}
 
+	nativeCapture.capture(ctx, table, obj, tableDef)
 	return obj, tableDef, nil
 }
 

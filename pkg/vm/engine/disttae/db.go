@@ -371,6 +371,9 @@ func (e *Engine) init(ctx context.Context) error {
 
 	// Initialize the sysTablesCreatedTime slice
 	e.sysTablesCreatedTime = make([]*vector.Vector, sysTableCreatedTimeSliceLen)
+	// These are new vectors, so replay must apply the catalog creation time
+	// again even if a previous connection had already fixed its own vectors.
+	e.timeFixed = false
 
 	err := initSysTable(
 		ctx,

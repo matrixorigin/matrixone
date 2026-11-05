@@ -3451,9 +3451,10 @@ func TestRegularIndexCandidateRejectsEmptyParts(t *testing.T) {
 	node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
 
 	require.NotPanics(t, func() {
-		resultID := builder.applyIndicesForFiltersRegularIndex(
+		resultID, indexErr := builder.applyIndicesForFiltersRegularIndex(
 			scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
 		)
+		require.NoError(t, indexErr)
 		require.Equal(t, scanID, resultID)
 	})
 }
@@ -4732,9 +4733,10 @@ func TestForceIndexPreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	require.True(t, backfillValid)
 	require.Less(t, backfillWork, coveringWork)
 
-	resultID := builder.applyIndicesForFiltersRegularIndex(
+	resultID, indexErr := builder.applyIndicesForFiltersRegularIndex(
 		scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
 	)
+	require.NoError(t, indexErr)
 	result := builder.qry.Nodes[resultID]
 	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
 	require.True(t, result.IndexScanInfo.IsIndexScan)
@@ -4798,9 +4800,10 @@ func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	require.Less(t, backfillWork, coveringWork,
 		"the regression requires cross-shape scoring to prefer backfill")
 
-	resultID := builder.applyIndicesForFiltersRegularIndex(
+	resultID, indexErr := builder.applyIndicesForFiltersRegularIndex(
 		scanID, node, colRefCnt, map[[2]int32]*planpb.Expr{},
 	)
+	require.NoError(t, indexErr)
 	result := builder.qry.Nodes[resultID]
 	require.Equal(t, planpb.Node_TABLE_SCAN, result.NodeType)
 	require.True(t, result.IndexScanInfo.IsIndexScan)
@@ -5966,7 +5969,8 @@ func TestFullTextScanProtectionSkipsRegularIndexRule(t *testing.T) {
 	})
 	registerFullTextJoinRegularIndexTable(builder, "__mo_idx_base_id")
 
-	got := builder.applyIndicesForFilters(leftScanID, leftScan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	got, indexErr := builder.applyIndicesForFilters(leftScanID, leftScan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, indexErr)
 	require.Equal(t, leftScanID, got)
 	require.True(t, builder.scanHasMatchedFullTextFilter(leftScan))
 
@@ -6021,7 +6025,8 @@ func TestRegularIndexRuleSkipsIrregularIndexes(t *testing.T) {
 		},
 	}
 
-	got := builder.applyIndicesForFiltersRegularIndex(nodeID, node, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	got, indexErr := builder.applyIndicesForFiltersRegularIndex(nodeID, node, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, indexErr)
 
 	require.Equal(t, nodeID, got)
 	require.Empty(t, builder.qry.Nodes)
@@ -8472,7 +8477,8 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 	}
 	scanID := builder.appendNode(node, ctx)
 
-	resultID := builder.applyIndicesForFilters(scanID, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	resultID, indexErr := builder.applyIndicesForFilters(scanID, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, indexErr)
 	require.NotEqual(t, scanID, resultID)
 
 	indexJoin := builder.qry.Nodes[resultID]
@@ -8518,8 +8524,9 @@ func TestApplyIndicesForFiltersIgnoresVisibilityMetadata(t *testing.T) {
 	}
 	scanID := builder.appendNode(node, ctx)
 
-	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID],
+	resultID, indexErr := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID],
 		map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, indexErr)
 	require.NotEqual(t, scanID, resultID)
 }
 
@@ -10529,7 +10536,8 @@ func TestRegularIndexInvalidCostPreservesCapacity(t *testing.T) {
 				node := builder.qry.Nodes[scanID]
 				node.TableDef.Indexes = []*planpb.IndexDef{idxDef}
 				filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
-				result := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				result, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				require.NoError(t, err)
 				if force {
 					require.NotEqual(t, scanID, result)
 				} else {

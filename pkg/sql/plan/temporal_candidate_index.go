@@ -1,0 +1,100 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
+
+// temporalIndexHint builds and marks a leading-component candidate only after
+// the original plan and index pass the admission checks. paramFree is a proof
+// from the pre-binding owner, not an inference from materialized literals.
+// Callers must separately establish access-path cost and placement permission.
+func temporalIndexHint(ctx context.Context, query *plan.Query, scanID int32, paramFree bool, index *plan.IndexDef,
+	indexTable *plan.TableDef, indexTag int32, filterPos int,
+) (*plan.Expr, bool, error) {
+	atom, admitted, err := temporalIndexOperands(ctx, query, scanID, paramFree, index, filterPos)
+	if err != nil || !admitted {
+		return nil, false, err
+	}
+	if indexTable == nil || len(indexTable.Cols) == 0 || indexTable.Cols[0] == nil {
+		return nil, false, nil
+	}
+	physical := GetColExpr(indexTable.Cols[0].Typ, indexTag, 0)
+	physical.GetCol().Name = indexTable.Cols[0].Name
+	var hint, guard *plan.Expr
+	if indexTableStoresSerializedKey(index) {
+		if types.T(physical.Typ.Id) != types.T_varchar {
+			return nil, false, nil
+		}
+		hint, guard, err = makeEncodedTemporalCandidate(ctx, physical, atom.column, atom.bound, atom.op, atom.scale)
+	} else {
+		if physical.Typ.Id != atom.column.Typ.Id || physical.Typ.Scale != atom.column.Typ.Scale {
+			return nil, false, nil
+		}
+		hint, guard, err = makeDirectTemporalCandidate(ctx, physical, atom.bound, atom.op, atom.scale)
+	}
+	if err != nil || hint == nil {
+		return nil, false, err
+	}
+	hint.TemporalCandidateFilter = true
+	guard.TemporalCandidateGuard = true
+	return hint, true, nil
+}
+
+// temporalIndexOperands proves the original owner, index completeness and
+// leading key before optional catalog resolution or candidate construction.
+func temporalIndexOperands(ctx context.Context, query *plan.Query, scanID int32, paramFree bool, index *plan.IndexDef,
+	filterPos int,
+) (temporalCandidateAtom, bool, error) {
+	if ctx == nil {
+		return temporalCandidateAtom{}, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return temporalCandidateAtom{}, false, err
+	}
+	if !paramFree || !temporalCandidateSimplePathSafe(query, scanID) || index == nil || !index.TableExist ||
+		!catalog.IsRegularIndexAlgo(index.IndexAlgo) || isSpatialIndexDef(index) || index.KeyFormat != 0 || len(index.Parts) == 0 || len(index.Parts) > 16 ||
+		regularIndexHasDeclaredPrefix(index) {
+		return temporalCandidateAtom{}, false, nil
+	}
+	scan := query.Nodes[scanID]
+	if scan.TableDef == nil || scan.TableDef.Pkey == nil || len(scan.BindingTags) == 0 || len(scan.FilterList) != 1 || filterPos != 0 {
+		return temporalCandidateAtom{}, false, nil
+	}
+	for _, part := range index.Parts {
+		pos, exists := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !exists || pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil {
+			return temporalCandidateAtom{}, false, nil
+		}
+	}
+	if indexUsesUnicodeCollation(index, scan.TableDef) || functionalIndexColumn(scan.TableDef, index) != nil || !hintedIndexContainsQualifyingRows(index, scan) {
+		return temporalCandidateAtom{}, false, nil
+	}
+	position, ok := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
+	if !ok || position < 0 || int(position) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[position] == nil {
+		return temporalCandidateAtom{}, false, nil
+	}
+	atom, ok := temporalCandidateAtomForExpr(scan.FilterList[filterPos])
+	if !ok || atom.column.GetCol().RelPos != scan.BindingTags[0] || atom.column.GetCol().ColPos != position ||
+		atom.column.Typ.Id != scan.TableDef.Cols[position].Typ.Id || atom.column.Typ.Scale != scan.TableDef.Cols[position].Typ.Scale {
+		return temporalCandidateAtom{}, false, nil
+	}
+	return atom, true, nil
+}

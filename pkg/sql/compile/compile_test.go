@@ -308,6 +308,37 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	require.Equal(t, []*plan.Expr{stable}, filters)
 }
 
+func TestAppendTemporalStorageHintsKeepsRowFilterIndependent(t *testing.T) {
+	row := plan2.MakePlan2Int64ConstExprWithType(1)
+	unrelated := plan2.MakePlan2Int64ConstExprWithType(2)
+	helper := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: function.EncodeOverloadID(function.TEMPORAL_DATETIME_BOUND, 0), ObjName: "__mo_temporal_datetime_bound",
+	}, Args: []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false)}}}}
+	helper.TemporalCandidateFilter = true
+	unmarked := plan2.DeepCopyExpr(helper)
+	unmarked.TemporalCandidateFilter = false
+	storage := make([]*plan.Expr, 1, 2)
+	storage[0] = row
+	result := appendTemporalStorageHints(storage, []*plan.Expr{unrelated, unmarked, helper})
+	require.Equal(t, []*plan.Expr{row, helper}, result)
+	require.Nil(t, storage[:2][1])
+	require.Equal(t, []*plan.Expr{row}, appendTemporalStorageHints(storage, nil))
+	copy := plan2.DeepCopyExpr(helper)
+	copy.Selectivity = 0.25
+	copy.Ndv = 17
+	copy.GetF().Args[0].Selectivity = 0.7
+	require.Equal(t, []*plan.Expr{row, copy}, appendTemporalStorageHints([]*plan.Expr{row, copy}, []*plan.Expr{helper}),
+		"statistics differences must not forward the same candidate twice")
+	different := plan2.DeepCopyExpr(helper)
+	different.GetF().Args = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+	require.Len(t, appendTemporalStorageHints([]*plan.Expr{row, different}, []*plan.Expr{helper}), 3,
+		"different execution permissions must not be deduplicated")
+	different = plan2.DeepCopyExpr(helper)
+	different.GetF().Args[0].TemporalCandidateGuard = true
+	require.Len(t, appendTemporalStorageHints([]*plan.Expr{row, different}, []*plan.Expr{helper}), 3,
+		"different provenance must not be deduplicated")
+}
+
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
