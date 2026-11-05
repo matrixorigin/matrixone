@@ -39,7 +39,7 @@ deallocate prepare c_ts;
 
 -- nothing reads the copy's index before its CDC sync applies this row to its models
 insert into c values (1000002, '[-50,-50,-50,-50,-50,-50,-50,-50]');
-set @c_synced_sql = concat('select max(`timestamp`) > @c_ts as synced from `', database(), '`.`', @c_meta, '`');
+set @c_synced_sql = concat('select max(`timestamp`) > cast(@c_ts as bigint) as synced from `', database(), '`.`', @c_meta, '`');
 prepare c_synced from @c_synced_sql;
 -- @wait_expect(2, 120)
 execute c_synced;

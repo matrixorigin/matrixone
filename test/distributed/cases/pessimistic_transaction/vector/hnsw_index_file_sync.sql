@@ -22,8 +22,7 @@ prepare covered from @covered_sql;
 execute covered;
 set @ts_sql = concat('select max(`timestamp`) into @ts from `', database(), '`.`', @t_meta, '`');
 prepare ts from @ts_sql;
-set @synced_sql = concat('select max(`timestamp`) > @ts as synced from `', database(), '`.`', @t_meta, '`');
-prepare synced from @synced_sql;
+set @synced_sql = concat('select max(`timestamp`) > cast(@ts as bigint) as synced from `', database(), '`.`', @t_meta, '`');
 select id from t order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
 
 -- a CN that did not run a sync sees its new models on its freshness sweep; shorten it so a
@@ -33,6 +32,7 @@ select @freshness_override not like '%failed=[%' as all_cn_updated;
 
 -- an insert: the sync rewrites the model, its rows cover the new size, and it is searched
 execute ts;
+prepare synced from @synced_sql;
 insert into t values (1000002, '[-50,-50,-50,-50,-50,-50,-50,-50]');
 -- @wait_expect(2, 120)
 execute synced;

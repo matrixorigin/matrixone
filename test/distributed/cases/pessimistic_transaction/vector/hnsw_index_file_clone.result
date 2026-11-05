@@ -30,7 +30,7 @@ prepare c_ts from @c_ts_sql;
 execute c_ts;
 deallocate prepare c_ts;
 insert into c values (1000002, '[-50,-50,-50,-50,-50,-50,-50,-50]');
-set @c_synced_sql = concat('select max(`timestamp`) > @c_ts as synced from `', database(), '`.`', @c_meta, '`');
+set @c_synced_sql = concat('select max(`timestamp`) > cast(@c_ts as bigint) as synced from `', database(), '`.`', @c_meta, '`');
 prepare c_synced from @c_synced_sql;
 execute c_synced;
 ➤ synced[-6,8,0]  𝄀
