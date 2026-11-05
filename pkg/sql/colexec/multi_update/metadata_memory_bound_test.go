@@ -16,10 +16,8 @@ package multi_update
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"testing"
 	"unsafe"
@@ -69,7 +67,7 @@ func TestFlushMetadataBorrowsEncodedPayload(t *testing.T) {
 					require.NoError(t, vector.AppendBytes(source.Vecs[1], objectio.ZeroObjectStats[:], false, proc.Mp()))
 					source.SetRowCount(1)
 				}
-				require.NoError(t, w.spoolFrame(proc, action, idx, rows, name, source))
+				require.NoError(t, w.appendMetadata(proc, action, idx, rows, name, source))
 				require.NoError(t, w.readMetadataFrame(proc))
 				frame := w.outputBat
 				require.Len(t, frame.Vecs, 5)
@@ -176,7 +174,13 @@ func metadataProtocolWriter(t *testing.T, contexts []*MultiUpdateCtx, controlled
 		proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 1, OutputBytes: 64 << 20}
 	}
 	w := &s3WriterDelegate{updateCtxs: contexts}
-	t.Cleanup(func() { require.NoError(t, w.free(proc)) })
+	credits := &admissionThrottler{capacity: 1 << 30}
+	w.memController.throttler = credits
+	t.Cleanup(func() {
+		require.NoError(t, w.free(proc))
+		require.Zero(t, credits.reserved)
+		require.False(t, credits.invalidRelease)
+	})
 	return proc, w
 }
 
@@ -196,18 +200,13 @@ func TestMultiUpdateInsertMetadataRejectsGlobalSlotSizedFrame(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, limit, w.outputFrameLimit)
 	require.Less(t, limit+1, w.outputLease.Capacity()/4)
-	w.metadataSpool, err = os.CreateTemp(t.TempDir(), "oversized-fixed-metadata-*")
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(w.metadataSpool.Name()))
-	var header [9]byte
-	binary.LittleEndian.PutUint64(header[:8], uint64(limit+1))
-	header[8] = byte(actionInsert)
-	_, err = w.metadataSpool.Write(header[:])
-	require.NoError(t, err)
-	w.metadataWritten = limit + 1 + 9
-	require.NoError(t, w.metadataSpool.Truncate(w.metadataWritten))
-	require.ErrorContains(t, w.readMetadataFrame(proc), "exceeds admitted output capacity")
-	require.Zero(t, w.metadataPool().AllocatedBytes(), "reject oversized frame before decoding its backing")
+	source := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_text.ToType()})
+	t.Cleanup(func() { source.Clean(proc.Mp()) })
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(strings.Repeat("x", int(limit+1))), false, proc.Mp()))
+	source.SetRowCount(1)
+	require.ErrorContains(t, w.appendMetadata(proc, actionInsert, 0, 1, "", source), "exceeds admitted output capacity")
+	require.Zero(t, w.metadataPool().AllocatedBytes(), "reject oversized output before retaining backing")
+	require.Equal(t, [2]*batch.Batch{}, w.metadata)
 }
 
 func TestMultiUpdateMetadataLimitFollowsGrowth(t *testing.T) {

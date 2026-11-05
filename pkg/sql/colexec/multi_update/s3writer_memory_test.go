@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -124,7 +125,7 @@ type writeErrorFS struct {
 func (fs *writeErrorFS) Write(context.Context, fileservice.IOVector) error { return fs.err }
 
 func TestS3WriterMemoryPressure(t *testing.T) {
-	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth"} {
+	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth", "retained output capacity error"} {
 		t.Run(mode, func(t *testing.T) {
 			_, ctrl, proc := prepareTestCtx(t, true)
 			t.Cleanup(proc.Free)
@@ -154,18 +155,32 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 			m := &admissionThrottler{capacity: 1 << 30}
 			w.memController.throttler = m
 			w.flushThreshold = 64 << 20
-			require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
-			require.Positive(t, m.reserved)
-			require.Equal(t, w.retainedBytes(), m.reserved, "charge actual current capacity, including free-list ownership")
-			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
-			for _, sinker := range first {
-				require.NotNil(t, sinker)
+			waiting := mode == "wait for capacity"
+			if !waiting {
+				// Include the existing protocol envelope in this tiny-data fixture.
+				output, err := colexec.InsertMetadataFrameLimit(int64(w.flushThreshold), len(w.updateCtxs))
+				require.NoError(t, err)
+				require.NoError(t, w.reserveMetadata(proc, output, 0))
+				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				require.Positive(t, m.reserved)
+				require.Equal(t, w.retainedBytes()+w.metadataGranted, m.reserved, "data and output keep distinct owners")
 			}
+			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
+			if !waiting {
+				for _, sinker := range first {
+					require.NotNil(t, sinker)
+				}
+			}
+			beforeAcquires := m.acquires
 			beforeReleased := m.released
 			m.capacity = m.reserved // the next growth must flush the previous owner
 			if mode == "wait for capacity" {
 				m.capacity = 0
 				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
+			}
+			if mode == "retained output capacity error" {
+				m.capacity = 0
+				m.beforeWait = func(*admissionThrottler) { t.Fatal("retained output must not enqueue behind its own release") }
 			}
 			if mode == "cancel before growth" {
 				ctx, cancel := context.WithCancel(proc.Ctx)
@@ -173,17 +188,27 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				proc.Ctx = ctx
 				cancel()
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), context.Canceled)
-				require.Equal(t, 1, m.acquires)
+				require.Equal(t, beforeAcquires, m.acquires)
 			} else if mode == "flush error" {
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), writeErr)
-				require.Equal(t, 2, m.acquires)
+				require.Equal(t, beforeAcquires+1, m.acquires)
 				require.Equal(t, beforeReleased, m.released, "failed flush retains its private vector owner")
+			} else if mode == "retained output capacity error" {
+				var capacity *rscthrottler.WorkingSetCapacityError
+				require.ErrorAs(t, w.append(proc, tc.op.OpAnalyzer, bat), &capacity)
+				require.NotNil(t, w.metadata[actionInsert])
+				require.Equal(t, w.metadataGranted, m.reserved)
 			} else {
 				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				if waiting {
+					require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				}
 				for i, sinker := range w.insertSinkers {
 					require.NotSame(t, first[i], sinker)
 				}
-				require.Positive(t, w.metadataWritten, "first flush metadata is disk owned while Build continues")
+				if !waiting {
+					require.NotNil(t, w.metadata[actionInsert], "first flush metadata stays owned while Build continues")
+				}
 				rows := map[uint64]uint64{}
 				for {
 					require.NoError(t, w.flushTailAndWriteToOutput(proc, tc.op.OpAnalyzer))

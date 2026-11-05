@@ -56,7 +56,7 @@ func metadataGoObjectBytes(size uintptr) int64 {
 
 // MetadataOutputBound takes the upstream protocol frame limit. Pure
 // INSERT derives that limit from colexec.InsertMetadataFrameLimit, independently
-// of a larger shared raw-data output lease. spoolFrame creates a fresh outer
+// of a larger shared raw-data output lease. readMetadataFrame creates a fresh outer
 // batch and appends exactly once. Its Insert/Delete payload and masks are decoded with ReadNoCopy, so
 // FlushS3Info borrows that frame rather than making another payload clone.
 // Local batch/vector headers and copied attribute names live until Call's
