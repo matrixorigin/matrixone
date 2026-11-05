@@ -279,6 +279,9 @@ func cloneTargetContext(ctx *MultiUpdateCtx) *MultiUpdateCtx {
 func (op *PartitionMultiUpdate) Call(
 	proc *process.Process,
 ) (vm.CallResult, error) {
+	if ReceivingCNProbeEnabled {
+		receivingCNPartitionCall(proc, op.raw.Action)
+	}
 	if op.raw.Action == UpdateWriteTable {
 		return op.writeTable(proc)
 	}
@@ -896,6 +899,10 @@ func (op *PartitionMultiUpdate) cancelPendingWriters() {
 }
 
 func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
+	var active, drained int
+	if ReceivingCNProbeEnabled {
+		active, drained = len(op.writers), len(op.freeWriters)
+	}
 	for id, writer := range op.writers {
 		_ = writer.free(proc)
 		delete(op.writers, id)
@@ -904,6 +911,9 @@ func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
 		_ = writer.free(proc)
 	}
 	op.freeWriters = nil
+	if ReceivingCNProbeEnabled {
+		receivingCNCleanup(proc, active, drained, len(op.writers)+len(op.freeWriters))
+	}
 }
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
@@ -971,6 +981,9 @@ func (op *PartitionMultiUpdate) getS3Writer(
 		w, err = newS3Writer(sid, op.raw)
 		if err != nil {
 			return nil, err
+		}
+		if ReceivingCNProbeEnabled {
+			markReceivingCNPartitionWriter(w)
 		}
 		op.writers[id] = w
 	}
