@@ -3049,6 +3049,51 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForFloatSortKey(t *testing.T
 	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
+func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		flag     planpb.OrderBySpec_OrderByFlag
+		nullable bool
+		offset   bool
+		quoted   bool
+	}{
+		{name: "descending", flag: planpb.OrderBySpec_DESC},
+		{name: "mixed"},
+		{name: "offset", offset: true},
+		{name: "nullable_fallback", nullable: true},
+		{name: "quoted_column_fallback", quoted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			scan, sort := builder.qry.Nodes[0], builder.qry.Nodes[1]
+			sort.OrderBy[0].Expr.Typ.NotNullable = !tc.nullable
+			if tc.quoted {
+				scan.TableDef.Cols[1].Name = "k.part"
+			}
+			sort.OrderBy = append(sort.OrderBy, &planpb.OrderBySpec{
+				Expr: GetColExpr(scan.TableDef.Cols[0].Typ, scan.BindingTags[0], 0), Flag: tc.flag,
+			})
+			if tc.offset {
+				sort.Offset = makePlan2Uint64ConstExprWithType(1)
+			}
+			original := DeepCopyExpr(sort.OrderBy[0].Expr)
+			builder.handleMessageFromTopToScan(rootID)
+			require.Equal(t, original, sort.OrderBy[0].Expr, "多键不能改写为单键索引截断顺序")
+			require.Nil(t, scan.IndexReaderParam, "不能按首键截断掉次键胜者")
+			if tc.nullable || tc.quoted {
+				require.Empty(t, sort.SendMsgList)
+				require.Empty(t, scan.OrderBy)
+				return
+			}
+			require.Len(t, sort.SendMsgList, 1)
+			require.Equal(t, sort.SendMsgList, scan.RecvMsgList)
+			require.Len(t, scan.OrderBy, 1)
+			require.Equal(t, original, scan.OrderBy[0].Expr)
+			require.Len(t, sort.OrderBy, 2)
+		})
+	}
+}
+
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(builder, nil)

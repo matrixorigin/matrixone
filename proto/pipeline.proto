@@ -595,6 +595,7 @@ message Instruction {
   PostDml post_dml = 53;
   int64 spill_mem = 54;
   plan.MongoScan mongodb_scan = 55;
+  int32 top_value_tag = 65;
 }
 
 message AnalysisList {

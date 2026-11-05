@@ -716,7 +716,7 @@ type OperatorStats struct {
 	ResourceQuality resource.QualityFlags         `json:"-"`
 	ResourceWaitNS  [resource.WaitKindCount]int64 `json:"-"`
 
-	InputBlocks  int64 `json:"-"`
+	InputBlocks  int64 `json:"InputBlocks,omitempty"`
 	ScanBytes    int64 `json:"-"`
 	ReadSize     int64 `json:"ReadSize,omitempty"`     // ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
 	S3ReadSize   int64 `json:"S3ReadSize,omitempty"`   // S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
