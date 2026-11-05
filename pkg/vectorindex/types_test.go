@@ -184,12 +184,13 @@ func TestVectorIndexCdcFloat32RoundTrip(t *testing.T) {
 
 	// other element types decode as before
 	c64 := NewVectorIndexCdc[float64](2)
-	c64.Insert(1, []float64{0.1, -2.5e-300}, nil)
+	c64.Insert(1, []float64{0.1, -2.5e-300, math.Copysign(0, -1)}, nil)
 	text, err = c64.ToJson()
 	require.NoError(t, err)
 	var g64 VectorIndexCdc[float64]
 	require.NoError(t, g64.UnmarshalJSON([]byte(text)))
 	require.Equal(t, c64.Data, g64.Data)
+	require.True(t, math.Signbit(g64.Data[0].Vec[2]), "-0 keeps its sign")
 	cbf := NewVectorIndexCdc[types.BF16](1)
 	cbf.Upsert(2, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-3)}, nil)
 	text, err = cbf.ToJson()

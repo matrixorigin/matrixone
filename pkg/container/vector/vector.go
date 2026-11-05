@@ -8958,6 +8958,8 @@ func unionFixedSelected[T types.FixedSizeT, S int32 | int64](target, source []by
 	shuffle.FixedLengthShuffle(src, dst, sels)
 }
 
+// UnionBatch may partially modify the destination on failure. To preserve it
+// for reuse, take an append checkpoint and roll back, or reset the vector.
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
 	return v.unionBatch(w, offset, cnt, flags, nil, mp, 0, 0, false)
 }

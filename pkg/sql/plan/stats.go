@@ -801,7 +801,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 		if !ok {
 			return 0.1
 		}
-		ret = (val2 - val1 + 1) / (max - min)
+		return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 
 	default:
 		return 0.1
@@ -852,7 +852,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	case "between", "in_range":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			if val2, ok = getFloat64Value(typ, vals[1]); ok {
-				ret = (val2 - val1 + 1) / (max - min)
+				return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 			}
 		}
 	default:
