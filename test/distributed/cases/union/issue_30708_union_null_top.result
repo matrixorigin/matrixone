@@ -36,6 +36,48 @@ ORDER BY x DESC LIMIT 16385;
 ➤ x[12,-1,0]  𝄀
 2  𝄀
 null
+SELECT x FROM issue_30708_top ORDER BY x DESC, x ASC LIMIT 1;
+➤ x[4,32,0]  𝄀
+2
+SELECT x FROM issue_30708_top ORDER BY x ASC, x DESC LIMIT 1;
+➤ x[4,32,0]  𝄀
+1
+SELECT x FROM issue_30708_top ORDER BY x DESC, x ASC LIMIT 16385;
+➤ x[4,32,0]  𝄀
+2  𝄀
+1
+SELECT x FROM issue_30708_top ORDER BY x ASC, x DESC LIMIT 16385;
+➤ x[4,32,0]  𝄀
+1  𝄀
+2
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top
+ORDER BY x DESC, x ASC LIMIT 1;
+➤ x[12,-1,0]  𝄀
+2
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top
+ORDER BY x ASC, x DESC LIMIT 1;
+➤ x[12,-1,0]  𝄀
+null
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top
+ORDER BY x DESC, x ASC LIMIT 16385;
+➤ x[12,-1,0]  𝄀
+2  𝄀
+1  𝄀
+null
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top
+ORDER BY x ASC, x DESC LIMIT 16385;
+➤ x[12,-1,0]  𝄀
+null  𝄀
+1  𝄀
+2
 SELECT NULL AS x
 UNION ALL
 SELECT x FROM issue_30708_top WHERE x = 2

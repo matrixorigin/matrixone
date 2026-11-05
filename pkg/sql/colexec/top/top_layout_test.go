@@ -33,6 +33,7 @@ import (
 
 // 与 main 的回归保持同一契约，只覆盖本分支已有的内存与 spill 路径。
 func TestTopTypedNullLayout(t *testing.T) {
+	// spill 按 map 遍历读取批次，输入次序不保证读取次序；空 payload 的确定性复用由 Vector UT 覆盖。
 	for _, tt := range []struct {
 		name  string
 		typ   types.Type
@@ -57,6 +58,51 @@ func TestTopTypedNullLayout(t *testing.T) {
 			require.Equal(t, tt.limit > int64(topSpillThreshold), tc.arg.ctr.spilling)
 			require.Equal(t, tt.want, collectTopLayoutRows(t, tc))
 		})
+	}
+}
+
+func TestTopRepeatedOrderKey(t *testing.T) {
+	for _, mode := range []struct {
+		name  string
+		limit int64
+	}{
+		{"resident", 1},
+		{"spill", int64(topSpillThreshold + 1)},
+	} {
+		for _, tt := range []struct {
+			name          string
+			first, second plan.OrderBySpec_OrderByFlag
+			input, want   []any
+		}{
+			{"ascending", plan.OrderBySpec_ASC, plan.OrderBySpec_DESC,
+				[]any{int64(2), int64(1)}, []any{int64(1), int64(2)}},
+			{"descending", plan.OrderBySpec_DESC, plan.OrderBySpec_ASC,
+				[]any{int64(1), int64(2)}, []any{int64(2), int64(1)}},
+			{"ascending_null", plan.OrderBySpec_ASC, plan.OrderBySpec_DESC,
+				[]any{int64(2), nil, int64(1)}, []any{nil, int64(1), int64(2)}},
+			{"descending_null", plan.OrderBySpec_DESC, plan.OrderBySpec_ASC,
+				[]any{nil, int64(1), int64(2)}, []any{int64(2), int64(1), nil}},
+			{"nulls_first", plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST, plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST,
+				[]any{int64(1), nil, int64(2)}, []any{nil, int64(2), int64(1)}},
+			{"nulls_last", plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST, plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+				[]any{nil, int64(2), int64(1)}, []any{int64(1), int64(2), nil}},
+		} {
+			t.Run(mode.name+"/"+tt.name, func(t *testing.T) {
+				tc, child := newTopLayoutFixture(t, types.T_int64.ToType(), mode.limit)
+				tc.arg.Fs[0].Flag = tt.first
+				tc.arg.Fs = append(tc.arg.Fs, &plan.OrderBySpec{Expr: tc.arg.Fs[0].Expr, Flag: tt.second})
+				for _, value := range tt.input {
+					appendTopLayoutBatch(t, tc, child, value)
+				}
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				require.Equal(t, mode.limit > int64(topSpillThreshold), tc.arg.ctr.spilling)
+				want := tt.want
+				if mode.limit == 1 {
+					want = want[:1]
+				}
+				require.Equal(t, want, collectTopLayoutRows(t, tc))
+			})
+		}
 	}
 }
 
