@@ -33,6 +33,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
@@ -64,7 +65,7 @@ type cagraBuilder interface {
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
 	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
-	PersistChunks(writer *sqlexec.ChunkInserter) error
+	PersistFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, run func(sql string) error) error
 	// DeviceDemand is what EACH device must hold to serve this index, valid after
 	// PreparePersistence. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
@@ -206,19 +207,15 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	storageProc := sqlexec.NewSqlProcess(proc)
 	return sqlexec.RunTxn(storageProc, func(exec executor.TxnExecutor) error {
 		stmt := storageProc.StatementOption()
-		if u.builder != nil {
-			writer, err := sqlexec.NewChunkInserter(storageProc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
-			if err != nil {
-				return err
-			}
-			if err := u.builder.PersistChunks(writer); err != nil {
-				return err
-			}
-		}
 		run := func(sql string) error {
 			res, err := exec.Exec(sql, stmt)
 			res.Close()
 			return err
+		}
+		if u.builder != nil {
+			if err := u.builder.PersistFiles(storageProc, exec.Txn(), run); err != nil {
+				return err
+			}
 		}
 		for _, sql := range sqls {
 			if err := run(sql); err != nil {

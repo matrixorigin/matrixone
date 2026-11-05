@@ -162,10 +162,8 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 
 	// SELECT-side `origFuncName(col, vec)` calls read the score column.
 	scanTag := scanNode.BindingTags[0]
-	if projNode != nil {
-		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
-			s.partPos, s.origFuncName, s.vecLitArg, searchTag, scoreColType)
-	}
+	replaceProjectDistFnsWithScoreCol(projNode, childNode, scanTag,
+		s.partPos, s.origFuncName, s.vecLitArg, searchTag, scoreColType)
 	if childNode != nil {
 		replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
 			s.partPos, s.origFuncName, s.vecLitArg, searchTag, scoreColType)

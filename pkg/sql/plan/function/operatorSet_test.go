@@ -1561,6 +1561,163 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+// MySQL treats TRUE/FALSE as the integers 1/0, so a string value branch next
+// to a BOOL value branch resolves to VARCHAR and a selected BOOL renders as
+// '1'/'0'. Picking BOOL instead casts the string branch to BOOL and fails
+// with "'x' is not a valid bool expression" (issue #31294).
+func Test_CaseCheck_MixedStringBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "string then bool",
+			inputs: []types.Type{
+				types.T_bool.ToType(),
+				types.New(types.T_varchar, 11, 0),
+				types.T_bool.ToType(),
+			},
+		},
+		{
+			name: "bool then string",
+			inputs: []types.Type{
+				types.T_bool.ToType(),
+				types.T_bool.ToType(),
+				types.New(types.T_varchar, 11, 0),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, 3)
+			require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+			require.True(t, result.finalType[1].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[1].Oid)
+			require.True(t, result.finalType[2].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[2].Oid)
+		})
+	}
+}
+
+func Test_IffCheck_MixedStringBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name:   "string then bool",
+			inputs: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType(), types.T_bool.ToType()},
+		},
+		{
+			name:   "bool then string",
+			inputs: []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), types.T_varchar.ToType()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := iffCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, 3)
+			require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+			require.True(t, result.finalType[1].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[1].Oid)
+			require.True(t, result.finalType[2].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[2].Oid)
+		})
+	}
+
+	// BOOL-only branches have no string and keep the BOOL result.
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.T_bool.ToType(),
+		types.T_bool.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+}
+
+func TestMixedStringNumericToVarcharWithBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+		wantOK bool
+	}{
+		{name: "string and bool", source: []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()}, wantOK: true},
+		{name: "bool and string", source: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()}, wantOK: true},
+		{name: "char and bool", source: []types.Type{types.New(types.T_char, 5, 0), types.T_bool.ToType()}, wantOK: true},
+		{name: "null string and bool", source: []types.Type{types.T_any.ToType(), types.T_varchar.ToType(), types.T_bool.ToType()}, wantOK: true},
+		{name: "bool only", source: []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, wantOK: false},
+		{name: "bool and int without string", source: []types.Type{types.T_bool.ToType(), types.T_int32.ToType()}, wantOK: false},
+		{name: "string only", source: []types.Type{types.T_varchar.ToType()}, wantOK: false},
+		{name: "bool and temporal", source: []types.Type{types.T_bool.ToType(), types.T_date.ToType()}, wantOK: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			retType, ok := mixedStringNumericToVarchar(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if test.wantOK {
+				require.True(t, retType.Oid.IsMySQLString(), "common type should be a string type, got: %v", retType.Oid)
+			}
+		})
+	}
+}
+
+// TestMixedStringNumericToVarcharConservativeCapacity pins the shared
+// conditional string+numeric contract: TEXT/BLOB branches keep the
+// conservative VARCHAR(65535) target, matching the control-flow metadata
+// contract (TestBindControlFlowMetadata). BOOL counts as numeric
+// (issue #31294), so string/TEXT/BLOB branches mixed with BOOL resolve the
+// same way as branches mixed with an integer.
+func TestMixedStringNumericToVarcharConservativeCapacity(t *testing.T) {
+	mediumText := types.New(types.T_text, types.MaxMediumTextLen, 0)
+	mediumBlob := types.New(types.T_blob, types.MaxMediumTextLen, 0)
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+	}{
+		{name: "string and bool", source: []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()}},
+		{name: "bool and string", source: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()}},
+		{name: "width zero text and bool", source: []types.Type{types.T_text.ToType(), types.T_bool.ToType()}},
+		{name: "bool and width zero text", source: []types.Type{types.T_bool.ToType(), types.T_text.ToType()}},
+		{name: "width zero text and int", source: []types.Type{types.T_text.ToType(), types.T_int32.ToType()}},
+		{name: "width zero blob and bool", source: []types.Type{types.T_blob.ToType(), types.T_bool.ToType()}},
+		{name: "bool and width zero blob", source: []types.Type{types.T_bool.ToType(), types.T_blob.ToType()}},
+		{name: "mediumtext and bool", source: []types.Type{mediumText, types.T_bool.ToType()}},
+		{name: "mediumblob and bool", source: []types.Type{mediumBlob, types.T_bool.ToType()}},
+		{name: "mediumblob mediumtext and bool", source: []types.Type{mediumBlob, mediumText, types.T_bool.ToType()}},
+		{name: "tinytext and bool", source: []types.Type{types.New(types.T_text, types.MaxTinyTextLen, 0), types.T_bool.ToType()}},
+		{name: "plain blob and bool", source: []types.Type{types.New(types.T_blob, types.MaxStringSize, 0), types.T_bool.ToType()}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			retType, ok := mixedStringNumericToVarchar(test.source)
+			require.True(t, ok)
+			require.Equal(t, types.T_varchar, retType.Oid)
+			require.Equal(t, int32(types.MaxVarBinaryLen), retType.Width)
+		})
+	}
+}
+
+// TestConditionalCheckStringBoolBranchCasts proves the conservative VARCHAR
+// target flows through CASE/IF branch casting and the return-type callback
+// when a string branch mixes with a BOOL branch (issue #31294).
+func TestConditionalCheckStringBoolBranchCasts(t *testing.T) {
+	caseResult := caseCheck(nil, []types.Type{types.T_bool.ToType(), types.T_text.ToType(), types.T_bool.ToType()})
+	require.Equal(t, succeedWithCast, caseResult.status)
+	require.Len(t, caseResult.finalType, 3)
+	require.Equal(t, types.T_bool, caseResult.finalType[0].Oid)
+	require.Equal(t, types.T_varchar, caseResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), caseResult.finalType[1].Width)
+	require.Equal(t, types.T_varchar, caseResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), caseResult.finalType[2].Width)
+
+	iffResult := iffCheck(nil, []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), types.T_varchar.ToType()})
+	require.Equal(t, succeedWithCast, iffResult.status)
+	require.Len(t, iffResult.finalType, 3)
+	require.Equal(t, types.T_varchar, iffResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), iffResult.finalType[1].Width)
+	require.Equal(t, types.T_varchar, iffResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), iffResult.finalType[2].Width)
+	require.Equal(t, int32(types.MaxVarBinaryLen), iffReturnType(iffResult.finalType).Width)
+}
+
 func TestCaseCheckAcceptsImplicitBooleanConditions(t *testing.T) {
 	for _, test := range []struct {
 		name      string
