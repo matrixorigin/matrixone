@@ -705,7 +705,7 @@ func (sinker *Sinker) WriteBorrowedToFile(ctx context.Context, data *batch.Batch
 		fs.arenaBytes = warmArenaBytes(int64(copy.Size()), int64(len(copy.Vecs)))
 	}
 	for start := 0; start < copy.RowCount(); {
-		end := byteWindowEnd(copy, start, objectio.BlockMaxRows, 0, sinker.config.bufferBytes)
+		end := min(copy.RowCount(), start+objectio.BlockMaxRows)
 		window, windowErr := copy.Window(start, end)
 		if windowErr != nil {
 			return windowErr
@@ -794,6 +794,16 @@ func (sinker *Sinker) pushStaged(
 	ctx context.Context, bat *batch.Batch, bound int,
 ) error {
 
+	if n := len(sinker.staged.inMemory); sinker.schema.sortKeyIdx < 0 && n > 0 &&
+		sinker.staged.inMemory[n-1].RowCount() < objectio.BlockMaxRows {
+		// An unsorted writer cannot repack this partial block. Finish its
+		// object before accepting another block; this call owns bat on error.
+		if err := sinker.trySpill(ctx); err != nil {
+			sinker.putBackBuffer(bat)
+			return err
+		}
+	}
+
 	sinker.staged.inMemStats.updateCount(1)
 	sinker.staged.inMemStats.updateBytes(bat.Size())
 
@@ -823,17 +833,6 @@ func (sinker *Sinker) runSizeLimit() int {
 	// Byte-sized merge buffers may be partial blocks. Keep each bounded run
 	// within one such buffer so only its final persisted block can be partial.
 	return min(sinker.staged.memorySizeThreshold, int(min(sinker.config.bufferBytes, int64(math.MaxInt))))
-}
-
-// mergeBufferBytes preserves full blocks within a byte-bounded run. Admission
-// already bounds the entire materialized run; its IO envelope covers rounded
-// vector capacity. Cutting on that capacity again could create a partial block
-// before the final block, which stats-only readers cannot represent.
-func (sinker *Sinker) mergeBufferBytes() int64 {
-	if sinker.runSizeLimit() > 0 {
-		return math.MaxInt64
-	}
-	return sinker.config.bufferBytes
 }
 
 // cleanupUnpublishedRun removes only objects still owned by the staging run.
@@ -1025,7 +1024,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	var workspace *rscthrottler.WorkspaceLease
 	if sinker.workspace != nil {
 		var err error
-		payload := int64(sinker.staged.inMemorySize)
+		payload := sinker.stagedMaterializedBytes()
 		need, boundErr := IOEnvelope([][]types.Type{sinker.schema.attrTypes}, min(sinker.config.bufferBytes, max(1, payload)), payload)
 		if boundErr != nil {
 			return boundErr
@@ -1153,7 +1152,7 @@ func (sinker *Sinker) trySpillMergeSortBounded(ctx context.Context, workspace *r
 		func(b *batch.Batch) (*batch.Batch, error) {
 			data = append(data, b)
 			return newBuffer(), nil
-		}, mp, sinker.putBackOneInMemory, sinker.mergeBufferBytes())
+		}, mp, sinker.putBackOneInMemory, math.MaxInt64)
 	if err != nil {
 		return err
 	}
@@ -1184,9 +1183,10 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 	return nil
 }
 
-// trySpillMergeSortStreaming merge-sorts staged data and streams each full
-// block directly to the file sinker, reusing a single buffer. This avoids
-// accumulating all sorted blocks in memory and eliminates PreExtend churn.
+// trySpillMergeSortStreaming streams full row blocks with one reusable buffer.
+// Byte targets bound source windows/runs; admitted writers reserve the complete
+// materialized run before merging, including rounded vector growth. Cutting
+// output by capacity would publish invalid partial intermediate blocks.
 func (sinker *Sinker) trySpillMergeSortStreaming(
 	ctx context.Context, fSinker FileSinker,
 ) error {
@@ -1227,7 +1227,7 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 		streamSinker,
 		mp,
 		sinker.putBackOneInMemory,
-		sinker.mergeBufferBytes(),
+		math.MaxInt64,
 	)
 	return err
 }
@@ -1280,7 +1280,7 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		innersinker,
 		mp,
 		sinker.putBackOneInMemory,
-		sinker.mergeBufferBytes(),
+		math.MaxInt64,
 	)
 	returnBuffer(buffer)
 	if err != nil {
@@ -1368,7 +1368,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 		streamSubmit,
 		sinker.mp,
 		sinker.putBackOneInMemory,
-		sinker.mergeBufferBytes(),
+		math.MaxInt64,
 	)
 	if buffer != nil {
 		sinker.putBackBuffer(buffer)
@@ -1401,7 +1401,7 @@ func (sinker *Sinker) getStageFileSinker() FileSinker {
 		}
 		sinker.fSinker.executor = sinker.fSinker.factory(mp, sinker.fs)
 		if fs, ok := sinker.fSinker.executor.(*FSinkerImpl); ok && sinker.ioMP != nil {
-			fs.arenaBytes = warmArenaBytes(int64(sinker.staged.inMemorySize), int64(len(sinker.schema.attrTypes)))
+			fs.arenaBytes = warmArenaBytes(sinker.stagedMaterializedBytes(), int64(len(sinker.schema.attrTypes)))
 		}
 	}
 	return sinker.fSinker.executor

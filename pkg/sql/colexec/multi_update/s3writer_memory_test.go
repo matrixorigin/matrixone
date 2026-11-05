@@ -136,7 +136,7 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 	for _, mode := range []string{
 		"flush and retry", "wait for capacity", "flush error", "cancel before growth",
 		"begin retries after flush", "autocommit waits", "begin capacity error",
-		"autocommit off capacity error", "begin canceled after retry", "begin oversized request",
+		"autocommit off capacity error", "begin canceled after retry", "begin oversized request", "autocommit output capacity error",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			_, ctrl, proc := prepareTestCtx(t, true)
@@ -167,18 +167,28 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 			m := &admissionThrottler{capacity: 1 << 30}
 			w.memController.throttler = m
 			w.flushThreshold = 64 << 20
-			require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
-			require.Positive(t, m.reserved)
-			require.Equal(t, w.retainedBytes(), m.reserved, "charge actual current capacity, including free-list ownership")
-			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
-			for _, sinker := range first {
-				require.NotNil(t, sinker)
+			waiting := mode == "wait for capacity" || mode == "autocommit waits"
+			if !waiting {
+				// Include the existing protocol envelope in this tiny-data fixture.
+				output, err := colexec.InsertMetadataFrameLimit(int64(w.flushThreshold), len(w.updateCtxs))
+				require.NoError(t, err)
+				require.NoError(t, w.reserveMetadata(proc, output, 0))
+				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				require.Positive(t, m.reserved)
+				require.Equal(t, w.retainedBytes()+w.metadataGranted, m.reserved, "data and output keep distinct owners")
 			}
+			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
+			if !waiting {
+				for _, sinker := range first {
+					require.NotNil(t, sinker)
+				}
+			}
+			beforeAcquires := m.acquires
 			beforeReleased := m.released
 			m.capacity = m.reserved // the next growth must flush the previous owner
 			if mode == "begin retries after flush" || mode == "autocommit waits" ||
-				mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "begin canceled after retry" || mode == "begin oversized request" {
-				options := txn.TxnOptions{Autocommit: true, ByBegin: mode != "autocommit waits"}
+				mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "begin canceled after retry" || mode == "begin oversized request" || mode == "autocommit output capacity error" {
+				options := txn.TxnOptions{Autocommit: true, ByBegin: mode != "autocommit waits" && mode != "autocommit output capacity error"}
 				if mode == "autocommit off capacity error" {
 					options = txn.TxnOptions{}
 				}
@@ -190,7 +200,7 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				m.capacity = 0
 				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
 			}
-			if mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "begin canceled after retry" || mode == "begin oversized request" {
+			if mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "begin canceled after retry" || mode == "begin oversized request" || mode == "autocommit output capacity error" {
 				m.capacity = 0
 				m.beforeWait = func(*admissionThrottler) { t.Fatal("a transaction must not enqueue behind its own live resources") }
 			}
@@ -214,18 +224,18 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				proc.Ctx = ctx
 				cancel()
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), context.Canceled)
-				require.Equal(t, 1, m.acquires)
+				require.Equal(t, beforeAcquires, m.acquires)
 			} else if mode == "flush error" {
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), writeErr)
-				require.Equal(t, 2, m.acquires)
+				require.Equal(t, beforeAcquires+1, m.acquires)
 				require.Equal(t, beforeReleased, m.released, "failed flush retains its private vector owner")
-			} else if mode == "begin capacity error" || mode == "autocommit off capacity error" {
+			} else if mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "autocommit output capacity error" {
 				var capacity *rscthrottler.WorkingSetCapacityError
 				require.ErrorAs(t, w.append(proc, tc.op.OpAnalyzer, bat), &capacity)
 				require.Positive(t, capacity.Minimum)
 				require.Less(t, capacity.Minimum, m.MaxAcquire(), "temporary pressure is not an oversized request")
 				require.Zero(t, capacity.Available)
-				require.Zero(t, m.reserved)
+				require.Equal(t, w.metadataGranted, m.reserved)
 				require.Equal(t, 2, bat.RowCount(), "the caller still owns the input when admission fails")
 			} else if mode == "begin canceled after retry" {
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), context.Canceled)
@@ -236,10 +246,15 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				require.Equal(t, int64(1), tooLarge.Maximum)
 			} else {
 				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				if waiting {
+					require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				}
 				for i, sinker := range w.insertSinkers {
 					require.NotSame(t, first[i], sinker)
 				}
-				require.Positive(t, w.metadataWritten, "first flush metadata is disk owned while Build continues")
+				if !waiting {
+					require.NotNil(t, w.metadata[actionInsert], "first flush metadata stays owned while Build continues")
+				}
 				rows := map[uint64]uint64{}
 				for {
 					require.NoError(t, w.flushTailAndWriteToOutput(proc, tc.op.OpAnalyzer))

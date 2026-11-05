@@ -243,3 +243,25 @@ func WriterBufferBytes(w *rscthrottler.WorkingSet, target int64, schemas [][]typ
 	}
 	return w.UnitBytes()
 }
+
+// stagedMaterializedBytes bounds both retained source area and expanded merge
+// values. Constants and aliases can have a much smaller physical source area.
+func (sinker *Sinker) stagedMaterializedBytes() int64 {
+	if sinker.runSizeLimit() > 0 {
+		return int64(sinker.staged.inMemorySize)
+	}
+	var total int64
+	for _, bat := range sinker.staged.inMemory {
+		for _, v := range bat.Vecs {
+			size := int64(v.Size())
+			if v.IsConst() || v.GetType().IsVarlen() && !v.VarlenaAreaIsDisjoint() {
+				size = max(size, v.WindowSize(0, bat.RowCount()))
+			}
+			if size > math.MaxInt64-total {
+				return math.MaxInt64
+			}
+			total += size
+		}
+	}
+	return total
+}

@@ -155,23 +155,20 @@ func TestCommittedDeletePreparationFailureReleasesOwners(t *testing.T) {
 func TestPartitionWriterDrainsAllMetadataFrames(t *testing.T) {
 	for _, count := range []int{0, 1, 3, 5} {
 		t.Run(string(rune('0'+count)), func(t *testing.T) {
-			proc := testutil.NewProc(t)
-			t.Cleanup(proc.Free)
-			w := &s3WriterDelegate{updateCtxs: []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}}, {TableDef: &plan.TableDef{TblId: 100}}}}
-			t.Cleanup(func() { require.NoError(t, w.free(proc)) })
+			proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}}, {TableDef: &plan.TableDef{TblId: 100}}}, false)
 			src := batch.NewWithSize(1)
 			t.Cleanup(func() { src.Clean(proc.Mp()) })
 			src.Vecs[0] = testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
 			src.SetRowCount(1)
 			var want []uint64
 			for i := 0; i < count; i++ {
-				// Alternate table and action; the spool must still emit deletes
+				// Alternate table and action; metadata must still emit deletes
 				// before inserts, with each table's frame preserved exactly once.
 				action := actionInsert
 				if i%2 == 0 {
 					action = actionDelete
 				}
-				require.NoError(t, w.spoolFrame(proc, action, i%2, uint64(i+1), "", src))
+				require.NoError(t, w.appendMetadata(proc, action, i%2, uint64(i+1), "", src))
 			}
 			for _, parity := range []int{0, 1} {
 				for i := parity; i < count; i += 2 {

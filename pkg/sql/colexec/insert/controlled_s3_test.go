@@ -17,9 +17,7 @@ package insert
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -208,13 +206,11 @@ func TestControlledInsertZeroDataCreditsStreamsCompleteObjectFrames(t *testing.T
 	require.Equal(t, uint32(3*rows), total)
 	require.Zero(t, deny.acquired)
 	require.Zero(t, deny.balance)
-	fd := state.spool
 	dataMP, outputMP := state.dataMP, state.outputMP
 	op.Reset(proc, false, nil)
 	require.Zero(t, dataMP.AllocatedBytes())
 	require.Zero(t, outputMP.AllocatedBytes())
-	_, err := fd.Stat()
-	require.Error(t, err, "Reset closes the anonymous metadata FD")
+	require.Nil(t, state.stats, "Reset retires retained metadata")
 	require.NotEmpty(t, firstBlock)
 	firstStats := objectio.ObjectStats(committed[0])
 	require.Equal(t, uint32(rows), firstStats.Rows(), "later frames and Reset must not alter committed metadata")
@@ -282,34 +278,6 @@ func TestControlledInsertCancelWaitingForWorkspaceClosesOwners(t *testing.T) {
 	op.Free(proc, true, context.Canceled)
 }
 
-func TestControlledInsertInvalidMetadataAndCloseErrorReleaseOwners(t *testing.T) {
-	proc, op, ws := controlledInsertFixture(t, &controlledTestThrottler{t: t})
-	s := op.ctr.controlled
-	var err error
-	s.spool, err = os.CreateTemp(t.TempDir(), "bad-frame-*")
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(s.spool.Name()))
-	var header [8]byte
-	n := uint64(s.outputSlot.Capacity()/4 + 1)
-	binary.LittleEndian.PutUint64(header[:], n)
-	_, err = s.spool.Write(header[:])
-	require.NoError(t, err)
-	s.written = int64(n) + 8
-	require.NoError(t, s.spool.Truncate(s.written))
-	_, err = s.next()
-	require.ErrorContains(t, err, "invalid insert metadata frame")
-	require.Zero(t, s.outputMP.AllocatedBytes(), "reject the frame before decoding any capacity")
-	dataMP, outputMP := s.dataMP, s.outputMP
-	require.NoError(t, s.spool.Close())
-	require.Error(t, s.close(), "surface an FD Close error while completing remaining cleanup")
-	require.NoError(t, s.close(), "cleanup is idempotent after a Close error")
-	require.Zero(t, dataMP.AllocatedBytes())
-	require.Zero(t, outputMP.AllocatedBytes())
-	lease, err := ws.AcquireInput(proc.Ctx, 1)
-	require.NoError(t, err)
-	lease.Release()
-}
-
 func TestControlledInsertCompletedMetadataFrames(t *testing.T) {
 	const unit = 4 << 20
 	const blocks = unit / objectio.BlockMaxRows
@@ -334,10 +302,14 @@ func TestControlledInsertCompletedMetadataFrames(t *testing.T) {
 				require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], blocks))
 				require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[i], blocks*objectio.BlockMaxRows))
 			}
-			require.NoError(t, s.spoolStats(stats))
-			require.Zero(t, s.outputMP.AllocatedBytes(), "each spooled frame retires its temporary backing")
+			require.NoError(t, s.collectStats(proc.Ctx, stats))
+			if objects == 0 {
+				require.Nil(t, s.stats)
+			} else {
+				require.Equal(t, objects, s.stats.Length(), "retain compact stats until Eval")
+			}
 			for i := range stats {
-				frame, err := s.next()
+				frame, err := s.next(proc.Ctx)
 				require.NoError(t, err)
 				require.NotNil(t, frame)
 				require.EqualValues(t, blocks, frame.Vecs[0].Length(), "all blocks of one object stay together")
@@ -348,7 +320,7 @@ func TestControlledInsertCompletedMetadataFrames(t *testing.T) {
 				require.LessOrEqual(t, int64(encodedSize), frameLimit)
 				require.LessOrEqual(t, s.outputMP.AllocatedBytes(), s.outputSlot.Capacity())
 			}
-			frame, err := s.next()
+			frame, err := s.next(proc.Ctx)
 			require.NoError(t, err)
 			require.Nil(t, frame, "no duplicate or trailing object")
 			outputMP := s.outputMP
@@ -357,14 +329,13 @@ func TestControlledInsertCompletedMetadataFrames(t *testing.T) {
 		})
 	}
 	t.Run("oversized-object", func(t *testing.T) {
-		_, op, _ := controlledInsertFixtureWithUnit(t, &controlledTestThrottler{t: t}, unit)
+		proc, op, _ := controlledInsertFixtureWithUnit(t, &controlledTestThrottler{t: t}, unit)
 		s := op.ctr.controlled
 		stat := objectio.NewObjectStats()
 		require.NoError(t, objectio.SetObjectStatsBlkCnt(stat, uint32((limit-4096)/int64(objectio.BlockInfoSize+24)+1)))
-		require.ErrorContains(t, s.spoolStats([]objectio.ObjectStats{*stat}), "insert metadata exceeds admitted frame capacity")
+		require.ErrorContains(t, s.collectStats(proc.Ctx, []objectio.ObjectStats{*stat}), "insert metadata exceeds admitted frame capacity")
 		require.Zero(t, s.outputMP.AllocatedBytes())
-		require.Zero(t, s.written)
-		require.Nil(t, s.spool)
+		require.Nil(t, s.stats)
 	})
 }
 
@@ -466,7 +437,7 @@ func checkControlledInsertPipeline(t *testing.T, grants int, cancelUpload, colle
 	ids[0], ids[1] = 4, 3
 	require.NoError(t, s.append(proc, op.OpAnalyzer, b), "a cold D retry must not join the first upload")
 	require.NoError(t, s.flushPending(proc))
-	require.Zero(t, s.written, "incomplete uploads must not produce transaction metadata")
+	require.Nil(t, s.stats, "incomplete uploads must not produce transaction metadata")
 	if cancelUpload {
 		cancel()
 		require.ErrorIs(t, s.flush(proc, op.OpAnalyzer), context.Canceled)
@@ -487,17 +458,17 @@ func checkControlledInsertPipeline(t *testing.T, grants int, cancelUpload, colle
 	unblock()
 	if collect {
 		// Sync is a deterministic completion barrier here; it leaves stats
-		// available for the next incremental collection instead of spooling.
+		// available for the next incremental collection instead of collecting.
 		_, err := s.writer.Sync(s.writeContext(ctx))
 		require.NoError(t, err)
 		require.NoError(t, s.flushPending(proc))
-		require.Positive(t, s.written, "incremental collection must spool completed objects")
+		require.NotNil(t, s.stats, "incremental collection must retain completed object stats")
 	}
 	require.NoError(t, s.flush(proc, op.OpAnalyzer))
 	var rows uint32
 	var objects int
 	for {
-		frame, err := s.next()
+		frame, err := s.next(proc.Ctx)
 		require.NoError(t, err)
 		if frame == nil {
 			break
