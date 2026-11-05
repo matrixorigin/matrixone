@@ -34,8 +34,8 @@ package disttae
 // record-stage fault fails the first pass after both replacements
 // persisted (the failure retains them and preserves the marks), the
 // failed admission's own boundary must hand the orphans to the
-// engine's queue, removing ONLY that fault plus the engine's
-// scheduled delete pass (no fault injection stays armed, no limit
+// engine's queue, removing ONLY that fault plus the engine's bounded
+// delete pass (no fault injection stays armed, no limit
 // change) must let the SAME transaction's next admission complete the
 // retried pass and then COMMIT.
 
@@ -86,8 +86,16 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	txn.compactWorker = compactPool
 	gcPool, err := ants.NewPool(2)
 	require.NoError(t, err)
-	t.Cleanup(func() { gcPool.Release() })
+	t.Cleanup(func() {
+		if err := gcPool.ReleaseTimeout(10 * time.Second); err != nil {
+			t.Errorf("wait for GC workers: %v", err)
+		}
+	})
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
+	// Keep the handoff observable until the test runs the same bounded drain
+	// pass used by the background scheduler.
+	restoreScheduling := issue25590FreezeUnpublishedDrainScheduling(t, e)
+	t.Cleanup(restoreScheduling)
 
 	dbv := txn.databaseOps.existAndActive(genDatabaseKey(1, "db"))
 	require.NotNil(t, dbv)
@@ -302,9 +310,8 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.Equal(t, recoveryAdmissionLimit, unpublishedPendingAdmissionLimit,
 		"the capacity limit is retained exactly")
 
-	// The engine's scheduled delete pass retires the queued orphans
-	// (the ONLY cleanup drive: no transaction-side call anywhere), which
-	// is what restores admission capacity.
+	// Run the engine's bounded delete pass, also used by its scheduler, to
+	// retire the queued orphans and restore admission capacity.
 	require.NoError(t, e.DrainUnpublishedPendingForTest(ctx),
 		"the engine's scheduled pass deletes the orphaned replacements")
 	for _, name := range orphanNames {
@@ -324,11 +331,20 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	// The retried admission INSIDE the same open transaction, under the
 	// SAME limit: the merge reapplies the marks, the pass rewrites both
 	// dirty objects fresh, records them, and the admission completes.
+	// Hold the accepted GC worker at storage so its two old objects remain
+	// counted while the exact post-retry ledger is asserted below.
+	releaseDeletes := failFS.armDeleteBlock()
+	t.Cleanup(func() {
+		failFS.unarmDeleteBlock()
+		releaseDeletes()
+	})
 	txn.StartStatement()
 	require.NoError(t, txn.IncrStatementID(ctx, false),
 		"the retried admission completes with the fault removed and the SAME capacity limit - the recovered storage can finally serve the transaction again")
 	txn.UpdateSnapshotWriteOffset()
 	txn.EndStatement()
+	require.Eventually(t, func() bool { return failFS.blockedDeleteCalls() > 0 },
+		10*time.Second, 10*time.Millisecond, "the accepted GC worker reached the deletion barrier")
 
 	require.Zero(t, txn.deletedBlocks.size(),
 		"the retried pass consumed the marks")
@@ -378,6 +394,8 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.Zero(t, inFlight)
 	require.Equal(t, int64(totalObjs+recoveryLimit), live,
 		"the completed pass's ledger equals the originals' re-publications plus the fresh replacements")
+	failFS.unarmDeleteBlock()
+	releaseDeletes()
 	require.Empty(t, txn.pendingObjectCleanupNames())
 	require.Equal(t, recoveryAdmissionLimit, unpublishedPendingAdmissionLimit,
 		"the capacity limit never changed through the whole recovery")
@@ -408,13 +426,11 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	txn.FinalizeCommit(ctx)
 	// Round-58 contract (issue #25590 review of 2026-10-28): the retried
 	// pass's compaction submitted the two superseded originals' deletes
-	// to the pool BEFORE this terminal, so at the terminal the names are
-	// recorded obligations an ACCEPTED GC job owns. The published-class
-	// release frees exactly the eight payload members' units at the
-	// commit; the two obsolete originals' units retire with their
-	// workers' settle — the settlement, never the terminal, returns a
-	// retained obligation's capacity — and nothing inside the commit
-	// waited on storage.
+	// before this terminal. The accepted GC job owns their obligations
+	// until its worker settles, which can happen before or after commit.
+	// The published-class release frees the payload members' units;
+	// settlement returns any retained deletion capacity, and commit does
+	// not wait on storage.
 	require.Eventually(t, func() bool {
 		_, l, _ := issue25590LedgerNow(e)
 		return l == 0
