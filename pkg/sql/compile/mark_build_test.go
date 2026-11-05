@@ -25,6 +25,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBroadcastMarkRejectsErrorProneKey(t *testing.T) {
+	for side := 0; side < 2; side++ {
+		typ := types.T_int64.ToType()
+		eq, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+		require.NoError(t, err)
+		plus, err := function.GetFunctionByName(context.Background(), "+", []types.Type{typ, typ})
+		require.NoError(t, err)
+		args := make([]*plan.Expr, 2)
+		for i := range args {
+			args[i] = &plan.Expr{Typ: plan.Type{Id: int32(typ.Oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: int32(i)}}}
+		}
+		args[side] = &plan.Expr{Typ: args[side].Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: plus.GetEncodedOverloadID(), ObjName: "+"}, Args: []*plan.Expr{
+				args[side], {Typ: args[side].Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}},
+			},
+		}}}
+		cond := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: eq.GetEncodedOverloadID(), ObjName: "="}, Args: args,
+		}}}
+		join := &loopjoin.LoopJoin{NonEqCond: cond, JoinType: plan.Node_MARK, JoinMapTag: 1}
+		dup := dupOperator(join, 0, 4).(*loopjoin.LoopJoin)
+		t.Cleanup(dup.Release)
+		for _, op := range []*loopjoin.LoopJoin{join, dup} {
+			build := constructBroadcastHashBuild(op, nil, 4)
+			t.Cleanup(build.Release)
+			require.False(t, build.NeedHashMap, "deterministic arithmetic may error before the pairwise evaluator reaches it")
+			require.False(t, build.OptionalIndex)
+			require.True(t, build.NeedBatches)
+		}
+	}
+}
+
 func TestBroadcastMarkBuildIndex(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

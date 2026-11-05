@@ -496,21 +496,53 @@ type GroupByClause struct {
 	Rollup           bool
 }
 
-func (node *GroupByClause) Format(ctx *FmtCtx) {
-	prefix := "group by "
+// RollupCubeKeys recovers the original ROLLUP/CUBE keys after binding has
+// expanded the grouping sets. The longest set preserves the original order;
+// CUBE's first expanded set is empty. This is not a union of arbitrary sets.
+func (node *GroupByClause) RollupCubeKeys() Exprs {
+	var keys Exprs
 	for _, list := range node.GroupByExprsList {
-		for _, n := range list {
-			ctx.WriteString(prefix)
-			n.Format(ctx)
-			prefix = ", "
+		if len(list) > len(keys) {
+			keys = list
 		}
 	}
-	if node.Cube {
-		ctx.WriteString("with cube")
+	return keys
+}
+
+func (node *GroupByClause) Format(ctx *FmtCtx) {
+	lists := node.GroupByExprsList
+	if len(lists) == 0 {
+		return
 	}
-	if node.Rollup {
-		ctx.WriteString(" with rollup")
+	ctx.WriteString("group by ")
+	if node.Cube || node.Rollup {
+		// CTAS formats its INSERT source after binding expanded these lists.
+		full := node.RollupCubeKeys()
+		if node.Cube {
+			ctx.WriteString("cube (")
+		}
+		full.Format(ctx)
+		if node.Cube {
+			ctx.WriteByte(')')
+		} else {
+			ctx.WriteString(" with rollup")
+		}
+		return
 	}
+	if len(lists) > 1 || len(lists[0]) == 0 {
+		ctx.WriteString("grouping sets (")
+		for i, list := range lists {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteByte('(')
+			list.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		ctx.WriteByte(')')
+		return
+	}
+	lists[0].Format(ctx)
 }
 
 const (

@@ -332,6 +332,16 @@ func outputTypeAfterNullExtension(node *plan.Node, childIdx int, typ plan.Type) 
 	return typ
 }
 
+// Missing grouping-set keys emit NULL only in the aggregate output. Keep the
+// input key's type intact: the aggregator still evaluates and encodes that key.
+func groupingOutputType(node *plan.Node, index int) plan.Type {
+	typ := node.GroupBy[index].Typ
+	if index < len(node.GroupingFlag) && !node.GroupingFlag[index] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
 func isIfNullCase(fn *plan.Function) bool {
 	if fn.Func.ObjName != "case" || len(fn.Args) != 3 {
 		return false
@@ -344,10 +354,7 @@ func isIfNullCase(fn *plan.Function) bool {
 	// recognize casts that could themselves produce NULL or lose information.
 	otherwise := fn.Args[2]
 	for cast := otherwise.GetF(); cast != nil && cast.Func.ObjName == "cast" && len(cast.Args) > 0; cast = otherwise.GetF() {
-		_, overload := function.DecodeOverloadID(cast.Func.Obj)
-		from, to := types.T(cast.Args[0].Typ.Id), types.T(otherwise.Typ.Id)
-		if overload != 0 || !from.IsInteger() || !to.IsInteger() ||
-			from.IsSignedInt() != to.IsSignedInt() || from.TypeLen() > to.TypeLen() {
+		if !function.IsLosslessIntegerCast(otherwise) {
 			return false
 		}
 		otherwise = cast.Args[0]
@@ -987,7 +994,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: groupingOutputType(node, idx),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1032,7 +1039,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.GroupBy[0].Typ,
+					Typ: groupingOutputType(node, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -3113,6 +3120,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		if selectClause.GroupBy != nil {
+			if selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube {
+				// The same CTAS/prepared AST can be bound more than once. Rebuild
+				// from its original keys, not already-expanded subtotal sets.
+				keys := selectClause.GroupBy.RollupCubeKeys()
+				selectClause.GroupBy.GroupByExprsList = []tree.Exprs{keys}
+			}
 			if selectClause.GroupBy.Rollup {
 				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
 					selectClause.GroupBy.GroupByExprsList = append(selectClause.GroupBy.GroupByExprsList, selectClause.GroupBy.GroupByExprsList[0][0:i])

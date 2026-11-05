@@ -56,3 +56,17 @@ func nonNullCast(args []*plan.Expr) bool {
 	}
 	return false
 }
+
+// IsLosslessIntegerCast proves preservation of both values and error behavior.
+// Unlike nonNullCast, this must not admit narrowing or parsing conversions:
+// returning an error instead of NULL is insufficient for moving evaluation.
+func IsLosslessIntegerCast(expr *plan.Expr) bool {
+	f := expr.GetF()
+	if f == nil || len(f.Args) != 2 {
+		return false
+	}
+	id, overload := DecodeOverloadID(f.Func.Obj)
+	from, to := types.T(f.Args[0].Typ.Id), types.T(expr.Typ.Id)
+	return id == CAST && overload == 0 && from.IsInteger() && to.IsInteger() &&
+		from.IsSignedInt() == to.IsSignedInt() && from.TypeLen() <= to.TypeLen()
+}

@@ -1543,4 +1543,41 @@ select (2,4) in (select 1,cast(null as int)) as hit, (2,4) not in (select 1,cast
 create table mark_float (v double);
 insert into mark_float values (cast('-0' as double)),(null);
 select cast('0' as double) in (select v from mark_float) as hit, cast('0' as double) not in (select v from mark_float) as miss;
+-- A missing grouping-set key is nullable only in the aggregate output.
+create table grouping_source (k bigint not null, r int not null, s varchar(8) not null, nk bigint);
+insert into grouping_source values (-2,10,'Ab',null),(1,20,'Cd',1);
+create table rollup_result as select k,count(*) as c from grouping_source group by k with rollup;
+select * from rollup_result order by k;
+create table rollup_multi_result as select k,r,count(*) as c from grouping_source group by k,r with rollup;
+select * from rollup_multi_result order by k,r;
+create table cube_result as select k,r,count(*) as c from grouping_source group by cube(k,r);
+select * from cube_result order by k,r;
+create table grouping_sets_result as select k,count(*) as c from grouping_source group by grouping sets ((k),());
+select * from grouping_sets_result order by k;
+create table grouping_partial_result as select k,r,count(*) as c from grouping_source group by grouping sets ((k,r),(k));
+select * from grouping_partial_result order by k,r;
+create table grouping_control_result as select k,count(*) as c from grouping_source group by k;
+select * from grouping_control_result order by k;
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('rollup_result','rollup_multi_result','cube_result','grouping_sets_result','grouping_partial_result','grouping_control_result') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+
+-- Positive proofs preserve safe function metadata without classifying all STRICT functions as safe.
+create table safe_abs_result as select abs(k) as v from grouping_source;
+select * from safe_abs_result order by v;
+insert into safe_abs_result values (null);
+create table safe_functions_result as select abs(k) as a, sign(k) as sg, ceil(k) as ce, floor(k) as fl, round(k) as ro, truncate(k,0) as tr, length(s) as le, char_length(s) as cl, bit_length(s) as bl, lower(s) as lo, upper(s) as up from grouping_source;
+select * from safe_functions_result order by a;
+create table safe_strings_result as select concat(s,s) as cc,concat_ws(',',s,s) as cw,ltrim(s) as lt,rtrim(s) as rt,reverse(s) as rv,substring(s,1,1) as sub,substring_index(s,'b',1) as si,trim(s) as tr from grouping_source;
+select * from safe_strings_result order by cc;
+create table safe_nullable_result as select abs(nk) as a,sign(nk) as sg,ceil(nk) as ce,floor(nk) as fl,round(nk) as ro from grouping_source;
+select * from safe_nullable_result order by a;
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('safe_abs_result','safe_functions_result','safe_strings_result','safe_nullable_result') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+
+-- Probe keys can be much wider than the build keys; preserve scalar MARK truth values.
+create table wide_probe (id int, v varchar(65535));
+create table short_rhs (v varchar(65535));
+insert into wide_probe values (1,'a'),(2,repeat('x',65535)),(3,null);
+insert into short_rhs values ('a');
+select p.id,length(p.v),p.v in (select v from short_rhs) as hit from wide_probe p order by p.id;
+-- Deterministic arithmetic is not proof that early key evaluation cannot error.
+select p.id,p.id in (select k+1 from grouping_source) as hit from mark_probe p order by p.id;
 drop database ctas_output_nullability;

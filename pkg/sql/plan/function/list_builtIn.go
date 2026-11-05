@@ -265,10 +265,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `bit_length`
 	{
-		functionId: BIT_LENGTH,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    BIT_LENGTH,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -286,10 +287,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `concat`
 	{
-		functionId: CONCAT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    builtInConcatCheck,
+		functionId:    CONCAT,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       builtInConcatCheck,
 
 		Overloads: []overload{
 			{
@@ -331,10 +333,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `concat_ws`
 	{
-		functionId: CONCAT_WS,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    concatWsCheck,
+		functionId:    CONCAT_WS,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       concatWsCheck,
 
 		Overloads: []overload{
 			{
@@ -2110,10 +2113,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `length`
 	{
-		functionId: LENGTH,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    LENGTH,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2161,10 +2165,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `length_utf8`, `char_length`
 	{
-		functionId: LENGTH_UTF8,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    LENGTH_UTF8,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2243,10 +2248,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `ltrim`
 	{
-		functionId: LTRIM,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    LTRIM,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2555,10 +2561,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `reverse`
 	{
-		functionId: REVERSE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    REVERSE,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2637,10 +2644,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `rtrim`
 	{
-		functionId: RTRIM,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    RTRIM,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3318,10 +3326,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `substring`, `substr`, `mid`
 	{
-		functionId: SUBSTRING,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    SUBSTRING,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3399,10 +3408,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `substring_index`
 	{
-		functionId: SUBSTRING_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch, // TODO:
+		functionId:    SUBSTRING_INDEX,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch, // TODO:
 
 		Overloads: []overload{
 			{
@@ -3664,10 +3674,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `trim`
 	{
-		functionId: TRIM,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    TRIM,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3685,10 +3696,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `lower`, `to_lower`
 	{
-		functionId: LOWER,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    LOWER,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3706,10 +3718,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `upper`, `to_upper`
 	{
-		functionId: UPPER,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    UPPER,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -6395,10 +6408,11 @@ var supportedArrayOperations = []FuncNew{
 var supportedMathBuiltIns = []FuncNew{
 	// function `abs`
 	{
-		functionId: ABS,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    ABS,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -6525,10 +6539,11 @@ var supportedMathBuiltIns = []FuncNew{
 	},
 	// function `sign`
 	{
-		functionId: SIGN,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    SIGN,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7017,10 +7032,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `ceil`, `ceiling`
 	{
-		functionId: CEIL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CEIL,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7247,10 +7263,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `floor`
 	{
-		functionId: FLOOR,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    FLOOR,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7853,10 +7870,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `round`
 	{
-		functionId: ROUND,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    ROUND,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7984,10 +8002,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `truncate`
 	{
-		functionId: TRUNCATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    TRUNCATE,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{

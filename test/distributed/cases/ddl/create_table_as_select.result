@@ -2210,4 +2210,129 @@ insert into mark_float values (cast('-0' as double)),(null);
 select cast('0' as double) in (select v from mark_float) as hit, cast('0' as double) not in (select v from mark_float) as miss;
 ➤ hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
 1  ¦  0
+create table grouping_source (k bigint not null, r int not null, s varchar(8) not null, nk bigint);
+insert into grouping_source values (-2,10,'Ab',null),(1,20,'Cd',1);
+create table rollup_result as select k,count(*) as c from grouping_source group by k with rollup;
+select * from rollup_result order by k;
+➤ k[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  2  𝄀
+-2  ¦  1  𝄀
+1  ¦  1
+create table rollup_multi_result as select k,r,count(*) as c from grouping_source group by k,r with rollup;
+select * from rollup_multi_result order by k,r;
+➤ k[-5,64,0]  ¦  r[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  2  𝄀
+-2  ¦  null  ¦  1  𝄀
+-2  ¦  10  ¦  1  𝄀
+1  ¦  null  ¦  1  𝄀
+1  ¦  20  ¦  1
+create table cube_result as select k,r,count(*) as c from grouping_source group by cube(k,r);
+select * from cube_result order by k,r;
+➤ k[-5,64,0]  ¦  r[4,32,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  2  𝄀
+null  ¦  10  ¦  1  𝄀
+null  ¦  20  ¦  1  𝄀
+-2  ¦  null  ¦  1  𝄀
+-2  ¦  10  ¦  1  𝄀
+1  ¦  null  ¦  1  𝄀
+1  ¦  20  ¦  1
+create table grouping_sets_result as select k,count(*) as c from grouping_source group by grouping sets ((k),());
+select * from grouping_sets_result order by k;
+➤ k[-5,64,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  2  𝄀
+-2  ¦  1  𝄀
+1  ¦  1
+create table grouping_partial_result as select k,r,count(*) as c from grouping_source group by grouping sets ((k,r),(k));
+select * from grouping_partial_result order by k,r;
+➤ k[-5,64,0]  ¦  r[4,32,0]  ¦  c[-5,64,0]  𝄀
+-2  ¦  null  ¦  1  𝄀
+-2  ¦  10  ¦  1  𝄀
+1  ¦  null  ¦  1  𝄀
+1  ¦  20  ¦  1
+create table grouping_control_result as select k,count(*) as c from grouping_source group by k;
+select * from grouping_control_result order by k;
+➤ k[-5,64,0]  ¦  c[-5,64,0]  𝄀
+-2  ¦  1  𝄀
+1  ¦  1
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('rollup_result','rollup_multi_result','cube_result','grouping_sets_result','grouping_partial_result','grouping_control_result') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cube_result  ¦  k  ¦  YES  𝄀
+cube_result  ¦  r  ¦  YES  𝄀
+cube_result  ¦  c  ¦  NO  𝄀
+grouping_control_result  ¦  k  ¦  NO  𝄀
+grouping_control_result  ¦  c  ¦  NO  𝄀
+grouping_partial_result  ¦  k  ¦  NO  𝄀
+grouping_partial_result  ¦  r  ¦  YES  𝄀
+grouping_partial_result  ¦  c  ¦  NO  𝄀
+grouping_sets_result  ¦  k  ¦  YES  𝄀
+grouping_sets_result  ¦  c  ¦  NO  𝄀
+rollup_multi_result  ¦  k  ¦  YES  𝄀
+rollup_multi_result  ¦  r  ¦  YES  𝄀
+rollup_multi_result  ¦  c  ¦  NO  𝄀
+rollup_result  ¦  k  ¦  YES  𝄀
+rollup_result  ¦  c  ¦  NO
+create table safe_abs_result as select abs(k) as v from grouping_source;
+select * from safe_abs_result order by v;
+➤ v[-5,64,0]  𝄀
+1  𝄀
+2
+insert into safe_abs_result values (null);
+constraint violation: Column 'v' cannot be null
+create table safe_functions_result as select abs(k) as a, sign(k) as sg, ceil(k) as ce, floor(k) as fl, round(k) as ro, truncate(k,0) as tr, length(s) as le, char_length(s) as cl, bit_length(s) as bl, lower(s) as lo, upper(s) as up from grouping_source;
+select * from safe_functions_result order by a;
+➤ a[-5,64,0]  ¦  sg[-5,64,0]  ¦  ce[-5,64,0]  ¦  fl[-5,64,0]  ¦  ro[-5,64,0]  ¦  tr[-5,64,0]  ¦  le[-5,64,0]  ¦  cl[-5,64,0]  ¦  bl[-5,64,0]  ¦  lo[12,-1,0]  ¦  up[12,-1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2  ¦  16  ¦  cd  ¦  CD  𝄀
+2  ¦  -1  ¦  -2  ¦  -2  ¦  -2  ¦  -2  ¦  2  ¦  2  ¦  16  ¦  ab  ¦  AB
+create table safe_strings_result as select concat(s,s) as cc,concat_ws(',',s,s) as cw,ltrim(s) as lt,rtrim(s) as rt,reverse(s) as rv,substring(s,1,1) as sub,substring_index(s,'b',1) as si,trim(s) as tr from grouping_source;
+select * from safe_strings_result order by cc;
+➤ cc[12,-1,0]  ¦  cw[12,-1,0]  ¦  lt[12,-1,0]  ¦  rt[12,-1,0]  ¦  rv[12,-1,0]  ¦  sub[12,-1,0]  ¦  si[12,-1,0]  ¦  tr[12,-1,0]  𝄀
+AbAb  ¦  Ab,Ab  ¦  Ab  ¦  Ab  ¦  bA  ¦  A  ¦  A  ¦  Ab  𝄀
+CdCd  ¦  Cd,Cd  ¦  Cd  ¦  Cd  ¦  dC  ¦  C  ¦  Cd  ¦  Cd
+create table safe_nullable_result as select abs(nk) as a,sign(nk) as sg,ceil(nk) as ce,floor(nk) as fl,round(nk) as ro from grouping_source;
+select * from safe_nullable_result order by a;
+➤ a[-5,64,0]  ¦  sg[-5,64,0]  ¦  ce[-5,64,0]  ¦  fl[-5,64,0]  ¦  ro[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+select table_name,column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('safe_abs_result','safe_functions_result','safe_strings_result','safe_nullable_result') and column_name <> '__mo_fake_pk_col' order by table_name,ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+safe_abs_result  ¦  v  ¦  NO  𝄀
+safe_functions_result  ¦  a  ¦  NO  𝄀
+safe_functions_result  ¦  sg  ¦  NO  𝄀
+safe_functions_result  ¦  ce  ¦  NO  𝄀
+safe_functions_result  ¦  fl  ¦  NO  𝄀
+safe_functions_result  ¦  ro  ¦  NO  𝄀
+safe_functions_result  ¦  tr  ¦  NO  𝄀
+safe_functions_result  ¦  le  ¦  NO  𝄀
+safe_functions_result  ¦  cl  ¦  NO  𝄀
+safe_functions_result  ¦  bl  ¦  NO  𝄀
+safe_functions_result  ¦  lo  ¦  NO  𝄀
+safe_functions_result  ¦  up  ¦  NO  𝄀
+safe_nullable_result  ¦  a  ¦  YES  𝄀
+safe_nullable_result  ¦  sg  ¦  YES  𝄀
+safe_nullable_result  ¦  ce  ¦  YES  𝄀
+safe_nullable_result  ¦  fl  ¦  YES  𝄀
+safe_nullable_result  ¦  ro  ¦  YES  𝄀
+safe_strings_result  ¦  cc  ¦  NO  𝄀
+safe_strings_result  ¦  cw  ¦  NO  𝄀
+safe_strings_result  ¦  lt  ¦  NO  𝄀
+safe_strings_result  ¦  rt  ¦  NO  𝄀
+safe_strings_result  ¦  rv  ¦  NO  𝄀
+safe_strings_result  ¦  sub  ¦  NO  𝄀
+safe_strings_result  ¦  si  ¦  NO  𝄀
+safe_strings_result  ¦  tr  ¦  NO
+create table wide_probe (id int, v varchar(65535));
+create table short_rhs (v varchar(65535));
+insert into wide_probe values (1,'a'),(2,repeat('x',65535)),(3,null);
+insert into short_rhs values ('a');
+select p.id,length(p.v),p.v in (select v from short_rhs) as hit from wide_probe p order by p.id;
+➤ id[4,32,0]  ¦  length(p.v)[-5,64,0]  ¦  hit[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  65535  ¦  0  𝄀
+3  ¦  null  ¦  null
+select p.id,p.id in (select k+1 from grouping_source) as hit from mark_probe p order by p.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  0
 drop database ctas_output_nullability;

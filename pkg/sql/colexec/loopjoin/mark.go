@@ -16,8 +16,10 @@ package loopjoin
 
 import (
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -97,8 +99,9 @@ func newMarkHash(proc *process.Process, cond *plan.Expr) (*markHash, error) {
 	return m, nil
 }
 
-// Return the referenced input mask, or -1 for an unsafe expression. Moving a
-// volatile call out of the pairwise evaluator would change its evaluation count.
+// Return the referenced input mask, or -1 when moving evaluation is unsafe.
+// Determinism alone is insufficient: a later RHS batch can error even though
+// the pairwise evaluator would stop at an earlier match without evaluating it.
 func markKeySide(expr *plan.Expr) int {
 	if c := expr.GetCol(); c != nil {
 		if c.RelPos < 0 || c.RelPos > 1 {
@@ -107,8 +110,7 @@ func markKeySide(expr *plan.Expr) int {
 		return 1 << c.RelPos
 	}
 	if f := expr.GetF(); f != nil {
-		ov, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
-		if !ok || ov.CannotFold() || ov.IsRealTimeRelated() {
+		if !function.IsLosslessIntegerCast(expr) {
 			return -1
 		}
 		mask := 0
@@ -207,7 +209,7 @@ func (m *markHash) floatMatch(row int, matched bool) bool {
 
 func (ctr *container) probeMarkHash(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
 	m := ctr.markHash
-	if ctr.probeIdx == 0 {
+	if m.probeVec == nil {
 		var err error
 		m.probeVec, err = m.key.Eval(proc, []*batch.Batch{ctr.inBat, ctr.inBat}, nil)
 		if err != nil {
@@ -220,7 +222,22 @@ func (ctr *container) probeMarkHash(ap *LoopJoin, proc *process.Process, result 
 			return err
 		}
 		count := min(hashmap.UnitLimit, end-start)
-		values, nonnull := m.iter.Find(start, count, []*vector.Vector{m.probeVec})
+		values, nonnull, err := hashmap.FindWithMPool(m.iter, start, count, []*vector.Vector{m.probeVec}, proc.Mp())
+		if err != nil {
+			if canceled := proc.Ctx.Err(); canceled != nil {
+				return canceled
+			}
+			if !moerr.IsMoErrCode(err, moerr.ErrOOM) &&
+				!(moerr.IsMoErrCode(err, moerr.ErrInternal) && strings.HasPrefix(err.Error(), "internal error: mpool out of space, alloc ")) {
+				return err
+			}
+			// Nothing from this Call has been published. Re-evaluation is safe
+			// for admitted keys; discard any preceding windows' partial output
+			// and use the existing evaluator from the original probeIdx.
+			m.probeVec = nil
+			ap.resetResultBat()
+			return ctr.probe(ap, proc, result)
+		}
 		for i := 0; i < count; i++ {
 			matched := nonnull[i] != 0 && m.floatMatch(start+i, values[i] != 0)
 			unknown := !matched && m.hasRows && (nonnull[i] == 0 || m.hasNull)
