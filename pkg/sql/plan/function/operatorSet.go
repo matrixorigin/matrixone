@@ -47,79 +47,16 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 		if t.Oid.IsMySQLString() {
 			hasString = true
 		}
+		// MySQL treats TRUE/FALSE as the integers 1/0, so BOOL counts as
+		// numeric here: a string value branch next to a BOOL branch resolves
+		// to a string result instead of casting the string to BOOL
+		// (issue #31294).
 		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() || t.Oid == types.T_bool {
 			hasNumeric = true
 		}
 		if hasString && hasNumeric {
 			retType := types.T_varchar.ToType()
 			retType.Width = types.MaxVarBinaryLen
-			// A TEXT/BLOB-family branch whose declared capacity exceeds
-			// VARCHAR must keep its family: casting it to VARCHAR(65535)
-			// truncates legal values (issue #31294 review). Only the
-			// persisted subtype markers are proven bounds: TINYTEXT/TINYBLOB
-			// and declared plain BLOB (65,535 bytes) fit VARCHAR, while
-			// MEDIUMTEXT/MEDIUMBLOB and LONGTEXT/LONGBLOB promote at their
-			// declared capacity. Width zero is ordinary or computed
-			// TEXT/BLOB with no proven bound (LOWER of a MEDIUMTEXT column
-			// returns T_text width zero; declaredStringByteBound documents
-			// width zero on TEXT/BLOB as unbounded), and any other legacy
-			// width is likewise unknown: both fail open to the LONG domain
-			// rather than risk truncation. A BLOB branch keeps the binary
-			// family, and when both families promote the BLOB domain covers
-			// the TEXT branch's capacity as well.
-			var textWidth, blobWidth int32
-			unboundedText, unboundedBlob := false, false
-			for _, t := range source {
-				if t.Oid != types.T_text && t.Oid != types.T_blob {
-					continue
-				}
-				isBlob := t.Oid == types.T_blob
-				switch {
-				case t.Width == types.MaxTinyTextLen:
-					// TINYTEXT/TINYBLOB's declared bound fits VARCHAR: no
-					// promotion.
-				case t.Width == types.MaxMediumTextLen || t.Width == types.MaxLongTextLen:
-					if isBlob {
-						if t.Width > blobWidth {
-							blobWidth = t.Width
-						}
-					} else if t.Width > textWidth {
-						textWidth = t.Width
-					}
-				case isBlob && t.Width == types.MaxStringSize:
-					// Declared plain BLOB's 65,535-byte bound fits VARCHAR:
-					// no promotion.
-				default:
-					if isBlob {
-						unboundedBlob = true
-					} else {
-						unboundedText = true
-					}
-				}
-			}
-			if blobWidth > 0 || unboundedBlob {
-				// A BLOB branch keeps the binary family and must also cover
-				// any TEXT branch's capacity.
-				retType = types.T_blob.ToType()
-				switch {
-				case unboundedBlob || unboundedText:
-					// An unknown or unbounded LOB domain fails open to the
-					// largest SQL-valid LOB domain, matching the
-					// window-function rule.
-					retType.Width = types.MaxLongTextLen
-				case textWidth > blobWidth:
-					retType.Width = textWidth
-				default:
-					retType.Width = blobWidth
-				}
-			} else if textWidth > 0 || unboundedText {
-				retType = types.T_text.ToType()
-				if unboundedText {
-					retType.Width = types.MaxLongTextLen
-				} else {
-					retType.Width = textWidth
-				}
-			}
 			return commonConditionalStringType(retType, source), true
 		}
 	}
