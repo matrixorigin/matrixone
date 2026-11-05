@@ -15100,6 +15100,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "stage_list":
 			nodeId, err = builder.buildStageList(tbl, ctx, exprs, nil)
+		case "desc_file":
+			nodeId, err = builder.buildDescFile(tbl, ctx, exprs, nil)
 		case "moplugin_table":
 			nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, nil)
 		case "parse_jsonl_data":

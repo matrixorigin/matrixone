@@ -1,0 +1,55 @@
+create stage zs URL='file:///$resources/load_data/zipzstd';
+select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/') d order by name;
+➤ name[12,65535,0]  ¦  size[-5,64,0]  ¦  is_dir[-7,1,0]  𝄀
+mix  ¦  0  ¦  1  𝄀
+rows_zip.csv.zip  ¦  146  ¦  0  𝄀
+rows_zst.csv.zst  ¦  47  ¦  0  𝄀
+stored.zip  ¦  145  ¦  0  𝄀
+two.zip  ¦  256  ¦  0
+select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/*.zip') d order by name;
+➤ name[12,65535,0]  ¦  size[-5,64,0]  ¦  is_dir[-7,1,0]  𝄀
+rows_zip.csv.zip  ¦  146  ¦  0  𝄀
+stored.zip  ¦  145  ¦  0  𝄀
+two.zip  ¦  256  ¦  0
+select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/two.zip') d;
+➤ name[12,65535,0]  ¦  size[-5,64,0]  ¦  is_dir[-7,1,0]  𝄀
+two.zip  ¦  256  ¦  0
+select substring_index(file, '/', -1) name from desc_file('stage://zs/mix/*') d order by name;
+➤ name[12,65535,0]  𝄀
+m_0.csv.zst  𝄀
+m_1.csv.lz4  𝄀
+m_2.csv.zip  𝄀
+m_3.csv
+select count(*) from desc_file('stage://zs/missing') d;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from desc_file(null) d;
+➤ count(*)[-5,64,0]  𝄀
+0
+select cast(unzip_file(cast('stage://zs/two.zip' as datalink)) as char) c;
+➤ c[12,65535,0]  𝄀
+id,name
+21,uniform
+22,victor
+
+select cast(unzip_file(cast('stage://zs/stored.zip' as datalink)) as char) c;
+➤ c[12,65535,0]  𝄀
+id,name
+41,quebec
+42,romeo
+
+select length(unzip_file(cast('stage://zs/mix/m_2.csv.zip' as datalink))) n;
+➤ n[-5,64,0]  𝄀
+16
+select cast(unzip_file('$resources/load_data/zipzstd/two.zip') as char) c;
+➤ c[12,65535,0]  𝄀
+id,name
+21,uniform
+22,victor
+
+select unzip_file(cast('stage://zs/rows_zst.csv.zst' as datalink));
+invalid input: not a zip archive
+select unzip_file(null);
+➤ unzip_file(null)[-4,2147483647,0]  𝄀
+null
+drop stage zs;
