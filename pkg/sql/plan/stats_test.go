@@ -875,6 +875,102 @@ func TestEstimateConjunctiveYearRange(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestRangeSelectivityClipsToDomain(t *testing.T) {
+	const empty = 1e-8
+	for _, tc := range []struct {
+		name                   string
+		min, max, lower, upper float64
+		want                   float64
+	}{
+		{name: "below domain", min: 0, max: 999, lower: -500, upper: -100, want: empty},
+		{name: "above domain", min: 0, max: 999, lower: 1100, upper: 1200, want: empty},
+		{name: "wide disjoint range", min: 0, max: 999, lower: 1000, upper: 3000, want: empty},
+		{name: "left overlap", min: 0, max: 100, lower: -20, upper: 19, want: 0.2},
+		{name: "right overlap", min: 0, max: 100, lower: 81, upper: 120, want: 0.2},
+		{name: "inside domain", min: 0, max: 100, lower: 20, upper: 39, want: 0.2},
+		{name: "exact domain", min: 0, max: 100, lower: 0, upper: 100, want: 1},
+		{name: "covers domain", min: 0, max: 100, lower: -20, upper: 120, want: 1},
+		{name: "touches minimum", min: 0, max: 100, lower: -20, upper: 0, want: 0.01},
+		{name: "touches maximum", min: 0, max: 100, lower: 100, upper: 120, want: 0.01},
+		{name: "interior point", min: 0, max: 100, lower: 20, upper: 20, want: 0.01},
+		{name: "reversed adjacent bounds", min: 0, max: 100, lower: 21, upper: 20, want: empty},
+		{name: "singleton exact match", min: 10, max: 10, lower: 10, upper: 10, want: 1},
+		{name: "singleton covered", min: 10, max: 10, lower: 9, upper: 11, want: 1},
+		{name: "singleton excluded below", min: 10, max: 10, lower: 8, upper: 9, want: empty},
+		{name: "singleton excluded above", min: 10, max: 10, lower: 11, upper: 12, want: empty},
+		{name: "invalid statistics", min: 100, max: 0, lower: 20, upper: 39, want: 0.1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, op := range []string{"between", "in_range"} {
+				t.Run(op, func(t *testing.T) {
+					literals := []*planpb.Literal{
+						{Value: &planpb.Literal_I64Val{I64Val: int64(tc.lower)}},
+						{Value: &planpb.Literal_I64Val{I64Val: int64(tc.upper)}},
+					}
+					require.InDelta(t, tc.want,
+						calcSelectivityByMinMax(op, tc.min, tc.max, types.T_int64, literals), 1e-12)
+
+					// Decimal conversion and its separate estimator must obey the same interval contract.
+					expr := makeDecimalBetweenExpr(tc.lower, tc.upper, 2)
+					expr.GetF().Func.ObjName = op
+					require.InDelta(t, tc.want,
+						calcSelectivityByMinMaxForDecimal(op, tc.min, tc.max, expr), 1e-12)
+				})
+			}
+		})
+	}
+
+	t.Run("unsupported literal preserves fallback", func(t *testing.T) {
+		valid := &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 20}}
+		invalid := &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "not a number"}}
+		for _, literals := range [][]*planpb.Literal{{invalid, valid}, {valid, invalid}} {
+			require.Equal(t, 0.1, calcSelectivityByMinMax("between", 0, 100, types.T_int64, literals))
+		}
+	})
+}
+
+func TestBoundBetweenSelectivityClipsToDomain(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	part := ctx.tables["part"]
+	require.NotNil(t, part)
+	stats := NewStatsInfo()
+	stats.TableName, stats.TableCnt = "part", 1000
+	stats.DataTypeMap["p_retailprice"] = uint64(types.T_decimal64)
+	stats.MinValMap["p_retailprice"], stats.MaxValMap["p_retailprice"] = 0, 100
+	cache := NewStatsCache()
+	cache.Set(part.TblId, stats)
+	compiler := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
+		MockCompilerContext: ctx, statsCache: cache,
+	}}
+	for _, tc := range []struct {
+		name, bounds string
+		want         float64
+	}{
+		{name: "disjoint", bounds: "-50.00 and -10.00", want: 1e-8},
+		{name: "overlap", bounds: "-20.00 and 19.00", want: 0.2},
+		{name: "cover", bounds: "-20.00 and 120.00", want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := mysql.Parse(compiler.GetContext(),
+				"select p_partkey from part where p_retailprice between "+tc.bounds, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			built, err := BuildPlan(compiler, stmts[0], false)
+			require.NoError(t, err)
+			var scan *planpb.Node
+			for _, node := range built.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef.Name == "part" {
+					scan = node
+					break
+				}
+			}
+			require.NotNil(t, scan)
+			require.InDelta(t, tc.want, scan.Stats.Selectivity, 1e-12)
+		})
+	}
+}
+
 func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
 	const emptySelectivity = 0.00000001
 	tests := []struct {
