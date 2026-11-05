@@ -139,9 +139,9 @@ func TestReadOneBlockScopedDecodePosition(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := &scopedDescriptorFS{}
-			proof := M0ObjectProof{ObjectName: "columns", WrittenSize: 3, SchemaSize: 4}
+
 			v, err := ReadOneBlockWithScopedDecode(
-				WithM0ProvenObject(t.Context(), proof), &meta, "columns", 0,
+				t.Context(), &meta, "columns", 0,
 				tc.columns, tc.typs, mp, fs, 0, tc.selected,
 			)
 			require.NoError(t, err)

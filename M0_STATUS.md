@@ -1,5 +1,43 @@
 # M0 restricted metadata-only ADD prototype
 
+## AR-1 local implementation, 2026-11-05
+
+This section supersedes the implementation/default-policy claims in the dated
+historical records below. The local candidate is based on `667fde44` plus its
+complete isolated-worktree patch. It has not been pushed or published to PR
+#30816; no current PR/CI state is asserted here.
+
+| Area | Current local contract and state |
+|---|---|
+| M1 authority | Explicit versioned `SchemaExtra.M0Evolution`, O(columns), binds root, account/database/relation, stable column semantics and layout introductions. CREATE/COPY, clone and supported restart rebuild authority. It is new persistent/protobuf metadata semantics, not a disk-object format extension. |
+| M2 execution | Engine ordinary/selected/late-materialized reads, capability-routed TopN/Search, pruning/statistics/COUNT, and the supported two-CN statement-view chain are implemented. Their real consumers have local evidence; no new wire payload was introduced. |
+| M3 boundary | PASS_LOCAL: ObjectIO's evolution policy, context proof/legacy NULL marker and shared missing-column rejection are removed. Engine passes explicit bounded object/block read layouts; ObjectIO only locates, reads and decodes physical data. The complete local A candidate has source-bound default/M0, race and two-mode static evidence. |
+| Default | Its missing-normal-column branch matches pre-PR `2465dae7`; ordinary ADD remains COPY. Existing physical checks remain. No new historical-version, upgrade or backup-source support is promised. |
+| Strict M0 | Owner/schema/snapshot/member binding precedes semantic interpretation. Unknown, missing or contradictory authority cannot authorize NULL. Only a validated appended nullable suffix (or the exact system-catalog rule) maps to NULL. No shape/width/history guessing remains in production authorization. |
+| Versioning | Catalog metadata version and contract layout generation are distinct. The existing object header stores layout generation only for contracted data; the generic physical version decoder does not decide its meaning. |
+| Producers | Ordinary full-layout writers remain strict. A validated older-generation clone rewrite uses a private prefix writer binding without changing catalog authority. Generated-column tables are ordinary COPY controls, not M0 roots. |
+| Qualification | Final local candidate status is separate from Linux, external BVT, published-head CI, maintainer review and QA; those are not claimed for this local patch. CF9 performance remains historical only. |
+
+The current contract and consumer handoff are described in the
+[R3 / AR-1 addendum](docs/design/20261027-m0-read-boundary-r3.md).
+Local source/evidence identities and terminal receipts are maintained in the
+isolated worktree's sibling `evidence/A1_BINDING_AND_RECOVERY.md` and
+`evidence/ar1-m3-final-source.json`; they are not substituted by this status text.
+The frozen code validation covers 64 default and 102 M0 root executions, 1,500
+mapping/lifetime race invocations, three real SQL race roots and two backup race
+roots. Both modes passed owning-package compile/vet, incremental lint and molint.
+The delivery seal separately records these documentation-only additions; they
+do not create a new binary or relabel external qualification.
+
+Experimental data is same-version only and must use an isolated data directory
+or storage namespace with deployment/access restrictions. Unmodified old/default
+binaries are not guaranteed to reject it. Mixed-version operation, production
+enablement, downgrade compatibility and full physical backup/restore qualification
+are not provided by these local checks.
+
+## Historical status records (pre-AR-1; identities remain unchanged)
+
+
 Architecture follow-up, 2026-10-27: [R3 read-boundary proposal](docs/design/20261027-m0-read-boundary-r3.md)
 is a draft for maintainer decision, not approval or an implementation change.
 It reopens the R2 default-compatibility policy and identifies an unresolved

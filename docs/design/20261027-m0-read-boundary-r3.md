@@ -1,5 +1,61 @@
 # Restricted M0 ADD COLUMN: read boundary proposal R3
 
+## Implemented local AR-1 contract (2026-11-05)
+
+This addendum supersedes the implementation choice and compatibility assumptions
+of the historical R3 draft below. It records the user-selected local architecture,
+not maintainer approval or a published PR revision. Final qualification is tracked
+separately in `M0_STATUS.md` and the local evidence seal.
+
+1. **Authority is durable and relation-owned.** `SchemaExtra.M0Evolution` records
+   a format version, root identity, owner binding, root width, layout generation,
+   stable column identities/introduction generations, normalized semantics and
+   digest. It is explicitly new persistent/protobuf metadata semantics. The
+   object encoding itself is unchanged. MVCC relation membership selects visible
+   objects; neither header fields nor dense shapes grant relation authority.
+2. **Engine owns interpretation.** CN binds the transaction-visible definition;
+   remote receivers reopen/validate the same relation/schema/snapshot; TN binds
+   its local relation/schema/object. These owners compare authoritative semantics
+   and pass `m0read.ObjectReadLayout` explicitly into Engine materialization and
+   metadata consumers. No context value can authorize ObjectIO NULL filling.
+3. **Physical and logical decisions are separate.** ObjectIO reads physical
+   metadata/columns and retains its existing decode/integrity checks. Engine
+   verifies the declared generation and complete consumed prefix, constructs
+   correctly typed NULL vectors, and preserves request order, rowids, tombstones
+   and selected-row positions. Missing/invalid authority never calls ordinary
+   compatibility as a recovery path. Internal physical readers without user
+   TableDef remain physical; user remote scopes reject absent relation bindings.
+4. **Validation has a bounded scope.** ADD/ingress checks the whole object once.
+   TN consumption checks the full declared prefix of the selected block, returns
+   a block-bound result, and cannot authorize another block. A B-block scan does
+   O(B*C) prefix work, not B whole-object scans. CN retains only the current
+   reader/object result. No global proof cache is introduced; no performance
+   result is claimed for this implementation.
+5. **Writers preserve declared layouts.** Current-layout writes still require the
+   complete bound layout. Clone deletion rewrites may preserve an older recorded
+   generation only after validating current owner/authority and source layout;
+   their private writer binding never changes catalog authority. Catalog snapshot
+   version remains distinct from the pinned output generation. Explicit COPY of
+   an otherwise admissible ADD validates source authority and uses the real
+   rewrite/new-root path; malformed authority cannot be hidden by COPY.
+6. **Default compatibility is restored.** The ordinary missing-column branch is
+   the pre-PR NULL-compatible branch. The exact system-catalog logical-ID rule is
+   maintained by its Engine owner. This restores prior behavior and does not
+   certify additional historical layouts, upgrade sources or backup sources.
+7. **Supported scope stays restricted.** Nullable/no-backfill tail ADD retains
+   the established schema/DDL limits. Generated-column tables remain ordinary
+   COPY, including after restart; they do not acquire an M0 contract. Unsupported
+   physical ingress cannot manufacture authority. Clone/snapshot/recovery must
+   reconstruct the recorded contract and proper target relation binding.
+8. **Acceptance remains separate.** Local default/M0/race/static evidence is
+   source-bound. Linux, external BVT, published-head CI, reviewer acceptance,
+   production/mixed-version eligibility and QA are separate. Old/default binary
+   access to experimental storage is unsupported and needs deployment isolation;
+   old binaries are not assumed to self-reject these directories.
+
+## Historical R3 proposal and evidence
+
+
 Status: **DRAFT; design decision and implementation blocked**. This proposal
 belongs to [PR #30816](https://github.com/matrixorigin/matrixone/pull/30816)
 and parent issue [#30518](https://github.com/matrixorigin/matrixone/issues/30518).

@@ -30,42 +30,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestM0ObjectSchemaIdentity(t *testing.T) {
-	require.IsType(t, (*error)(nil), &ErrM0SchemaIdentityUnavailable)
-	require.IsType(t, (*error)(nil), &ErrM0AppendLayout)
+func TestObjectSchemaVersionPhysicalHeader(t *testing.T) {
 	h := BuildHeader()
 	h.SetSchemaVersion(7)
-	meta := buildObjectDataMetaV1(1)
-	meta.BlockHeader().SetTableID(42)
-	tableID, version, err := M0ObjectSchemaIdentity(h, meta)
+	version, err := ObjectSchemaVersion(h)
 	require.NoError(t, err)
-	require.Equal(t, uint64(42), tableID)
 	require.Equal(t, uint32(7), version)
-
-	for _, test := range []struct {
-		name string
-		h    Header
-		meta ObjectDataMeta
-	}{
-		{"short header", h[:8], meta},
-		{"bad magic", make(Header, HeaderSize), meta},
-		{"short metadata", h, meta[:8]},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, _, err := M0ObjectSchemaIdentity(test.h, test.meta)
-			require.Error(t, err)
-		})
-	}
-	meta.BlockHeader().SetTableID(0)
-	_, _, err = M0ObjectSchemaIdentity(h, meta)
-	require.ErrorIs(t, err, ErrM0SchemaIdentityUnavailable)
+	_, err = ObjectSchemaVersion(nil)
+	require.Error(t, err)
+	invalid := BuildHeader()
+	invalid[0] ^= 1
+	_, err = ObjectSchemaVersion(invalid)
+	require.Error(t, err)
 }
 
 // This exercises the actual B writer, disk bytes and a newly opened service.
 // A nonzero schema version and dense columns do not supply an origin relation.
 // Reopening cannot manufacture the missing identity. This is not a SQL clone
 // or WAL/checkpoint recovery test.
-func TestM0PersistedBObjectHasNoWriterSchemaIdentity(t *testing.T) {
+func TestPersistedObjectHeaderFieldsSurviveReopen(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -110,10 +93,11 @@ func TestM0PersistedBObjectHasNoWriterSchemaIdentity(t *testing.T) {
 	require.Equal(t, uint16(0), data.BlockHeader().MaxSeqnum())
 	require.Equal(t, uint32(7), types.DecodeUint32(h[8+2+ExtentSize:8+2+ExtentSize+4]))
 	before := bytes.Clone(data)
-	_, _, err = M0ObjectSchemaIdentity(h, data)
-	require.ErrorIs(t, err, ErrM0SchemaIdentityUnavailable)
+	version, err := ObjectSchemaVersion(h)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), version)
 	require.Equal(t, before, []byte(data))
-	// A proposed appended column is physically absent, but remains unproven.
+	// Physical absence is data; evolution authorization belongs to Engine.
 	require.Zero(t, data.MustGetColumn(1).DataType())
 	require.Zero(t, data.MustGetColumn(1).NullCnt())
 }

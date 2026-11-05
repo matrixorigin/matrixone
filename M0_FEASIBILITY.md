@@ -1,5 +1,14 @@
 # M0 missing-column feasibility result
 
+> Historical feasibility record. AR-1 supersedes the statement below that current
+> shape/version alone is sufficient: the local implementation now requires an
+> explicit recoverable relation contract in SchemaExtra (new persistent/protobuf
+> semantics). Object format bytes are unchanged; default reading retains its
+> pre-PR behavior and strict M0 interpretation belongs to Engine. See
+> [current status](M0_STATUS.md) and the
+> [implemented AR-1 contract](docs/design/20261027-m0-read-boundary-r3.md).
+
+
 **Result: route 2, a restricted append invariant, is feasible for the local
 `mo_m0` prototype.** It is not yet a production feature and does not select M0
 in ordinary builds.
