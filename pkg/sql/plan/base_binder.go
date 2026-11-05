@@ -9611,7 +9611,11 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 	// COALESCE 按转换成本选择的数值/布尔/时间重载会丢失字符串内容。
 	// 窗口必须保留两个分支的值域，不能因未使用的默认值改写源值。
 	// 先选未知容量的字符串域，再由调用方统一推导容量及 SQL LOB 子类型。
-	if !ret.Oid.IsMySQLString() && (valueArg.Oid.IsMySQLString() || defaultArg.Oid.IsMySQLString()) {
+	// BOOL 在 mixedStringNumericToVarchar 中按数值处理（issue #31294），
+	// 其 VARCHAR(65535) 结果同样不能收窄另一分支的 TEXT/BLOB 值域。
+	boolMixedString := (valueArg.Oid == types.T_bool && defaultArg.Oid.IsMySQLString()) ||
+		(defaultArg.Oid == types.T_bool && valueArg.Oid.IsMySQLString())
+	if (!ret.Oid.IsMySQLString() || boolMixedString) && (valueArg.Oid.IsMySQLString() || defaultArg.Oid.IsMySQLString()) {
 		if valueArg.Oid == types.T_blob || defaultArg.Oid == types.T_blob ||
 			valueArg.Oid == types.T_binary || defaultArg.Oid == types.T_binary ||
 			valueArg.Oid == types.T_varbinary || defaultArg.Oid == types.T_varbinary {
