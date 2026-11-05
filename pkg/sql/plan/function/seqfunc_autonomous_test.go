@@ -323,6 +323,49 @@ func newSeqRouteFixture(t *testing.T, relID uint64, state *seqMetadataState) *se
 	}
 }
 
+// TestSeqExecutorEnvCasePolicyMapping pins the internal executor's case
+// policy for the sequence-owned generated SQL. Those statements embed
+// already-resolved physical identifiers — sequenceRelationName applied the
+// session policy before this point — while the bind side folds identifiers
+// under every non-zero policy (tree.NewCStr) even though the lexer folds
+// only mode 1. Executing a mode-2 session's resolved targets at the session
+// value would re-fold the preserved spelling mid-statement (review
+// 5776394217); the internal execution must run case-preserving instead.
+func TestSeqExecutorEnvCasePolicyMapping(t *testing.T) {
+	newEnvOpts := func(t *testing.T, policy int64) executor.Options {
+		ctrl := gomock.NewController(t)
+		txn := mock_frontend.NewMockTxnOperator(ctrl)
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		proc.Base.TxnOperator = txn
+		proc.SetResolveVariableFunc(sequenceCasePolicyResolver(policy))
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
+		rt := runtime.ServiceRuntime(proc.GetService())
+		previous, hadPrevious := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+		stub := &seqRouteExec{}
+		rt.SetGlobalVariables(runtime.InternalSQLExecutor, stub)
+		t.Cleanup(func() {
+			rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, stub)
+			if hadPrevious {
+				rt.SetGlobalVariables(runtime.InternalSQLExecutor, previous)
+			}
+		})
+		env, err := seqExecutorEnv(proc.Ctx, proc, "db")
+		require.NoError(t, err)
+		return env.opts
+	}
+
+	t.Run("mode 2 executes the generated SQL case-preserving", func(t *testing.T) {
+		require.Equal(t, int64(0), newEnvOpts(t, 2).LowerCaseTableNames())
+	})
+	t.Run("mode 1 keeps the historical fold execution", func(t *testing.T) {
+		require.Equal(t, int64(1), newEnvOpts(t, 1).LowerCaseTableNames())
+	})
+	t.Run("mode 0 keeps the historical case-preserving execution", func(t *testing.T) {
+		require.Equal(t, int64(0), newEnvOpts(t, 0).LowerCaseTableNames())
+	})
+}
+
 // expectCommittedRoute admits the autonomous attempt's resolution through its
 // own fresh transaction: the caller-resolved identity is visible in committed
 // state (same committed database id, same relation id).
