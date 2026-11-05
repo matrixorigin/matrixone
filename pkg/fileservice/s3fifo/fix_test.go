@@ -132,15 +132,15 @@ func TestGhostCountsRememberedEntries(t *testing.T) {
 	require.Less(t, len(g.ring), 4096)
 }
 
-// Concurrent sets, replaces, reads and deletes keep Used within the capacity and the values in
-// flight, and within the capacity once they have returned; every value given to the cache is
-// released once it has left it.
+// Concurrent sets, replaces, reads and deletes keep Used within the ceiling, a sixteenth over
+// the capacity, and the values in flight, and within the capacity once they have returned;
+// every value given to the cache is released once it has left it.
 func TestUsedStaysWithinCapacity(t *testing.T) {
 	var misuse atomic.Int32
 	const goroutines, maxSize = 8, 256
 	for _, capacity := range []int64{1, 4 << 10, 64 << 10} {
 		c := newCache(capacity)
-		ceiling := capacity + goroutines*min(capacity, maxSize)
+		ceiling := capacity + capacity/16 + goroutines*min(capacity, maxSize)
 		var over atomic.Int64
 		stop := make(chan struct{})
 		sampled := make(chan struct{})

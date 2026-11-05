@@ -24,8 +24,9 @@ import (
 
 // model is S3-FIFO as libCacheSim implements it, in one shard, but for the order of insertion
 // and eviction: a miss inserts the object into main when the ghost queue remembers it, taking it
-// from the ghost queue, and into small otherwise, then evicts while the cache is over capacity. Eviction takes from small while small holds more than a
-// tenth of the capacity or main is empty: a small object read more than once moves to main.
+// from the ghost queue, and into small otherwise, then evicts while the cache is over capacity.
+// Eviction takes from small while small holds more than a tenth of the capacity or main is
+// empty: a small object read more than once moves to main.
 // From main, an object read since it was last passed over goes back with one read fewer. Any
 // other is evicted, and remembered in the ghost queue when it has bytes, as the cache it
 // replaces did for main too. The ghost queue holds at most nine tenths of the capacity, and

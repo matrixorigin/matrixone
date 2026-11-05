@@ -21,8 +21,11 @@
 // as one S3-FIFO. One goroutine evicts at a time.
 //
 // A Set inserts its value, makes it evictable once its insertion is notified, then evicts
-// until Used is within the capacity, waiting for the evictor when another goroutine holds it. Used exceeds the capacity only by the values of the
-// Sets running, or after the capacity shrinks until the next Set or eviction.
+// while Used is over the capacity. When another goroutine is evicting, the Set leaves the
+// eviction to it, which checks Used again once it lets go of the evictor, unless Used is over
+// the ceiling, a sixteenth over the capacity, where the Set waits to evict too. Used exceeds
+// the capacity only while Sets are running, by at most a sixteenth of it and the values being
+// inserted, or after the capacity shrinks until the next Set or eviction.
 //
 // The cache retains a value when it inserts it and releases it once the value has left the
 // cache, outside all of its locks; a Get retains the value for the caller. When Set returns,
@@ -260,6 +263,9 @@ func (c *Cache[K, V]) Set(key K, value V, size int64) (inserted bool, rejected b
 	}
 	hash := c.opts.Hash(key)
 	ps, ix := c.policyOf(hash), c.indexOf(hash)
+	if ix.contains(key) {
+		return false, false
+	}
 	limit, ghostHit := int64(math.MaxInt64), false
 	if c.opts.Admission != nil {
 		if target, ok := c.opts.Admission(capacity); ok {
@@ -292,7 +298,7 @@ func (c *Cache[K, V]) Set(key K, value V, size int64) (inserted bool, rejected b
 	if ghostHit {
 		seq, result = c.evictAndPublish(ps, ix, e, limit)
 	} else {
-		seq, result = c.publish(ps, ix, e, limit)
+		seq, result = c.publish(ix, e, limit)
 	}
 	if result != insertOK {
 		return false, result == insertRejected
@@ -326,11 +332,11 @@ func (c *Cache[K, V]) evictAndPublish(ps *policyShard[K, V], ix *indexShard[K, V
 	var buf [evictBatch]removal[K, V]
 	for {
 		c.evictor.Lock()
-		seq, result := c.publish(ps, ix, e, limit)
+		seq, result := c.publish(ix, e, limit)
 		removed, done := buf[:0], false
 		if result == insertRejected {
 			removed, _, done = c.evictBatch(limit-e.size, removed)
-			seq, result = c.publish(ps, ix, e, limit)
+			seq, result = c.publish(ix, e, limit)
 		}
 		c.evictor.Unlock()
 		c.finishAll(removed)
@@ -343,9 +349,7 @@ func (c *Cache[K, V]) evictAndPublish(ps *policyShard[K, V], ix *indexShard[K, V
 
 // publish charges e within limit and indexes it, unless its key is already cached, and returns
 // its sequence number. e is not queued yet.
-func (c *Cache[K, V]) publish(ps *policyShard[K, V], ix *indexShard[K, V], e *entry[K, V], limit int64) (uint64, insertResult) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
+func (c *Cache[K, V]) publish(ix *indexShard[K, V], e *entry[K, V], limit int64) (uint64, insertResult) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if _, cached := ix.index[e.key]; cached {
@@ -503,13 +507,18 @@ func (c *Cache[K, V]) DeleteGroup(group string) {
 // EvictTo evicts values until Used is at most target, and returns Used. It stops early when
 // ctx is done or nothing is left to evict.
 func (c *Cache[K, V]) EvictTo(ctx context.Context, target int64) int64 {
-	target = max(target, 0)
 	var buf [evictBatch]removal[K, V]
+	return c.evictTo(ctx, target, buf[:0])
+}
+
+// evictTo is EvictTo evicting in batches of the capacity of buf.
+func (c *Cache[K, V]) evictTo(ctx context.Context, target int64, buf []removal[K, V]) int64 {
+	target = max(target, 0)
 	for {
 		// The evicted values are released outside the evictor, so that a slow release does
 		// not hold up the other evictions.
 		c.evictor.Lock()
-		removed, used, done := c.evictBatch(target, buf[:0])
+		removed, used, done := c.evictBatch(target, buf)
 		c.evictor.Unlock()
 		c.finishAll(removed)
 		clear(removed)
@@ -519,19 +528,41 @@ func (c *Cache[K, V]) EvictTo(ctx context.Context, target int64) int64 {
 	}
 }
 
-// evictOver evicts until Used is within the capacity.
+// evictOver evicts while Used is over the capacity, in small batches as a Set has few values
+// to evict. When another goroutine holds the evictor, it leaves the eviction to that one
+// unless Used is over the ceiling, a sixteenth over the capacity, and then waits to evict too.
+// It checks Used again each time it lets go of the evictor, so that it evicts the bytes of the
+// Sets that left the eviction to it. It stops when nothing is left to evict: the bytes of a Set
+// not yet queued are evicted by that Set.
 func (c *Cache[K, V]) evictOver() {
-	if c.used.Load() > c.capacity() {
-		c.EvictTo(context.Background(), c.capacity())
+	var buf [8]removal[K, V]
+	for {
+		capacity := c.capacity()
+		used := c.used.Load()
+		if used <= capacity {
+			return
+		}
+		if used > capacity+capacity/16 {
+			c.evictor.Lock()
+		} else if !c.evictor.TryLock() {
+			return
+		}
+		removed, used, done := c.evictBatch(capacity, buf[:0])
+		c.evictor.Unlock()
+		c.finishAll(removed)
+		clear(removed)
+		if done && used > capacity {
+			return
+		}
 	}
 }
 
-// evictBatch evicts up to evictBatch values into removed while Used is over target. done
+// evictBatch evicts values into removed, up to its capacity, while Used is over target. done
 // reports that Used is within target or that nothing is left to evict. The caller holds the
 // evictor.
 func (c *Cache[K, V]) evictBatch(target int64, removed []removal[K, V]) (_ []removal[K, V], used int64, done bool) {
 	capacity := c.capacity()
-	for len(removed) < evictBatch {
+	for len(removed) < cap(removed) {
 		if used = c.used.Load(); used <= target {
 			return removed, used, true
 		}
@@ -704,6 +735,13 @@ func (ps *policyShard[K, V]) queueOf(e *entry[K, V]) *fifo[K, V] {
 		return &ps.main
 	}
 	return nil
+}
+
+func (ix *indexShard[K, V]) contains(key K) bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	_, ok := ix.index[key]
+	return ok
 }
 
 func (ix *indexShard[K, V]) groupEntries(group string) []*entry[K, V] {
