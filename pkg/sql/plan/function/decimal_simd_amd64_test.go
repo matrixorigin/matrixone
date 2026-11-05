@@ -79,11 +79,12 @@ func TestDecimalSIMDExactAndFallback(t *testing.T) {
 						clear(got.GetData())
 						clear(want.GetData())
 						require.NoError(t, decimalArithmeticChunkScalar(op, x, y, want, 1, 1, 1, n))
-						require.Equal(t, n >= 256, tryDecimalSIMD(op, x, y, got, 1, 1, 1, n))
-						if n >= 256 {
+						minimum := decimalArithmeticSIMDMinRows(op, x, y, got)
+						require.Equal(t, n >= minimum, tryDecimalSIMD(op, x, y, got, 1, 1, 1, n))
+						if n >= minimum {
 							require.Equal(t, want.GetData(), got.GetData())
 						}
-						if op == MULTI && n >= 256 {
+						if op == MULTI && n >= minimum {
 							// A later full-width value ends vectorization without losing the prefix.
 							if wide {
 								vector.MustFixedColNoTypeCheck[types.Decimal128](x)[5] = types.Decimal128{B0_63: 1, B64_127: 1}
@@ -220,6 +221,111 @@ func TestDecimalSIMDBroadcastAndDecline(t *testing.T) {
 	out.GetType().Scale = 1
 	require.False(t, tryDecimalSIMD(MULTI, x, y, out, 0, 0, 0, 257))
 	require.Equal(t, before, out.GetData())
+}
+
+// Broadcasts select different concrete loops; exercise each through the public
+// dispatcher, including a wide first block and exact scalar suffix after a prefix.
+func TestDecimalSIMDBroadcastWidths(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("AVX2 unavailable")
+	}
+	for _, op := range []int32{PLUS, MINUS, MULTI} {
+		for _, xt := range []types.T{types.T_decimal64, types.T_decimal128} {
+			for _, rt := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+				if (op == MULTI && rt == types.T_decimal64) || (op != MULTI && ((xt == types.T_decimal64 && rt == types.T_decimal256) || (xt == types.T_decimal128 && rt == types.T_decimal64))) {
+					continue
+				}
+				for _, left := range []bool{false, true} {
+					t.Run(fmt.Sprintf("op%d/input%d/output%d/left%v", op, xt, rt, left), func(t *testing.T) {
+						mp := mpool.MustNewZero()
+						t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+						typ := func(oid types.T) types.Type {
+							width := int32(18)
+							if oid == types.T_decimal128 {
+								width = 38
+							}
+							if oid == types.T_decimal256 {
+								width = 65
+							}
+							return types.New(oid, width, 0)
+						}
+						makeInput := func(oid types.T, constant bool) *vector.Vector {
+							var v *vector.Vector
+							var err error
+							if constant {
+								if oid == types.T_decimal64 {
+									v, err = vector.NewConstFixed(typ(oid), types.Decimal64(3), 257, mp)
+								} else {
+									v, err = vector.NewConstFixed(typ(oid), types.Decimal128FromInt64(3), 257, mp)
+								}
+								require.NoError(t, err)
+								t.Cleanup(func() { v.Free(mp) })
+							} else {
+								v = vector.NewVec(typ(oid))
+								t.Cleanup(func() { v.Free(mp) })
+								for i := 0; i < 257; i++ {
+									x := int64(i%7 - 3)
+									if oid == types.T_decimal64 {
+										err = vector.AppendFixed(v, types.Decimal64(x), false, mp)
+									} else {
+										err = vector.AppendFixed(v, types.Decimal128FromInt64(x), false, mp)
+									}
+									require.NoError(t, err)
+								}
+							}
+							return v
+						}
+						yt := xt
+						if op == MULTI {
+							yt = types.T_decimal64
+						}
+						a, b := makeInput(xt, left), makeInput(yt, !left)
+						got, want := vector.NewVec(typ(rt)), vector.NewVec(typ(rt))
+						for _, v := range []*vector.Vector{got, want} {
+							t.Cleanup(func() { v.Free(mp) })
+							require.NoError(t, v.PreExtend(257, mp))
+							v.SetLength(257)
+							clear(v.GetData())
+						}
+						require.NoError(t, decimalArithmeticChunkScalar(op, a, b, want, 0, 0, 0, 257))
+						require.True(t, TryDecimalArithmeticSIMD(op, a, b, got, 0, 0, 0, 257))
+						require.Equal(t, want.GetData(), got.GetData())
+						if op != MULTI {
+							return
+						}
+						flat := a
+						if left {
+							flat = b
+						}
+						for _, row := range []int{0, 1, 2, 3, 4, 5, 6, 7, 256} {
+							func() {
+								if flat.GetType().Oid == types.T_decimal64 {
+									col := vector.MustFixedColNoTypeCheck[types.Decimal64](flat)
+									old := col[row]
+									defer func() { col[row] = old }()
+									col[row] = types.Decimal64(math.MaxInt64)
+								} else {
+									col := vector.MustFixedColNoTypeCheck[types.Decimal128](flat)
+									old := col[row]
+									defer func() { col[row] = old }()
+									col[row] = types.Decimal128{B0_63: 1, B64_127: 1}
+								}
+								before := append([]byte(nil), got.GetData()...)
+								accepted := TryDecimalArithmeticSIMD(op, a, b, got, 0, 0, 0, 257)
+								require.Equal(t, row >= 4, accepted)
+								if !accepted {
+									require.Equal(t, before, got.GetData())
+									return
+								}
+								require.NoError(t, decimalArithmeticChunkScalar(op, a, b, want, 0, 0, 0, 257))
+								require.Equal(t, want.GetData(), got.GetData())
+							}()
+						}
+					})
+				}
+			}
+		}
+	}
 }
 
 func BenchmarkDecimalSIMDRefusal(b *testing.B) {

@@ -24,7 +24,7 @@ import (
 )
 
 func tryDecimalSIMD(op int32, x, y, out *vector.Vector, xi, yi, oi, n int) bool {
-	if n < 256 || !archsimd.X86.AVX2() || x.IsConstNull() || y.IsConstNull() || x.HasNull() || y.HasNull() || x.HasGrouping() || y.HasGrouping() || (x.IsConst() && y.IsConst()) {
+	if n < decimalArithmeticSIMDMinRows(op, x, y, out) || !archsimd.X86.AVX2() || x.IsConstNull() || y.IsConstNull() || x.HasNull() || y.HasNull() || x.HasGrouping() || y.HasGrouping() || (x.IsConst() && y.IsConst()) {
 		return false
 	}
 	if op == MULTI && x.GetType().Oid == types.T_decimal64 && y.GetType().Oid == types.T_decimal128 {
@@ -61,13 +61,7 @@ func tryDecimalSIMD(op int32, x, y, out *vector.Vector, xi, yi, oi, n int) bool 
 	}
 	if xt == types.T_decimal64 {
 		if rt == types.T_decimal128 {
-			if xc {
-				return decimalMul64To128Left(x, y, out, xi, yi, oi, n)
-			}
-			if yc {
-				return decimalMul64To128Right(x, y, out, xi, yi, oi, n)
-			}
-			return decimalMul64To128Flat(x, y, out, xi, yi, oi, n)
+			return decimalMul64To128(x, y, out, xi, yi, oi, n)
 		} else {
 			if xc {
 				return decimalMul64To256Left(x, y, out, xi, yi, oi, n)

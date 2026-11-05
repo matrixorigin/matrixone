@@ -72,9 +72,32 @@ func TryDecimalMulSub64(x, y *vector.Vector, c types.Decimal64, out *vector.Vect
 		return true
 	}
 	if !xc && !yc && !x.HasNull() && !y.HasNull() {
-		return decimalMulSub64(xv, yv, c, vector.MustFixedColNoTypeCheck[types.Decimal128](out))
+		dst := vector.MustFixedColNoTypeCheck[types.Decimal128](out)
+		if n >= decimalSIMDFusedMinRows && len(xv) == n && len(yv) == n && int64(xv[0]) == int64(int32(xv[0])) {
+			ci, yi := int64(c), int64(yv[0])
+			delta := ci - yi
+			if ((ci^yi)&(ci^delta)) >= 0 && delta == int64(int32(delta)) {
+				first := decimalMulSubSIMDPrefix(xv, yv, c, dst)
+				return decimalMulSub64(xv[first:], yv[first:], c, dst[first:])
+			}
+		}
+		return decimalMulSub64(xv, yv, c, dst)
 	}
 	dst := vector.MustFixedColNoTypeCheck[types.Decimal128](out)
+	if n == 1 {
+		if x.IsNull(0) || y.IsNull(0) {
+			out.GetNulls().Add(0)
+			return true
+		}
+		out.GetNulls().Del(0)
+		ci, yi := int64(c), int64(yv[0])
+		delta := ci - yi
+		if ((ci ^ yi) & (ci ^ delta)) >= 0 {
+			dst[0] = d64MulInline(xv[0], types.Decimal64(delta))
+			return true
+		}
+		return decimalMulSub64(xv[:1], yv[:1], c, dst[:1])
+	}
 	var xn, yn *nulls.Nulls
 	if !xc {
 		xn = x.GetNulls()

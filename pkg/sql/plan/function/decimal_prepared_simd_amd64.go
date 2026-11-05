@@ -357,3 +357,12 @@ func decimal64WideSub(a, b []types.Decimal64, out []types.Decimal128, n int) {
 		out[i] = types.Decimal128{B0_63: v.B0_63, B64_127: v.B64_127}
 	}
 }
+
+func loadDecimal128Permuted(v []uint64, i int, constant bool) (archsimd.Uint64x4, archsimd.Uint64x4) {
+	if constant {
+		return archsimd.BroadcastUint64x4(v[0]), archsimd.BroadcastUint64x4(v[1])
+	}
+	at := i * 2
+	a, b := archsimd.LoadUint64x4(v[at:at+4]), archsimd.LoadUint64x4(v[at+4:at+8])
+	return a.InterleaveLoGrouped(b), a.InterleaveHiGrouped(b)
+}

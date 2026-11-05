@@ -14,11 +14,29 @@
 
 package function
 
-import "github.com/matrixorigin/matrixone/pkg/container/vector"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
 
-// TryDecimalArithmeticSIMD is an optional exact kernel for already-admitted
-// aggregate operands. Refusal leaves output untouched; the original scalar
-// entrypoint remains unchanged for unsupported and short inputs.
+// Provisional minima are qualified against dispatched scalar controls before
+// adoption. Fixed expression chunk capacity is independent of these thresholds.
+const (
+	decimalSIMDPreparedMinRows = 256
+	decimalSIMDFusedMinRows    = 32
+	decimalSIMDMultiplyMinRows = 32
+	decimalSIMDCastMinRows     = 64
+)
+
+func decimalArithmeticSIMDMinRows(op int32, x, y, out *vector.Vector) int {
+	if op == MULTI && x.GetType().Oid == types.T_decimal64 && y.GetType().Oid == types.T_decimal64 && out.GetType().Oid == types.T_decimal128 {
+		return decimalSIMDMultiplyMinRows
+	}
+	return decimalSIMDPreparedMinRows
+}
+
+// TryDecimalArithmeticSIMD optionally computes admitted aggregate operands.
+// Refusal leaves output untouched; unsupported shapes keep scalar arithmetic.
 func TryDecimalArithmeticSIMD(op int32, x, y, out *vector.Vector, xi, yi, oi, n int) bool {
-	return n >= 256 && decimalSIMDQuickCheck(op, x, y, xi, yi) && tryDecimalSIMD(op, x, y, out, xi, yi, oi, n)
+	return n >= 32 && n >= decimalArithmeticSIMDMinRows(op, x, y, out) && decimalSIMDQuickCheck(op, x, y, xi, yi) && tryDecimalSIMD(op, x, y, out, xi, yi, oi, n)
 }

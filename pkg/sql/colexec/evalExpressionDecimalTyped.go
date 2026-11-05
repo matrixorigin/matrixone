@@ -129,7 +129,7 @@ func (e *decimalTypedExecutor) Eval(p *process.Process, b []*batch.Batch, s []bo
 	}
 	out := e.root.resultVector.GetResultVector()
 	out.SetLength(n)
-	if !(n >= 256 && function.TryDecimalArithmeticSIMD(e.op, x, y, out, 0, 0, 0, n)) && !function.TryDecimal64Binary(e.op, x, y, out) {
+	if !(function.TryDecimalArithmeticSIMD(e.op, x, y, out, 0, 0, 0, n)) && !function.TryDecimal64Binary(e.op, x, y, out) {
 		return e.root.Eval(p, b, s)
 	}
 	return out, nil

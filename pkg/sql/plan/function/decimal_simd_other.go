@@ -25,4 +25,8 @@ func tryDecimalSIMD(_ int32, _, _, _ *vector.Vector, _, _, _, _ int) bool { retu
 
 func decimalSIMDQuickCheck(_ int32, _, _ *vector.Vector, _, _ int) bool { return false }
 
-func tryDecimal128SIMD(_ int32, _, _, _ []types.Decimal128) (int, bool) { return -1, false }
+func decimalMulSubSIMDPrefix(_, _ []types.Decimal64, _ types.Decimal64, _ []types.Decimal128) int {
+	return 0
+}
+func decimal64MulSIMDPrefix(_, _ []types.Decimal64, _ []types.Decimal128, _ int) int { return 0 }
+func decimal64WidenSIMDPrefix(_ []types.Decimal64, _ []types.Decimal128, _ int) int  { return 0 }

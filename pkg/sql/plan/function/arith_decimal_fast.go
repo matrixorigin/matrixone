@@ -133,11 +133,6 @@ func d128Add(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 // Different-scale: scales operand(s) first, then uses bits.Sub64 loop.
 
 func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
-	if max(len(v1), len(v2)) >= 256 && rsnull.IsEmpty() {
-		if idx, ok := tryDecimal128SIMD(PLUS, v1, v2, rs); ok {
-			return idx
-		}
-	}
 	bmp := rsnull.GetBitmap()
 	len1 := len(v1)
 	len2 := len(v2)
@@ -295,11 +290,6 @@ func d128Sub(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 // For vector-vector: scale lower-scale vector into rs, then bits.Add64 with other.
 
 func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
-	if max(len(v1), len(v2)) >= 256 && rsnull.IsEmpty() {
-		if idx, ok := tryDecimal128SIMD(MINUS, v1, v2, rs); ok {
-			return idx
-		}
-	}
 	bmp := rsnull.GetBitmap()
 	len1 := len(v1)
 	len2 := len(v2)
@@ -4560,17 +4550,12 @@ func d64SubDiffScale(v1, v2, rs []types.Decimal64, scale1, scale2 int32, rsnull 
 
 func d64Mul(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	bmp := rsnull.GetBitmap()
-	desiredScale := int32(12)
-	if scale1 > desiredScale {
-		desiredScale = scale1
+	// The common unscaled product needs no rounding-scale calculation.
+	// min(max(12, scale1, scale2), scale1+scale2) is the sum when it is <=12.
+	scaleAdj := int32(0)
+	if sum := scale1 + scale2; sum > 12 {
+		scaleAdj = min(max(int32(12), scale1, scale2), sum) - sum
 	}
-	if scale2 > desiredScale {
-		desiredScale = scale2
-	}
-	if scale1+scale2 < desiredScale {
-		desiredScale = scale1 + scale2
-	}
-	scaleAdj := desiredScale - scale1 - scale2
 
 	n := len(rs)
 	if len(v1) == 1 && len(v2) == 1 {
@@ -4586,6 +4571,23 @@ func d64Mul(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int3
 
 	if scaleAdj != 0 {
 		return d64MulScaled(v1, v2, rs, scaleAdj, rsnull)
+	}
+
+	if n >= decimalSIMDMultiplyMinRows && rsnull.IsEmpty() && int64(v1[0]) == int64(int32(v1[0])) && int64(v2[0]) == int64(int32(v2[0])) {
+		first := decimal64MulSIMDPrefix(v1, v2, rs, n)
+		if first != 0 {
+			am, bm := -1, -1
+			if len(v1) == 1 {
+				am = 0
+			}
+			if len(v2) == 1 {
+				bm = 0
+			}
+			for i := first; i < n; i++ {
+				rs[i] = d64MulInline(v1[i&am], v2[i&bm])
+			}
+			return nil
+		}
 	}
 
 	if len(v1) == 1 {
@@ -4737,17 +4739,11 @@ func d64MulScaled(v1, v2 []types.Decimal64, rs []types.Decimal128, scaleAdj int3
 // Single 64×64→128 bit multiply. No overflow possible. Fully branchless.
 
 func d64MulInline(x, y types.Decimal64) types.Decimal128 {
-	xi, yi := int64(x), int64(y)
-	mx, my := xi>>63, yi>>63
-	ax, ay := uint64((xi^mx)-mx), uint64((yi^my)-my)
-	hi, lo := bits.Mul64(ax, ay)
-	// Branchless conditional negate (two's complement: XOR + add carry).
-	nm := uint64((xi ^ yi) >> 63) // 0xFF..FF if different signs
-	lo ^= nm
-	hi ^= nm
-	var c uint64
-	lo, c = bits.Add64(lo, 0, nm&1)
-	hi, _ = bits.Add64(hi, 0, c)
+	hi, lo := bits.Mul64(uint64(x), uint64(y))
+	// Correct the unsigned high limb to the signed product modulo 2^128.
+	// Each negative operand contributes the other operand times 2^64.
+	hi -= uint64(int64(x)>>63) & uint64(y)
+	hi -= uint64(int64(y)>>63) & uint64(x)
 	return types.Decimal128{B0_63: lo, B64_127: hi}
 }
 
