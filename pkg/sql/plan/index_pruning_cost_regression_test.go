@@ -43,6 +43,14 @@ func TestJoinIndexCostsProbeFanout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := newEncodedExistsPlanTestContext(t, tc.ndv)
+			// Isolate probe fanout from per-reader preparation costs and host CPU count.
+			base := *ctx.MockCompilerContext
+			ctx.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+				if name == "max_dop" {
+					return int64(1), nil
+				}
+				return base.ResolveVariable(name, system, global)
+			}
 			activity := ctx.tables["cost_activity"]
 			activity.Cols[2].Typ = activity.Cols[0].Typ
 			activity.Name2ColIndex["payload"] = int32(len(activity.Cols))
@@ -63,6 +71,7 @@ func TestJoinIndexCostsProbeFanout(t *testing.T) {
 			query, err := runOneStmt(optimizer, t, "select count(*) from cost_activity "+tc.hint+
 				" where state in (select tenant_id from cost_tags where tenant_id < 100)"+tc.residual)
 			require.NoError(t, err)
+			require.Equal(t, int64(1), query.GetQuery().MaxDop)
 			require.True(t, reachablePlanHasJoinType(query.GetQuery(), planpb.Node_SEMI))
 			require.Equal(t, tc.wantIndex, planHasIndexJoin(query))
 			if !tc.wantIndex {
