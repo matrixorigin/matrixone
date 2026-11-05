@@ -2660,4 +2660,7 @@ message MySQLSpecialResultType {
   // Empty paths and constant/implicit-group window inputs are distinct proofs.
   // Cursor execution still materializes its result schema.
   bool materialization_elided = 3;
+  // Stored expression labels never regain ENUM/SET declaration flags, even
+  // when their current producer becomes an aggregate or a forwarded field.
+  bool label_only = 4;
 }

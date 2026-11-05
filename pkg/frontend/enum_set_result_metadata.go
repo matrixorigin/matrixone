@@ -77,7 +77,11 @@ func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResu
 	col.SetDecimal(0)
 	switch result.Kind {
 	case plan.MySQLSpecialResultType_COLUMN:
-		col.SetFlag(col.Flag() | uint16(flag))
+		if result.LabelOnly {
+			col.SetFlag(col.Flag() &^ uint16(defines.ENUM_FLAG|defines.SET_FLAG))
+		} else {
+			col.SetFlag(col.Flag() | uint16(flag))
+		}
 	case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_SCALAR_SUBQUERY,
 		plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_ROLLUP_AGGREGATE, plan.MySQLSpecialResultType_CHAR_LABEL,
 		plan.MySQLSpecialResultType_PREPARE_ONLY, plan.MySQLSpecialResultType_VARCHAR_LABEL:

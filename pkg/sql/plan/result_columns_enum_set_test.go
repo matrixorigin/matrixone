@@ -184,6 +184,10 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2) and (b.id is null)+1>0", false},
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=(b.id is null)+1", false},
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=b.id+1", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2) and (b.id=1) is true", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2) and sign(b.id)>0", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=sign(b.id)+1", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=sign(b.id is null)+1", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id>=1.2 and id<=1.1", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id between 1.2 and 1.1", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where 1.2<=id and 1.1>=id", false},
@@ -401,6 +405,7 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 		{"sql_string", []any{ParamValue{Value: "2", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, true},
 		{"sql_string_prefix", []any{ParamValue{Value: "2x", HasSourceType: true, SourceType: types.T_varchar.ToType(), EnableNumericPrefix: true}, ParamValue{Value: "1x", HasSourceType: true, SourceType: types.T_varchar.ToType(), EnableNumericPrefix: true}}, true},
 		{"sql_string_unadmitted_prefix", []any{ParamValue{Value: "2x", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1x", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, false},
+		{"binary_long64", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int64.ToType(), IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int64.ToType(), IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}}, true},
 		{"binary_double", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
 		{"binary_double_native", []any{ParamValue{Value: float64(1.2), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: float64(1.1), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
 		{"sql_integer_transport", []any{ParamValue{Value: int64(2)}, ParamValue{Value: int64(1)}}, true},
@@ -438,6 +443,11 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 					bindings[i].Type = types.T_text.ToType()
 				}
 			}
+			if tc.name == "binary_long64" {
+				for i := range bindings {
+					bindings[i].Type = types.T_int64.ToType()
+				}
+			}
 			if strings.HasPrefix(tc.name, "binary_double") {
 				for i := range bindings {
 					bindings[i].Type = types.T_float64.ToType()
@@ -454,6 +464,157 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 				require.Equal(t, tc.empty, col.MysqlSpecialResultType.MaterializationElided)
 			}
 			require.True(t, proto.Equal(snapshot, bound.Plan))
+		})
+	}
+}
+
+func TestEnumSetCharLabelProvenance(t *testing.T) {
+	set := "select e,s from enum_order_t group by e,s with rollup union select e,s from enum_order_t group by e,s with rollup"
+	for _, sql := range []string{
+		set,
+		"select min(e),max(s) from (" + set + ")d",
+		"select e,s from(select min(e)e,max(s)s from (" + set + ")d)a",
+		"select e,s from(select e,s from(select min(e)e,max(s)s from (" + set + ")d)a)b",
+		"select min(e)over(),max(s)over() from (" + set + ")d",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock(t)
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			for _, candidate := range []*Plan{p, DeepCopyPlan(p)} {
+				data, err := candidate.Marshal()
+				require.NoError(t, err)
+				var restored Plan
+				require.NoError(t, restored.Unmarshal(data))
+				snapshot := proto.Clone(&restored)
+				for _, column := range GetResultColumnsFromPlan(&restored) {
+					require.NotNil(t, column.MysqlSpecialResultType)
+					require.True(t, column.MysqlSpecialResultType.LabelOnly)
+				}
+				require.True(t, proto.Equal(snapshot, &restored))
+			}
+		})
+	}
+	legacy := &pb.MySQLSpecialResultType{Kind: pb.MySQLSpecialResultType_CHAR_LABEL}
+	converted := withMySQLSpecialResultKind(legacy, pb.MySQLSpecialResultType_AGGREGATE)
+	require.Equal(t, pb.MySQLSpecialResultType_AGGREGATE, converted.Kind)
+	require.True(t, converted.LabelOnly)
+}
+
+func TestEnumSetBinaryNullSetSchema(t *testing.T) {
+	mock := newMySQLSpecialOrderMock(t)
+	stmt, err := mysql.ParseOne(t.Context(), "select e,s from enum_order_t group by e,s with rollup union all select ?,?", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	proc := mock.ctxt.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+	for i := 0; i < 2; i++ {
+		require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+	}
+	proc.SetPrepareParams(params)
+	values := []any{ParamValue{IsBinaryProtocol: true}, ParamValue{IsBinaryProtocol: true}}
+	bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_any.ToType()}, {Position: 1, Type: types.T_any.ToType()}}
+	bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+	require.NoError(t, err)
+	snapshot := proto.Clone(bound.Plan)
+	for _, column := range GetResultColumnsFromPlanWithParams(bound.Plan, values) {
+		require.Nil(t, column.MysqlSpecialResultType, "a binary NULL parameter is not an untyped literal NULL branch")
+		require.Equal(t, int32(types.T_text), column.Typ.Id)
+	}
+	require.True(t, proto.Equal(snapshot, bound.Plan))
+}
+
+func TestEnumSetRangeWideColumnDomains(t *testing.T) {
+	for _, tc := range []struct {
+		oid            types.T
+		predicate      string
+		indexed, empty bool
+	}{
+		{types.T_int64, "id between 9223372036854775808 and 9223372036854775809", true, true},
+		{types.T_int64, "id between 9223372036854775808 and 9223372036854775808", false, true},
+		{types.T_int64, "id between -9223372036854775809 and -9223372036854775809", false, false},
+		{types.T_int64, "id=9223372036854775808", false, true},
+		{types.T_uint64, "id between 18446744073709551616 and 18446744073709551617", true, true},
+		{types.T_uint64, "id between 18446744073709551616 and 18446744073709551616", false, false},
+		{types.T_uint64, "id between -1 and -1", false, true},
+		{types.T_uint64, "id=-1", false, true},
+		{types.T_int8, "id=1.2", false, true},
+		{types.T_int64, "id=1.2", false, true},
+		{types.T_uint64, "id=1.2", false, true},
+	} {
+		t.Run(tc.oid.String()+"/"+tc.predicate, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock(t)
+			table := mock.ctxt.tables["enum_order_t"]
+			table.Cols[0].Typ.Id = int32(tc.oid)
+			if tc.indexed {
+				table.Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			}
+			stmt, err := mysql.ParseOne(t.Context(), "select min(e)over(),max(s)over() from enum_order_t where "+tc.predicate, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			for _, column := range GetResultColumnsFromPlan(p) {
+				require.NotNil(t, column.MysqlSpecialResultType)
+				require.Equal(t, tc.empty, column.MysqlSpecialResultType.MaterializationElided)
+			}
+		})
+	}
+}
+
+func TestResultIntegerFieldLimits(t *testing.T) {
+	for _, tc := range []struct {
+		oid       types.T
+		low, high string
+	}{
+		{types.T_int8, "-128", "127"}, {types.T_uint8, "0", "255"},
+		{types.T_int16, "-32768", "32767"}, {types.T_uint16, "0", "65535"},
+		{types.T_int32, "-2147483648", "2147483647"}, {types.T_uint32, "0", "4294967295"},
+		{types.T_int64, "-9223372036854775808", "9223372036854775807"}, {types.T_uint64, "0", "18446744073709551615"},
+	} {
+		column := &Expr{Typ: pb.Type{Id: int32(tc.oid)}}
+		low, high, ok := resultIntegerFieldLimits(column, column)
+		require.True(t, ok)
+		require.Equal(t, tc.low, low.RatString())
+		require.Equal(t, tc.high, high.RatString())
+		_, _, ok = resultIntegerFieldLimits(column, &Expr{Typ: pb.Type{Id: int32(types.T_float64)}})
+		require.Equal(t, tc.oid.TypeLen() < 8, ok)
+		_, _, ok = resultIntegerFieldLimits(column, &Expr{Typ: pb.Type{Id: int32(types.T_float32)}})
+		require.Equal(t, tc.oid.TypeLen() < 4, ok)
+	}
+	_, _, ok := resultIntegerFieldLimits(&Expr{Typ: pb.Type{Id: int32(types.T_varchar)}}, &Expr{})
+	require.False(t, ok)
+	_, _, ok = resultIntegerFieldLimits(&Expr{Typ: pb.Type{Id: int32(types.T_uint64), Enumvalues: "x,yy"}}, &Expr{})
+	require.False(t, ok)
+}
+
+func TestEnumSetUnsignedRangeDomain(t *testing.T) {
+	for _, tc := range []struct {
+		predicate string
+		empty     bool
+	}{
+		{"id<0", true}, {"id<-0.1", true}, {"id>=4294967296", true},
+		{"id between 4294967296 and 4294967297", true},
+		{"id between -2 and -1", false}, {"id between -0.9 and -0.1", false}, {"id>=0", false},
+	} {
+		t.Run(tc.predicate, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock(t)
+			table := mock.ctxt.tables["enum_order_t"]
+			table.Cols[0].Typ.Id = int32(types.T_uint32)
+			table.Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			stmt, err := mysql.ParseOne(t.Context(), "select min(e)over(),max(s)over() from enum_order_t where "+tc.predicate, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			for _, column := range GetResultColumnsFromPlan(p) {
+				require.NotNil(t, column.MysqlSpecialResultType)
+				require.Equal(t, tc.empty, column.MysqlSpecialResultType.MaterializationElided)
+			}
 		})
 	}
 }
@@ -504,6 +665,20 @@ func TestEnumSetRangeIndexAccess(t *testing.T) {
 		{"no_index_null_order", "id>=null", nil, false, false},
 		{"no_index_null_equal", "id=null", nil, false, false},
 		{"primary_between", "id between 2 and 1", []string{"id"}, true, true},
+		{"primary_above_between", "id between 2147483648 and 2147483649", []string{"id"}, true, true},
+		{"primary_below_between_control", "id between -2147483650 and -2147483649", []string{"id"}, true, false},
+		{"primary_above_lower", "id>=2147483648", []string{"id"}, true, true},
+		{"primary_below_upper", "id< -2147483648", []string{"id"}, true, true},
+		{"primary_fractional_above", "id>=2147483647.2", []string{"id"}, true, true},
+		{"primary_fractional_equal_between", "id between 1.2 and 1.2", []string{"id"}, true, true},
+		{"primary_fractional_gap_control", "id between 1.2 and 1.8", []string{"id"}, true, false},
+		{"primary_fractional_high_between_control", "id between 2147483647.1 and 2147483647.9", []string{"id"}, true, false},
+		{"primary_fractional_low_between_control", "id between -2147483648.9 and -2147483648.1", []string{"id"}, true, false},
+		{"unindexed_domain_fold", "id>=2147483648", nil, false, true},
+		{"unindexed_domain_between_control", "id between 2147483648 and 2147483649", nil, false, false},
+		{"unindexed_equal_between_control", "id between 1.2 and 1.2", nil, false, false},
+		{"unindexed_equal_above_domain", "id between 2147483648 and 2147483648", nil, false, true},
+		{"unindexed_equal_below_domain", "id between -2147483649 and -2147483649", nil, false, true},
 		{"secondary_between", "id between 2 and 1", []string{"id"}, false, true},
 		{"secondary_null", "id between null and 1", []string{"id"}, false, true},
 		{"invisible_secondary", "id between 2 and 1", []string{"id"}, false, false},

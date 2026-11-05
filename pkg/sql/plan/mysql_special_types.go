@@ -896,6 +896,9 @@ func mysqlSpecialResultTypeFromProvenance(provenance OutputColumnProvenance) *pl
 // Materializing a label as VARCHAR irreversibly loses CHAR identity. Later
 // value-preserving operators may retain its width, but cannot recreate it.
 func withMySQLSpecialResultKind(result *plan.MySQLSpecialResultType, kind plan.MySQLSpecialResultType_Kind) *plan.MySQLSpecialResultType {
+	if result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL {
+		result.LabelOnly = true
+	}
 	if result.Kind != plan.MySQLSpecialResultType_VARCHAR_LABEL {
 		result.Kind = kind
 	}

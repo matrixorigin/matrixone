@@ -103,6 +103,42 @@ func TestEnumSetColumnDefinitionMetadata(t *testing.T) {
 	}
 }
 
+func TestEnumSetLabelOnlyColumnHeader(t *testing.T) {
+	for _, source := range []pb.Type{{Id: int32(types.T_enum), Enumvalues: "a,bb,"}, {Id: int32(types.T_uint64), Enumvalues: "x,yy"}} {
+		for _, labelOnly := range []bool{false, true} {
+			def := &pb.ColDef{Typ: pb.Type{Id: int32(types.T_varchar)}, MysqlSpecialResultType: &pb.MySQLSpecialResultType{
+				Typ: source, Kind: pb.MySQLSpecialResultType_COLUMN, LabelOnly: labelOnly,
+			}}
+			data, err := def.Marshal()
+			require.NoError(t, err)
+			var restored pb.ColDef
+			require.NoError(t, restored.Unmarshal(data))
+			col, err := colDef2MysqlColumn(t.Context(), &restored)
+			require.NoError(t, err)
+			protocol := &MysqlProtocolImpl{io: NewIOPackage(true)}
+			cached, err := protocol.MakeColumnDefData(t.Context(), []*pb.ColDef{&restored})
+			require.NoError(t, err)
+			for _, command := range []CommandType{COM_QUERY, COM_STMT_PREPARE, COM_STMT_EXECUTE} {
+				packet := protocol.makeColumnDefinition41Payload(col, int(command))
+				require.Equal(t, cached[0], packet)
+				wire := parsePrepareColumnDefinition(t, packet[HeaderOffset:])
+				require.Equal(t, defines.MYSQL_TYPE_STRING, wire.typ)
+				flags := uint16(defines.ENUM_FLAG)
+				if source.Id == int32(types.T_uint64) {
+					flags = uint16(defines.SET_FLAG)
+				}
+				if labelOnly {
+					flags = 0
+				}
+				require.Equal(t, flags, wire.flags)
+			}
+			after, err := restored.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, data, after)
+		}
+	}
+}
+
 func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
 	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		pb.MySQLSpecialResultType_SCALAR_SUBQUERY, pb.MySQLSpecialResultType_ROLLUP,

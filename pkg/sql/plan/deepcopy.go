@@ -594,6 +594,7 @@ func DeepCopyMySQLSpecialResultType(result *plan.MySQLSpecialResultType) *plan.M
 	}
 	return &plan.MySQLSpecialResultType{
 		Typ: *DeepCopyType(&result.Typ), Kind: result.Kind, MaterializationElided: result.MaterializationElided,
+		LabelOnly: result.LabelOnly,
 	}
 }
 

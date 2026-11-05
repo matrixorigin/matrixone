@@ -90,9 +90,11 @@ public final class EnumSetMetadataProbe {
         }
     }
 
-    private static void rangeExecution(PreparedStatement statement,Integer[] range,boolean cursor) throws Exception {
+    private static void rangeExecution(PreparedStatement statement,Integer[] range,boolean cursor,boolean... wide) throws Exception {
         for (int i=0;i<2;i++) {
-            if (range[i]==null) statement.setNull(i+1,Types.INTEGER); else statement.setInt(i+1,range[i]);
+            if (range[i]==null) statement.setNull(i+1,Types.INTEGER);
+            else if (wide.length>0 && wide[0]) statement.setLong(i+1,range[i].longValue());
+            else statement.setInt(i+1,range[i]);
         }
         boolean empty=range[0]==null || range[1]==null || range[0]>range[1];
         List<List<String>> wanted=empty ? Collections.<List<String>>emptyList() : range[0].equals(range[1])
@@ -165,6 +167,27 @@ public final class EnumSetMetadataProbe {
                     (strings ? "String " : "Double ")+Arrays.toString(range));
             labelWidths(result.getMetaData());
         }
+    }
+
+    private static void binaryNullSetExecution(PreparedStatement statement,String[] values,List<List<String>> base,boolean all) throws Exception {
+        // This result has a TEXT common schema, not ENUM/SET metadata. Keep
+        // its existing PREPARE cache immutable; the execution type below has
+        // an independent MySQL oracle. General TEXT PREPARE typing is separate.
+        ResultSetMetaData cached=statement.getMetaData();
+        int type1=cached.getColumnType(1),type2=cached.getColumnType(2);
+        check(cached.getPrecision(1)==16383 && cached.getPrecision(2)==16383,"binary SET prepare width");
+        for (int i=0;i<2;i++) {
+            if (values[i]==null) statement.setNull(i+1,Types.VARCHAR); else statement.setString(i+1,values[i]);
+        }
+        List<List<String>> wanted=new ArrayList<>(base);
+        List<String> row=Arrays.asList(values);
+        if (all || !wanted.contains(row)) wanted.add(row);
+        try (ResultSet result=statement.executeQuery()) {
+            check(result.getMetaData().getPrecision(1)==16383 && result.getMetaData().getPrecision(2)==16383,"binary SET lost TEXT width");
+            rows(result,Types.LONGVARCHAR,false,wanted,"binary SET "+Arrays.toString(values));
+        }
+        check(statement.getMetaData().getColumnType(1)==type1 && statement.getMetaData().getColumnType(2)==type2,"binary SET changed prepare type");
+        check(statement.getMetaData().getPrecision(1)==16383 && statement.getMetaData().getPrecision(2)==16383,"binary SET changed prepare width");
     }
 
     public static void main(String[] args) throws Exception {
@@ -289,6 +312,13 @@ public final class EnumSetMetadataProbe {
                             Arrays.asList("a", null), Arrays.asList("", ""), Arrays.asList("", null), Arrays.asList(null, null));
                     query(connection, mode, "SELECT e,s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d UNION "
                             + "SELECT e,s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d", Types.VARCHAR, false, distinctRollup);
+                    String charSet="SELECT e,s FROM t GROUP BY e,s WITH ROLLUP UNION SELECT e,s FROM t GROUP BY e,s WITH ROLLUP";
+                    for (String sql:new String[]{
+                            "SELECT MIN(e),MAX(s) FROM("+charSet+")d",
+                            "SELECT e,s FROM(SELECT MIN(e)e,MAX(s)s FROM("+charSet+")d)a",
+                            "SELECT e,s FROM(SELECT e,s FROM(SELECT MIN(e)e,MAX(s)s FROM("+charSet+")d)a)b"}) {
+                        query(connection,mode,sql,Types.CHAR,false,Collections.singletonList(Arrays.asList("","x,yy")));
+                    }
                     for (String predicate : new String[]{"", " WHERE TRUE"}) {
                         query(connection, mode, "SELECT e,s FROM t GROUP BY e,s WITH ROLLUP UNION "
                                 + "SELECT e,s FROM t"+predicate+" GROUP BY e,s WITH ROLLUP", Types.CHAR, false, distinctRollup);
@@ -455,7 +485,10 @@ public final class EnumSetMetadataProbe {
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<>1 AND NULL)",
                             "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=b.id",
                             "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE b.id IS NOT NULL AND a.id=COALESCE(b.id,2)",
-                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2) AND LENGTH(b.id)>0"}) {
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2) AND LENGTH(b.id)>0",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2) AND (b.id=1) IS TRUE",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2) AND (LENGTH(b.id)>0) IS TRUE",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2) AND SIGN(b.id)>0"}) {
                         query(connection,mode,sql,constantWindowType,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
                     }
                     for (String sql:new String[]{
@@ -496,6 +529,58 @@ public final class EnumSetMetadataProbe {
                             Types.VARCHAR,Types.CHAR,false,Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList("","x,yy")));
                     query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON TRUE WHERE a.id=(b.id IS NULL)+1",
                             Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON TRUE WHERE a.id=SIGN(b.id)+1",
+                            constantWindowType,Types.CHAR,false,Collections.singletonList(Arrays.asList("","")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON TRUE WHERE a.id=SIGN(b.id IS NULL)+1",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2) AND (b.id IS NULL) IS TRUE",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("","")));
+                    for (String predicate:new String[]{"id>=2147483648","id< -2147483648","id>=2147483647.2","id<= -2147483648.2","2147483648<=id",
+                            "n>=2147483648","n< -2147483648","n=1.2","id BETWEEN 2147483648 AND 2147483649","id BETWEEN 1.2 AND 1.2"}) {
+                        query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE "+predicate,
+                                constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    }
+                    for (String predicate:new String[]{"id BETWEEN -2147483650 AND -2147483649","id BETWEEN 1.2 AND 1.8",
+                            "id BETWEEN 2147483647.1 AND 2147483647.9","id BETWEEN -2147483648.9 AND -2147483648.1",
+                            "n BETWEEN 2147483648 AND 2147483649","n BETWEEN 1.2 AND 1.2"}) {
+                        query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE "+predicate,
+                                Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    }
+                    setup.execute("ALTER TABLE t MODIFY n INT UNSIGNED");
+                    try {
+                        for (String predicate:new String[]{"n<0","n<-0.1","n>=4294967296"}) {
+                            query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE "+predicate,
+                                    constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                        }
+                        setup.execute("ALTER TABLE t ADD INDEX unsigned_n(n)");
+                        try {
+                            query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE n BETWEEN 4294967296 AND 4294967297",
+                                    constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                            query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE n BETWEEN -0.9 AND -0.1",
+                                    Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
+                        } finally { setup.execute("ALTER TABLE t DROP INDEX unsigned_n"); }
+                    } finally { setup.execute("ALTER TABLE t MODIFY n INT"); }
+                    for (boolean unsigned:new boolean[]{false,true}) {
+                        setup.execute("ALTER TABLE t MODIFY n BIGINT"+(unsigned ? " UNSIGNED" : ""));
+                        String tooHigh=unsigned ? "18446744073709551616" : "9223372036854775808";
+                        String higher=unsigned ? "18446744073709551617" : "9223372036854775809";
+                        try {
+                            for (String predicate:unsigned ? new String[]{"n=-1","n BETWEEN -1 AND -1","n=1.2"}
+                                    : new String[]{"n=9223372036854775808","n BETWEEN 9223372036854775808 AND 9223372036854775808","n=1.2"}) {
+                                query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE "+predicate,
+                                        constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                            }
+                            String equalControl=unsigned ? "n BETWEEN "+tooHigh+" AND "+tooHigh
+                                    : "n BETWEEN -9223372036854775809 AND -9223372036854775809";
+                            query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE "+equalControl,
+                                    Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
+                            setup.execute("ALTER TABLE t ADD INDEX wide_n(n)");
+                            try {
+                                query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE n BETWEEN "+tooHigh+" AND "+higher,
+                                        constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                            } finally { setup.execute("ALTER TABLE t DROP INDEX wide_n"); }
+                        } finally { setup.execute("ALTER TABLE t MODIFY n INT"); }
+                    }
                     String unindexedRange="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE n BETWEEN 2 AND 1";
                     query(connection,mode,unindexedRange,Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
                     setup.execute("ALTER TABLE t ADD INDEX range_n(n)");
@@ -548,21 +633,40 @@ public final class EnumSetMetadataProbe {
                         }
                         Integer[][] ranges={{2,1},{null,1},{1,null},{1,2},{1,1},{2,1},{1,2},{null,null},{1,2}};
                         String sql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
+                        for (boolean wide:new boolean[]{false,true}) {
                         for (Integer[] range:ranges) {
                             try (PreparedStatement fresh=connection.prepareStatement(sql)) {
                                 fresh.setQueryTimeout(30);
                                 if (mode.equals("cursor")) fresh.setFetchSize(1);
                                 check(fresh.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),"range prepare fell back");
                                 metadata(fresh.getMetaData(),Types.CHAR,false,"fresh range prepare");
-                                rangeExecution(fresh,range,mode.equals("cursor"));
+                                rangeExecution(fresh,range,mode.equals("cursor"),wide);
                             }
                         }
                         try (PreparedStatement repeated=connection.prepareStatement(sql)) {
                             repeated.setQueryTimeout(30);
                             if (mode.equals("cursor")) repeated.setFetchSize(1);
                             for (Integer[] range:ranges) {
-                                rangeExecution(repeated,range,mode.equals("cursor"));
+                                rangeExecution(repeated,range,mode.equals("cursor"),wide);
                                 metadata(repeated.getMetaData(),Types.CHAR,false,"range prepare cache after execution");
+                            }
+                        }
+                        }
+                        for (boolean all:new boolean[]{false,true}) {
+                            String root="SELECT e,s FROM t GROUP BY e,s WITH ROLLUP "+(all ? "UNION ALL" : "UNION")+" SELECT ?,?";
+                            String[] setSqls={root,"SELECT e,s FROM("+root+")d",root+" UNION ALL SELECT e,s FROM t WHERE FALSE"};
+                            for (int shape=0;shape<setSqls.length;shape++) {
+                                String setSql=setSqls[shape];
+                                String[][] values={{null,null},{"abcdef","x"},{null,null}};
+                                for (String[] value:values) try (PreparedStatement fresh=connection.prepareStatement(setSql)) {
+                                    fresh.setQueryTimeout(30);if(mode.equals("cursor"))fresh.setFetchSize(1);
+                                    check(fresh.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),"binary SET prepare fell back");
+                                    binaryNullSetExecution(fresh,value,all ? rollup : distinctRollup,all);
+                                }
+                                try (PreparedStatement repeated=connection.prepareStatement(setSql)) {
+                                    repeated.setQueryTimeout(30);if(mode.equals("cursor"))repeated.setFetchSize(1);
+                                    for (String[] value:values) binaryNullSetExecution(repeated,value,all ? rollup : distinctRollup,all);
+                                }
                             }
                         }
                         for (String key : new String[]{"id", "u"}) {

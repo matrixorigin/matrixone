@@ -5259,7 +5259,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		for colIdx := range ctx.headings {
 			var candidate *plan.MySQLSpecialResultType
 			compatible := true
-			hasRollup, widthOnly, allAggregate := false, false, true
+			hasRollup, widthOnly, allAggregate, labelOnly := false, false, true, false
 			for branchIdx, branchCtx := range subCtxList {
 				result := mysqlSpecialResultTypeFromProvenance(branchCtx.outputColumnProvenanceForProject(int32(colIdx)))
 				if captured := branchCtx.mysqlSpecialResultTypes[int32(colIdx)]; captured != nil {
@@ -5276,6 +5276,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					compatible = false
 					break
 				}
+				labelOnly = labelOnly || result.LabelOnly || result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL
 				allAggregate = allAggregate && (result.Kind == plan.MySQLSpecialResultType_AGGREGATE || result.Kind == plan.MySQLSpecialResultType_ROLLUP_AGGREGATE)
 				hasRollup = hasRollup || result.Kind == plan.MySQLSpecialResultType_ROLLUP ||
 					result.Kind == plan.MySQLSpecialResultType_ROLLUP_AGGREGATE || result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL
@@ -5291,7 +5292,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					candidate.Kind = plan.MySQLSpecialResultType_ROLLUP_AGGREGATE
 				} else if !shareGroupingInput {
 					candidate.Kind = plan.MySQLSpecialResultType_CHAR_LABEL
+					labelOnly = true
 				}
+				candidate.LabelOnly = labelOnly
 				if distinct {
 					candidate.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
 				}
