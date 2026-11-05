@@ -168,7 +168,7 @@ func (a *VectorQuery) selectBranch(proc *process.Process) error {
 			return moerr.NewInternalErrorNoCtx("invalid scalar vector provider batch")
 		}
 		nonNull = !bat.Vecs[0].IsNull(0)
-		if err := a.Source.Append(bat); err != nil {
+		if err := a.Source.Append(proc.Ctx, bat); err != nil {
 			return err
 		}
 	}

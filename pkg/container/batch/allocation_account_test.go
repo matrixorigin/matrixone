@@ -16,8 +16,12 @@ package batch
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -88,6 +92,142 @@ func newBatchAllocationTestSource(
 	}
 	bat.SetRowCount(32)
 	return bat
+}
+
+func TestBatchCopyFromPreservesOwnedValuesMetadataAndContext(t *testing.T) {
+	for _, mode := range []string{"plain", "batch account", "column accounts"} {
+		t.Run(mode, func(t *testing.T) {
+			state := newTestBatchAllocationAccount(t, 128)
+			mp := mpool.MustNewZero()
+			source := newBatchAllocationTestSource(t, mp, nil)
+			source.Vecs[0].SetSorted(true)
+			source.Vecs[0].SetNull(3)
+			source.Vecs[0].GetGrouping().Add(7)
+			source.Recursive, source.ShuffleIDX = 2, 9
+			source.ExtraBuf = []byte{4, 5}
+			destination := NewWithSchema(true, source.Attrs, []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})
+			t.Cleanup(func() {
+				source.Clean(mp)
+				destination.Clean(mp)
+				finalizeTestBatchAllocationAccount(t, state)
+				require.Zero(t, mp.CurrNB())
+			})
+			if mode == "batch account" {
+				require.NoError(t, destination.SetAllocationAccount(state.selection))
+			} else if mode == "column accounts" {
+				for _, v := range destination.Vecs {
+					require.NoError(t, v.SetAllocationAccount(state.selection))
+				}
+			}
+			for range 2 {
+				require.NoError(t, destination.CopyFrom(t.Context(), source, mp))
+				require.Equal(t, 32, destination.RowCount())
+				require.Equal(t, source.Attrs, destination.Attrs)
+				require.Equal(t, source.ExtraBuf, destination.ExtraBuf)
+				require.Equal(t, source.Recursive, destination.Recursive)
+				require.Equal(t, source.ShuffleIDX, destination.ShuffleIDX)
+				require.True(t, destination.Vecs[0].GetSorted())
+				require.True(t, destination.Vecs[0].IsNull(3))
+				require.True(t, destination.Vecs[0].GetGrouping().Contains(7))
+				require.Equal(t, int64(8), vector.GetFixedAtNoTypeCheck[int64](destination.Vecs[0], 8))
+				require.Equal(t, source.Vecs[1].GetBytesAt(8), destination.Vecs[1].GetBytesAt(8))
+				if mode != "plain" {
+					require.Same(t, state.selection, destination.Vecs[0].AllocationAccountSelection())
+					require.Positive(t, state.account.Snapshot().Used)
+				}
+			}
+			// Constant NULL and a changed shape exercise the destination context,
+			// rather than inheriting the source's allocation provenance.
+			nulls := NewWithSize(1)
+			nulls.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 32, nil)
+			nulls.SetRowCount(32)
+			defer nulls.Clean(mp)
+			err := destination.CopyFrom(t.Context(), nulls, mp)
+			if mode == "column accounts" {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+				require.Zero(t, destination.RowCount())
+			} else {
+				require.NoError(t, err)
+				require.True(t, destination.Vecs[0].IsConstNull())
+			}
+			require.NoError(t, destination.CopyFrom(t.Context(), source, mp))
+			vector.SetFixedAtNoTypeCheck(source.Vecs[0], 8, int64(99))
+			source.Attrs[0], source.ExtraBuf[0] = "changed", 99
+			require.Equal(t, int64(8), vector.GetFixedAtNoTypeCheck[int64](destination.Vecs[0], 8))
+			require.Equal(t, "id", destination.Attrs[0])
+			require.Equal(t, byte(4), destination.ExtraBuf[0])
+		})
+	}
+}
+
+// Cancel at an observed ownership boundary, without scheduling a racing timer
+// or depending on the number of context checkpoints in the implementation.
+type cancelAfterBatchAllocation struct {
+	context.Context
+	account *mpool.AllocationAccount
+	cancel  func()
+}
+
+func (c cancelAfterBatchAllocation) Err() error {
+	if c.account.Snapshot().Used > 0 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestBatchCopyFromPartialFailureReleasesDataAndRetainsContext(t *testing.T) {
+	for _, failure := range []string{"admission", "cancel after allocation"} {
+		t.Run(failure, func(t *testing.T) {
+			state := newTestBatchAllocationAccount(t, 128)
+			mp := mpool.MustNewZero()
+			source := newBatchAllocationTestSource(t, mp, nil)
+			destination := NewOffHeapEmpty()
+			require.NoError(t, destination.SetAllocationAccount(state.selection))
+			t.Cleanup(func() {
+				source.Clean(mp)
+				destination.Clean(mp)
+				finalizeTestBatchAllocationAccount(t, state)
+				require.Zero(t, mp.CurrNB())
+			})
+			ctx := t.Context()
+			cause := moerr.NewInternalErrorNoCtx("cancel after copying an owned vector")
+			var filler []byte
+			if failure == "admission" {
+				probe, err := source.Vecs[0].DupOffHeapWithAllocation(mp, state.selection)
+				require.NoError(t, err)
+				firstBytes := state.account.Snapshot().Used
+				probe.Free(mp)
+				filler, err = mp.AllocAccounted(int(state.account.Snapshot().Limit-firstBytes), state.account, 1, 5)
+				require.NoError(t, err)
+				defer func() {
+					if filler != nil {
+						mp.Free(filler)
+					}
+				}()
+			} else {
+				parent, cancel := context.WithCancelCause(ctx)
+				defer cancel(nil)
+				ctx = cancelAfterBatchAllocation{parent, state.account, func() { cancel(cause) }}
+			}
+			err := destination.CopyFrom(ctx, source, mp)
+			if failure == "admission" {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Equal(t, state.account.Snapshot().Limit, state.account.Snapshot().Peak, "the first vector was admitted before the later denial")
+			} else {
+				require.Same(t, cause, err)
+				require.Positive(t, state.account.Snapshot().Peak)
+			}
+			require.Zero(t, destination.RowCount())
+			require.Equal(t, uint64(len(filler)), state.account.Snapshot().Used)
+			require.Same(t, state.selection, destination.AllocationAccountSelection())
+			if filler != nil {
+				mp.Free(filler)
+				filler = nil
+			}
+			require.NoError(t, destination.CopyFrom(t.Context(), source, mp))
+			require.Equal(t, 32, destination.RowCount())
+		})
+	}
 }
 
 func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
@@ -801,4 +941,49 @@ func TestBatchAllocationAccountConfigurationIsAtomic(t *testing.T) {
 	offHeap.Clean(mp)
 	onHeap.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchDecodeMetadataAdmissionUsesDecoderFraming(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	for _, columns := range []int{0, 1, 65} {
+		b := NewWithSize(columns)
+		for i := range b.Vecs {
+			b.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(b.Vecs[i], int64(i), false, mp))
+		}
+		b.Attrs = []string{strings.Repeat("attribute", 32), "excess attribute"}
+		b.ExtraBuf = []byte(strings.Repeat("extra", 128))
+		b.SetRowCount(1)
+		encoded, err := b.MarshalBinary()
+		require.NoError(t, err)
+		metadata, err := UnmarshalBinaryMetadataSize(encoded)
+		require.NoError(t, err)
+		var decoded Batch
+		require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(encoded, mp))
+		copied := len(decoded.ExtraBuf)
+		for _, attr := range decoded.Attrs {
+			copied += len(attr)
+		}
+		require.Greater(t, metadata, uint64(copied), "metadata includes owned headers and vector objects")
+		require.Equal(t, b.ExtraBuf, decoded.ExtraBuf)
+		if columns == 0 {
+			require.Equal(t, b.Attrs, decoded.Attrs)
+		}
+		if columns == 1 {
+			// An earlier corrupt vector must win over later corrupt framing.
+			corrupt := append([]byte(nil), encoded...)
+			corrupt[16] = 255
+			binary.NativeEndian.PutUint32(corrupt[len(corrupt)-12:len(corrupt)-8], ^uint32(0))
+			_, scanErr := UnmarshalBinaryMetadataSize(corrupt)
+			var invalid Batch
+			decodeErr := invalid.UnmarshalBinaryWithAnyMp(corrupt, mp)
+			require.Error(t, scanErr)
+			require.Equal(t, decodeErr.Error(), scanErr.Error())
+			invalid.Clean(mp)
+		}
+		decoded.Clean(mp)
+		b.Clean(mp)
+	}
+	require.Zero(t, mp.CurrNB())
 }

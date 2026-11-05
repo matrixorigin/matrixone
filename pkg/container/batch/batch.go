@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -189,11 +190,29 @@ func (bat *Batch) prepareMarshalBinary(
 	return int(total), nil
 }
 
+const inlineBatchMarshalPlans = 64
+
+// MarshalBinaryScratchSize bounds the temporary plan storage used by
+// MarshalBinaryTo. Narrow batches keep those plans on the stack.
+func (bat *Batch) MarshalBinaryScratchSize() (int, error) {
+	if bat == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if len(bat.Vecs) <= inlineBatchMarshalPlans {
+		return 0, nil
+	}
+	width := int(reflect.TypeFor[vector.MarshalBinaryPlan]().Size())
+	if len(bat.Vecs) > math.MaxInt/width {
+		return 0, moerr.NewInvalidInputNoCtx("batch marshal scratch exceeds platform limit")
+	}
+	return len(bat.Vecs) * width, nil
+}
+
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
-	var inlinePlans [64]vector.MarshalBinaryPlan
+	var inlinePlans [inlineBatchMarshalPlans]vector.MarshalBinaryPlan
 	var plans []vector.MarshalBinaryPlan
 	if len(bat.Vecs) <= len(inlinePlans) {
 		plans = inlinePlans[:len(bat.Vecs)]
@@ -349,28 +368,141 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 	return types.DecodeUint32(data), nil
 }
 
+// The batch decoder and admission scanner share framing and validation.
+func (c *batchUnmarshalCursor) readRowCount() (int, error) {
+	rows, err := c.readInt64()
+	if err != nil {
+		return 0, err
+	}
+	if rows < 0 || int64(int(rows)) != rows {
+		return 0, moerr.NewInvalidInputNoCtx("invalid batch row count")
+	}
+	return int(rows), nil
+}
+
+func (c *batchUnmarshalCursor) readCount(field string) (int, error) {
+	n, err := c.readInt32()
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 || int64(n) > int64(len(c.data)/4) {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid batch %s count", field)
+	}
+	return int(n), nil
+}
+
+func (c *batchUnmarshalCursor) readVector() ([]byte, error) {
+	n, err := c.readUint32()
+	if err != nil {
+		return nil, err
+	}
+	if uint64(n) > uint64(len(c.data)) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return c.read(int(n))
+}
+
+func (c *batchUnmarshalCursor) readSizedBytes(field string) ([]byte, error) {
+	n, err := c.readInt32()
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, moerr.NewInvalidInputNoCtxf("invalid batch %s size", field)
+	}
+	return c.read(int(n))
+}
+
+// UnmarshalBinaryMetadataSize validates the frame and bounds fresh decoder
+// metadata. Vector payloads alias data; vector objects, attribute strings and
+// ExtraBuf are separate allocations. The conservative factor covers Go heap
+// rounding. The caller separately owns and charges data until Batch.Clean.
+// Existing incremental decodes do not need this admission-only scan.
+func UnmarshalBinaryMetadataSize(data []byte) (uint64, error) {
+	cursor := batchUnmarshalCursor{data: data}
+	if _, err := cursor.readRowCount(); err != nil {
+		return 0, err
+	}
+	vecs, err := cursor.readCount("vector")
+	if err != nil {
+		return 0, err
+	}
+	total := uint64(reflect.TypeFor[Batch]().Size())
+	add := func(n uint64) error {
+		if n > (math.MaxUint64/2)-total {
+			return moerr.NewInvalidInputNoCtx("batch metadata size overflow")
+		}
+		total += n
+		return nil
+	}
+	vectorBytes := uint64(reflect.TypeFor[*vector.Vector]().Size() + reflect.TypeFor[vector.Vector]().Size())
+	if uint64(vecs) > (math.MaxUint64/2)/vectorBytes {
+		return 0, moerr.NewInvalidInputNoCtx("batch metadata size overflow")
+	}
+	if err := add(uint64(vecs) * vectorBytes); err != nil {
+		return 0, err
+	}
+	for range vecs {
+		encoded, err := cursor.readVector()
+		if err != nil {
+			return 0, err
+		}
+		var checked vector.Vector
+		if err := checked.UnmarshalBinary(encoded); err != nil {
+			return 0, err
+		}
+	}
+	attrs, err := cursor.readCount("attribute")
+	if err != nil {
+		return 0, err
+	}
+	attrsLen := vecs
+	if vecs == 0 {
+		attrsLen = attrs
+	}
+	if err := add(uint64(attrsLen) * uint64(reflect.TypeFor[string]().Size())); err != nil {
+		return 0, err
+	}
+	for i := range attrs {
+		value, err := cursor.readSizedBytes("attribute")
+		if err != nil {
+			return 0, err
+		}
+		if i < attrsLen {
+			if err := add(uint64(len(value))); err != nil {
+				return 0, err
+			}
+		}
+	}
+	extra, err := cursor.readSizedBytes("extra buffer")
+	if err != nil {
+		return 0, err
+	}
+	if err := add(uint64(len(extra))); err != nil {
+		return 0, err
+	}
+	if _, err := cursor.readInt32(); err != nil {
+		return 0, err
+	}
+	if _, err := cursor.readInt32(); err != nil {
+		return 0, err
+	}
+	return total * 2, nil
+}
+
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
 	allocationAccount := bat.allocationAccount
 	cursor := batchUnmarshalCursor{data: data}
-	rowCount, err := cursor.readInt64()
+	decodedRowCount, err := cursor.readRowCount()
 	if err != nil {
 		return err
 	}
-	if rowCount < 0 || int64(int(rowCount)) != rowCount {
-		return moerr.NewInvalidInputNoCtx("invalid batch row count")
-	}
-	decodedRowCount := int(rowCount)
-
-	l, err := cursor.readInt32()
+	vecsLen, err := cursor.readCount("vector")
 	if err != nil {
 		return err
-	}
-	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
-		return moerr.NewInvalidInputNoCtx("invalid batch vector count")
 	}
 	// Fix for bug #23156: Handle Vecs length changes (from d4b79f12) while maintaining revert version's firstTime logic
 	firstTime := bat.Vecs == nil
-	vecsLen := int(l)
 	vecsLenChanged := !firstTime && vecsLen != len(bat.Vecs)
 
 	// CRITICAL FIX: When batch is reused (not firstTime), always reallocate Vecs if length changed
@@ -398,14 +530,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	const linearReceiverScanLimit = 64
 	var usedReceivers map[*vector.Vector]struct{}
 	for i := 0; i < vecsLen; i++ {
-		size, err := cursor.readUint32()
-		if err != nil {
-			return err
-		}
-		if uint64(size) > uint64(len(cursor.data)) {
-			return io.ErrUnexpectedEOF
-		}
-		vecData, err := cursor.read(int(size))
+		vecData, err := cursor.readVector()
 		if err != nil {
 			return err
 		}
@@ -455,18 +580,14 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		}
 	}
 
-	l, err = cursor.readInt32()
+	serializedAttrsLen, err := cursor.readCount("attribute")
 	if err != nil {
 		return err
-	}
-	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
-		return moerr.NewInvalidInputNoCtx("invalid batch attribute count")
 	}
 	// Fix for bug #23156: Attrs length MUST always match Vecs length
 	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
 	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
 	// This handles cases where serialized data has inconsistent lengths (which can occur in practice)
-	serializedAttrsLen := int(l)
 	// CRITICAL FIX: Always reallocate Attrs to ensure clean state for batch reuse
 	// This prevents stale Attrs values from previous unmarshal operations
 	// Special case: if vecsLen == 0 but serializedAttrsLen > 0, use serializedAttrsLen
@@ -500,14 +621,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		attrsToRead = attrsLen
 	}
 	for i := 0; i < attrsToRead; i++ {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return err
-		}
-		if size < 0 {
-			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		attrData, err := cursor.read(int(size))
+		attrData, err := cursor.readSizedBytes("attribute")
 		if err != nil {
 			return err
 		}
@@ -520,27 +634,11 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 	// If serialized Attrs length > vecsLen, skip the excess data
 	for i := attrsToRead; i < serializedAttrsLen; i++ {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return err
-		}
-		if size < 0 {
-			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		if _, err := cursor.read(int(size)); err != nil {
+		if _, err := cursor.readSizedBytes("attribute"); err != nil {
 			return err
 		}
 	}
-
-	// ExtraBuf
-	l, err = cursor.readInt32()
-	if err != nil {
-		return err
-	}
-	if l < 0 {
-		return moerr.NewInvalidInputNoCtx("invalid batch extra buffer size")
-	}
-	extraBuf, err := cursor.read(int(l))
+	extraBuf, err := cursor.readSizedBytes("extra buffer")
 	if err != nil {
 		return err
 	}
@@ -1158,6 +1256,95 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 	toBat.ShuffleIDX = bat.ShuffleIDX
 
 	return
+}
+
+// CopyFrom replaces the receiver with an owned copy of src, including wire
+// metadata. src may borrow a transport frame, but must not borrow the receiver.
+// The receiver's allocation context survives errors; failed copies publish no
+// rows. Its old data is released before admission of the replacement.
+func (bat *Batch) CopyFrom(ctx context.Context, src *Batch, mp *mpool.MPool) (err error) {
+	if bat == nil || src == nil || bat == src || mp == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	bat.SetRowCount(0)
+	if err = context.Cause(ctx); err != nil {
+		return err
+	}
+	for _, v := range src.Vecs {
+		if v == nil {
+			return moerr.NewInvalidInput(ctx, "nil source vector in batch copy")
+		}
+	}
+	if err = src.CheckLength(); err != nil {
+		return err
+	}
+	// Empty vector headers preserve column-specific contexts too. They own no
+	// data and become the receiver's retry layout if a later copy fails.
+	layout := &Batch{offHeap: bat.offHeap, allocationAccount: bat.allocationAccount, Vecs: make([]*vector.Vector, len(bat.Vecs))}
+	hasColumnAccount := false
+	defer func() {
+		if layout != nil {
+			layout.Clean(mp)
+		}
+	}()
+	for i, v := range bat.Vecs {
+		if v == nil {
+			continue
+		}
+		selection := v.AllocationAccountSelection()
+		hasColumnAccount = hasColumnAccount || selection != nil
+		if selection != nil {
+			layout.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*v.GetType(), selection)
+		} else if bat.offHeap {
+			layout.Vecs[i] = vector.NewOffHeapVecWithType(*v.GetType())
+		} else {
+			layout.Vecs[i] = vector.NewVec(*v.GetType())
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if bat.allocationAccount == nil && hasColumnAccount && len(src.Vecs) != len(bat.Vecs) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	bat.Clean(mp)
+	*bat = *layout
+	layout = nil
+	owned := &Batch{offHeap: bat.offHeap, allocationAccount: bat.allocationAccount, Vecs: make([]*vector.Vector, len(src.Vecs))}
+	defer func() {
+		if owned != nil {
+			owned.Clean(mp)
+		}
+	}()
+	for i, v := range src.Vecs {
+		if err = context.Cause(ctx); err != nil {
+			return err
+		}
+		selection := bat.allocationAccount
+		if selection == nil && i < len(bat.Vecs) && bat.Vecs[i] != nil {
+			selection = bat.Vecs[i].AllocationAccountSelection()
+		}
+		if selection != nil {
+			owned.Vecs[i], err = v.DupOffHeapWithAllocation(mp, selection)
+		} else if bat.offHeap {
+			owned.Vecs[i], err = v.DupOffHeapWithAllocation(mp, nil)
+		} else {
+			owned.Vecs[i], err = v.Dup(mp)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if err = context.Cause(ctx); err != nil {
+		return err
+	}
+	owned.Attrs = append([]string(nil), src.Attrs...)
+	owned.ExtraBuf = append([]byte(nil), src.ExtraBuf...)
+	owned.rowCount, owned.Recursive, owned.ShuffleIDX = src.rowCount, src.Recursive, src.ShuffleIDX
+	bat.Clean(mp)
+	*bat = *owned
+	owned = nil
+	return nil
 }
 
 // Dup used to copy a Batch object, this method will create a new batch

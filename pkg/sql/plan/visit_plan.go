@@ -217,15 +217,34 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	if node.DedupJoinCtx != nil {
-		for i := range node.DedupJoinCtx.UpdateColExprList {
-			node.DedupJoinCtx.UpdateColExprList[i], err = applyAndResetType(node.DedupJoinCtx.UpdateColExprList[i])
+	if actions := node.PreInsertUkCtx.GetOdkuActions(); actions != nil {
+		for _, list := range [][]*plan.Expr{actions.SourceColumns, actions.OldColumns, actions.UpdateExprs, actions.InsertChecks, actions.UpdateChecks} {
+			for i := range list {
+				list[i], err = applyAndResetType(list[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+		for _, key := range actions.Constraints {
+			for _, expr := range []**plan.Expr{&key.InputKey, &key.PriorTarget, &key.CurrentKey} {
+				*expr, err = applyAndResetType(*expr)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		for _, fk := range actions.ForeignKeyChecks {
+			fk.Eligibility, err = applyAndResetType(fk.Eligibility)
 			if err != nil {
 				return err
 			}
 		}
+		actions.SourceOrdinal, err = applyAndResetType(actions.SourceOrdinal)
+		if err != nil {
+			return err
+		}
 	}
-
 	for i := range node.ProjectList {
 		if vq.isUpdatePlan {
 			node.ProjectList[i], err = applyAndResetType(node.ProjectList[i])
@@ -247,6 +266,18 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 	case *Plan_Query:
 		qry := pl.Query
 		vq.isUpdatePlan = (pl.Query.StmtType == plan.Query_UPDATE)
+		for _, rule := range vq.rules {
+			if !rule.IsApplyExpr() {
+				continue
+			}
+			for i := range qry.Params {
+				var err error
+				qry.Params[i], err = rule.ApplyExpr(qry.Params[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
 
 		if len(qry.Steps) == 0 {
 			return nil

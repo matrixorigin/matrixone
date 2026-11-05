@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,9 @@ var _ engine.RelData = new(BlockListRelData)
 var _ engine.RelData = new(ObjListRelData)
 
 func UnmarshalRelationData(data []byte) (engine.RelData, error) {
+	if len(data) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("empty relation data")
+	}
 	typ := engine.RelDataType(data[0])
 	switch typ {
 	case engine.RelDataBlockList:
@@ -121,6 +125,9 @@ func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
 }
 
 func (rd *EmptyRelationData) UnmarshalBinary(data []byte) (err error) {
+	if len(data) < 5 {
+		return moerr.NewInvalidInputNoCtx("truncated empty relation data")
+	}
 	typ := engine.RelDataType(types.DecodeUint8(data))
 	if typ != engine.RelDataEmpty {
 		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary empty rel data with type:%v", typ)
@@ -129,8 +136,12 @@ func (rd *EmptyRelationData) UnmarshalBinary(data []byte) (err error) {
 
 	tombstoneLen := types.DecodeUint32(data)
 	data = data[4:]
+	if uint64(tombstoneLen) > uint64(len(data)) {
+		return moerr.NewInvalidInputNoCtx("truncated empty relation tombstones")
+	}
 
 	if tombstoneLen == 0 {
+		rd.tombs = nil
 		return
 	}
 	rd.tombs, err = UnmarshalTombstoneData(data[:tombstoneLen])
@@ -449,6 +460,9 @@ func (relData *BlockListRelData) AppendBlockInfoSlice(slice objectio.BlockInfoSl
 }
 
 func (relData *BlockListRelData) UnmarshalBinary(data []byte) (err error) {
+	if len(data) < 9 {
+		return moerr.NewInvalidInputNoCtx("truncated block-list relation data")
+	}
 	typ := engine.RelDataType(types.DecodeUint8(data))
 	if typ != engine.RelDataBlockList {
 		return moerr.NewInternalErrorNoCtxf("UnmarshalBinary RelDataBlockList with %v", typ)
@@ -457,14 +471,22 @@ func (relData *BlockListRelData) UnmarshalBinary(data []byte) (err error) {
 
 	sizeofblks := types.DecodeUint32(data)
 	data = data[4:]
+	if uint64(sizeofblks)+4 > uint64(len(data)) || sizeofblks%uint32(objectio.BlockInfoSize) != 0 {
+		return moerr.NewInvalidInputNoCtx("invalid block-list relation data length")
+	}
 
-	relData.blklist = data[:sizeofblks]
+	blocks := data[:sizeofblks]
 	data = data[sizeofblks:]
 
 	tombstoneLen := types.DecodeUint32(data)
 	data = data[4:]
+	if uint64(tombstoneLen) > uint64(len(data)) {
+		return moerr.NewInvalidInputNoCtx("truncated relation tombstones")
+	}
+	relData.blklist = blocks
 
 	if tombstoneLen == 0 {
+		relData.tombstones = nil
 		return
 	}
 
@@ -472,7 +494,27 @@ func (relData *BlockListRelData) UnmarshalBinary(data []byte) (err error) {
 	return
 }
 
+// BlockListEncodedSize is the complete wire size of a tombstone-free block list.
+// Its owner can admit the serialization buffer before MarshalBinary allocates it.
+func BlockListEncodedSize(blockBytes int) (int, error) {
+	const headerSize = 1 + 4 + 4 // type, block bytes, tombstone bytes
+	if blockBytes < 0 || blockBytes%objectio.BlockInfoSize != 0 || uint64(blockBytes) > math.MaxUint32 || blockBytes > math.MaxInt-headerSize {
+		return 0, moerr.NewInvalidInputNoCtx("invalid block-list relation data length")
+	}
+	return blockBytes + headerSize, nil
+}
+
 func (relData *BlockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err error) {
+	size, err := BlockListEncodedSize(len(relData.blklist))
+	if err != nil {
+		return err
+	}
+	if w.Len() > math.MaxInt-size {
+		return moerr.NewInvalidInputNoCtx("block-list relation data size overflow")
+	}
+	// Include the trailing tombstone length before allocating. In particular,
+	// writing that header must not double a just-filled block-list buffer.
+	w.Grow(size)
 	typ := uint8(relData.GetType())
 	if _, err = w.Write(types.EncodeUint8(&typ)); err != nil {
 		return
@@ -497,6 +539,9 @@ func (relData *BlockListRelData) MarshalBinaryWithBuffer(w *bytes.Buffer) (err e
 	if relData.tombstones != nil {
 		if err = relData.tombstones.MarshalBinaryWithBuffer(w); err != nil {
 			return
+		}
+		if uint64(w.Len()-offset-4) > math.MaxUint32 {
+			return moerr.NewInvalidInputNoCtx("relation tombstones exceed wire length")
 		}
 		tombstoneLen = uint32(w.Len() - offset - 4)
 		buf := w.Bytes()

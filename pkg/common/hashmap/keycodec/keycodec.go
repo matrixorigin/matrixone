@@ -154,6 +154,51 @@ func (c Float32Codec) CanonicalBits(value float32) uint32 {
 	return CanonicalFloat32Bits(c.normalizer.Normalize(value))
 }
 
+// FiniteEqualRange returns the closed raw FLOAT32 interval whose values have
+// the same canonical key as value. Searching the actual normalizer includes
+// decimal endpoint rounding and both signed zeros. Exceptional keys need a
+// candidate scan and report ok=false.
+func (c Float32Codec) FiniteEqualRange(value float32) (lower, upper float32, ok bool) {
+	target := c.normalizer.Normalize(value)
+	if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) ||
+		math.IsNaN(float64(target)) || math.IsInf(float64(target), 0) {
+		return 0, 0, false
+	}
+	decode := func(ordered uint64) float32 {
+		bits := uint32(ordered)
+		if bits&0x80000000 != 0 {
+			bits ^= 0x80000000
+		} else {
+			bits = ^bits
+		}
+		return math.Float32frombits(bits)
+	}
+	// A positive finite factor, Round, division and float conversion are
+	// monotone on finite inputs. Canonicalization additionally joins the two
+	// adjacent zero encodings, so each finite key has one contiguous interval.
+	const first, end = uint64(0x00800000), uint64(0xff800000)
+	bound := func(strict bool) uint64 {
+		lo, hi := first, end
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			normalized := c.normalizer.Normalize(decode(mid))
+			if normalized > target || (!strict && normalized == target) {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		return lo
+	}
+	left, right := bound(false), bound(true)
+	if left >= right || left == end {
+		return 0, 0, false
+	}
+	lower, upper = decode(left), decode(right-1)
+	want := c.CanonicalBits(value)
+	return lower, upper, c.CanonicalBits(lower) == want && c.CanonicalBits(upper) == want
+}
+
 // CanonicalFloat32Bits returns canonical bits for a FLOAT32 value after any
 // required scale normalization. SQL equality identifies signed zero, so both
 // zero representations use the single all-zero key.

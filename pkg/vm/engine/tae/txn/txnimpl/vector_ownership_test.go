@@ -16,13 +16,17 @@ package txnimpl
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -39,6 +43,108 @@ import (
 type rowLookupObject struct {
 	data.Object
 	lookup func(context.Context, containers.Vector) error
+}
+
+type dedupReadFailureFS struct {
+	fileservice.FileService
+	beforeRead func(context.Context) error
+}
+
+func (f *dedupReadFailureFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if err := f.beforeRead(ctx); err != nil {
+		return err
+	}
+	return f.FileService.Read(ctx, v)
+}
+
+func TestPrePrepareDedupRetainsFrontiersOnWorkspaceReadFailure(t *testing.T) {
+	for _, cancelRead := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%v", cancelRead), func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+			cause := moerr.NewInternalErrorNoCtx("workspace tombstone read failed")
+			fs, err := fileservice.NewMemoryFS(t.Name(), fileservice.CacheConfig{}, nil)
+			require.NoError(t, err)
+			defer fs.Close(t.Context())
+			var reads atomic.Int32
+			failingFS := &dedupReadFailureFS{FileService: fs, beforeRead: func(actual context.Context) error {
+				if reads.Add(1) != 1 {
+					return nil
+				}
+				want, hasWant := ctx.Deadline()
+				got, hasGot := actual.Deadline()
+				require.Equal(t, hasWant, hasGot)
+				require.Equal(t, want, got)
+				if cancelRead {
+					cancel(cause)
+					return context.Cause(actual)
+				}
+				return cause
+			}}
+			entry := catalog.MockTableEntryWithDB(catalog.MockDBEntryWithAccInfo(0, 1), 2)
+			schema := entry.GetLastestSchema(false)
+			require.NoError(t, schema.AppendPKCol("pk", types.T_int64.ToType(), 0))
+			require.NoError(t, schema.Finalize(false))
+			id := objectio.NewObjectid()
+			stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+			require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+			objectio.WithCNCreated()(stats)
+			block := objectio.NewBlockidWithObjectID(&id, 0)
+			rowID := types.NewRowid(&block, 0)
+			object := catalog.MockObjectEntry(entry, stats, false, func(*catalog.ObjectEntry) data.Object {
+				return &rowLookupObject{lookup: func(_ context.Context, rows containers.Vector) error {
+					rows.Update(0, rowID, false)
+					return nil
+				}}
+			}, types.BuildTS(2, 0))
+			entry.AddEntryLocked(object)
+			pool := containers.NewVectorPool(t.Name(), 2)
+			defer pool.Destory()
+			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(1, 0))
+			txn.SetDedupType(txnif.DedupPolicy_CheckAll)
+			rt := dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool), dbutils.WithRuntimeObjectFS(failingFS))
+			rt.Now = func() types.TS { return types.BuildTS(3, 0) }
+			table := &txnTable{entry: entry, store: &txnStore{ctx: ctx, txn: txn, rt: rt}}
+			table.dataTable = newBaseTable(schema, false, table)
+			table.tombstoneTable = newBaseTable(catalog.GetTombstoneSchema(schema), true, table)
+			staged := containers.NewBatch()
+			defer staged.Close()
+			keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+			keys.Append(int64(1), false)
+			staged.AddVector("pk", keys)
+			table.dataTable.tableSpace = &tableSpace{node: &anode{data: staged, rows: 1}}
+			deleted := catalog.NewCNTombstoneBatchByPKType(types.T_int64.ToType(), common.DefaultAllocator)
+			defer deleted.Close()
+			deleted.Vecs[0].Append(rowID, false)
+			deleted.Vecs[1].Append(int64(1), false)
+			writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+			_, err = writer.WriteBatch(containers.ToCNBatch(deleted))
+			require.NoError(t, err)
+			_, _, err = writer.Sync(t.Context())
+			require.NoError(t, err)
+			table.tombstoneTable.tableSpace = &tableSpace{node: &anode{data: deleted, rows: 1}, stats: []objectio.ObjectStats{writer.GetObjectStats()}}
+			frontier := types.BuildTS(1, 0)
+			table.dataTable.dedupTS, table.tombstoneTable.dedupTS = frontier, frontier
+			before := common.WorkspaceAllocator.CurrNB()
+			err = table.PrePrepareDedup(ctx, false, txnif.PrePreparePhase, rt.Now())
+			require.Greater(t, reads.Load(), int32(0), "the error occurs during actual tombstone IO")
+			require.Equal(t, frontier, table.dataTable.dedupTS)
+			require.Equal(t, frontier, table.tombstoneTable.dedupTS)
+			require.Same(t, cause, err)
+			used, _ := pool.Used(false)
+			require.Zero(t, used)
+			// Retry the same staged rows after the one-shot read failure. The
+			// caller's fresh context owns this work even if store.ctx was cancelled.
+			table.tombstoneTable.tableSpace.node = nil // The same deletion is persisted.
+			require.NoError(t, table.PrePrepareDedup(t.Context(), false, txnif.PrePreparePhase, rt.Now()))
+			require.Equal(t, rt.Now(), table.dataTable.dedupTS)
+			require.Equal(t, frontier, table.tombstoneTable.dedupTS)
+			used, _ = pool.Used(false)
+			require.Zero(t, used)
+			pool.Destory()
+			require.Equal(t, before, common.WorkspaceAllocator.CurrNB())
+		})
+	}
 }
 
 func (o *rowLookupObject) GetDuplicatedRows(ctx context.Context, _ txnif.TxnReader, _ containers.Vector, _ index.ZM, _ types.TS, _ types.TS, rows containers.Vector, _ *mpool.MPool) error {

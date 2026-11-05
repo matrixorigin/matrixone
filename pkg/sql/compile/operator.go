@@ -630,8 +630,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
-		op.UpdateColIdxList = t.UpdateColIdxList
-		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -656,8 +654,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.OnDuplicateAction = t.OnDuplicateAction
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
-		op.UpdateColIdxList = t.UpdateColIdxList
-		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
 		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
@@ -1433,8 +1429,6 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 	arg.DedupDeleteMarkerColIdx = -1
 	if node.DedupJoinCtx != nil {
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
-		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
-		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
 		// must exclude that row from duplicate detection: an UPDATE that keeps
 		// a primary/unique key unchanged is not a duplicate of itself.
@@ -1504,8 +1498,6 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
 	if node.DedupJoinCtx != nil {
-		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
-		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
 		// See constructDedupJoin: UPDATE IGNORE also needs to exclude the
 		// target row's old key from duplicate detection.
 		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(node.DedupJoinCtx.OldColList) > 0 {
@@ -2135,7 +2127,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedHashMap = true
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction
@@ -2200,7 +2192,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		arg := op.(*dedupjoin.DedupJoin)
 		ret.Conditions = arg.Conditions[1]
 		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE || arg.OnDuplicateAction == plan.Node_IGNORE
+		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_IGNORE
 		ret.IsDedup = true
 		ret.DedupBuildKeepLast = arg.DedupBuildKeepLast
 		ret.OnDuplicateAction = arg.OnDuplicateAction

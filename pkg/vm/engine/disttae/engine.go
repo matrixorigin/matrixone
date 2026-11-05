@@ -209,6 +209,7 @@ func New(
 }
 
 func (e *Engine) Close() error {
+	gcErr := e.drainStatementObjects(true)
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
@@ -217,7 +218,7 @@ func (e *Engine) Close() error {
 	e.cloneTxnCache = nil
 	e.ccprTxnCache = nil
 
-	return nil
+	return gcErr
 }
 
 func (e *Engine) fillDefaults() {

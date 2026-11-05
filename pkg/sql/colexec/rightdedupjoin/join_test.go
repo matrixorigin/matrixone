@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -251,17 +252,20 @@ func TestRightDedupResetAndPrepareRetry(t *testing.T) {
 	typ := types.T_int32.ToType()
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	literal := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_Sval{Sval: strings.Repeat("x", 128)},
+	}}}
 	arg := &RightDedupJoin{
-		Conditions:        [][]*plan.Expr{{valid}, {valid}},
-		UpdateColExprList: []*plan.Expr{valid, invalid},
+		Conditions: [][]*plan.Expr{{literal, invalid}, {valid}},
 	}
-	installTestAllocation(t, arg)
+	account := installTestAllocation(t, arg)
 
 	require.Error(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.vecs)
 	require.Nil(t, arg.ctr.evecs)
-	require.Nil(t, arg.ctr.exprExecs)
-	arg.UpdateColExprList[1] = valid
+	require.Positive(t, account.Snapshot().Peak)
+	require.Zero(t, account.Snapshot().Used)
+	arg.Conditions[0][1] = valid
 	require.NoError(t, arg.Prepare(proc))
 
 	arg.ctr.groupCount = 10
@@ -270,7 +274,28 @@ func TestRightDedupResetAndPrepareRetry(t *testing.T) {
 	require.Zero(t, arg.ctr.groupCount)
 	require.Zero(t, arg.ctr.buildGroupCount)
 	arg.Free(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
 	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestRightDedupPrepareRejectsUnsupportedAction(t *testing.T) {
+	for _, tc := range []struct {
+		action plan.Node_OnDuplicateAction
+		code   uint16
+	}{
+		{plan.Node_UPDATE, moerr.ErrNotSupported},
+		{plan.Node_OnDuplicateAction(123), moerr.ErrInternal},
+	} {
+		arg := &RightDedupJoin{OnDuplicateAction: tc.action}
+		err := arg.Prepare(nil)
+		require.True(t, moerr.IsMoErrCode(err, tc.code), "%v", err)
+	}
+	for _, action := range []plan.Node_OnDuplicateAction{plan.Node_FAIL, plan.Node_IGNORE} {
+		arg := &RightDedupJoin{OnDuplicateAction: action}
+		require.ErrorIs(t, arg.Prepare(nil), mpool.ErrAllocationAccountInvalid)
+	}
 }
 
 func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {

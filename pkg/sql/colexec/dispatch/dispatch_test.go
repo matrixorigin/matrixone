@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1562,4 +1563,101 @@ func TestDataLossPrevention_ComparisonTable(t *testing.T) {
 		require.NoError(t, err, "SendToAny can tolerate failures")
 		t.Log("SendToAny: Can failover to other receivers")
 	})
+}
+
+func TestMaterializedWriterCopyHonorsChildCancellation(t *testing.T) {
+	for _, primarySelected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "child cause", true: "selected primary wins"}[primarySelected], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			parent := proc.Ctx
+			childCtx, cancel := context.WithCancelCause(parent)
+			defer cancel(nil)
+			proc.Ctx = childCtx
+			generation, err := proc.GetHashBuildBudget()
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(1<<20, generation)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			require.NoError(t, err)
+			input := batch.NewOffHeapWithSize(1)
+			input.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+			input.SetRowCount(1)
+			source := materialized.NewSource(1)
+			d := NewArgument()
+			d.FuncId = SendToAllLocalFunc
+			d.MaterializedSource = source
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			d.AppendChild(child)
+			t.Cleanup(func() {
+				d.Reset(proc, true, nil)
+				source.ReleaseReader(0)
+				source.Close()
+				d.Free(proc, false, nil)
+				d.Release()
+				input.Clean(proc.Mp())
+				require.Zero(t, account.Seal().Used)
+				_, e := registry.Finalize(account)
+				require.NoError(t, e)
+				require.Zero(t, generation.Used())
+			})
+			stopped := moerr.NewInternalErrorNoCtx("only the producer pipeline stopped")
+			primary := moerr.NewDuplicateEntryNoCtx("selected before stop", "uk")
+			cancelDuringCopy := true
+			config := materialized.SpillConfig{Allocation: selection, Budget: materialized.SpillBudget{ReserveMemory: func(size uint64) (materialized.Reservation, error) {
+				charge, err := generation.ReserveMemory(parent, size)
+				if err == nil && cancelDuringCopy {
+					if primarySelected {
+						source.Finish(primary)
+					}
+					cancel(stopped)
+				}
+				return charge, err
+			}}}
+			require.NoError(t, source.Begin(proc.Mp(), config))
+			require.NoError(t, d.Prepare(proc))
+			_, err = d.Call(proc)
+			expected := error(stopped)
+			if primarySelected {
+				expected = primary
+			}
+			require.Same(t, expected, err)
+			require.NoError(t, context.Cause(parent), "the compile context stays live")
+			require.Zero(t, source.CurrentBytes())
+			require.Zero(t, account.Snapshot().Peak, "no vectors may be copied after child cancellation")
+			out, charge, end, err := source.Next(parent, 0, 0)
+			require.True(t, end)
+			require.Nil(t, out)
+			require.Nil(t, charge)
+			require.Same(t, expected, err)
+			require.Zero(t, generation.Used())
+			d.Reset(proc, true, err)
+			source.ReleaseReader(0)
+			proc.Ctx = parent
+			cancelDuringCopy = false
+			child.Reset(proc, false, nil)
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+			input.SetRowCount(1)
+			require.NoError(t, source.Begin(proc.Mp(), config))
+			require.NoError(t, d.Prepare(proc))
+			_, err = d.Call(proc)
+			require.NoError(t, err)
+			source.Finish(nil)
+			out, charge, end, err = source.Next(parent, 0, 0)
+			require.NoError(t, err)
+			require.False(t, end)
+			require.NotNil(t, charge)
+			func() {
+				defer charge.Release()
+				defer out.Clean(proc.Mp())
+				require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[0], 0))
+			}()
+			d.Reset(proc, false, nil)
+			source.ReleaseReader(0)
+			require.Zero(t, account.Snapshot().Used)
+			require.Zero(t, generation.Used())
+		})
+	}
 }

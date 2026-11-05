@@ -199,33 +199,9 @@ func appendCheckConstraintPlan(
 		}
 	}
 
-	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
-	for _, check := range tableDef.Checks {
-		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
-		passExpr, err := BindFuncExprImplByPlanExpr(
-			builder.GetContext(),
-			"coalesce",
-			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)},
-		)
-		if err != nil {
-			return 0, err
-		}
-		if ignoreMode {
-			filterList = append(filterList, passExpr)
-			continue
-		}
-		errMsg := makePlan2StringConstExprWithType(
-			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
-		)
-		assertExpr, err := BindFuncExprImplByPlanExpr(
-			builder.GetContext(),
-			"_check_constraint_assert",
-			[]*plan.Expr{passExpr, errMsg},
-		)
-		if err != nil {
-			return 0, err
-		}
-		filterList = append(filterList, assertExpr)
+	filterList, err := buildCheckConstraintExprs(builder, tableDef, tableColProjList, ignoreMode)
+	if err != nil {
+		return 0, err
 	}
 
 	return builder.appendNode(&plan.Node{
@@ -2556,4 +2532,50 @@ func bindPrimaryKeyIdentityExpr(builder *QueryBuilder, expr *Expr, typ plan.Type
 	// encodings to duplicate-check paths so NaN payloads and signed zero are
 	// neither collapsed nor matched inconsistently by scalar-key hash joins.
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*Expr{expr})
+}
+
+func buildCheckConstraintExprs(builder *QueryBuilder, tableDef *TableDef, tableColProjList []*plan.Expr, ignoreMode bool) ([]*plan.Expr, error) {
+	if len(tableDef.Checks) > 0 {
+		if err := requireCheckConstraintProtocol(builder.GetContext(), builder.compCtx.GetProcess()); err != nil {
+			return nil, err
+		}
+	}
+	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.Check == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing CHECK expression")
+		}
+		for _, pos := range collectRefColPos(check.Check) {
+			if pos < 0 || int(pos) >= len(tableColProjList) || tableColProjList[pos] == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid CHECK column reference")
+			}
+		}
+		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
+		passExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"coalesce",
+			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)},
+		)
+		if err != nil {
+			return nil, err
+		}
+		if ignoreMode {
+			filterList = append(filterList, passExpr)
+			continue
+		}
+		errMsg := makePlan2StringConstExprWithType(
+			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
+		)
+		assertExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"_check_constraint_assert",
+			[]*plan.Expr{passExpr, errMsg},
+		)
+		if err != nil {
+			return nil, err
+		}
+		filterList = append(filterList, assertExpr)
+	}
+
+	return filterList, nil
 }

@@ -1206,8 +1206,8 @@ func collectUniquePlanParamTypes(t *testing.T, queryPlan *Plan) map[int32]planpb
 		for _, expr := range node.OnUpdateExprs {
 			collectExprParamTypesByPos(t, expr, result)
 		}
-		if dedup := node.DedupJoinCtx; dedup != nil {
-			for _, expr := range dedup.UpdateColExprList {
+		if c := node.PreInsertUkCtx.GetOdkuActions(); c != nil {
+			for _, expr := range c.UpdateExprs {
 				collectExprParamTypesByPos(t, expr, result)
 			}
 		}
@@ -1625,19 +1625,20 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 				}
 			}
 			if test.checkFlatten {
-				dedupCount := 0
+				ownerCount := 0
 				updateExprCount := 0
 				for _, node := range queryPlan.GetQuery().Nodes {
-					if node.DedupJoinCtx == nil {
+					c := node.PreInsertUkCtx.GetOdkuActions()
+					if c == nil {
 						continue
 					}
-					dedupCount++
-					for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+					ownerCount++
+					for _, expr := range c.UpdateExprs {
 						updateExprCount++
 						require.False(t, exprContainsSubqueryRef(expr))
 					}
 				}
-				require.Positive(t, dedupCount)
+				require.Equal(t, 1, ownerCount)
 				require.Positive(t, updateExprCount)
 			}
 		})

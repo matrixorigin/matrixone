@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -50,6 +51,11 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	if hashBuild.IsDedup {
+		if err := colexec.ValidateDedupAction(hashBuild.OnDuplicateAction); err != nil {
+			return err
+		}
+	}
 	// A HashBuild can be reused after Reset.  The terminal gate belongs to the
 	// new execution generation; the old MessageBoard is reset by the pipeline
 	// before this generation's consumers are started.

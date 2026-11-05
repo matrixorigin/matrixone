@@ -16,6 +16,7 @@ package hashjoin
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -530,6 +531,13 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 		ctr.itr = ctr.mp.NewIterator()
 	}
 	leftRowCnt := ctr.leftBat.RowCount()
+	// A unique LEFT join without a residual emits exactly one row per probe.
+	// Copy its probe columns once while the existing loop owns all matching,
+	// build columns, batch boundaries and publication.
+	probeColumnsCopied, err := ctr.copyUniqueLeftProbeColumns(hashJoin, proc)
+	if err != nil {
+		return err
+	}
 	resRowCnt := 0
 
 	for {
@@ -591,7 +599,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			if z == 0 || v == 0 {
 				if ctr.probeEmitUnmatched {
-					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row, probeColumnsCopied); err != nil {
 						return err
 					}
 					resRowCnt++
@@ -613,7 +621,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			if ctr.probeHashOnPK {
 				if hashJoin.NonEqCond == nil {
 					if ctr.probeRightSemiAnti {
-						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
+						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2, probeColumnsCopied)
 						if err != nil {
 							return err
 						}
@@ -636,7 +644,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 					if ok {
 						if ctr.probeRightSemiAnti {
-							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
+							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2, probeColumnsCopied)
 							if err != nil {
 								return err
 							}
@@ -652,7 +660,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
 					} else if ctr.probeEmitUnmatched {
-						err = ctr.appendOneNotMatch(hashJoin, proc, row)
+						err = ctr.appendOneNotMatch(hashJoin, proc, row, probeColumnsCopied)
 						if err != nil {
 							return err
 						}
@@ -669,7 +677,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
-						if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						if err = ctr.appendOneNotMatch(hashJoin, proc, row, probeColumnsCopied); err != nil {
 							return err
 						}
 						resRowCnt++
@@ -757,7 +765,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.leftRowMatched = true
 
 						if ctr.probeRightSemiAnti {
-							if err = ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2); err != nil {
+							if err = ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2, probeColumnsCopied); err != nil {
 								return err
 							}
 							resRowCnt++
@@ -772,7 +780,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 				if len(ctr.sels) == 0 &&
 					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
-					if err = ctr.appendOneNotMatch(hashJoin, proc, int64(row)); err != nil {
+					if err = ctr.appendOneNotMatch(hashJoin, proc, int64(row), probeColumnsCopied); err != nil {
 						return err
 					}
 					resRowCnt++
@@ -794,6 +802,67 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			}
 		}
 	}
+}
+
+// copyUniqueLeftProbeColumns returns false before modifying output when the
+// current batch cannot use the one-output-per-probe shape. It owns no state
+// beyond this probe call; partial copies on error remain private until Reset.
+func (ctr *container) copyUniqueLeftProbeColumns(hashJoin *HashJoin, proc *process.Process) (bool, error) {
+	count := ctr.leftBat.RowCount()
+	if hashJoin.JoinType != plan.Node_LEFT || hashJoin.IsRightJoin || !ctr.probeHashOnPK ||
+		ctr.mp == nil || hashJoin.NonEqCond != nil || ctr.spillEngine != nil || ctr.probeBucketActive || ctr.skipProbe ||
+		ctr.probeState != psNextBatch || ctr.lastIdx != 0 || ctr.resBat.RowCount() != 0 || count < 1 || count > colexec.DefaultBatchSize {
+		return false, nil
+	}
+	for i, rp := range hashJoin.ResultCols {
+		if rp.Rel != 0 {
+			continue
+		}
+		if rp.Pos < 0 || int(rp.Pos) >= len(ctr.leftBat.Vecs) {
+			return false, nil
+		}
+		src, dst := ctr.leftBat.Vecs[rp.Pos], ctr.resBat.Vecs[i]
+		if src == nil || dst == nil || dst.Length() != 0 || *src.GetType() != *dst.GetType() ||
+			(!src.IsConst() && src.Length() != count) {
+			return false, nil
+		}
+	}
+	for i, rp := range hashJoin.ResultCols {
+		if rp.Rel != 0 {
+			continue
+		}
+		if err := context.Cause(proc.Ctx); err != nil {
+			return false, err
+		}
+		src, dst := ctr.leftBat.Vecs[rp.Pos], ctr.resBat.Vecs[i]
+		// Constant UnionBatch broadcasts grouping only for an entirely grouped
+		// vector. Preserve per-row grouping if its probe range is partial.
+		rowwise := src.IsConst() && src.HasGrouping() &&
+			(!src.IsGrouping() || src.GetGrouping().GetBitmap().CountRange(0, uint64(count)) != count)
+		if !src.IsConst() && src.GetType().IsVarlen() && src.VarlenaAreaIsDisjoint() {
+			live := 0
+			for row := range count {
+				if !src.IsNull(uint64(row)) {
+					if n := len(src.GetBytesAt(row)); n > types.VarlenaInlineSize {
+						live += n
+					}
+				}
+			}
+			// A disjoint area may still contain dead payload from Copy or
+			// SetBytesAt. Avoid copying/admitting bytes the old loop ignored.
+			rowwise = len(src.GetArea()) > live
+		}
+		if rowwise {
+			for row := range count {
+				if err := dst.UnionOne(src, int64(row), proc.Mp()); err != nil {
+					return false, err
+				}
+			}
+		} else if err := dst.UnionBatch(src, 0, count, nil, proc.Mp()); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
@@ -950,9 +1019,12 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	return nil
 }
 
-func (ctr *container) appendOneNotMatch(hashJoin *HashJoin, proc *process.Process, row int64) error {
+func (ctr *container) appendOneNotMatch(hashJoin *HashJoin, proc *process.Process, row int64, probeColumnsCopied bool) error {
 	for j, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
+			if probeColumnsCopied {
+				continue
+			}
 			err := ctr.resBat.Vecs[j].UnionOne(ctr.leftBat.Vecs[rp.Pos], row, proc.Mp())
 			if err != nil {
 				return err
@@ -967,9 +1039,12 @@ func (ctr *container) appendOneNotMatch(hashJoin *HashJoin, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, leftRow, rIdx1, rIdx2 int64) error {
+func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, leftRow, rIdx1, rIdx2 int64, probeColumnsCopied bool) error {
 	for j, rp := range hashJoin.ResultCols {
 		if rp.Rel == 0 {
+			if probeColumnsCopied {
+				continue
+			}
 			err := ctr.resBat.Vecs[j].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp())
 			if err != nil {
 				return err

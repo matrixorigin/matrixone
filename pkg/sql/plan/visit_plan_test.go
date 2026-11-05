@@ -57,6 +57,33 @@ func (replaceParamWithSevenRule) ApplyExpr(expr *planpb.Expr) (*planpb.Expr, err
 	}
 }
 
+func TestVisitPlanExploresQueryParams(t *testing.T) {
+	query := &planpb.Query{Params: []*planpb.Expr{{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}}}
+	visitor := NewVisitPlan(&planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}, []VisitPlanRule{replaceParamWithSevenRule{}})
+	require.NoError(t, visitor.Visit(context.Background()))
+	require.Equal(t, uint64(7), query.Params[0].GetLit().GetU64Val())
+}
+
+func TestPruneUsedNodesRetainsCatalogDependencyForAuthorization(t *testing.T) {
+	root := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN}
+	referenced := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef:   &planpb.ObjectRef{SchemaName: "app", ObjName: "secret", Db: 1, Obj: 2},
+		TableDef: &planpb.TableDef{DbName: "app", Name: "secret", DbId: 1, TblId: 2},
+	}
+	unrelated := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef:   &planpb.ObjectRef{SchemaName: "app", ObjName: "unused", Db: 1, Obj: 3},
+		TableDef: &planpb.TableDef{DbName: "app", Name: "unused", DbId: 1, TblId: 3},
+	}
+	query := &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{root, referenced, unrelated},
+		CatalogDependencies: []*planpb.ObjectRef{{SchemaName: "app", ObjName: "secret", Db: 1, Obj: 2}}}
+	(&BaseOptimizer{}).pruneUsedNodes(query)
+	require.Equal(t, []int32{0}, query.Steps)
+	require.Equal(t, []*planpb.Node{root, referenced}, query.Nodes)
+	require.Equal(t, int32(1), referenced.NodeId)
+}
+
 func TestVisitPlanExploresIndexReaderParam(t *testing.T) {
 	paramExpr := func() *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}

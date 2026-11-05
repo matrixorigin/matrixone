@@ -169,7 +169,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if dispatch.MaterializedSource != nil {
-		err = dispatch.MaterializedSource.Append(whichToSend)
+		err = dispatch.MaterializedSource.Append(proc.Ctx, whichToSend)
 		analyzer.SetMemUsed(dispatch.MaterializedSource.CurrentBytes())
 		return result, err
 	}

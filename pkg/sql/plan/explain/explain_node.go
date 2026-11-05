@@ -731,26 +731,6 @@ func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options 
 			describeColRef(&dedupJoinCtx.OldColList[i], buf)
 		}
 
-		buf.WriteString(" Update index list: ")
-		first = true
-		for i := range dedupJoinCtx.UpdateColIdxList {
-			if !first {
-				buf.WriteString(", ")
-			}
-			first = false
-			buf.WriteString(strconv.Itoa(int(dedupJoinCtx.UpdateColIdxList[i])))
-		}
-
-		buf.WriteString(" Update expr list: ")
-		first = true
-		for i := range dedupJoinCtx.UpdateColIdxList {
-			if !first {
-				buf.WriteString(", ")
-			}
-			first = false
-			describeExpr(ctx, dedupJoinCtx.UpdateColExprList[i], options, buf)
-		}
-
 		lines = append(lines, buf.String())
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return nil, moerr.NewNYI(ctx, "explain format json")

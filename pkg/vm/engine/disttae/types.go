@@ -294,6 +294,13 @@ type Engine struct {
 	packerPool *fileservice.Pool[*types.Packer]
 
 	gcPool *ants.Pool
+	// Failed deletion of a statement-pinned object remains engine-owned and
+	// quota-charged after its transaction and last reader have closed.
+	statementGC struct {
+		sync.Mutex
+		head   *statementObjectPin
+		active chan struct{}
+	}
 
 	// XXX related to cn push model
 	pClient PushClient
@@ -423,6 +430,8 @@ type Transaction struct {
 	//}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
+
+	statementKeyPins atomic.Pointer[statementKeyPins]
 
 	rollbackCount int
 	//current statement id
@@ -562,6 +571,12 @@ func (txn *Transaction) deleteLoadFiles(
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
+	if err = txn.quiesceStatementViewsForLoad(names); err != nil {
+		return nil, err
+	}
+	if err = context.Cause(cleanupCtx); err != nil {
+		return nil, err
+	}
 	for start := 0; start < len(names); start += GCBatchOfFileCount {
 		end := min(start+GCBatchOfFileCount, len(names))
 		_, err := fileservice.DoWithRetryContext(
@@ -1025,16 +1040,25 @@ const (
 )
 
 func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
-	if txn.isCloneTxn {
+	if txn.engine.cloneTxnCache != nil {
 		names = readutil.RemoveIf(names, func(name string) bool {
 			txnID := txn.op.Txn().ID
+			// TrackLoadFiles owns the same protection even when no other
+			// clone operation has marked this transaction as a clone.
 			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
 				return true
 			}
-			return scope == cloneGCIntermediate &&
+			return txn.isCloneTxn && scope == cloneGCIntermediate &&
 				txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
 		})
 	}
+
+	names = txn.deferPinnedObjectGC(names)
+	return gcUnpinnedFiles(txn, names...)
+}
+
+// Called only after clone protection and statement-view pins relinquish ownership.
+func gcUnpinnedFiles(txn *Transaction, names ...string) error {
 
 	if len(names) == 0 {
 		return nil
@@ -1172,6 +1196,10 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
 	v2.TxnRollbackLastStatementCounter.Inc()
+	txn.Lock()
+	txn.invalidateStatementKeyViewsLocked()
+	txn.Unlock()
+
 	var (
 		beforeEntries int
 		afterEntries  int
