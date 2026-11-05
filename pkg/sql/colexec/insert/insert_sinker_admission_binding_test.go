@@ -15,14 +15,19 @@
 package insert
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -60,6 +65,53 @@ func (s *issue25590WorkspaceStub) retained() ([]string, []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.names...), append([]string(nil), s.reasons...)
+}
+
+type rebindFailureFS struct {
+	fileservice.FileService
+	written string
+}
+
+func (fs *rebindFailureFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	if err := fs.FileService.Write(ctx, v); err != nil {
+		return err
+	}
+	fs.written = v.FilePath
+	return errors.New("injected ambiguous write")
+}
+
+func TestRebindWorkspaceReplacesCleanupOwnership(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	base := testutil.NewSharedFS()
+	t.Cleanup(func() { base.Close(ctx) })
+	fs := &rebindFailureFS{FileService: base}
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(&issue25590WorkspaceStub{
+		MockWorkspace: mock_frontend.NewMockWorkspace(ctrl),
+	}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	w := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false,
+		ioutil.WithWorkspaceOwnedCleanup())
+	defer w.Close()
+	require.True(t, w.WorkspaceOwnsCleanup())
+	w.RebindWorkspaceSinkerCapacity(proc)
+	require.True(t, w.HasUncommittedCapacityHook())
+	require.False(t, w.WorkspaceOwnsCleanup(), "the new hook-only owner must not inherit the old cleanup owner")
+
+	bat := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+		testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+		testutil.MakeVarcharVector([]string{"value"}, nil, proc.Mp()),
+	}}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+	require.ErrorContains(t, w.Write(ctx, bat), "injected ambiguous write")
+	require.NotEmpty(t, fs.written)
+	_, err := base.StatFile(ctx, fs.written)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "local cleanup must delete the ambiguous object")
 }
 
 // TestInsertToWriteS3BindsWorkspaceAdmissionAndRetainsOnFree pins the

@@ -110,6 +110,17 @@ func TestNextvalAutonomousExhaustionTerminalWithoutRetryState(t *testing.T) {
 	require.Equal(t, seqAutonomousMaxAttempts, f.exec.attempts)
 }
 
+func TestSequenceRetryExpiryDecisionCancellationWithoutProber(t *testing.T) {
+	f := newSeqRouteFixture(t, 7, newSeqMetadataState(1, 1, 100, 1, 1, false, false))
+	f.proc.GetSessionInfo().SeqRetry = process.NewSequenceRetryState()
+	f.proc.Base.TxnOperator = nil // the expiry prober cannot be constructed
+	ctx, cancel := context.WithCancel(f.proc.Ctx)
+	cancel()
+	outcome := RunSequenceRetryExpiryDecision(ctx, f.proc, time.Time{})
+	require.Equal(t, process.DecideCancelled, outcome.Kind)
+	require.ErrorIs(t, outcome.Err, context.Canceled)
+}
+
 // Pre-filter matrix: each arm denies exactly one term (publication already
 // won, autocommit=0, explicit BEGIN, snapshot isolation) while the rest of
 // the envelope would admit. Every arm keeps the terminal named error and
