@@ -358,11 +358,32 @@ Decided by @cpegeric, 2026-10-28.
 - A tail with frames that have no metadata row, written before every frame had one, is read
   entirely from its chunk rows. A MERGE or REINDEX rewrites it with a row for every frame.
 
+## IVF-PQ and CAGRA files (decision)
+
+Decided by @cpegeric, 2026-11-05.
+
+- Each sub-index's model tar (`Tag_ModelChunk`, chunks from 0) is one file, named by the
+  sub-index's `index_id`. CREATE and REINDEX write it through the layer, in the transaction
+  that writes its metadata row, so the building CN has it in its cache.
+- The checksum stays the MD5 the metadata row records. The cache entry is named by it, and a
+  rebuild verifies the assembled tar against it. A cache hit checks the manifest and length,
+  and the full check on the first open after a restart follows
+  `index-file-check-on-startup`, as for every index file; a load no longer hashes the whole
+  tar.
+- The write checks the bytes it streams against the recorded size and MD5, as FULLTEXT2
+  checks its segments, and fails the CREATE on a mismatch.
+- A load holds the tar from its fetch until `Unpack` has read it: through the aggregate
+  admission over all sub-indexes and the unpack. It then releases the hold, and the tar stays
+  in the cache for the next load. A refused or failed load releases every tar it fetched.
+- `Unpack` extracts into the model's host spill directory, as before.
+- The CDC event log (`Tag_CdcEvents`) stays chunk rows, read and written as before, like
+  FULLTEXT2's one-chunk tail frames.
+
 ## Scope and non-goals
 
 - In scope: the logical file layer (naming, whole-file write and read, the index-file disk
   cache, the internal table function the write path uses) and its contract.
-- Not in scope: adopting the layer in any index other than FULLTEXT2. Each algorithm
+- Not in scope: adopting the layer in any index other than FULLTEXT2, IVF-PQ and CAGRA. Each algorithm
   adopts it in its own change, which decides how its files map onto the layer (for example how a CDC tail is
   split into files). When cached files are deleted is the
   layer's (see "Holds and idle collection").

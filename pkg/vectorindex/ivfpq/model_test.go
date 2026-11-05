@@ -17,13 +17,11 @@
 package ivfpq
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -82,20 +80,6 @@ func generateTestData(nVectors, dim int) []float32 {
 
 // ---- mock SQL helpers ----
 
-func mock_runSql_streaming_error(
-	ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	sql string,
-	ch chan executor.Result,
-	err_chan chan error,
-) (executor.Result, error) {
-	defer func() {
-		err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-		time.Sleep(10 * time.Millisecond)
-	}()
-	return executor.Result{}, moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-}
-
 func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesize int64) *batch.Batch {
 	bat := batch.NewWithSize(4)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
@@ -107,21 +91,6 @@ func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesi
 	vector.AppendBytes(bat.Vecs[1], []byte(checksum), false, proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[2], timestamp, false, proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[3], filesize, false, proc.Mp())
-	bat.SetRowCount(1)
-	return bat
-}
-
-func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
-
-	dat, err := os.ReadFile(tarPath)
-	if err != nil {
-		panic(fmt.Sprintf("makeIndexBatch: cannot read %s: %v", tarPath, err))
-	}
-	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
 }
@@ -172,9 +141,8 @@ func TestModelStreamError(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	orig := runSql_streaming
-	runSql_streaming = mock_runSql_streaming_error
-	defer func() { runSql_streaming = orig }()
+	files := swapIndexFiles(t)
+	files.openErr = moerr.NewInternalErrorNoCtx("index file read failed")
 
 	// LoadIndex now fires tag=1 / tag=2 goroutines via runSql; mock those
 	// to return empty so they don't hit the production executor.
@@ -307,20 +275,12 @@ func TestModelLoadFromDB(t *testing.T) {
 	tarPath := built.Path
 	defer os.Remove(tarPath)
 
-	// Inject streaming mock.
-	orig := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		ch <- res
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = orig }()
+	swapIndexFiles(t).putFile(t, "test-from-db", tarPath)
 
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		// LoadIndex now also fires tag=1 (deleted pkids) and tag=2 (overflow)
-		// SELECTs in parallel with the model tar streaming. Return an empty
-		// result for those — the test exercises the no-CDC-delta path.
+		// LoadIndex also reads the tag=1 CDC event chunks. Return an empty result for
+		// them — the test exercises the no-CDC-delta path.
 		if strings.Contains(sql, "AND tag = 1") || strings.Contains(sql, "AND tag = 2") {
 			return executor.Result{Mp: proc.Mp()}, nil
 		}
