@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -70,7 +71,7 @@ func TestGenerateManifest_Basic(t *testing.T) {
 	require.NoError(t, txn2.Commit(ctx))
 
 	// Generate manifest
-	data, err := GenerateManifest(tableEntry, "/test/data/dir")
+	data, err := GenerateManifest(tableEntry, "/test/data/dir", tae.Runtime.Now())
 	require.NoError(t, err)
 
 	var m Manifest
@@ -111,7 +112,7 @@ func TestGenerateManifest_WithData(t *testing.T) {
 	tableEntry := rel.GetMeta().(*catalog.TableEntry)
 	require.NoError(t, txn.Commit(ctx))
 
-	data, err := GenerateManifest(tableEntry, "/test/data")
+	data, err := GenerateManifest(tableEntry, "/test/data", tae.Runtime.Now())
 	require.NoError(t, err)
 
 	var m Manifest
@@ -133,6 +134,69 @@ func TestGenerateManifest_WithData(t *testing.T) {
 
 	t.Logf("Manifest with data (%d objects, %d rows):\n%s",
 		m.Stats.TotalObjects, m.Stats.TotalRows, string(data))
+}
+
+// TestGenerateManifest_EngineClockAheadOfWall reproduces the
+// review-5789148073 counterexample on a real engine: the configured engine
+// HLC stays ahead of wall time (the same state a wall-clock rollback
+// produces), so every committed object carries a commit end above wall
+// time and every engine allocation keeps landing above wall time. If the
+// manifest snapshot bound came from wall time instead of the engine's own
+// timestamp owner, the normal reader would exclude those committed objects
+// and export a nonempty table as an empty manifest.
+func TestGenerateManifest_EngineClockAheadOfWall(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	// Deterministic ahead-of-wall engine clock, the same fixture injection
+	// used by the db/test replay fixtures: no wall dependency, no sleeps.
+	opts.Clock = types.NewMockHLCClock(time.Now().Add(time.Hour).UnixNano())
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(5, 0)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 20)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
+
+	txn, rel := tae.GetRelation()
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, txn.Commit(ctx))
+
+	// Fixed bound: the manifest takes its snapshot from the engine's own
+	// timestamp owner (DB.Runtime.Now), which is the same allocator that
+	// stamped the commits above and therefore sits at or above every
+	// already-committed object end.
+	engineNow := tae.Runtime.Now()
+	data, err := GenerateManifest(tableEntry, "/test/data", engineNow)
+	require.NoError(t, err)
+
+	var m Manifest
+	require.NoError(t, json.Unmarshal(data, &m))
+	require.NotEmpty(t, m.Objects,
+		"engine-HLC bound: committed objects must stay visible, manifest=%s", string(data))
+	require.EqualValues(t, 20, m.Stats.TotalRows,
+		"engine-HLC bound: committed rows must stay visible, manifest=%s", string(data))
+
+	// Independent negation, kept as the permanent wall-bound oracle: with
+	// the engine HLC ahead of wall time, a wall-time bound sits below the
+	// committed object ends and excludes every committed object, which is
+	// exactly the empty-manifest-for-a-nonempty-table defect the engine
+	// bound exists to prevent.
+	wallNow := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	dataWall, err := GenerateManifest(tableEntry, "/test/data", wallNow)
+	require.NoError(t, err)
+
+	var mWall Manifest
+	require.NoError(t, json.Unmarshal(dataWall, &mWall))
+	require.Emptyf(t, mWall.Objects,
+		"wall-time bound below ahead-of-wall commit ends hides the committed generation, manifest=%s", string(dataWall))
+	require.EqualValues(t, 0, mWall.Stats.TotalRows)
 }
 
 func TestInspectManifest(t *testing.T) {
@@ -320,8 +384,8 @@ type manifestReadOutcome struct {
 
 // readManifestOf runs the real manifest producer and decodes it without any
 // testify dependency, so it is safe to call from reader goroutines.
-func readManifestOf(table *catalog.TableEntry, dataDir string) manifestReadOutcome {
-	data, err := GenerateManifestPretty(table, dataDir)
+func readManifestOf(table *catalog.TableEntry, dataDir string, now types.TS) manifestReadOutcome {
+	data, err := GenerateManifestPretty(table, dataDir, now)
 	if err != nil {
 		return manifestReadOutcome{err: err}
 	}
@@ -332,9 +396,9 @@ func readManifestOf(table *catalog.TableEntry, dataDir string) manifestReadOutco
 	return manifestReadOutcome{manifest: m}
 }
 
-func manifestOf(t *testing.T, table *catalog.TableEntry) Manifest {
+func manifestOf(t *testing.T, table *catalog.TableEntry, now types.TS) Manifest {
 	t.Helper()
-	outcome := readManifestOf(table, "/test/data")
+	outcome := readManifestOf(table, "/test/data", now)
 	require.NoError(t, outcome.err)
 	return outcome.manifest
 }
@@ -419,7 +483,7 @@ func TestGenerateManifest_DuringUncommittedMerge(t *testing.T) {
 	sources := visibleDataObjects(t, tableEntry)
 	require.Len(t, sources, 2, "fixture requires two committed data objects")
 
-	before := manifestOf(t, tableEntry)
+	before := manifestOf(t, tableEntry, tae.Runtime.Now())
 	require.Len(t, before.Objects, 2)
 	require.EqualValues(t, 4, before.Stats.TotalRows)
 
@@ -439,7 +503,7 @@ func TestGenerateManifest_DuringUncommittedMerge(t *testing.T) {
 	// During the merge the manifest must carry one complete committed
 	// generation: the two unmerged sources with their 4 rows. It must not
 	// report a successful empty manifest.
-	during := manifestOf(t, tableEntry)
+	during := manifestOf(t, tableEntry, tae.Runtime.Now())
 	require.NotEmpty(t, during.Objects,
 		"manifest must not succeed empty for a nonempty table during a physical merge")
 	require.EqualValues(t, 2, len(during.Objects))
@@ -466,7 +530,7 @@ func TestGenerateManifest_DuringUncommittedMerge(t *testing.T) {
 	mergeCommitted = true
 	require.NoError(t, mtxn.Commit(ctx))
 
-	after := manifestOf(t, tableEntry)
+	after := manifestOf(t, tableEntry, tae.Runtime.Now())
 	require.Len(t, after.Objects, 1)
 	require.EqualValues(t, 4, after.Stats.TotalRows)
 	requirePKsReadable(t, tae, expectedPKs)
@@ -480,7 +544,7 @@ func TestGenerateManifest_DuringUncommittedMerge(t *testing.T) {
 	require.NoError(t, task2.OnExec(ctx))
 	require.NoError(t, mtxn2.Rollback(ctx))
 
-	afterRollback := manifestOf(t, tableEntry)
+	afterRollback := manifestOf(t, tableEntry, tae.Runtime.Now())
 	require.Len(t, afterRollback.Objects, 1)
 	require.EqualValues(t, 4, afterRollback.Stats.TotalRows)
 	require.Equal(t, manifestPaths(after), manifestPaths(afterRollback))
@@ -544,7 +608,7 @@ func TestGenerateManifest_DuringCommittingMerge(t *testing.T) {
 
 	sources := visibleDataObjects(t, tableEntry)
 	require.Len(t, sources, 2, "fixture requires two committed data objects")
-	before := manifestOf(t, tableEntry)
+	before := manifestOf(t, tableEntry, tae.Runtime.Now())
 	require.Len(t, before.Objects, 2)
 	require.EqualValues(t, 4, before.Stats.TotalRows)
 
@@ -639,7 +703,7 @@ func TestGenerateManifest_DuringCommittingMerge(t *testing.T) {
 	go func() {
 		defer close(readerDone)
 		close(readerStarted)
-		readerCh <- readManifestOf(tableEntry, "/test/data")
+		readerCh <- readManifestOf(tableEntry, "/test/data", tae.Runtime.Now())
 	}()
 	readersLaunched = 1
 	go func() {
@@ -736,7 +800,7 @@ func TestGenerateManifest_DuringCommittingMerge(t *testing.T) {
 	requirePKsReadable(t, tae, expectedPKs)
 	tae.CheckRowsByScan(4, true)
 
-	after := manifestOf(t, tableEntry)
+	after := manifestOf(t, tableEntry, tae.Runtime.Now())
 	require.EqualValues(t, 1, len(after.Objects))
 	require.EqualValues(t, 4, after.Stats.TotalRows)
 	require.Equal(t, manifestPaths(res.manifest), manifestPaths(after))

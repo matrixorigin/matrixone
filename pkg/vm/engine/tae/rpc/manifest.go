@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -66,7 +65,12 @@ type ManifestStats struct {
 //
 // dataDir is the base directory where .tae object files are stored
 // (e.g., the fileservice shared path).
-func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error) {
+//
+// now is the snapshot bound and must come from the engine's timestamp owner
+// (DB.Runtime.Now, the same allocator that stamps commits). Commit stamps
+// ride the configured HLC, which can stay ahead of wall time, so a
+// wall-time bound can sit below committed object ends and hide them.
+func GenerateManifest(table *catalog.TableEntry, dataDir string, now types.TS) ([]byte, error) {
 	schema := table.GetLastestSchema(false)
 
 	// Build column list, skipping hidden/internal columns
@@ -112,7 +116,8 @@ func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error)
 	// replacement only appears once its own commit is visible. The
 	// manifest therefore always enumerates one complete committed object
 	// generation.
-	now := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	// The bound is the caller-provided engine now; wall time must never be
+	// used here because the HLC that stamps commits can stay ahead of it.
 	readTxn := txnbase.NewTxn(nil, nil, []byte("tae-manifest-reader"), now, now)
 	it := table.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
@@ -163,8 +168,8 @@ func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error)
 }
 
 // GenerateManifestPretty is like GenerateManifest but produces indented JSON.
-func GenerateManifestPretty(table *catalog.TableEntry, dataDir string) ([]byte, error) {
-	data, err := GenerateManifest(table, dataDir)
+func GenerateManifestPretty(table *catalog.TableEntry, dataDir string, now types.TS) ([]byte, error) {
+	data, err := GenerateManifest(table, dataDir, now)
 	if err != nil {
 		return nil, err
 	}
