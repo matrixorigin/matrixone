@@ -101,7 +101,7 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 						require.Equal(t, wantTable, exists)
 						fields := "function_id,body"
 						if wantTable {
-							fields += ",active_revision,namespace_version"
+							fields += ",active_revision,namespace_version,canonical_input_descriptor,return_descriptor,signature_key_schema_version,signature_fingerprint"
 						}
 						res, err := txn.Exec("select "+fields+" from mo_catalog.mo_user_defined_function where name = 'legacy_plus_seven'", versions.UpgradeStatementOption(accountID))
 						if err != nil {
@@ -120,6 +120,10 @@ func TestReleasedCatalogLoginRepairsRoutineSchema(t *testing.T) {
 						if wantTable {
 							require.Equal(t, uint64(0), vector.GetFixedAtWithTypeCheck[uint64](batch.Vecs[2], 0))
 							require.Equal(t, uint64(0), vector.GetFixedAtWithTypeCheck[uint64](batch.Vecs[3], 0))
+							require.Empty(t, batch.Vecs[4].GetStringAt(0))
+							require.Empty(t, batch.Vecs[5].GetStringAt(0))
+							require.Zero(t, vector.GetFixedAtWithTypeCheck[int32](batch.Vecs[6], 0))
+							require.Empty(t, batch.Vecs[7].GetStringAt(0))
 						}
 						return nil
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(catalog.System_Account)))
