@@ -1282,7 +1282,11 @@ func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vect
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	v := vectors[0]
-	if decimalReductionAvailable() && v.Length() >= 256 && !v.HasNull() && !v.IsConst() && !v.HasGrouping() && exec.bulkInput != 0 && v.GetType().Oid == exec.bulkInput && exec.bulkState != 0 && exec.aggInfo.stateTypes[0].Oid == exec.bulkState {
+	// A single row needs neither batch-local accumulation nor SIMD dispatch.
+	if v.Length() == 1 && groupIndex >= 0 {
+		return exec.Fill(groupIndex, 0, vectors)
+	}
+	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() && exec.bulkInput != 0 && v.GetType().Oid == exec.bulkInput && exec.bulkState != 0 && exec.aggInfo.stateTypes[0].Oid == exec.bulkState {
 		return decimalBulkReduce(&exec.aggExec, exec.isSum, groupIndex, v)
 	}
 	if exec.isSum {

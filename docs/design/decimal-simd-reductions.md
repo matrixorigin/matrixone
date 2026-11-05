@@ -43,3 +43,23 @@ Initial test-binary screens used default function alignment; retained-path
 controls use production-equivalent64-byte alignment. Earlier NULL/control
 signals are retained until comparable evidence clears them. No end-to-end
 acceptance or readiness is claimed from component speedups.
+
+## Register packing refinement
+
+The2026-11-05 refinement keeps the same signed64 coefficient admission,
+four-row transactional prefix and existing scalar suffix. Decimal128 inputs
+are separated into low/high vectors with unpack instructions. Decimal256
+inputs use a four-by-four limb transpose in registers; every upper limb must
+equal the coefficient's sign extension before any lane is accumulated.
+The private lanes may stay in row order0,2,1,3 because their bounded exact128
+totals are folded once, after the prefix. No per-block stack staging array is
+needed. Signed comparisons against zero form sign masks using AVX2; signed64
+vector arithmetic shifts are AVX-512-only and are excluded. Refusal tests cover
+each row lane and every upper limb with signed64 endpoint coefficients.
+
+Non-DISTINCT one-row batches reuse the existing scalar Fill operation, avoiding
+batch accumulation/SIMD setup. The unchanged batch bodies are the parity oracle
+for NULL/constant/wide inputs, populated state, counts and overflow publication.
+
+The mixed SIMD/scalar slowdown remains an acceptance blocker until measured
+evidence clears it; faster packing alone does not clear that gate.

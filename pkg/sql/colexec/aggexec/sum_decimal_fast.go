@@ -161,7 +161,11 @@ func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vec
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	v := vectors[0]
-	if decimalReductionAvailable() && v.Length() >= 256 && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+	// A single row needs neither batch-local accumulation nor SIMD dispatch.
+	if v.Length() == 1 && groupIndex >= 0 {
+		return exec.Fill(groupIndex, 0, vectors)
+	}
+	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
 		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors)
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
@@ -629,7 +633,11 @@ func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Ve
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
 	v := vectors[0]
-	if decimalReductionAvailable() && v.Length() >= 256 && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+	// A single row needs neither batch-local accumulation nor SIMD dispatch.
+	if v.Length() == 1 && groupIndex >= 0 {
+		return exec.Fill(groupIndex, 0, vectors)
+	}
+	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
 		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors)
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)

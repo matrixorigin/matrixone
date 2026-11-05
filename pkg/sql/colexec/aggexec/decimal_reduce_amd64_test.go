@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
+	"math"
 	"simd/archsimd"
 	"testing"
 )
@@ -32,44 +33,77 @@ func TestDecimalReductionPrefix(t *testing.T) {
 	}
 	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		for _, n := range []int{0, 255, 256, 257, 512} {
-			mp := mpool.MustNewZero()
-			v := vector.NewVec(types.New(oid, 38, 2))
-			values := make([]int64, n+3)
-			for i := range values {
-				values[i] = int64(i%17 - 8)
-				switch oid {
-				case types.T_decimal64:
-					require.NoError(t, vector.AppendFixed(v, types.Decimal64(values[i]), false, mp))
-				case types.T_decimal128:
-					require.NoError(t, vector.AppendFixed(v, types.Decimal128FromInt64(values[i]), false, mp))
-				case types.T_decimal256:
-					require.NoError(t, vector.AppendFixed(v, types.Decimal256FromInt64(values[i]), false, mp))
+			t.Run(fmt.Sprintf("%s/rows%d", oid.String(), n), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+				v := vector.NewVec(types.New(oid, 38, 2))
+				t.Cleanup(func() { v.Free(mp) })
+				values := make([]int64, n+3)
+				bounds := []int64{math.MinInt64, math.MaxInt64, -8, 8, -1, 0, 7, -7}
+				for i := range values {
+					values[i] = bounds[i%len(bounds)]
+					switch oid {
+					case types.T_decimal64:
+						require.NoError(t, vector.AppendFixed(v, types.Decimal64(values[i]), false, mp))
+					case types.T_decimal128:
+						require.NoError(t, vector.AppendFixed(v, types.Decimal128FromInt64(values[i]), false, mp))
+					case types.T_decimal256:
+						require.NoError(t, vector.AppendFixed(v, types.Decimal256FromInt64(values[i]), false, mp))
+					}
 				}
-			}
-			p := reduceDecimalPrefix(v, 3, n)
-			wantRows := 0
-			if n >= 256 {
-				wantRows = n / 4 * 4
-			}
-			require.Equal(t, wantRows, p.rows)
-			require.Equal(t, int64(wantRows), p.count)
-			var sum types.Decimal128
-			for i := 0; i < p.rows; i++ {
-				sum = sum.Add128Unchecked(types.Decimal128FromInt64(values[i+3]))
-			}
-			require.Equal(t, sum, p.sum)
-			if n == 512 && oid != types.T_decimal64 {
-				if oid == types.T_decimal128 {
-					vector.MustFixedColNoTypeCheck[types.Decimal128](v)[303] = types.Decimal128{B64_127: 1}
-				} else {
-					vector.MustFixedColNoTypeCheck[types.Decimal256](v)[303] = types.Decimal256{B192_255: 1}
+				p := reduceDecimalPrefix(v, 3, n)
+				wantRows := 0
+				if n >= 256 {
+					wantRows = n / 4 * 4
 				}
-				p = reduceDecimalPrefix(v, 3, n)
-				require.Equal(t, 300, p.rows)
-				require.Equal(t, int64(300), p.count)
-			}
-			v.Free(mp)
-			require.Zero(t, mp.CurrNB())
+				require.Equal(t, wantRows, p.rows)
+				require.Equal(t, int64(wantRows), p.count)
+				var sum types.Decimal128
+				for i := 0; i < wantRows; i++ {
+					sum = sum.Add128Unchecked(types.Decimal128FromInt64(values[i+3]))
+				}
+				require.Equal(t, sum, p.sum)
+				if n != 512 || oid == types.T_decimal64 {
+					return
+				}
+				var prefixSum types.Decimal128
+				for _, value := range values[3:303] {
+					prefixSum = prefixSum.Add128Unchecked(types.Decimal128FromInt64(value))
+				}
+				limbs := 1
+				if oid == types.T_decimal256 {
+					limbs = 3
+				}
+				for lane := 0; lane < 4; lane++ {
+					for limb := 1; limb <= limbs; limb++ {
+						t.Run(fmt.Sprintf("wide_lane%d_limb%d", lane, limb), func(t *testing.T) {
+							at := 303 + lane
+							if oid == types.T_decimal128 {
+								args := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
+								old := args[at]
+								t.Cleanup(func() { args[at] = old })
+								args[at].B64_127 ^= 1
+							} else {
+								args := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+								old := args[at]
+								t.Cleanup(func() { args[at] = old })
+								switch limb {
+								case 1:
+									args[at].B64_127 ^= 1
+								case 2:
+									args[at].B128_191 ^= 1
+								case 3:
+									args[at].B192_255 ^= 1
+								}
+							}
+							got := reduceDecimalPrefix(v, 3, n)
+							require.Equal(t, 300, got.rows)
+							require.Equal(t, int64(300), got.count)
+							require.Equal(t, prefixSum, got.sum)
+						})
+					}
+				}
+			})
 		}
 	}
 }

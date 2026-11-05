@@ -15,9 +15,11 @@
 package aggexec
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1131,5 +1133,134 @@ func TestSumDecimal64Fast_BatchFillMultiChunkInitialization(t *testing.T) {
 				require.Equal(t, int64(2), cnts[0])
 			}
 		})
+	}
+}
+
+// Compare the one-row entrypoint with the retained batch bodies, including
+// pre-existing state and error publication. The oracle does not call Fill.
+func TestDecimalSingleRowBulkFill(t *testing.T) {
+	for _, typ := range []types.Type{types.New(types.T_decimal64, 15, 2), types.New(types.T_decimal128, 18, 2), types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal256, 65, 2)} {
+		for _, isSum := range []bool{false, true} {
+			for _, shape := range []string{"flat", "negative", "null", "constant", "constant_null", "wide"} {
+				if shape == "wide" && typ.Width < 38 {
+					continue
+				}
+				for _, seeded := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/p%d/sum%t/%s/seed%t", typ.Oid.String(), typ.Width, isSum, shape, seeded), func(t *testing.T) {
+						mp := mpool.MustNewZero()
+						t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+						coefficient := int64(3)
+						if shape == "negative" {
+							coefficient = -3
+						}
+						d128, d256 := types.Decimal128FromInt64(coefficient), types.Decimal256FromInt64(coefficient)
+						if shape == "wide" {
+							d128 = types.Decimal128{B64_127: 1}
+							d256 = types.Decimal256{B128_191: 1}
+						}
+						var v *vector.Vector
+						if shape == "constant_null" {
+							v = vector.NewConstNull(typ, 1, mp)
+							t.Cleanup(func() { v.Free(mp) })
+						} else if shape == "constant" {
+							var err error
+							switch typ.Oid {
+							case types.T_decimal64:
+								v, err = vector.NewConstFixed(typ, types.Decimal64(coefficient), 1, mp)
+							case types.T_decimal128:
+								v, err = vector.NewConstFixed(typ, d128, 1, mp)
+							case types.T_decimal256:
+								v, err = vector.NewConstFixed(typ, d256, 1, mp)
+							}
+							require.NoError(t, err)
+							t.Cleanup(func() { v.Free(mp) })
+						} else {
+							v = vector.NewVec(typ)
+							t.Cleanup(func() { v.Free(mp) })
+							switch typ.Oid {
+							case types.T_decimal64:
+								require.NoError(t, vector.AppendFixed(v, types.Decimal64(coefficient), shape == "null", mp))
+							case types.T_decimal128:
+								require.NoError(t, vector.AppendFixed(v, d128, shape == "null", mp))
+							case types.T_decimal256:
+								require.NoError(t, vector.AppendFixed(v, d256, shape == "null", mp))
+							}
+						}
+						id := AggIdOfAvg
+						if isSum {
+							id = AggIdOfSum
+						}
+						actual := makeSumAvgExec(mp, isSum, id, false, typ)
+						t.Cleanup(actual.Free)
+						expected := makeSumAvgExec(mp, isSum, id, false, typ)
+						t.Cleanup(expected.Free)
+						require.NoError(t, actual.GroupGrow(2))
+						require.NoError(t, expected.GroupGrow(2))
+						input := []*vector.Vector{v}
+						reference := func(exec AggFuncExec) (*aggExec, func() error) {
+							switch e := exec.(type) {
+							case *sumDecimal64FastExec:
+								return &e.aggExec, func() error { return e.bulkFillSingleGroup(1, input) }
+							case *sumDecimal128FastExec:
+								return &e.aggExec, func() error { return e.bulkFillSingleGroup(1, input) }
+							case *sumAvgDecExec[types.Decimal128, types.Decimal256]:
+								return &e.aggExec, func() error {
+									if e.isSum {
+										return e.bulkFillSumRange(1, 0, 1, input)
+									}
+									return e.bulkFillAvgRange(1, 0, 1, input)
+								}
+							case *sumAvgDecExec[types.Decimal256, types.Decimal256]:
+								return &e.aggExec, func() error {
+									if e.isSum {
+										return e.bulkFillSumRange(1, 0, 1, input)
+									}
+									return e.bulkFillAvgRange(1, 0, 1, input)
+								}
+							default:
+								t.Fatalf("uncovered executor %T", exec)
+								return nil, nil
+							}
+						}
+						gotBase, _ := reference(actual)
+						wantBase, runReference := reference(expected)
+						if seeded {
+							for _, base := range []*aggExec{gotBase, wantBase} {
+								sums := base.state[0].vecs[0]
+								if sums.GetType().Oid == types.T_decimal128 {
+									chunkArr[types.Decimal128](sums)[1] = types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxInt64}
+								} else {
+									chunkArr[types.Decimal256](sums)[1] = types.Decimal256{B0_63: math.MaxUint64, B64_127: math.MaxUint64, B128_191: math.MaxUint64, B192_255: math.MaxInt64}
+								}
+								sums.UnsetNull(1)
+								if len(base.state[0].vecs) > 1 {
+									vector.MustFixedColNoTypeCheck[int64](base.state[0].vecs[1])[1] = 1
+								}
+							}
+						}
+						wantErr := runReference()
+						gotErr := actual.BulkFill(1, input)
+						wantCode, wantOK := moerr.GetMoErrCode(wantErr)
+						gotCode, gotOK := moerr.GetMoErrCode(gotErr)
+						require.Equal(t, wantOK, gotOK)
+						require.Equal(t, wantCode, gotCode)
+						if wantErr == nil {
+							require.NoError(t, gotErr)
+						} else {
+							require.Error(t, gotErr)
+							require.Equal(t, wantErr.Error(), gotErr.Error())
+						}
+						for i, want := range wantBase.state[0].vecs {
+							got := gotBase.state[0].vecs[i]
+							require.Equal(t, *want.GetType(), *got.GetType())
+							size := int(want.GetType().TypeSize()) * 2
+							require.Equal(t, want.GetData()[:size], got.GetData()[:size])
+							require.Equal(t, want.IsNull(0), got.IsNull(0))
+							require.Equal(t, want.IsNull(1), got.IsNull(1))
+						}
+					})
+				}
+			}
+		}
 	}
 }

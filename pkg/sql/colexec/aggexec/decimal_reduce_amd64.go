@@ -46,34 +46,50 @@ func reduceDecimalPrefix(v *vector.Vector, offset int, n int) (r decimalReductio
 
 // Contiguous reduction needs neither group matching nor per-group masked accumulators.
 func reduceDecimalContiguous(data []uint64, offset, n, width int) (r decimalReductionPrefix) {
-	lo, hi := archsimd.BroadcastUint64x4(0), archsimd.BroadcastUint64x4(0)
+	zero := archsimd.BroadcastUint64x4(0)
+	lo, hi := zero, zero
 	ones := archsimd.BroadcastUint64x4(^uint64(0))
+blocks:
 	for r.rows+4 <= n {
-		var add archsimd.Uint64x4
-		if width == 1 {
+		var add, sign archsimd.Uint64x4
+		switch width {
+		case 1:
 			at := offset + r.rows
 			add = archsimd.LoadUint64x4(data[at : at+4])
-		} else {
-			var vals [4]uint64
-			valid := true
-			for lane := 0; lane < 4; lane++ {
-				at := (offset + r.rows + lane) * width
-				vals[lane] = data[at]
-				sign := uint64(int64(vals[lane]) >> 63)
-				for limb := 1; limb < width; limb++ {
-					if data[at+limb] != sign {
-						valid = false
-					}
-				}
+			sign = add.BitsToInt64().Less(zero.BitsToInt64()).ToInt64x4().ToBits()
+		case 2:
+			at := (offset + r.rows) * 2
+			a := archsimd.LoadUint64x4(data[at : at+4])
+			b := archsimd.LoadUint64x4(data[at+4 : at+8])
+			// Retain row order 0,2,1,3 in the lanes; horizontal summation
+			// does not need an additional cross-lane permutation.
+			add = a.InterleaveLoGrouped(b)
+			sign = add.BitsToInt64().Less(zero.BitsToInt64()).ToInt64x4().ToBits()
+			if !a.InterleaveHiGrouped(b).Xor(sign).IsZero() {
+				break blocks
 			}
-			if !valid {
-				break
+		case 4:
+			at := (offset + r.rows) * 4
+			a := archsimd.LoadUint64x4(data[at : at+4])
+			b := archsimd.LoadUint64x4(data[at+4 : at+8])
+			c := archsimd.LoadUint64x4(data[at+8 : at+12])
+			d := archsimd.LoadUint64x4(data[at+12 : at+16])
+			acLo, bdLo := a.InterleaveLoGrouped(c), b.InterleaveLoGrouped(d)
+			acHi, bdHi := a.InterleaveHiGrouped(c), b.InterleaveHiGrouped(d)
+			add = acLo.ConcatPermute128Scalars(0, 2, bdLo)
+			sign = add.BitsToInt64().Less(zero.BitsToInt64()).ToInt64x4().ToBits()
+			h1 := acHi.ConcatPermute128Scalars(0, 2, bdHi)
+			h2 := acLo.ConcatPermute128Scalars(1, 3, bdLo)
+			h3 := acHi.ConcatPermute128Scalars(1, 3, bdHi)
+			if !h1.Xor(sign).Or(h2.Xor(sign)).Or(h3.Xor(sign)).IsZero() {
+				break blocks
 			}
-			add = archsimd.LoadUint64x4(vals[:])
+		default:
+			return r
 		}
 		next := lo.Add(add)
 		carry := lo.And(add).Or(lo.Or(add).And(next.Xor(ones))).ShiftAllRight(63)
-		hi = hi.Add(add.AsInt64x4().ShiftAllRight(63).AsUint64x4()).Add(carry)
+		hi = hi.Add(sign).Add(carry)
 		lo = next
 		r.rows += 4
 	}
