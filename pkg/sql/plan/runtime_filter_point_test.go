@@ -25,7 +25,6 @@ import (
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -188,8 +187,7 @@ func pointRuntimeFilterBuilder(t *testing.T) *QueryBuilder {
 	builder := newRuntimeFilterSingleTestBuilder(false)
 	ctx := builder.compCtx.(*MockCompilerContext)
 	proc := ctx.GetProcess()
-	ctx.GetProcessFunc = func() *process.Process { return proc }
-	t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+	cleanupMockProcess(t, proc)
 	build := pointProofScan()
 	build.BindingTags = []int32{2}
 	build.FilterList[0].GetF().Args[0].GetCol().RelPos = 2
@@ -437,8 +435,7 @@ func (c pointUpdateStatsContext) Stats(obj *ObjectRef, snapshot *Snapshot) (*sta
 func TestRuntimeFilterForPrimaryKeyPointUpdate(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	proc := mock.ctxt.GetProcess()
-	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-	t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+	cleanupMockProcess(t, proc)
 	addIndexHintChoiceTableForTest(mock)
 	table := mock.ctxt.tables["index_hint_t"]
 	table.Indexes = table.Indexes[:2]

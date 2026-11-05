@@ -15,16 +15,78 @@
 package testutil
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
 const (
 	Rows = 10
 )
+
+func TestSetupAutoIncrServiceIsIdempotent(t *testing.T) {
+	const sid = "testutil-auto-increment-idempotence"
+	const workers = 16
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, sid, nil)
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+
+	results := make(chan incrservice.AutoIncrementService, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			SetupAutoIncrService(sid)
+			results <- incrservice.GetAutoIncrementService(sid)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	first := <-results
+	require.NotNil(t, first)
+	t.Cleanup(func() {
+		first.Close()
+		rt.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, first)
+	})
+	for result := range results {
+		require.Same(t, first, result)
+	}
+
+	SetupAutoIncrService(sid)
+	require.Same(t, first, incrservice.GetAutoIncrementService(sid))
+}
+
+func TestSetupAutoIncrServicePreservesInstalledServicePerRuntime(t *testing.T) {
+	const firstID = "testutil-auto-increment-existing"
+	const secondID = "testutil-auto-increment-other"
+	firstRuntime := moruntime.NewRuntime(metadata.ServiceType_CN, firstID, nil)
+	secondRuntime := moruntime.NewRuntime(metadata.ServiceType_CN, secondID, nil)
+	moruntime.SetupServiceBasedRuntime(firstID, firstRuntime)
+	moruntime.SetupServiceBasedRuntime(secondID, secondRuntime)
+	existing := incrservice.NewIncrService(firstID, incrservice.NewMemStore(), incrservice.Config{})
+	firstRuntime.SetGlobalVariables(moruntime.AutoIncrementService, existing)
+	t.Cleanup(func() {
+		firstRuntime.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, existing)
+		existing.Close()
+	})
+
+	SetupAutoIncrService(firstID)
+	require.Same(t, existing, incrservice.GetAutoIncrementService(firstID))
+	SetupAutoIncrService(secondID)
+	other := incrservice.GetAutoIncrementService(secondID)
+	t.Cleanup(func() {
+		secondRuntime.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, other)
+		other.Close()
+	})
+	require.NotSame(t, existing, other)
+}
 
 func TestNewBatch(t *testing.T) {
 	m := mpool.MustNewZero()
