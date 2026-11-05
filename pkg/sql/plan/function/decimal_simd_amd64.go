@@ -23,11 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func decimalSIMDFits32(lo, hi archsimd.Uint64x4) bool {
-	narrow := lo.AsInt64x4().ShiftAllLeft(32).ShiftAllRight(32).AsUint64x4()
-	sign := lo.AsInt64x4().ShiftAllRight(63).AsUint64x4()
-	return lo.Equal(narrow).And(hi.Equal(sign)).ToBits() == 15
-}
 func tryDecimalSIMD(op int32, x, y, out *vector.Vector, xi, yi, oi, n int) bool {
 	if n < 256 || !archsimd.X86.AVX2() || x.IsConstNull() || y.IsConstNull() || x.HasNull() || y.HasNull() || x.HasGrouping() || y.HasGrouping() || (x.IsConst() && y.IsConst()) {
 		return false
@@ -37,92 +32,70 @@ func tryDecimalSIMD(op int32, x, y, out *vector.Vector, xi, yi, oi, n int) bool 
 		xi, yi = yi, xi
 	}
 	xt, yt, rt := x.GetType().Oid, y.GetType().Oid, out.GetType().Oid
-	if xt != types.T_decimal64 && xt != types.T_decimal128 {
-		return false
-	}
-	if yt != types.T_decimal64 {
-		return false
-	}
-	if op == MULTI {
-		if (rt != types.T_decimal128 && rt != types.T_decimal256) || out.GetType().Scale != x.GetType().Scale+y.GetType().Scale {
+	if op == PLUS || op == MINUS {
+		if x.GetType().Scale != out.GetType().Scale || y.GetType().Scale != out.GetType().Scale {
 			return false
+		}
+		if xt == types.T_decimal128 && yt == types.T_decimal128 && (rt == types.T_decimal128 || rt == types.T_decimal256) {
+			return decimal128PreparedSIMD(op, x, y, out, xi, yi, oi, n)
+		}
+		if xt != types.T_decimal64 || yt != types.T_decimal64 {
+			return false
+		}
+		if rt == types.T_decimal64 {
+			decimal64ResultSIMD(op, x, y, out, xi, yi, oi, n)
+			return true
+		}
+		if rt == types.T_decimal128 {
+			decimal64WideSIMD(op, x, y, out, xi, yi, oi, n)
+			return true
+		}
+		return false
+	}
+	if op != MULTI || yt != types.T_decimal64 || (xt != types.T_decimal64 && xt != types.T_decimal128) || (rt != types.T_decimal128 && rt != types.T_decimal256) || out.GetType().Scale != x.GetType().Scale+y.GetType().Scale {
+		return false
+	}
+	xc, yc := x.IsConst(), y.IsConst()
+	if (xc && !decimalSIMDFirstNarrow(x, xi)) || (yc && !decimalSIMDFirstNarrow(y, yi)) {
+		return false
+	}
+	if xt == types.T_decimal64 {
+		if rt == types.T_decimal128 {
+			if xc {
+				return decimalMul64To128Left(x, y, out, xi, yi, oi, n)
+			}
+			if yc {
+				return decimalMul64To128Right(x, y, out, xi, yi, oi, n)
+			}
+			return decimalMul64To128Flat(x, y, out, xi, yi, oi, n)
+		} else {
+			if xc {
+				return decimalMul64To256Left(x, y, out, xi, yi, oi, n)
+			}
+			if yc {
+				return decimalMul64To256Right(x, y, out, xi, yi, oi, n)
+			}
+			return decimalMul64To256Flat(x, y, out, xi, yi, oi, n)
 		}
 	} else {
-		if (op != PLUS && op != MINUS) || xt != types.T_decimal64 || (rt != types.T_decimal64 && rt != types.T_decimal128) || x.GetType().Scale != out.GetType().Scale || y.GetType().Scale != out.GetType().Scale {
-			return false
-		}
-	}
-	xd, yd, od := types.DecodeSlice[uint64](x.GetData()), types.DecodeSlice[uint64](y.GetData()), types.DecodeSlice[uint64](out.GetData())
-	xc, yc := x.IsConst(), y.IsConst()
-	ones := archsimd.BroadcastUint64x4(^uint64(0))
-	i := 0
-	for ; i+4 <= n; i += 4 {
-		var a, ah, b, bh archsimd.Uint64x4
-		if xt == types.T_decimal64 {
+		if rt == types.T_decimal128 {
 			if xc {
-				a = archsimd.BroadcastUint64x4(xd[0])
-			} else {
-				a = archsimd.LoadUint64x4(xd[xi+i : xi+i+4])
+				return decimalMul128To128Left(x, y, out, xi, yi, oi, n)
 			}
-			ah = a.AsInt64x4().ShiftAllRight(63).AsUint64x4()
-		} else if xc {
-			a = archsimd.BroadcastUint64x4(xd[0])
-			ah = archsimd.BroadcastUint64x4(xd[1])
-		} else {
-			at := (xi + i) * 2
-			l, h := archsimd.LoadUint64x4(xd[at:at+4]), archsimd.LoadUint64x4(xd[at+4:at+8])
-			even, odd := l.ConcatPermute128Scalars(0, 2, h), l.ConcatPermute128Scalars(1, 3, h)
-			a, ah = even.InterleaveLoGrouped(odd), even.InterleaveHiGrouped(odd)
-		}
-		if yc {
-			b = archsimd.BroadcastUint64x4(yd[0])
-		} else {
-			b = archsimd.LoadUint64x4(yd[yi+i : yi+i+4])
-		}
-		bh = b.AsInt64x4().ShiftAllRight(63).AsUint64x4()
-		var lo, hi archsimd.Uint64x4
-		switch op {
-		case MULTI:
-			if !decimalSIMDFits32(a, ah) || !decimalSIMDFits32(b, bh) {
-				if i == 0 {
-					return false
-				}
-				// Scalar span preserves committed prefix and processes each remaining row once.
-				decimalSIMDScalarSpan(op, x, y, out, xi+i, yi+i, oi+i, n-i)
-				return true
+			if yc {
+				return decimalMul128To128Right(x, y, out, xi, yi, oi, n)
 			}
-			lo = a.AsInt32x8().MulWidenEven(b.AsInt32x8()).AsUint64x4()
-			hi = lo.AsInt64x4().ShiftAllRight(63).AsUint64x4()
-		case PLUS:
-			lo = a.Add(b)
-			carry := a.And(b).Or(a.Or(b).And(lo.Xor(ones))).ShiftAllRight(63)
-			hi = ah.Add(bh).Add(carry)
-		case MINUS:
-			lo = a.Sub(b)
-			borrow := a.Xor(ones).And(b).Or(a.Xor(b).Xor(ones).And(lo)).ShiftAllRight(63)
-			hi = ah.Sub(bh).Sub(borrow)
-		}
-		at := oi + i
-		switch rt {
-		case types.T_decimal64:
-			lo.Store(od[at : at+4])
-		case types.T_decimal128:
-			l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
-			l.ConcatPermute128Scalars(0, 2, h).Store(od[at*2 : at*2+4])
-			l.ConcatPermute128Scalars(1, 3, h).Store(od[at*2+4 : at*2+8])
-		case types.T_decimal256:
-			l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
-			m, n := hi.InterleaveLoGrouped(hi), hi.InterleaveHiGrouped(hi)
-			l.ConcatPermute128Scalars(0, 2, m).Store(od[at*4 : at*4+4])
-			h.ConcatPermute128Scalars(0, 2, n).Store(od[at*4+4 : at*4+8])
-			l.ConcatPermute128Scalars(1, 3, m).Store(od[at*4+8 : at*4+12])
-			h.ConcatPermute128Scalars(1, 3, n).Store(od[at*4+12 : at*4+16])
+			return decimalMul128To128Flat(x, y, out, xi, yi, oi, n)
+		} else {
+			if xc {
+				return decimalMul128To256Left(x, y, out, xi, yi, oi, n)
+			}
+			if yc {
+				return decimalMul128To256Right(x, y, out, xi, yi, oi, n)
+			}
+			return decimalMul128To256Flat(x, y, out, xi, yi, oi, n)
 		}
 	}
-	if i < n {
-		decimalSIMDScalarSpan(op, x, y, out, xi+i, yi+i, oi+i, n-i)
-	}
-	return true
 }
 
 // Only the admitted exact families reach this remainder, so it needs neither
@@ -180,4 +153,8 @@ func decimalSIMDFirstNarrow(v *vector.Vector, at int) bool {
 	default:
 		return false
 	}
+}
+
+func decimalSIMDFitsLane32(v archsimd.Uint64x4) bool {
+	return v.Equal(v.AsInt64x4().ShiftAllLeft(32).ShiftAllRight(32).AsUint64x4()).ToBits() == 15
 }

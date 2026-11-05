@@ -133,6 +133,11 @@ func d128Add(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 // Different-scale: scales operand(s) first, then uses bits.Sub64 loop.
 
 func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
+	if max(len(v1), len(v2)) >= 256 && rsnull.IsEmpty() {
+		if idx, ok := tryDecimal128SIMD(PLUS, v1, v2, rs); ok {
+			return idx
+		}
+	}
 	bmp := rsnull.GetBitmap()
 	len1 := len(v1)
 	len2 := len(v2)
@@ -290,6 +295,11 @@ func d128Sub(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.
 // For vector-vector: scale lower-scale vector into rs, then bits.Add64 with other.
 
 func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
+	if max(len(v1), len(v2)) >= 256 && rsnull.IsEmpty() {
+		if idx, ok := tryDecimal128SIMD(MINUS, v1, v2, rs); ok {
+			return idx
+		}
+	}
 	bmp := rsnull.GetBitmap()
 	len1 := len(v1)
 	len2 := len(v2)

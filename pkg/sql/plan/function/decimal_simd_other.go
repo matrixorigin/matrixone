@@ -16,8 +16,13 @@
 
 package function
 
-import "github.com/matrixorigin/matrixone/pkg/container/vector"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
 
 func tryDecimalSIMD(_ int32, _, _, _ *vector.Vector, _, _, _, _ int) bool { return false }
 
 func decimalSIMDQuickCheck(_ int32, _, _ *vector.Vector, _, _ int) bool { return false }
+
+func tryDecimal128SIMD(_ int32, _, _, _ []types.Decimal128) (int, bool) { return -1, false }
