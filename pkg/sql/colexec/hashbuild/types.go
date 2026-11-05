@@ -65,11 +65,8 @@ type container struct {
 }
 
 type HashBuild struct {
-	ctr         container
-	NeedHashMap bool
-	// OptionalIndex permits an index-free JoinMap only for consumers that can
-	// evaluate retained batches. It must not be enabled for ordinary HashJoin.
-	OptionalIndex       bool
+	ctr                 container
+	NeedHashMap         bool
 	HashOnPK            bool
 	NeedBatches         bool
 	NeedAllocateSels    bool

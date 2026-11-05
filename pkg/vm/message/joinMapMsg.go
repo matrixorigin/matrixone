@@ -149,7 +149,6 @@ func (sels *GroupSels) Get(k int32) []int32 {
 // JoinMap is used for join
 type JoinMap struct {
 	runtimeFilter_In bool
-	hasNullKey       bool // Summary from the same insertion pass that built the index.
 	valid            bool
 	rowCnt           int64 // for debug purpose
 	refCnt           int64
@@ -198,10 +197,6 @@ func (jm *JoinMap) GetRefCount() int64 {
 	return atomic.LoadInt64(&jm.refCnt)
 }
 
-func (jm *JoinMap) HasNullKey() bool { return jm.hasNullKey }
-
-func (jm *JoinMap) SetHasNullKey(hasNull bool) { jm.hasNullKey = hasNull }
-
 func (jm *JoinMap) GetRowCount() int64 {
 	if jm == nil {
 		return 0
@@ -243,11 +238,9 @@ func (jm *JoinMap) GetSels(k uint64) []int32 {
 func (jm *JoinMap) NewIterator() hashmap.Iterator {
 	if jm.shm != nil {
 		return jm.shm.NewIterator()
-	}
-	if jm.ihm != nil {
+	} else {
 		return jm.ihm.NewIterator()
 	}
-	return nil // Loop builds retain batches without a membership index.
 }
 
 func (jm *JoinMap) IncRef(cnt int32) {

@@ -135,7 +135,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*hashbuild.HashBuild)
 		op := hashbuild.NewArgument()
 		op.NeedHashMap = t.NeedHashMap
-		op.OptionalIndex = t.OptionalIndex
 		op.HashOnPK = t.HashOnPK
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
@@ -1887,14 +1886,6 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
-		if keys := loopjoin.MarkHashKeys(arg.NonEqCond); arg.JoinType == plan.Node_MARK && keys != nil {
-			// Build once and share the immutable membership index across all
-			// broadcast probe scopes. MARK needs no per-key build row lists.
-			ret.NeedHashMap = true
-			ret.OptionalIndex = true
-			ret.NeedAllocateSels = false
-			ret.Conditions = rewriteJoinExprToHashBuildExpr(keys[1:])
-		}
 
 	case vm.DedupJoin:
 		arg := op.(*dedupjoin.DedupJoin)

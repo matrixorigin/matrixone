@@ -254,22 +254,17 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // sql select c1+1, abs(c2), cast(c3 as varchar(10)) from t1 where c1=c3;
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
-	fid, idx := DecodeOverloadID(overloadID)
-	fn := &allSupportedFunctions[fid]
-	if fn.testFlag(plan.Function_PRODUCE_NO_NULL) {
+	fid, _ := DecodeOverloadID(overloadID)
+	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
-	if fn.testFlag(plan.Function_PRODUCE_NULL) || fn.testFlag(plan.Function_AGG) {
-		return false
+
+	for _, arg := range args {
+		if !arg.Typ.NotNullable {
+			return false
+		}
 	}
-	// Absence of a NULL-producing flag is not a proof. Unclassified functions
-	// (including newly registered ones) must remain nullable. An overload can
-	// refine a function-wide proof when its result depends on the input domain.
-	proof := fn.nonNullResult
-	if fn.Overloads[idx].nonNullResult != nil {
-		proof = fn.Overloads[idx].nonNullResult
-	}
-	return proof != nil && proof(args)
+	return true
 }
 
 type FuncGetResult struct {
@@ -335,11 +330,6 @@ type FuncNew struct {
 	// function type.
 	class plan.Function_FuncFlag
 
-	// Positive non-NULL result proof, separate from STRICT (NULL propagation).
-	// nil means unknown and therefore nullable. Applies to every overload unless
-	// an overload supplies its own proof.
-	nonNullResult func([]*plan.Expr) bool
-
 	// All overloads of the function.
 	Overloads []overload
 
@@ -381,9 +371,6 @@ type aggregationLogicOfOverload struct {
 // stores all information about execution logic.
 type overload struct {
 	overloadId int
-
-	// Optional domain-specific override of the function's non-NULL proof.
-	nonNullResult func([]*plan.Expr) bool
 
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.

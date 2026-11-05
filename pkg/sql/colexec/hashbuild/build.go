@@ -40,11 +40,6 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
-	if hashBuild.OptionalIndex && (!hashBuild.NeedHashMap || !hashBuild.NeedBatches ||
-		hashBuild.NeedAllocateSels || hashBuild.HashOnPK || hashBuild.IsDedup ||
-		hashBuild.IsShuffle || hashBuild.CanSpill || hashBuild.RuntimeFilterSpec != nil) {
-		return moerr.NewInternalError(proc.Ctx, "optional membership index requires a batch-preserving broadcast build")
-	}
 	hashBuild.ctr.spillAllowed = hashBuild.CanSpill && hashBuild.NeedHashMap && (hashBuild.IsShuffle || len(hashBuild.SpillExpectedScopes) > 0)
 	if !hashBuild.IsShuffle && hashBuild.ctr.spillAllowed {
 		group, err := proc.GetMessageBoard().BroadcastSpillGroup(hashBuild.JoinMapTag, hashBuild.SpillExpectedScopes)
@@ -90,9 +85,6 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	ctr := &hashBuild.ctr
 	for {
-		if err := proc.Ctx.Err(); err != nil {
-			return result, err
-		}
 		switch ctr.state {
 		case BuildHashMap:
 			if err := hashBuild.build(proc, analyzer); err != nil {
@@ -240,9 +232,6 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		if err != nil {
 			return err
 		}
-		if err := proc.Ctx.Err(); err != nil {
-			return err
-		}
 		if result.Batch == nil {
 			break
 		}
@@ -313,14 +302,8 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 	// If we never entered spill mode, build the hashmap
 	if !spillMode && hashBuild.NeedHashMap {
-		if err := proc.Ctx.Err(); err != nil {
-			return err
-		}
-		if hashBuild.OptionalIndex {
-			if err := hashBuild.buildOptionalIndex(proc); err != nil {
-				return err
-			}
-		} else if err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc); err != nil {
+		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
+		if err != nil {
 			return err
 		}
 	}

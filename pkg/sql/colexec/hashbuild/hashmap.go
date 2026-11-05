@@ -35,7 +35,6 @@ import (
 type HashmapBuilder struct {
 	needDupVec         bool
 	InputBatchRowCount int
-	hasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
@@ -90,7 +89,6 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 		return nil
 	}
 	jm := message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
-	jm.SetHasNullKey(hb.hasNullKey)
 	// GetJoinMap is the ownership transfer. An unpublished/error cleanup must
 	// not retain a second owner of the same hashmap/Sels/batches.
 	hb.Sels = message.GroupSels{}
@@ -171,7 +169,6 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	}
 	hb.curVecs = nil
 	hb.InputBatchRowCount = 0
-	hb.hasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -270,7 +267,7 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
-	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc, nil)
+	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
 }
 
 func (hb *HashmapBuilder) buildHashmap(
@@ -279,19 +276,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	needUniqueVec bool,
 	dedupBuildKeepLast bool,
 	proc *process.Process,
-	budget *optionalIndexBudget,
 ) (retErr error) {
-	if err := proc.Ctx.Err(); err != nil {
-		return err
-	}
-	hb.hasNullKey = false
 	if hb.InputBatchRowCount == 0 {
 		return nil
-	}
-	if budget != nil {
-		if err := budget.admit(hb, proc, uint64(min(hb.InputBatchRowCount, hashmap.UnitLimit))); err != nil {
-			return err
-		}
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
@@ -375,9 +362,6 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
-		if err := proc.Ctx.Err(); err != nil {
-			return err
-		}
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
 		}
@@ -388,7 +372,7 @@ func (hb *HashmapBuilder) buildHashmap(
 
 		// if not hash on primary key, estimate the hashmap size after 8192 rows
 		//preAlloc to improve performance and reduce memory reAlloc
-		if budget == nil && !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
+		if !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
 			if hb.keyWidth <= 8 {
 				groupCount := hb.IntHashMap.GroupCount()
 				rate := float64(groupCount) / float64(i)
@@ -412,19 +396,6 @@ func (hb *HashmapBuilder) buildHashmap(
 			}
 		}
 
-		if budget != nil {
-			var groups uint64
-			if hb.IntHashMap != nil {
-				groups = hb.IntHashMap.GroupCount()
-			} else {
-				groups = hb.StrHashMap.GroupCount()
-			}
-			// At most n new keys can arrive, including an adversarial change in
-			// cardinality after an arbitrarily long duplicate prefix.
-			if err := budget.admit(hb, proc, groups+uint64(n)); err != nil {
-				return err
-			}
-		}
 		vecIdx1 := i / colexec.DefaultBatchSize
 		vecIdx2 := i % colexec.DefaultBatchSize
 		if vecIdx1 != lastBatch {
@@ -433,15 +404,11 @@ func (hb *HashmapBuilder) buildHashmap(
 			}
 			lastBatch = vecIdx1
 		}
-		if err := proc.Ctx.Err(); err != nil {
-			return err
-		}
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)
 		if err != nil {
 			return err
 		}
 		for k, v := range vals[:n] {
-			hb.hasNullKey = hb.hasNullKey || zvals[k] == 0
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
 				hb.Sels.Insert(int32(v), int32(i+k))
 				continue
@@ -558,7 +525,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.InputBatchRowCount = totalRowCount
 		}
 		hb.resetHashStateForRebuild(proc)
-		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc, nil); err != nil {
+		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
 			return err
 		}
 		hb.InputBatchRowCount = totalRowCount

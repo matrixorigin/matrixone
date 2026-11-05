@@ -637,33 +637,6 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		nullable []bool
 	}{
 		{"count control", "select count(*) as c from nation", []bool{false}},
-		{"rollup", "select n_nationkey as k,count(*) as c from nation group by n_nationkey with rollup", []bool{true, false}},
-		{"multi key rollup", "select n_nationkey as k,n_regionkey as r,count(*) as c from nation group by n_nationkey,n_regionkey with rollup", []bool{true, true, false}},
-		{"cube", "select n_nationkey as k,n_regionkey as r,count(*) as c from nation group by cube(n_nationkey,n_regionkey)", []bool{true, true, false}},
-		{"grouping sets", "select n_nationkey as k,count(*) as c from nation group by grouping sets ((n_nationkey),())", []bool{true, false}},
-		{"grouping control", "select n_nationkey as k,count(*) as c from nation group by n_nationkey", []bool{false, false}},
-		{"grouping sets present control", "select n_nationkey as k,n_regionkey as r,count(*) as c from nation group by grouping sets ((n_nationkey,n_regionkey),(n_nationkey))", []bool{false, true, false}},
-		{"abs compatibility", "select abs(n_nationkey) as v from nation", []bool{false}},
-		{"string compatibility", "select length(n_name) as n, lower(n_name) as l,upper(n_name) as u from nation", []bool{false, false, false}},
-		{"regexp no match", "select regexp_substr(n_name, 'z') as v from nation", []bool{true}},
-		{"regexp group", "select regexp_substr(n_name, 'z') as v,count(*) as c from nation group by regexp_substr(n_name, 'z')", []bool{true, false}},
-		{"sqrt domain", "select sqrt(n_nationkey) as v from nation", []bool{true}},
-		{"log domain", "select ln(n_nationkey) as v from nation", []bool{true}},
-		{"unhex invalid", "select unhex(n_name) as v from nation", []bool{true}},
-		{"date cast domain", "select cast(n_name as date) as v from nation", []bool{true}},
-		{"division", "select 1/n_nationkey as v from nation", []bool{true}},
-		{"integer division", "select 1 div n_nationkey as v from nation", []bool{true}},
-		{"modulo", "select 1 % n_nationkey as v from nation", []bool{true}},
-		{"division grouping", "select 1/n_nationkey as v,count(*) as c from nation group by 1/n_nationkey", []bool{true, false}},
-		{"division distinct", "select distinct 1/n_nationkey as v from nation", []bool{true}},
-		{"max empty input", "select max(n_nationkey) as v from nation where false", []bool{true}},
-		{"min empty input", "select min(n_nationkey) as v from nation where false", []bool{true}},
-		{"sum empty input", "select sum(n_nationkey) as v from nation where false", []bool{true}},
-		{"avg empty input", "select avg(n_nationkey) as v from nation where false", []bool{true}},
-		{"lag boundary", "select lag(n_nationkey) over(order by n_nationkey) as v from nation", []bool{true}},
-		{"lead boundary", "select lead(n_nationkey) over(order by n_nationkey) as v from nation", []bool{true}},
-		{"first value empty frame", "select first_value(n_nationkey) over(order by n_nationkey rows between 1 preceding and 1 preceding) as v from nation", []bool{true}},
-		{"last value empty frame", "select last_value(n_nationkey) over(order by n_nationkey rows between 1 preceding and 1 preceding) as v from nation", []bool{true}},
 		{"union null right", "select count(*) as c from nation union all select null", []bool{true}},
 		{"union null left", "select null as c union all select count(*) from nation", []bool{true}},
 		{"union nonnull control", "select count(*) as c from nation union all select 1", []bool{false}},
@@ -712,61 +685,6 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestCreateTableAsSelectGroupingRebind(t *testing.T) {
-	for _, tc := range []struct {
-		name, by string
-		sets     int
-	}{
-		{"rollup", "n_nationkey,n_regionkey with rollup", 3},
-		{"cube", "cube(n_nationkey,n_regionkey)", 4},
-		{"sets", "grouping sets ((n_nationkey,n_regionkey),(n_nationkey))", 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
-			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "create table regroup as select n_nationkey,n_regionkey,count(*) c from nation group by "+tc.by, 1)
-			require.NoError(t, err)
-			t.Cleanup(stmt.Free)
-			var insert string
-			for generation := 0; generation < 3; generation++ {
-				p, err := BuildPlan(mock.CurrentContext(), stmt, false)
-				require.NoError(t, err, "generation %d", generation)
-				group := stmt.(*tree.CreateTable).AsSource.Select.(*tree.SelectClause).GroupBy
-				require.Len(t, group.GroupByExprsList, tc.sets, "rebinding must neither duplicate subtotals nor lose CUBE keys")
-				current := p.GetDdl().GetCreateTable().CreateAsSelectSql
-				if generation == 0 {
-					insert = current
-				} else {
-					require.Equal(t, insert, current)
-				}
-			}
-		})
-	}
-}
-
-func TestGroupingSetNullabilityPreservesInput(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	p, err := buildSingleStmt(mock, t, "select n_nationkey,count(*) from nation group by n_nationkey with rollup")
-	require.NoError(t, err)
-	missing := 0
-	for _, node := range p.GetQuery().Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		for i, key := range node.GroupBy {
-			require.True(t, key.Typ.NotNullable, "grouping-set NULL must not change the evaluated input key")
-			if i < len(node.GroupingFlag) && !node.GroupingFlag[i] {
-				missing++
-				for _, out := range node.ProjectList {
-					if col := out.GetCol(); col != nil && col.RelPos == -1 && col.ColPos == int32(i) {
-						require.False(t, out.Typ.NotNullable)
-					}
-				}
-			}
-		}
-	}
-	require.Positive(t, missing)
 }
 
 func TestCreateTableAsSelectPreservesSourceMetadata(t *testing.T) {

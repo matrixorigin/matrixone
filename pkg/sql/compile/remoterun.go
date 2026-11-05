@@ -705,7 +705,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *hashbuild.HashBuild:
 		in.HashBuild = &pipeline.HashBuild{
 			NeedHashMap:               t.NeedHashMap,
-			OptionalIndex:             t.OptionalIndex,
 			HashOnPk:                  t.HashOnPK,
 			NeedBatches:               t.NeedBatches,
 			NeedAllocateSels:          t.NeedAllocateSels,
@@ -1187,7 +1186,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := hashbuild.NewArgument()
 		t := opr.GetHashBuild()
 		arg.NeedHashMap = t.NeedHashMap
-		arg.OptionalIndex = t.OptionalIndex
 		arg.HashOnPK = t.HashOnPk
 		arg.NeedBatches = t.NeedBatches
 		arg.NeedAllocateSels = t.NeedAllocateSels

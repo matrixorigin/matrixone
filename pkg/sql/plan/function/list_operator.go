@@ -23,10 +23,9 @@ var supportedOperators = []FuncNew{
 	// operator `=`
 	// return true if a = b, return false if a != b, return null if one of a and b is null
 	{
-		functionId:    EQUAL,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        COMPARISON_OPERATOR,
+		functionId: EQUAL,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -126,10 +125,9 @@ var supportedOperators = []FuncNew{
 	// operator `>`
 	// return a > b, if any one of a and b is null, return null.
 	{
-		functionId:    GREAT_THAN,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        COMPARISON_OPERATOR,
+		functionId: GREAT_THAN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if jsonOrderingWithStringNotSupported(inputs) {
@@ -165,10 +163,9 @@ var supportedOperators = []FuncNew{
 	// operator `>=`
 	// return a >= b, if any one of a and b is null, return null.
 	{
-		functionId:    GREAT_EQUAL,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        COMPARISON_OPERATOR,
+		functionId: GREAT_EQUAL,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if jsonOrderingWithStringNotSupported(inputs) {
@@ -204,10 +201,9 @@ var supportedOperators = []FuncNew{
 	// operator `<`
 	// return a < b, if any one of a and b is null, return null.
 	{
-		functionId:    LESS_THAN,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        COMPARISON_OPERATOR,
+		functionId: LESS_THAN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if jsonOrderingWithStringNotSupported(inputs) {
@@ -243,10 +239,9 @@ var supportedOperators = []FuncNew{
 	// operator `<=`
 	// return a <= b, if any one of a and b is null, return null.
 	{
-		functionId:    LESS_EQUAL,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        COMPARISON_OPERATOR,
+		functionId: LESS_EQUAL,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				if jsonOrderingWithStringNotSupported(inputs) {
@@ -281,10 +276,9 @@ var supportedOperators = []FuncNew{
 
 	// operator `between`
 	{
-		functionId:    BETWEEN,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        BETWEEN_AND_EXPRESSION,
+		functionId: BETWEEN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     BETWEEN_AND_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) != 3 {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -336,10 +330,9 @@ var supportedOperators = []FuncNew{
 	// operator `!=`
 	// return a != b, if any one of a and b is null, return null.
 	{
-		functionId:    NOT_EQUAL,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        COMPARISON_OPERATOR,
+		functionId: NOT_EQUAL,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -371,11 +364,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `not`
 	{
-		functionId:    NOT,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        UNARY_LOGICAL_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: NOT,
+		class:      plan.Function_STRICT,
+		layout:     UNARY_LOGICAL_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -393,10 +385,9 @@ var supportedOperators = []FuncNew{
 
 	// operator `and`
 	{
-		functionId:    AND,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        MULTIARY_LOGICAL_OPERATOR,
+		functionId: AND,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     MULTIARY_LOGICAL_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			cost := 0
 			for _, source := range inputs {
@@ -436,10 +427,9 @@ var supportedOperators = []FuncNew{
 
 	// operator `or`
 	{
-		functionId:    OR,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        MULTIARY_LOGICAL_OPERATOR,
+		functionId: OR,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     MULTIARY_LOGICAL_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			cost := 0
 			for _, source := range inputs {
@@ -479,11 +469,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `xor`
 	{
-		functionId:    XOR,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        BINARY_LOGICAL_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: XOR,
+		class:      plan.Function_STRICT,
+		layout:     BINARY_LOGICAL_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -501,11 +490,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `like`
 	{
-		functionId:    LIKE,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        BINARY_LOGICAL_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: LIKE,
+		class:      plan.Function_STRICT,
+		layout:     BINARY_LOGICAL_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -1656,10 +1644,9 @@ var supportedOperators = []FuncNew{
 	// operator `+`
 	// return a + b, return null if any of a and b is null.
 	{
-		functionId:    PLUS,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        BINARY_ARITHMETIC_OPERATOR,
+		functionId: PLUS,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -1734,10 +1721,9 @@ var supportedOperators = []FuncNew{
 	// operator `-`
 	// return a - b, return null if any of a and b is null.
 	{
-		functionId:    MINUS,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        BINARY_ARITHMETIC_OPERATOR,
+		functionId: MINUS,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -1810,10 +1796,9 @@ var supportedOperators = []FuncNew{
 	// operator `*`
 	// return a * b. return null if any of parameters is null.
 	{
-		functionId:    MULTI,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        BINARY_ARITHMETIC_OPERATOR,
+		functionId: MULTI,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
@@ -1913,7 +1898,7 @@ var supportedOperators = []FuncNew{
 	// return a / b if b was not zero. return null if any of a and b is null.
 	{
 		functionId: DIV,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE | plan.Function_PRODUCE_NULL,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1987,7 +1972,7 @@ var supportedOperators = []FuncNew{
 	// return null if any of parameters was null.
 	{
 		functionId: INTEGER_DIV,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE | plan.Function_PRODUCE_NULL,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -2020,7 +2005,7 @@ var supportedOperators = []FuncNew{
 	// operator `mod`
 	{
 		functionId: MOD,
-		class:      plan.Function_STRICT | plan.Function_PRODUCE_NULL,
+		class:      plan.Function_STRICT,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -2060,11 +2045,10 @@ var supportedOperators = []FuncNew{
 	// operator `unary_plus`
 	// e.g : select +a;
 	{
-		functionId:    UNARY_PLUS,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        UNARY_ARITHMETIC_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: UNARY_PLUS,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     UNARY_ARITHMETIC_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2203,11 +2187,10 @@ var supportedOperators = []FuncNew{
 	// operator `unary_minus`
 	// e.g : select -a;
 	{
-		functionId:    UNARY_MINUS,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:        UNARY_ARITHMETIC_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: UNARY_MINUS,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     UNARY_ARITHMETIC_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2305,11 +2288,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `unary_tilde`
 	{
-		functionId:    UNARY_TILDE,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        UNARY_ARITHMETIC_OPERATOR,
-		checkFn:       fixedDirectlyTypeMatch,
+		functionId: UNARY_TILDE,
+		class:      plan.Function_STRICT,
+		layout:     UNARY_ARITHMETIC_OPERATOR,
+		checkFn:    fixedDirectlyTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2397,11 +2379,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `case X then Y case X1 then Y1 ... (else Z)`
 	{
-		functionId:    CASE,
-		nonNullResult: nonNullCase,
-		class:         plan.Function_NONE,
-		layout:        CASE_WHEN_EXPRESSION,
-		checkFn:       caseCheck,
+		functionId: CASE,
+		class:      plan.Function_NONE,
+		layout:     CASE_WHEN_EXPRESSION,
+		checkFn:    caseCheck,
 
 		Overloads: []overload{
 			{
@@ -2418,11 +2399,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `coalesce`
 	{
-		functionId:    COALESCE,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        STANDARD_FUNCTION,
-		checkFn:       coalesceCheck,
+		functionId: COALESCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    coalesceCheck,
 
 		Overloads: []overload{
 			{
@@ -2707,8 +2687,7 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:    0,
-				nonNullResult: nonNullCast,
+				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[1]
 				},
@@ -2740,8 +2719,7 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId:    0,
-				nonNullResult: nonNullCast,
+				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[1]
 				},
@@ -2960,11 +2938,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `&`
 	{
-		functionId:    OP_BIT_AND,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        COMPARISON_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: OP_BIT_AND,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3002,11 +2979,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `|`
 	{
-		functionId:    OP_BIT_OR,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        COMPARISON_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: OP_BIT_OR,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3044,11 +3020,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `^`
 	{
-		functionId:    OP_BIT_XOR,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        COMPARISON_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: OP_BIT_XOR,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3086,11 +3061,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `<<`
 	{
-		functionId:    OP_BIT_SHIFT_LEFT,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        COMPARISON_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: OP_BIT_SHIFT_LEFT,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3108,11 +3082,10 @@ var supportedOperators = []FuncNew{
 
 	// operator `>>`
 	{
-		functionId:    OP_BIT_SHIFT_RIGHT,
-		nonNullResult: nonNullArgs,
-		class:         plan.Function_STRICT,
-		layout:        COMPARISON_OPERATOR,
-		checkFn:       fixedTypeMatch,
+		functionId: OP_BIT_SHIFT_RIGHT,
+		class:      plan.Function_STRICT,
+		layout:     COMPARISON_OPERATOR,
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{

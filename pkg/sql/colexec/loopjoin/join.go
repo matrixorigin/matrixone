@@ -64,12 +64,6 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 		loopJoin.OpAnalyzer.Reset()
 	}
 
-	if loopJoin.JoinType == plan.Node_MARK && loopJoin.ctr.markHash == nil {
-		loopJoin.ctr.markHash, err = newMarkHash(proc, loopJoin.NonEqCond)
-		if err != nil {
-			return err
-		}
-	}
 	if loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.NonEqCond)
 		if err != nil {
@@ -87,9 +81,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
-		if err := proc.Ctx.Err(); err != nil {
-			return result, err
-		}
 		switch ctr.state {
 		case Build:
 			if err = loopJoin.build(proc, analyzer); err != nil {
@@ -108,9 +99,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inBat == nil {
 				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
-					return result, err
-				}
-				if err := proc.Ctx.Err(); err != nil {
 					return result, err
 				}
 				if input.Batch == nil {
@@ -140,8 +128,6 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if ctr.mp == nil {
 				err = ctr.emptyProbe(loopJoin, proc, &result)
-			} else if ctr.markHash != nil && ctr.markHash.iter != nil {
-				err = ctr.probeMarkHash(loopJoin, proc, &result)
 			} else {
 				err = ctr.probe(loopJoin, proc, &result)
 			}
@@ -172,9 +158,6 @@ func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer
 	start := time.Now()
 	defer analyzer.WaitStop(start)
 	loopJoin.ctr.mp, err = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
-	if err == nil && loopJoin.ctr.mp != nil && loopJoin.ctr.markHash != nil {
-		err = loopJoin.ctr.markHash.build(proc, loopJoin.ctr.mp)
-	}
 	return err
 }
 
@@ -215,9 +198,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 	rowCountIncrease := 0
 	for i := ctr.probeIdx; i < count; i++ {
-		if err := proc.Ctx.Err(); err != nil {
-			return err
-		}
 		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
 			if rowCountIncrease >= colexec.DefaultBatchSize {
 				result.Batch = ctr.resBat
@@ -230,9 +210,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			hasTrue := false
 			hasNull := false
 			for idx := 0; idx < len(mpbat); idx++ {
-				if err := proc.Ctx.Err(); err != nil {
-					return err
-				}
 				bat := mpbat[idx]
 				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
 					bat.RowCount(), ctr.cfs); err != nil {
@@ -241,9 +218,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
 				if err != nil {
-					return err
-				}
-				if err := proc.Ctx.Err(); err != nil {
 					return err
 				}
 
@@ -301,9 +275,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			matched = true
 		}
 		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
-			if err := proc.Ctx.Err(); err != nil {
-				return err
-			}
 			if rowCountIncrease >= colexec.DefaultBatchSize {
 				result.Batch = ctr.resBat
 				ctr.resBat.SetRowCount(rowCountIncrease)
@@ -322,9 +293,6 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
 				if err != nil {
-					return err
-				}
-				if err := proc.Ctx.Err(); err != nil {
 					return err
 				}
 
