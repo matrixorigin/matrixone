@@ -156,7 +156,10 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		if len(ctr.cmps) == 0 {
 			mp := make(map[int]int, len(ctr.poses))
 			for i, pos := range ctr.poses {
-				mp[int(pos)] = i
+				// The first specification for a repeated column determines its order.
+				if _, exists := mp[int(pos)]; !exists {
+					mp[int(pos)] = i
+				}
 			}
 
 			if ctr.bat == nil {
