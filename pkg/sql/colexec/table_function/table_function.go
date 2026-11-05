@@ -193,6 +193,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltext2CompactPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
+	case "desc_file":
+		tblArg.ctr.state, err = descFilePrepare(proc, tblArg)
 	case "moplugin_table":
 		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
 	case "hnsw_create":

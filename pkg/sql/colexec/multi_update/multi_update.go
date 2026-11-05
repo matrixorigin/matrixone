@@ -143,6 +143,15 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			update.ctr.s3Writer = writer
 		} else {
 			update.ctr.s3Writer.refreshSelectorState(update)
+			// A reused delegate's persistent insert sinkers still carry
+			// the FIRST transaction's capacity hook — the cached plan
+			// keeps them and their pools alive across executions — so
+			// every next execution must re-arm their per-object
+			// admission on the CURRENT workspace BEFORE any spill can
+			// run: the first workspace is finalizing or finalized, and
+			// a reservation it holds can never be released by this
+			// transaction (issue #25590 round-35 review).
+			update.ctr.s3Writer.rebindWorkspaceCapacity(proc)
 		}
 
 	case UpdateFlushS3Info:

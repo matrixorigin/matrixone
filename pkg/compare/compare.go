@@ -198,6 +198,7 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 		return &strCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,
+			sqlOrder:    sqlOrder,
 			typ:         typ,
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),

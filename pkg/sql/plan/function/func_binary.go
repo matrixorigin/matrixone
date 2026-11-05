@@ -1319,6 +1319,14 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, coalesceValueArgument, coalesceCheckTypes)
+}
+
+func coalesceValueArgument(_, _ int) bool {
+	return true
+}
+
+func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
 	if widened, ok := widenMixedLowPrecisionFloats(inputs, func(int) bool { return true }); ok {
 		return castFromWidened(coalesceCheck(overloads, widened), widened)
 	}

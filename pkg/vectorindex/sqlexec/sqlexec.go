@@ -19,6 +19,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -89,7 +91,7 @@ type SqlProcess struct {
 	// Optional raw runtime-filter payload from the build side for IVF probe path.
 	// This contains serialized unique join keys and must be converted by IVF code
 	// before it is exposed to entries table scans.
-	IvfRuntimeFilterData []byte
+	IvfRuntimeFilterData *keycodec.KeyPayload
 	// True when the runtime-filter producer sent an exact key set. It is
 	// separate from the payload because an empty set is semantically different
 	// from no filter (RF PASS).

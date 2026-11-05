@@ -683,7 +683,7 @@ func (u *reader) closeProbeTail() {
 // matches and lets the final join apply the residual predicate.
 func (u *reader) applyMembership() error {
 	switch {
-	case u.req.HasMembershipFilter && len(u.req.MembershipFilter) > 0:
+	case u.req.HasMembershipFilter && u.req.MembershipFilter.Rows() > 0:
 		payload, err := fulltext.BuildMembershipFilter(u.proc, u.req.MembershipFilter)
 		if err != nil {
 			return err

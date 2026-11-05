@@ -140,7 +140,7 @@ func (r *reader) start() error {
 
 	// The unique-join-keys runtime filter (pre-filter pushdown) restricts the doc_ids
 	// the index table reads return.
-	if r.req.HasMembershipFilter && len(r.req.MembershipFilter) > 0 {
+	if r.req.HasMembershipFilter && r.req.MembershipFilter.Rows() > 0 {
 		payload, err := fulltext.BuildMembershipFilter(proc, r.req.MembershipFilter)
 		if err != nil {
 			return err
