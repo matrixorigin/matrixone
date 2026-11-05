@@ -40,7 +40,6 @@ account all    account    *    0
 database ownership    database    *.*    0
 table ownership    table    *.*    0
 grant select,insert,update on testdb.* to test_role;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " testdb.* to test_role;";
 grant select,insert,update on account * to 'test_role';
 internal error: the privilege "select" can only be granted to the object type "table" or "view"
 grant show tables,create,drop,alter on  testdb.* to 'test_role';
@@ -63,7 +62,7 @@ grant moadmin to user_not_exists;
 internal error: there is no role or user user_not_exists
 create role grant_role_1;
 grant  create account, drop account, alter account on *  to 'grant_role_1' with grant option;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 55 near " *  to 'grant_role_1' with grant option;";
+internal error: the privilege create account can not be granted
 grant grant_role_1 to grant_role_1;
 cannot grant role grant_role_1 to grant_role_1
 grant show tables,create table,drop table on database * to moadmin;

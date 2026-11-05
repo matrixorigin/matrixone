@@ -1039,6 +1039,28 @@ Adaptive Top[15] (cost=1.00 outcnt=1.00 selectivity=0.0855 dop=1 blockNum=1 rows
   Vector Index Search Summary: search_count=1 round_count=1 buckets_searched=1 bucket_windows=0:1 row_limits=11 empty_rounds=0  𝄀
   Vector Index Execution: search_count=2 readers=2 metadata_blocks=2 metadata_rows=2 metadata_time_ns=9974417 centroid_blocks=0 centroid_rows=0 centroid_time_ns=0 entry_blocks_selected=2 entry_blocks_read=0 entry_output_rows=13 entry_time_ns=10179500 storage_filter_rows=0:0 vector_rows_scored=15 vector_chunks=0 vector_chunk_cache_hits=0 vector_compressed_bytes=0 vector_decoded_bytes=0 block_topk_rows=13 output_rows=13
 drop table ivf_char_retry;
+create table ivf_chunk_domain(id int primary key, grp int, v vecf32(2));
+insert into ivf_chunk_domain
+select result, if(result=1,0,1),
+cast(case when result=1 then '[0,0]' when result=8194 then '[1,0]' else '[100,0]' end as vecf32(2))
+from generate_series(1,8194) g;
+create index chunk_idx using ivfflat on ivf_chunk_domain(v) lists=1 op_type 'vector_l2_ops';
+select id from ivf_chunk_domain where grp=1
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=pre';
+id
+8194
+select id from ivf_chunk_domain where grp=1
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=force';
+id
+8194
+select count(*) from (select id from ivf_chunk_domain where grp=2
+order by l2_distance(v,'[0,0]') limit 1 by rank with option 'mode=pre') x;
+count(*)
+0
+select count(*) from ivf_chunk_domain a join ivf_chunk_domain b on a.id=b.id where a.grp=1;
+count(*)
+8193
+drop table ivf_chunk_domain;
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;
