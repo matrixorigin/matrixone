@@ -801,7 +801,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 		if !ok {
 			return 0.1
 		}
-		ret = (val2 - val1 + 1) / (max - min)
+		return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 
 	default:
 		return 0.1
@@ -852,7 +852,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 	case "between", "in_range":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			if val2, ok = getFloat64Value(typ, vals[1]); ok {
-				ret = (val2 - val1 + 1) / (max - min)
+				return estimateIntervalSelectivity(min, max, val1, true, true, val2, true, true)
 			}
 		}
 	default:
@@ -2182,6 +2182,34 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
+// isSimpleZoneMapFilter 只识别可将边界值一次性物化的直接列比较。
+// 准入仍须通过 ExprIsZonemappable；这不是复杂表达式的安全性证明。
+func isSimpleZoneMapFilter(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	argCount := 2
+	switch fn.GetFunc().GetObjName() {
+	case "=", "<", "<=", ">", ">=":
+	case "between":
+		argCount = 3
+	case "in_range":
+		argCount = 4
+	default:
+		return false
+	}
+	if !hasNonNilFunctionArgs(fn, argCount) {
+		return false
+	}
+	if fn.Args[0].GetCol() == nil {
+		return argCount == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
+	}
+	for _, bound := range fn.Args[1:] {
+		if !isRuntimeConstExpr(bound) {
+			return false
+		}
+	}
+	return true
+}
+
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if builder.isRestore {
 		return DefaultHugeStats()
@@ -2193,11 +2221,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultStats()
 	}
 
-	//ts := timestamp.Timestamp{}
-	//if node.ScanTS != nil {
-	//	ts = *node.ScanTS
-	//}
-
 	var scanSnapshot *plan.Snapshot
 	if node.ScanSnapshot != nil {
 		scanSnapshot = node.ScanSnapshot
@@ -2205,53 +2228,46 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	s, err := statsForTableDef(
 		builder.compCtx, node.ObjRef, node.TableDef, scanSnapshot)
-	if err != nil || s == nil {
-		return DefaultStats()
+	if err != nil {
+		s = nil
 	}
 
-	stats := new(plan.Stats)
-	stats.TableCnt = s.TableCnt
+	hint := 0
+	if builder.optimizerHints != nil {
+		hint = builder.optimizerHints.blockFilter
+	}
 	var blockSel float64 = 1
 	var preservedCompositeFilters []*plan.Expr
-	if builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2 {
+	if hint != 2 {
 		preservedCompositeFilters = existingCompositeBlockFilters(node)
 	}
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if builder.optimizerHints != nil {
-			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
-				node.BlockFilterList = nil
-			} else {
-				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(node.FilterList[i].GetF(), node.TableDef) {
-					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-						copyOfExpr := DeepCopyExpr(node.FilterList[i])
-						copyOfExpr.Selectivity = currentBlockSel
-						blockExprList = append(blockExprList, copyOfExpr)
-					}
-				}
-			}
-		} else {
-			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(node.FilterList[i].GetF(), node.TableDef) {
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			}
+		filter := node.FilterList[i]
+		currentBlockSel := 1.0
+		if s != nil {
+			filter.Selectivity = estimateExprSelectivity(filter, builder, s)
+			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
+		}
+		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。
+		// 简单比较仍下推；其余表达式保留既有成本策略及语义安全检查。
+		if hint != 2 && (hint == 1 || isSimpleZoneMapFilter(filter) || currentBlockSel < 1 ||
+			strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(filter.GetF(), node.TableDef)) &&
+			ExprIsZonemappable(builder.GetContext(), filter) {
+			copyOfExpr := DeepCopyExpr(filter)
+			copyOfExpr.Selectivity = currentBlockSel
+			blockExprList = append(blockExprList, copyOfExpr)
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	blockExprList = append(blockExprList, preservedCompositeFilters...)
 	node.BlockFilterList = deduplicateBlockFilterList(blockExprList)
+	if s == nil {
+		return DefaultStats()
+	}
+	stats := new(plan.Stats)
+	stats.TableCnt = s.TableCnt
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel

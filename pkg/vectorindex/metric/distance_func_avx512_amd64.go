@@ -23,6 +23,8 @@ import "simd/archsimd"
 // Callers must check hasAVX512 and their existing block-size threshold first.
 // Only scalar prefix results cross back to the baseline entrypoints, which
 // retain their original accumulation order, tails and error handling.
+// Each clears the upper vector bits before returning (VZEROUPPER), so the scalar code
+// that follows does not pay the AVX-SSE transition penalty.
 
 //go:noinline
 func l2DistanceSqFloat32AVX512(a, b []float32) (float32, int) {
@@ -42,7 +44,9 @@ func l2DistanceSqFloat32AVX512(a, b []float32) (float32, int) {
 		acc3 = d3.MulAdd(d3, acc3)
 		i += 64
 	}
-	return sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3))), i
+	sum := sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+	archsimd.ClearAVXUpperBits()
+	return sum, i
 }
 
 //go:noinline
@@ -58,7 +62,9 @@ func innerProductFloat32AVX512(a, b []float32) (float32, int) {
 		acc3 = archsimd.LoadFloat32x16(as[48:64]).MulAdd(archsimd.LoadFloat32x16(bs[48:64]), acc3)
 		i += 64
 	}
-	return sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3))), i
+	sum := sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+	archsimd.ClearAVXUpperBits()
+	return sum, i
 }
 
 //go:noinline
@@ -78,7 +84,9 @@ func l2DistanceSqFloat64AVX512(a, b []float64) (float64, int) {
 		acc3 = d3.MulAdd(d3, acc3)
 		i += 32
 	}
-	return sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3))), i
+	sum := sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+	archsimd.ClearAVXUpperBits()
+	return sum, i
 }
 
 //go:noinline
@@ -94,7 +102,9 @@ func innerProductFloat64AVX512(a, b []float64) (float64, int) {
 		acc3 = archsimd.LoadFloat64x8(as[24:32]).MulAdd(archsimd.LoadFloat64x8(bs[24:32]), acc3)
 		i += 32
 	}
-	return sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3))), i
+	sum := sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+	archsimd.ClearAVXUpperBits()
+	return sum, i
 }
 
 //go:noinline
@@ -110,7 +120,9 @@ func l1DistanceFloat32AVX512(a, b []float32) (float32, int) {
 		acc3 = acc3.Add(archsimd.LoadFloat32x16(as[48:64]).Sub(archsimd.LoadFloat32x16(bs[48:64])).Max(archsimd.LoadFloat32x16(bs[48:64]).Sub(archsimd.LoadFloat32x16(as[48:64]))))
 		i += 64
 	}
-	return sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3))), i
+	sum := sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
+	archsimd.ClearAVXUpperBits()
+	return sum, i
 }
 
 //go:noinline
@@ -126,7 +138,9 @@ func l1DistanceFloat64AVX512(a, b []float64) (float64, int) {
 		acc3 = acc3.Add(archsimd.LoadFloat64x8(as[24:32]).Sub(archsimd.LoadFloat64x8(bs[24:32])).Max(archsimd.LoadFloat64x8(bs[24:32]).Sub(archsimd.LoadFloat64x8(as[24:32]))))
 		i += 32
 	}
-	return sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3))), i
+	sum := sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
+	archsimd.ClearAVXUpperBits()
+	return sum, i
 }
 
 //go:noinline
@@ -141,7 +155,9 @@ func cosineAccumFloat32AVX512(a, b []float32) (float32, float32, float32, int) {
 		accB = vb.MulAdd(vb, accB)
 		i += 16
 	}
-	return sumF32x16(accD), sumF32x16(accA), sumF32x16(accB), i
+	dot, normA, normB := sumF32x16(accD), sumF32x16(accA), sumF32x16(accB)
+	archsimd.ClearAVXUpperBits()
+	return dot, normA, normB, i
 }
 
 //go:noinline
@@ -156,5 +172,7 @@ func cosineAccumFloat64AVX512(a, b []float64) (float64, float64, float64, int) {
 		accB = vb.MulAdd(vb, accB)
 		i += 8
 	}
-	return sumF64x8(accD), sumF64x8(accA), sumF64x8(accB), i
+	dot, normA, normB := sumF64x8(accD), sumF64x8(accA), sumF64x8(accB)
+	archsimd.ClearAVXUpperBits()
+	return dot, normA, normB, i
 }

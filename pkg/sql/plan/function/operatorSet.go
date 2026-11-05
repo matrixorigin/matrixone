@@ -365,7 +365,7 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 // selected vector type.
 func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, valid bool) {
 	for i := range source {
-		if source[i].Oid.IsArrayRelate() {
+		if source[i].Oid.IsArray() {
 			retType = source[i]
 			hasVector = true
 			break
@@ -379,7 +379,7 @@ func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, v
 		if source[i].Oid == types.T_any {
 			continue
 		}
-		if !source[i].Oid.IsArrayRelate() ||
+		if !source[i].Oid.IsArray() ||
 			source[i].Oid != retType.Oid || source[i].Width != retType.Width {
 			return types.Type{}, true, false
 		}
@@ -431,6 +431,9 @@ func legacyConditionalBooleanCheck(id int32, _ []overload, inputs []types.Type) 
 func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
+		if widened, ok := widenMixedLowPrecisionFloats(inputs, func(i int) bool { return i > 0 }); ok {
+			return castFromWidened(legacyIffBooleanCheck(widened), widened)
+		}
 		conditionType := inputs[0]
 		needCast := conditionType.Oid == types.T_any
 		if needCast {
@@ -475,6 +478,12 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			// would turn legacy or utf8mb4_bin metadata into general_ci.
 			if needCast {
 				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
+			}
+			return newCheckResultWithSuccess(0)
+		}
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			if needCast || source[0].Oid != lowPrecType.Oid || source[1].Oid != lowPrecType.Oid {
+				return newCheckResultWithCast(0, []types.Type{conditionType, lowPrecType, lowPrecType})
 			}
 			return newCheckResultWithSuccess(0)
 		}
@@ -575,6 +584,10 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 
 func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 	l := len(inputs)
+	isValue := func(i int) bool { return i%2 == 1 || (l%2 == 1 && i == l-1) }
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, isValue); ok {
+		return castFromWidened(legacyCaseBooleanCheck(widened), widened)
+	}
 
 	needCast := false
 	if l >= 2 {
@@ -635,6 +648,25 @@ func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 			shouldCast := needCast
 			for i := range inputs {
 				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = lowPrecType
+				}
+				if inputs[i].Oid != finalTypes[i].Oid {
 					shouldCast = true
 				}
 			}
@@ -776,8 +808,20 @@ func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func caseCheck(_ []overload, inputs []types.Type) checkResult {
+func caseCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, caseValueArgument, caseCheckTypes)
+}
+
+func caseValueArgument(i, n int) bool {
+	return i%2 == 1 || (n%2 == 1 && i == n-1)
+}
+
+func caseCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
+	isValue := func(i int) bool { return i%2 == 1 || (l%2 == 1 && i == l-1) }
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, isValue); ok {
+		return castFromWidened(caseCheck(nil, widened), widened)
+	}
 
 	needCast := false
 	if l >= 2 {
@@ -847,6 +891,25 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			shouldCast := needCast
 			for i := range inputs {
 				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = lowPrecType
+				}
+				if inputs[i].Oid != finalTypes[i].Oid {
 					shouldCast = true
 				}
 			}
@@ -1037,6 +1100,14 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[float32](parameters, result, proc, length, selectList)
 	case types.T_float64:
 		return generalCaseFn[float64](parameters, result, proc, length, selectList)
+	case types.T_bf16:
+		return generalCaseFn[types.BF16](parameters, result, proc, length, selectList)
+	case types.T_float16:
+		return generalCaseFn[types.Float16](parameters, result, proc, length, selectList)
+	case types.T_float8:
+		return generalCaseFn[types.Float8](parameters, result, proc, length, selectList)
+	case types.T_float4:
+		return generalCaseFn[types.Float4](parameters, result, proc, length, selectList)
 	case types.T_date:
 		return generalCaseFn[types.Date](parameters, result, proc, length, selectList)
 	case types.T_time:
@@ -1061,7 +1132,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		types.T_blob, types.T_text, types.T_datalink, types.T_json,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
@@ -1247,9 +1319,20 @@ var (
 	}
 )
 
-func iffCheck(_ []overload, inputs []types.Type) checkResult {
+func iffCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, iffValueArgument, iffCheckTypes)
+}
+
+func iffValueArgument(i, n int) bool {
+	return n == 3 && i > 0
+}
+
+func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
+		if widened, ok := widenMixedLowPrecisionFloats(inputs, func(i int) bool { return i > 0 }); ok {
+			return castFromWidened(iffCheck(nil, widened), widened)
+		}
 		conditionType := inputs[0]
 		needCast := conditionType.Oid == types.T_any
 		if needCast {
@@ -1296,6 +1379,12 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			// would turn legacy or utf8mb4_bin metadata into general_ci.
 			if needCast {
 				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
+			}
+			return newCheckResultWithSuccess(0)
+		}
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			if needCast || source[0].Oid != lowPrecType.Oid || source[1].Oid != lowPrecType.Oid {
+				return newCheckResultWithCast(0, []types.Type{conditionType, lowPrecType, lowPrecType})
 			}
 			return newCheckResultWithSuccess(0)
 		}
@@ -1454,6 +1543,14 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 		return vector.GetFixedAtNoTypeCheck[float32](vec, int(row)) != 0, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, int(row)) != 0, nil
+	case types.T_bf16:
+		return vector.GetFixedAtNoTypeCheck[types.BF16](vec, int(row)).ToFloat32() != 0, nil
+	case types.T_float16:
+		return vector.GetFixedAtNoTypeCheck[types.Float16](vec, int(row)).ToFloat32() != 0, nil
+	case types.T_float8:
+		return vector.GetFixedAtNoTypeCheck[types.Float8](vec, int(row)).ToFloat32() != 0, nil
+	case types.T_float4:
+		return vector.GetFixedAtNoTypeCheck[types.Float4](vec, int(row)).ToFloat32() != 0, nil
 	case types.T_decimal64:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, int(row)) != 0, nil
 	case types.T_decimal128:
@@ -1496,6 +1593,14 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[float32](parameters, result, proc, length, selectList)
 	case types.T_float64:
 		return generalIffFn[float64](parameters, result, proc, length, selectList)
+	case types.T_bf16:
+		return generalIffFn[types.BF16](parameters, result, proc, length, selectList)
+	case types.T_float16:
+		return generalIffFn[types.Float16](parameters, result, proc, length, selectList)
+	case types.T_float8:
+		return generalIffFn[types.Float8](parameters, result, proc, length, selectList)
+	case types.T_float4:
+		return generalIffFn[types.Float4](parameters, result, proc, length, selectList)
 	case types.T_uuid:
 		return generalIffFn[types.Uuid](parameters, result, proc, length, selectList)
 	case types.T_bool:
@@ -1519,7 +1624,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_blob, types.T_text, types.T_datalink, types.T_json,
 		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return strIffFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
@@ -1611,6 +1717,21 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 			// use the historical BIGINT overload after an explicit widening cast,
 			// so old workers execute the same physical argument/result contract.
 			return newCheckResultWithCast(3, []types.Type{types.T_int64.ToType()})
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			// The low-precision floats widen losslessly to float32 (overload 4).
+			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+// unaryPlusMatch widens a low-precision float operand to float32 (overload 8); every
+// other type keeps its existing unary-plus overload.
+func unaryPlusMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			return newCheckResultWithCast(8, []types.Type{types.T_float32.ToType()})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)
@@ -1694,12 +1815,13 @@ func operatorUnaryMinusDecimal256(parameters []*vector.Vector, result vector.Fun
 }
 
 func funcBitInversion[T constraints.Integer](x T) uint64 {
-	if x > 0 {
-		n := uint64(x)
-		return ^n
-	} else {
-		return uint64(^x)
-	}
+	// The numeric unary bit inversion is evaluated in the unsigned 64-bit
+	// domain, so widen first and complement once. Complementing at the storage
+	// width of T leaked that width for unsigned zero values: ~tinyint_unsigned
+	// 0 returned 255 instead of 18446744073709551615 (issue #31905). For
+	// signed x the two's-complement sign extension makes ^uint64(x) equal to
+	// the old uint64(^x), so their behavior is unchanged.
+	return ^uint64(x)
 }
 
 func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1870,4 +1992,79 @@ func funcIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, le
 		}
 	}
 	return nil
+}
+
+// boolValueBranchesAsNumeric gives CASE/IF/COALESCE MySQL's numeric meaning
+// of TRUE/FALSE when BOOL value branches are mixed with numeric ones:
+// COALESCE(2, TRUE) is 2 and IF(c, 1.5e0, TRUE) is 1.5e0. BOOL has no
+// implicit cast to a number in fixedCanImplicitCastRule (on purpose, see
+// fixedTypeMatchWithBoolNumericCast), so the plain checkers picked BOOL as the
+// common type and turned every numeric branch into 0/1.
+//
+// The common type is resolved as if each BOOL value branch were BIGINT, or
+// DECIMAL(1,0) when a DECIMAL branch takes part: TRUE/FALSE only ever are
+// 1/0, a single integral digit, so a high-scale DECIMAL branch must not be
+// widened by the 19 digits a BIGINT stand-in would claim (DECIMAL(65,58)
+// mixed with TRUE would otherwise need 77 digits and fall off DECIMAL256).
+// The BOOL branches are then cast to the resolved type. Conditions are left
+// alone. If the BOOL branches cannot be cast to the chosen type, the original
+// resolution is kept; a mixture the numeric domains cannot resolve (e.g.
+// DECIMAL(76,76) with TRUE needs 77 digits) is an error, not a silent fold
+// back to BOOL.
+func boolValueBranchesAsNumeric(
+	overloads []overload,
+	inputs []types.Type,
+	isValue func(i, n int) bool,
+	check func([]overload, []types.Type) checkResult,
+) checkResult {
+	hasBool, hasNumeric, hasDecimal := false, false, false
+	for i, input := range inputs {
+		if !isValue(i, len(inputs)) {
+			continue
+		}
+		switch {
+		case input.Oid == types.T_bool:
+			hasBool = true
+		case input.Oid == types.T_any:
+		case input.IsNumeric() && input.Oid != types.T_bit:
+			hasNumeric = true
+			hasDecimal = hasDecimal || input.Oid.IsDecimal()
+		default:
+			return check(overloads, inputs)
+		}
+	}
+	if !hasBool || !hasNumeric {
+		return check(overloads, inputs)
+	}
+
+	replacement := types.T_int64.ToType()
+	if hasDecimal {
+		replacement = types.New(types.T_decimal64, 1, 0)
+	}
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if isValue(i, len(inputs)) && normalized[i].Oid == types.T_bool {
+			normalized[i] = replacement
+		}
+	}
+	matched := check(overloads, normalized)
+	var finalTypes []types.Type
+	switch matched.status {
+	case succeedMatched:
+		finalTypes = normalized
+	case succeedWithCast:
+		finalTypes = append([]types.Type(nil), matched.finalType...)
+	default:
+		return matched
+	}
+	for i, input := range inputs {
+		if !isValue(i, len(inputs)) || input.Oid != types.T_bool {
+			continue
+		}
+		if target := finalTypes[i]; !target.IsNumeric() || target.Oid == types.T_bit ||
+			!IfTypeCastSupported(types.T_bool, target.Oid) {
+			return check(overloads, inputs)
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
 }

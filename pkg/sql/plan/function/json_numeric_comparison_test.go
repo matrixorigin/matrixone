@@ -13,6 +13,7 @@ package function
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -63,8 +64,28 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		{"unsigned negative fraction", "-0.5", "0", types.T_uint64, -1, false},
 		{"negative fraction", "-1.5", "-1", types.T_int64, -1, false},
 		{"float32 rounding", "16777217", "16777216", types.T_float32, 0, false},
-		{"float32 overflow", "1e100", "1", types.T_float32, 0, true},
+		{"float32 overflow", "1e100", "1", types.T_float32, 1, false},
+		{"float32 negative overflow", "-1e100", "1", types.T_float32, -1, false},
+		{"double precision", "16777217", "16777216", types.T_float64, 1, false},
 		{"double fraction", "1.5", "1", types.T_float64, 1, false},
+		// bf16/float16/float8/float4 round a JSON number inside the type's finite range
+		// to the type's grid as CAST does; outside it the JSON number compares unrounded
+		{"bf16 rounding", "0.3", "0.30078125", types.T_bf16, 0, false},
+		{"bf16 fraction", "1.5", "1", types.T_bf16, 1, false},
+		{"bf16 printed maximum", "3.3895314e38", "3.3895314e38", types.T_bf16, 0, false},
+		{"bf16 overflow", "3.4e38", "1", types.T_bf16, 1, false},
+		{"bf16 negative overflow", "-1e100", "1", types.T_bf16, -1, false},
+		{"float16 rounding", "0.1", "0.099975586", types.T_float16, 0, false},
+		{"float16 maximum", "65504", "65504", types.T_float16, 0, false},
+		{"float16 overflow", "65505", "65504", types.T_float16, 1, false},
+		{"float16 negative overflow", "-65505", "-65504", types.T_float16, -1, false},
+		{"float8 rounding", "1.06", "1", types.T_float8, 0, false},
+		{"float8 maximum", "448", "448", types.T_float8, 0, false},
+		{"float8 overflow", "449", "448", types.T_float8, 1, false},
+		{"float4 rounding", "1.1", "1", types.T_float4, 0, false},
+		{"float4 ordering", "-6", "-4", types.T_float4, -1, false},
+		{"float4 overflow", "6.0000001", "6", types.T_float4, 1, false},
+		{"float4 negative overflow", "-6.0000001", "-6", types.T_float4, -1, false},
 		{"decimal64 exact", "9007199254740993", "9007199254740992", types.T_decimal64, 1, false},
 		{"decimal128 exact", "9007199254740993", "9007199254740992", types.T_decimal128, 1, false},
 		{"decimal256 exact", "9007199254740993", "9007199254740992", types.T_decimal256, 1, false},
@@ -93,6 +114,13 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		{"unsigned peer range", "256", types.T_uint8, vector.PrepareParamInteger},
 		{"unsigned peer sign", "-1", types.T_uint64, vector.PrepareParamInteger},
 		{"legacy peer range", "1e100", types.T_any, vector.PrepareParamInteger},
+		{"float32 peer overflow", "1e100", types.T_float32, vector.PrepareParamFloat},
+		{"float32 peer underflow", "-1e100", types.T_float32, vector.PrepareParamFloat},
+		{"float32 peer nonnumeric", `"x"`, types.T_float32, vector.PrepareParamFloat},
+		{"bf16 peer overflow", "3.4e38", types.T_bf16, vector.PrepareParamNone},
+		{"float16 peer overflow", "65505", types.T_float16, vector.PrepareParamNone},
+		{"float8 peer overflow", "449", types.T_float8, vector.PrepareParamNone},
+		{"float4 peer overflow", "6.0000001", types.T_float4, vector.PrepareParamNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := makeJSONNumericPeer(context.Background(), parse(tc.value), tc.typ, tc.kind)
@@ -100,11 +128,41 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		})
 	}
 
+	// Values just outside the FLOAT32 domain must not round back to its maximum.
+	for _, sign := range []float64{-1, 1} {
+		max := sign * float64(math.MaxFloat32)
+		peerJSON, err := bytejson.CreateByteJSON(max)
+		require.NoError(t, err)
+		peer, err := makeJSONNumericPeer(context.Background(), peerJSON, types.T_float32, vector.PrepareParamNone)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			value float64
+			want  int
+		}{
+			{max, 0}, {math.Nextafter(max, 0), 0}, {math.Nextafter(max, sign*math.Inf(1)), int(sign)},
+			{sign * math.MaxFloat64, int(sign)},
+		} {
+			value, err := bytejson.CreateByteJSON(tc.value)
+			require.NoError(t, err)
+			cmp, _, err := compareJSONNumeric(context.Background(), value, &peer)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cmp)
+		}
+	}
+	floatPeer, err := makeJSONNumericPeer(context.Background(), parse("0"), types.T_float32, vector.PrepareParamNone)
+	require.NoError(t, err)
+	cmp, _, err := compareJSONNumeric(context.Background(), parse("1e-100"), &floatPeer)
+	require.NoError(t, err)
+	require.Zero(t, cmp)
+	cmp, _, err = compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "1e100"), &floatPeer)
+	require.NoError(t, err)
+	require.Equal(t, 1, cmp)
+
 	// JSON decimal values also retain their full value above the integer peer
 	// range, without truncating or narrowing before comparison.
 	peer, err := makeJSONNumericPeer(context.Background(), parse("18446744073709551615"), types.T_uint64, vector.PrepareParamNone)
 	require.NoError(t, err)
-	cmp, _, err := compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "18446744073709551615.9"), &peer)
+	cmp, _, err = compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "18446744073709551615.9"), &peer)
 	require.NoError(t, err)
 	require.Equal(t, 1, cmp)
 	peer, err = makeJSONNumericPeer(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "1.0000000000000000001"), types.T_decimal256, vector.PrepareParamNone)
@@ -124,7 +182,7 @@ func TestJSONNumericDirectTypesAndResolution(t *testing.T) {
 	jsonVector, err := vector.NewConstBytes(types.T_json.ToType(), encoded, 2, proc.Mp())
 	require.NoError(t, err)
 	t.Cleanup(func() { jsonVector.Free(proc.Mp()) })
-	for _, typ := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+	for _, typ := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_bf16, types.T_float16, types.T_float8, types.T_float4, types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		t.Run(typ.String(), func(t *testing.T) {
 			numericType := typ.ToType()
 			if typ.IsDecimal() {
@@ -154,6 +212,14 @@ func TestJSONNumericDirectTypesAndResolution(t *testing.T) {
 					err = vector.AppendFixed(numbers, float32(1), false, proc.Mp())
 				case types.T_float64:
 					err = vector.AppendFixed(numbers, float64(1), false, proc.Mp())
+				case types.T_bf16:
+					err = vector.AppendFixed(numbers, types.BF16FromFloat32(1), false, proc.Mp())
+				case types.T_float16:
+					err = vector.AppendFixed(numbers, types.Float16FromFloat32(1), false, proc.Mp())
+				case types.T_float8:
+					err = vector.AppendFixed(numbers, types.Float8FromFloat32(1), false, proc.Mp())
+				case types.T_float4:
+					err = vector.AppendFixed(numbers, types.Float4FromFloat32(1), false, proc.Mp())
 				case types.T_decimal64:
 					err = vector.AppendFixed(numbers, types.Decimal64(100), false, proc.Mp())
 				case types.T_decimal128:
@@ -169,21 +235,24 @@ func TestJSONNumericDirectTypesAndResolution(t *testing.T) {
 			require.NoError(t, greatThanFn([]*vector.Vector{jsonVector, numbers}, result, proc, 2, nil))
 			require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 			// Exercise concrete prepared dispatch for every standard numeric OID,
-			// including all three DECIMAL physical types.
-			paramJSON, err := bytejson.CreateByteJSON(int64(1))
-			require.NoError(t, err)
-			paramBytes, err := types.EncodeJson(paramJSON)
-			require.NoError(t, err)
-			param, err := vector.NewConstBytes(types.T_json.ToType(), paramBytes, 2, proc.Mp())
-			require.NoError(t, err)
-			t.Cleanup(func() { param.Free(proc.Mp()) })
-			param.SetPreparedJSONComparisonParam()
-			param.SetPrepareParamType(typ)
-			kind, ok := vector.PrepareParamKindForType(typ)
-			require.True(t, ok)
-			param.SetPrepareParamKind(kind)
-			require.NoError(t, greatThanFn([]*vector.Vector{jsonVector, param}, result, proc, 2, nil))
-			require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+			// including all three DECIMAL physical types. A prepared parameter is
+			// never bf16/float16/float8/float4.
+			if !typ.IsLowPrecisionFloat() {
+				paramJSON, err := bytejson.CreateByteJSON(int64(1))
+				require.NoError(t, err)
+				paramBytes, err := types.EncodeJson(paramJSON)
+				require.NoError(t, err)
+				param, err := vector.NewConstBytes(types.T_json.ToType(), paramBytes, 2, proc.Mp())
+				require.NoError(t, err)
+				t.Cleanup(func() { param.Free(proc.Mp()) })
+				param.SetPreparedJSONComparisonParam()
+				param.SetPrepareParamType(typ)
+				kind, ok := vector.PrepareParamKindForType(typ)
+				require.True(t, ok)
+				param.SetPrepareParamKind(kind)
+				require.NoError(t, greatThanFn([]*vector.Vector{jsonVector, param}, result, proc, 2, nil))
+				require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+			}
 			for _, name := range []string{"=", "!=", "<=>", "<", "<=", ">", ">="} {
 				for _, reversed := range []bool{false, true} {
 					args := []types.Type{types.T_json.ToType(), numericType}

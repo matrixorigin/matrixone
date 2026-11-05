@@ -635,6 +635,16 @@ func assertBitwiseAggregateCast(
 	require.True(t, success, info)
 }
 
+func TestBitwiseAggregateCastLowPrecisionFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	assertBitwiseAggregateCast(t, proc, types.T_bf16.ToType(),
+		[]types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-3), 0}, []bool{false, false, true},
+		[]int64{2, -3, 0}, []bool{false, false, true}, nil)
+	assertBitwiseAggregateCast(t, proc, types.T_float8.ToType(),
+		[]types.Float8{types.Float8FromFloat32(6)}, []bool{false},
+		[]int64{6}, []bool{false}, nil)
+}
+
 func TestBitwiseAggregatePreservesBlobType(t *testing.T) {
 	for _, width := range []int32{0, 511} {
 		operand := types.NewWithCharset(types.T_blob, width, 0, types.CharsetBinary)

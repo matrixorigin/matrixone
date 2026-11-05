@@ -515,4 +515,28 @@ select a, b from json_numeric_composite where c=cast('null' as json) or c=1 orde
 select a, b from json_numeric_composite where c=cast('"1"' as json) or c=cast('"2"' as json) order by a, b;
 select a, b from json_numeric_composite where c=1 or c=2 order by a, b;
 drop table json_numeric_composite;
+-- Implicit FLOAT comparisons must accept JSON numbers outside FLOAT range (#30539).
+create table json_float_boundary(id int primary key, doc json);
+insert into json_float_boundary values (1,'{"a":1}'),(2,'{"a":1e38}'),(3,'{"a":1e100}'),(4,'{"a":-1e100}');
+select id from json_float_boundary where json_extract(doc,'$.a')=cast(1 as float) order by id;
+select id from json_float_boundary where cast(1 as float)=json_extract(doc,'$.a') order by id;
+select id from json_float_boundary where json_extract(doc,'$.a')>cast(1 as float) order by id;
+select id from json_float_boundary where cast(1 as float)>json_extract(doc,'$.a') order by id;
+prepare json_float_boundary_stmt from 'select id from json_float_boundary where json_extract(doc,''$.a'')=? order by id';
+set @json_float_boundary_param=cast(1 as float);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+set @json_float_boundary_param=cast(1 as double);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+set @json_float_boundary_param=cast(1 as signed);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+set @json_float_boundary_param=null;
+execute json_float_boundary_stmt using @json_float_boundary_param;
+set @json_float_boundary_param=cast(1 as float);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+deallocate prepare json_float_boundary_stmt;
+-- @regex("invalid argument operator cast, bad value \[JSON -> FLOAT\]",true)
+select cast(json_extract('1e100', '$') as float);
+select cast(json_extract('1', '$') as float) as float_cast;
+select count(*), sum(id) from json_float_boundary;
+drop table json_float_boundary;
 drop database test;

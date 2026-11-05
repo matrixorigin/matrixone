@@ -1491,6 +1491,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
               Filter Cond: (decimal_opt_test.price = 99.99)  𝄀
+              Block Filter Cond: (decimal_opt_test.price = 99.99)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
@@ -1514,6 +1515,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
               Filter Cond: (decimal_opt_test.price = 99.99)  𝄀
+              Block Filter Cond: (decimal_opt_test.price = 99.99)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
@@ -1530,6 +1532,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
               Filter Cond: (decimal_opt_test.quantity = 100)  𝄀
+              Block Filter Cond: (decimal_opt_test.quantity = 100)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_quantity [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
@@ -1539,17 +1542,19 @@ SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 1  ¦  99.99  ¦  12.34567  ¦  100
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
 -- @regex("prefix_between", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
         Join Cond: (decimal_opt_test.id = __mo_index_pri_col)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
-              Filter Cond: (decimal_opt_test.price <= 299.990000), (decimal_opt_test.price >= 99.990000)  𝄀
+              Filter Cond: (decimal_opt_test.price >= 99.990000), (decimal_opt_test.price <= 299.990000)  𝄀
+              Block Filter Cond: (decimal_opt_test.price >= 99.990000), (decimal_opt_test.price <= 299.990000)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Filter Cond: prefix_between(__mo_index_idx_col)
+              Filter Cond: prefix_between(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_between(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀
@@ -1582,6 +1587,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
               Filter Cond: (decimal_opt_test.amount = 12.34000)  𝄀
+              Block Filter Cond: (decimal_opt_test.amount = 12.34000)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_amount [ForceOneCN]  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
@@ -1625,7 +1631,7 @@ SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.990000000;
 INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = -50.500000;
 -- @regex("Index Table Scan.*idx_price", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -1633,9 +1639,11 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
               Filter Cond: (decimal_opt_test.price = -50.50)  𝄀
+              Block Filter Cond: (decimal_opt_test.price = -50.50)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = -50.500000;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 4  ¦  -50.50  ¦  -10.12345  ¦  -100

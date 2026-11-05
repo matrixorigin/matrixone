@@ -829,6 +829,7 @@ func sortRollupFixedValueType(typ Type) bool {
 		containertypes.T_array_float32, containertypes.T_array_float64,
 		containertypes.T_array_bf16, containertypes.T_array_float16,
 		containertypes.T_array_int8, containertypes.T_array_uint8,
+		containertypes.T_array_float8, containertypes.T_array_float4,
 		containertypes.T_geometry, containertypes.T_geometry32:
 		return false
 	case containertypes.T_bool, containertypes.T_bit,
@@ -837,6 +838,7 @@ func sortRollupFixedValueType(typ Type) bool {
 		containertypes.T_uint8, containertypes.T_uint16, containertypes.T_uint32,
 		containertypes.T_uint64, containertypes.T_uint128,
 		containertypes.T_float32, containertypes.T_float64,
+		containertypes.T_bf16, containertypes.T_float16, containertypes.T_float8, containertypes.T_float4,
 		containertypes.T_decimal64, containertypes.T_decimal128, containertypes.T_decimal256,
 		containertypes.T_date, containertypes.T_time, containertypes.T_datetime,
 		containertypes.T_timestamp, containertypes.T_year, containertypes.T_uuid,

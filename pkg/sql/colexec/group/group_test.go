@@ -1850,7 +1850,7 @@ func TestSortRollupDoesNotPublishAfterEOFCancellation(t *testing.T) {
 
 func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 	for _, fast := range []bool{true, false} {
-		name := "fallback-min"
+		name := "forced-fallback-min"
 		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
 		if fast {
 			name = "reuse"
@@ -1882,7 +1882,10 @@ func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			require.NoError(t, g.Prepare(proc))
-			require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+			require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+			if !fast {
+				g.ctr.sortRollup.reuseSingleGroup = false
+			}
 			results := collectSortRollupBatches(t, g, proc)
 			require.Greater(t, len(results), 1,
 				"streaming rollup must publish a full batch before EOF")
@@ -1910,7 +1913,7 @@ func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 
 func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 	for _, fast := range []bool{true, false} {
-		name := "fallback-min"
+		name := "forced-fallback-min"
 		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
 		if fast {
 			name = "reuse"
@@ -1945,7 +1948,10 @@ func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			require.NoError(t, g.Prepare(proc))
-			require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+			require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+			if !fast {
+				g.ctr.sortRollup.reuseSingleGroup = false
+			}
 			results := collectSortRollupBatches(t, g, proc)
 
 			detailCounts := make(map[int32]int64, firstRows+1)
@@ -1974,7 +1980,7 @@ func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 
 func TestSortRollupReclaimsPublishedOutputBatches(t *testing.T) {
 	for _, fast := range []bool{true, false} {
-		name := "fallback-min"
+		name := "forced-fallback-min"
 		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
 		if fast {
 			name = "reuse"
@@ -2004,7 +2010,10 @@ func TestSortRollupReclaimsPublishedOutputBatches(t *testing.T) {
 					require.Zero(t, proc.Mp().CurrNB())
 				}()
 				require.NoError(t, g.Prepare(proc))
-				require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+				require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+				if !fast {
+					g.ctr.sortRollup.reuseSingleGroup = false
+				}
 
 				var peak int64
 				for {
@@ -5918,16 +5927,29 @@ func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
 	}
 	one := &plan.Expr{Typ: types.New(types.T_decimal128, 19, 0).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 1}}}}}
 	revenue := call("*", cast(0), call("-", one, cast(1)))
+	widen := func(source *plan.Expr) *plan.Expr {
+		typ := types.New(types.T_decimal256, source.Typ.Width, source.Typ.Scale)
+		e := call("cast", source, &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+		e.Typ = typ.PlanType()
+		return e
+	}
+	charge := call("*", widen(revenue), widen(call("+", one, cast(2))))
+	plus, minus := call("+", cast(0), cast(1)), call("-", cast(0), cast(1))
+	makeSum := func(arg *plan.Expr) aggexec.AggFuncExecExpression {
+		f, err := function.GetFunctionByName(proc.Ctx, "sum", []types.Type{types.MustTypeFromPlan(arg.Typ)})
+		require.NoError(t, err)
+		return aggexec.MakeAggFunctionExpression(f.GetEncodedOverloadID(), false, []*plan.Expr{arg}, nil)
+	}
 	sum, err := function.GetFunctionByName(proc.Ctx, "sum", []types.Type{types.MustTypeFromPlan(revenue.Typ)})
 	require.NoError(t, err)
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(sum.GetEncodedOverloadID(), false, []*plan.Expr{revenue}, nil), countStarLiteralAgg(),
+		aggexec.MakeAggFunctionExpression(sum.GetEncodedOverloadID(), false, []*plan.Expr{revenue}, nil), countStarLiteralAgg(), makeSum(charge), makeSum(plus), makeSum(minus),
 	})
 	child := colexec.NewMockOperator()
 	g.AppendChild(child)
 	defer func() { g.Free(proc, false, nil); child.Free(proc, false, nil); require.Zero(t, proc.Mp().CurrNB()) }()
-	input := batch.NewWithSize(2)
-	for i, values := range [][]types.Decimal64{{10000, 20000, 30000}, {5, 10, 20}} {
+	input := batch.NewWithSize(3)
+	for i, values := range [][]types.Decimal64{{10000, 20000, 30000}, {5, 10, 20}, {8, 8, 8}} {
 		input.Vecs[i] = vector.NewVec(narrow)
 		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 	}
@@ -5936,6 +5958,9 @@ func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 	require.Equal(t, "decimal multiply/subtract", g.ctr.aggArgEvaluate[0].Executor[0].TypeName())
 	require.IsType(t, &colexec.FixedVectorExpressionExecutor{}, g.ctr.aggArgEvaluate[1].Executor[0])
+	require.Equal(t, "bounded decimal arithmetic", g.ctr.aggArgEvaluate[2].Executor[0].TypeName())
+	require.Equal(t, "typed decimal arithmetic", g.ctr.aggArgEvaluate[3].Executor[0].TypeName())
+	require.Equal(t, "typed decimal arithmetic", g.ctr.aggArgEvaluate[4].Executor[0].TypeName())
 	results := collectBatches(t, g, proc)
 	require.Len(t, results, 1)
 	// SUM uses its existing Decimal256 carrier; the fused argument remains Decimal128.
@@ -5945,4 +5970,7 @@ func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
 	require.Equal(t, int32(4), sumResult.GetType().Scale)
 	require.Equal(t, "515.0000", vector.GetFixedAtWithTypeCheck[types.Decimal256](sumResult, 0).Format(4))
 	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](results[0].Vecs[1], 0))
+	require.Equal(t, "556.200000", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0].Vecs[2], 0).Format(6))
+	require.Equal(t, "600.35", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0].Vecs[3], 0).Format(2))
+	require.Equal(t, "599.65", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0].Vecs[4], 0).Format(2))
 }

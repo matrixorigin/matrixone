@@ -6298,6 +6298,9 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
+	if keys, dop := c.parallelUnionDistinct(node, left, right); dop > 1 {
+		return c.compileParallelUnionDistinct(node, left, right, keys, dop)
+	}
 	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
 }
 
@@ -6306,6 +6309,15 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 // copy of a set key per worker, so their local operator-level deduplication is
 // insufficient once those worker outputs are merged.
 func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
+	rs := c.newMergeScope(scopes)
+	op := c.constructDistinctSetGroup(node)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{rs}
+}
+
+func (c *Compile) constructDistinctSetGroup(node *plan.Node) *group.Group {
 	gn := &plan.Node{SpillMem: node.SpillMem}
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
@@ -6323,7 +6335,6 @@ func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFir
 			panic(err)
 		}
 	}
-	rs := c.newMergeScope(scopes)
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
 	if len(node.PhysicalEqualityKeyList) > 0 {
 		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))
@@ -6334,10 +6345,7 @@ func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFir
 			}
 		}
 	}
-	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
-	rs.setRootOperator(op)
-	c.anal.isFirst = false
-	return []*Scope{rs}
+	return op
 }
 
 func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
@@ -6389,6 +6397,9 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	if keys, dop := c.parallelSetMembership(node, left, right); dop > 1 {
+		return c.compileParallelSetMembership(node, left, right, keys, dop)
+	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
@@ -8009,6 +8020,9 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileWin(node *plan.Node, ss []*Scope) []*Scope {
+	if dop := c.parallelPartitionWindow(node, ss); dop > 1 {
+		return c.compileParallelPartitionWindow(node, ss[0], dop)
+	}
 	partitionTopN := len(ss) == 1
 	if partitionTopN {
 		upstreamOp := ss[0].RootOp
@@ -8598,7 +8612,7 @@ func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
 func isCanonicalVectorHLLAddType(typ types.T) bool {
 	switch typ {
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false
@@ -10109,8 +10123,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
-	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	rs.Proc = c.proc.NewNoContextChildProc(0)
 	if len(ss) > 0 {
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 
@@ -10127,7 +10142,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if sameExecutionNode(rs.NodeInfo, ss[i].NodeInfo) {
 			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
+		rs.Proc.Reg.MergeReceivers[j] = process.NewPipelineEdge(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])

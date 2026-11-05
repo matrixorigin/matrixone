@@ -1354,8 +1354,11 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumRange(groupIndex, offset, n int, vec
 }
 
 func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	return exec.bulkFillAvgRange(groupIndex, 0, vectors[0].Length(), vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillAvgRange(groupIndex, offset, n int, vectors []*vector.Vector) error {
 	vec := vectors[0]
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -1374,7 +1377,7 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors 
 	var localSum S
 	var localCnt int64
 	for i := 0; i < n; i++ {
-		row := i
+		row := offset + i
 		if isConst {
 			row = 0
 		}

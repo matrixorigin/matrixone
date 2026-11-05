@@ -5729,6 +5729,7 @@ const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
+const NameVectorMatmul = "vector_matmul"
 const NameQuantileExactWeighted = "quantileExactWeighted"
 const NameEwmMean = "ewmmean"
 const NameEwmVar = "ewmvar"
@@ -14338,6 +14339,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
+			if mayHaveVirtualTimestampRead(midNode.TableDef) &&
+				len(VirtualTimestampExpansionFindings(midNode.TableDef)) != 0 {
+				nodeID, err = builder.stageLegacyVirtualTimestampColumns(nodeID, ctx)
+				if err != nil {
+					return 0, "", err
+				}
+			}
 		}
 		return
 	case *tree.StatementSource:
@@ -14763,6 +14771,18 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if err != nil {
 		return 0, err
 	}
+	// Expressions bound above this join must distinguish a missing child row
+	// from a real row whose generated expression happens to return a value.
+	if joinType == plan.Node_RIGHT || joinType == plan.Node_OUTER {
+		for _, binding := range leftCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
+	}
+	if joinType == plan.Node_LEFT || joinType == plan.Node_ASOF_LEFT || joinType == plan.Node_OUTER {
+		for _, binding := range rightCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
+	}
 	if ctx.bindingTree != nil {
 		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
 		ctx.bindingTree.rightJoinUsingStar = joinType == plan.Node_RIGHT &&
@@ -15079,6 +15099,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "stage_list":
 			nodeId, err = builder.buildStageList(tbl, ctx, exprs, nil)
+		case "desc_file":
+			nodeId, err = builder.buildDescFile(tbl, ctx, exprs, nil)
 		case "moplugin_table":
 			nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, nil)
 		case "parse_jsonl_data":
