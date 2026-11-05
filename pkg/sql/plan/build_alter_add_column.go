@@ -501,7 +501,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 }
 
 func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {
-	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tbInfo.Pkey == nil || tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
 		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {

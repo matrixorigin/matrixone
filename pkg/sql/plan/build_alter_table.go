@@ -434,6 +434,14 @@ type AlterTableContext struct {
 	UpdateSqls     []string
 }
 
+func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {
+	source, hasSource := ctx.alterColMap[oldName]
+	delete(ctx.alterColMap, oldName)
+	if hasSource {
+		ctx.alterColMap[newName] = source
+	}
+}
+
 type exprType int
 
 const (

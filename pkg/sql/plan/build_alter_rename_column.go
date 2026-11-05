@@ -192,12 +192,8 @@ func addRenameContextToAlterCtx(
 		return nil
 	}
 
-	// map the new column name to the old column as its data source
-	delete(alterCtx.alterColMap, oldColName)
-	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oldColName,
-	}
+	// Preserve the column's existing data source under its new name.
+	alterCtx.renameColumnSource(oldColName, newColName)
 
 	if tmpCol, ok := alterCtx.changColDefMap[oldCol.ColId]; ok {
 		tmpCol.Name = newColName
