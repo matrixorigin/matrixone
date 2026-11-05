@@ -1,0 +1,11 @@
+drop database if exists decimal_simd_reduce;
+create database decimal_simd_reduce;
+use decimal_simd_reduce;
+create table t(d64 decimal(15,2), d128 decimal(25,2), d256 decimal(50,2));
+insert into t select result,result,result from generate_series(1,257) g;
+select sum(d64) as s64,cast(avg(d64) as decimal(30,6)) as a64,sum(d128) as s128,cast(avg(d128) as decimal(30,6)) as a128,sum(d256) as s256,cast(avg(d256) as decimal(30,6)) as a256 from t;
+insert into t values (null,1000000000000000000.00,1000000000000000000.00);
+select sum(d128) as s128,sum(d256) as s256 from t;
+insert into t values (null,null,null);
+select sum(d64) as s64,cast(avg(d64) as decimal(30,6)) as a64,sum(d128) as s128,sum(d256) as s256 from t;
+drop database decimal_simd_reduce;

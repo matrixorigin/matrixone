@@ -160,6 +160,10 @@ func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vec
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
+	v := vectors[0]
+	if decimalReductionAvailable() && v.Length() >= 256 && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors)
+	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
 
@@ -190,6 +194,61 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroup(groupIndex int, vectors []
 	var localSum types.Decimal128
 	var localCnt int64
 	for i := 0; i < n; i++ {
+		if hasNull && np.Contains(uint64(i)) {
+			continue
+		}
+		raw := vals[i&constMask]
+		val := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+		if localCnt == 0 {
+			localSum = val
+		} else {
+			localSum = localSum.Add128Unchecked(val)
+		}
+		localCnt++
+	}
+	if localCnt == 0 {
+		return nil
+	}
+	sums[y] = sums[y].Add128Unchecked(localSum)
+	cnts[y] += localCnt
+	return nil
+}
+
+func (exec *sumDecimal64FastExec) bulkFillSingleGroupSIMD(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if vec.IsConstNull() {
+		return nil
+	}
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
+	constMask := -min(1, len(vals)-1)
+	hasNull := vec.HasNull()
+	var np *bitmap.Bitmap
+	if hasNull {
+		np = vec.GetNulls().GetBitmap()
+	}
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+
+	var localSum types.Decimal128
+	var localCnt int64
+	var prefix decimalReductionPrefix
+	if n >= 256 && !hasNull && !vec.IsConst() {
+		prefix = reduceDecimalPrefix(vec, 0, n)
+	}
+	if prefix.rows != 0 {
+		localSum = prefix.sum
+		localCnt = prefix.count
+	}
+	for i := prefix.rows; i < n; i++ {
 		if hasNull && np.Contains(uint64(i)) {
 			continue
 		}
@@ -569,6 +628,10 @@ func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Ve
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
+	v := vectors[0]
+	if decimalReductionAvailable() && v.Length() >= 256 && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors)
+	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
 
@@ -600,6 +663,75 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroup(groupIndex int, vectors [
 	var localSum types.Decimal128
 	var localCnt int64
 	for i := 0; i < n; i++ {
+		if hasNull && np.Contains(uint64(i)) {
+			continue
+		}
+		val := vals[i&constMask]
+		if localCnt == 0 {
+			localSum = val
+		} else {
+			if checked {
+				var err error
+				if localSum, err = localSum.Add128(val); err != nil {
+					return err
+				}
+			} else {
+				localSum = localSum.Add128Unchecked(val)
+			}
+		}
+		localCnt++
+	}
+	if localCnt == 0 {
+		return nil
+	}
+	if checked {
+		var err error
+		if sums[y], err = sums[y].Add128(localSum); err != nil {
+			return err
+		}
+	} else {
+		sums[y] = sums[y].Add128Unchecked(localSum)
+	}
+	cnts[y] += localCnt
+	return nil
+}
+
+func (exec *sumDecimal128FastExec) bulkFillSingleGroupSIMD(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if vec.IsConstNull() {
+		return nil
+	}
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	vals := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
+	constMask := -min(1, len(vals)-1)
+	hasNull := vec.HasNull()
+	var np *bitmap.Bitmap
+	if hasNull {
+		np = vec.GetNulls().GetBitmap()
+	}
+	checked := exec.overflowCheck
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[types.Decimal128](exec.state[x].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+
+	var localSum types.Decimal128
+	var localCnt int64
+	var prefix decimalReductionPrefix
+	if n >= 256 && !hasNull && !vec.IsConst() {
+		prefix = reduceDecimalPrefix(vec, 0, n)
+	}
+	if prefix.rows != 0 {
+		localSum = prefix.sum
+		localCnt = prefix.count
+	}
+	for i := prefix.rows; i < n; i++ {
 		if hasNull && np.Contains(uint64(i)) {
 			continue
 		}

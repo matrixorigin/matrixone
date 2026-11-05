@@ -1175,8 +1175,11 @@ func decimalStateMinus[S sumAvgDecimalState](value S) S {
 
 type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 	aggExec
-	isSum              bool
-	localAddSafe       bool // true when state type is wider than arg type (overflow impossible in local buffer)
+	isSum        bool
+	localAddSafe bool // true when state type is wider than arg type (overflow impossible in local buffer)
+	// Physical Go carriers are distinct from declared SQL result types.
+	bulkInput          types.T
+	bulkState          types.T
 	windowNonNullCount int64
 }
 
@@ -1277,6 +1280,10 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
+	}
+	v := vectors[0]
+	if decimalReductionAvailable() && v.Length() >= 256 && !v.HasNull() && !v.IsConst() && !v.HasGrouping() && exec.bulkInput != 0 && v.GetType().Oid == exec.bulkInput && exec.bulkState != 0 && exec.aggInfo.stateTypes[0].Oid == exec.bulkState {
+		return decimalBulkReduce(&exec.aggExec, exec.isSum, groupIndex, v)
 	}
 	if exec.isSum {
 		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
@@ -2171,6 +2178,21 @@ func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool,
 		exec.aggInfo.stateTypes = []types.Type{
 			sumAvgDecimalStateType[S](sumAvgDecimalArgScale(param)),
 			types.T_int64.ToType(),
+		}
+	}
+
+	switch any(a).(type) {
+	case types.Decimal64:
+		exec.bulkInput = types.T_decimal64
+	case types.Decimal128:
+		exec.bulkInput = types.T_decimal128
+	case types.Decimal256:
+		exec.bulkInput = types.T_decimal256
+	}
+	if decimalReductionAvailable() && exec.bulkInput != 0 {
+		exec.bulkState = sumAvgDecimalStateType[S](sumAvgDecimalArgScale(param)).Oid
+		if exec.bulkInput.TypeLen() > exec.bulkState.TypeLen() {
+			exec.bulkState = 0
 		}
 	}
 
