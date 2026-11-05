@@ -1069,6 +1069,228 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+// MySQL treats TRUE/FALSE as the integers 1/0, so a string value branch next
+// to a BOOL value branch resolves to VARCHAR and a selected BOOL renders as
+// '1'/'0'. Picking BOOL instead casts the string branch to BOOL and fails
+// with "'x' is not a valid bool expression" (issue #31294).
+func Test_CaseCheck_MixedStringBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "string then bool",
+			inputs: []types.Type{
+				types.T_bool.ToType(),
+				types.New(types.T_varchar, 11, 0),
+				types.T_bool.ToType(),
+			},
+		},
+		{
+			name: "bool then string",
+			inputs: []types.Type{
+				types.T_bool.ToType(),
+				types.T_bool.ToType(),
+				types.New(types.T_varchar, 11, 0),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, 3)
+			require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+			require.True(t, result.finalType[1].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[1].Oid)
+			require.True(t, result.finalType[2].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[2].Oid)
+		})
+	}
+}
+
+func Test_IffCheck_MixedStringBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name:   "string then bool",
+			inputs: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType(), types.T_bool.ToType()},
+		},
+		{
+			name:   "bool then string",
+			inputs: []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), types.T_varchar.ToType()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := iffCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, 3)
+			require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+			require.True(t, result.finalType[1].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[1].Oid)
+			require.True(t, result.finalType[2].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[2].Oid)
+		})
+	}
+
+	// BOOL-only branches have no string and keep the BOOL result.
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.T_bool.ToType(),
+		types.T_bool.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+}
+
+func TestMixedStringNumericToVarcharWithBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+		wantOK bool
+	}{
+		{name: "string and bool", source: []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()}, wantOK: true},
+		{name: "bool and string", source: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()}, wantOK: true},
+		{name: "char and bool", source: []types.Type{types.New(types.T_char, 5, 0), types.T_bool.ToType()}, wantOK: true},
+		{name: "null string and bool", source: []types.Type{types.T_any.ToType(), types.T_varchar.ToType(), types.T_bool.ToType()}, wantOK: true},
+		{name: "bool only", source: []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, wantOK: false},
+		{name: "bool and int without string", source: []types.Type{types.T_bool.ToType(), types.T_int32.ToType()}, wantOK: false},
+		{name: "string only", source: []types.Type{types.T_varchar.ToType()}, wantOK: false},
+		{name: "bool and temporal", source: []types.Type{types.T_bool.ToType(), types.T_date.ToType()}, wantOK: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			retType, ok := mixedStringNumericToVarchar(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if test.wantOK {
+				require.True(t, retType.Oid.IsMySQLString(), "common type should be a string type, got: %v", retType.Oid)
+			}
+		})
+	}
+}
+
+// TestMixedStringNumericToVarcharTextCapacity keeps the full domain of
+// TEXT value branches: a fixed VARCHAR(65535) target would truncate legal
+// values once a string branch mixes with any numeric, so the common type
+// must stay in the TEXT family at the proven capacity (issue #31294 review).
+// Only the persisted subtype markers are proven bounds: TINYTEXT (255 bytes)
+// fits VARCHAR, while MEDIUMTEXT/LONGTEXT promote at their declared capacity.
+// Width zero is ordinary or computed TEXT with no proven bound (LOWER of a
+// MEDIUMTEXT column returns T_text width zero), so it fails open to LONGTEXT
+// rather than risking truncation; any other legacy width is likewise unknown.
+func TestMixedStringNumericToVarcharTextCapacity(t *testing.T) {
+	medium := types.New(types.T_text, types.MaxMediumTextLen, 0)
+	long := types.New(types.T_text, types.MaxLongTextLen, 0)
+	for _, test := range []struct {
+		name      string
+		source    []types.Type
+		wantOID   types.T
+		wantWidth int32
+	}{
+		{name: "mediumtext and bool", source: []types.Type{medium, types.T_bool.ToType()}, wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
+		{name: "bool and longtext", source: []types.Type{types.T_bool.ToType(), long}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "mediumtext and int", source: []types.Type{medium, types.T_int32.ToType()}, wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
+		{name: "mediumtext longtext and float", source: []types.Type{medium, long, types.T_float64.ToType()}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "mediumtext varchar and bool", source: []types.Type{medium, types.New(types.T_varchar, 10, 0), types.T_bool.ToType()}, wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
+		{name: "unknown text bound and bool", source: []types.Type{types.New(types.T_text, 100000, 0), types.T_bool.ToType()}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "width zero text and bool fails open", source: []types.Type{types.T_text.ToType(), types.T_bool.ToType()}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "bool and width zero text fails open", source: []types.Type{types.T_bool.ToType(), types.T_text.ToType()}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "width zero text and int fails open", source: []types.Type{types.T_text.ToType(), types.T_int32.ToType()}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "legacy text width and bool fails open", source: []types.Type{types.New(types.T_text, types.MaxVarBinaryLen, 0), types.T_bool.ToType()}, wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "tinytext and bool stay varchar", source: []types.Type{types.New(types.T_text, types.MaxTinyTextLen, 0), types.T_bool.ToType()}, wantOID: types.T_varchar, wantWidth: types.MaxVarBinaryLen},
+		{name: "varchar and bool stay varchar", source: []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()}, wantOID: types.T_varchar, wantWidth: types.MaxVarBinaryLen},
+		// BLOB branches keep the binary family at full capacity instead of
+		// truncating to VARCHAR(65535) (issue #31294 review). The persisted
+		// markers match the TEXT family: TINYBLOB is 255, declared plain BLOB
+		// is MaxStringSize, MEDIUMBLOB/LONGBLOB are the medium/long markers.
+		{name: "mediumblob and bool", source: []types.Type{types.New(types.T_blob, types.MaxMediumTextLen, 0), types.T_bool.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxMediumTextLen},
+		{name: "bool and longblob", source: []types.Type{types.T_bool.ToType(), types.New(types.T_blob, types.MaxLongTextLen, 0)}, wantOID: types.T_blob, wantWidth: types.MaxLongTextLen},
+		{name: "mediumblob and int", source: []types.Type{types.New(types.T_blob, types.MaxMediumTextLen, 0), types.T_int32.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxMediumTextLen},
+		{name: "mediumblob mediumtext and bool keeps blob", source: []types.Type{types.New(types.T_blob, types.MaxMediumTextLen, 0), types.New(types.T_text, types.MaxMediumTextLen, 0), types.T_bool.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxMediumTextLen},
+		{name: "mediumtext longblob and bool keeps blob", source: []types.Type{types.New(types.T_text, types.MaxMediumTextLen, 0), types.New(types.T_blob, types.MaxLongTextLen, 0), types.T_bool.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxLongTextLen},
+		{name: "width zero blob and bool fails open", source: []types.Type{types.T_blob.ToType(), types.T_bool.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxLongTextLen},
+		{name: "bool and width zero blob fails open", source: []types.Type{types.T_bool.ToType(), types.T_blob.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxLongTextLen},
+		{name: "width zero blob and width zero text keeps blob", source: []types.Type{types.T_blob.ToType(), types.T_text.ToType(), types.T_bool.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxLongTextLen},
+		{name: "unknown blob bound and bool fails open", source: []types.Type{types.New(types.T_blob, 100000, 0), types.T_bool.ToType()}, wantOID: types.T_blob, wantWidth: types.MaxLongTextLen},
+		{name: "tinyblob and bool stay varchar", source: []types.Type{types.New(types.T_blob, types.MaxTinyTextLen, 0), types.T_bool.ToType()}, wantOID: types.T_varchar, wantWidth: types.MaxVarBinaryLen},
+		{name: "plain blob and bool stay varchar", source: []types.Type{types.New(types.T_blob, types.MaxStringSize, 0), types.T_bool.ToType()}, wantOID: types.T_varchar, wantWidth: types.MaxVarBinaryLen},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			retType, ok := mixedStringNumericToVarchar(test.source)
+			require.True(t, ok)
+			require.Equal(t, test.wantOID, retType.Oid)
+			require.Equal(t, test.wantWidth, retType.Width)
+		})
+	}
+}
+
+// TestConditionalCheckTextCapacityWithBool proves the promoted TEXT target
+// flows through CASE/IF branch casting and survives the return-type callback.
+func TestConditionalCheckTextCapacityWithBool(t *testing.T) {
+	medium := types.New(types.T_text, types.MaxMediumTextLen, 0)
+	long := types.New(types.T_text, types.MaxLongTextLen, 0)
+
+	caseResult := caseCheck(nil, []types.Type{types.T_bool.ToType(), medium, types.T_bool.ToType()})
+	require.Equal(t, succeedWithCast, caseResult.status)
+	require.Len(t, caseResult.finalType, 3)
+	require.Equal(t, types.T_bool, caseResult.finalType[0].Oid)
+	require.Equal(t, types.T_text, caseResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxMediumTextLen), caseResult.finalType[1].Width)
+	require.Equal(t, types.T_text, caseResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxMediumTextLen), caseResult.finalType[2].Width)
+	require.Equal(t, int32(types.MaxMediumTextLen), caseReturnType(caseResult.finalType).Width)
+
+	iffResult := iffCheck(nil, []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), long})
+	require.Equal(t, succeedWithCast, iffResult.status)
+	require.Len(t, iffResult.finalType, 3)
+	require.Equal(t, types.T_text, iffResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), iffResult.finalType[1].Width)
+	require.Equal(t, types.T_text, iffResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), iffResult.finalType[2].Width)
+	require.Equal(t, int32(types.MaxLongTextLen), iffReturnType(iffResult.finalType).Width)
+
+	// Width-zero TEXT is ordinary or computed TEXT with no proven bound
+	// (e.g. LOWER of a MEDIUMTEXT column): it must fail open to LONGTEXT so a
+	// computed value beyond 65,535 characters is never truncated by the cast.
+	unbounded := types.T_text.ToType()
+	caseResult = caseCheck(nil, []types.Type{types.T_bool.ToType(), unbounded, types.T_bool.ToType()})
+	require.Equal(t, succeedWithCast, caseResult.status)
+	require.Equal(t, types.T_text, caseResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), caseResult.finalType[1].Width)
+	require.Equal(t, types.T_text, caseResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), caseResult.finalType[2].Width)
+	require.Equal(t, int32(types.MaxLongTextLen), caseReturnType(caseResult.finalType).Width)
+
+	iffResult = iffCheck(nil, []types.Type{types.T_bool.ToType(), unbounded, types.T_bool.ToType()})
+	require.Equal(t, succeedWithCast, iffResult.status)
+	require.Equal(t, types.T_text, iffResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), iffResult.finalType[2].Width)
+	require.Equal(t, int32(types.MaxLongTextLen), iffReturnType(iffResult.finalType).Width)
+
+	// A MEDIUMBLOB branch keeps the binary family at its declared capacity:
+	// VARCHAR(65535) would silently truncate legal values beyond 65,535 bytes.
+	mediumBlob := types.New(types.T_blob, types.MaxMediumTextLen, 0)
+	caseResult = caseCheck(nil, []types.Type{types.T_bool.ToType(), mediumBlob, types.T_bool.ToType()})
+	require.Equal(t, succeedWithCast, caseResult.status)
+	require.Len(t, caseResult.finalType, 3)
+	require.Equal(t, types.T_blob, caseResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxMediumTextLen), caseResult.finalType[1].Width)
+	require.Equal(t, types.T_blob, caseResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxMediumTextLen), caseResult.finalType[2].Width)
+	require.Equal(t, types.T_blob, caseReturnType(caseResult.finalType).Oid)
+	require.Equal(t, int32(types.MaxMediumTextLen), caseReturnType(caseResult.finalType).Width)
+
+	// Width-zero BLOB is a computed binary string with no proven bound: fail
+	// open to the LONG domain rather than truncate.
+	iffResult = iffCheck(nil, []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), types.T_blob.ToType()})
+	require.Equal(t, succeedWithCast, iffResult.status)
+	require.Equal(t, types.T_blob, iffResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), iffResult.finalType[1].Width)
+	require.Equal(t, types.T_blob, iffResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), iffResult.finalType[2].Width)
+	require.Equal(t, types.T_blob, iffReturnType(iffResult.finalType).Oid)
+	require.Equal(t, int32(types.MaxLongTextLen), iffReturnType(iffResult.finalType).Width)
+}
+
 func TestCaseCheckAcceptsImplicitBooleanConditions(t *testing.T) {
 	for _, test := range []struct {
 		name      string

@@ -345,5 +345,69 @@ WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_width_m
 ORDER BY ordinal_position;
 DROP TABLE if_control_flow_binary_width_metadata;
 
+-- issue #31294: a string value branch next to a BOOL branch resolves to a
+-- string type, because MySQL treats TRUE/FALSE as the integers 1/0. The
+-- string branch must not be cast to BOOL, and a selected BOOL branch renders
+-- as '1'/'0'.
+SELECT IF(1, 'x', TRUE) AS if_str_bool_t, IF(0, 'x', TRUE) AS if_str_bool_f, IF(0, TRUE, 'y') AS if_bool_str_f;
+SELECT CASE WHEN 1 THEN 'x' ELSE FALSE END AS case_str_bool_t, CASE WHEN 0 THEN 'x' ELSE FALSE END AS case_str_bool_f;
+SELECT IF(1, 'true', FALSE) AS if_word_t, IF(0, 'true', FALSE) AS if_word_f;
+CREATE TABLE if_case_str_bool_t(id INT, s VARCHAR(10), b BOOL);
+INSERT INTO if_case_str_bool_t VALUES (1, 'abc', TRUE), (2, 'def', FALSE);
+SELECT id, IF(b, s, b) AS if_col, CASE WHEN b THEN s ELSE b END AS case_col FROM if_case_str_bool_t ORDER BY id;
+-- NULL contracts through portable assertions: a NULL condition selects the
+-- ELSE branch, and a NULL value branch stays NULL with a BOOL result type.
+SELECT IF(NULL, 'x', TRUE) AS if_null_cond;
+SELECT IF(IF(1, NULL, FALSE) IS NULL, 'isnull', 'hasvalue') AS if_null_branch,
+IF(CASE WHEN 1 THEN NULL ELSE TRUE END IS NULL, 'isnull', 'hasvalue') AS case_null_branch;
+CREATE TABLE if_case_str_bool_meta AS
+SELECT IF(1, 'x', TRUE) AS if_b, CASE WHEN 1 THEN 'x' ELSE FALSE END AS case_b,
+IF(1, NULL, FALSE) AS if_null_branch, CASE WHEN 1 THEN NULL ELSE TRUE END AS case_null_branch;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'if_case_str_bool_meta' ORDER BY ordinal_position;
+DROP TABLE if_case_str_bool_meta;
+DROP TABLE if_case_str_bool_t;
+-- A MEDIUMTEXT branch exceeds VARCHAR capacity: the common type must keep
+-- the TEXT family so values at the 65535/65536 boundary survive intact.
+CREATE TABLE if_case_str_bool_text_t(id INT, s MEDIUMTEXT, b BOOL);
+INSERT INTO if_case_str_bool_text_t VALUES (1, REPEAT('a', 65535), TRUE), (2, REPEAT('b', 65536), TRUE), (3, REPEAT('c', 65536), FALSE);
+SELECT id, CONCAT(LENGTH(IF(b, s, b))) AS if_len, CONCAT(LENGTH(CASE WHEN b THEN s ELSE b END)) AS case_len FROM if_case_str_bool_text_t ORDER BY id;
+SELECT id, CONCAT(LENGTH(COALESCE(s, b))) AS coalesce_len, CONCAT(LENGTH(IFNULL(s, b))) AS ifnull_len FROM if_case_str_bool_text_t ORDER BY id;
+CREATE TABLE if_case_str_bool_text_meta AS SELECT id, IF(b, s, b) AS if_t, CASE WHEN b THEN s ELSE b END AS case_t FROM if_case_str_bool_text_t;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'if_case_str_bool_text_meta' ORDER BY ordinal_position;
+SELECT id, CONCAT(LENGTH(if_t)) AS if_len, CONCAT(LENGTH(case_t)) AS case_len FROM if_case_str_bool_text_meta ORDER BY id;
+DROP TABLE if_case_str_bool_text_meta;
+DROP TABLE if_case_str_bool_text_t;
+-- A computed TEXT branch (LOWER of a MEDIUMTEXT column) carries no proven
+-- width: the common type must fail open to LONGTEXT so computed values beyond
+-- 65,535 characters survive. LENGTH and MD5 oracles prove completeness because
+-- a plain equality casts both sides of the comparison (issue #31294 review).
+CREATE TABLE if_case_str_bool_lower_t(id INT, s MEDIUMTEXT, b BOOL);
+INSERT INTO if_case_str_bool_lower_t VALUES (1, REPEAT('A', 65535), TRUE), (2, REPEAT('B', 65536), TRUE), (3, REPEAT('C', 65536), FALSE);
+SELECT id, CONCAT(LENGTH(IF(b, LOWER(s), b))) AS if_len, CONCAT(LENGTH(CASE WHEN b THEN LOWER(s) ELSE b END)) AS case_len FROM if_case_str_bool_lower_t ORDER BY id;
+SELECT id, CONCAT(LENGTH(COALESCE(LOWER(s), b))) AS coalesce_len, CONCAT(LENGTH(IFNULL(LOWER(s), b))) AS ifnull_len FROM if_case_str_bool_lower_t ORDER BY id;
+SELECT id, CONCAT(LENGTH(IF(1, LOWER(s), 1))) AS if_int_len FROM if_case_str_bool_lower_t ORDER BY id;
+SELECT id, IF(MD5(IF(b, LOWER(s), b)) = MD5(LOWER(s)), 'match', 'diff') AS if_full, IF(MD5(CASE WHEN b THEN LOWER(s) ELSE b END) = MD5(LOWER(s)), 'match', 'diff') AS case_full FROM if_case_str_bool_lower_t ORDER BY id;
+CREATE TABLE if_case_str_bool_lower_meta AS SELECT id, IF(b, LOWER(s), b) AS if_t, CASE WHEN b THEN LOWER(s) ELSE b END AS case_t FROM if_case_str_bool_lower_t;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'if_case_str_bool_lower_meta' ORDER BY ordinal_position;
+SELECT m.id, CONCAT(LENGTH(m.if_t)) AS if_len, IF(MD5(m.if_t) = MD5(LOWER(t.s)), 'match', 'diff') AS if_full FROM if_case_str_bool_lower_meta m JOIN if_case_str_bool_lower_t t ON m.id = t.id ORDER BY m.id;
+DROP TABLE if_case_str_bool_lower_meta;
+DROP TABLE if_case_str_bool_lower_t;
+-- A MEDIUMBLOB branch exceeds VARCHAR capacity: the common type must keep
+-- the BLOB family and its full capacity when a BOOL branch participates, so
+-- binary values at the 65535/65536-byte boundary survive intact. LENGTH and
+-- MD5 oracles prove completeness because a plain equality casts both sides
+-- of the comparison (issue #31294 review).
+CREATE TABLE if_case_str_bool_blob_t(id INT, s MEDIUMBLOB, b BOOL);
+INSERT INTO if_case_str_bool_blob_t VALUES (1, REPEAT('a', 65535), TRUE), (2, REPEAT('b', 65536), TRUE), (3, REPEAT('c', 65536), FALSE);
+SELECT id, CONCAT(LENGTH(IF(b, s, b))) AS if_len, CONCAT(LENGTH(IF(b, b, s))) AS if_rev_len FROM if_case_str_bool_blob_t ORDER BY id;
+SELECT id, CONCAT(LENGTH(CASE WHEN b THEN s ELSE b END)) AS case_len, CONCAT(LENGTH(CASE WHEN b THEN b ELSE s END)) AS case_rev_len FROM if_case_str_bool_blob_t ORDER BY id;
+SELECT id, CONCAT(LENGTH(COALESCE(s, b))) AS coalesce_len, CONCAT(LENGTH(IFNULL(s, b))) AS ifnull_len FROM if_case_str_bool_blob_t ORDER BY id;
+SELECT id, IF(MD5(IF(b, s, b)) = MD5(s), 'match', 'diff') AS if_full, IF(MD5(CASE WHEN b THEN s ELSE b END) = MD5(s), 'match', 'diff') AS case_full FROM if_case_str_bool_blob_t ORDER BY id;
+CREATE TABLE if_case_str_bool_blob_meta AS SELECT id, IF(b, s, b) AS if_b, CASE WHEN b THEN s ELSE b END AS case_b, COALESCE(s, b) AS coal_b, IFNULL(s, b) AS nvl_b FROM if_case_str_bool_blob_t;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'if_case_str_bool_blob_meta' ORDER BY ordinal_position;
+SELECT m.id, CONCAT(LENGTH(m.if_b)) AS if_len, IF(MD5(m.if_b) = MD5(t.s), 'match', 'diff') AS if_full FROM if_case_str_bool_blob_meta m JOIN if_case_str_bool_blob_t t ON m.id = t.id ORDER BY m.id;
+DROP TABLE if_case_str_bool_blob_meta;
+DROP TABLE if_case_str_bool_blob_t;
+
 # reset
 SET TIME_ZONE = "SYSTEM";
