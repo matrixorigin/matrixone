@@ -596,8 +596,7 @@ func ivfIndexEntriesTable(
 	)
 
 	indexColumnName := indexDef.Parts[0]
-	cfg := vectorindex.IndexTableConfig{DbName: qryDatabase, MetadataTable: metadataTableName, PKey: originalTableDef.Pkey.PkeyColName,
-		PKeyScales: vectorindex.SerialPkScales(originalTableDef)}
+	cfg := vectorindex.IndexTableConfig{DbName: qryDatabase, MetadataTable: metadataTableName, PKey: originalTableDef.Pkey.PkeyColName}
 	if ignoredDef != nil {
 		cfg.IgnoredTable = ignoredDef.IndexTableName
 		if cfg.MaxBadRecords, err = catalog.IndexParamMaxBadRecords(ignoredDef.IndexAlgoParams); err != nil {

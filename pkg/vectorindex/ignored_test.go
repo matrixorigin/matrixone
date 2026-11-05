@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,17 +147,5 @@ func TestSerialPkString(t *testing.T) {
 	defer p.Close()
 	p.EncodeInt64(1)
 	p.EncodeStringType([]byte("x"))
-	d, err := types.Decimal64FromFloat64(1.5, 10, 2)
-	require.NoError(t, err)
-	p.EncodeDecimal64(d)
-	require.Equal(t, "(1, x, 1.50)", SerialPkString(p.GetBuf(), []int32{0, 0, 2}))
-	require.Equal(t, "X'ff01'", SerialPkString([]byte{0xff, 0x01}, nil), "bytes that are no serial")
-
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{{Name: "a"}, {Name: "d", Typ: plan.Type{Scale: 2}}},
-		Pkey: &plan.PrimaryKeyDef{PkeyColName: "__mo_cpkey_da", Names: []string{"d", "a"}},
-	}
-	require.Equal(t, []int32{2, 0}, SerialPkScales(tableDef))
-	tableDef.Pkey = &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
-	require.Nil(t, SerialPkScales(tableDef), "a single key column")
+	require.Equal(t, "X'3B150146017800'", SerialPkString(p.GetBuf()))
 }

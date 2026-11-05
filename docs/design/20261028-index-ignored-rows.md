@@ -107,6 +107,13 @@ It returns one row per ignored source row of every index of the table:
 | `Reason` | the message of the row, or of its code |
 | `Ignored_at` | when the row was recorded |
 
+A single-column key is its value as text. A composite key is the hex literal of its serial,
+`X'…'` in the digits `HEX` writes, the bytes the table's `serial` of the key columns gives: `WHERE
+serial(a, b) = X'…'` finds the source row, and a join on `serial(a, b)` matches a table of such
+keys. The errors of the limit name a row by the same text. A rejected alternative printed the
+parts of a composite key as text, which loses fractional seconds and ENUM numbers and cannot be
+compared with the key (@cpegeric, 2026-11-05).
+
 `WHERE` filters on these columns, as in `SHOW INDEX`. For a partitioned table it lists the
 ignored rows of the indexes of every partition. It shows rows of the table, so it requires the
 `SELECT` privilege on the table.
@@ -264,3 +271,4 @@ and I19–I20 of `test/distributed/cases/pessimistic_transaction/fulltext2/fullt
 | I18 | A search vector an IVF-Flat index cannot store is rejected. | `TestCheckQuery` |
 | I19 | A FULLTEXT2 build leaves out, and records with its message, a row whose text is not JSON or whose DATALINK it cannot read, within its limit; a DATALINK error that may pass is retried. | `TestFulltext2CreateLeavesOutInvalidJSON`, `TestDatalinkError`, `TestJSONError`, `TestFulltext2BuildRecordsIgnoredRows` |
 | I20 | The FULLTEXT2 sync records the rows and follows the source rows, stops past the limit, and restarts with ALTER REINDEX. | `TestFulltext2WriterIgnoresInvalidJSON`, `TestFulltext2WriterIgnoredNativeKey`, `TestValidateReindexParams_MaxBadRecords` |
+| I21 | A composite key reads as the hex literal of its serial in `SHOW INDEX IGNORED` and in the errors of the limit; keys that differ only in fractional seconds read differently, and the literal finds its source row by `serial` of the key columns. | `TestIgnoredPkSql`, `TestSerialPkString`, `TestIgnoredRowsPkString`, `TestIvfflatWriterIgnoredTable`; `vector_ivfflat_ignored.sql` |

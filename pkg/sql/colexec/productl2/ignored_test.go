@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -151,17 +152,18 @@ func TestPkLiteral(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `'\u0001x\''`, strings.ReplaceAll(lit, "\x01", `\u0001`))
 
-	// a composite key reads as its parts
+	// a composite key reads as the hex literal of its serial
 	p := types.NewPacker()
 	defer p.Close()
 	p.EncodeInt64(1)
 	p.EncodeStringType([]byte("x"))
 	serial := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(serial, p.GetBuf(), false, mp))
-	ig := &Ignored{Serial: true, PkScales: []int32{0, 0}}
+	ig := &Ignored{Serial: true}
 	lit, err = ig.pkLiteral(proc, serial, 0)
 	require.NoError(t, err)
-	require.Equal(t, "(1, x)", ig.pkString(serial, 0, lit))
+	require.Equal(t, vectorindex.SerialPkString(p.GetBuf()), lit)
+	require.Equal(t, lit, ig.pkString(serial, 0, lit))
 	require.Equal(t, "7", (&Ignored{}).pkString(serial, 0, "7"))
 
 	// an ENUM key is its stored number, whether the probe carries the value or its serial

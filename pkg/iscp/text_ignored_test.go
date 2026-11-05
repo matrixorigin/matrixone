@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,7 +123,7 @@ func TestIvfflatWriterIgnoredTable(t *testing.T) {
 	stubIgnoredCount(t, 0)
 	require.NoError(t, w.checkIgnored(ctx, "", nil, true))
 
-	// the serial of a composite key reads as its parts
+	// the serial of a composite key reads as its hex literal
 	p := types.NewPacker()
 	defer p.Close()
 	p.EncodeInt64(1)
@@ -130,7 +131,7 @@ func TestIvfflatWriterIgnoredTable(t *testing.T) {
 	w.tabledef.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"pk", "vec"}}
 	stubIgnoredCountPk(t, 3, p.GetBuf())
 	w.rows = 1
-	require.ErrorContains(t, w.checkIgnored(ctx, "", nil, false), "max_bad_records = 2 rows; row (1, x)")
+	require.ErrorContains(t, w.checkIgnored(ctx, "", nil, false), "max_bad_records = 2 rows; row "+vectorindex.SerialPkString(p.GetBuf()))
 }
 
 func TestIvfflatWriterWithoutIgnoredTable(t *testing.T) {

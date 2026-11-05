@@ -91,12 +91,12 @@ insert into c values (1,'x','[1,2]'),(2,'y','[3,4]'),(3,'z','[1e300,1]'),(4,'w',
 create index ic using ivfflat on c(v) lists 1 op_type 'vector_l2_ops' quantization 'int8' max_bad_records 2 async;
 show index ignored from c;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-ic  ¦  (3, z)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:03:31
+ic  ¦  X'3A150346017A00'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 19:56:02
 insert into c values (5,'v','[1e200,2]');
 delete from c where a = 3;
 show index ignored from c;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-ic  ¦  (5, v)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:04:21
+ic  ¦  X'3A150546017600'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 19:56:50
 select a from c order by l2_distance(v, '[1,2]') limit 3;
 ➤ a[4,32,0]  𝄀
 1  𝄀
@@ -104,14 +104,14 @@ select a from c order by l2_distance(v, '[1,2]') limit 3;
 4
 insert into c values (6,'u','[1e250,2]'),(7,'s','[1e260,2]');
 show index status from c;
-➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,173,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
-ic  ¦  c  ¦  stopped  ¦  the index cannot store more than max_bad_records = 2 rows; row (6, u): vector element is out of the range the index stores: vector element 1e+250 cannot be stored as float32  ¦  1  ¦  2  ¦  2026-11-03 15:05:11
+➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,184,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
+ic  ¦  c  ¦  stopped  ¦  the index cannot store more than max_bad_records = 2 rows; row X'3A150646017500': vector element is out of the range the index stores: vector element 1e+250 cannot be stored as float32  ¦  1  ¦  2  ¦  2026-11-05 19:57:38
 alter table c alter reindex ic ivfflat max_bad_records 5;
 show index ignored from c;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-ic  ¦  (5, v)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:06:31  𝄀
-ic  ¦  (6, u)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:06:31  𝄀
-ic  ¦  (7, s)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:06:31
+ic  ¦  X'3A150546017600'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 19:58:57  𝄀
+ic  ¦  X'3A150646017500'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 19:58:57  𝄀
+ic  ¦  X'3A150746017300'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 19:58:57
 show index status from c;
 ➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,65535,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
 ic  ¦  c  ¦  running  ¦  null  ¦  3  ¦  5  ¦  2026-11-03 15:08:11
@@ -160,8 +160,21 @@ create index ice using ivfflat on ce(v) lists 1 op_type 'vector_l2_ops' quantiza
 insert ignore into ce values (3,'zz','[200000,1]');
 show index ignored from ce;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-ice  ¦  (2, y)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:10:17  𝄀
-ice  ¦  (3, 0)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:10:17
+ice  ¦  X'3A1502503D1502'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 20:04:30  𝄀
+ice  ¦  X'3A1503503D14'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 20:04:30
+create table cd(a int, d datetime(6), t time(6), v vecf32(2), primary key(a, d, t));
+insert into cd values (1,'2026-11-05 10:00:00.100000','10:00:00.100000','[100000,1]'),(1,'2026-11-05 10:00:00.200000','10:00:00.200000','[200000,1]'),(2,'2026-11-05 10:00:00','10:00:00','[1,1]');
+create index icd using ivfflat on cd(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 2;
+show index ignored from cd;
+➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+icd  ¦  X'3A1501421BE31F838E316EA047190861C5EEA0'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 20:04:30  𝄀
+icd  ¦  X'3A1501421BE31F838E32F54047190861C77540'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 20:04:30
+show index ignored from cd where `Primary_key` = 'X''3A1501421BE31F838E32F54047190861C77540''';
+➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+icd  ¦  X'3A1501421BE31F838E32F54047190861C77540'  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-05 20:04:30
+select a, d, t from cd where serial(a, d, t) = X'3A1501421BE31F838E32F54047190861C77540';
+➤ a[4,32,0]  ¦  d[93,26,0]  ¦  t[92,17,0]  𝄀
+1  ¦  2026-11-05 10:00:00.200000000  ¦  10:00:00.200000000
 create table k(id bigint primary key, v vecf32(2));
 insert into k values (1,'[1,1]'),(2,'[2,2]'),(3,'[3,3]'),(4,'[100000,1]'),(5,'[200000,1]');
 create index ik using ivfflat on k(v) lists 4 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;

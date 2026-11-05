@@ -85,12 +85,7 @@ func TestProductL2Ignored(t *testing.T) {
 	require.True(t, ig.Serial)
 	require.Empty(t, ig.Table, "an index without an ignored table fails on such a row")
 
-	cfg.PKeyScales = []int32{0, 2}
-	ig, err = c.productL2Ignored(l2Node(t, cfg, `{}`, "src."+catalog.CPrimaryKeyColName))
-	require.NoError(t, err)
-	require.Equal(t, []int32{0, 2}, ig.PkScales)
-
-	cfg.PKey, cfg.PKeyType, cfg.PKeyScales, cfg.PKeyEnum = "e", int32(types.T_enum), nil, "a,b"
+	cfg.PKey, cfg.PKeyType, cfg.PKeyEnum = "e", int32(types.T_enum), "a,b"
 	ig, err = c.productL2Ignored(l2Node(t, cfg, `{}`, "src.e"))
 	require.NoError(t, err)
 	require.Equal(t, int32(0), ig.Pk, "an ENUM key is recorded")

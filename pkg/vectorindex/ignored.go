@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const ignoredRowsPerSql = 1024
@@ -65,34 +64,10 @@ func EnumPkLiteral(e types.Enum, members string) string {
 	return fmt.Sprintf("SERIAL_EXTRACT(X'%s', 0 AS ENUM(%s))", hex.EncodeToString(p.GetBuf()), strings.Join(quoted, ","))
 }
 
-// SerialPkString returns the composite primary key whose serial is b as (a, b), the parts formatted
-// with the scales of their columns, or b in hex when b is no serial.
-func SerialPkString(b []byte, scales []int32) string {
-	tp, err := types.Unpack(b)
-	if err != nil || len(tp) == 0 {
-		return "X'" + hex.EncodeToString(b) + "'"
-	}
-	return "(" + strings.Join(tp.SQLStrings(scales), ", ") + ")"
-}
-
-// SerialPkScales returns the scales of the parts of the composite primary key of tableDef, nil
-// when its key is a single column.
-func SerialPkScales(tableDef *plan.TableDef) []int32 {
-	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < 2 {
-		return nil
-	}
-	scales := make([]int32, 0, len(tableDef.Pkey.Names))
-	for _, name := range tableDef.Pkey.Names {
-		var scale int32
-		for _, col := range tableDef.Cols {
-			if col.Name == name {
-				scale = col.Typ.Scale
-				break
-			}
-		}
-		scales = append(scales, scale)
-	}
-	return scales
+// SerialPkString returns the composite primary key whose serial is b as the hex literal X'...', in
+// the digits HEX writes.
+func SerialPkString(b []byte) string {
+	return "X'" + strings.ToUpper(hex.EncodeToString(b)) + "'"
 }
 
 // UnstorableCode returns the code of err when it is a reason an index cannot store a row.

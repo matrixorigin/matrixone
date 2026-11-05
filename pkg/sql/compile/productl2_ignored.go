@@ -65,7 +65,6 @@ func (c *Compile) productL2Ignored(node *plan.Node) (*productl2.Ignored, error) 
 		Serial:     cfg.PKey == catalog.CPrimaryKeyColName,
 		Enum:       types.T(cfg.PKeyType) == types.T_enum,
 		EnumValues: cfg.PKeyEnum,
-		PkScales:   cfg.PKeyScales,
 	}
 	if cfg.IgnoredTable != "" {
 		ig.Db, ig.Table, ig.Limit = cfg.DbName, cfg.IgnoredTable, cfg.MaxBadRecords

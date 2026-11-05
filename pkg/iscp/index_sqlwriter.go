@@ -786,8 +786,8 @@ func (w *IvfflatSqlWriter) checkIgnored(ctx context.Context, service string, txn
 		if b != nil && b.RowCount() > 0 {
 			n = vector.GetFixedAtNoTypeCheck[int64](b.Vecs[0], 0)
 			pk = b.Vecs[1].GetStringAt(0)
-			if scales := vectorindex.SerialPkScales(w.tabledef); scales != nil {
-				pk = vectorindex.SerialPkString(b.Vecs[1].GetBytesAt(0), scales)
+			if w.tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+				pk = vectorindex.SerialPkString(b.Vecs[1].GetBytesAt(0))
 			}
 			detail = moerr.MessageOf(uint16(vector.GetFixedAtNoTypeCheck[int32](b.Vecs[2], 0)))
 		}
@@ -980,7 +980,6 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		MaxBadRecords: w.maxBadRecords,
 		PKey:          w.tabledef.Pkey.PkeyColName,
 		PKeyType:      int32(w.pkType.Oid),
-		PKeyScales:    vectorindex.SerialPkScales(w.tabledef),
 		PKeyEnum:      w.tabledef.Cols[w.tabledef.Name2ColIndex[w.tabledef.Pkey.PkeyColName]].Typ.Enumvalues,
 		KeyPartType:   int32(w.partsType[0].Oid),
 	})

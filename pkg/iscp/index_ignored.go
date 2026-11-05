@@ -48,8 +48,8 @@ type ignoredRows struct {
 	tbl    string
 	table  string
 	pkType *types.Type
-	// pkScales are the scales of the parts of a composite key, nil for a single column.
-	pkScales []int32
+	// serial reports that the key is the serial of a composite key.
+	serial bool
 	// pkEnum are the members of an ENUM key.
 	pkEnum string
 	limit  int64
@@ -81,12 +81,12 @@ type ignoredChange struct {
 
 // pkString returns the primary key pk as users read it.
 func (g *ignoredRows) pkString(pk any) string {
-	if g.pkScales != nil {
+	if g.serial {
 		switch b := pk.(type) {
 		case []byte:
-			return vectorindex.SerialPkString(b, g.pkScales)
+			return vectorindex.SerialPkString(b)
 		case string:
-			return vectorindex.SerialPkString([]byte(b), g.pkScales)
+			return vectorindex.SerialPkString([]byte(b))
 		}
 	}
 	if e, ok := pk.(types.Enum); ok {
@@ -132,14 +132,14 @@ func newIgnoredRows(dbName string, tableDef *plan.TableDef, indexdefs []*plan.In
 			pkType.Oid = types.T_varbinary
 		}
 		return &ignoredRows{
-			db:       dbName,
-			tbl:      idx.IndexTableName,
-			table:    sqlquote.QualifiedIdent(dbName, idx.IndexTableName),
-			pkType:   pkType,
-			pkScales: vectorindex.SerialPkScales(tableDef),
-			pkEnum:   pk.Enumvalues,
-			limit:    limit,
-			changes:  make(map[any]ignoredChange),
+			db:      dbName,
+			tbl:     idx.IndexTableName,
+			table:   sqlquote.QualifiedIdent(dbName, idx.IndexTableName),
+			pkType:  pkType,
+			serial:  tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName,
+			pkEnum:  pk.Enumvalues,
+			limit:   limit,
+			changes: make(map[any]ignoredChange),
 		}, nil
 	}
 	return nil, nil

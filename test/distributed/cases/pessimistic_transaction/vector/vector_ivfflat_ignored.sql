@@ -131,14 +131,23 @@ delete from ea0 where cast(k as int) = 0;
 -- @wait_expect(2, 60)
 show index ignored from ea0;
 
--- a composite key with an ENUM part reads as its members
+-- a composite key reads as the hex literal of its serial
 create table ce(a int, e enum('x','y'), v vecf32(2), primary key(a, e));
 insert into ce values (1,'x','[1,1]'),(2,'y','[100000,1]');
 create index ice using ivfflat on ce(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;
--- an ENUM part that names no member reads as its number
+-- including an ENUM part that names no member
 insert ignore into ce values (3,'zz','[200000,1]');
 -- @ignore:4
 show index ignored from ce;
+-- keys that differ in fractional seconds read as distinct literals, and a literal finds its row
+create table cd(a int, d datetime(6), t time(6), v vecf32(2), primary key(a, d, t));
+insert into cd values (1,'2026-11-05 10:00:00.100000','10:00:00.100000','[100000,1]'),(1,'2026-11-05 10:00:00.200000','10:00:00.200000','[200000,1]'),(2,'2026-11-05 10:00:00','10:00:00','[1,1]');
+create index icd using ivfflat on cd(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 2;
+-- @ignore:4
+show index ignored from cd;
+-- @ignore:4
+show index ignored from cd where `Primary_key` = 'X''3A1501421BE31F838E32F54047190861C77540''';
+select a, d, t from cd where serial(a, d, t) = X'3A1501421BE31F838E32F54047190861C77540';
 -- rows left out of the samples may leave fewer of them than lists
 create table k(id bigint primary key, v vecf32(2));
 insert into k values (1,'[1,1]'),(2,'[2,2]'),(3,'[3,3]'),(4,'[100000,1]'),(5,'[200000,1]');

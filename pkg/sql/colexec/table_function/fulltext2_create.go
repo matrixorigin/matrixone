@@ -24,7 +24,6 @@ package table_function
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -496,7 +495,7 @@ func (u *fulltext2CreateState) leaveOut(tf *TableFunction, proc *process.Process
 	pkVec := tf.ctr.argVecs[1]
 	var pk string
 	if u.tblcfg.PKey == catalog.CPrimaryKeyColName {
-		pk = "X'" + hex.EncodeToString(pkVec.GetBytesAt(nthRow)) + "'"
+		pk = vectorindex.SerialPkString(pkVec.GetBytesAt(nthRow))
 	} else {
 		var lerr error
 		if pk, lerr = iscp.SqlLiteral(proc.Ctx, pkVec, nthRow); lerr != nil {

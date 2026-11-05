@@ -15,7 +15,6 @@
 package productl2
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -51,8 +50,6 @@ type Ignored struct {
 	Enum bool `json:"enum,omitempty"`
 	// EnumValues are the members of an ENUM primary key.
 	EnumValues string `json:"enum_values,omitempty"`
-	// PkScales are the scales of the parts of a composite key.
-	PkScales []int32 `json:"pk_scales,omitempty"`
 	// Limit is the number of rows the table may hold.
 	Limit int64 `json:"limit,omitempty"`
 }
@@ -133,7 +130,7 @@ func (ctr *container) leaveOut(ap *Productl2, proc *process.Process, vec *vector
 // pkLiteral returns the SQL literal of the primary key in row j of vec.
 func (ig *Ignored) pkLiteral(proc *process.Process, vec *vector.Vector, j int) (string, error) {
 	if ig.Serial {
-		return "X'" + hex.EncodeToString(vec.GetBytesAt(j)) + "'", nil
+		return vectorindex.SerialPkString(vec.GetBytesAt(j)), nil
 	}
 	if ig.Enum {
 		e, err := enumKey(vec, j)
@@ -170,9 +167,6 @@ func enumKey(vec *vector.Vector, j int) (types.Enum, error) {
 
 // pkString returns the primary key in row j of vec, whose literal is lit, as users read it.
 func (ig *Ignored) pkString(vec *vector.Vector, j int, lit string) string {
-	if ig.Serial {
-		return vectorindex.SerialPkString(vec.GetBytesAt(j), ig.PkScales)
-	}
 	if ig.Enum {
 		if e, err := enumKey(vec, j); err == nil {
 			if label, err := types.ParseEnumIndex(ig.EnumValues, e); err == nil {

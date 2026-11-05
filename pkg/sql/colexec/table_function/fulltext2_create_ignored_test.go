@@ -90,7 +90,7 @@ func TestFulltext2CreateLeaveOutCompositeKey(t *testing.T) {
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
 	tf.ctr.argVecs = []*vector.Vector{nil, pk}
 	require.NoError(t, st.leaveOut(tf, proc, 0, moerr.NewIndexInvalidJSONNoCtx("x")))
-	require.Equal(t, "X'01ff'", st.ignored.firstPk)
+	require.Equal(t, "X'01FF'", st.ignored.firstPk)
 	require.ErrorContains(t, st.leaveOut(tf, proc, 0, moerr.NewInternalErrorNoCtx("io")), "io", "not a reason a row cannot be stored")
 }
 

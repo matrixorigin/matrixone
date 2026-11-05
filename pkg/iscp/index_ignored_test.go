@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -341,15 +342,15 @@ func TestStoppedJobState(t *testing.T) {
 	require.Equal(t, ISCPJobState_Error, catalog.MoISCPJobStateError)
 }
 
-// A composite key reads as its parts in the errors and logs of the tracker.
+// A composite key reads as the hex literal of its serial in the errors and logs of the tracker.
 func TestIgnoredRowsPkString(t *testing.T) {
 	p := types.NewPacker()
 	defer p.Close()
 	p.EncodeInt64(1)
 	p.EncodeStringType([]byte("x"))
-	g := &ignoredRows{pkScales: []int32{0, 0}}
-	require.Equal(t, "(1, x)", g.pkString(p.GetBuf()))
-	require.Equal(t, "(1, x)", g.pkString(string(p.GetBuf())))
+	g := &ignoredRows{serial: true}
+	require.Equal(t, vectorindex.SerialPkString(p.GetBuf()), g.pkString(p.GetBuf()))
+	require.Equal(t, vectorindex.SerialPkString(p.GetBuf()), g.pkString(string(p.GetBuf())))
 	require.Equal(t, "7", (&ignoredRows{}).pkString(int64(7)))
 	require.Equal(t, "b", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(2)), "users read the member")
 	require.Equal(t, "3", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(3)), "no such member")
@@ -369,5 +370,5 @@ func TestIgnoredRowsPkString(t *testing.T) {
 	require.NoError(t, ignored.load(context.Background(), "", nil, true, t.TempDir()))
 	defer ignored.close()
 	err = ignored.ignore(p.GetBuf(), outOfRange("c"))
-	require.ErrorContains(t, err, "row (1, x): ")
+	require.ErrorContains(t, err, "row "+vectorindex.SerialPkString(p.GetBuf())+": ")
 }

@@ -4279,7 +4279,6 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 			MaxBadRecords: limit,
 			PKey:          tableDef.Cols[posOriginPk].Name,
 			PKeyType:      typeOriginPk.Id,
-			PKeyScales:    vectorindex.SerialPkScales(tableDef),
 			PKeyEnum:      typeOriginPk.Enumvalues,
 			KeyPartType:   typeOriginVecColumn.Id,
 		})
