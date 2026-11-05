@@ -3013,6 +3013,85 @@ func Test_convertRowsIntoBatchUnsignedRoundTrip(t *testing.T) {
 	assert.Equal(t, []uint8{7}, vector.MustFixedColWithTypeCheck[uint8](tinyData.Vecs[0]))
 }
 
+func Test_convertRowsIntoBatchVarStringBytesAndBinaryType(t *testing.T) {
+	// Engine-extracted VARCHAR/TEXT/VARBINARY cells arrive as []byte, and the
+	// diff path also publishes VARBINARY columns as VAR_STRING with the binary
+	// charset. Saving must keep the exact bytes and the binary type instead of
+	// rendering []byte as a Go numeric list (issue #31535).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	textCol := new(MysqlColumn)
+	textCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	textCol.SetName("v")
+	textCol.SetCharset(charsetVarchar)
+
+	binCol := new(MysqlColumn)
+	binCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	binCol.SetName("bin")
+	binCol.SetCharset(charsetBinary)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(textCol)
+	mrs.AddColumn(binCol)
+	mrs.AddRow([]any{[]byte("中文"), []byte{0xFF, 0x00, 0x0A}})
+	mrs.AddRow([]any{"plain", []byte{}})
+	mrs.AddRow([]any{nil, nil})
+	// Counterexample: NULL, empty string and embedded NUL must stay distinct.
+	mrs.AddRow([]any{[]byte{0x00, 0x31}, []byte{0x00, 0x31}})
+
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_varchar), pColDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, int32(types.T_varbinary), pColDefs.ResultCols[1].Typ.Id)
+
+	textVec := data.Vecs[0]
+	assert.Equal(t, types.T_varchar, textVec.GetType().Oid)
+	require.Equal(t, []byte("中文"), (textVec.GetBytesAt(0)))
+	require.Equal(t, []byte("plain"), (textVec.GetBytesAt(1)))
+	assert.True(t, textVec.GetNulls().Contains(2))
+	require.Equal(t, []byte{0x00, 0x31}, (textVec.GetBytesAt(3)))
+
+	binVec := data.Vecs[1]
+	assert.Equal(t, types.T_varbinary, binVec.GetType().Oid)
+	require.Equal(t, []byte{0xFF, 0x00, 0x0A}, (binVec.GetBytesAt(0)))
+	require.Empty(t, (binVec.GetBytesAt(1)))
+	assert.True(t, binVec.GetNulls().Contains(2))
+	require.Equal(t, []byte{0x00, 0x31}, (binVec.GetBytesAt(3)))
+}
+
+func Test_convertRowsIntoBatchVectorTextPresentation(t *testing.T) {
+	// VECF32 cells published under VARCHAR metadata must save the same
+	// "[2, 2]" display text the client sees, not the Go "%v" form "[2 2]"
+	// (issue #31535 comment case).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	vecCol := new(MysqlColumn)
+	vecCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	vecCol.SetName("vec")
+	vecCol.SetCharset(charsetVarchar)
+
+	textCol := new(MysqlColumn)
+	textCol.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	textCol.SetName("t")
+	textCol.SetCharset(charsetVarchar)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(vecCol)
+	mrs.AddColumn(textCol)
+	mrs.AddRow([]any{[]float32{2, 2}, []byte("bytes text")})
+	mrs.AddRow([]any{[]float64{1.5, 2.5}, nil})
+
+	data, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	require.Equal(t, []byte("[2, 2]"), (data.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, []byte("[1.5, 2.5]"), (data.Vecs[0].GetBytesAt(1)))
+	require.Equal(t, []byte("bytes text"), (data.Vecs[1].GetBytesAt(0)))
+	assert.True(t, data.Vecs[1].GetNulls().Contains(1))
+}
+
 func Test_convertRowsIntoBatchUnsignedRejections(t *testing.T) {
 	// Values that cannot be represented exactly must fail fast instead of
 	// panicking, wrapping sign, or truncating (issue #31498).
