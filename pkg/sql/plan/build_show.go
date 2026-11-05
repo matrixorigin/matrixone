@@ -642,6 +642,21 @@ func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, de
 	query.ViewMetadataDependsOnUdf = query.ViewMetadataDependsOnUdf || dependsOnUdf
 }
 
+// descColumnLikeInstaller installs the DESCRIBE <table> <col> shortcut's
+// derived LIKE predicate for the current build and returns the undo function.
+// The derived comparison never survives the build: the frontend reuses the
+// saved prepared AST (computation_wrapper.go, mysql_cmd_executor.go), and a
+// persisted derived LIKE would keep the first build's stored spelling and
+// skip re-derivation on replan. Restoring the authored statement makes every
+// plan regenerate the predicate from the current column spelling.
+func descColumnLikeInstaller(stmt *tree.ShowColumns, pattern string) func() {
+	savedLike := stmt.Like
+	stmt.Like = tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal(pattern, pattern, false, tree.P_char))
+	return func() {
+		stmt.Like = savedLike
+	}
+}
+
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -679,6 +694,31 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		colNameOrigin := col.GetOriginCaseName()
 		colIdToOriginName[col.ColId] = colNameOrigin
 		colNameToOriginName[col.Name] = colNameOrigin
+	}
+
+	// DESCRIBE tbl col_name is MySQL's shortcut for SHOW COLUMNS FROM tbl
+	// LIKE 'col_name': reuse the LIKE filter returnByLikeAndSQL composes.
+	// An exact column keeps its stored case via the origin-name map, so
+	// `desc tbl mixcase` still finds `MixCase`; anything else preserves the
+	// argument's original spelling so %/_ patterns match exactly like the
+	// equivalent public SHOW COLUMNS ... LIKE, and a missing name yields
+	// the empty set. The literal is the parser's own value-level string
+	// literal (NumVal/P_char), never spliced SQL text.
+	// DESCRIBE tbl col_name keeps the physical catalog map as the authority
+	// for ordinary targets. User views are excluded here: their rows come
+	// from the live logical description resolved (and subscription-bound)
+	// further below, which must also own the filter's exact-name spelling
+	// even when the physical map still hits with a stale stored origin
+	// (#32197 review F1/F2).
+	if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil &&
+		!isUserViewMetadata(dbName, tableDef) {
+		pattern := stmt.ColName.ColNameOrigin()
+		if origin, ok := colNameToOriginName[stmt.ColName.ColName()]; ok {
+			pattern = origin
+		} else if origin, ok := colNameToOriginName[pattern]; ok {
+			pattern = origin
+		}
+		defer descColumnLikeInstaller(stmt, pattern)()
 	}
 
 	var sub *SubscriptionMeta
@@ -786,9 +826,29 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
-		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
+		columns, liveCols, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
+		}
+		// F1: this live description owns the DESCRIBE filter's exact-name
+		// spelling even when the physical column map hits with a stale stored
+		// origin. F2: it is the same resolved, subscription-bound description
+		// instance that produced the row source, so a published view derives
+		// from the publisher-side binding exactly like its rows; a live miss
+		// keeps the authored spelling (unknown-name semantics unchanged).
+		if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil {
+			descPattern := stmt.ColName.ColNameOrigin()
+			for _, col := range liveCols {
+				if col.Hidden {
+					continue
+				}
+				if strings.EqualFold(col.Name, stmt.ColName.ColName()) ||
+					strings.EqualFold(col.GetOriginCaseName(), descPattern) {
+					descPattern = col.GetOriginCaseName()
+					break
+				}
+			}
+			defer descColumnLikeInstaller(stmt, descPattern)()
 		}
 		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
 		viewDependencies = dependencies

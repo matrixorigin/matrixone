@@ -443,9 +443,9 @@ func doComQueryInBack(
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:          backSes.respr.GetStr(USERNAME),
+		User:          backSes.GetResponser().GetStr(USERNAME),
 		Host:          pu.SV.Host,
-		Database:      backSes.respr.GetStr(DBNAME),
+		Database:      backSes.GetResponser().GetStr(DBNAME),
 		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
@@ -1236,7 +1236,7 @@ func (backSes *backSession) initFeSes(
 	backSes.derivedStmt = false
 	backSes.label = make(map[string]string)
 	backSes.timeZone = ses.GetTimeZone()
-	backSes.respr = defResper
+	backSes.setResponser(defResper)
 	backSes.service = ses.GetService()
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
@@ -1391,7 +1391,7 @@ func (backSes *backSession) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := backSes.respr.GetU32(CONNID)
+	routineId := backSes.GetResponser().GetU32(CONNID)
 	// Optimize: use strconv instead of fmt.Sprintf
 	var buf [24]byte
 	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)

@@ -15,8 +15,10 @@
 package aggexec
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,6 +33,134 @@ func initAggResultWithBytesTypeResult(
 	res.init(mp, resultType, setEmptyGroupToNull, hasDistinct)
 	res.InitialValue = []byte(initialValue)
 	return res
+}
+
+func TestPreallocatedResultGrowthAcrossChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		initial, additional int
+	}{
+		{"first_chunk", 0, 3},
+		{"two_full_chunks", 0, 8},
+		{"three_full_chunks", 0, 12},
+		{"partial_third_chunk", 0, 9},
+		{"partial_then_full", 2, 10},
+		{"full_then_full", 4, 8},
+	} {
+		for _, preallocate := range []bool{false, true} {
+			for _, withEmpty := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/preallocate=%t/empty=%t", tc.name, preallocate, withEmpty), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), withEmpty, 0, false)
+					t.Cleanup(func() { ret.free(); require.Zero(t, mp.CurrNB()) })
+					ret.optInformation.chunkSize = 4
+					if tc.initial > 0 {
+						require.NoError(t, ret.grows(tc.initial))
+					}
+					if preallocate {
+						require.NoError(t, ret.preExtend(tc.additional))
+						require.Equal(t, tc.initial, ret.resultList[0].Length())
+						for _, chunk := range ret.resultList[1:] {
+							require.Zero(t, chunk.Length())
+						}
+					}
+					require.NoError(t, ret.grows(tc.additional))
+					count := tc.initial + tc.additional
+					require.Len(t, ret.values, (count+3)/4)
+					// A subsequent grow must continue at the last occupied chunk.
+					require.NoError(t, ret.grows(1))
+					count++
+					for i := 0; i < count; i++ {
+						ret.values[i/4][i%4] = int64(i + 1)
+						if withEmpty {
+							ret.bsFromEmptyList[i/4][i%4] = i%3 == 0
+						}
+					}
+					output := ret.flushAll()
+					t.Cleanup(func() {
+						for _, chunk := range output {
+							chunk.Free(mp)
+						}
+					})
+					require.Len(t, output, (count+3)/4)
+					for i, chunk := range output {
+						require.Equal(t, min(4, count-i*4), chunk.Length())
+						for j, value := range vector.MustFixedColNoTypeCheck[int64](chunk) {
+							index := i*4 + j
+							require.Equal(t, int64(index+1), value)
+							require.Equal(t, withEmpty && index%3 == 0, chunk.IsNull(uint64(j)))
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestResultGrowthDoesNotExtendFullChunk(t *testing.T) {
+	mp := mpool.MustNewZero()
+	ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
+	t.Cleanup(func() { ret.free(); require.Zero(t, mp.CurrNB()) })
+	ret.optInformation.chunkSize = AggBatchSize
+	require.NoError(t, ret.grows(AggBatchSize))
+	resultBytes, emptyBytes := ret.resultList[0].Allocated(), ret.emptyList[0].Allocated()
+	require.NoError(t, ret.grows(0))
+	require.Equal(t, resultBytes, ret.resultList[0].Allocated())
+	require.Equal(t, emptyBytes, ret.emptyList[0].Allocated())
+	require.NoError(t, ret.grows(1))
+	require.Equal(t, resultBytes, ret.resultList[0].Allocated())
+	require.Equal(t, emptyBytes, ret.emptyList[0].Allocated())
+	checkRowDistribution(t, []int{AggBatchSize, 1}, ret.resultList)
+}
+
+func TestResultGrowthFailureCleansPartialChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		freeBelow       int64
+		completed       int
+		allocatedResult bool
+	}{
+		{"result", 65536, 0, false},
+		{"empty", 73728, 0, true},
+		{"after_one_chunk", 110000, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const limit = int64(1 << 20)
+			mp, err := mpool.NewMPool("result-growth-failure", limit, mpool.NoFixed)
+			require.NoError(t, err)
+			ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
+			var ballast [][]byte
+			t.Cleanup(func() {
+				ret.free()
+				for _, b := range ballast {
+					mp.Free(b)
+				}
+				require.Zero(t, mp.CurrNB())
+				mpool.DeleteMPool(mp)
+			})
+			ret.optInformation.chunkSize = AggBatchSize
+			require.NoError(t, ret.grows(AggBatchSize))
+			resultBytes, emptyBytes := ret.resultList[0].Allocated(), ret.emptyList[0].Allocated()
+			for i := 0; i < 300 && limit-mp.CurrNB() >= tc.freeBelow; i++ {
+				b, allocErr := mp.Alloc(4096, true)
+				require.NoError(t, allocErr)
+				ballast = append(ballast, b)
+			}
+			err = ret.grows(2 * AggBatchSize)
+			require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
+			require.Equal(t, resultBytes, ret.resultList[0].Allocated())
+			require.Equal(t, emptyBytes, ret.emptyList[0].Allocated())
+			require.Len(t, ret.resultList, 2+tc.completed)
+			if tc.completed != 0 {
+				require.Equal(t, AggBatchSize, ret.resultList[1].Length())
+			}
+			if tc.allocatedResult {
+				require.Positive(t, ret.resultList[1].Allocated())
+				require.Zero(t, ret.emptyList[1].Allocated())
+			}
+			require.Zero(t, ret.resultList[len(ret.resultList)-1].Length())
+		})
+	}
 }
 
 // there is very important to check the result's extendResultPurely first.
