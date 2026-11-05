@@ -24,7 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var errOptionalIndexBudget = errors.New("optional membership index budget exceeded")
+// Match this sentinel by identity, not ErrInternal or its message: unrelated
+// internal errors must still propagate instead of becoming index-free success.
+var errOptionalIndexBudget = moerr.NewInternalErrorNoCtx("optional membership index budget exceeded")
 
 // overhead bounds key/executor scratch independently of distinct-key count.
 // limit is the initial incremental budget; admit also checks current headroom.

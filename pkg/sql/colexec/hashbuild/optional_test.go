@@ -192,7 +192,7 @@ func (e reviewEvalHook) Eval(p *process.Process, b []*batch.Batch, s []bool) (*v
 }
 
 func TestOptionalIndexPartialFailure(t *testing.T) {
-	for _, mode := range []string{"oom", "pool limit", "headroom loss", "error", "cancel"} {
+	for _, mode := range []string{"oom", "pool limit", "headroom loss", "error", "same internal error", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			limit := int64(32 << 20)
 			if mode == "headroom loss" {
@@ -230,6 +230,11 @@ func TestOptionalIndexPartialFailure(t *testing.T) {
 			})
 			require.NoError(t, b.Prepare(proc))
 			sentinel := moerr.NewInvalidInputNoCtx("injected expression failure")
+			if mode == "same internal error" {
+				sentinel = moerr.NewInternalErrorNoCtx("optional membership index budget exceeded")
+				require.Equal(t, errOptionalIndexBudget.Error(), sentinel.Error())
+				require.True(t, moerr.IsMoErrCode(sentinel, moerr.ErrInternal))
+			}
 			b.ctr.hashmapBuilder.executors[0] = reviewEvalHook{b.ctr.hashmapBuilder.executors[0], func() error {
 				require.NotNil(t, b.ctr.hashmapBuilder.IntHashMap, "failure after index allocation")
 				if mode == "cancel" {
