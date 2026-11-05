@@ -387,6 +387,8 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
+	primaryAffected := alterColumnIsPrimary(tableDef, column)
+
 	// We only support dropping column with single-value none Primary Key index covered now.
 	if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
 		return column.Primary, err
@@ -416,7 +418,7 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return primaryAffected, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
