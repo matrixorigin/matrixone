@@ -19,6 +19,8 @@ x-mo-common: &mo-common
       - ../../coverage:/coverage
     restart: on-failure
     tty: true
+    # Allow instrumented services to finish shutdown and flush coverage.
+    stop_grace_period: 120s
 
 
 services:

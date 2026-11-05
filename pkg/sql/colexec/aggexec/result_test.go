@@ -33,6 +33,50 @@ func initAggResultWithBytesTypeResult(
 	return res
 }
 
+func TestPreallocatedResultGrowthAcrossChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		initial, additional int
+	}{
+		{"first_chunk", 0, 4},
+		{"two_full_chunks", 0, 8},
+		{"partial_third_chunk", 0, 9},
+		{"three_full_chunks", 0, 12},
+		{"partial_then_full", 2, 10},
+		{"full_then_full", 4, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
+			t.Cleanup(func() { ret.free(); require.Zero(t, mp.CurrNB()) })
+			ret.optInformation.chunkSize = 4
+			if tc.initial > 0 {
+				require.NoError(t, ret.grows(tc.initial))
+			}
+			require.NoError(t, ret.preExtend(12-tc.initial))
+			require.NoError(t, ret.grows(tc.additional))
+			count := tc.initial + tc.additional
+			require.Equal(t, (count+3)/4, len(ret.values))
+			for i := 0; i < count; i++ {
+				ret.values[i/4][i%4] = int64(i + 1)
+				ret.bsFromEmptyList[i/4][i%4] = i%3 == 0
+			}
+			output := ret.flushAll()
+			t.Cleanup(func() {
+				for _, chunk := range output {
+					chunk.Free(mp)
+				}
+			})
+			require.Equal(t, (count+3)/4, len(output))
+			for i := 0; i < count; i++ {
+				chunk, row := output[i/4], i%4
+				require.Equal(t, int64(i+1), vector.GetFixedAtNoTypeCheck[int64](chunk, row))
+				require.Equal(t, i%3 == 0, chunk.IsNull(uint64(row)))
+			}
+		})
+	}
+}
+
 // there is very important to check the result's extendResultPurely first.
 //
 // we do test for the following three cases:

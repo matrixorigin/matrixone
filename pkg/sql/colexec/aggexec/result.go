@@ -231,7 +231,12 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
-		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
+		if i >= len(flags) || len(flags[i]) == 0 {
+			continue
+		}
+		if err := rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp); err != nil {
+			return err
+		}
 	}
 	if err := rvec.MarshalBinaryWithBuffer(buf); err != nil {
 		return err
@@ -244,7 +249,12 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
-			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
+			if i >= len(flags) || len(flags[i]) == 0 {
+				continue
+			}
+			if err := mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp); err != nil {
+				return err
+			}
 		}
 		if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
 			return err
@@ -425,6 +435,9 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 //
 // do not call this method directly, plz use the preExtend and extendResult.
 func (r *optSplitResult) extendResultPurely(more int) error {
+	if more == 0 {
+		return nil
+	}
 
 	// try tp full the using part first.
 	l1 := r.resultList[r.nowIdx1].Length()
@@ -437,11 +450,14 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 		r.setLengthPartK(r.nowIdx1, l1+more)
 		return nil
 	}
-	if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
-		return err
+	// Vector.PreExtend(0) reserves one row, so skip an already full chunk.
+	if maxToExtendWithinTheUsingPart > 0 {
+		if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
+			return err
+		}
+		r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
+		more -= maxToExtendWithinTheUsingPart
 	}
-	r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
-	more -= maxToExtendWithinTheUsingPart
 
 	// try to full the allocated part first.
 	maxToExtendWithoutPartAppend := (len(r.resultList) - 1 - r.nowIdx1) * r.optInformation.chunkSize
@@ -462,6 +478,8 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 				return err
 			}
 			r.setLengthPartK(r.nowIdx1, rowMore)
+		} else {
+			r.nowIdx1 += fullPart - 1
 		}
 		return nil
 	}
@@ -478,7 +496,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	for i := 0; i < apFullPart; i++ {
 		k := r.appendPartK()
 		if err := r.extendMoreToKthGroup(k, r.optInformation.chunkSize); err != nil {
-			return nil
+			return err
 		}
 		r.setLengthPartK(k, r.optInformation.chunkSize)
 	}

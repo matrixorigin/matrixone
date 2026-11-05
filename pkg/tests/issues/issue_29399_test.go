@@ -485,6 +485,8 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count))
 		execSQLRequire(t, ctx, admin, "revoke reader from u")
+		// Denial on CN1 must observe the revocation committed through CN0.
+		syncAuthenticatedClusterCommit(t, ctx, c)
 		t.Run("revoked primary role", func(t *testing.T) {
 			err := conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count)
 			require.ErrorContains(t, err, "do not have privilege")
