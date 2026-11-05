@@ -205,8 +205,10 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 	// The child PROJECT is detached and its columns are substituted into their readers, a
 	// copy per reference. An expression exprCanRemoveProject rejects (rand(), uuid(), now())
 	// must not be copied: with the SORT anchor every ancestor reads it, with the PROJECT
-	// anchor only that node does, so there it may be read once.
-	if childNode != nil && !vectorChildProjectIsDetachable(projNode, childNode, orderExpr) {
+	// anchor only that node does, so there it may be read once. Its pagination bounds the
+	// rows ranked, so a paginated child PROJECT keeps the exact path.
+	if childNode != nil && (childNode.Limit != nil || childNode.Offset != nil ||
+		!vectorChildProjectIsDetachable(projNode, childNode, orderExpr)) {
 		return nil
 	}
 

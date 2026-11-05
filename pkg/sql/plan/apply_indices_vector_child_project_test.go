@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"context"
 	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -61,21 +63,26 @@ func TestVectorTopKKeepsDerivedTablePagination(t *testing.T) {
 		"select id, r from (select id, v, rand() r from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2",
 		"select id, r from (select v, id, rand() r from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2 by rank with option 'mode=post'",
 		"select id from (select id, v from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2",
+		"select id from (select v, id from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2",
 	}
 	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString()} {
 		for _, sql := range queries {
-			query := buildBooleanFullTextPublicPlan(t, sql, false, false, algo)
-			inner := false
-			for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
-				if n.NodeType == planpb.Node_INDEX_SEARCH_SCAN {
-					t.Fatalf("%s: index search over a paginated derived table: %s", algo, sql)
+			for _, hints := range []string{"", "pushDownLimitToScan=1"} {
+				cc := newFullTextJoinMockCompilerContext(t)
+				cc.SetContext(context.WithValue(cc.GetContext(), defines.OptimizerHints{}, hints))
+				query, _ := buildBooleanFullTextPublicPlanIn(t, cc, sql, false, false, algo)
+				inner := false
+				for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
+					if n.NodeType == planpb.Node_INDEX_SEARCH_SCAN {
+						t.Fatalf("%s %s: index search over a paginated derived table: %s", algo, hints, sql)
+					}
+					if limit, ok := getLiteralUint64(n.Limit); ok && limit == 1 {
+						offset, ok := getLiteralUint64(n.Offset)
+						inner = inner || (ok && offset == 1)
+					}
 				}
-				if limit, ok := getLiteralUint64(n.Limit); ok && limit == 1 {
-					offset, ok := getLiteralUint64(n.Offset)
-					inner = inner || (ok && offset == 1)
-				}
+				require.True(t, inner, "%s %s: inner LIMIT 1 OFFSET 1 lost: %s", algo, hints, sql)
 			}
-			require.True(t, inner, "%s: inner LIMIT 1 OFFSET 1 lost: %s", algo, sql)
 		}
 	}
 }
