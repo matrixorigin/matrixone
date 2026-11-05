@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -292,6 +293,10 @@ func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pb
 }
 
 func withInventoryCASCluster(t *testing.T, fn func(embed.Cluster)) {
+	withInventoryCASClusterThreshold(t, 0, fn)
+}
+
+func withInventoryCASClusterThreshold(t *testing.T, threshold time.Duration, fn func(embed.Cluster)) {
 	t.Helper()
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
 		s.Adjust(func(cfg *embed.ServiceConfig) {
@@ -306,7 +311,7 @@ func withInventoryCASCluster(t *testing.T, fn func(embed.Cluster)) {
 				}
 			}
 			if cfg.ServiceType == "CN" {
-				cfg.CN.Engine.CNTransferTxnLifespanThreshold = 0
+				cfg.CN.Engine.CNTransferTxnLifespanThreshold = threshold
 			}
 		})
 	}))
@@ -424,5 +429,70 @@ func TestInventoryCASPessimisticRC(t *testing.T) {
 		require.Equal(t, 1, count)
 		require.Equal(t, 2, epoch)
 		exec("drop database nr_pess_probe")
+	})
+}
+
+// Share one cluster: both cases have the same topology/configuration and use
+// distinct tables/transactions. A long transfer threshold makes the pre-commit
+// revalidation the sole guard after the deliberately failed explicit advance.
+func TestInventoryCASFailedValidationCommit(t *testing.T) {
+	withInventoryCASClusterThreshold(t, time.Hour, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		value, ok := moruntime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+		require.True(t, ok)
+		sqlExec := value.(executor.SQLExecutor)
+		opts := executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied()
+		exec := func(q string) { t.Helper(); r, e := sqlExec.Exec(ctx, q, opts); require.NoError(t, e); r.Close() }
+		exec("create database cas_failed_validation")
+		defer exec("drop database cas_failed_validation")
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		for _, cancelled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cancelled=%v", cancelled), func(t *testing.T) {
+				table := fmt.Sprintf("cas_failed_validation.t%v", cancelled)
+				exec("create table " + table + "(id int primary key,epoch int)")
+				exec("insert into " + table + " values(1,1)")
+				err := sqlExec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+					op := tx.Txn()
+					defer op.Rollback(ctx)
+					r, e := tx.Exec("update "+table+" set epoch=2 where id=1 and epoch=1", executor.StatementOption{})
+					require.NoError(t, e)
+					require.EqualValues(t, 1, r.AffectedRows)
+					r.Close()
+					ws := op.GetWorkspace().(*disttae.Transaction)
+					before := op.SnapshotTS()
+					exec("update " + table + " set epoch=3 where id=1")
+					if cancelled {
+						// Model cancellation after RC read visibility has already advanced.
+						op.SetSnapshotTS(cn.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS().Next())
+						failed, stop := context.WithCancel(ctx)
+						stop()
+						require.ErrorIs(t, ws.AdvanceSnapshot(failed, op.SnapshotTS()), context.Canceled)
+					} else {
+						require.Error(t, ws.AdvanceSnapshot(ctx, pbtxn.TxnMeta{}.SnapshotTS))
+					}
+					require.True(t, before.Less(op.SnapshotTS()), "read snapshot really advanced")
+					e = op.Commit(ctx)
+					require.Error(t, e, "fresh-context COMMIT must revalidate the retained dependency")
+					require.Contains(t, e.Error(), "conflict")
+					return e
+				}, opts.WithTxnMode(pbtxn.TxnMode_Optimistic).WithTxnIsolation(pbtxn.TxnIsolation_RC))
+				require.Error(t, err)
+				rows, e := db.QueryContext(ctx, "select id,epoch from "+table)
+				require.NoError(t, e)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				var id, epoch int
+				require.NoError(t, rows.Scan(&id, &epoch))
+				require.Equal(t, 1, id)
+				require.Equal(t, 3, epoch)
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			})
+		}
 	})
 }
