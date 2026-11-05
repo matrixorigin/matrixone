@@ -126,10 +126,12 @@ func TestTableMetaReaderMaterializesVisibleRows(t *testing.T) {
 	cancelFS := cancelMaterializationWriteFS{FileService: fs, cancel: cancel}
 	cancelReader := &TableMetaReader{table: tbl, fs: cancelFS, snapshot: types.BuildTS(2, 0), txnOffset: boundary, pState: state, sinkerOption: txn.SinkerCapacityOption()}
 	beforeCancelWrites := len(failFS.persistedSnapshot())
+	beforeCancelMemory := mp.CurrNB()
 	cancelOut := colexec.AllocCNS3ResultBat(false)
 	_, err = cancelReader.collectDataOfAObjsAndInMem(cancelCtx, mp, cancelOut, seqs, attrs, typs, readutil.ObjListRelData{})
 	cancelOut.Clean(mp)
 	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, beforeCancelMemory, mp.CurrNB(), "canceled reader and writer release their batches")
 	persisted := failFS.persistedSnapshot()
 	require.Len(t, persisted, beforeCancelWrites+1)
 	canceledName := persisted[len(persisted)-1]
@@ -251,4 +253,22 @@ func TestTableMetaReaderMaterializesAppendableVisibility(t *testing.T) {
 		}
 	}
 	require.Equal(t, []int64{2, 3}, live)
+
+	// Fail the actual mixed-object collection after the replacement object is
+	// persisted. The already committed shared source must survive cleanup.
+	fs.armPostPersistFailure(func() bool { return true })
+	failedOut := colexec.AllocCNS3ResultBat(false)
+	_, err = r.collect(ctx, mp, failedOut, false, seqs, attrs, typs)
+	failedOut.Clean(mp)
+	require.ErrorContains(t, err, "injected post-persist fs write failure")
+	failedName := fs.failedAtName()
+	require.NotEmpty(t, failedName)
+	fs.stopPostPersistFailure()
+	txn.Lock()
+	txn.drainUnpublishedDumpReservationsLocked(drainUnpublishedDumpReservationsTerminalReason)
+	txn.handoffPendingObjectCleanup()
+	txn.Unlock()
+	require.NoError(t, txn.engine.DrainUnpublishedPendingForTest(ctx))
+	issue25590RequireGone(t, fs, failedName, "failed replacement is reclaimed")
+	issue25590RequireKept(t, fs, shared.ObjectName().String(), "committed shared source survives mixed collection failure")
 }
