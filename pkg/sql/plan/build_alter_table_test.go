@@ -901,6 +901,8 @@ func TestAlterPrimaryKeyDropControls(t *testing.T) {
 			base.Pkey.Cols = base.Pkey.Cols[2:]
 			base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
 			base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			base.Pkey.CompPkeyCol.Primary = true
+			base.Cols[0].Primary = false
 			base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
 			idx := *mock.ctxt.tables["single_idx_t"].Indexes[0]
 			idx.Parts = []string{"ps_availqty"}
@@ -909,7 +911,8 @@ func TestAlterPrimaryKeyDropControls(t *testing.T) {
 			if triple {
 				base.Pkey.Names = append(base.Pkey.Names, "ps_supplycost")
 				base.Pkey.Cols = append(base.Pkey.Cols, base.Cols[3].ColId)
-				base.Cols[3].Primary = true
+				assert.False(t, base.Cols[3].Primary)
+				assert.Equal(t, []string{"ps_partkey", "ps_suppkey", "ps_supplycost"}, base.Pkey.Names)
 				clause = "drop column ps_supplycost"
 			}
 			p, err := buildSingleStmt(mock, t, "alter table tpch.partsupp "+clause)
@@ -922,7 +925,8 @@ func TestAlterPrimaryKeyDropControls(t *testing.T) {
 			}
 			assert.False(t, alter.Options.SkipIndexesCopy[idx.IndexName])
 			if triple {
-				assert.Len(t, alter.CopyTableDef.Pkey.Names, 2)
+				assert.Equal(t, []string{"ps_partkey", "ps_suppkey"}, alter.CopyTableDef.Pkey.Names)
+				assert.Equal(t, catalog.CPrimaryKeyColName, alter.CopyTableDef.Pkey.PkeyColName)
 			}
 		})
 	}
