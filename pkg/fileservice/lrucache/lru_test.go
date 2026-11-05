@@ -79,7 +79,10 @@ func keys(c *Cache[string, int]) []string {
 		s.mu.Unlock()
 	}
 	slices.SortFunc(items, func(a, b *item[string, int]) int { return cmp.Compare(b.stamp, a.stamp) })
-	var out []string
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
 	for _, it := range items {
 		out = append(out, it.key)
 	}
