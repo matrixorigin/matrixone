@@ -1,0 +1,41 @@
+drop account if exists mts_size_a;
+drop account if exists mts_size_b;
+create account mts_size_a admin_name 'admin' identified by '111' comment 'storage size a';
+create account mts_size_b admin_name 'admin' identified by '111' comment 'storage size b';
+create database size_db;
+create table size_db.t (v int);
+insert into size_db.t values (1), (2);
+create database size_db;
+create table size_db.t (v int);
+insert into size_db.t values (1), (2), (3), (4);
+show accounts like 'mts_size_a';
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110257  ¦  0.0  ¦  storage size a
+show accounts like 'mts_size_b';
+-- @regex("(?m)^mts_size_b  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size b(  𝄀)?$",true)
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_b  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110349  ¦  0.0  ¦  storage size b
+show accounts like 'mts_size_%';
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+-- @regex("(?m)^mts_size_b  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size b(  𝄀)?$",true)
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110257  ¦  0.0  ¦  storage size a  𝄀
+mts_size_b  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110349  ¦  0.0  ¦  storage size b
+show accounts;
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110257  ¦  0.0  ¦  storage size a
+drop table size_db.t;
+show accounts like 'mts_size_a';
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  82  ¦  0.110166  ¦  0.0  ¦  storage size a
+show accounts like 'mts_size_%';
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+-- @regex("(?m)^mts_size_b  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size b(  𝄀)?$",true)
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  82  ¦  0.110166  ¦  0.0  ¦  storage size a  𝄀
+mts_size_b  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110349  ¦  0.0  ¦  storage size b
+drop account mts_size_a;
+drop account mts_size_b;
