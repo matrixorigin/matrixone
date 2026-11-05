@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -854,6 +855,75 @@ func TestAlterCompositePrimaryKeyRebuildsIndexes(t *testing.T) {
 				return
 			}
 			assert.False(t, alter.Options.SkipIndexesCopy[idx.IndexName])
+		})
+	}
+}
+
+func TestAlterCopyIndexControls(t *testing.T) {
+	for _, table := range []string{"single_idx_t", "fake_pk_t"} {
+		t.Run(table, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			base := mock.ctxt.tables[table]
+			// Add a distinct ordinary/unique index while retaining the fixture's index.
+			idx := *mock.ctxt.tables["single_idx_t"].Indexes[0]
+			if table == "single_idx_t" {
+				idx = *mock.ctxt.tables["fake_pk_t"].Indexes[0]
+				idx.Parts = []string{"id"}
+			} else {
+				idx.Parts = []string{"a"}
+			}
+			base.Indexes = append(base.Indexes, &idx)
+			base.Cols = append(base.Cols, &ColDef{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 10}, Default: &plan.Default{NullAbility: true}})
+			p, err := buildSingleStmt(mock, t, "alter table constraint_test."+table+" modify column payload varchar(20), algorithm=copy")
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			if !assert.NotNil(t, alter) || !assert.Len(t, alter.CopyTableDef.Indexes, 2) {
+				return
+			}
+			for _, index := range alter.CopyTableDef.Indexes {
+				assert.True(t, alter.Options.SkipIndexesCopy[index.IndexName], index.IndexName)
+			}
+			if table == "fake_pk_t" {
+				assert.Equal(t, 2, strings.Count(alter.InsertTmpDataSql, "`"+catalog.FakePrimaryKeyColName+"`"))
+			}
+		})
+	}
+}
+
+func TestAlterPrimaryKeyDropControls(t *testing.T) {
+	for _, triple := range []bool{false, true} {
+		t.Run(fmt.Sprintf("triple=%v", triple), func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			base := mock.ctxt.tables["partsupp"]
+			base.Pkey.Names = base.Pkey.Names[2:]
+			base.Pkey.Cols = base.Pkey.Cols[2:]
+			base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
+			base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
+			idx := *mock.ctxt.tables["single_idx_t"].Indexes[0]
+			idx.Parts = []string{"ps_availqty"}
+			base.Indexes = []*plan.IndexDef{&idx}
+			clause := "modify column ps_partkey bigint, drop column ps_comment"
+			if triple {
+				base.Pkey.Names = append(base.Pkey.Names, "ps_supplycost")
+				base.Pkey.Cols = append(base.Pkey.Cols, base.Cols[3].ColId)
+				base.Cols[3].Primary = true
+				clause = "drop column ps_supplycost"
+			}
+			p, err := buildSingleStmt(mock, t, "alter table tpch.partsupp "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			if !assert.NotNil(t, alter) || !assert.Len(t, alter.CopyTableDef.Indexes, 1) {
+				return
+			}
+			assert.False(t, alter.Options.SkipIndexesCopy[idx.IndexName])
+			if triple {
+				assert.Len(t, alter.CopyTableDef.Pkey.Names, 2)
+			}
 		})
 	}
 }
