@@ -803,6 +803,8 @@ func TestAlterPrimaryKeyImpactPersistsAcrossClauses(t *testing.T) {
 		"modify column id bigint, add column extra int",
 		"add column extra int, modify column id bigint",
 		"modify column id bigint, modify column val bigint",
+		"modify column id bigint, change column val value bigint",
+		"modify column id bigint, alter column val set default 5",
 	} {
 		t.Run(clause, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
@@ -827,6 +829,9 @@ func TestAlterCompositePrimaryKeyRebuildsIndexes(t *testing.T) {
 		"modify column ps_suppkey bigint",
 		"change column ps_suppkey renamed bigint",
 		"modify column ps_partkey bigint, add column extra int",
+		"drop column ps_partkey",
+		"drop column ps_suppkey",
+		"modify column ps_partkey bigint, rename column ps_suppkey to renamed",
 	} {
 		t.Run(clause, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
