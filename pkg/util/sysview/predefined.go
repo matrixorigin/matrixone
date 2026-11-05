@@ -1096,7 +1096,7 @@ var (
 		// index tables do not leak in as ordinary-table rows; stats stay
 		// one evaluation per row on the real base or physical partition
 		// identity (coalesce above).
-		" AND NOT startswith(`tbl`.`relname`, '" + catalog.IndexTableNamePrefix + "')" +
+		" AND " + catalog.NonIndexRelationSQLPredicate("tbl") +
 		" AND " + catalog.NonTemporaryTableSQLPredicate("tbl") +
 		" AND `tbl`.`relname` != '" + catalog.MO_ACCOUNT_LOCK + "'" +
 		" AND `tbl`.`relkind` NOT IN ('" + catalog.SystemPartitionRel + "', '" +

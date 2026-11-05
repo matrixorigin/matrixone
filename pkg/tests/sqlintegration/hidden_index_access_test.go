@@ -346,6 +346,8 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		func() {
 			exec(admin, "set experimental_fulltext_index=1")
 			exec(admin, "create table hidden_access_db.docs(id bigint primary key,body text,fulltext index ft(body))")
+			exec(user, "create table hidden_access_db.partitioned(id int) partition by range(id) (partition p0 values less than (10), partition p1 values less than (100))")
+			exec(user, "insert into hidden_access_db.partitioned values(1),(11)")
 			exec(user, "insert into hidden_access_db.docs values(1,'aurora'),(2,'nebula')")
 			var matchedID int
 			require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.docs where match(body) against('aurora' in natural language mode)>0").Scan(&matchedID))
@@ -367,6 +369,7 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 				"show tables from hidden_access_db",
 				"show full tables from hidden_access_db",
 				"select table_name,table_rows,data_length from information_schema.tables where table_schema='hidden_access_db'",
+				"select table_name,table_rows,data_length from information_schema.partitions where table_schema='hidden_access_db' and table_name in ('renamed_child','t')",
 			} {
 				func() {
 					rows, err := user.QueryContext(ctx, query)
@@ -389,6 +392,20 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 					require.True(t, sawBase, query)
 				}()
 			}
+			func() {
+				rows, err := user.QueryContext(ctx, "select partition_name,table_rows,data_length from information_schema.partitions where table_schema='hidden_access_db' and table_name='partitioned' order by partition_ordinal_position")
+				require.NoError(t, err)
+				defer rows.Close()
+				var partitions []string
+				for rows.Next() {
+					var name string
+					var rowCount, size sql.NullInt64
+					require.NoError(t, rows.Scan(&name, &rowCount, &size))
+					partitions = append(partitions, name)
+				}
+				require.NoError(t, rows.Err())
+				require.Equal(t, []string{"p0", "p1"}, partitions)
+			}()
 			for _, tableKeyword := range []string{"table ", ""} {
 				_, err := admin.ExecContext(ctx, "grant select on "+tableKeyword+renamed+" to hidden_access_role")
 				var grantError *mysql.MySQLError

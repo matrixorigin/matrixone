@@ -131,7 +131,7 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.NotContains(t, InformationSchemaPartitionsDDL, "INNER JOIN")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`")
-	assert.Contains(t, InformationSchemaPartitionsDDL, "AND NOT startswith(`tbl`.`relname`, '__mo_index_')")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND "+catalog.NonIndexRelationSQLPredicate("tbl"))
 	assert.NotContains(t, InformationSchemaPartitionsDDL, "NOT LIKE '__mo_index_%'")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "AND `tbl`.`relkind` NOT IN ('partition', 'v', 'S')")
 	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
