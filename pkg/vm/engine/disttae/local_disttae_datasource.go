@@ -517,9 +517,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
-		ls.batchPrefetch(seqNums)
-	}
+	ls.batchPrefetch(ctx, seqNums)
 
 	for {
 		switch ls.iteratePhase {
@@ -829,29 +827,33 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 
 		if offsets == nil {
-			// apply pk filter on workspace entries
-			if enableFilter {
-				skipMask = objectio.GetReusableBitmap()
-				put := ls.table.db.getEng().packerPool.Get(&packer)
-				ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
-				put.Put()
-			}
-
-			// apply bf filter on workspace entries
-			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-				if !skipMask.IsValid() {
+			func() {
+				defer func() { skipMask.Release() }()
+				// apply pk filter on workspace entries
+				if enableFilter {
 					skipMask = objectio.GetReusableBitmap()
+					func() {
+						put := ls.table.db.getEng().packerPool.Get(&packer)
+						defer put.Put()
+						ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+					}()
 				}
-				bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
-				ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
-					if !exist {
-						skipMask.Add(uint64(row))
-					}
-				})
-			}
 
-			offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
-			skipMask.Release()
+				// apply bf filter on workspace entries
+				if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+					if !skipMask.IsValid() {
+						skipMask = objectio.GetReusableBitmap()
+					}
+					bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+					ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+						if !exist {
+							skipMask.Add(uint64(row))
+						}
+					})
+				}
+
+				offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+			}()
 		}
 
 		if len(offsets) == 0 {
@@ -1030,16 +1032,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if i == physicalColumnPos {
 					continue
 				}
-
-				var idx uint16
-				switch seqNums[i] {
-				case objectio.SEQNUM_COMMITTS:
-					// in-memory committed row batch layout:
-					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
-					idx = 1
-				default:
-					idx = 2 /*rowid and commits*/ + seqNums[i]
+				if seqNums[i] == objectio.SEQNUM_COMMITTS {
+					// Replayed rows keep commit time on RowEntry, not in the
+					// retained batch's zero-length timestamp vector.
+					if err = vector.AppendFixed(outBatch.Vecs[i], entry.Time, false, mp); err != nil {
+						return err
+					}
+					continue
 				}
+
+				idx := 2 /*rowid and commits*/ + seqNums[i]
 
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
@@ -1073,12 +1075,21 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if deletedMask.Count() > 0 {
 			delInFile += deletedMask.Count()
 			if physicalColumnPos == -1 {
-				physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				if err := physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 
 				// negative shrink requires the bat sorted already
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt))
+				if err := outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 			} else {
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				if err := outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 			}
 		}
 
@@ -1773,7 +1784,7 @@ func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
 	return &i.current, nil
 }
 
-func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	if ls.rc.prefetchDisabled {
 		return
 	}
@@ -1787,6 +1798,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
+	policy := fileservice.GetFileServicePolicy(ctx)
 	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
 		blk := ls.rangeSlice.Get(idx)
@@ -1795,6 +1807,9 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		}
 
 		preObj = *blk.BlockID.Object()
+		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+			continue
+		}
 
 		// prefetch blk data
 		err := ioutil.Prefetch(

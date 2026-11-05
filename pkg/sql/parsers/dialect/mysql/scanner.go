@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
 const eofChar = 0x100
@@ -58,6 +59,7 @@ type Scanner struct {
 	strBuilder             bytes.Buffer
 	parseControl           *parseControl
 	aliasFollowerLookahead bool
+	soundsPhraseLookahead  bool
 	identifierAfterDot     bool
 }
 
@@ -76,6 +78,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.sqlMode = 0
 	s.parseControl = nil
 	s.aliasFollowerLookahead = false
+	s.soundsPhraseLookahead = false
 	s.identifierAfterDot = false
 
 	if clearLargeOnly {
@@ -302,16 +305,25 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 			return skippedScannerToken, ""
 		case '*':
 			s.inc()
+			start := s.Pos - 2
 			switch s.cur() {
 			case '!':
-				s.CommentFlag = true
 				s.inc()
-				if !s.readVersion() {
+				commentVersion, valid := s.readVersion()
+				if !valid {
 					return LEX_ERROR, ""
 				}
+				if commentVersion > version.MySQLCompatibilityVersion {
+					id, str := s.scanCommentTypeBlock(start)
+					if comments || id == LEX_ERROR {
+						return id, str
+					}
+					return skippedScannerToken, ""
+				}
+				s.CommentFlag = true
 				return skippedScannerToken, ""
 			default:
-				id, str := s.scanCommentTypeBlock()
+				id, str := s.scanCommentTypeBlock(start)
 				if comments || id == LEX_ERROR {
 					return id, str
 				}
@@ -426,7 +438,7 @@ func (s *Scanner) ScanComment() (int, string) {
 			return s.scanCommentTypeLine(2)
 		case '*': // /*
 			s.inc()
-			return s.scanCommentTypeBlock()
+			return s.scanCommentTypeBlock(s.Pos - 2)
 		}
 	}
 	return eofChar, ""
@@ -436,22 +448,21 @@ func EofChar() int {
 	return eofChar
 }
 
-func (s *Scanner) readVersion() bool {
-	if s.Pos < len(s.buf) {
-		if isDigit(s.cur()) {
-			if s.Pos+4 < len(s.buf) {
-				for i := 0; i < 5; i++ {
-					if !isDigit(s.cur()) {
-						return false
-					}
-					s.inc()
-				}
-				return true
-			}
-			return false
+// readVersion consumes the complete immediate ASCII digit run. Unlike MySQL's
+// five-digit format, longer guards are compared as a whole, including leading
+// zeros, so version digits never become SQL tokens. Short guards remain invalid.
+func (s *Scanner) readVersion() (int, bool) {
+	start := s.Pos
+	value := 0
+	const cap = version.MySQLCompatibilityVersion + 1
+	for isDigit(s.cur()) {
+		if value < cap {
+			// value is bounded before multiplication, even for arbitrarily long runs.
+			value = min(value*10+int(s.cur()-'0'), cap)
 		}
+		s.inc()
 	}
-	return true
+	return value, s.Pos == start || s.Pos-start >= 5
 }
 
 func (s *Scanner) stepBackOneChar(ch uint16, comments bool) (int, string) {
@@ -713,9 +724,11 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) 
 }
 
 // scanCommentTypeBlock scans a '/*' delimited comment;
-// assumes the opening prefix has already been scanned
-func (s *Scanner) scanCommentTypeBlock() (int, string) {
-	start := s.Pos - 2
+// assumes the opening prefix has already been scanned. start is the opening
+// slash, including for ignored executable comments whose guard was consumed.
+// Like ordinary block comments, ignored guards end at the first */; they do not
+// interpret SQL quotes or add support for nested comments.
+func (s *Scanner) scanCommentTypeBlock(start int) (int, string) {
 	for {
 		if s.cur() == '*' {
 			s.inc()
@@ -892,6 +905,11 @@ exponent:
 			token = FLOAT
 			s.inc()
 		} else {
+			if !canPromoteToIdentifier {
+				// A dotted mantissa cannot leave an invalid exponent as an alias.
+				s.inc()
+				return LEX_ERROR, s.buf[start:s.Pos]
+			}
 			goto exit
 		}
 		s.scanMantissa(10)
@@ -997,6 +1015,19 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 				return keywordID, keywordName
 			}
 			return ID, keywordName
+		}
+		// SOUNDS is non-reserved, including as an implicit SELECT alias.
+		// Only the two-word predicate needs the keyword token.
+		if lower == "sounds" {
+			if s.soundsPhraseLookahead {
+				return ID, keywordName
+			}
+			lookahead := *s
+			lookahead.soundsPhraseLookahead = true
+			next, _ := lookahead.Scan()
+			if next != LIKE {
+				return ID, keywordName
+			}
 		}
 		if lower == "offset" && !s.aliasFollowerLookahead && !s.offsetClauseAhead() {
 			return ID, keywordName

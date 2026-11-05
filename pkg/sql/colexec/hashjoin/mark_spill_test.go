@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -527,4 +528,113 @@ func TestHashMarkJoinSpilledEmptyBuild(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	_, _, err := registry.CompleteTerminal(account)
 	require.NoError(t, err)
+}
+
+func TestBooleanExistenceMarkNullMasksAndReuse(t *testing.T) {
+	for _, keys := range []int{2, 3} {
+		t.Run(fmt.Sprintf("keys=%d", keys), func(t *testing.T) {
+			typ := types.T_int32.ToType()
+			ts := make([]types.Type, keys+1)
+			conds := make([]*plan.Expr, keys)
+			for i := range ts {
+				ts[i] = typ
+			}
+			for i := range conds {
+				conds[i] = newExpr(int32(i+1), typ)
+			}
+			tc := newTestCase(t, ts, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(-1, 0)}, [][]*plan.Expr{conds, conds})
+			defer tc.cancel()
+			tc.arg.JoinType = plan.Node_MARK
+			tc.arg.NonEqCond = nil
+			tc.arg.ExistenceOnly = true
+			tc.barg.NeedAllocateSels = false
+			tc.barg.NeedBatches = false
+			defer finishMarkSpillTest(t, &tc)
+			// -1 denotes NULL only in this independent pairwise test oracle.
+			var probes [][]int32
+			var enumerate func([]int32)
+			enumerate = func(prefix []int32) {
+				if len(prefix) == keys {
+					probes = append(probes, append([]int32(nil), prefix...))
+					return
+				}
+				for _, v := range []int32{-1, 0, 1} {
+					enumerate(append(prefix, v))
+				}
+			}
+			enumerate(nil)
+			probes = append(probes, probes[len(probes)-1])
+			allNull := make([]int32, keys)
+			allOne := make([]int32, keys)
+			for i := range keys {
+				allNull[i] = -1
+				allOne[i] = 1
+			}
+			builds := make([][][]int32, 0, 4)
+			builds = append(builds, nil, [][]int32{allNull}, [][]int32{allNull, probes[1], allOne, allOne})
+			// More than one build batch of duplicate witnesses must remain one match.
+			duplicate := make([][]int32, colexec.DefaultBatchSize+1)
+			for i := range duplicate {
+				duplicate[i] = allOne
+			}
+			builds = append(builds, duplicate)
+			makeBatches := func(rows [][]int32) []*batch.Batch {
+				var bats []*batch.Batch
+				for offset := 0; offset < len(rows); offset += colexec.DefaultBatchSize {
+					end := min(offset+colexec.DefaultBatchSize, len(rows))
+					bat := batch.NewWithSize(keys + 1)
+					for col := 0; col <= keys; col++ {
+						values := make([]int32, end-offset)
+						var nulls []uint64
+						for i, row := range rows[offset:end] {
+							if col == 0 {
+								values[i] = int32(offset + i)
+							} else if row[col-1] < 0 {
+								nulls = append(nulls, uint64(i))
+							} else {
+								values[i] = row[col-1]
+							}
+						}
+						bat.Vecs[col] = testutil.MakeInt32Vector(values, nulls, tc.proc.Mp())
+					}
+					bat.SetRowCount(end - offset)
+					bats = append(bats, bat)
+				}
+				return bats
+			}
+			for generation, buildRows := range builds {
+				probeOp := colexec.NewMockOperator().WithBatchs(makeBatches(probes))
+				buildOp := colexec.NewMockOperator().WithBatchs(makeBatches(buildRows))
+				tc.arg.Children = nil
+				tc.arg.AppendChild(probeOp)
+				tc.barg.Children = nil
+				tc.barg.AppendChild(buildOp)
+				func() {
+					defer probeOp.Free(tc.proc, false, nil)
+					defer buildOp.Free(tc.proc, false, nil)
+					require.NoError(t, tc.arg.Prepare(tc.proc))
+					require.NoError(t, tc.barg.Prepare(tc.proc))
+					_, err := vm.Exec(tc.barg, tc.proc)
+					require.NoError(t, err)
+					got := collectMarkResults(t, &tc)
+					require.Len(t, got, len(probes))
+					for id, p := range probes {
+						want := false
+						for _, b := range buildRows {
+							match := true
+							for k := range keys {
+								match = match && p[k] >= 0 && b[k] >= 0 && p[k] == b[k]
+							}
+							want = want || match
+						}
+						require.Equal(t, markResult{value: want}, got[int32(id)], "generation=%d row=%v", generation, p)
+					}
+					tc.arg.Reset(tc.proc, false, nil)
+					tc.barg.Reset(tc.proc, false, nil)
+				}()
+				tc.proc.SetMessageBoard(tc.proc.GetMessageBoard().Reset())
+				tc.proc.GetMessageBoard().BeforeRunonce()
+			}
+		})
+	}
 }

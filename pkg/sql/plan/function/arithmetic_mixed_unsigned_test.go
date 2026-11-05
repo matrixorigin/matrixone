@@ -51,8 +51,8 @@ func TestMixedInt64Uint64ResolversUseUnsignedDomainOverloads(t *testing.T) {
 		types.T_uint32.ToType(), types.T_int64.ToType(),
 	})
 	require.NoError(t, err)
-	require.NotEqual(t, int32(2), resolved.overloadId,
-		"smaller integer combinations keep the existing resolver")
+	require.Equal(t, int32(2), resolved.overloadId,
+		"mixed integers of every width use the checked unsigned domain")
 }
 
 func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {

@@ -102,17 +102,32 @@ func (builder *QueryBuilder) registerGroupingSetInput(nodes []int32, contexts []
 	})
 }
 
-func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
-	if builder.sharedComputationDisabled() || builder.sessionSelectLimitMayStopEarly {
-		return rootID
+// groupingSetInputSharingMayApply is the cheap common precondition for the
+// protocol 49+ grouping-set sharing rewrite. It is deliberately only a
+// possibility check: shape, determinism, drain, and capacity checks remain in
+// shareGroupingSetInput, and a failed detailed rewrite still falls back to the
+// independent branch model. The rollup cost probe uses this same possibility
+// check as a conservative lower-envelope baseline; it must not claim that the
+// detailed rewrite is guaranteed to succeed.
+func (builder *QueryBuilder) groupingSetInputSharingMayApply() bool {
+	if builder == nil || builder.sharedComputationDisabled() ||
+		builder.sessionSelectLimitMayStopEarly {
+		return false
+	}
+	if builder.compCtx == nil {
+		return false
 	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
-		return rootID
+		return false
 	}
 	version, _ := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.MOProtocolVersion)
 	protocolVersion, ok := version.(int64)
-	if !ok || protocolVersion < defines.MORPCVersion49 {
+	return ok && protocolVersion >= defines.MORPCVersion49
+}
+
+func (builder *QueryBuilder) sharePendingGroupingSetInputs(rootID int32) int32 {
+	if !builder.groupingSetInputSharingMayApply() {
 		return rootID
 	}
 	parents := builder.groupingSetConsumerParents()
@@ -1029,6 +1044,8 @@ func materializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
 				types.T_array_bf16, types.T_array_float16,
 				types.T_array_int8, types.T_array_uint8:
 				payloadSize *= float64(types.New(oid, typ.Width, typ.Scale).GetArrayElementSize())
+			case types.T_array_float8, types.T_array_float4:
+				payloadSize = float64(types.New(oid, typ.Width, typ.Scale).ArrayCellBytes())
 			case types.T_json, types.T_blob, types.T_text,
 				types.T_binary, types.T_varbinary, types.T_datalink,
 				types.T_geometry, types.T_geometry32:

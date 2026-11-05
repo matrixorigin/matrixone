@@ -106,41 +106,9 @@ func runLocalRankWindow(
 	mp *mpool.MPool,
 ) (got []uint64, nulls []bool, err error) {
 	proc := testutil.NewProcessWithMPool(t, "", mp)
-	arg := &Window{
-		WinSpecList: []*plan.Expr{spec},
-		Aggs: []aggexec.AggFuncExecExpression{
-			aggexec.MakeAggFunctionExpression(0, false, spec.Expr.(*plan.Expr_W).W.WindowFunc.GetF().Args, nil),
-		},
-	}
-	op := colexec.NewMockOperator().WithBatchs(bats)
-	arg.AppendChild(op)
-
-	require.NoError(t, arg.Prepare(proc))
-	for {
-		result, execErr := vm.Exec(arg, proc)
-		if execErr != nil {
-			arg.Free(proc, false, nil)
-			proc.Free()
-			return nil, nil, execErr
-		}
-		if result.Batch == nil {
-			break
-		}
-		if result.Batch.IsEmpty() {
-			continue
-		}
-		vec := result.Batch.Vecs[len(result.Batch.Vecs)-1]
-		if vec.Length() > 0 {
-			got = append(got, vector.MustFixedColWithTypeCheck[uint64](vec)...)
-			for i := 0; i < vec.Length(); i++ {
-				nulls = append(nulls, vec.IsNull(uint64(i)))
-			}
-		}
-	}
-	arg.Free(proc, false, nil)
-	op.Free(proc, false, nil)
-	proc.Free()
-	return got, nulls, nil
+	defer proc.Free()
+	got, nulls, err, _, _ = runLocalRankWindowProc(t, spec, bats, proc)
+	return got, nulls, err
 }
 
 // runLocalRankWindowProc runs the harness with a caller-built process, for
@@ -162,6 +130,8 @@ func runLocalRankWindowProc(
 	}
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.AppendChild(op)
+	defer op.Free(proc, false, nil)
+	defer arg.Free(proc, false, nil)
 
 	require.NoError(t, arg.Prepare(proc))
 	var got []uint64
@@ -170,8 +140,6 @@ func runLocalRankWindowProc(
 		result, execErr := vm.Exec(arg, proc)
 		if execErr != nil {
 			civilOrderIndexes := len(arg.ctr.timestampCivilOrder)
-			arg.Free(proc, false, nil)
-			op.Free(proc, false, nil)
 			return nil, nil, execErr, arg, civilOrderIndexes
 		}
 		if result.Batch == nil {
@@ -189,8 +157,6 @@ func runLocalRankWindowProc(
 		}
 	}
 	civilOrderIndexes := len(arg.ctr.timestampCivilOrder)
-	arg.Free(proc, false, nil)
-	op.Free(proc, false, nil)
 	return got, nulls, nil, arg, civilOrderIndexes
 }
 
@@ -679,6 +645,7 @@ func TestLocalRankMrankWidthValidation(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error type %T: %s", err, err)
 			require.Contains(t, err.Error(), tc.errMsg)
+			require.Zero(t, mp.CurrNB())
 		})
 	}
 }

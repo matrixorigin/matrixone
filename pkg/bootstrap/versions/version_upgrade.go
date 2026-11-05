@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -114,7 +115,7 @@ func GetUpgradeVersionForUpdateByID(
 		return VersionUpgrade{}, err
 	}
 	if len(values) != 1 {
-		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: can not get version upgrade by primary key: %d", id))
+		return VersionUpgrade{}, moerr.NewInvalidStateNoCtxf("expected one upgrade step for id %d, found %d", id, len(values))
 	}
 	return values[0], nil
 }
@@ -154,15 +155,10 @@ func UpdateVersionUpgradeState(
 func UpdateVersionUpgradeTasks(
 	upgrade VersionUpgrade,
 	txn executor.TxnExecutor) error {
-	updateState := ""
-	if upgrade.TotalTenant == upgrade.ReadyTenant {
-		updateState = fmt.Sprintf("state = %d,", StateReady)
-	}
-	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d,%s update_at = current_timestamp() where final_version = '%s' and final_version_offset = %d and upgrade_order = %d",
+	sql := fmt.Sprintf("update %s set total_tenant = %d, ready_tenant = %d, update_at = current_timestamp() where final_version = '%s' and final_version_offset = %d and upgrade_order = %d",
 		catalog.MOUpgradeTable,
 		upgrade.TotalTenant,
 		upgrade.ReadyTenant,
-		updateState,
 		upgrade.FinalVersion,
 		upgrade.FinalVersionOffset,
 		upgrade.UpgradeOrder)

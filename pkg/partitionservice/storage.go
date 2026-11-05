@@ -43,7 +43,6 @@ const (
 )
 
 type storage struct {
-	sid  string
 	exec executor.SQLExecutor
 	eng  engine.Engine
 }
@@ -96,12 +95,11 @@ func partitionMetadataReadScope(op client.TxnOperator, account uint32) (partitio
 }
 
 func NewStorage(
-	sid string,
+	_ string, // service ID retained for caller compatibility
 	exec executor.SQLExecutor,
 	eng engine.Engine,
 ) PartitionStorage {
 	s := &storage{
-		sid:  sid,
 		exec: exec,
 		eng:  eng,
 	}

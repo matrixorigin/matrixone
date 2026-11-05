@@ -72,8 +72,8 @@ func l2sqBF16AVX2(a, b []types.BF16) (float64, error) {
 	for ; j <= np-8; j += 8 {
 		ua := archsimd.LoadUint32x8(au[j : j+8])
 		ub := archsimd.LoadUint32x8(bu[j : j+8])
-		dE := ua.ShiftAllLeft(16).AsFloat32x8().Sub(ub.ShiftAllLeft(16).AsFloat32x8())
-		dO := ua.And(hi).AsFloat32x8().Sub(ub.And(hi).AsFloat32x8())
+		dE := ua.ShiftAllLeft(16).BitsToFloat32().Sub(ub.ShiftAllLeft(16).BitsToFloat32())
+		dO := ua.And(hi).BitsToFloat32().Sub(ub.And(hi).BitsToFloat32())
 		acc0 = dE.MulAdd(dE, acc0)
 		acc1 = dO.MulAdd(dO, acc1)
 	}
@@ -97,8 +97,8 @@ func innerProductBF16AVX2(a, b []types.BF16) (float64, error) {
 	for ; j <= np-8; j += 8 {
 		ua := archsimd.LoadUint32x8(au[j : j+8])
 		ub := archsimd.LoadUint32x8(bu[j : j+8])
-		acc0 = ua.ShiftAllLeft(16).AsFloat32x8().MulAdd(ub.ShiftAllLeft(16).AsFloat32x8(), acc0)
-		acc1 = ua.And(hi).AsFloat32x8().MulAdd(ub.And(hi).AsFloat32x8(), acc1)
+		acc0 = ua.ShiftAllLeft(16).BitsToFloat32().MulAdd(ub.ShiftAllLeft(16).BitsToFloat32(), acc0)
+		acc1 = ua.And(hi).BitsToFloat32().MulAdd(ub.And(hi).BitsToFloat32(), acc1)
 	}
 	sum := sumF32x8(acc0.Add(acc1))
 	for i := j * 2; i < n; i++ {
@@ -120,10 +120,10 @@ func l1DistanceBF16AVX2(a, b []types.BF16) (float64, error) {
 	for ; j <= np-8; j += 8 {
 		ua := archsimd.LoadUint32x8(au[j : j+8])
 		ub := archsimd.LoadUint32x8(bu[j : j+8])
-		dE := ua.ShiftAllLeft(16).AsFloat32x8().Sub(ub.ShiftAllLeft(16).AsFloat32x8())
-		dO := ua.And(hi).AsFloat32x8().Sub(ub.And(hi).AsFloat32x8())
-		acc0 = acc0.Add(dE.AsUint32x8().And(absMask).AsFloat32x8())
-		acc1 = acc1.Add(dO.AsUint32x8().And(absMask).AsFloat32x8())
+		dE := ua.ShiftAllLeft(16).BitsToFloat32().Sub(ub.ShiftAllLeft(16).BitsToFloat32())
+		dO := ua.And(hi).BitsToFloat32().Sub(ub.And(hi).BitsToFloat32())
+		acc0 = acc0.Add(dE.ToBits().And(absMask).BitsToFloat32())
+		acc1 = acc1.Add(dO.ToBits().And(absMask).BitsToFloat32())
 	}
 	sum := sumF32x8(acc0.Add(acc1))
 	for i := j * 2; i < n; i++ {
@@ -153,10 +153,10 @@ func cosineDistanceBF16AVX2(a, b []types.BF16) (float64, error) {
 	for ; j <= np-8; j += 8 {
 		ua := archsimd.LoadUint32x8(au[j : j+8])
 		ub := archsimd.LoadUint32x8(bu[j : j+8])
-		aE := ua.ShiftAllLeft(16).AsFloat32x8()
-		aO := ua.And(hi).AsFloat32x8()
-		bE := ub.ShiftAllLeft(16).AsFloat32x8()
-		bO := ub.And(hi).AsFloat32x8()
+		aE := ua.ShiftAllLeft(16).BitsToFloat32()
+		aO := ua.And(hi).BitsToFloat32()
+		bE := ub.ShiftAllLeft(16).BitsToFloat32()
+		bO := ub.And(hi).BitsToFloat32()
 		dot0 = aE.MulAdd(bE, dot0)
 		dot1 = aO.MulAdd(bO, dot1)
 		na0 = aE.MulAdd(aE, na0)
@@ -201,6 +201,7 @@ func l2sqInt8AVX2(a, b []int8) (float64, error) {
 		acc = acc.Add(dlo.DotProductPairs(dlo)).Add(dhi.DotProductPairs(dhi))
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		sum += int64(d * d)
@@ -225,6 +226,7 @@ func innerProductInt8AVX2(a, b []int8) (float64, error) {
 		acc = acc.Add(lo).Add(hi)
 	}
 	sum := sumI32x8(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		sum += int64(int32(a[i]) * int32(b[i]))
 	}
@@ -242,8 +244,8 @@ func l1DistanceInt8AVX2(a, b []int8) (float64, error) {
 	var acc archsimd.Uint64x4
 	i := 0
 	for ; i <= n-32; i += 32 {
-		va := archsimd.LoadInt8x32(a[i : i+32]).AsUint8x32().Xor(bias)
-		vb := archsimd.LoadInt8x32(b[i : i+32]).AsUint8x32().Xor(bias)
+		va := archsimd.LoadInt8x32(a[i : i+32]).ToBits().Xor(bias)
+		vb := archsimd.LoadInt8x32(b[i : i+32]).ToBits().Xor(bias)
 		acc = acc.Add(va.SumOf8AbsDiff(vb))
 	}
 	var lanes [4]uint64
@@ -253,6 +255,7 @@ func l1DistanceInt8AVX2(a, b []int8) (float64, error) {
 		usum += v
 	}
 	sum := int64(usum)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		if d < 0 {
@@ -284,6 +287,7 @@ func cosineDistanceInt8AVX2(a, b []int8) (float64, error) {
 		nbA = nbA.Add(blo.DotProductPairs(blo)).Add(bhi.DotProductPairs(bhi))
 	}
 	dot, na2, nb2 := sumI32x8(dotA), sumI32x8(naA), sumI32x8(nbA)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		ai8, bi8 := int64(a[i]), int64(b[i])
 		dot += ai8 * bi8
@@ -301,10 +305,10 @@ func cosineDistanceInt8AVX2(a, b []int8) (float64, error) {
 
 func f16decX8(h, m7fff, m8000, mInf archsimd.Uint32x8, magic, infNan archsimd.Float32x8) archsimd.Float32x8 {
 	o := h.And(m7fff).ShiftAllLeft(13)
-	of := o.AsFloat32x8().Mul(magic)
-	ou := of.AsUint32x8()
+	of := o.BitsToFloat32().Mul(magic)
+	ou := of.ToBits()
 	ou = ou.Or(mInf).Merge(ou, of.GreaterEqual(infNan))
-	return ou.Or(h.And(m8000).ShiftAllLeft(16)).AsFloat32x8()
+	return ou.Or(h.And(m8000).ShiftAllLeft(16)).BitsToFloat32()
 }
 
 func f16DecodeConstsX8() (m7fff, m8000, mLo, mInf archsimd.Uint32x8, magic, infNan archsimd.Float32x8) {
@@ -335,6 +339,7 @@ func l2sqF16AVX2(a, b []types.Float16) (float64, error) {
 		acc1 = dO.MulAdd(dO, acc1)
 	}
 	sum := sumF32x8(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		d := f16fast(a[i]) - f16fast(b[i])
 		sum += d * d
@@ -358,6 +363,7 @@ func innerProductF16AVX2(a, b []types.Float16) (float64, error) {
 		acc1 = f16decX8(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).MulAdd(f16decX8(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan), acc1)
 	}
 	sum := sumF32x8(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		sum += f16fast(a[i]) * f16fast(b[i])
 	}
@@ -379,10 +385,11 @@ func l1DistanceF16AVX2(a, b []types.Float16) (float64, error) {
 		ub := archsimd.LoadUint32x8(bu[j : j+8])
 		dE := f16decX8(ua.And(mLo), m7fff, m8000, mInf, magic, infNan).Sub(f16decX8(ub.And(mLo), m7fff, m8000, mInf, magic, infNan))
 		dO := f16decX8(ua.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan).Sub(f16decX8(ub.ShiftAllRight(16), m7fff, m8000, mInf, magic, infNan))
-		acc0 = acc0.Add(dE.AsUint32x8().And(absMask).AsFloat32x8())
-		acc1 = acc1.Add(dO.AsUint32x8().And(absMask).AsFloat32x8())
+		acc0 = acc0.Add(dE.ToBits().And(absMask).BitsToFloat32())
+		acc1 = acc1.Add(dO.ToBits().And(absMask).BitsToFloat32())
 	}
 	sum := sumF32x8(acc0.Add(acc1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		d := f16fast(a[i]) - f16fast(b[i])
 		if d < 0 {
@@ -424,6 +431,7 @@ func cosineDistanceF16AVX2(a, b []types.Float16) (float64, error) {
 	dot := sumF32x8(dot0.Add(dot1))
 	na2 := sumF32x8(na0.Add(na1))
 	nb2 := sumF32x8(nb0.Add(nb1))
+	archsimd.ClearAVXUpperBits()
 	for i := j * 2; i < n; i++ {
 		ai, bi := f16fast(a[i]), f16fast(b[i])
 		dot += ai * bi

@@ -291,7 +291,7 @@ func TestHAKeeperClientAttemptsHonorOwner(t *testing.T) {
 			return nil, attempt.Err()
 		})
 		require.Nil(t, client)
-		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, 1, calls)
 	})
 	t.Run("success transfers client and releases attempt context", func(t *testing.T) {
@@ -308,6 +308,17 @@ func TestHAKeeperClientAttemptsHonorOwner(t *testing.T) {
 		require.NoError(t, client.Close())
 		require.Equal(t, 1, want.closeCount)
 	})
+	t.Run("cancelled owner closes a late successful client", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		want := &testHAKClient{}
+		client, err := waitHAKeeperClient(ctx, func(context.Context) (logservice.CNHAKeeperClient, error) {
+			cancel()
+			return want, nil
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, client)
+		require.Equal(t, 1, want.closeCount)
+	})
 	t.Run("already cancelled does not create client", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -315,7 +326,7 @@ func TestHAKeeperClientAttemptsHonorOwner(t *testing.T) {
 			t.Fatal("unexpected attempt")
 			return nil, nil
 		})
-		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }
 

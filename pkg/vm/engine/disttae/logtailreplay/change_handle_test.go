@@ -16,12 +16,14 @@ package logtailreplay
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -74,7 +76,7 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	t.Run("insert delete cancels with added-first layout", func(t *testing.T) {
 		data := newData([]int32{7}, []int64{10})
 		tombstone := newTombstone([]int64{20})
-		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false, mp))
 		require.Zero(t, data.RowCount())
 		require.Zero(t, tombstone.RowCount())
 		data.Clean(mp)
@@ -87,7 +89,7 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 		// final tombstone is the delete being tested and must remain as the
 		// latest net effect.
 		tombstone := newTombstone([]int64{5, 30})
-		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false, mp))
 		require.Zero(t, data.RowCount())
 		require.Equal(t, 1, tombstone.RowCount())
 		data.Clean(mp)
@@ -3553,6 +3555,33 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		src.Clean(mp)
 	})
 
+	t.Run("fillInDeleteBatch reads compact retained delete", func(t *testing.T) {
+		src := batch.NewWithSize(1)
+		pkVec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+		require.NoError(t, vector.AppendFixed(pkVec, int64(42), false, mp))
+		src.Vecs[0] = pkVec
+		src.SetRowCount(2)
+
+		blk := types.Blockid{}
+		rowID := types.NewRowid(&blk, 3)
+		commitTS := types.BuildTS(100, 0)
+		entry := &RowEntry{Batch: src, Offset: 1, RowID: rowID, Time: commitTS, Deleted: true}
+		for _, retainRowID := range []bool{false, true} {
+			var out *batch.Batch
+			fillInDeleteBatch(&out, entry, retainRowID, mp)
+			pkCol := 0
+			if retainRowID {
+				require.Equal(t, rowID, vector.GetFixedAtNoTypeCheck[types.Rowid](out.Vecs[0], 0))
+				pkCol = 1
+			}
+			require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[pkCol], 0))
+			require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[pkCol+1], 0))
+			out.Clean(mp)
+		}
+		src.Clean(mp)
+	})
+
 	t.Run("fillInInsertBatch omits rowid column", func(t *testing.T) {
 		// RowEntry.Batch layout: [Rowid, TS, pk, val]; src.Attrs[2:] = [pk, val]
 		src := batch.NewWithSize(4)
@@ -3581,6 +3610,27 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		assertNoRowID(t, out)
 		// Trailing column must be commit_ts.
 		require.Equal(t, types.T_TS, out.Vecs[len(out.Vecs)-1].GetType().Oid)
+		out.Clean(mp)
+		src.Clean(mp)
+	})
+
+	t.Run("fillInInsertBatch reads rowid and time from compact retained insert", func(t *testing.T) {
+		src := batch.NewWithSize(3)
+		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
+		src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(42), false, mp))
+		src.SetRowCount(1)
+		blk := types.Blockid{}
+		rowID := types.NewRowid(&blk, 5)
+		commitTS := types.BuildTS(123, 0)
+		entry := &RowEntry{Batch: src, RowID: rowID, Time: commitTS}
+		var out *batch.Batch
+		fillInInsertBatch(&out, entry, true, nil, mp)
+		require.Equal(t, rowID, vector.GetFixedAtNoTypeCheck[types.Rowid](out.Vecs[0], 0))
+		require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[1], 0))
+		require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[2], 0))
 		out.Clean(mp)
 		src.Clean(mp)
 	})
@@ -3650,7 +3700,7 @@ func splitPKOps(t *testing.T, mp *mpool.MPool, ops []pkOp, skipDeletes, keepTrai
 	defer dataBat.Clean(mp)
 	defer tombBat.Clean(mp)
 
-	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes))
+	require.NoError(t, filterBatch(dataBat, tombBat, 0, skipDeletes, keepTrailingDeletes, mp))
 	return remainingPKs(t, dataBat), remainingPKs(t, tombBat)
 }
 
@@ -3885,4 +3935,39 @@ func TestSelectRangeNetEffectRowsKeepsTrailingDeleteInRecovery(t *testing.T) {
 	keepFirst, keepLast = selectRangeNetEffectRows(single, single, false, false)
 	require.True(t, keepFirst)
 	require.False(t, keepLast)
+}
+
+type failingReplayOutput struct {
+	bat *batch.Batch
+	err error
+}
+
+func (h *failingReplayOutput) init(bool, *mpool.MPool) error { return nil }
+func (h *failingReplayOutput) IsEmpty() bool                 { return false }
+func (h *failingReplayOutput) Rows() int                     { return 1 }
+func (h *failingReplayOutput) NextTS() types.TS              { return types.TS{} }
+func (h *failingReplayOutput) Close()                        {}
+func (h *failingReplayOutput) Next(dst **batch.Batch, _ *mpool.MPool) error {
+	*dst = h.bat
+	return h.err
+}
+func (h *failingReplayOutput) QuickNext(dst **batch.Batch, mp *mpool.MPool) error {
+	return h.Next(dst, mp)
+}
+
+func TestChangeHandlerNextReleasesPartialOutputOnError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 2}, nil, mp))
+	bat.SetRowCount(2)
+	failure := errors.New("injected replay failure")
+	handler := &ChangeHandler{quick: true, mp: mp, lastPrint: time.Now(), LogThreshold: time.Hour,
+		spillNetEffectData: &failingReplayOutput{bat: bat, err: failure}}
+	data, tombstone, _, err := handler.Next(context.Background(), mp)
+	require.ErrorIs(t, err, failure)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.Zero(t, mp.CurrNB())
 }

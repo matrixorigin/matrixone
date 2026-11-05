@@ -22,6 +22,9 @@ vector operations, and fulltext search.
 
 from __future__ import annotations
 
+from ._telemetry import observe, pool_wait
+from ._utils import result_returns_rows
+
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 try:
@@ -138,6 +141,22 @@ class Session(SQLAlchemySession):
         self.cdc = CDCManager(client, executor=self)
         self.export = ExportManager(self)
 
+    @observe('session')
+    def execute_driver(self, sql, params=None):
+        """Driver-bound SQL on this session; the result belongs to the session."""
+        if not isinstance(sql, str):
+            raise TypeError('execute_driver requires SQL text')
+        try:
+            return self.connection().exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+        except Exception as error:
+            from .client import _classify_db_error
+
+            classified = _classify_db_error(error, sql)
+            if classified is error:
+                raise
+            raise classified from error
+
+    @observe('session')
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
         Execute SQL or SQLAlchemy statement within the current session transaction.
@@ -401,7 +420,7 @@ class Session(SQLAlchemySession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -425,7 +444,10 @@ class Session(SQLAlchemySession):
             self.client.logger.log_error(e, context="Session query execution")
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def insert(self, table_name: str, data: dict[str, Any]) -> "ResultSet":
         """
@@ -479,75 +501,10 @@ class Session(SQLAlchemySession):
 
             MatrixOneQuery instance configured for the specified columns within session
         """
+        from .orm import create_query
         from .orm import MatrixOneQuery
 
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return MatrixOneQuery(column, self.client, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression - need to handle specially
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = MatrixOneQuery(model_class, self.client, transaction_wrapper=self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = MatrixOneQuery(None, self.client, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            # For "db.table.column" format, use "db.table"
-                            # For "table.column" format, use "table"
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
+        return create_query(MatrixOneQuery, self.client, columns, snapshot=snapshot, transaction_wrapper=self)
 
     def create_table(self, table_name: str, columns: dict, **kwargs) -> "Session":
         """
@@ -563,32 +520,11 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
+        from .sqlalchemy_ext.table_builder import simplified_table
         from sqlalchemy.schema import CreateTable
 
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # Parse primary key from kwargs
-        primary_key = kwargs.pop('primary_key', None)
-
-        # Use VectorTableBuilder to create the table
-        builder = VectorTableBuilder(table_name)
-
-        # Add columns
-        for col_name, col_type in columns.items():
-            is_primary = primary_key == col_name if primary_key else False
-            if is_primary:
-                builder.add_column(col_name, col_type, primary_key=True)
-            else:
-                builder.add_column(col_name, col_type)
-
-        # Build the table
-        table = builder.build_table()
-
-        # Generate CREATE TABLE SQL
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
-        self.execute(sql)
-
+        table = simplified_table(table_name, columns, **kwargs)
+        self.execute(CreateTable(table))
         return self
 
     def drop_table(self, table_name: str) -> "Session":
@@ -603,7 +539,9 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         self.execute(sql)
         return self
 
@@ -622,25 +560,7 @@ class Session(SQLAlchemySession):
 
             Session: Self for chaining
         """
-        from sqlalchemy.schema import CreateTable
-
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        # First create the table (same as create_table)
-        primary_key = kwargs.pop('primary_key', None)
-        builder = VectorTableBuilder(table_name)
-
-        for col_name, col_type in columns.items():
-            is_primary = primary_key == col_name if primary_key else False
-            if is_primary:
-                builder.add_column(col_name, col_type, primary_key=True)
-            else:
-                builder.add_column(col_name, col_type)
-
-        table = builder.build_table()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
-        self.execute(sql)
+        self.create_table(table_name, columns, **kwargs)
 
         # Then create the indexes if provided
         if indexes:
@@ -799,6 +719,23 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.cdc = AsyncCDCManager(client, executor=self)
         self.export = AsyncExportManager(self)
 
+    @observe('session')
+    async def execute_driver(self, sql, params=None):
+        """Driver-bound SQL on this session; the result belongs to the session."""
+        if not isinstance(sql, str):
+            raise TypeError('execute_driver requires SQL text')
+        try:
+            connection = await self.connection()
+            return await connection.exec_driver_sql(sql, params, execution_options={'no_parameters': params is None})
+        except Exception as error:
+            from .client import _classify_db_error
+
+            classified = _classify_db_error(error, sql)
+            if classified is error:
+                raise
+            raise classified from error
+
+    @observe('session')
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
         """
         Execute SQL or SQLAlchemy statement within async session.
@@ -842,7 +779,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -866,7 +803,10 @@ class AsyncSession(SQLAlchemyAsyncSession):
             self.client.logger.log_error(e, context="Async session query execution")
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     async def insert(self, table_name_or_model, data: dict):
         """
@@ -882,12 +822,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             SQLAlchemy async result object
         """
         # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        table_name = table_name_or_model
 
         sql = self.client._build_insert_sql(table_name, data)
         return await self.execute(sql)
@@ -912,12 +847,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             return AsyncResultSet([], [], affected_rows=0)
 
         # Handle model class input
-        if hasattr(table_name_or_model, '__tablename__'):
-            # It's a model class
-            table_name = table_name_or_model.__tablename__
-        else:
-            # It's a table name string
-            table_name = table_name_or_model
+        table_name = table_name_or_model
 
         sql = self.client._build_batch_insert_sql(table_name, data_list)
         return await self.execute(sql)
@@ -937,73 +867,10 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             AsyncMatrixOneQuery instance configured for the specified columns within session
         """
+        from .orm import create_query
         from .async_orm import AsyncMatrixOneQuery
 
-        if len(columns) == 1:
-            # Traditional single model class usage
-            column = columns[0]
-            if isinstance(column, str):
-                # String table name
-                return AsyncMatrixOneQuery(column, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, '__tablename__'):
-                # This is a model class
-                return AsyncMatrixOneQuery(column, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-            elif hasattr(column, 'name') and hasattr(column, 'as_sql'):
-                # This is a CTE object
-                from .orm import CTE
-
-                if isinstance(column, CTE):
-                    query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                    query._table_name = column.name
-                    query._select_columns = ["*"]  # Default to select all from CTE
-                    query._ctes = [column]  # Add the CTE to the query
-                    return query
-            else:
-                # This is a single column/expression
-                query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = [column]
-                # Try to infer table name from column
-                if hasattr(column, 'table') and hasattr(column.table, 'name'):
-                    query._table_name = column.table.name
-                return query
-        else:
-            # Multiple columns/expressions
-            model_class = None
-            select_columns = []
-
-            for column in columns:
-                if hasattr(column, '__tablename__'):
-                    # This is a model class - use its table
-                    model_class = column
-                else:
-                    # This is a column or expression
-                    select_columns.append(column)
-
-            if model_class:
-                query = AsyncMatrixOneQuery(model_class, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                if select_columns:
-                    # Add additional columns to the model's default columns
-                    query._select_columns = select_columns
-                return query
-            else:
-                # No model class provided, need to infer table from columns
-                query = AsyncMatrixOneQuery(None, self.client, None, transaction_wrapper=self, snapshot=snapshot)
-                query._select_columns = select_columns
-
-                # Try to infer table name from first column that has table info
-                for col in select_columns:
-                    if hasattr(col, 'table') and hasattr(col.table, 'name'):
-                        query._table_name = col.table.name
-                        break
-                    elif isinstance(col, str) and '.' in col:
-                        # String column like "table.column" - extract table name
-                        parts = col.split('.')
-                        if len(parts) >= 2:
-                            table_name = '.'.join(parts[:-1])
-                            query._table_name = table_name
-                            break
-
-                return query
+        return create_query(AsyncMatrixOneQuery, self.client, columns, snapshot=snapshot, transaction_wrapper=self)
 
     async def create_table(self, table_name: str, columns: dict, **kwargs):
         """
@@ -1019,25 +886,11 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             Self for chaining
         """
+        from .sqlalchemy_ext.table_builder import simplified_table
         from sqlalchemy.schema import CreateTable
 
-        from .sqlalchemy_ext import VectorTableBuilder
-
-        primary_key = kwargs.pop('primary_key', None)
-        builder = VectorTableBuilder(table_name)
-
-        for col_name, col_type in columns.items():
-            is_primary = primary_key == col_name if primary_key else False
-            if is_primary:
-                builder.add_column(col_name, col_type, primary_key=True)
-            else:
-                builder.add_column(col_name, col_type)
-
-        table = builder.build_table()
-        create_sql = CreateTable(table)
-        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
-        await self.execute(sql)
-
+        table = simplified_table(table_name, columns, **kwargs)
+        await self.execute(CreateTable(table))
         return self
 
     async def drop_table(self, table_name: str):
@@ -1052,6 +905,8 @@ class AsyncSession(SQLAlchemyAsyncSession):
 
             Self for chaining
         """
-        sql = f"DROP TABLE IF EXISTS {table_name}"
+        from ._utils import get_table_name
+
+        sql = 'DROP TABLE IF EXISTS ' + get_table_name(table_name, quoted=True)
         await self.execute(sql)
         return self

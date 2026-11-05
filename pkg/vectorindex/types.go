@@ -16,15 +16,19 @@ package vectorindex
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"hash/crc32"
+	"reflect"
+
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
-	"hash/crc32"
 )
 
 // QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
@@ -151,6 +155,11 @@ type IndexTableConfig struct {
 	SrcTable      string `json:"src"`
 	MetadataTable string `json:"metadata"`
 	IndexTable    string `json:"index"`
+	DictTable     string `json:"dict,omitempty"`
+	IgnoredTable  string `json:"ignored,omitempty"`
+	// MaxBadRecords is the number of rows the build may leave out because the index cannot
+	// store them; one more fails the build.
+	MaxBadRecords int64  `json:"max_bad_records,omitempty"`
 	PKey          string `json:"pkey"`
 	KeyPart       string `json:"part"`
 	OrigFuncName  string `json:"orig_func_name"`
@@ -163,6 +172,7 @@ type IndexTableConfig struct {
 	Nprobe             uint     `json:"nprobe"`
 	PKeyType           int32    `json:"pktype"`
 	KeyPartType        int32    `json:"parttype"`
+	KeyPartWidth       int32    `json:"partwidth,omitempty"`
 	KmeansTrainPercent float64  `json:"kmeans_train_percent"`
 	KmeansMaxIteration int64    `json:"kmeans_max_iteration"`
 	Limit              uint64   `json:"limit"`
@@ -189,6 +199,7 @@ type HnswParam struct {
 	EfSearch         string `json:"ef_search"`
 	Async            string `json:"async"`
 	MaxIndexCapacity string `json:"max_index_capacity"`
+	Quantization     string `json:"quantization"`
 }
 
 // IVF specified parameters
@@ -317,10 +328,13 @@ type RuntimeConfig struct {
 	// default) and MaxProbe caps Probe (0 = every list).
 	Membership      docfilter.MembershipFilter
 	MembershipCount uint64
-	Iterative       bool
-	ResultLimit     uint
-	MaxLimit        uint
-	MaxProbe        uint
+	// ExactThreshold, when non-zero, is the largest MembershipCount an HNSW search scans
+	// instead of traversing the graph.
+	ExactThreshold uint64
+	Iterative      bool
+	ResultLimit    uint
+	MaxLimit       uint
+	MaxProbe       uint
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
@@ -348,7 +362,7 @@ type RuntimeConfig struct {
 
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a membership filter for entries.
-	RuntimeFilterData []byte
+	RuntimeFilterData *keycodec.KeyPayload
 	NThreads          uint // Brute Force Index
 
 	// Query-scoped IVF search state. These fields must not be cached on the
@@ -388,6 +402,13 @@ type RuntimeConfig struct {
 	// captured under the cache entry's read lock during Search/SearchInto. The cache reads
 	// it back to decide eviction without touching the underlying algo unsynchronized.
 	EmptyGeneration *bool
+
+	// SearchDFCutoff is the fulltext2 high-df term cutoff for this query: a ranked
+	// bag-of-words term whose global df/N reaches this fraction is dropped from the BM25
+	// search (0 = off). It is query-scoped and MUST travel here, not be cached on the shared
+	// index object, because different sessions/queries can set different cutoffs against the
+	// same warm cache entry. Other algorithms ignore it.
+	SearchDFCutoff float64
 }
 
 type IvfIncludeResult struct {
@@ -429,11 +450,11 @@ type IvfSearchCursor struct {
 // ColumnBuffer (the typed, box-free streaming key batch used by Emit) lives in
 // columnbuffer.go.
 
-type VectorIndexCdc[T types.RealNumbers] struct {
+type VectorIndexCdc[T types.ArrayElement] struct {
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
-func NewVectorIndexCdc[T types.RealNumbers](capacity int) *VectorIndexCdc[T] {
+func NewVectorIndexCdc[T types.ArrayElement](capacity int) *VectorIndexCdc[T] {
 	return &VectorIndexCdc[T]{
 		Data: make([]VectorIndexCdcEntry[T], 0, capacity),
 	}
@@ -487,15 +508,47 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 	h.Data = append(h.Data, e)
 }
 
+// vectorIndexCdcFields is VectorIndexCdc without its methods, decoded by UnmarshalJSON.
+type vectorIndexCdcFields[T types.ArrayElement] VectorIndexCdc[T]
+
+// floatElements reports whether T is float32 or float64, whose vectors a batch encodes and
+// decodes with encoding/json.
+func floatElements[T types.ArrayElement]() bool {
+	k := reflect.TypeFor[T]().Kind()
+	return k == reflect.Float32 || k == reflect.Float64
+}
+
+// UnmarshalJSON decodes a batch from ToJson: float vectors with encoding/json, other element
+// types (integers) with sonic.
+func (h *VectorIndexCdc[T]) UnmarshalJSON(data []byte) error {
+	if floatElements[T]() {
+		// Not sonic: its native decoder rounds float32 twice (text -> float64 -> float32),
+		// unfixed upstream in every release (bytedance/sonic#884), so a synced vector would
+		// differ from the stored one (7.038531e-26 reads as the next float32), and it reads
+		// -0 as 0. encoding/json parses each value with strconv.ParseFloat(text, bits), a
+		// single rounding.
+		return json.Unmarshal(data, (*vectorIndexCdcFields[T])(h))
+	}
+	return sonic.Unmarshal(data, (*vectorIndexCdcFields[T])(h))
+}
+
+// ToJson encodes the batch: float vectors with encoding/json, which writes -0 as -0 where
+// sonic on arm64 writes 0, other element types with sonic.
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
-	b, err := sonic.Marshal(h)
+	var b []byte
+	var err error
+	if floatElements[T]() {
+		b, err = json.Marshal((*vectorIndexCdcFields[T])(h))
+	} else {
+		b, err = sonic.Marshal(h)
+	}
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
 }
 
-type VectorIndexCdcEntry[T types.RealNumbers] struct {
+type VectorIndexCdcEntry[T types.ArrayElement] struct {
 	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
 	PKey int64  `json:"pk"`
 	Vec  []T    `json:"v,omitempty"`

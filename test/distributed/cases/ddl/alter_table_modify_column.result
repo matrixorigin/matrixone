@@ -740,7 +740,7 @@ SQL parser error: table "text01" does not exist
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'text01' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]
 drop table text01;
-no such table test.text01
+Unknown table 'test.text01'
 drop table if exists alter03;
 create table alter03 (col1 int, col2 binary, col3 decimal(38,0));
 insert into alter03 values (1, 'e', 324214.2134123);
@@ -1491,8 +1491,8 @@ cast03  ¦  CREATE TABLE `cast03` (
 insert into cast03 values ('3243342', '3242f()', '4728947234342,', '457328990r3if943i4u9owiuo4ewfr3w4r3fre');
 select * from cast03;
 ➤ col4[12,-1,0]  ¦  col1[1,50,0]  ¦  col2[1,100,0]  ¦  col3[12,-1,0]  𝄀
-8329498352  ¦  1  ¦  323242.34  ¦  23432.3242  𝄀
-0  ¦  200  ¦  -213443.33  ¦  32424.342424242  𝄀
+8329498352  ¦  1  ¦  323242  ¦  23432.3242  𝄀
+0  ¦  200  ¦  -213443  ¦  32424.342424242  𝄀
 null  ¦  null  ¦  null  ¦  null  𝄀
 3243342  ¦  3242f()  ¦  4728947234342,  ¦  457328990r3if943i4u9owiuo4ewfr3w4r3fre
 drop table cast03;

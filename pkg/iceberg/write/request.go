@@ -79,7 +79,7 @@ func BuildAppendRequest(ctx context.Context, spec AppendRequestSpec) (api.Append
 	if spec.SourceKind == AppendSourceCTAS && !spec.ExistingMapping && !spec.CatalogCreateAllowed {
 		return api.AppendRequest{}, api.NewError(api.ErrUnsupportedFeature, "Iceberg CTAS requires an existing mapping unless catalog create-table capability is enabled", map[string]string{"table": spec.Table})
 	}
-	summary := cloneStringMap(spec.Summary)
+	summary := api.CloneNonEmptyMap(spec.Summary)
 	if summary == nil {
 		summary = make(map[string]string)
 	}

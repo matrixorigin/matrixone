@@ -325,6 +325,18 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+// WithMaxResultBytes limits the logical vector payload retained by one
+// statement. Zero leaves the result unlimited. The estimate excludes allocator
+// capacity, NULL/grouping bitmaps, and the plan and producer's memory.
+func (opts StatementOption) WithMaxResultBytes(limit uint64) StatementOption {
+	opts.maxResultBytes = limit
+	return opts
+}
+
+func (opts StatementOption) MaxResultBytes() uint64 {
+	return opts.maxResultBytes
+}
+
 // WithMoColumnsUpdate allows an internal metadata upgrade to rewrite the
 // redundant columns-table fields without opening mo_columns to ordinary DML.
 func (opts StatementOption) WithMoColumnsUpdate() StatementOption {

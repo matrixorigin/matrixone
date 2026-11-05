@@ -717,6 +717,9 @@ func (s *service) handleMigrateConnTo(
 	if req.MigrateConnToRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
+	if !s.viewMetadataIngressReady.Load() {
+		return moerr.NewServiceUnavailableNoCtx("CN is not ready for connection migration")
+	}
 	rm := s.mo.GetRoutineManager()
 	if err := rm.MigrateConnectionTo(ctx, req.MigrateConnToRequest); err != nil {
 		logutil.Errorf("failed to migrate conn to: %v", err)

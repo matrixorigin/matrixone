@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -46,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -76,6 +74,7 @@ var (
 
 type Service interface {
 	Start() error
+	StartContext(context.Context) error
 	Close() error
 	// ID returns UUID of the service.
 	ID() string
@@ -306,7 +305,8 @@ type Config struct {
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
 
-	// LargestEntryLimit is the max size for reading file to buf
+	// LargestEntryLimit is the max raw size of one CSV record readable by the
+	// LOAD DATA / external-table CSV parser; see config.LargestEntryLimit.
 	LargestEntryLimit int `toml:"largest-entry-limit"`
 
 	// MaxPreparedStmtCount
@@ -325,10 +325,16 @@ type Config struct {
 	// Whether to automatically upgrade when system startup
 	AutomaticUpgrade       bool `toml:"auto-upgrade"`
 	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
+	// UpgradeCatalogObjectLimit bounds one indivisible catalog input in bytes.
+	UpgradeCatalogObjectLimit uint64 `toml:"upgrade-catalog-object-limit"`
 }
 
 func (c *Config) Validate() error {
-	foundMachineHost := ""
+	if c.UpgradeCatalogObjectLimit == 0 {
+		c.UpgradeCatalogObjectLimit = bootstrap.DefaultCatalogUpgradeObjectBytes
+	} else if c.UpgradeCatalogObjectLimit < bootstrap.CatalogUpgradePageBytes {
+		return moerr.NewBadConfigNoCtxf("cn.upgrade-catalog-object-limit must be at least %d bytes", bootstrap.CatalogUpgradePageBytes)
+	}
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
@@ -341,26 +347,8 @@ func (c *Config) Validate() error {
 	if c.ISCP.IndexFlushWatermarkInterval.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("cn.iscp.index-flush-watermark-interval must be non-negative")
 	}
-	if c.ListenAddress == "" {
-		c.ListenAddress = defaultListenAddress
-	}
-	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
-	}
-	if c.Role == "" {
-		c.Role = metadata.CNRole_TP.String()
-	}
-	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
-		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
-	}
-	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
-		c.HAKeeper.HeatbeatInterval.Duration = time.Second
-	}
-	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
-		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
-	}
+	foundMachineHost := c.setServiceDefaults()
+	c.setHAKeeperDefaults()
 	if c.HAKeeper.HeatbeatInterval.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat interval must be positive")
 	}
@@ -373,30 +361,7 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
 	}
-	if c.TaskRunner.Parallelism == 0 {
-		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism <= ReservedTasks {
-			c.TaskRunner.Parallelism = 1 + ReservedTasks
-		}
-	}
-	if c.TaskRunner.FetchInterval.Duration == 0 {
-		c.TaskRunner.FetchInterval.Duration = time.Second * 10
-	}
-	if c.TaskRunner.FetchTimeout.Duration == 0 {
-		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
-	}
-	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
-		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
-	}
-	if c.TaskRunner.MaxWaitTasks == 0 {
-		c.TaskRunner.MaxWaitTasks = 256
-	}
-	if c.TaskRunner.QueryLimit == 0 {
-		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
-	}
-	if c.TaskRunner.RetryInterval.Duration == 0 {
-		c.TaskRunner.RetryInterval.Duration = time.Second
-	}
+	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
@@ -425,39 +390,7 @@ func (c *Config) Validate() error {
 		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
 	}
 
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = 1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	}
-
-	if c.Txn.MaxActiveAges.Duration == 0 {
-		c.Txn.MaxActiveAges.Duration = time.Minute * 2
-	}
-	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 10
-	}
+	c.setTxnFeatureDefaults()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
@@ -512,6 +445,88 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func (c *Config) setServiceDefaults() string {
+	foundMachineHost := ""
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = c.ListenAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	}
+	if c.Role == "" {
+		c.Role = metadata.CNRole_TP.String()
+	}
+	return foundMachineHost
+}
+
+func (c *Config) setHAKeeperDefaults() {
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = time.Second
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
+	}
+}
+
+func (c *Config) setTaskRunnerDefaults() {
+	if c.TaskRunner.Parallelism == 0 {
+		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
+		if c.TaskRunner.Parallelism <= ReservedTasks {
+			c.TaskRunner.Parallelism = 1 + ReservedTasks
+		}
+	}
+	if c.TaskRunner.FetchInterval.Duration == 0 {
+		c.TaskRunner.FetchInterval.Duration = time.Second * 10
+	}
+	if c.TaskRunner.FetchTimeout.Duration == 0 {
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
+	}
+	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
+		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
+	}
+	if c.TaskRunner.MaxWaitTasks == 0 {
+		c.TaskRunner.MaxWaitTasks = 256
+	}
+	if c.TaskRunner.QueryLimit == 0 {
+		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
+	}
+	if c.TaskRunner.RetryInterval.Duration == 0 {
+		c.TaskRunner.RetryInterval.Duration = time.Second
+	}
+}
+
+func (c *Config) setTxnFeatureDefaults() {
+	// Resolve the mode before modifying fields so invalid modes still panic without mutation.
+	pessimistic := txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic
+	if c.Txn.EnableSacrificingFreshness == 0 {
+		c.Txn.EnableSacrificingFreshness = 1
+	}
+	if c.Txn.EnableCNBasedConsistency == 0 {
+		if pessimistic {
+			c.Txn.EnableCNBasedConsistency = -1
+		} else {
+			c.Txn.EnableCNBasedConsistency = 1
+		}
+	}
+	// Refresh expressions are not supported in either transaction mode.
+	c.Txn.EnableRefreshExpression = -1
+	if c.Txn.EnableLeakCheck == 0 {
+		c.Txn.EnableLeakCheck = -1
+	}
+
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 10
+	}
+}
+
 func validateCNServiceUUID(serviceID string) error {
 	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
 		return moerr.NewBadConfigNoCtxf(
@@ -541,56 +556,11 @@ func (c *SiriusConfig) validate() error {
 	return validateSiriusEmbeddedConfig(c)
 }
 
-// SetDefaultValue setups the default of the config.
-// most of the code are copied from the Validate.
-// But, the Validate may change some global variables that the SetDefaultValue does not need.
-// So, need a different function.
+// SetDefaultValue applies defaults without Validate's checks or global side effects.
 func (c *Config) SetDefaultValue() {
-	foundMachineHost := ""
-	if c.ListenAddress == "" {
-		c.ListenAddress = defaultListenAddress
-	}
-	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
-	}
-	if c.Role == "" {
-		c.Role = metadata.CNRole_TP.String()
-	}
-	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
-		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
-	}
-	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
-		c.HAKeeper.HeatbeatInterval.Duration = time.Second
-	}
-	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
-		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
-	}
-	if c.TaskRunner.Parallelism == 0 {
-		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism <= ReservedTasks {
-			c.TaskRunner.Parallelism = 1 + ReservedTasks
-		}
-	}
-	if c.TaskRunner.FetchInterval.Duration == 0 {
-		c.TaskRunner.FetchInterval.Duration = time.Second * 10
-	}
-	if c.TaskRunner.FetchTimeout.Duration == 0 {
-		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
-	}
-	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
-		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
-	}
-	if c.TaskRunner.MaxWaitTasks == 0 {
-		c.TaskRunner.MaxWaitTasks = 256
-	}
-	if c.TaskRunner.QueryLimit == 0 {
-		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
-	}
-	if c.TaskRunner.RetryInterval.Duration == 0 {
-		c.TaskRunner.RetryInterval.Duration = time.Second
-	}
+	foundMachineHost := c.setServiceDefaults()
+	c.setHAKeeperDefaults()
+	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
@@ -609,39 +579,7 @@ func (c *Config) SetDefaultValue() {
 			c.Txn.Isolation = txn.TxnIsolation_SI.String()
 		}
 	}
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = 1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	}
-
-	if c.Txn.MaxActiveAges.Duration == 0 {
-		c.Txn.MaxActiveAges.Duration = time.Minute * 2
-	}
-	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 10
-	}
+	c.setTxnFeatureDefaults()
 	c.Txn.NormalStateNoWait = false
 	c.LockService.ServiceID = c.UUID
 
@@ -736,8 +674,6 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
-	colexecServer          *colexec.Server
-	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService
@@ -799,6 +735,12 @@ type service struct {
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
+	startMu             sync.Mutex
+	startCtx            context.Context
+	startCancel         context.CancelCauseFunc
+	startInProgress     bool
+	startUpgradeActive  bool
+	startClosing        bool
 	lifecycleMu         sync.Mutex
 	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState

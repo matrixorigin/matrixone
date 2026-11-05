@@ -159,7 +159,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 	// Selection and manifestsToRead retain additional manifest structs while the
 	// decoded list remains live. Charge full manifest weights conservatively;
 	// paths and partition bounds are mostly shared, but slice/map overhead is not.
-	derivedManifestMemory := saturatingPlanningMul(
+	derivedManifestMemory := api.SaturatingMemoryMul(
 		ManifestListMemoryWeight(0, manifestListRead.Manifests),
 		2,
 	)
@@ -277,7 +277,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			// values from the decoded manifest.
 			if err := reservePlanningMemory(
 				&planningMemoryUsed,
-				saturatingPlanningMul(planningDataFileMemory(file), 2),
+				api.SaturatingMemoryMul(planningDataFileMemory(file), 2),
 				cfg.planningMaxMemory,
 				cfg.serverPlanningMode,
 			); err != nil {
@@ -303,13 +303,13 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 	if len(deleteEntries) > 0 {
 		if err := reservePlanningMemory(
 			&planningMemoryUsed,
-			saturatingPlanningMul(int64(len(loaded.Metadata.PartitionSpecs)), 64),
+			api.SaturatingMemoryMul(int64(len(loaded.Metadata.PartitionSpecs)), 64),
 			cfg.planningMaxMemory,
 			cfg.serverPlanningMode,
 		); err != nil {
 			return nil, err
 		}
-		specFieldCounts = partitionSpecFieldCounts(loaded.Metadata)
+		specFieldCounts = loaded.Metadata.PartitionSpecFieldCounts()
 	}
 	deleteTasks, err := pairDeleteTasksBoundedMemory(
 		planningCtx,
@@ -349,7 +349,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 
 	if err := reservePlanningMemory(
 		&planningMemoryUsed,
-		saturatingPlanningMul(int64(len(schema.Fields)), 512),
+		api.SaturatingMemoryMul(int64(len(schema.Fields)), 512),
 		cfg.planningMaxMemory,
 		cfg.serverPlanningMode,
 	); err != nil {
@@ -405,7 +405,7 @@ func (p LocalScanPlanner) planSnapshotlessScan(ctx context.Context, req api.Scan
 		return nil, unsupportedFeaturesError(features)
 	}
 	planningMemoryUsed := profile.MetadataBytes
-	if err := reservePlanningMemory(&planningMemoryUsed, saturatingPlanningMul(int64(len(schema.Fields)), 512), cfg.planningMaxMemory, cfg.serverPlanningMode); err != nil {
+	if err := reservePlanningMemory(&planningMemoryUsed, api.SaturatingMemoryMul(int64(len(schema.Fields)), 512), cfg.planningMaxMemory, cfg.serverPlanningMode); err != nil {
 		return nil, err
 	}
 	columnMapping, err := buildColumnMapping(schema, req.ProjectionIDs)
@@ -431,17 +431,6 @@ func (p LocalScanPlanner) planSnapshotlessScan(ctx context.Context, req api.Scan
 		DeleteMaxMemoryBytes: req.DeleteMaxMemoryBytes,
 		EnableDeleteSpill:    req.EnableDeleteSpill,
 	}, nil
-}
-
-func partitionSpecFieldCounts(meta *api.TableMetadata) map[int]int {
-	if meta == nil {
-		return nil
-	}
-	out := make(map[int]int, len(meta.PartitionSpecs))
-	for _, spec := range meta.PartitionSpecs {
-		out[spec.SpecID] = len(spec.Fields)
-	}
-	return out
 }
 
 type RefCacheRefresher interface {
@@ -596,23 +585,6 @@ func reservePlanningMemory(used *int64, addition, limit int64, mode api.ServerPl
 	}
 	*used += addition
 	return nil
-}
-
-func saturatingPlanningMul(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left > math.MaxInt64/right {
-		return math.MaxInt64
-	}
-	return left * right
-}
-
-func saturatingPlanningAdd(left, right int64) int64 {
-	if left < 0 || right < 0 || left > math.MaxInt64-right {
-		return math.MaxInt64
-	}
-	return left + right
 }
 
 func planningDataFileMemory(file api.DataFile) int64 {

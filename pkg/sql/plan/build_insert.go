@@ -70,7 +70,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +78,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		typ:     "insert",
 		rootId:  -1,
 		tblInfo: tblInfo,
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "INSERT requires one physical target table")
 	}
 	tableDef := tblInfo.tableDefs[0]
 
@@ -104,9 +107,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	bindCtx := NewBindContext(builder, nil)
 
-	// Pass WITH clause from INSERT to SELECT if present
-	if stmt.With != nil && stmt.Rows != nil {
-		stmt.Rows.With = stmt.With
+	if err = builder.prepareInsertSourceScope(stmt, bindCtx); err != nil {
+		return nil, err
 	}
 
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
@@ -338,8 +340,8 @@ func appendExternalInsertPlanWithExtraOptions(builder *QueryBuilder, bindCtx *Bi
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
-// If the INSERT statement does not specify the columns, all columns except the fake primary key column
-// will be included in the list.
+// The legacy planner supplies a filtered schema; its implicit list omits the
+// fake primary key retained for automatic generation.
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
@@ -359,7 +361,8 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 	} else {
 		for _, column := range stmt.Columns {
 			colName := strings.ToLower(string(column))
-			if _, ok := colToIdx[colName]; !ok {
+			idx, ok := colToIdx[colName]
+			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(ctx, tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
 			insertColsName = append(insertColsName, colName)
@@ -615,7 +618,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i, data := range node.RowsetData.Cols[idx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
-			e, err := builder.forceAssignmentCastExpr(rowExpr, col.Typ, builder.isInsertIgnore)
+			e, err := builder.forceAssignmentCastExpr(rowExpr, col.Typ, builder.isInsertIgnore, col.Name)
 			if err != nil {
 				return nil, err
 			}

@@ -32,7 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -40,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -129,6 +134,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
+	sender.odkuGeneration = s.Proc.ODKUResultGeneration()
 	// Capture the execution-attempt sink, rather than looking it up from proc
 	// when the terminal message arrives. Retry/reuse can replace proc.WarningSink
 	// before an old RPC callback is delivered; a closed captured sink then drops
@@ -314,17 +320,53 @@ func prepareRemoteRunSendingDataWithProtocol(
 		return nil, false, nil, false, err
 	}
 
+	// Only producers (including forwarded producer subtrees) need an ordinal
+	// range. Ordinary nested remote reads must not consume a receiver's bounded
+	// range and prevent the next sibling pipeline from being sent.
+	var odkuOrdinalBase uint64
+	if remoteScopeProducesODKUOrdinals(encodedScope) {
+		odkuOrdinalBase, err = proc.NextODKURemoteOrdinalBase()
+		if err != nil {
+			return nil, false, nil, false, err
+		}
+	}
+
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(
 		s.Proc,
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		odkuOrdinalBase,
 	); err != nil {
 		return nil, false, nil, false, err
 	}
 
 	return scopeData, withoutOutput, processData, folded, nil
+}
+
+// PRE_INSERT owns ordinal generation; DEDUP_JOIN only consumes provenance.
+// Inspect all operator children and scope descendants, not just the remote root.
+func remoteScopeProducesODKUOrdinals(scope *Scope) bool {
+	if scope == nil {
+		return false
+	}
+	produces := false
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if pre, ok := op.(*preinsert.PreInsert); ok && pre.TrackODKUResult {
+			produces = true
+		}
+		return nil
+	})
+	if produces {
+		return true
+	}
+	for _, child := range scope.PreScopes {
+		if remoteScopeProducesODKUOrdinals(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -350,6 +392,111 @@ func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSen
 	return receiveMessageFromCnServerIfOnlyRun(s, sender)
 }
 
+// adoptRelayedS3ObjectsAtIntake performs the recording side's r6
+// ownership adoption of the S3 objects a remote fragment relayed into
+// this run's stream (issue #25590 round-22 review, finding H1,
+// hardened by the round-23 review): every decoded flush-info batch's
+// object names join the recording workspace's per-object reservations
+// HERE — before the batch is forwarded into the local pipeline (whose
+// downstream may already have stopped and discard it) and before the
+// ack releases the fragment's credit — so an enumerable cleanup owner
+// exists from the moment the bytes leave the wire, strictly earlier
+// than the fragment's own terminal settlement. Admission uses the SAME
+// per-object reservation the writers use (round-22 review, finding
+// H2): a saturated recording engine refuses the admission now, the
+// refusal fails the transport and with it the whole run — the refused
+// batch is never acknowledged, so the fragment's settlement behind its
+// batch-flow drain observes the failing query's own terminal
+// (cancellation or stop) and keeps the non-transferred rollback: every
+// still-local name stays reachable and the fragment deletes it. The
+// failure-side owner is the fragment itself in both stream modes
+// (issue #25590 round-52 review, design r17). A received obligation is
+// never discarded without an enumerable owner — refusals can never
+// pile names onto a bound nobody releases.
+//
+// r23 producer provenance (round-23 review, finding 1): rows are a
+// candidate for adoption only after scopeRemoteObjectAdmission finds
+// a REGISTERED remote-persistence producer in this scope's own
+// operator tree — the plan the coordinator itself built. Ordinary
+// query rows never reach any recognizer, whatever their column shape;
+// a crafted ordinary result naming an existing committed file books
+// nothing anywhere. Inside a provenance-admitted stream, finding 3's
+// registry dispatches the three layout classifiers (multi_update's
+// relay action rows, the standalone insert's block-info results, the
+// standalone delete's remote rows), and a classifier that recognizes
+// its producer's layout must decode every ownership row before the
+// ack — undecodable, incomplete metadata fails the run and keeps the
+// fragment's local owner.
+func adoptRelayedS3ObjectsAtIntake(
+	s *Scope, bat *batch.Batch,
+) error {
+	adm := scopeRemoteObjectAdmission(s)
+	if !adm.any() {
+		return nil
+	}
+	mp := s.Proc.Mp()
+	matched := false
+	var names []string
+	if adm.insertS3 {
+		rowNames, ok, err := insert.TryExtractS3InsertObjectNames(bat)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = true
+			names = append(names, rowNames...)
+		}
+	}
+	if adm.deleteRemote {
+		rowNames, ok, err := deletion.TryExtractRemoteDeleteObjectNames(bat, mp)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = true
+			names = append(names, rowNames...)
+		}
+	}
+	if adm.multiUpdateS3 {
+		rowNames, ok, err := multi_update.TryExtractRelayS3InfoObjectNames(bat, mp)
+		if err != nil {
+			return err
+		}
+		if ok {
+			matched = true
+			names = append(names, rowNames...)
+		}
+	}
+	if !matched || len(names) == 0 {
+		return nil
+	}
+	txnOp := s.Proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return nil
+	}
+	rtx, isDisttae := ws.(*disttae.Transaction)
+	if !isDisttae {
+		return nil
+	}
+	return rtx.AdoptRemoteTransferredObjectNames(names)
+}
+
+// AdoptRemoteRunIntakeMetadata is the transport intake's exported
+// contract (issue #25590 round-23 review): the receive loops call it
+// for every decoded batch — before the ack releases the fragment's
+// credit — and the transport regression calls the same path to prove a
+// stream without a registered persistence producer never turns rows
+// into cleanup obligations.
+func AdoptRemoteRunIntakeMetadata(
+	s *Scope, bat *batch.Batch,
+) error {
+	return adoptRelayedS3ObjectsAtIntake(s, bat)
+}
+
 func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient) error {
 	var bat *batch.Batch
 	var end bool
@@ -363,6 +510,13 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
+			return err
+		}
+		// r6 intake adoption (issue #25590 round-22 review): even a
+		// stream this loop only drains discards the decoded batch, so
+		// the relayed object names need their recording-side owner HERE.
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
+			bat.Clean(mp)
 			return err
 		}
 		bat.Clean(mp)
@@ -386,6 +540,14 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
+			return err
+		}
+		// r6 intake adoption (issue #25590 round-22 review): adopt the
+		// relayed object names before forwarding — the local receiver
+		// below may already have stopped and discard this batch, and the
+		// ack that follows releases the fragment's credit.
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
+			bat.Clean(mp)
 			return err
 		}
 		connectorAnalyze.Network(bat)
@@ -434,6 +596,14 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
+			return err
+		}
+		// r6 intake adoption (issue #25590 round-22 review): adopt the
+		// relayed object names before the dispatch re-emits the batch —
+		// its receivers may already have stopped, and the ack that
+		// follows releases the fragment's credit.
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
+			bat.Clean(mp)
 			return err
 		}
 
@@ -503,8 +673,9 @@ type messageSenderOnClient struct {
 	mp *mpool.MPool
 
 	// anal was used to merge remote-run's cost analysis information.
-	anal *AnalyzeModule
-	proc *process.Process
+	anal           *AnalyzeModule
+	proc           *process.Process
+	odkuGeneration uint64
 
 	// warningSink is the captured diagnostic destination on the initiating
 	// process for this execution attempt. Remote terminal warnings are applied
@@ -634,7 +805,8 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 }
 
 // The capability query uses a different RPC connection. Confirm on the stream
-// that will carry the pipeline so a replacement old CN cannot execute a newer contract.
+// that will carry the pipeline so a replacement old CN cannot execute a newer
+// contract.
 func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
 	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
 	defer cancel()
@@ -748,7 +920,7 @@ func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, suc
 // Execution failures keep their identity even when auxiliary terminal data is
 // malformed. Invalid data cannot authorize backend reuse during later cleanup.
 func (sender *messageSenderOnClient) finishRemoteTerminal(message *pipeline.Message) error {
-	analysisErr := sender.dealRemoteTerminal(message.GetAnalyse())
+	analysisErr := sender.dealRemoteTerminalWithResult(message.GetAnalyse(), len(message.GetErr()) == 0 && (sender.ctx == nil || sender.ctx.Err() == nil || context.Cause(sender.ctx) == process.ErrPipelineStopped))
 	var remoteErr error
 	valid := analysisErr == nil
 	if data := message.GetErr(); len(data) > 0 {
@@ -1029,6 +1201,10 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 }
 
 func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
+	return sender.dealRemoteTerminalWithResult(data, true)
+}
+
+func (sender *messageSenderOnClient) dealRemoteTerminalWithResult(data []byte, publishODKU bool) error {
 	sender.terminalMu.Lock()
 	defer sender.terminalMu.Unlock()
 	if sender.terminalSeen {
@@ -1045,6 +1221,19 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+	}
+	if publishODKU && sender.proc != nil && envelope.ODKUResult != nil {
+		sender.proc.MergeODKUResultSummaryAtGeneration(process.ODKUResultSummary{
+			HasGenerated:          envelope.ODKUResult.HasGenerated,
+			FirstGeneratedOrdinal: envelope.ODKUResult.FirstGeneratedOrdinal,
+			FirstGeneratedID:      envelope.ODKUResult.FirstGeneratedID,
+			HasAction:             envelope.ODKUResult.HasAction,
+			LastActionOrdinal:     envelope.ODKUResult.LastActionOrdinal,
+			LastActionID:          envelope.ODKUResult.LastActionID,
+			HasSuccessfulAction:   envelope.ODKUResult.HasSuccessfulAction,
+			LastSuccessfulOrdinal: envelope.ODKUResult.LastSuccessfulOrdinal,
+			LastSuccessfulID:      envelope.ODKUResult.LastSuccessfulID,
+		}, sender.odkuGeneration)
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)

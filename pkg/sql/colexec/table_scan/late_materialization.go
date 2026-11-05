@@ -49,7 +49,9 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 		types.T_array_bf16,
 		types.T_array_float16,
 		types.T_array_int8,
-		types.T_array_uint8:
+		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4:
 		return true
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		return typ.Width > 0 &&
@@ -208,7 +210,9 @@ func (tableScan *TableScan) applyReaderFilter(
 		tableScan.ctr.filterActiveDuration += time.Since(start)
 	}()
 	tableScan.recordFilterInput(bat, loadedColumns)
-	tableScan.ctr.filterLateMaterialized = loadedColumns != nil
+	// A fallback can load the entire schema through this callback. Only a
+	// proper subset leaves late-column bytes to account for after filtering.
+	tableScan.ctr.filterLateMaterialized = loadedColumns != nil && len(loadedColumns) < len(tableScan.Types)
 	return tableScan.evalFilter(proc, bat, loadedColumns)
 }
 

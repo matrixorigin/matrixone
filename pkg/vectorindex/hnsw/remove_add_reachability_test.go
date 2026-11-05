@@ -44,7 +44,7 @@ func TestRemoveAddKeepsGraphReachable(t *testing.T) {
 			cfg.Usearch.Metric = usearch.L2sq
 			cfg.Usearch.Quantization = usearch.F32
 
-			idx, err := NewHnswModelForBuild[float32]("remove-add", cfg, 1, 2*total, "")
+			idx, err := NewHnswModelForBuild[float32]("remove-add", cfg, 1, 2*total, 0, "")
 			require.NoError(t, err)
 			defer func() { idx.Destroy() }()
 			for i := int64(1); i <= total; i++ {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 // ON EMPTY must not reserve the existing EMPTY function or column name.
@@ -47,6 +48,8 @@ func TestJSONTableEmptyKeywordPreservesFunctionCalls(t *testing.T) {
 func TestJSONTableConsumerSyntax(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
 		{"constant_text", `SELECT jt.n FROM JSON_TABLE('[1,2]', '$[*]' COLUMNS(n INT PATH '$')) AS jt ORDER BY jt.n`},
+		{"varchar", `SELECT jt.channel FROM JSON_TABLE('["alpha","beta"]', '$[*]' COLUMNS(channel VARCHAR(150) PATH '$')) AS jt ORDER BY jt.channel`},
+		{"varchar_charset", `SELECT jt.channel FROM JSON_TABLE('["alpha","beta"]', '$[*]' COLUMNS(channel VARCHAR(150) CHARACTER SET utf8mb4 PATH '$')) AS jt ORDER BY jt.channel`},
 		{"correlated_text", `SELECT t.id, jt.n FROM jt_input AS t, JSON_TABLE(t.doc, '$[*]' COLUMNS(n INT PATH '$')) AS jt ORDER BY t.id, jt.n`},
 		{"stage_datalink", `SELECT jt.n FROM JSON_TABLE(CAST('stage://jt_stage/input.json' AS DATALINK), '$[*]' COLUMNS(n INT PATH '$')) AS jt ORDER BY jt.n`},
 	} {
@@ -57,6 +60,71 @@ func TestJSONTableConsumerSyntax(t *testing.T) {
 			}
 			stmt.Free()
 		})
+	}
+}
+
+func TestJSONTableColumnCharset(t *testing.T) {
+	for _, tc := range []struct {
+		name, column, charset string
+		specified             bool
+	}{
+		{"omitted", `v varchar(20) PATH '$'`, "", false},
+		{"varchar", `v varchar(150) CHARACTER SET utf8mb4 PATH '$'`, "utf8mb4", true},
+		{"char", `v char(4) CHAR SET UTF8MB4 PATH '$'`, "utf8mb4", true},
+		{"text", `v text CHARSET 'utf8mb4' PATH '$'`, "utf8mb4", true},
+		{"nested", `NESTED PATH '$[*]' COLUMNS(v varchar(20) CHARACTER SET utf8mb4 PATH '$')`, "utf8mb4", true},
+		{"exists", `v varchar(20) CHARACTER SET utf8mb4 EXISTS PATH '$'`, "utf8mb4", true},
+		{"multiple", `v varchar(20) CHARACTER SET utf8mb4 PATH '$', w varchar(20) CHARACTER SET utf8 PATH '$'`, "utf8mb4", true},
+		{"empty_name", `v varchar(20) CHARACTER SET '' PATH '$'`, "", true},
+		{"escaped_name", `v varchar(20) CHARACTER SET 'not''a_charset' PATH '$'`, "not'a_charset", true},
+	} {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES,ANSI_QUOTES"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				stmt, err := ParseOneWithSQLMode(context.Background(),
+					`SELECT * FROM JSON_TABLE('[]', '$[*]' COLUMNS(`+tc.column+`)) jt`, 1, mode)
+				require.NoError(t, err)
+				defer stmt.Free()
+				original := jsonTableSpec(t, stmt)
+				column := original.Columns[0]
+				if column.Kind == "nested" {
+					column = column.Children[0]
+				}
+				if tc.specified {
+					require.NotNil(t, column.Charset)
+					require.Equal(t, tc.charset, *column.Charset)
+				} else {
+					require.Nil(t, column.Charset)
+				}
+				var opts []tree.FmtCtxOption
+				if mode != "" {
+					opts = append(opts, tree.WithNoBackslashEscape())
+				}
+				formatted := tree.StringWithOpts(stmt, dialect.MYSQL, opts...)
+				roundTrip, err := ParseOneWithSQLMode(context.Background(), formatted, 1, mode)
+				require.NoError(t, err, formatted)
+				defer roundTrip.Free()
+				require.Equal(t, original, jsonTableSpec(t, roundTrip))
+				require.Equal(t, formatted, tree.StringWithOpts(roundTrip, dialect.MYSQL, opts...))
+			})
+		}
+	}
+}
+
+func jsonTableSpec(t *testing.T, stmt tree.Statement) *tree.JSONTable {
+	t.Helper()
+	table := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0]
+	for {
+		switch node := table.(type) {
+		case *tree.JoinTableExpr:
+			table = node.Left
+		case *tree.AliasedTableExpr:
+			table = node.Expr
+		case *tree.TableFunction:
+			return node.JSONTable
+		default:
+			t.Fatalf("unexpected FROM shape %T", node)
+			return nil
+		}
 	}
 }
 
@@ -71,23 +139,7 @@ func TestJSONTableFormatRoundTripSQLModes(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer stmt.Free()
-			getSpec := func(stmt tree.Statement) *tree.JSONTable {
-				table := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0]
-				for {
-					switch node := table.(type) {
-					case *tree.JoinTableExpr:
-						table = node.Left
-					case *tree.AliasedTableExpr:
-						table = node.Expr
-					case *tree.TableFunction:
-						return node.JSONTable
-					default:
-						t.Fatalf("unexpected FROM shape %T", node)
-						return nil
-					}
-				}
-			}
-			original := getSpec(stmt)
+			original := jsonTableSpec(t, stmt)
 			if original.Path != `$."a\\b'c"` || original.Columns[0].OnEmpty.Default != `"a\\b'c"` {
 				t.Fatalf("literal bytes differ from independent oracle: %#v", original)
 			}
@@ -104,7 +156,7 @@ func TestJSONTableFormatRoundTripSQLModes(t *testing.T) {
 				if err != nil {
 					t.Fatalf("reparse %q: %v", formatted, err)
 				}
-				reparsed := getSpec(roundTrip)
+				reparsed := jsonTableSpec(t, roundTrip)
 				before, after := original.Columns[0], reparsed.Columns[0]
 				if original.Path != reparsed.Path || before.Path != after.Path || before.Name != after.Name ||
 					before.Kind != after.Kind || before.OnEmpty.Action != after.OnEmpty.Action ||
@@ -129,6 +181,8 @@ func TestJSONTableRejectsDuplicatePolicies(t *testing.T) {
 		`SELECT * FROM JSON_TABLE('[]','$[*]' COLUMNS(n INT PATH '$' NULL ON EMPTY ERROR ON EMPTY)) jt`,
 		`SELECT * FROM JSON_TABLE('[]','$[*]' COLUMNS(n INT PATH '$' NULL ON ERROR ERROR ON ERROR)) jt`,
 		`SELECT * FROM JSON_TABLE('[]',CAST('$[*]' AS VARCHAR) COLUMNS(n INT PATH '$')) jt`,
+		`SELECT * FROM JSON_TABLE('[]','$[*]' COLUMNS(v VARCHAR(20) CHARACTER SET utf8mb4 CHARACTER SET utf8mb4 PATH '$')) jt`,
+		`SELECT * FROM JSON_TABLE('[]','$[*]' COLUMNS(v VARCHAR(20) CHARACTER SET PATH '$')) jt`,
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		if stmt != nil {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -43,6 +44,11 @@ type Service interface {
 	Bootstrap(ctx context.Context) error
 	// BootstrapUpgrade bootstrap upgrade framework
 	BootstrapUpgrade(ctx context.Context) error
+	// UpgradeStatus reports the final catalog commit or an actionable failure.
+	UpgradeStatus() (bool, error)
+	// CheckManualUpgradeReadiness rejects an old catalog when automatic
+	// upgrade is disabled and SQL ingress cannot safely be opened.
+	CheckManualUpgradeReadiness(context.Context) error
 	// MaybeUpgradeTenant used to upgrade tenant metadata if the tenant is old version.
 	// The callback supplies the tenant ID and an optional version hint; the persisted
 	// mo_account.create_version, not the hint, determines whether upgrade is needed.
@@ -89,6 +95,13 @@ type VersionHandle interface {
 // Option option for bootstrap service
 type Option func(s *service)
 
+const (
+	// CatalogUpgradePageBytes limits ordinary catalog-upgrade result pages.
+	CatalogUpgradePageBytes = versions.CatalogUpgradePageBytes
+	// DefaultCatalogUpgradeObjectBytes permits larger indivisible definitions.
+	DefaultCatalogUpgradeObjectBytes = versions.DefaultCatalogUpgradeObjectBytes
+)
+
 // WithUpgradeHandles reset upgrade handles
 func WithUpgradeHandles(handles []VersionHandle) Option {
 	return func(s *service) {
@@ -101,6 +114,18 @@ func WithUpgradeTenantBatch(value int) Option {
 	return func(s *service) {
 		s.upgrade.upgradeTenantBatch = value
 	}
+}
+
+// WithUpgradeCatalogObjectLimit bounds one indivisible catalog input.
+func WithUpgradeCatalogObjectLimit(value uint64) Option {
+	return func(s *service) {
+		s.upgrade.catalogObjectLimit = value
+	}
+}
+
+// WithUpgradeDecisionFileService supplies the shared, immutable operator input.
+func WithUpgradeDecisionFileService(fs fileservice.FileService) Option {
+	return func(s *service) { s.upgrade.decisionFileService = fs }
 }
 
 // WithCheckUpgradeDuration setup check upgrade duration

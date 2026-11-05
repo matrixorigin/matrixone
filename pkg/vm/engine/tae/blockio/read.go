@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,23 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
-
-func removeIf[T any](data []T, pred func(t T) bool) []T {
-	// from plan.RemoveIf
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
-}
 
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 // Right now, it cannot support filter by physical address column.
@@ -125,7 +109,7 @@ func ReadDataByFilter(
 		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
-			sels = removeIf(sels, func(i int64) bool {
+			sels = util.RemoveIf(sels, func(i int64) bool {
 				return deleteMask.Contains(uint64(i))
 			})
 		}
@@ -210,13 +194,21 @@ func BlockDataReadWithFilter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	readLayouts ...*m0read.ObjectReadLayout,
 ) (preFilterRows int, err error) {
-	if applyFilter == nil {
+	if applyFilter == nil || applyFilter.Apply == nil {
 		return 0, moerr.NewInvalidInputNoCtx("nil residual block filter")
 	}
-	if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {
+	if applyFilter.Exact != nil && len(columns) > 0 && len(earlyColumns) == len(columns) {
+		// Exact filtering consumes the full requested schema. The legacy
+		// late-materialization contract still requires a proper subset.
+		for i, pos := range earlyColumns {
+			if pos != i {
+				return 0, moerr.NewInvalidInputNoCtx("invalid complete exact-filter column positions")
+			}
+		}
+	} else if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {
 		return 0, err
 	}
 	err = blockDataRead(
@@ -264,7 +256,7 @@ func blockDataRead(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	preFilterRows *int,
 	readLayouts ...*m0read.ObjectReadLayout,
 ) error {
@@ -362,6 +354,12 @@ func blockDataRead(
 		}
 	}
 
+	if applyFilter != nil && applyFilter.Exact != nil &&
+		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
+		cacheVectors.Free(mp)
+		return blockDataReadExactFilter(ctx, info, ds, columns, colTypes, sels, policy, bat, mp, fs, applyFilter, preFilterRows)
+	}
+
 	if applyFilter == nil {
 		err = BlockDataReadInner(
 			ctx,
@@ -420,7 +418,7 @@ func canFuseExactMembershipTopK(
 	top *objectio.IndexReaderTopOp,
 	phyAddrColumnPos int,
 	columnCount int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 ) bool {
 	if info == nil || info.IsAppendable() || !filter.ExactMembership || filter.HasFakePK ||
 		filter.CachedSearch != nil || searchFunc == nil || len(filterColumns) == 0 ||
@@ -597,7 +595,7 @@ func CopyBlockData(
 			return moerr.NewInvalidInputNoCtx("invalid physical block delete offsets")
 		}
 	}
-	outputBat.Shrink(deletes, true)
+	err = outputBat.Shrink(deletes, true, mp)
 	return
 }
 
@@ -684,7 +682,9 @@ func BlockDataReadBackup(
 		rows := tombstones.ToI64Array(nil)
 		if len(rows) > 0 {
 			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
-			loaded.Shrink(rows, true)
+			if err = loaded.Shrink(rows, true, common.DebugAllocator); err != nil {
+				return
+			}
 		}
 		return
 	}
@@ -708,7 +708,9 @@ func BlockDataReadBackup(
 		visibleRows = append(visibleRows, int64(row))
 	}
 	if len(visibleRows) != len(commitTSs) {
-		loaded.Shrink(visibleRows, false)
+		if err = loaded.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+			return
+		}
 		logutil.Info("[BlockDataReadBackup]",
 			zap.String("ts", ts.ToString()),
 			zap.String("location", location.String()),
@@ -792,7 +794,8 @@ func fillOutputBatchBySelectedRows(
 
 // materializeBlockData copies block columns directly from pinned FileService
 // cache entries into the output batch. Cached Vectors remain scoped inside
-// ObjectIO; only caller-owned output data survives this call.
+// ObjectIO. Full non-appendable reads publish private, retained varlen payloads;
+// selected/visibility reads keep the existing uniquely owned materialization.
 func materializeBlockData(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -963,6 +966,9 @@ func materializeBlockColumnsAtPositions(
 	if outputBat == nil {
 		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx("nil output batch for block columns")
 	}
+	if len(positions) == 0 {
+		return objectio.NullBitmap, nil
+	}
 	selectedColumns := make([]uint16, len(positions))
 	selectedTypes := make([]types.Type, len(positions))
 	selectedOutput := batch.NewWithSize(len(positions))
@@ -1051,7 +1057,7 @@ func blockDataReadWithFilter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 	readLayouts ...*m0read.ObjectReadLayout,
@@ -1169,7 +1175,9 @@ func blockDataReadWithFilter(
 			defer func() { vector.PutSels(deleted) }()
 			deleted = deleteMask.ToI64Array(&deleted)
 			for _, pos := range earlyColumns {
-				outputBat.Vecs[pos].Shrink(deleted, true)
+				if err := outputBat.Vecs[pos].Shrink(deleted, true, mp); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1193,7 +1201,7 @@ func blockDataReadWithFilter(
 		return nil
 	}
 
-	filterResult, err := applyFilter(outputBat, earlyColumns)
+	filterResult, err := applyFilter.Apply(outputBat, earlyColumns)
 	if err != nil {
 		return err
 	}
@@ -1287,7 +1295,9 @@ func blockDataReadWithFilter(
 				outputBat.Vecs[pos].CleanOnlyData()
 				continue
 			}
-			outputBat.Vecs[pos].Shrink(winnerPositions, false)
+			if err := outputBat.Vecs[pos].Shrink(winnerPositions, false, mp); err != nil {
+				return err
+			}
 		}
 		outputBat.SetRowCount(len(topRows))
 		materializeRows = topRows
@@ -1347,7 +1357,7 @@ func blockDataReadWithSelectedFilterTopK(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	earlyColumns []int,
-	applyFilter engine.ReaderFilter,
+	applyFilter *engine.ReaderFilterRequest,
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 ) error {
@@ -1409,7 +1419,7 @@ func blockDataReadWithSelectedFilterTopK(
 			}
 
 			var filterErr error
-			filterResult, filterErr = applyFilter(outputBat, earlyColumns)
+			filterResult, filterErr = applyFilter.Apply(outputBat, earlyColumns)
 			if filterErr != nil {
 				return nil, filterErr
 			}
@@ -1466,7 +1476,9 @@ func blockDataReadWithSelectedFilterTopK(
 			outputBat.Vecs[pos].CleanOnlyData()
 			continue
 		}
-		outputBat.Vecs[pos].Shrink(winnerPositions, false)
+		if err := outputBat.Vecs[pos].Shrink(winnerPositions, false, mp); err != nil {
+			return err
+		}
 	}
 	outputBat.SetRowCount(len(topRows))
 	outputBat.Vecs[topColPos].CleanOnlyData()
@@ -1641,7 +1653,9 @@ func BlockDataReadInner(
 			defer vector.PutSels(arr)
 			deletedRows = deleteMask.ToI64Array(&arr)
 			for i := range columns {
-				outputBat.Vecs[i].Shrink(deletedRows, true)
+				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -1831,7 +1845,9 @@ func BlockDataReadInner(
 			loadedColumnPos++
 		}
 		if len(deletedRows) > 0 {
-			outputBat.Vecs[outputColPos].Shrink(deletedRows, true)
+			if err = outputBat.Vecs[outputColPos].Shrink(deletedRows, true, mp); err != nil {
+				return
+			}
 		}
 	}
 	return

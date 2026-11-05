@@ -265,7 +265,7 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 
 			for _, expr := range []*planpb.Expr{ordinaryExpr, preparedExpr} {
 				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
-				width := int32(38)
+				width := int32(20)
 				if op == "%" {
 					width = 19
 				}
@@ -419,7 +419,7 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 							strings.ReplaceAll(tc.expression, "?", "cast("+value+" as "+castType+")"))
 						require.NoError(t, err)
 						expected := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
-						require.Equal(t, expected.Typ.Id, actual.Typ.Id)
+						require.Equal(t, expected.Typ.Id, actual.Typ.Id, "expected=%s actual=%s", expected.String(), actual.String())
 						require.Equal(t, expected.Typ.Width, actual.Typ.Width)
 						require.Equal(t, expected.Typ.Scale, actual.Typ.Scale)
 						want, wantErr := eval(expected)
@@ -489,7 +489,7 @@ func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testi
 			require.NoError(t, preparedErr)
 			require.Equal(t, ordinaryType, preparedType)
 			require.Equal(t, types.T_decimal128, ordinaryType.Oid)
-			width := int32(38)
+			width := int32(26)
 			if op == "%" {
 				width = 19
 			}
@@ -552,7 +552,7 @@ func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
 	ordinaryType, ordinaryValue := evaluate(ordinaryExpr)
 	preparedType, preparedValue := evaluate(preparedExpr)
 	require.Equal(t, types.T_decimal128, ordinaryType.Oid)
-	require.Equal(t, int32(38), ordinaryType.Width)
+	require.Equal(t, int32(26), ordinaryType.Width)
 	require.Equal(t, int32(6), ordinaryType.Scale)
 	require.Equal(t, ordinaryType, preparedType)
 	require.Equal(t, "2.000000", ordinaryValue)
@@ -579,7 +579,7 @@ func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
 	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 	preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal128), ordinaryExpr.Typ.Id)
-	require.Equal(t, int32(38), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(21), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(0), ordinaryExpr.Typ.Scale)
 	require.Equal(t, ordinaryExpr.Typ.Id, preparedExpr.Typ.Id)
 	require.Equal(t, ordinaryExpr.Typ.Width, preparedExpr.Typ.Width)
@@ -614,19 +614,19 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 		{name: "left null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
 			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 38, id: types.T_decimal128},
 		{name: "right null", values: []any{
 			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 38, id: types.T_decimal128},
 		{name: "both null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 18, id: types.T_decimal64},
 		{name: "both integers", values: []any{
 			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
 			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
-		}, width: 38, id: types.T_decimal128},
+		}, width: 20, id: types.T_decimal128},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -657,8 +657,8 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 		})
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
-	require.Equal(t, int32(65), expr.Typ.Width)
+	require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+	require.Equal(t, int32(38), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 	require.False(t, expr.Typ.NotNullable)
 }
@@ -675,7 +675,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
-	require.Equal(t, int32(38), expr.Typ.Width)
+	require.Equal(t, int32(20), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 
 	for _, tc := range []struct {
@@ -707,7 +707,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 			require.NoError(t, err)
 			foldedExpr := foldedPlan.GetQuery().Nodes[len(foldedPlan.GetQuery().Nodes)-1].ProjectList[0]
 			require.Equal(t, int32(types.T_decimal128), foldedExpr.Typ.Id)
-			require.Equal(t, int32(38), foldedExpr.Typ.Width)
+			require.Equal(t, int32(20), foldedExpr.Typ.Width)
 			require.Equal(t, int32(0), foldedExpr.Typ.Scale)
 			if tc.want == "" {
 				return
@@ -757,7 +757,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 	require.NoError(t, err)
 	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal128), ordinaryExpr.Typ.Id)
-	require.Equal(t, int32(38), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(22), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(2), ordinaryExpr.Typ.Scale)
 
 	prepared, err := runOneStmt(mock, t,

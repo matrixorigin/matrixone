@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -100,7 +101,7 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 		bids[idx-begin] = blk.BlockID
 	}
 
-	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
+	if !ioutil.PrefetchSkipped(ctx, rs.fs, fileservice.GetFileServicePolicy(ctx), blks[0]) {
 		err := ioutil.Prefetch(
 			rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 		if err != nil {
@@ -434,17 +435,5 @@ func FastApplyDeletesByRowOffsets(
 
 // RemoveIf removes the elements that pred is true.
 func RemoveIf[T any](data []T, pred func(t T) bool) []T {
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
+	return commonutil.RemoveIf(data, pred)
 }

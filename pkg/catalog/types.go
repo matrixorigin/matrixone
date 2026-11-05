@@ -356,6 +356,9 @@ const (
 	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
 
+// MoISCPJobStateError is the job_state of mo_iscp_log of a job stopped by a permanent error.
+const MoISCPJobStateError int8 = 4
+
 func IsSystemTable(id uint64) bool {
 	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID || id == MO_TABLES_LOGICAL_ID_INDEX_ID
 }
@@ -382,6 +385,7 @@ const (
 	MO_COLUMNS        = "mo_columns"
 	MO_COLUMNS_UPDATE = "mo_columns_update"
 	MO_USER           = "mo_user"
+	MO_ROLE_GRANT     = "mo_role_grant"
 	MO_ROLE_RULE      = "mo_role_rule"
 
 	// mo_tables logical_id index table name (fixed name, no UUID)
@@ -672,12 +676,22 @@ const (
 	IndexMetadata_TblCol_Nrow      = "nrow"
 	IndexMetadata_TblCol_Build_Ts  = "build_ts"
 
+	// Ignored rows - a table of an index holding the source rows the index cannot store,
+	// keyed by the source primary key, with the error code, an optional message and the
+	// commit time of the change.
+	IndexIgnored_TblType       = "ignored"
+	IndexIgnored_TblCol_Pk     = "__mo_index_pk"
+	IndexIgnored_TblCol_Code   = "__mo_index_code"
+	IndexIgnored_TblCol_Reason = "__mo_index_reason"
+	IndexIgnored_TblCol_Ts     = "__mo_index_ts"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types
 	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
 	Hnsw_TblType_Metadata = "hnsw_meta"
 	Hnsw_TblType_Storage  = "hnsw_index"
+	Hnsw_TblType_Dict     = "hnsw_dict"
 
 	// HNSW Storage - Column names
 	Hnsw_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
@@ -692,6 +706,13 @@ const (
 	Hnsw_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
 	Hnsw_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
 	Hnsw_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
+
+	// HNSW Dict - a key/value table of an int8/uint8 index; Hnsw_Dict_QuantizeMin/Max hold
+	// the [min,max] range every vector is mapped with.
+	Hnsw_TblCol_Dict_Key  = "__mo_index_key"
+	Hnsw_TblCol_Dict_Val  = "__mo_index_val"
+	Hnsw_Dict_QuantizeMin = "quantize_min"
+	Hnsw_Dict_QuantizeMax = "quantize_max"
 
 	/************ Cagra Index *************/
 

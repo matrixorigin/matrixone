@@ -53,8 +53,15 @@ separately in `M0_STATUS.md` and the local evidence seal.
    access to experimental storage is unsupported and needs deployment isolation;
    old binaries are not assumed to self-reject these directories.
 
-## Historical R3 proposal and evidence
+Base integration note (2026-11-05): main `d2dab994` is merged into the AR-1
+candidate `61d76463` without changing the contract above. Workspace rewrites use
+main's physical-rewrite/staged-record/infallible-publication lifecycle and
+asynchronous orphan ownership, retaining relation-qualified sources and private
+pinned layouts. Tests drive the existing bounded cleanup pass before asserting
+physical deletion and queue retirement. New readonly and copy-on-write APIs
+remain behind strict mapping checks; no context authorization is restored.
 
+## Historical R3 proposal and evidence
 
 Status: **DRAFT; design decision and implementation blocked**. This proposal
 belongs to [PR #30816](https://github.com/matrixorigin/matrixone/pull/30816)

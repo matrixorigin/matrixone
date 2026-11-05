@@ -198,7 +198,7 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 ) (*plan.Expr, error) {
 	var err error
 	if isDefaultValExpr(rhs) {
-		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), ignore)
+		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, table.DbName, builder.compCtx.GetProcess(), ignore)
 		if err != nil {
 			return nil, err
 		}
@@ -225,7 +225,7 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 	if isGeometryPlanType(&col.Typ) {
 		return funcCastForGeometryType(builder.GetContext(), rhs, col.Typ)
 	}
-	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore)
+	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore, col.Name)
 }
 
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
@@ -262,13 +262,25 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[pos]))
 	}
 	for pos, col := range tableDef.Cols {
-		oldColName2Idx[alias+"."+col.Name] = int32(pos)
+		oldColName2Idx[alias+"."+col.Name] = int32(columnCount + pos)
 	}
 
 	currentProjectList := selectNode.ProjectList
 	currentNodeID := lastNodeID
 	currentNode := selectNode
 	currentTag := selectNodeTag
+	// Historical catalogs may exceed the expression-inlining limit. Their
+	// virtual values must be staged from the current row image before each RHS:
+	// an earlier assignment can change a dependency such as TIMESTAMP.
+	stageLegacy := mayHaveVirtualTimestampRead(tableDef) && len(VirtualTimestampExpansionFindings(tableDef)) > 0
+	var stageOrder []int32
+	if stageLegacy {
+		var err error
+		stageOrder, err = builder.virtualTimestampStageOrder(tableDef)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+	}
 	for _, assignment := range assignments {
 		colName := assignment.Column
 		astExpr := assignment.Expr
@@ -277,8 +289,20 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		if !ok {
 			return 0, nil, 0, moerr.NewInternalErrorf(builder.GetContext(), "update column %s not found", colName)
 		}
+		if stageLegacy {
+			for _, generatedPos := range stageOrder {
+				var err error
+				currentNodeID, currentTag, err = builder.appendVirtualTimestampStage(
+					currentNodeID, currentTag, tableDef, generatedPos, bindCtx, true)
+				if err != nil {
+					return 0, nil, 0, err
+				}
+			}
+			currentNode = builder.qry.Nodes[currentNodeID]
+			currentProjectList = currentNode.ProjectList
+		}
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
-			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
+			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, stageLegacy,
 		)
 		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
 			target := tableDef.Cols[columnIndex].Typ
@@ -366,6 +390,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	tableDef *plan.TableDef,
 	alias string,
 	currentProjectList []*plan.Expr,
+	staged bool,
 ) (*BindContext, *ProjectionBinder) {
 	ctx := NewBindContext(builder, parent)
 	cols := make([]string, len(tableDef.Cols))
@@ -386,6 +411,8 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = alias + "." + col.Name
 	}
 	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
+	binding.virtualTimestampTable = tableDef
+	binding.virtualTimestampStaged = staged
 	ctx.bindings = append(ctx.bindings, binding)
 	ctx.bindingByTag[tag] = binding
 	ctx.bindingByTable[alias] = binding
@@ -399,12 +426,11 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	return ctx, binder
 }
 
-func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (rootID int32, err error) {
+func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext, dmlCtx *DMLContext) (rootID int32, err error) {
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
 	}
 
-	dmlCtx := NewDMLContext()
 	err = dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
 		return 0, err
@@ -477,6 +503,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			if sequentialAssignments && isEnumOrSetPlanType(&col.Typ) {
+				// Sequential projections must retain the storage ordinal/bitmap.
+				// A display string cannot recover an empty-label ENUM member.
+				if bindCtx.physicalMySQLSpecialRefs == nil {
+					bindCtx.physicalMySQLSpecialRefs = make(map[*tree.UnresolvedName]struct{})
+				}
+				bindCtx.physicalMySQLSpecialRefs[e] = struct{}{}
+			}
+			if col.GeneratedCol != nil {
+				if bindCtx.physicalGeneratedRefs == nil {
+					bindCtx.physicalGeneratedRefs = make(map[*tree.UnresolvedName]struct{})
+				}
+				bindCtx.physicalGeneratedRefs[e] = struct{}{}
+			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
@@ -502,8 +542,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
+		checkGeneratedAssignment := func(assignment UpdateAssignment) (bool, error) {
+			for _, col := range tableDef.Cols {
+				if col.Name != assignment.Column || col.GeneratedCol == nil {
+					continue
+				}
+				if _, ok := assignment.Expr.(*tree.DefaultVal); ok {
+					return true, nil
+				}
+				return true, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", assignment.Column, tableDef.Name)
+			}
+			return false, nil
+		}
+
 		updateAssignments := dmlCtx.updateAssignments[i]
 		if !sequentialAssignments {
+			// The nonsequential path keeps only the last assignment per column.
+			// Validate the original occurrences first so a later DEFAULT cannot
+			// hide an invalid write to a generated column.
+			if len(updateAssignments) > len(dmlCtx.updateCol2Expr[i]) {
+				for _, assignment := range updateAssignments {
+					if _, err := checkGeneratedAssignment(assignment); err != nil {
+						return 0, err
+					}
+				}
+			}
 			updateAssignments = make([]UpdateAssignment, 0, len(dmlCtx.updateCol2Expr[i]))
 			for colName := range dmlCtx.updateCol2Expr[i] {
 				updateAssignments = append(updateAssignments, UpdateAssignment{
@@ -514,25 +577,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		for _, assignment := range updateAssignments {
 			colName := assignment.Column
-			if isFunctionalColumn(FindColumn(tableDef.Cols, colName)) {
-				return 0, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
-			}
 			updateExpr := assignment.Expr
-			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
-			isGenCol := false
-			for _, colDef := range tableDef.Cols {
-				if colDef.Name == colName && colDef.GeneratedCol != nil {
-					isGenCol = true
-					break
-				}
+			isGenCol, err := checkGeneratedAssignment(assignment)
+			if err != nil {
+				return 0, err
 			}
 			if isGenCol {
-				if _, ok := updateExpr.(*tree.DefaultVal); ok {
-					// SET gen_col = DEFAULT is allowed — silently remove from update set
-					delete(dmlCtx.updateCol2Expr[i], colName)
-					continue
-				}
-				return 0, moerr.NewInvalidInputf(builder.compCtx.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
+				// SET generated_col = DEFAULT is allowed and is not a write.
+				delete(dmlCtx.updateCol2Expr[i], colName)
+				continue
 			}
 
 			if !dmlCtx.updatePartCol[i] {
@@ -588,10 +641,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// still tracks only the target tables. buildFrom requires a single
 	// TableExpr, so cross-join target and the FROM-clause join tree here.
 	selectFromTables := stmt.Tables
+	var targetScope *updateTargetScope
 	if stmt.From != nil && len(stmt.From.Tables) > 0 {
 		joined := tree.TableExpr(stmt.Tables[0])
 		for _, src := range stmt.From.Tables {
-			joined = &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+			join := &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+			if targetScope == nil {
+				targetScope = &updateTargetScope{join: join}
+			}
+			joined = join
 		}
 		selectFromTables = tree.TableExprs{joined}
 	}
@@ -613,8 +671,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
+	previousScope := builder.updateTargetScope
+	builder.updateTargetScope = targetScope
+	defer func() { builder.updateTargetScope = previousScope }()
 	lastNodeID, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
+		return 0, err
+	}
+	if err = validateUpdateAssignmentTargets(builder, bindCtx, targetScope, dmlCtx, stmt); err != nil {
 		return 0, err
 	}
 
@@ -834,7 +898,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if err = replaceFuncId(builder.GetContext(), newDefExpr); err != nil {
 				return 0, err
 			}
+			if isAttributedDecimalPlanType(col.Typ) {
+				// Replay the persisted admission boundary under this
+				// statement's ignore policy instead of reusing the
+				// DDL-authored one verbatim.
+				if newDefExpr, err = rePoliceUnsignedDecimalAssignmentBoundary(
+					builder.GetContext(), newDefExpr, stmt.Ignore, builder.compCtx.GetProcess()); err != nil {
+					return 0, err
+				}
+			}
 			oldPos := oldColName2Idx[qualifiedName]
+			newPos := oldPos
+			if sequentialAssignments {
+				newPos = dmlCtx.tableDefs[i].Name2ColIndex[col.Name]
+			}
 			if changed := changedPredicates[alias]; changed != nil {
 				newDefExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
 					DeepCopyExpr(changed), newDefExpr, DeepCopyExpr(selectNode.ProjectList[oldPos]),
@@ -843,11 +920,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					return 0, err
 				}
 			}
-			newColName2Idx[qualifiedName] = oldPos
-			automaticAssignments[qualifiedName] = oldPos
-			oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
-			selectNode.ProjectList[oldPos] = newDefExpr
+			newColName2Idx[qualifiedName] = newPos
+			automaticAssignments[qualifiedName] = newPos
+			if !sequentialAssignments {
+				oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			}
+			selectNode.ProjectList[newPos] = newDefExpr
 		}
 	}
 	if err = guardAssignments(automaticAssignments, false); err != nil {
@@ -1044,14 +1123,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
-			newColName2Idx[alias+"."+col.Name] = oldPos
+			newPos := oldPos
+			if sequentialAssignments {
+				// The first half is the current row; the second half is the
+				// physical OLD image required by index maintenance.
+				newPos = tableDef.Name2ColIndex[col.Name]
+			}
+			newColName2Idx[alias+"."+col.Name] = newPos
 			if assignedColsByTarget[i] == nil {
 				assignedColsByTarget[i] = make(map[string]struct{})
 			}
 			assignedColsByTarget[i][col.Name] = struct{}{}
-			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
-			selectNode.ProjectList[oldPos] = genExpr
+			if !sequentialAssignments {
+				oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			}
+			selectNode.ProjectList[newPos] = genExpr
 			if isMultiTargetUpdate {
 				targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
 					selectNode,
@@ -5392,4 +5479,47 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 	}
 	lastNodeID = builder.appendNode(projectNode, bindCtx)
 	return lastNodeID, projectNode, projectNode.BindingTags[0], nil
+}
+
+// Validate SET against the source binder's namespace, which includes read-only
+// CTEs and USING's chosen source, before accepting the provisional write target.
+func validateUpdateAssignmentTargets(builder *QueryBuilder, bindCtx *BindContext, targetScope *updateTargetScope, dmlCtx *DMLContext, stmt *tree.Update) error {
+	if targetScope != nil && targetScope.context == nil {
+		return moerr.NewInternalError(builder.GetContext(), "UPDATE target namespace was not bound")
+	}
+	for _, assignment := range stmt.Exprs {
+		for _, lhs := range assignment.Names {
+			sourceCtx := bindCtx
+			if targetScope != nil && lhs.TblName() == "" {
+				sourceCtx = targetScope.context
+			}
+			binding, err := resolveUpdateAssignmentTarget(builder.GetContext(), sourceCtx, lhs)
+			if err != nil {
+				return err
+			}
+
+			idx, writable := dmlCtx.aliasMap[binding.table]
+			if !writable || binding.tableID != dmlCtx.tableDefs[idx].TblId {
+				return moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)
+			}
+		}
+	}
+	return nil
+}
+
+// Use the existing source identity owner for SET, never SELECT projection aliases.
+func resolveUpdateAssignmentTarget(ctx context.Context, bindCtx *BindContext, lhs *tree.UnresolvedName) (*Binding, error) {
+	binding, _, ok := resolveColumnIdentity(bindCtx, lhs)
+	if !ok {
+		if lhs.TblName() == "" {
+			if value, found := bindCtx.bindingByCol[lhs.ColName()]; found && value == nil {
+				return nil, moerr.NewInvalidInputf(ctx, "ambiguous column reference '%s'", lhs.ColNameOrigin())
+			}
+		}
+		return nil, moerr.NewBadFieldErrorf(ctx, "unknown UPDATE target column '%s'", lhs.ColNameOrigin())
+	}
+	if lhs.TblName() == "" && len(bindCtx.outerUsingCols[lhs.ColName()]) > 1 {
+		return nil, moerr.NewInvalidInputf(ctx, "UPDATE target column '%s' is not uniquely writable", lhs.ColNameOrigin())
+	}
+	return binding, nil
 }

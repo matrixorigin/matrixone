@@ -14,12 +14,18 @@
 
 package moerr
 
+// wholeTxnRollbackCodes classifies infrastructure failures that doom the whole
+// owning transaction. The lock-wait-timeout family (ErrLockWaitTimeout,
+// ErrRemoteLockWaitTimeout) is deliberately NOT in this list: matching MySQL's
+// default (innodb_rollback_on_timeout=OFF), an expired lock wait rolls back
+// only the failing statement and leaves the transaction open, so the session
+// can COMMIT work done before the contention. A deadlock still rolls back the
+// whole transaction, as InnoDB does.
 var wholeTxnRollbackCodes = [...]uint16{
 	ErrRetryForCNRollingRestart, ErrDeadLockDetected, ErrLockTableBindChanged,
 	ErrLockTableNotFound, ErrDeadlockCheckBusy, ErrLockConflict,
-	ErrRemoteLockWaitTimeout, ErrLockWaitTimeout, ErrTxnUnknown,
-	ErrBackendClosed, ErrNoAvailableBackend, ErrBackendCannotConnect,
-	ErrTxnWriteConflict,
+	ErrTxnUnknown, ErrBackendClosed, ErrNoAvailableBackend,
+	ErrBackendCannotConnect, ErrTxnWriteConflict,
 }
 
 // WholeTxnRollbackCodes returns a copy for diagnostics/tests without exposing

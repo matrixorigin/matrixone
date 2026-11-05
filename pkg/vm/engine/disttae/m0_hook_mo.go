@@ -391,9 +391,6 @@ func buildM0CNAddColumn(
 	}
 
 	table := tbl.GetTableDef(ctx)
-	if err := validateM0Evolution(tbl, table); err != nil {
-		return nil, err
-	}
 	if !m0AppendPositionAllowed(add.InsertPosition, len(table.Cols)) {
 		return nil, moerr.NewInternalErrorNoCtx("M0: ADD COLUMN must append before rowid")
 	}
@@ -416,6 +413,9 @@ func buildM0CNAddColumn(
 	if len(table.Indexes) != 0 || len(table.Fkeys) != 0 ||
 		len(table.RefChildTbls) != 0 || len(table.Checks) != 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("M0: secondary indexes, foreign keys and checks are outside the append domain")
+	}
+	if err := validateM0Evolution(tbl, table); err != nil {
+		return nil, err
 	}
 	next := uint32(len(table.Cols) - 1)
 	if tbl.extraInfo == nil || tbl.extraInfo.NextColSeqnum != next {

@@ -2118,11 +2118,14 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxBadRecords            int64
+	MaxBadRecordsSet         bool  // whether MAX_BAD_RECORDS was specified, so that 0 can be set
 	MaxPostingsCapacity      int64 // fulltext2: max postings (term occurrences) per built segment
 	PositionFree             bool  // fulltext2: build a position-free (bag-of-words only) index
 	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
 	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
+	TokenFilters             []string // fulltext2: token_filter analyzer chain (e.g. ["stop"])
 }
 
 // Must follow the following sequence when test
@@ -2137,10 +2140,10 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
+		node.MaxIndexCapacity != 0 || node.MaxBadRecordsSet || node.MaxPostingsCapacity != 0 ||
 		node.QuantizerTrainLimit != 0 || node.PositionFree ||
 		node.Merge || node.ForceSync ||
-		len(node.IncludeColumns) != 0 {
+		len(node.IncludeColumns) != 0 || len(node.TokenFilters) != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2266,6 +2269,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
 		ctx.WriteByte(' ')
 	}
+	if node.MaxBadRecordsSet {
+		ctx.WriteString("MAX_BAD_RECORDS ")
+		ctx.WriteString(strconv.FormatInt(node.MaxBadRecords, 10))
+		ctx.WriteByte(' ')
+	}
 	if node.MaxPostingsCapacity != 0 {
 		ctx.WriteString("MAX_POSTINGS_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxPostingsCapacity, 10))
@@ -2278,6 +2286,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.PositionFree {
 		ctx.WriteString("POSITION_FREE=TRUE ")
+	}
+	if len(node.TokenFilters) != 0 {
+		ctx.WriteString("TOKEN_FILTER = '")
+		ctx.WriteString(strings.Join(node.TokenFilters, ","))
+		ctx.WriteString("' ")
 	}
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString("INCLUDE (")

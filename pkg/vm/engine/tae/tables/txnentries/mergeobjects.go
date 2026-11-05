@@ -17,6 +17,7 @@ package txnentries
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -233,22 +234,37 @@ func (entry *mergeObjectsEntry) RollbackTransferState() {
 	entry.transferredDels = nil
 }
 
-func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
+func (entry *mergeObjectsEntry) PrepareRollback() error {
 	entry.RollbackTransferState()
+	names := make([]string, 0, len(entry.createdObjs))
+	for _, obj := range entry.createdObjs {
+		names = append(names, obj.ObjectName().String())
+	}
+	return scheduleMergeOutputCleanup(entry.rt, names)
+}
 
-	fs := entry.rt.Fs
-	// for io task, dispatch by round robin, scope can be nil
-	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
-		// TODO: variable as timeout
-		ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CausePrepareRollback2)
-
-		defer cancel()
-		for _, obj := range entry.createdObjs {
-			_ = fs.Delete(ctx, obj.ObjectName().String())
-		}
+func scheduleMergeOutputCleanup(rt *dbutils.Runtime, names []string) error {
+	if len(names) == 0 {
 		return nil
-	})
-	return
+	}
+	cleanup := func() error {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CausePrepareRollback2)
+		defer cancel()
+		var result error
+		for _, name := range names {
+			if err := rt.Fs.Delete(ctx, name); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				logutil.Warnf("[MergeObjects] delete rollback output %s: %v", name, err)
+				result = errors.Join(result, err)
+			}
+		}
+		return result
+	}
+	if _, err := rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, cleanup); err != nil {
+		// A rejected task has no owner left to delete these uncommitted files.
+		logutil.Warnf("[MergeObjects] schedule rollback output cleanup: %v", err)
+		return cleanup()
+	}
+	return nil
 }
 
 func (entry *mergeObjectsEntry) ApplyRollback() (err error) {

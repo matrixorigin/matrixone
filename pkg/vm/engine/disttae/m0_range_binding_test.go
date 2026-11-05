@@ -45,7 +45,7 @@ import (
 )
 
 func TestM0RangesBindMissingBeforePruning(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), 0)
 	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
@@ -145,6 +145,10 @@ func TestM0RangesBindMissingBeforePruning(t *testing.T) {
 			arg := &plan.Expr{Typ: table.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: tc.filter, ColPos: pos}}}
 			filter := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.ISNULL, 0), ObjName: "isnull"}, Args: []*plan.Expr{arg}}}}
 			tbl := &txnTable{db: &txnDatabase{op: op, databaseName: "db"}, tableName: "customer", tableDef: table}
+			if tc.name == "legal append" {
+				tbl.tableId, tbl.db.databaseId = 42, 7
+				m0BindAppendFixtureEvolution(t, tbl)
+			}
 			var blocks objectio.BlockInfoSlice
 			param := engine.RangesParam{BlockFilters: []*plan.Expr{filter}}
 			if tc.name == "ordinary complete bound projection" {

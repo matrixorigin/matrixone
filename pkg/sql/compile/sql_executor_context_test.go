@@ -27,10 +27,12 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -995,4 +997,84 @@ func TestInternalCompilerLoadPrimaryKeyPolicy(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, value, got)
 	}
+}
+
+type namespaceDelegate struct {
+	*plan.MockCompilerContext
+	t        *testing.T
+	snapshot *plan.Snapshot
+}
+
+func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return &plan.ObjectRef{Obj: 99}, &plan.TableDef{TblId: 99, IsTemporary: true}, nil
+}
+
+func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	require.Equal(d.t, "subscription_db", db)
+	require.Equal(d.t, "source", table)
+	require.Same(d.t, d.snapshot, snapshot)
+	id, err := d.GetAccountId()
+	require.NoError(d.t, err)
+	return &plan.ObjectRef{Obj: 11, PubInfo: &pbplan.PubInfo{TenantId: int32(id)}}, &plan.TableDef{TblId: 11}, nil
+}
+
+func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	snapshot := &plan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 23}}
+	delegate := &namespaceDelegate{MockCompilerContext: plan.NewMockCompilerContext(false, proc), t: t, snapshot: snapshot}
+	for _, viewChild := range []bool{false, true} {
+		c := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(proc.Ctx, delegate), viewChild: viewChild, viewDelegate: delegate}
+		obj, def, err := c.ResolveWithoutTemporaryAlias("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, uint64(11), def.TblId)
+		id, err := delegate.GetAccountId()
+		require.NoError(t, err)
+		require.Equal(t, int32(id), obj.PubInfo.TenantId)
+		_, def, err = c.Resolve("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, uint64(99), def.TblId)
+	}
+}
+
+func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	owner.AddTempTable("db", "t", "physical")
+	proc.Session = owner
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(database, nil).AnyTimes()
+	for i, name := range []string{"t", "physical"} {
+		def := &plan.TableDef{Name: name, TblId: uint64(i + 11), TableType: catalog.SystemOrdinaryRel}
+		if name == "physical" {
+			def.TableType = catalog.SystemTemporaryTable
+		}
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		relation.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), name, nil).Return(relation, nil).AnyTimes()
+	}
+	c := &compilerContext{engine: eng, proc: proc, ctx: proc.Ctx}
+	for _, skipAlias := range []bool{false, true, false} {
+		resolve := c.Resolve
+		if skipAlias {
+			resolve = c.ResolveWithoutTemporaryAlias
+		}
+		obj, def, err := resolve("db", "t", nil)
+		require.NoError(t, err)
+		require.Equal(t, !skipAlias, def.IsTemporary)
+		require.Equal(t, !skipAlias, obj.NotLockMeta)
+		if skipAlias {
+			require.Equal(t, uint64(11), def.TblId)
+		} else {
+			require.Equal(t, uint64(12), def.TblId)
+		}
+	}
+	obj, def, err := c.ResolveWithoutTemporaryAlias("db", "physical", nil)
+	require.NoError(t, err)
+	require.True(t, def.IsTemporary)
+	require.True(t, obj.NotLockMeta)
+	_, _, err = (&recoveryCompilerContext{compilerContext: c}).ResolveWithoutTemporaryAlias("db", "t", nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }

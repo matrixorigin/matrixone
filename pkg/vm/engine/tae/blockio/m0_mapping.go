@@ -171,6 +171,10 @@ func loadColumnsDataInto(
 		return objectio.NullBitmap, false, err
 	}
 	if mapping == nil {
+		if sels == nil && visibilityTS == nil {
+			fromCache, err := ioutil.LoadColumnsDataIntoReadonly(ctx, columns, typs, fs, location, destinations, mp, policy)
+			return objectio.NullBitmap, fromCache, err
+		}
 		return ioutil.LoadColumnsDataInto(ctx, columns, typs, fs, location, destinations, sels, visibilityTS, mp, policy)
 	}
 	if visibilityTS != nil || len(destinations) != len(columns) || mp == nil {

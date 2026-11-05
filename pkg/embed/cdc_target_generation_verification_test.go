@@ -47,8 +47,15 @@ func TestCDCTargetGenerationContractsOnMO(t *testing.T) {
 }
 
 func TestCDCSourceGenerationGuardAcrossCN(t *testing.T) {
-	runCDCGenerationContracts(t, 2, "TestCDCTenantCatalogGuardBlocksOtherCNDrop", testCDCTenantCatalogGuardBlocksOtherCNDrop,
-		"TestCDCFirstAckHoldsSourceGenerationAcrossCN", testCDCFirstAckHoldsSourceGenerationAcrossCN)
+	runCDCGenerationContract(t, 2, func(cluster Cluster) {
+		if !t.Run("TestCDCTenantCatalogGuardBlocksOtherCNDrop", func(t *testing.T) { testCDCTenantCatalogGuardBlocksOtherCNDrop(t, cluster) }) {
+			return
+		}
+		if !t.Run("TestCDCControlConcurrentClaims", func(t *testing.T) { testCDCControlConcurrentClaims(t, cluster) }) {
+			return
+		}
+		t.Run("TestCDCFirstAckHoldsSourceGenerationAcrossCN", func(t *testing.T) { testCDCFirstAckHoldsSourceGenerationAcrossCN(t, cluster) })
+	})
 }
 
 func runCDCGenerationContracts(t *testing.T, cnCount int, passiveName string, passive func(*testing.T, Cluster), activeName string, active func(*testing.T, Cluster)) {
@@ -836,7 +843,13 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		_, err = root.ExecContext(ctx, "CREATE ACCOUNT cdc_retry_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'")
 		require.NoError(t, err)
 		cleanupSQL := func(db *sql.DB, q string) {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cleanupTimeout := 30 * time.Second
+			if strings.HasPrefix(q, "DROP ACCOUNT") {
+				// Account teardown drops its catalog and databases one by one.
+				// Under parallel embedded tests it can outlast a single SQL cleanup.
+				cleanupTimeout = 2 * time.Minute
+			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
 			defer cleanupCancel()
 			if _, cleanupErr := db.ExecContext(cleanupCtx, q); cleanupErr != nil {
 				t.Errorf("cleanup %s: %v", q, cleanupErr)

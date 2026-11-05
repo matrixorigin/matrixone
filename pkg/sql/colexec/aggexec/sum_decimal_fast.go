@@ -18,6 +18,8 @@ package aggexec
 // Eliminates interface boxing, type switches, and per-add overflow checks.
 
 import (
+	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -234,8 +236,8 @@ func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors
 	var localCnts [maxSlots]int64
 	var localGrps [maxSlots]uint64
 	nSlots := 0
-	for i := range slotOf {
-		slotOf[i] = 0xFF
+	for i := 0; i < len(slotOf); i += 8 {
+		binary.LittleEndian.PutUint64(slotOf[i:i+8], ^uint64(0))
 	}
 	fallbackLastX := -1
 	var fallbackSums *[AggBatchSize]types.Decimal128

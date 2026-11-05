@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +46,10 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		svc, ok := cn.RawService().(cnservice.Service)
+		require.True(t, ok)
+		barrier, ok := svc.GetEngine().(engine.LogtailReadBarrier)
+		require.True(t, ok)
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -56,7 +61,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		const schema = "timestampadd_dump_contract"
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
 		exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
-		flushForDump := func(t *testing.T, table string) {
+		flushForDump := func(t *testing.T, table string) string {
 			t.Helper()
 			var response string
 			require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush',?)", table).Scan(&response))
@@ -79,6 +84,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 			applied, err := service.GetTxnClient().WaitLogTailAppliedAt(ctx, frontier)
 			require.NoError(t, err)
 			require.False(t, applied.Less(frontier))
+			return response
 		}
 		scalar := func(q, want string) {
 			t.Helper()
@@ -176,7 +182,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		exec("load table " + historicalSource + " from '" + seedPath + "'")
 		exec("insert into " + historicalSource + "(a) values(1.50)")
 		scalar("select cast(g as char) from "+historicalSource, "2024-01-01 00:00:02.000000")
-		flushForDump(t, historicalSource)
+		flush := flushForDump(t, historicalSource)
 		// A rolling deployment may still author at the previous floor. Failure
 		// to bind the current era must preserve the historical binding witness.
 		rt := moruntime.ServiceRuntime(cn.ServiceID())
@@ -189,6 +195,11 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 			}
 		}()
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
+		require.NoError(t, validateDecimalDumpFlushResult(flush))
+		frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+		require.NoError(t, err)
+		require.False(t, frontier.IsEmpty(), "flush logtail barrier must report an applied frontier")
+		t.Logf("logtail read barrier frontier=%s", frontier.DebugString())
 		exec("dump table " + historicalSource + " to '" + dataPath + "'")
 		exported := readManifest(t, dataPath)
 		assertHistoricalChecks := func(manifest map[string]json.RawMessage) {
@@ -332,8 +343,13 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(seedDir, "manifest.json"), encoded, 0600))
 				exec("load table " + sourceName + " from '" + seedDir + "'")
 				exec("insert into " + sourceName + "(a,b) values(5.50,2)")
-				flushForDump(t, sourceName)
+				flush := flushForDump(t, sourceName)
 				dataDir := filepath.Join(root, "div-data-"+tc.name)
+				require.NoError(t, validateDecimalDumpFlushResult(flush))
+				frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+				require.NoError(t, err)
+				require.False(t, frontier.IsEmpty(), "flush logtail barrier must report an applied frontier")
+				t.Logf("logtail read barrier frontier=%s", frontier.DebugString())
 				exec("dump table " + sourceName + " to '" + dataDir + "'")
 				exec("load table " + restoredName + " from '" + dataDir + "'")
 				metadataDir := filepath.Join(root, "div-restored-"+tc.name)

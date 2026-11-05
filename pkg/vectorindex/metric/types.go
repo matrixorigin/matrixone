@@ -226,14 +226,12 @@ func MaxFloat[T types.RealNumbers]() T {
 // usearch is the only backend needing this HERE: the Go CPU kernels already return MO's
 // convention (InnerProduct returns -a·b), and cuVS output is negated inside cgo/cuvs
 // (index_base.hpp search path, distance.hpp / distance_c.cpp pairwise) before it reaches
-// Go. (Note: the gpu-tagged pairwise wait in gpu.go negates IP a SECOND time on top of
-// the cgo flip — a separate, pre-existing GPU-only defect, not something this transform
-// compensates for.) Within usearch only inner product differs — its IP metric is 1 - a·b against MO's
+// Go. Within usearch only inner product differs — its IP metric is 1 - a·b against MO's
 // -a·b, so an untranslated score is exactly 1 too high; ordering stays correct, which is
 // why only a value comparison catches it. Cosine is deliberately not repaired here:
 // usearch's cosine score can be wrong for zero and subnormal vectors, and this function
-// has neither the vectors nor the candidate set needed to recompute a correct score.
-// The HNSW planner therefore keeps cosine queries on the exact SQL path.
+// has neither the vectors nor the candidate set needed to recompute a correct score;
+// hnsw/search.go rejects a zero or subnormal cosine query vector before the search.
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance

@@ -1,5 +1,34 @@
 # M0 restricted metadata-only ADD prototype
 
+## Base integration checkpoint, 2026-11-05
+
+This revision merges frozen main `d2dab994dd87445b5f5d44a06293bd5e09a1eee9`
+into the published AR-1 candidate `61d76463baf34090c16fe94669aa4dd0fa4655ad`.
+The original review package and counts below retain that older identity.
+The selected AR-1 architecture and support boundary are unchanged.
+
+Conflict resolution preserves upstream failure-atomic workspace compaction,
+capacity admission and asynchronous orphan cleanup alongside AR-1's relation-
+qualified deletion keys and pinned older-generation writer bindings. It also
+retains the new reader-filter/copy-on-write APIs, physical readonly loading
+after strict mapping validation, and both nullability/presentation deep copies.
+Old shape-only positive unit fixtures now declare their controlled contract;
+real authority issuance continues to have separate SQL coverage. Missing owner
+metadata rejects rather than panics, without granting a default fallback.
+
+Affected local validation passed: 42 default and 107 M0 unit roots, three
+ordinary SQL roots, 23 M0 SQL roots via unchanged-case reuse plus precise cleanup
+retests, 51 unit race invocations and seven real SQL race roots. Both modes passed
+incremental lint/molint and affected compile/vet; format, PR-diff and error checks
+passed. A new local native library was built from the frozen main inputs;
+the old native qualification is not relabelled. Failed integration trials remain
+recorded separately. These are affected integration results, not a new full-main
+test result or new performance measurement.
+
+Current Linux, external BVT, published-head CI, independent review and QA remain
+separate pending qualifications. Publication/source and receipt bindings are in
+the worktree's sibling `evidence/ar1-conflict-integration-receipt.json`.
+
 ## AR-1 local implementation, 2026-11-05
 
 This section supersedes the implementation/default-policy claims in the dated

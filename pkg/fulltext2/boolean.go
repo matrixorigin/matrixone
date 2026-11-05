@@ -93,6 +93,11 @@ type BoolQuery struct {
 	mustNot []clause // -
 	should  []clause // bare / > / <
 	adjust  []clause // ~
+	// dfCutoff is the per-query high-df term cutoff for the ranked bag-of-words path
+	// (fulltext2_search_df_cutoff): a pure-disjunction SHOULD term whose global df/N
+	// reaches this fraction is dropped before the WAND search. 0 (default) = off. Set only
+	// by the BM25 bag-of-words builders; boolean/phrase queries leave it 0.
+	dfCutoff float64
 }
 
 // SearchBoolean evaluates a boolean query and returns up to k hits, score desc

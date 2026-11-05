@@ -617,10 +617,11 @@ func recreateTableFromTS(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
+		return restoreRoutineCatalogWithCurrentSchema(
 			ctx,
 			bh,
+			tblInfo.tblName,
 			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
 			restoreAccount,
 			toAccountId,
@@ -664,7 +665,7 @@ func recreateTableFromTS(
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] insert select table: %v, cost: %v", restoreAccount, snapshotTs, tblInfo.tblName, time.Since(beginTime)))
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func restoreSystemDatabaseFromTS(

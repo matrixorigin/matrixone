@@ -30,9 +30,19 @@ func TestViewMetadataColumnsKnownTemplatesPreserveRelationalContract(t *testing.
 		"v58":         InformationSchemaColumnsV58DDL(),
 		"v100":        InformationSchemaColumnsV100DDL(),
 		"v109":        InformationSchemaColumnsV109DDL(),
+		"v110":        InformationSchemaColumnsV110DDL(),
+		// The base-era current identity (V110 with the #31160 NULL
+		// selector): a derived view-metadata statement that recorded it
+		// keeps binding after the live identity moved on (H1a).
+		"binaryNull": InformationSchemaColumnsBinaryFamilyNullDDL(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, input := range []string{definition, strings.Replace(definition, "information_schema.COLUMNS", "information_schema.columns", 1)} {
+			lowerName := strings.Replace(definition, "information_schema.COLUMNS", "information_schema.columns", 1)
+			for _, input := range []string{
+				definition, lowerName,
+				strings.Replace(definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+				strings.Replace(lowerName, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+			} {
 				adapted, ok := ViewMetadataColumnsDDL(input)
 				require.True(t, ok)
 				require.Contains(t, adapted, "mo_view_columns(mt.reldatabase, mt.relname, mt.rel_id)")
@@ -45,7 +55,7 @@ func TestViewMetadataColumnsKnownTemplatesPreserveRelationalContract(t *testing.
 					"mo_subscription_view_columns(mt.reldatabase, mt.relname, mt.rel_id)", "mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)",
 				).Replace(adapted)
 				baseline := definition
-				if name != "current" && name != "v100" && name != "v109" {
+				if name != "current" && name != "v100" && name != "v109" && name != "v110" && name != "binaryNull" {
 					baseline, ok = AdaptLegacyInformationSchemaColumnsDDL(definition)
 					require.True(t, ok)
 					readapted, supported := ViewMetadataColumnsDDL(baseline)
@@ -107,8 +117,10 @@ func TestDerivedColumnsTemplateSeparatesPersistedAndDerivedAuthority(t *testing.
 
 func TestViewMetadataColumnsRejectsUnknownDefinitions(t *testing.T) {
 	for _, definition := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL + " where true"} {
-		adapted, ok := ViewMetadataColumnsDDL(definition)
-		require.False(t, ok)
-		require.Empty(t, adapted)
+		for _, input := range []string{definition, strings.Replace(definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)} {
+			adapted, ok := ViewMetadataColumnsDDL(input)
+			require.False(t, ok)
+			require.Empty(t, adapted)
+		}
 	}
 }

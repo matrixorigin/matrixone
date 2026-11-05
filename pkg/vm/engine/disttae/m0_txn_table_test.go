@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,6 +35,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+// This controlled unit fixture declares authority explicitly; it does not
+// prove CREATE issuance. Real issuance and owner reconstruction have SQL oracles.
+func m0BindAppendFixtureEvolution(t *testing.T, tbl *txnTable) {
+	t.Helper()
+	def := tbl.tableDef
+	def.DbId, def.TblId = tbl.db.databaseId, tbl.tableId
+	for i, col := range def.Cols {
+		if col.ColId == 0 {
+			col.ColId = uint64(i + 1)
+		}
+		if col.Typ.Id == 0 {
+			col.Typ.Id = int32(types.T_int32)
+		}
+	}
+	def.Cols[2].Typ.Id = int32(types.T_varchar)
+	def.Pkey.Names = []string{"a", "b"}
+	def.Pkey.CompPkeyCol = def.Cols[2]
+	cols, err := evolutionColumns(def, 3)
+	require.NoError(t, err)
+	c := &api.M0EvolutionContract{FormatVersion: 1, RootId: []byte("0123456789abcdef"), AccountId: tbl.accountId, DatabaseId: tbl.db.databaseId, RelationId: tbl.tableId, RootColumns: 3, LayoutGeneration: 1, Columns: cols, SchemaDigest: m0read.EvolutionDigest(cols)}
+	if tbl.extraInfo == nil {
+		tbl.extraInfo = &api.SchemaExtra{NextColSeqnum: 4}
+	}
+	tbl.extraInfo.M0Evolution = c
+	def.Defs = []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: "schema_extra", Value: string(api.MustMarshalTblExtra(tbl.extraInfo))}}}}}}
+	require.NoError(t, validateM0Evolution(tbl, def))
+}
+
+func TestM0EvolutionRejectsMissingOwnerWithoutPanic(t *testing.T) {
+	for _, tbl := range []*txnTable{nil, {}, {db: &txnDatabase{}}, {db: &txnDatabase{}, extraInfo: &api.SchemaExtra{}}} {
+		require.Error(t, validateM0Evolution(tbl, m0TestAppendTableDef()))
+	}
+}
 
 func TestM0AddRejectsUncommittedDataObject(t *testing.T) {
 	workspace := newCatalogCreateTxnForTest(t)
@@ -60,6 +95,7 @@ func TestM0AddRejectsUncommittedDataObject(t *testing.T) {
 	table.tableDef = m0TestAppendTableDef()
 	table.tableDef.Name2ColIndex = map[string]int32{"a": 0, "b": 1, "c": 3}
 	table.extraInfo = &api.SchemaExtra{NextColSeqnum: 4}
+	m0BindAppendFixtureEvolution(t, table)
 	table.remoteWorkspace = true
 	buildOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	buildOp.EXPECT().IsSnapOp().Return(false).AnyTimes()

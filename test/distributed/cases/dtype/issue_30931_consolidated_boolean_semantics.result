@@ -1,0 +1,712 @@
+create database if not exists issue_30931_consolidated_bool;
+use issue_30931_consolidated_bool;
+select b'1' and 1 as bit_and_true;
+➤ bit_and_true[-6,8,0]  𝄀
+1
+select b'0' and 1 as bit_and_zero;
+➤ bit_and_zero[-6,8,0]  𝄀
+0
+select b'10000000' and 1 as bit_and_128;
+➤ bit_and_128[-6,8,0]  𝄀
+1
+select b'0' or 0 as bit_or_zero;
+➤ bit_or_zero[-6,8,0]  𝄀
+0
+select not b'1' as not_bit_one;
+➤ not_bit_one[-6,8,0]  𝄀
+0
+select b'1' xor 0 as bit_xor_one;
+➤ bit_xor_one[-6,8,0]  𝄀
+1
+select if(b'1', 1, 0) as if_bit_one;
+➤ if_bit_one[-5,64,0]  𝄀
+1
+select if(b'0', 1, 0) as if_bit_zero;
+➤ if_bit_zero[-5,64,0]  𝄀
+0
+select case when b'1' then 'y' else 'n' end as case_bit_one;
+➤ case_bit_one[12,1,0]  𝄀
+y
+select case when b'0' then 'y' else 'n' end as case_bit_zero;
+➤ case_bit_zero[12,1,0]  𝄀
+n
+select b'1' + 0 as add_one, b'0' + 0 as add_zero, b'10000000' + 0 as add_128;
+➤ add_one[-5,64,0]  ¦  add_zero[-5,64,0]  ¦  add_128[-5,64,0]  𝄀
+1  ¦  0  ¦  128
+create table bt (id int primary key, b bit(8));
+insert into bt values (1, b'1'), (2, b'0'), (3, b'10000000');
+select id, if(b, 1, 0) as if_col from bt order by id;
+➤ id[4,32,0]  ¦  if_col[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  1
+select id, b + 0 as col_num from bt order by id;
+➤ id[4,32,0]  ¦  col_num[3,38,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  128
+drop table bt;
+create table j (id int primary key, j json);
+insert into j values (1, '0'), (2, '1'), (3, 'true'), (4, 'false'), (5, '"1"'), (6, 'null');
+insert into j (id) values (7);
+select id, j as raw_value, j is null as sql_null_flag from j order by id;
+➤ id[4,32,0]  ¦  raw_value[-1,2147483647,0]  ¦  sql_null_flag[-6,8,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  true  ¦  0  𝄀
+4  ¦  false  ¦  0  𝄀
+5  ¦  "1"  ¦  0  𝄀
+6  ¦  null  ¦  0  𝄀
+7  ¦  null  ¦  1
+select id, if(j, 1, 0) as if_json from j order by id;
+➤ id[4,32,0]  ¦  if_json[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  0  𝄀
+5  ¦  1  𝄀
+6  ¦  0  𝄀
+7  ¦  0
+select id, case when j then 1 else 0 end as case_json from j order by id;
+➤ id[4,32,0]  ¦  case_json[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  0  𝄀
+5  ¦  1  𝄀
+6  ¦  0  𝄀
+7  ¦  0
+select id from j where j order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+5
+prepare pj from select id, if(j, 1, 0) as if_json, case when j then 1 else 0 end as case_json from j where j order by id;
+execute pj;
+➤ id[4,32,0]  ¦  if_json[-5,64,0]  ¦  case_json[-5,64,0]  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  1  𝄀
+5  ¦  1  ¦  1
+execute pj;
+➤ id[4,32,0]  ¦  if_json[-5,64,0]  ¦  case_json[-5,64,0]  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  1  𝄀
+5  ¦  1  ¦  1
+deallocate prepare pj;
+drop table j;
+create table js (id int primary key, j json);
+insert into js values (1, '"true"'), (2, '"abc"'), (3, '"2tail"'), (4, '""'),
+(5, '"0.5"'), (6, '" 12"'), (7, '"1e2"'), (8, '{"x":1}'), (9, '[1,2]'),
+(10, 'true'), (11, '"1"'), (12, 'null');
+insert into js (id) values (13);
+select id, ifnull(cast(j as char), '(sql-null)') as txt from js order by id;
+➤ id[4,32,0]  ¦  txt[12,65535,0]  𝄀
+1  ¦  "true"  𝄀
+2  ¦  "abc"  𝄀
+3  ¦  "2tail"  𝄀
+4  ¦  ""  𝄀
+5  ¦  "0.5"  𝄀
+6  ¦  " 12"  𝄀
+7  ¦  "1e2"  𝄀
+8  ¦  {"x": 1}  𝄀
+9  ¦  [1, 2]  𝄀
+10  ¦  true  𝄀
+11  ¦  "1"  𝄀
+12  ¦  null  𝄀
+13  ¦  (sql-null)
+select id, if(j, 1, 0) as if_json from js order by id;
+➤ id[4,32,0]  ¦  if_json[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  0  𝄀
+5  ¦  1  𝄀
+6  ¦  1  𝄀
+7  ¦  1  𝄀
+8  ¦  0  𝄀
+9  ¦  0  𝄀
+10  ¦  1  𝄀
+11  ¦  1  𝄀
+12  ¦  0  𝄀
+13  ¦  0
+select id, case when j then 1 else 0 end as case_json from js order by id;
+➤ id[4,32,0]  ¦  case_json[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  0  𝄀
+5  ¦  1  𝄀
+6  ¦  1  𝄀
+7  ¦  1  𝄀
+8  ¦  0  𝄀
+9  ¦  0  𝄀
+10  ¦  1  𝄀
+11  ¦  1  𝄀
+12  ¦  0  𝄀
+13  ¦  0
+prepare pjs from select id, if(j, 1, 0) as if_json, case when j then 1 else 0 end as case_json from js order by id;
+execute pjs;
+➤ id[4,32,0]  ¦  if_json[-5,64,0]  ¦  case_json[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  1  ¦  1  𝄀
+6  ¦  1  ¦  1  𝄀
+7  ¦  1  ¦  1  𝄀
+8  ¦  0  ¦  0  𝄀
+9  ¦  0  ¦  0  𝄀
+10  ¦  1  ¦  1  𝄀
+11  ¦  1  ¦  1  𝄀
+12  ¦  0  ¦  0  𝄀
+13  ¦  0  ¦  0
+execute pjs;
+➤ id[4,32,0]  ¦  if_json[-5,64,0]  ¦  case_json[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  1  ¦  1  𝄀
+6  ¦  1  ¦  1  𝄀
+7  ¦  1  ¦  1  𝄀
+8  ¦  0  ¦  0  𝄀
+9  ¦  0  ¦  0  𝄀
+10  ¦  1  ¦  1  𝄀
+11  ¦  1  ¦  1  𝄀
+12  ¦  0  ¦  0  𝄀
+13  ¦  0  ¦  0
+deallocate prepare pjs;
+drop table js;
+create table t (id int primary key, e enum('a','b'), s set('a','b'));
+insert into t values (1,'a','a'), (2,'b','b'), (3,null,null), (4,'a',''), (5,'b','a,b');
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert ignore into t values (6, 'bad', '');
+set session sql_mode = @saved_mode;
+select case when e then 1 else 0 end as cwe, count(*) as cnt from t group by e order by cwe, cnt;
+➤ cwe[-5,64,0]  ¦  cnt[-5,64,0]  𝄀
+0  ¦  1  𝄀
+0  ¦  1  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+select e and 1 as ea, count(*) as cnt from t group by e order by ea, cnt;
+➤ ea[-6,8,0]  ¦  cnt[-5,64,0]  𝄀
+null  ¦  1  𝄀
+0  ¦  1  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+select case when s then 1 else 0 end as cws, count(*) as cnt from t group by s order by cws, cnt;
+➤ cws[-5,64,0]  ¦  cnt[-5,64,0]  𝄀
+0  ¦  1  𝄀
+0  ¦  2  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1
+select count(*) as cnt from t group by e having e order by cnt;
+➤ cnt[-5,64,0]  𝄀
+2  𝄀
+2
+select count(*) as cnt from t group by s having s order by cnt;
+➤ cnt[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
+1
+select count(*) as cnt from t group by e having not e order by cnt;
+➤ cnt[-5,64,0]  𝄀
+1
+select count(*) as cnt from t group by s having not s order by cnt;
+➤ cnt[-5,64,0]  𝄀
+2
+select id from t where e = 'a' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+select id from t where s = 'a,b' order by id;
+➤ id[4,32,0]  𝄀
+5
+drop table t;
+create table te (id int primary key, e enum('', 'a'));
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert into te values (1, ''), (2, 'a'), (3, '');
+insert ignore into te values (4, 'zz');
+set session sql_mode = @saved_mode;
+insert into te (id) values (5);
+select id, e + 0 as ordi, if(e, 1, 0) as if_e from te order by id;
+➤ id[4,32,0]  ¦  ordi[-5,64,0]  ¦  if_e[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  1  ¦  1  𝄀
+4  ¦  0  ¦  0  𝄀
+5  ¦  null  ¦  0
+select id, case when e then 1 else 0 end as cw from te order by id;
+➤ id[4,32,0]  ¦  cw[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  0  𝄀
+5  ¦  0
+select id from te where e order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select if(e, 1, 0) as g_if, count(*) as cnt, min(id) as minid from te group by e order by g_if desc, cnt, minid;
+➤ g_if[-5,64,0]  ¦  cnt[-5,64,0]  ¦  minid[4,32,0]  𝄀
+1  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  𝄀
+0  ¦  1  ¦  4  𝄀
+0  ¦  1  ¦  5
+select case when e then 1 else 0 end as g_cw, count(*) as cnt, min(id) as minid from te group by e order by g_cw desc, cnt, minid;
+➤ g_cw[-5,64,0]  ¦  cnt[-5,64,0]  ¦  minid[4,32,0]  𝄀
+1  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1  𝄀
+0  ¦  1  ¦  4  𝄀
+0  ¦  1  ¦  5
+select count(*) as cnt from te group by e having e order by cnt;
+➤ cnt[-5,64,0]  𝄀
+1  𝄀
+2
+select count(*) as cnt from te group by e having not e order by cnt;
+➤ cnt[-5,64,0]  𝄀
+1
+select not e as g_not, count(*) as cnt, min(id) as minid from te group by e order by g_not, cnt, minid;
+➤ g_not[-6,8,0]  ¦  cnt[-5,64,0]  ¦  minid[4,32,0]  𝄀
+null  ¦  1  ¦  5  𝄀
+0  ¦  1  ¦  2  𝄀
+0  ¦  2  ¦  1  𝄀
+1  ¦  1  ¦  4
+select if(v, 1, 0) as d_if from (select e as v from te group by e) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select if(v, 1, 0) as d_if from (select distinct e as v from te) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select v and 1 as d_and from (select e as v from te group by e) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select cast(v as bool) as d_cast from (select e as v from te group by e) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select cast(v as bool) as d_cast from (select distinct e as v from te) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+create table ti (id int primary key, e enum('a','b'));
+insert into ti values (1, 'a'), (2, 'b');
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert ignore into ti values (3, 'zz');
+set session sql_mode = @saved_mode;
+select id, e + 0 as ordi from ti order by id;
+➤ id[4,32,0]  ¦  ordi[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  0
+select if(v, 1, 0) as d_if, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+➤ d_if[-5,64,0]  ¦  ordi[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select case when v then 1 else 0 end as d_cw, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+➤ d_cw[-5,64,0]  ¦  ordi[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select v and 1 as d_and, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+➤ d_and[-6,8,0]  ¦  ordi[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select cast(v as bool) as d_cast, v + 0 as ordi from (select e as v from ti group by e) d order by ordi;
+➤ d_cast[-6,8,0]  ¦  ordi[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select if(v, 1, 0) as d_if from (select distinct e as v from ti) d order by d_if;
+➤ d_if[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
+1
+select cast(v as bool) as d_cast from (select distinct e as v from ti) d order by d_cast;
+➤ d_cast[-6,8,0]  𝄀
+0  𝄀
+1  𝄀
+1
+drop table ti;
+drop table te;
+create table ts (id int primary key, s set('', 'a'));
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = '';
+insert into ts values (1, ''), (2, 'a');
+insert ignore into ts values (3, 'zz');
+set session sql_mode = @saved_mode;
+insert into ts (id) values (4);
+select id, s + 0 as mask, if(s, 1, 0) as if_s from ts order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  if_s[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  null  ¦  0
+select id, case when s then 1 else 0 end as cw from ts order by id;
+➤ id[4,32,0]  ¦  cw[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select if(s, 1, 0) as g_if, count(*) as cnt, min(id) as minid from ts group by s order by g_if desc, cnt, minid;
+➤ g_if[-5,64,0]  ¦  cnt[-5,64,0]  ¦  minid[4,32,0]  𝄀
+1  ¦  1  ¦  2  𝄀
+0  ¦  1  ¦  4  𝄀
+0  ¦  2  ¦  1
+select count(*) as cnt from ts group by s having s order by cnt;
+➤ cnt[-5,64,0]  𝄀
+1
+select count(*) as cnt from ts group by s having not s order by cnt;
+➤ cnt[-5,64,0]  𝄀
+2
+select not s as g_not, count(*) as cnt, min(id) as minid from ts group by s order by g_not, cnt, minid;
+➤ g_not[-6,8,0]  ¦  cnt[-5,64,0]  ¦  minid[4,32,0]  𝄀
+null  ¦  1  ¦  4  𝄀
+0  ¦  1  ¦  2  𝄀
+1  ¦  2  ¦  1
+select if(v, 1, 0) as d_if from (select s as v from ts group by s) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select if(v, 1, 0) as d_if from (select distinct s as v from ts) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select cast(v as bool) as d_cast from (select s as v from ts group by s) d;
+not supported: boolean truth of an ENUM/SET value from declaration ,a cannot recover the stored value across a query boundary; use the stored value in the same query block
+select v in (2) as d_in2, v + 0 as mask from (select distinct s as v from ts) d order by mask;
+➤ d_in2[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+null  ¦  null  𝄀
+0  ¦  0  𝄀
+1  ¦  2
+select v not in (2) as d_notin2, v + 0 as mask from (select distinct s as v from ts) d order by mask;
+➤ d_notin2[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  0  𝄀
+0  ¦  2
+select v in (2) as g_in2, v + 0 as mask from (select s as v from ts group by s) d order by mask;
+➤ g_in2[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+null  ¦  null  𝄀
+0  ¦  0  𝄀
+1  ¦  2
+select v in (2) as t_in2, v + 0 as mask from (select s as v from ts) d order by mask;
+➤ t_in2[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+null  ¦  null  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+1  ¦  2
+select v in (0) as d_in0, v + 0 as mask from (select distinct s as v from ts) d order by mask;
+➤ d_in0[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  0  𝄀
+0  ¦  2
+create table tsi (id int primary key, s set('a','b'));
+insert into tsi values (1, 'a'), (2, 'b'), (3, '');
+select if(v, 1, 0) as d_if, v + 0 as mask from (select s as v from tsi group by s) d order by mask;
+➤ d_if[-5,64,0]  ¦  mask[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select case when v then 1 else 0 end as d_cw, v + 0 as mask from (select s as v from tsi group by s) d order by mask;
+➤ d_cw[-5,64,0]  ¦  mask[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select cast(v as bool) as d_cast, v + 0 as mask from (select s as v from tsi group by s) d order by mask;
+➤ d_cast[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select cast(v as bool) as d_cast from (select distinct s as v from tsi) d order by d_cast;
+➤ d_cast[-6,8,0]  𝄀
+0  𝄀
+1  𝄀
+1
+drop table tsi;
+drop table ts;
+create table tz (id int primary key, z enum('0','x'));
+insert into tz values (1, '0'), (2, 'x');
+select id, z, z + 0 as ordi, cast(z as bool) as zc from tz order by id;
+➤ id[4,32,0]  ¦  z[12,65535,0]  ¦  ordi[-5,64,0]  ¦  zc[-6,8,0]  𝄀
+1  ¦  0  ¦  1  ¦  1  𝄀
+2  ¦  x  ¦  2  ¦  1
+select z, cast(z as bool) as zc, min(id) as mn from tz group by z order by mn;
+➤ z[12,65535,0]  ¦  zc[-6,8,0]  ¦  mn[4,32,0]  𝄀
+0  ¦  1  ¦  1  𝄀
+x  ¦  1  ¦  2
+select cast(v as bool) as zc, v + 0 as ordi from (select z as v from tz group by z) d order by ordi;
+➤ zc[-6,8,0]  ¦  ordi[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+select cast(v as bool) as zc from (select distinct z as v from tz) d order by zc;
+➤ zc[-6,8,0]  𝄀
+1  𝄀
+1
+drop table tz;
+create table tgr (id int primary key, e enum('a','b'), s set('a','b'));
+insert into tgr values (1, 'a', 'a'), (2, 'b', 'b'), (3, 'a', ''), (4, null, null);
+select e, if(e, 1, 0) as ce, count(*) as cnt, min(id) as mn from tgr group by e with rollup order by ce, mn;
+➤ e[12,65535,0]  ¦  ce[-5,64,0]  ¦  cnt[-5,64,0]  ¦  mn[4,32,0]  𝄀
+null  ¦  0  ¦  4  ¦  1  𝄀
+null  ¦  0  ¦  1  ¦  4  𝄀
+a  ¦  1  ¦  2  ¦  1  𝄀
+b  ¦  1  ¦  1  ¦  2
+select s, if(s, 1, 0) as cs, count(*) as cnt, min(id) as mn from tgr group by s with rollup order by cs, mn;
+➤ s[12,65535,0]  ¦  cs[-5,64,0]  ¦  cnt[-5,64,0]  ¦  mn[4,32,0]  𝄀
+null  ¦  0  ¦  4  ¦  1  𝄀
+  ¦  0  ¦  1  ¦  3  𝄀
+null  ¦  0  ¦  1  ¦  4  𝄀
+a  ¦  1  ¦  1  ¦  1  𝄀
+b  ¦  1  ¦  1  ¦  2
+select e, s, if(e, 1, 0) as ce, if(s, 1, 0) as cs, count(*) as cnt, min(id) as mn from tgr group by grouping sets ((e), (s)) order by e, s, cnt, mn;
+➤ e[12,65535,0]  ¦  s[12,65535,0]  ¦  ce[-5,64,0]  ¦  cs[-5,64,0]  ¦  cnt[-5,64,0]  ¦  mn[4,32,0]  𝄀
+null  ¦  null  ¦  0  ¦  0  ¦  1  ¦  4  𝄀
+null  ¦  null  ¦  0  ¦  0  ¦  1  ¦  4  𝄀
+null  ¦    ¦  0  ¦  0  ¦  1  ¦  3  𝄀
+null  ¦  a  ¦  0  ¦  1  ¦  1  ¦  1  𝄀
+null  ¦  b  ¦  0  ¦  1  ¦  1  ¦  2  𝄀
+a  ¦  null  ¦  1  ¦  0  ¦  2  ¦  1  𝄀
+b  ¦  null  ¦  1  ¦  0  ¦  1  ¦  2
+drop table tgr;
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+create table tnat (id int primary key, e enum('a','b'), s set('a','b'));
+insert into tnat values (1, 'a', 'a'), (2, 'b', 'b'), (3, null, null);
+select id, if(e, 1, 0) as label_if from tnat order by id;
+invalid input: "a" is invalid numeric string
+select id, if(s, 1, 0) as label_set_if from tnat order by id;
+invalid input: "a" is invalid numeric string
+select id from tnat where e order by id;
+invalid input: 'a' is not a valid bool expression
+select id, case when e then 1 else 0 end as cw from tnat order by id;
+invalid input: 'a' is not a valid bool expression
+select id, e and 1 as ea from tnat order by id;
+invalid input: 'a' is not a valid bool expression
+create table tnatns (id int primary key, s set('', 'a'));
+insert into tnatns values (1, ''), (2, 'a');
+select v in (2) as ns_in2, v + 0 as mask from (select distinct s as v from tnatns) d order by mask;
+➤ ns_in2[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  2
+select 1 as alive_after_native_setin;
+➤ alive_after_native_setin[-5,64,0]  𝄀
+1
+create table tflag (id int primary key, flag bool);
+insert into tflag values (1, true), (2, false);
+update tflag set flag = b'1' where id = 1;
+invalid input: '' is not a valid bool expression
+select 1 as alive_after_native_update_cast;
+➤ alive_after_native_update_cast[-5,64,0]  𝄀
+1
+insert into tflag (id) values (1) on duplicate key update flag = b'1';
+invalid input: '' is not a valid bool expression
+select 1 as alive_after_native_odku_cast;
+➤ alive_after_native_odku_cast[-5,64,0]  𝄀
+1
+select id, flag from tflag order by id;
+➤ id[4,32,0]  ¦  flag[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+create table tnatddl (id int primary key, e enum('a','b'), g int generated always as (case when e then 1 else 0 end));
+invalid argument operator case, bad value [ENUM BIGINT BIGINT]
+select 1 as connection_alive_after_native_gaps;
+➤ connection_alive_after_native_gaps[-5,64,0]  𝄀
+1
+set session sql_mode = @saved_mode;
+select id, if(e, 1, 0) as storage_if from tnat order by id;
+➤ id[4,32,0]  ¦  storage_if[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0
+select id from tnat where e order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+update tflag set flag = b'1' where id = 1;
+insert into tflag (id) values (1) on duplicate key update flag = b'1';
+select id, flag from tflag order by id;
+➤ id[4,32,0]  ¦  flag[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select v in (2) as mysql_ns_in2, v + 0 as mask from (select distinct s as v from tnatns) d order by mask;
+➤ mysql_ns_in2[-6,8,0]  ¦  mask[-5,64,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  2
+drop table tnatns;
+drop table tflag;
+drop table tnat;
+create table tgx (id int primary key, e enum('a','b'), g int generated always as (case when e then 1 else 0 end));
+insert into tgx (id, e) values (1, 'a'), (2, 'b');
+select id, e, g from tgx order by id;
+➤ id[4,32,0]  ¦  e[12,65535,0]  ¦  g[4,32,0]  𝄀
+1  ¦  a  ¦  1  𝄀
+2  ¦  b  ¦  1
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+insert into tgx (id, e) values (3, 'a');
+not supported: implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session
+select 1 as connection_alive_after_native_dml_failure;
+➤ connection_alive_after_native_dml_failure[-5,64,0]  𝄀
+1
+select id from tgx order by id;
+not supported: implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session
+update tgx set e = 'b' where id = 1;
+not supported: implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session
+select 1 as connection_alive_after_native_update_failure;
+➤ connection_alive_after_native_update_failure[-5,64,0]  𝄀
+1
+set session sql_mode = @saved_mode;
+insert into tgx (id, e) values (3, 'a');
+update tgx set e = 'b' where id = 1;
+select id, e, g from tgx order by id;
+➤ id[4,32,0]  ¦  e[12,65535,0]  ¦  g[4,32,0]  𝄀
+1  ¦  b  ¦  1  𝄀
+2  ¦  b  ¦  1  𝄀
+3  ¦  a  ¦  1
+drop table tgx;
+create table tjx (id int primary key, j json, g int generated always as (if(j, 1, 0)));
+insert into tjx (id, j) values (1, '1'), (2, '0'), (3, '2'), (4, '"2tail"'), (5, '"abc"'), (6, 'null'), (7, null);
+select id, g from tjx order by id;
+➤ id[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  0  𝄀
+6  ¦  0  𝄀
+7  ¦  0
+insert into tjx (id, j) values (8, '7');
+select id, g from tjx order by id;
+➤ id[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  0  𝄀
+6  ¦  0  𝄀
+7  ¦  0  𝄀
+8  ¦  1
+update tjx set j = '0' where id = 1;
+select id, g from tjx order by id;
+➤ id[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  0  𝄀
+6  ¦  0  𝄀
+7  ¦  0  𝄀
+8  ¦  1
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+insert into tjx (id, j) values (9, '5');
+not supported: implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session
+select 1 as alive_after_native_json_insert;
+➤ alive_after_native_json_insert[-5,64,0]  𝄀
+1
+select id, g from tjx order by id;
+not supported: implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session
+update tjx set j = '1' where id = 2;
+not supported: implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session
+select 1 as alive_after_native_json_update;
+➤ alive_after_native_json_update[-5,64,0]  𝄀
+1
+set session sql_mode = @saved_mode;
+insert into tjx (id, j) values (9, '5');
+update tjx set j = '1' where id = 2;
+select id, j, g from tjx order by id;
+➤ id[4,32,0]  ¦  j[-1,2147483647,0]  ¦  g[4,32,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  2  ¦  1  𝄀
+4  ¦  "2tail"  ¦  1  𝄀
+5  ¦  "abc"  ¦  0  𝄀
+6  ¦  null  ¦  0  𝄀
+7  ¦  null  ¦  0  𝄀
+8  ¦  7  ¦  1  𝄀
+9  ¦  5  ¦  1
+drop table tjx;
+create table tg8m (id int primary key, s set('a','b'), g bigint generated always as (if(s, 1, 0)) stored);
+insert into tg8m (id, s) values (1, 'a'), (2, 'b'), (3, ''), (4, 'a,b'), (5, null);
+select id, s+0 as mask, g from tg8m order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  3  ¦  1  𝄀
+5  ¦  null  ¦  0
+insert into tg8m (id, s) values (6, 'a');
+update tg8m set s = 'b' where id = 6;
+select id, s+0 as mask, g from tg8m order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  3  ¦  1  𝄀
+5  ¦  null  ¦  0  𝄀
+6  ¦  2  ¦  1
+create table tg8b (id int primary key, s set('a','b'), f bool generated always as (cast(s as bool)) stored);
+insert into tg8b (id, s) values (1, 'a'), (2, ''), (3, null);
+select id, s+0 as mask, f from tg8b order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  f[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null
+set @saved_mode = @@session.sql_mode;
+set session sql_mode = 'MATRIXONE_NATIVE';
+create table tg8n (id int primary key, s set('a','b'), g bigint generated always as (if(s, 1, 0)) stored);
+insert into tg8n (id, s) values (1, 'a'), (2, ''), (3, null);
+select id, s+0 as mask, g from tg8n order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  0
+update tg8n set s = 'a' where id = 2;
+select id, s+0 as mask, g from tg8n order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  0
+select id, s+0 as mask, g from tg8m order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  3  ¦  1  𝄀
+5  ¦  null  ¦  0  𝄀
+6  ¦  2  ¦  1
+insert into tg8m (id, s) values (7, 'a');
+update tg8m set s = 'b' where id = 7;
+select id, s+0 as mask, g from tg8m order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  3  ¦  1  𝄀
+5  ¦  null  ¦  0  𝄀
+6  ¦  2  ¦  1  𝄀
+7  ¦  2  ¦  1
+select id, s+0 as mask, f from tg8b order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  f[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null
+update tg8b set s = 'a' where id = 2;
+select id, s+0 as mask, f from tg8b order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  f[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null
+select 1 as alive_after_native_setgen;
+➤ alive_after_native_setgen[-5,64,0]  𝄀
+1
+set session sql_mode = @saved_mode;
+select id, s+0 as mask, g from tg8m order by id;
+➤ id[4,32,0]  ¦  mask[-5,64,0]  ¦  g[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  0  ¦  0  𝄀
+4  ¦  3  ¦  1  𝄀
+5  ¦  null  ¦  0  𝄀
+6  ¦  2  ¦  1  𝄀
+7  ¦  2  ¦  1
+drop table tg8n;
+drop table tg8b;
+drop table tg8m;
+drop database issue_30931_consolidated_bool;

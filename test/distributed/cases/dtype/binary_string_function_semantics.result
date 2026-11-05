@@ -591,8 +591,8 @@ where table_schema = 'binary_string_function_semantics'
 and table_name = 'binary_function_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_octet_length[-5,64,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
-binary_left  ¦  varbinary  ¦  1  ¦  1  ¦  binary  ¦  binary  𝄀
-binary_lower  ¦  varbinary  ¦  16  ¦  16  ¦  binary  ¦  binary  𝄀
+binary_left  ¦  varbinary  ¦  1  ¦  1  ¦  null  ¦  null  𝄀
+binary_lower  ¦  varbinary  ¦  16  ¦  16  ¦  null  ¦  null  𝄀
 text_replace  ¦  varchar  ¦  16  ¦  64  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select hex(binary_left), hex(binary_lower), hex(text_replace),
 char_length(binary_left), char_length(binary_lower), char_length(text_replace)

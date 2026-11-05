@@ -303,6 +303,18 @@ func TestM0CloneMultipleWorkspaceOwnersCommit(t *testing.T) {
 	})
 }
 
+// Cleanup is engine-owned after integration with failure-atomic compaction.
+// Drive its existing bounded pass explicitly rather than assuming asynchronous
+// deletion has completed before the failed transaction returns.
+func m0AssertRewriteOutputCollected(t *testing.T, ctx context.Context, eng *disttae.Engine, name string) {
+	t.Helper()
+	require.NoError(t, eng.DrainUnpublishedPendingForTest(ctx))
+	_, statErr := eng.FS().StatFile(ctx, name)
+	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "unpublished rewrite output must be removed")
+	queued, _, _ := eng.InspectUnpublishedPendingForTest()
+	require.NotContains(t, queued, name, "collected output must retire from engine cleanup")
+}
+
 func TestM0CloneCompactionFailureCannotCommit(t *testing.T) {
 	runSQLIntegration(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
@@ -352,8 +364,7 @@ func TestM0CloneCompactionFailureCannotCommit(t *testing.T) {
 		require.NotEmpty(t, name, "the fault must run after an object reaches storage")
 		engine, ok := service.GetEngine().(*disttae.Engine)
 		require.True(t, ok)
-		_, statErr := engine.FS().StatFile(ctx, name)
-		require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "failed rewrite output must be removed")
+		m0AssertRewriteOutputCollected(t, ctx, engine, name)
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".parent").Scan(&count))
 		require.Equal(t, 2, count)
@@ -425,8 +436,7 @@ func TestM0ClonePhysicalRewriteCancelAfterSync(t *testing.T) {
 		require.NotEmpty(t, name)
 		engine, ok := service.GetEngine().(*disttae.Engine)
 		require.True(t, ok)
-		_, statErr := engine.FS().StatFile(ctx, name)
-		require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "canceled rewrite output must be removed")
+		m0AssertRewriteOutputCollected(t, ctx, engine, name)
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".parent").Scan(&count))
 		require.Equal(t, 2, count)
@@ -483,8 +493,7 @@ func TestM0ClonePhysicalRewritePanicAfterSync(t *testing.T) {
 		require.NotEmpty(t, name)
 		engine, ok := service.GetEngine().(*disttae.Engine)
 		require.True(t, ok)
-		_, statErr := engine.FS().StatFile(ctx, name)
-		require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "panic output must be removed")
+		m0AssertRewriteOutputCollected(t, ctx, engine, name)
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".parent").Scan(&count))
 		require.Equal(t, 2, count)

@@ -1586,7 +1586,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
+		Type:              InitSystemVariableIntType("wait_timeout", 1, 31536000, false),
 		Default:           int64(86400),
 	},
 	warningCountSystemVariable: {
@@ -3849,6 +3849,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemSystemEnumType("window_partition_algorithm", "COST", "SORT", "HASH"),
 		Default:           "SORT",
 	},
+	"rollup_algorithm": {
+		Name:              "rollup_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("rollup_algorithm", "COST", "SORT", "HASH"),
+		Default:           "COST",
+	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",
 		Scope:             ScopeBoth,
@@ -4215,13 +4223,45 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"hnsw_prefilter_exact_threshold": {
+		Name:              "hnsw_prefilter_exact_threshold",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_prefilter_exact_threshold", 0, 1000000000, false),
+		Default:           int64(5000),
+	},
+	"fulltext2_threads_search": {
+		Name:              "fulltext2_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext2_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"fulltext2_threads_build": {
+		Name:              "fulltext2_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext2_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"fulltext2_search_df_cutoff": {
+		Name:              "fulltext2_search_df_cutoff",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableDoubleType("fulltext2_search_df_cutoff", 0, 1),
+		Default:           float64(0),
+	},
 	"hnsw_max_index_capacity": {
 		Name:              "hnsw_max_index_capacity",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
-		Default:           int64(1000000),
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
 	},
 	"experimental_cagra_index": {
 		Name:              "experimental_cagra_index",
@@ -4710,6 +4750,8 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
 	case []int8:
 		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
+	case types.BlockScaledValue:
+		return planpb.Type{Id: int32(v.Oid), Width: int32(types.BlockScaledDim(v.Cell))}
 	case nil:
 		oid = types.T_any
 	default:
@@ -4724,7 +4766,7 @@ func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_year:
 		return vector.PrepareParamInteger
-	case types.T_float32, types.T_float64:
+	case types.T_float32, types.T_float64, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return vector.PrepareParamFloat
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return vector.PrepareParamDecimal

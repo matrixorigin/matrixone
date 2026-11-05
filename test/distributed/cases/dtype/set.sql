@@ -39,8 +39,11 @@ select group_concat(colors order by colors separator '|') as ordered_values
 from c where colors is not null and colors <> '';
 
 -- SET('', 'a') maps bitmap 0 and bitmap 1 to the same display value. Direct
--- sorting and transparent projections retain raw identity. Equality boundaries
--- sort the canonical bitmap of the surviving display, without splitting it.
+-- sorting and transparent projections retain raw identity. GROUP BY keys on the
+-- stored bitmap (issue #30931 D1), so the zero bitmap and the empty-label member
+-- stay separate groups that both display '' like MySQL; DISTINCT keeps one row
+-- per display label; the grouped ORDER BY still sorts by the canonical bitmap
+-- of the surviving display, so the equal-display groups cluster together.
 drop table if exists set_empty_member_order;
 create table set_empty_member_order (id int primary key, tags set('', 'a'));
 insert into set_empty_member_order values (2, 0), (1, 1), (3, 2);

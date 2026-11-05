@@ -96,7 +96,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{temporalExpressionProtocolVersion(features) != 0, temporalExpressionProtocolVersion(features),
 			"temporal result contracts require a versioned remote destination",
 			"remote destination does not support temporal result contracts (MORPC version %d)"},
-		{(features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) || features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
+		{features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
 			"versioned expression semantics require a remote destination",
 			"remote destination does not support versioned expression semantics (MORPC version %d)"},
 		{features.StringNumericResultContracts, defines.MORPCVersion80,

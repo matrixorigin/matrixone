@@ -17,7 +17,6 @@ package aggexec
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -111,7 +110,8 @@ func groupConcatFieldBytes(vec *vector.Vector, row int, typ types.Type) []byte {
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
 		types.T_varbinary, types.T_binary, types.T_json,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_float8, types.T_array_float4:
 		return vec.GetBytesAt(row)
 	default:
 		return vec.GetRawBytesAt(row)
@@ -136,11 +136,7 @@ func appendGroupConcatData(dst []byte, typ types.Type, data []byte) ([]byte, err
 }
 
 func formatGroupConcatFloat(value float64, bitSize int) []byte {
-	if value >= 1e15 || (value > 0 && value < 1e-13) ||
-		(value < 0 && value > -1e-13) || value <= -1e15 {
-		return []byte(strconv.FormatFloat(value, 'E', -1, bitSize))
-	}
-	return []byte(strconv.FormatFloat(value, 'f', -1, bitSize))
+	return util.AppendMySQLFloat(nil, value, bitSize)
 }
 
 func writeGroupConcatData(
@@ -231,6 +227,12 @@ func writeGroupConcatData(
 	case types.T_array_float32, types.T_array_float64, types.T_array_bf16,
 		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		return writeGroupConcatArrayData(writer, typ, data)
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(data)
+		if err != nil {
+			return err
+		}
+		return writeBytes([]byte(text))
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
 		types.T_char, types.T_varchar, types.T_enum:
 		return writeBytes(data)

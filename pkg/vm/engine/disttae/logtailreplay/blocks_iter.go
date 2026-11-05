@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -220,6 +221,62 @@ func (p *PartitionState) GetChangedObjsBetween(
 	inserted map[objectio.ObjectNameShort]struct{},
 ) {
 	return p.getChangedObjsBetween(begin, end, false)
+}
+
+// VisitChangedDataObjects visits the same committed object projection as
+// GetChangedObjsBetween followed by GetObject, without retaining a set whose
+// size grows with the change history. Returning false stops the visit.
+func (p *PartitionState) VisitChangedDataObjects(
+	ctx context.Context, begin, end types.TS,
+	visit func(objectio.ObjectEntry, bool) (bool, error),
+) error {
+	iter := p.dataObjectTSIndex.Iter()
+	defer iter.Release()
+	for ok := iter.Seek(ObjectIndexByTSEntry{Time: begin}); ok; ok = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		event := iter.Item()
+		if event.Time.GT(&end) {
+			break
+		}
+		if !event.Time.GT(&begin) {
+			continue
+		}
+		obj, ok := p.GetObject(event.ShortObjName)
+		if !ok {
+			continue
+		}
+
+		// Suppress only a create followed by a delete inside the window. The
+		// time-index comparator does not distinguish create from delete at the
+		// same time, so consult the actual counterpart rather than assuming it
+		// exists from the object's lifecycle fields.
+		if event.IsDelete && obj.CreateTime.GT(&begin) && obj.CreateTime.LT(&event.Time) {
+			other, exists := p.dataObjectTSIndex.Get(ObjectIndexByTSEntry{
+				Time: obj.CreateTime, ShortObjName: event.ShortObjName,
+			})
+			if exists && !other.IsDelete {
+				continue
+			}
+		} else if !event.IsDelete && !obj.DeleteTime.IsEmpty() &&
+			obj.DeleteTime.GT(&event.Time) && obj.DeleteTime.LE(&end) {
+			other, exists := p.dataObjectTSIndex.Get(ObjectIndexByTSEntry{
+				Time: obj.DeleteTime, ShortObjName: event.ShortObjName,
+			})
+			if exists && other.IsDelete {
+				continue
+			}
+		}
+		next, err := visit(obj, event.IsDelete)
+		if err != nil {
+			return err
+		}
+		if !next {
+			return nil
+		}
+	}
+	return ctx.Err()
 }
 
 // GetChangedObjsBetweenForTombstoneTransfer includes deleted intermediate

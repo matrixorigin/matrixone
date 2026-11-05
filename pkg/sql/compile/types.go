@@ -28,7 +28,6 @@ import (
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -286,7 +285,6 @@ type scopeContext struct {
 	root     *scopeContext
 	parent   *scopeContext
 	children []*scopeContext
-	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
 }
 
@@ -428,6 +426,9 @@ type Compile struct {
 	// runtime-filter producers which were actually visited by compilePlanScope.
 	// It is statement-local and excludes physically pruned subtrees.
 	compiledLocalRuntimeFilterNodes []int32
+	// Non-owning, compileQuery-generation evidence for optional deep filters.
+	deepRuntimeFilterTags           map[int32]bool
+	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
 
 	needLockMeta bool
 	needBlock    bool

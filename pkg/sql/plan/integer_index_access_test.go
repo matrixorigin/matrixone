@@ -96,6 +96,129 @@ func TestExactDecimalNativeIntegerFilters(t *testing.T) {
 	}
 }
 
+func TestExplicitIntegerCastNativeFilters(t *testing.T) {
+	for _, columnType := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_uint8, types.T_uint16} {
+		for _, predicate := range []string{
+			"id in (1,3)", "cast(id as int)=3", "cast(id as signed)=3", "3=cast(id as signed)",
+			"cast(cast(id as int) as signed)=3", "cast(id as signed)>=3", "3<cast(id as int)",
+			"cast(id as int) in (1,3)", "cast(id as signed) between 1 and 3",
+			"cast(id as int)=cast(3 as int)", "cast(3 as int)>cast(id as int)",
+			"cast(id as int) between cast(1 as int) and cast(3 as int)",
+			"cast(id as int)<=>3",
+		} {
+			t.Run(columnType.String()+"/"+predicate, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addIndexHintChoiceTableForTest(mock)
+				mock.ctxt.tables["index_hint_t"].Cols[0].Typ = makeSimplePlan2Type(columnType)
+				mock.ctxt.tables["index_hint_t"].Cols[0].Typ.NotNullable = true
+				query, err := runOneStmt(mock, t, "select id from index_hint_t use index() where "+predicate)
+				require.NoError(t, err)
+				var scan *pb.Node
+				for _, node := range query.GetQuery().Nodes {
+					if node.NodeType == pb.Node_TABLE_SCAN && !node.IndexScanInfo.IsIndexScan {
+						scan = node
+					}
+				}
+				require.NotNil(t, scan)
+				require.NotEmpty(t, scan.FilterList)
+				for _, filter := range scan.FilterList {
+					require.NotNil(t, filter.GetF().Args[0].GetCol(), filter.String())
+					require.Equal(t, int32(columnType), filter.GetF().Args[0].Typ.Id)
+				}
+			})
+		}
+	}
+}
+
+func TestExplicitIntegerCastSecondaryAccess(t *testing.T) {
+	for _, columnType := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_uint8, types.T_uint16} {
+		for _, predicate := range []string{
+			"a=7", "cast(a as int)=7", "cast(a as signed)=7", "cast(cast(a as int) as signed)=7",
+			"cast(a as int) in (1,3)", "cast(a as int)=cast(3 as int)",
+			"cast(a as int) between cast(1 as int) and cast(3 as int)",
+		} {
+			t.Run(columnType.String()+"/"+predicate, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addIndexHintChoiceTableForTest(mock)
+				mock.ctxt.tables["index_hint_t"].Cols[1].Typ = makeSimplePlan2Type(columnType)
+				query, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where "+predicate)
+				require.NoError(t, err)
+				require.Equal(t, "idx_a", findFirstIndexScanName(query), query.String())
+			})
+		}
+	}
+}
+
+func TestIntegerCastChainProof(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source types.T
+		chain  []types.T
+		accept bool
+	}{
+		{"signed identity", types.T_int64, []types.T{types.T_int64}, true},
+		{"unsigned identity", types.T_uint64, []types.T{types.T_uint64}, true},
+		{"signed widening", types.T_int8, []types.T{types.T_int16, types.T_int32, types.T_int64}, true},
+		{"unsigned widening", types.T_uint8, []types.T{types.T_uint16, types.T_uint32, types.T_uint64}, true},
+		{"unsigned to wider signed", types.T_uint32, []types.T{types.T_int64}, true},
+		{"signed narrowing", types.T_int64, []types.T{types.T_int32}, false},
+		{"unsigned narrowing", types.T_uint64, []types.T{types.T_uint32}, false},
+		{"signed to unsigned", types.T_int32, []types.T{types.T_uint64}, false},
+		{"unsigned to same width signed", types.T_uint64, []types.T{types.T_int64}, false},
+		{"lossy intermediate", types.T_int32, []types.T{types.T_int8, types.T_int32}, false},
+		{"noninteger intermediate", types.T_int32, []types.T{types.T_float64, types.T_int64}, false},
+		{"explicit decimal", types.T_int32, []types.T{types.T_decimal128}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			builder := NewQueryBuilder(pb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+			column := GetColExpr(makeSimplePlan2Type(tc.source), 0, 0)
+			expr := column
+			for _, target := range tc.chain {
+				var err error
+				expr, err = appendSyntaxExplicitCastBeforeExpr(ctx, expr, makeSimplePlan2Type(target))
+				require.NoError(t, err)
+			}
+			peer, err := makePlan2DecimalExprWithType(ctx, "3.0")
+			require.NoError(t, err)
+			original := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "="}, Args: []*pb.Expr{expr, peer}}}}
+			before := DeepCopyExpr(original)
+			rewritten := builder.rewriteNativeIntegerComparison(original)
+			require.Equal(t, tc.accept, rewritten != original)
+			require.Equal(t, before, original, "proof and publication may not mutate a shared source")
+			if tc.accept {
+				require.NotNil(t, rewritten.GetF().Args[0].GetCol())
+				require.Equal(t, column.Typ.Id, rewritten.GetF().Args[0].Typ.Id)
+				require.Equal(t, column.Typ.NotNullable, rewritten.GetF().Args[0].Typ.NotNullable)
+				require.Same(t, rewritten, builder.rewriteNativeIntegerComparison(rewritten))
+			}
+		})
+	}
+}
+
+func TestIntegerCastPredicatePreservesProjection(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	addIndexHintChoiceTableForTest(mock)
+	query, err := runOneStmt(mock, t, "select cast(a as signed) as widened from index_hint_t use index() where cast(a as int)=3")
+	require.NoError(t, err)
+	root := query.GetQuery().Nodes[query.GetQuery().Steps[0]]
+	require.Len(t, root.ProjectList, 1)
+	projection := root.ProjectList[0]
+	require.Equal(t, int32(types.T_int64), projection.Typ.Id)
+	require.False(t, projection.Typ.NotNullable)
+	require.Equal(t, "cast", projection.GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_int32), projection.GetF().Args[0].Typ.Id)
+	var found bool
+	for _, node := range query.GetQuery().Nodes {
+		if node.NodeType == pb.Node_TABLE_SCAN {
+			require.NotEmpty(t, node.FilterList)
+			require.NotNil(t, node.FilterList[0].GetF().Args[0].GetCol())
+			found = true
+		}
+	}
+	require.True(t, found)
+}
+
 func TestNullableUniqueHintCompleteness(t *testing.T) {
 	for _, tc := range []struct {
 		sql       string
@@ -152,6 +275,7 @@ func TestSparseUniqueRejectionIsAtomic(t *testing.T) {
 
 func TestExactDecimalPreservesOtherDomains(t *testing.T) {
 	for _, predicate := range []string{"id=3.1", "id=2147483648.0", "id=3e0", "cast(id as decimal(12,1))=3.0",
+		"cast(id as smallint)=3", "cast(cast(id as smallint) as int)=3", "cast(id as unsigned)=3",
 		"id=(select 3.1)", "id=(select 2147483648.0)", "id=(select 3e0)", "cast(id as decimal(12,1))=(select 3.0)"} {
 		t.Run(predicate, func(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))

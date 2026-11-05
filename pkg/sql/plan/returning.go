@@ -260,8 +260,13 @@ func returningExprForbidden(expr *planpb.Expr) string {
 			if strings.EqualFold(e.F.Func.ObjName, "python_user_defined_function") {
 				return "external UDF in RETURNING expression"
 			}
-			if function.GetFunctionIsVolatileOrRealTimeRelatedByName(e.F.Func.ObjName) {
-				return "volatile function in RETURNING expression"
+			// Resolve the actual overload: a no-fold, execution-stable conversion
+			// must not make every overload sharing its name volatile.
+			if impl, known := function.GetFunctionByIdWithoutError(e.F.Func.Obj); known {
+				unstable, _ := function.GetFunctionValueUnstableByID(e.F.Func.Obj)
+				if unstable || impl.IsRealTimeRelated() {
+					return "volatile function in RETURNING expression"
+				}
 			}
 		}
 		for _, arg := range e.F.Args {
@@ -460,5 +465,8 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	builder.qry.HasReturning = true
 	builder.qry.ReturningStep = builder.appendStep(projectID)
 	builder.qry.Headings = append(builder.qry.Headings, returnCtx.headings...)
+	if builder.integerPrecision != nil {
+		builder.captureIntegerPrecisionOutputs(returnCtx)
+	}
 	return nil
 }

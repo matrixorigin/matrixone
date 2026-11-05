@@ -467,10 +467,20 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
 	}
-	if builder.subqueryNeedsDependent(subquery.NodeId) && !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected) {
+	// The existing deep-correlation proof owns its complete domain. The range
+	// admission only supplements otherwise legacy, one-level relations.
+	dependent := builder.subqueryNeedsDependent(subquery.NodeId)
+	if dependent {
+		dependent = !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected)
+	} else {
+		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx, guarded)
+	}
+	if dependent {
 		if subquery.Child != nil && hasSubquery(subquery.Child) {
+			// The left operand has the same demand as the comparison. Hoisting
+			// it into a JOIN would evaluate even an unselected CASE branch.
 			var err error
-			nodeID, subquery.Child, err = builder.flattenSubqueriesWithContext(nodeID, subquery.Child, ctx, false)
+			subquery.Child, err = builder.bindDependentJoinCondition(subquery.Child)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -1152,7 +1162,10 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		// Lifting any visible volatile result across the join can change both
 		// its evaluation count and DISTINCT cardinality.  Keep this shape
 		// fail-closed until it can be decorrelated without moving evaluation.
-		if containsVolatileFunction(ctx.projects[i]) ||
+		// CAST9 is a pure, execution-stable conversion even though SQL-mode
+		// sensitivity forbids folding. Only this nullable, match-guarded lift
+		// may use that proof; diagnostic/unstable inputs remain inadmissible.
+		if containsVolatileFunctionImpl(ctx.projects[i], true) ||
 			(hasCorrCol(ctx.projects[i]) && !builder.casePreservesType(ctx.projects[i])) {
 			return unsafe()
 		}
@@ -1433,9 +1446,7 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 // Inspect only referenced origins in the input graph, without expanding or
 // mutating expressions. Unknown producers retain the historical IS TRUE barrier.
 func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*plan.Expr, inputs ...int32) bool {
-	if !areTruncationSafePredicates(predicates) {
-		return false
-	}
+	legacyProof := areTruncationSafePredicates(predicates)
 	origins := make(map[int32]*plan.Node)
 	visited := make(map[int32]uint8)
 	var collect func(int32) bool
@@ -1496,6 +1507,47 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 		}
 	}
 
+	// TEXT width zero also describes some unbounded computed expressions. Only
+	// use the ordinary stored TEXT byte limit after following transparent column
+	// references to the actual table definition.
+	storedTextIsBounded := func(expr *plan.Expr) bool {
+		seen := make(map[[2]int32]bool)
+		for expr != nil && types.T(expr.Typ.Id) == types.T_text && expr.Typ.Width == 0 {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 {
+				return false
+			}
+			key := [2]int32{col.RelPos, col.ColPos}
+			if seen[key] {
+				return false
+			}
+			seen[key] = true
+			node := origins[col.RelPos]
+			if node == nil {
+				return false
+			}
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if int(col.ColPos) >= len(node.TableDef.Cols) || node.TableDef.Cols[col.ColPos] == nil {
+					return false
+				}
+				typ := node.TableDef.Cols[col.ColPos].Typ
+				return types.T(typ.Id) == types.T_text && typ.Width == 0
+			}
+			if node.NodeType != plan.Node_PROJECT || int(col.ColPos) >= len(node.ProjectList) {
+				return false
+			}
+			expr = node.ProjectList[col.ColPos]
+		}
+		return false
+	}
+	if !legacyProof {
+		for _, predicate := range predicates {
+			if !builder.existentialPredicateIsTotal(predicate, storedTextIsBounded) {
+				return false
+			}
+		}
+	}
+
 	proved := make(map[[2]int32]uint8)
 	var inspect func(*plan.Expr) bool
 	inspect = func(expr *plan.Expr) bool {
@@ -1518,7 +1570,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 					return false
 				}
 				origin := node.ProjectList[col.ColPos]
-				if !isTruncationSafePredicateValue(origin) || !inspect(origin) {
+				if !(legacyProof && isTruncationSafePredicateValue(origin) || builder.existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
 					return false
 				}
 			}
@@ -1550,6 +1602,11 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
+	if outerPred == nil {
+		if root, marker, rewritten, rewriteErr := builder.tryExistentialDisjunction(left, right, joinPreds, negate, ctx); rewritten || rewriteErr != nil {
+			return root, marker, rewriteErr
+		}
+	}
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
 
@@ -1582,12 +1639,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	markNotNullable := outerPred != nil && outerPred.Typ.NotNullable
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_JOIN,
-		Children:    []int32{left, right},
-		BindingTags: []int32{markTag},
-		JoinType:    plan.Node_MARK,
-		OnList:      joinPreds,
-		SpillMem:    builder.joinSpillMem,
+		NodeType:          plan.Node_JOIN,
+		Children:          []int32{left, right},
+		BindingTags:       []int32{markTag},
+		JoinType:          plan.Node_MARK,
+		MarkExistenceOnly: keepRawExistential,
+		OnList:            joinPreds,
+		SpillMem:          builder.joinSpillMem,
 	}, ctx)
 
 	markExpr = &plan.Expr{
@@ -3649,8 +3707,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	//   AGG(...)
 	// or:
 	//   PROJECT(agg_col) -> AGG(...)
-	// Other shapes (user GROUP BY keys, HAVING/FILTER, and computed PROJECT
-	// expressions) need different rewrites to preserve scalar subquery semantics.
+	// A pure aggregate-result expression can be rebuilt above the new AGG.
+	// Other shapes (user GROUP BY keys, HAVING/FILTER, and wrapped computed
+	// projections) need different rewrites to preserve scalar semantics.
 	//
 	// Note: pullupThroughAgg may have appended inner expressions of the
 	// correlated predicates to aggNode.GroupBy.  Those entries do not affect
@@ -3692,6 +3751,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 				"aggregation with non equal predicate in scalar subquery will be supported in future version")
 		}
 		for i := range resultCount {
+			if subquery.Child == nil && rangeScalarResultSupported(subRoot.ProjectList[i], subCtx.aggregateTag, len(aggNode.AggList)) {
+				continue
+			}
 			col, ok := subRoot.ProjectList[i].Expr.(*plan.Expr_Col)
 			if !ok || col.Col == nil || col.Col.RelPos != subCtx.aggregateTag ||
 				col.Col.ColPos < 0 || int(col.Col.ColPos) >= len(aggNode.AggList) {
@@ -3747,37 +3809,11 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	//     pick a single tag for the AGG, dropping access to the others.
 	//  2. Native row identity must survive the outer stream. Transparent inline
 	//     CTEs can forward it privately; unknown output changes stay rejected.
-	if len(ctx.bindings) != 1 {
-		return 0, nil, moerr.NewNYIf(builder.GetContext(),
-			"aggregation with non equal predicate in scalar subquery referencing multiple outer tables will be supported in future version")
+	outerSource, outerOutputs, err := builder.rangeScalarOuterSource(nodeID, ctx, subquery.Child != nil)
+	if err != nil {
+		return 0, nil, err
 	}
 	outerBinding := ctx.bindings[0]
-	// Row comparisons may still consume other subquery outputs in Child.
-	// Reaggregating an already composed outer plan cannot remap those refs.
-	if subquery.Child != nil && builder.findReachableRowIDColRef(nodeID) == nil {
-		return 0, nil, moerr.NewNYI(builder.GetContext(),
-			"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
-	}
-	outerMarker := builder.findPreservedOuterRowIDColRef(nodeID)
-	var outerSource *scalarCTERowSource
-	if outerMarker == nil || outerMarker.GetCol() == nil ||
-		outerMarker.GetCol().RelPos != outerBinding.tag ||
-		outerMarker.GetCol().ColPos < 0 ||
-		int(outerMarker.GetCol().ColPos) >= len(outerBinding.cols) ||
-		int(outerMarker.GetCol().ColPos) >= len(outerBinding.colIsHidden) ||
-		!outerBinding.colIsHidden[outerMarker.GetCol().ColPos] {
-		outerSource = builder.analyzeScalarCTERowSource(outerBinding.nodeId, len(outerBinding.cols))
-		if outerSource == nil || outerSource.marker.GetCol().RelPos != outerBinding.tag ||
-			!builder.preservesScalarCTEIdentity(nodeID, outerSource) {
-			return 0, nil, moerr.NewNYI(builder.GetContext(),
-				"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
-		}
-	}
-	outerOutputs, ok := builder.collectScalarOuterOutputs(nodeID, outerBinding.tag, int32(len(outerBinding.cols)), ctx)
-	if !ok {
-		return 0, nil, moerr.NewNYI(builder.GetContext(),
-			"correlated aggregate on an outer input without preserved row columns")
-	}
 	if outerSource != nil {
 		marker := outerSource.marker.GetCol()
 		found := false
@@ -3856,27 +3892,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 
 	// A LEFT JOIN creates one synthetic row for an unmatched outer row.
 	// Only the inner scan's accessible Row_ID distinguishes it from real input.
-	markerCol := builder.findReachableRowIDColRef(innerID)
-	var innerSource *scalarCTERowSource
-	var innerColCount int
-	if markerCol == nil {
-		innerSource = builder.analyzeScalarCTERowSource(innerID, -1)
-		if innerSource == nil {
-			return 0, nil, moerr.NewNYI(builder.GetContext(),
-				"non-equality correlated aggregate requires an accessible inner row marker")
-		}
-		markerCol = DeepCopyExpr(innerSource.marker)
-		innerColCount = len(innerSource.columns)
-	} else {
-		innerScanID := innerID
-		for builder.qry.Nodes[innerScanID].NodeType != plan.Node_TABLE_SCAN {
-			innerScanID = builder.qry.Nodes[innerScanID].Children[0]
-		}
-		innerColCount = len(builder.qry.Nodes[innerScanID].TableDef.Cols)
-	}
-	if innerColCount == 0 {
-		return 0, nil, moerr.NewNYI(builder.GetContext(),
-			"non-equality correlated aggregate requires an accessible inner row marker")
+	markerCol, innerSource, innerColCount, err := builder.rangeScalarInnerSource(innerID)
+	if err != nil {
+		return 0, nil, err
 	}
 	markerCol.Typ.NotNullable = false // nullable after the LEFT JOIN
 	markerTag := markerCol.GetCol().RelPos
@@ -3886,7 +3904,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	}
 	for _, agg := range aggExprs {
 		f := agg.GetF()
-		if f == nil || f.Func == nil {
+		if !rangeScalarAggregateInputSupported(agg, markerTag, innerColCount, innerSource) {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"unsupported non-equality correlated aggregate input")
 		}
@@ -3904,35 +3922,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			agg.Typ.NotNullable = true
 			continue
 		}
-		switch fid {
-		case function.COUNT, function.SUM, function.MIN, function.MAX, function.AVG:
-			if len(f.Args) != 1 {
-				return 0, nil, moerr.NewNYI(builder.GetContext(),
-					"unsupported non-equality correlated aggregate input")
-			}
-		case function.GROUP_CONCAT:
-			if len(f.Args) == 0 {
-				return 0, nil, moerr.NewNYI(builder.GetContext(),
-					"unsupported non-equality correlated aggregate input")
-			}
-		default:
-			return 0, nil, moerr.NewNYI(builder.GetContext(),
-				"unsupported non-equality correlated aggregate input")
-		}
 		for i, arg := range f.Args {
-			switch input := arg.Expr.(type) {
-			case *plan.Expr_Col:
-				if input.Col == nil || input.Col.RelPos != markerTag || input.Col.ColPos < 0 ||
-					int(input.Col.ColPos) >= innerColCount ||
-					(innerSource != nil && arg.Typ.Id != innerSource.columns[input.Col.ColPos].Typ.Id) {
-					return 0, nil, moerr.NewNYI(builder.GetContext(),
-						"unsupported non-equality correlated aggregate input")
-				}
-			case *plan.Expr_Lit:
-			default:
-				return 0, nil, moerr.NewNYI(builder.GetContext(),
-					"unsupported non-equality correlated aggregate input")
-			}
 			masked, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
 				DeepCopyExpr(markerIsNull), makePlan2NullConstExprWithType(), arg,
 			})
@@ -3987,13 +3977,21 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		return nodeID, retExpr, err
 	}
 
-	aggregatePos := int32(0)
 	if wrappedAgg == nil && subRoot != aggNode {
-		aggregatePos = subRoot.ProjectList[0].GetCol().ColPos
+		if col := subRoot.ProjectList[0].GetCol(); col != nil {
+			return nodeID, GetColExpr(aggExprs[col.ColPos].Typ, newAggTag, col.ColPos), nil
+		}
+		projects := make([]*plan.Expr, len(aggExprs))
+		for i, agg := range aggExprs {
+			projects[i] = GetColExpr(agg.Typ, newAggTag, int32(i))
+		}
+		retExpr, ok := replaceAggregateRefsForPostJoin(DeepCopyExpr(subRoot.ProjectList[0]), subCtx.aggregateTag, projects)
+		if !ok {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "non-equality aggregate result cannot be reprojected")
+		}
+		return nodeID, retExpr, nil
 	}
-	retExpr := GetColExpr(aggExprs[aggregatePos].Typ, newAggTag, aggregatePos)
-
-	return nodeID, retExpr, nil
+	return nodeID, GetColExpr(aggExprs[0].Typ, newAggTag, 0), nil
 }
 
 // subtreeContainsAggregate checks every reachable child, including JOIN
@@ -4938,7 +4936,8 @@ func correlatedPaginationPartitionTypeSupported(typ types.T) bool {
 		types.T_varbinary, types.T_json, types.T_text, types.T_datalink,
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

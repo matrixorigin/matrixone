@@ -209,6 +209,10 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 			if preInsert := node.GetPreInsertCtx(); preInsert != nil {
 				require.False(t, preInsert.TrackAutoIncrementGenerated,
 					"ODKU must not carry INSERT IGNORE-only auto-increment provenance")
+				require.True(t, preInsert.TrackOdkuResult, "ODKU owns its own provenance contract")
+				require.GreaterOrEqual(t, preInsert.AutoIncrementGeneratedColumn, int32(0))
+				require.Greater(t, preInsert.OdkuOrdinalColumn, preInsert.AutoIncrementGeneratedColumn)
+				require.GreaterOrEqual(t, preInsert.OdkuAutoIncrementColumn, int32(0))
 			}
 		}
 	})

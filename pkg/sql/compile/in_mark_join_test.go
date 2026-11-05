@@ -16,9 +16,11 @@ package compile
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
@@ -323,6 +325,62 @@ func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
 	require.Len(t, op.EqConds[1], 1)
 }
 
+func TestCompileArithmeticExistenceUsesHashJoin(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		join      plan.Node_JoinType
+		count     int
+	}{
+		{"semi", `select n.n_name from tpch.nation n where exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1)`, plan.Node_SEMI, 1},
+		{"anti", `select n.n_name from tpch.nation n where not exists (select 1 from tpch.region r where r.r_regionkey+1=n.n_regionkey)`, plan.Node_ANTI, 1},
+		{"mark", `select exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1) from tpch.nation n`, plan.Node_MARK, 1},
+		{"compound", `select n.n_name from tpch.nation n where exists (select 1 from tpch.region r where r.r_regionkey*10+r.r_regionkey=n.n_regionkey*10+n.n_nationkey)`, plan.Node_SEMI, 1},
+		{"disjunction", `select exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1 or r.r_regionkey=n.n_regionkey+1) from tpch.nation n`, plan.Node_MARK, 2},
+		{"negative disjunction", `select not exists (select 1 from tpch.region r where r.r_regionkey=n.n_regionkey-1 or r.r_regionkey=n.n_regionkey+1) from tpch.nation n`, plan.Node_MARK, 2},
+		{"nullable disjunction", `select exists (select 1 from tpch.region r where r.r_comment=n.n_comment or r.r_comment=n.n_name) from tpch.nation n`, plan.Node_MARK, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
+			statements, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			p, err := plan2.BuildPlan(ctx, statements[0], false)
+			require.NoError(t, err)
+			query := p.GetQuery()
+			var joins []*plan.Node
+			var visit func(int32)
+			visit = func(id int32) {
+				node := query.Nodes[id]
+				if node.NodeType == plan.Node_JOIN {
+					require.Equal(t, tc.join, node.JoinType)
+					joins = append(joins, node)
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range query.Steps {
+				visit(root)
+			}
+			require.Len(t, joins, tc.count)
+			for _, join := range joins {
+				join.Stats.HashmapStats.Shuffle = false
+				join.SendMsgList = []plan.MsgHeader{{MsgType: int32(message.MsgJoinMap), MsgTag: 1}}
+				c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+				probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+				build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+				result := c.compileJoin(join, query.Nodes[join.Children[0]], query.Nodes[join.Children[1]], []*Scope{probe}, []*Scope{build})
+				require.Len(t, result, 1)
+				op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+				require.True(t, ok, "compiled %T, want HashJoin", result[0].RootOp)
+				require.Equal(t, tc.join, op.JoinType)
+				require.Len(t, op.EqConds[0], 1)
+				require.Len(t, op.EqConds[1], 1)
+			}
+		})
+	}
+}
+
 func TestCompileBroadcastMarkJoinSelectsPhysicalOperator(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -614,4 +672,94 @@ func TestJoinKeysRejectMixedOperandAndRetainResidual(t *testing.T) {
 	require.Equal(t, int32(0), left.GetCol().RelPos)
 	require.Equal(t, int32(1), right.GetCol().RelPos)
 	require.True(t, plan2.IsEquiJoin2([]*plan.Expr{key, mixed}))
+}
+
+func TestCompileBooleanExistenceMark(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		alter func(*plan.Node, *plan.Node, *plan.Node)
+		want  bool
+	}{
+		{"nullable composite", nil, true},
+		{"ordinary mark", func(n, l, r *plan.Node) { n.MarkExistenceOnly = false }, false},
+		{"one probe", func(n, l, r *plan.Node) { l.Stats.Outcnt = 1 }, false},
+		{"missing statistics", func(n, l, r *plan.Node) { l.Stats = nil }, false},
+		{"nonfinite statistics", func(n, l, r *plan.Node) { l.Stats.Outcnt = math.Inf(1) }, false},
+		{"NaN statistics", func(n, l, r *plan.Node) { l.Stats.Outcnt = math.NaN() }, false},
+		{"floating-point domain", func(n, l, r *plan.Node) {
+			for _, e := range n.OnList {
+				for _, a := range e.GetF().Args {
+					a.Typ.Id = int32(types.T_float64)
+				}
+			}
+			for _, c := range []*plan.Node{l, r} {
+				for _, e := range c.ProjectList {
+					e.Typ.Id = int32(types.T_float64)
+				}
+			}
+		}, false},
+		{"right mark", func(n, l, r *plan.Node) { n.IsRightJoin = true }, false},
+		{"residual", func(n, l, r *plan.Node) { n.OnList[1] = makeMarkJoinTestCondition(t, "<", 1, false) }, false},
+		{"mismatched domain", func(n, l, r *plan.Node) { n.OnList[0].GetF().Args[0].Typ.Id = int32(types.T_uint64) }, false},
+		{"invalid column", func(n, l, r *plan.Node) { n.OnList[0].GetF().Args[0].GetCol().ColPos = 99 }, false},
+		{"computed key", func(n, l, r *plan.Node) { n.OnList[0].GetF().Args[0] = makeMarkJoinTestCondition(t, "=", 0, false) }, false},
+		{"same-side keys", func(n, l, r *plan.Node) { n.OnList[0].GetF().Args[0].GetCol().RelPos = 1 }, false},
+		{"commuted equality", func(n, l, r *plan.Node) { f := n.OnList[0].GetF(); f.Args[0], f.Args[1] = f.Args[1], f.Args[0] }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newShuffleJoinTestNode(1)
+			n.JoinType = plan.Node_MARK
+			n.MarkExistenceOnly = true
+			n.Stats.HashmapStats.Shuffle = false
+			n.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false), makeMarkJoinTestCondition(t, "=", 1, false)}
+			l := &plan.Node{Stats: &plan.Stats{Outcnt: 288}, ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, false), makeMarkJoinTestColumn(0, 1, false)}}
+			r := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, false), makeMarkJoinTestColumn(1, 1, false)}}
+			if tc.alter != nil {
+				tc.alter(n, l, r)
+			}
+			require.Equal(t, tc.want, canUseHashExistenceJoinWithInputs(n, l, r))
+			require.False(t, canUseShuffleHashMarkJoinWithInputs(n, l, r), "ordinary three-valued shuffle eligibility must stay unchanged")
+			if !tc.want {
+				return
+			}
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+			got := c.compileJoin(n, l, r, []*Scope{newShuffleJoinTestScope(t, c.cnList[0], 1)}, []*Scope{newShuffleJoinTestScope(t, c.cnList[0], 1)})
+			require.Len(t, got, 1)
+			op, ok := got[0].RootOp.(*hashjoin.HashJoin)
+			require.True(t, ok)
+			require.True(t, op.ExistenceOnly)
+			require.False(t, op.HashOnPK)
+			require.False(t, op.EqConds[0][0].Typ.NotNullable, "do not fake non-null key metadata")
+			cloned := dupOperator(op, 0, 1).(*hashjoin.HashJoin)
+			require.True(t, cloned.ExistenceOnly)
+			defer cloned.Release()
+			build := constructBroadcastHashBuild(op, c.proc, 1)
+			defer build.Release()
+			require.True(t, build.NeedHashMap)
+			require.False(t, build.NeedBatches)
+			require.False(t, build.NeedAllocateSels)
+			require.False(t, build.TrackNullKeys)
+			// Scope encoding/decoding must preserve the mode, not only proto round trips.
+			wire, err := encodeScope(&Scope{Proc: c.proc, RootOp: cloned})
+			require.NoError(t, err)
+			decoded, err := decodeScope(wire, c.proc, false, nil)
+			require.NoError(t, err)
+			require.True(t, decoded.RootOp.(*hashjoin.HashJoin).ExistenceOnly)
+		})
+	}
+}
+
+func TestExistenceMarkDefaultFalseEncoding(t *testing.T) {
+	oldNode := &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_MARK}
+	data, err := oldNode.Marshal()
+	require.NoError(t, err)
+	var node plan.Node
+	require.NoError(t, node.Unmarshal(data))
+	require.False(t, node.MarkExistenceOnly)
+	oldJoin := &pipeline.HashJoin{JoinType: plan.Node_MARK}
+	data, err = oldJoin.Marshal()
+	require.NoError(t, err)
+	var join pipeline.HashJoin
+	require.NoError(t, join.Unmarshal(data))
+	require.False(t, join.ExistenceOnly)
 }

@@ -64,6 +64,9 @@ func evolutionColumns(def *plan.TableDef, root uint32) ([]*api.M0EvolutionColumn
 }
 
 func validateM0Evolution(tbl *txnTable, def *plan.TableDef) error {
+	if tbl == nil || tbl.db == nil || tbl.extraInfo == nil || def == nil {
+		return moerr.NewInternalErrorNoCtx("M0: invalid relation evolution contract")
+	}
 	c := tbl.extraInfo.M0Evolution
 	if err := m0read.ValidateEvolution(c, evolutionOwner(tbl)); err != nil {
 		return err

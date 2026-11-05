@@ -2399,7 +2399,7 @@ func TestHashDiffConflictReportsExpandedUpdatesWithoutValueClaim(t *testing.T) {
 		nil,
 	)
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataBranchConflict), err)
 	require.ErrorContains(t, err, "target UPDATE and base UPDATE on pk(7)")
 	require.NotContains(t, err.Error(), "different values")
 	require.Empty(t, emitted)

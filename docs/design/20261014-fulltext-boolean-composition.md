@@ -5,6 +5,7 @@
 - Owning issue: <https://github.com/matrixorigin/matrixone/issues/30166> (read in full, including its recipe and regression expectations; no comments as of 2026-10-14).
 - Design revision: v1, 2026-10-14. Status: approved by independent review v1 on 2026-10-16; see the frozen decision below.
 - Implementation history: the later review examined PR #30190; design approval does not certify implementation or merge readiness.
+- Revision 2026-10-27 (#31411): a MATCH used as a Boolean is whether the index returned the row, not whether its relevance is nonzero (§2). Decided by the developer; the frozen review below predates it.
 - Verified base/head/merge-base before this document: `5a0570ea70083c9365719009a5ed8d7618f9ed91`; isolated worktree `/workspace/shared/matrixone-30166` was clean.
 - G-FEATURE-DESIGN applies: new SQL capability and material hot-path cardinality/resource change, independent of diff size. This document is the design-only phase. No production code may precede recorded independent PASS on its exact content revision.
 - The frozen decision below identifies the reviewed commit and content SHA256. Material design changes invalidate approval of affected decisions.
@@ -27,7 +28,7 @@ Compatibility precedent matters: maintainers intentionally retain score-zero omi
 
 ## 2. Exact scalar semantics and three-valued logic
 
-Define `S_m(r)` from the COMPLETE existing search stream for MATCH m: emitted relevance if that stream contains r's primary key; otherwise typed FLOAT32 zero. An emitted zero or negative relevance is preserved, not replaced by a Boolean membership bit. Bare MATCH uses the binder's existing numeric-to-Boolean conversion: zero is FALSE, nonzero TRUE. Comparisons/casts/rounding retain their original bound expression; no algebraic approximation.
+Define `S_m(r)` from the COMPLETE existing search stream for MATCH m: emitted relevance if that stream contains r's primary key; otherwise typed FLOAT32 zero. Define `F_m(r)` as whether that stream contains r's primary key. The BOOL value of MATCH is `F_m(r)` wherever MATCH is converted to BOOL — a bare predicate, an operand of AND/OR/NOT/XOR, a CASE/IF condition, or an explicit `CAST(MATCH(...) AS BOOL)`: TRUE for every row the index returned, whatever its relevance, including zero (a term in every document, or a one-row table, has idf zero); FALSE for a row it did not return. This is the same answer an AND-only MATCH gives, so `MATCH`, `MATCH OR FALSE` and `NOT MATCH` agree (#31411). Every non-Boolean use of MATCH is `S_m(r)`: comparisons, numeric casts, rounding and projection retain their original bound expression on the score; no algebraic approximation. A cast through a numeric type therefore converts the score (`CAST(CAST(MATCH(...) AS DOUBLE) AS BOOL)` is FALSE at relevance zero). A column projected from MATCH is `S_m(r)`, so a condition on it in an outer query block (`SELECT ... FROM (SELECT MATCH(...) AS sc ...) d WHERE sc`) is the score's truth, not `F_m(r)`, wherever the optimizer moves that condition.
 
 This is an explicit contract for the newly supported composition domain, not a claim that a previously unexecutable scalar form already returned these values. Missing index rows do not become SQL NULL merely because LEFT JOIN represents absence with NULL.
 

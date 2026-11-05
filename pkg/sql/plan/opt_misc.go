@@ -17,13 +17,14 @@ package plan
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -90,9 +91,18 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
 func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+	return builder.removeSimpleProjectionsUnder(nodeID, parentType, false, flag, colRefCnt)
+}
+
+// removeSimpleProjectionsUnder is removeSimpleProjections with matchAbove: the parent is a
+// PROJECT whose select list calls fulltext_match, a column pass-through PROJECT with
+// matchAbove, or a SORT with matchAbove under a PROJECT. The PROJECT that calls
+// fulltext_match can be the fulltext rewrite boundary for a scan below this node
+// (resolveFullTextIndexPath).
+func (builder *QueryBuilder) removeSimpleProjectionsUnder(nodeID int32, parentType plan.Node_NodeType, matchAbove bool, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_SINK {
-		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
+		return builder.removeSimpleProjectionsUnder(node.Children[0], plan.Node_UNKNOWN, false, flag, colRefCnt)
 	}
 	projMap := make(map[[2]int32]*plan.Expr)
 
@@ -102,14 +112,14 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER ||
 			node.JoinType == plan.Node_ASOF_LEFT
 
-		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
+		newChildID, childProjMap := builder.removeSimpleProjectionsUnder(node.Children[0], plan.Node_JOIN, false, leftFlag, colRefCnt)
 		node.Children[0] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
 		}
 
 		origRightID := node.Children[1]
-		newChildID, childProjMap = builder.removeSimpleProjections(node.Children[1], plan.Node_JOIN, rightFlag, colRefCnt)
+		newChildID, childProjMap = builder.removeSimpleProjectionsUnder(node.Children[1], plan.Node_JOIN, false, rightFlag, colRefCnt)
 		// When OldColCaptureList is set, the build-side (right child) PROJECT
 		// contains NULL placeholder slots that the DEDUP JOIN writes captured
 		// values into at runtime. Removing this PROJECT would lose those
@@ -126,8 +136,10 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL:
+		childMatchAbove := node.NodeType == plan.Node_PROJECT &&
+			(exprListCallsFullTextMatch(node.ProjectList) || (matchAbove && isColumnPassThroughProject(node)))
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, node.NodeType, childMatchAbove, false, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -136,7 +148,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 
 	case plan.Node_MULTI_UPDATE:
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, node.NodeType, false, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -153,7 +165,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			childParentType = plan.Node_UNKNOWN
 		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, childParentType, false, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -166,8 +178,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			// Keep the operand's positional schema boundary through identity wrappers.
 			childParentType = parentType
 		}
+		childMatchAbove := node.NodeType == plan.Node_SORT && parentType == plan.Node_PROJECT && matchAbove
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, childParentType, childMatchAbove, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -183,7 +196,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		replaceColumnsForExprList(right.TblFuncExprList, projMap)
 	}
 
-	if builder.canRemoveProject(parentType, node) {
+	if builder.canRemoveProject(parentType, node, matchAbove) {
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
@@ -225,7 +238,7 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 }
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
-func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node, matchAbove bool) bool {
 	if builder.isFullTextBooleanScoreProject(node) {
 		return false
 	}
@@ -271,9 +284,18 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
 	// A PROJECT is also the rewrite boundary for a fulltext-filtered scan.
 	// Removing it can expose the scan directly under a WINDOW or an outer JOIN,
-	// neither of which can safely perform the scan-local fulltext rewrite.
-	if childType == plan.Node_TABLE_SCAN && builder.scanHasMatchedFullTextFilter(builder.qry.Nodes[node.Children[0]]) {
-		return false
+	// neither of which can safely perform the scan-local fulltext rewrite. With
+	// matchAbove, the PROJECT above takes over as the boundary, and its own
+	// MATCHes, which read this PROJECT's columns, are served by the same rewrite.
+	// A scan LIMIT/OFFSET pages this block's relevance order; under a SORT the
+	// rewrite would move that page onto the SORT, so the boundary stays.
+	if childType == plan.Node_TABLE_SCAN {
+		scan := builder.qry.Nodes[node.Children[0]]
+		paged := scan.Limit != nil || scan.Offset != nil
+		if builder.scanHasMatchedFullTextFilter(scan) &&
+			(!matchAbove || (paged && parentType != plan.Node_PROJECT)) {
+			return false
+		}
 	}
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
 		return parentType == plan.Node_PROJECT
@@ -293,6 +315,29 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		}
 	}
 
+	return true
+}
+
+func exprListCallsFullTextMatch(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprCallsFunc(expr, "fulltext_match") {
+			return true
+		}
+	}
+	return false
+}
+
+// isColumnPassThroughProject reports a PROJECT without LIMIT/OFFSET whose select list is
+// column references only.
+func isColumnPassThroughProject(node *plan.Node) bool {
+	if node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		if expr.GetCol() == nil {
+			return false
+		}
+	}
 	return true
 }
 
@@ -837,8 +882,9 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
+	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -921,6 +967,11 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		return nil
 	}
 
+	// This proof belongs to the current inputs and predicates. Rewriters may
+	// have changed them since a previous invocation, including for a trial.
+	if node.Stats != nil && node.Stats.HashmapStats != nil {
+		node.Stats.HashmapStats.HashOnPK = false
+	}
 	leftColMap := determineHashOnPK(node.Children[0], builder)
 	rightColMap := determineHashOnPK(node.Children[1], builder)
 	if rightColMap == nil {
@@ -2018,10 +2069,12 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
-	// CHAR comparison binding casts text operands to the fixed CHAR domain.
-	// With the same charset and a target at least as wide as the declared
-	// source, that cast cannot reject or truncate any source value.
-	if targetID == types.T_char &&
+	// Text widening is total in the same collation: strToStr checks character
+	// width without transcoding, and every value fits a target at least as wide
+	// as its bounded source. Keep the cast itself (including comparison-key
+	// trimming); this only proves that skipping its evaluation cannot hide an
+	// input-dependent error or warning.
+	if (targetID == types.T_char || targetID == types.T_varchar) &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
 		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
@@ -2111,23 +2164,6 @@ func integerTypeDomain(oid types.T) (bits int, signed bool) {
 		return 64, false
 	default:
 		return 0, false
-	}
-}
-
-func integerDecimalDigits(oid types.T) int32 {
-	switch oid {
-	case types.T_int8, types.T_uint8:
-		return 3
-	case types.T_int16, types.T_uint16:
-		return 5
-	case types.T_int32, types.T_uint32:
-		return 10
-	case types.T_int64:
-		return 19
-	case types.T_uint64:
-		return 20
-	default:
-		return 0
 	}
 }
 
@@ -2253,84 +2289,108 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	if builder.optimizerHints != nil && builder.optimizerHints.optimizeLikeExpr != 0 {
 		return
 	}
-	// for a like "abc%", change it to prefix_equal(a,"abc")
-	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
 	node := builder.qry.Nodes[nodeID]
-
 	for _, childID := range node.Children {
 		builder.optimizeLikeExpr(childID)
 	}
 	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
 		return
 	}
-	var newFilters []*plan.Expr
-	for i := range node.FilterList {
-		expr := node.FilterList[i]
-		fun := expr.GetF()
-		if fun != nil && fun.Func.ObjName == "like" {
-			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
-			// the original predicate intact instead of applying the two-argument
-			// prefix rewrite with its hard-coded default escape semantics.
-			if len(fun.Args) != 2 {
-				continue
+	var stats *statspb.StatsInfo
+	if w := builder.getStatsInfoByTableID(node.TableDef.TblId); w != nil {
+		stats = w.GetStats()
+	}
+	var prefixes []*plan.Expr
+	var equalities []*plan.Expr
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
+			continue
+		}
+		if _, usable := prefixStringDomain(fn.Args[0].Typ); !usable {
+			continue
+		}
+		lit := fn.Args[1].GetLit()
+		if lit == nil || lit.Isnull || lit.Src != nil {
+			continue
+		}
+		value, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok || value.Sval == "" {
+			continue
+		}
+		binary, _ := prefixStringDomain(fn.Args[0].Typ)
+		if !binary && (!utf8.ValidString(value.Sval) || strings.ContainsRune(value.Sval, utf8.RuneError)) {
+			continue
+		}
+		prefix, wildcard, escaped, pure := likeLiteralPrefix(value.Sval)
+		if !wildcard {
+			if !escaped {
+				fn.Func.ObjName = function.EqualFunctionName
+				fn.Func.Obj = function.EqualFunctionEncodedID
+				equalities = append(equalities, expr)
 			}
-			col := fun.Args[0].GetCol()
-			if col == nil {
-				continue
-			}
-			if fun.Args[1].GetLit() == nil {
-				continue
-			}
-			str := fun.Args[1].GetLit().GetSval()
-			if len(str) == 0 {
-				continue
-			}
-			index1 := strings.IndexByte(str, '_')
-			if index1 > 0 && str[index1-1] == '\\' {
-				index1--
-			}
-			index2 := strings.IndexByte(str, '%')
-			if index2 > 0 && str[index2-1] == '\\' {
-				index2--
-			}
-			if index1 == -1 && index2 == -1 {
-				// it's col like string without wildcard, can change to equal
-				fun.Func.ObjName = function.EqualFunctionName
-				fun.Func.Obj = function.EqualFunctionEncodedID
-				continue
-			}
-
-			indexOfWildCard := index1
-			if index1 == -1 {
-				indexOfWildCard = index2
-			}
-			if index2 != -1 && index2 < index1 {
-				indexOfWildCard = index2
-			}
-			if indexOfWildCard <= 0 {
-				continue
-			}
-			newStr := str[:indexOfWildCard]
-
-			newFilter := node.FilterList[i]
-			// if no _ and % in the last, we can replace the origin filter
-			replaceOrigin := (index1 == -1) && (index2 == len(str)-1)
-			if !replaceOrigin {
-				newFilter = DeepCopyExpr(newFilter)
-				newFilters = append(newFilters, newFilter)
-			}
-			newFunc := newFilter.GetF()
-			newFunc.Func.ObjName = function.PrefixEqualFunctionName
-			newFunc.Func.Obj = function.PrefixEqualFunctionEncodedID
-			newFunc.Args[1].GetLit().Value.(*plan.Literal_Sval).Sval = newStr
-			if replaceOrigin {
-				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(newFilter))
-			}
+			continue
+		}
+		if _, ok := stringPrefixSuccessor(prefix, binary); !ok {
+			continue
+		}
+		bound := makePlan2StringConstExprWithType(prefix, binary)
+		bound.Typ.Charset = fn.Args[0].Typ.Charset
+		prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", []*plan.Expr{DeepCopyExpr(fn.Args[0]), bound})
+		if err != nil {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		if !logicalPrefixOnTable(prefixExpr.GetF(), node.TableDef) || len(node.BindingTags) == 0 || col.RelPos != node.BindingTags[0] {
+			continue
+		}
+		prefixExpr.Selectivity = regularIndexUnknownRangeSel
+		if upper, known := stringPrefixSelectivity(prefixExpr.GetF(), stats, node); known {
+			prefixExpr.Selectivity = upper
+		}
+		// This is one predicate's necessary condition, not an independent estimate.
+		// Preserve LIKE's truth and error semantics after the candidate lookup.
+		if pure {
+			// In the proved byte domain, trailing '%' contributes only a suffix:
+			// prefix_eq is exact even if later subject bytes are malformed UTF-8.
+			node.FilterList[i] = prefixExpr
+			node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(prefixExpr))
+		} else {
+			expr.Selectivity = 1
+			prefixes = append(prefixes, prefixExpr)
 		}
 	}
-	if len(newFilters) > 0 {
-		node.FilterList = append(node.FilterList, newFilters...)
-		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	node.FilterList = append(node.FilterList, prefixes...)
+	node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(prefixes)...)
+	if len(equalities) > 0 && builder.canRefreshLiteralLikeSelectivity(nodeID) && regularIndexFiltersHaveStableEvaluation(node, equalities...) {
+		for _, expr := range equalities {
+			// LIKE's cached 20% estimate no longer describes this equality.
+			// Refresh before filter sorting, without an observable zero estimate.
+			expr.Selectivity = estimateEqualitySelectivity(expr, builder, stats)
+		}
+	}
+}
+
+// New estimates may change which independent branch is executed first. Keep
+// their historical behavior; a linear single-scan query has no such branch.
+func (builder *QueryBuilder) canRefreshLiteralLikeSelectivity(scanID int32) bool {
+	if len(builder.qry.Steps) != 1 || builder.qry.Correlation != nil {
+		return false
+	}
+	for nodeID := builder.qry.Steps[0]; ; {
+		node := builder.qry.Nodes[nodeID]
+		if nodeID == scanID {
+			return node.NodeType == plan.Node_TABLE_SCAN && len(node.Children) == 0
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_AGG, plan.Node_SORT:
+		default:
+			return false
+		}
+		if len(node.Children) != 1 {
+			return false
+		}
+		nodeID = node.Children[0]
 	}
 }
 
@@ -2440,6 +2500,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.skipDedup = value
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
+	case "rollupSort":
+		builder.optimizerHints.rollupSort = value
 	}
 }
 
@@ -2461,19 +2523,35 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 			handleOptimizerHints(kvs[i], builder)
 		}
 	}
-	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+	// The session value includes the global default captured when the connection was
+	// created. CN runtime variables are shared by unrelated sessions and tenants.
+	if v, err := builder.compCtx.ResolveVariable("optimizer_hints", true, false); err == nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
 	}
 	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
 	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
-	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// AFTER the session so a statement can override it -- e.g. the fulltext2 json probe's fallback/
 	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
 	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
+	}
+}
+
+// sortRollupMode is retained as an internal compatibility adapter. New code
+// should use rollup_algorithm through rollupAlgorithmMode, which mirrors the
+// COST/SORT/HASH session variable used by the window partition implementation.
+func (builder *QueryBuilder) sortRollupMode() int {
+	switch builder.rollupAlgorithmMode() {
+	case rollupAlgorithmSort:
+		return 1
+	case rollupAlgorithmHash:
+		return 2
+	default:
+		return 0
 	}
 }
 

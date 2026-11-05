@@ -629,7 +629,7 @@ func TestM0EngineFilteredTopNMissingEarlyColumn(t *testing.T) {
 	defer cache.Free(mp)
 	top := &objectio.IndexReaderTopOp{ColPos: 0, Limit: 1, Typ: types.T_array_float32, NumVec: types.ArrayToBytes([]float32{0}), MetricType: metric.Metric_L2Distance}
 	calls := 0
-	err = blockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, []types.Type{typ, types.T_int32.ToType()}, -1, types.TS{}, []int64{0, 1, 2}, fileservice.SkipAllCache, out, cache, mp, fs, []int{1}, func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+	err = blockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, []types.Type{typ, types.T_int32.ToType()}, -1, types.TS{}, []int64{0, 1, 2}, fileservice.SkipAllCache, out, cache, mp, fs, []int{1}, &engine.ReaderFilterRequest{Apply: func(b *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 		calls++
 		require.Equal(t, []int{1}, loaded)
 		require.Equal(t, 3, b.RowCount())
@@ -637,10 +637,10 @@ func TestM0EngineFilteredTopNMissingEarlyColumn(t *testing.T) {
 			require.True(t, b.Vecs[1].IsNull(i))
 		}
 		selected := []int64{1, 2}
-		b.Vecs[1].Shrink(selected, false)
+		require.NoError(t, b.Vecs[1].Shrink(selected, false, mp))
 		b.SetRowCount(2)
 		return engine.ReaderFilterResult{Sels: selected}, nil
-	}, top, nil, layout)
+	}}, top, nil, layout)
 	require.NoError(t, err)
 	require.Equal(t, 1, calls)
 	require.Equal(t, 1, out.RowCount())
