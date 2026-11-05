@@ -16,10 +16,11 @@ package aggexec
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"testing"
 )
 
 func BenchmarkDecimalContiguousReduction(b *testing.B) {
@@ -35,7 +36,7 @@ func benchmarkDecimalReduction(b *testing.B, batch bool) {
 	shapes := []string{"flat", "null", "wide"}
 	if batch {
 		oids = append(oids, types.T_int64)
-		shapes = append(shapes, "mixed", "late", "unmatched")
+		shapes = append(shapes, "mixed", "late", "interior_late", "unmatched")
 	}
 	for _, oid := range oids {
 		widths := []int32{15}
@@ -49,7 +50,7 @@ func benchmarkDecimalReduction(b *testing.B, batch bool) {
 			widths = []int32{65}
 		}
 		for _, width := range widths {
-			for _, n := range []int{1, 256, 8192} {
+			for _, n := range []int{1, 31, 32, 33, 64, 65, 128, 129, 255, 256, 257, 8192} {
 				for _, shape := range shapes {
 					if shape == "wide" && (oid == types.T_int64 || width < 38) {
 						continue
@@ -108,6 +109,9 @@ func benchmarkDecimalReduction(b *testing.B, batch bool) {
 						}
 						if shape == "late" {
 							groups[n-1] = 2
+						}
+						if shape == "interior_late" && n > 2 {
+							groups[n-2] = 2
 						}
 						if shape == "unmatched" {
 							groups[n-1] = GroupNotMatched

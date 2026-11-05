@@ -1426,7 +1426,7 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 		return exec.Fill(int(groups[0])-1, offset, vectors)
 	}
 	// Non-decimal instantiations keep the existing scalar dispatch.
-	if exec.bulkInput != 0 && exec.bulkState != 0 && len(groups) >= 256 && decimalReductionAvailable() {
+	if exec.bulkInput != 0 && exec.bulkState != 0 && len(groups) >= 256 && groups[0] != GroupNotMatched && groups[0] == groups[len(groups)-1] && decimalReductionAvailable() {
 		v := vectors[0]
 		if v.GetType().Oid == exec.bulkInput && exec.aggInfo.stateTypes[0].Oid == exec.bulkState && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
 			if group, ok := decimalReductionGroup(groups); ok {

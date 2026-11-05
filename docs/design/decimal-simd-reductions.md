@@ -115,3 +115,35 @@ paths. Focused dense-boundary, checked-overflow, uniform-span and compact/global
 Group tests pass in the required build modes. Earlier timing against007dd57a
 precedes this faster dense baseline and is historical; fresh performance
 qualification is required before readiness.
+
+## Approved 2026-11-06 coverage revision
+
+Requalify this independent candidate against main5792e1c372, including its
+compact/dense scalar implementation. Measure32/64/128/256 thresholds through
+real BulkFill and BatchFill consumers, with adjacent lengths, wide/NULL,
+mixed/late/unmatched and integer controls. Select a smaller minimum only if it
+wins at T,2T and8192 without a confirmed nearby or fallback slowdown; otherwise
+retain256. No new grouping algorithm, run matcher or persistent state is added.
+Preserve dense fallback eligibility, checked large-call error order and one-row
+Fill. Component results precede independent all22/Total local SF10 and server129
+SF100 acceptance. The cold suite is excluded, with no spilling/swap/OOM and
+quiet CPUs. Historical results against older scalar main do not qualify this
+source. This revision was approved by the requester before implementation.
+
+The first refreshed dense-main screen confirms uniform gains of72–93%, but
+also confirms small0.4–1.1% fallback costs. It does not pass. Reject obvious
+first/last mismatches before metadata/SIMD setup at the BatchFill owner, while
+retaining the complete helper proof for admission. Add an interior penultimate
+mismatch control too, so the endpoint shortcut cannot hide a repeated-scan
+cost. Keep the existing256 minimum until those controls and all22 qualify it.
+
+The penultimate mismatch confirms the limitation: D64 uniform rejection is
+6.31% slower at256 rows [95% CI5.68%,6.94%] and2.69% slower at8192
+[1.82%,3.56%]. Other decimal carriers also regress. Endpoint rejection fixes
+the obvious late/unmatched cases but cannot remove a complete admission scan
+followed by replay through the scalar coalescer. This revision remains blocked.
+Do not add more sampled endpoint checks or claim acceptance from uniform gains.
+Eliminating the repeated scan generally would require a separately approved
+integration into the existing dense coalescer, preserving its private state and
+checked publication order; that is outside this revision's no-new-grouping
+algorithm scope. No TPC-H result can label this failed component screen passed.
