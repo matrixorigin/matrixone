@@ -10,7 +10,7 @@ Keep the generic group hash table authoritative. For ordinary one/two-column non
 
 The index (257 or 66049 uint64 slots plus bounded chunk scratch) is MPool-owned and charged to the existing group allocation account. No vectors or strings are retained. The generic table, output keys, spill and wire formats do not change. A private existing-only preview avoids fabricating a transactional insert plan.
 
-For non-DISTINCT decimal SUM/AVG with one resident chunk and <=256 groups, replace local group hashing with direct group-ID indexing, touched-group tracking and one scatter per touched group. Larger states keep the current path. Preserve NULL/constant/offset/overflow semantics and per-group accumulation order; do not change AggFuncExec, decimal types, widening or expression fusion.
+For non-DISTINCT decimal SUM/AVG with one resident chunk and <=256 groups, replace local group hashing with direct group-ID indexing, touched-group tracking and one scatter per touched group. Checked accumulation additionally requires <=256 input rows per call; larger checked calls retain the existing 255-slot combiner and its direct updates after that cache fills. Widening-safe accumulation retains the dense path for larger calls. Larger states keep the current path. Preserve NULL/constant/offset/overflow semantics and per-group accumulation order; do not change AggFuncExec, decimal types, widening or expression fusion.
 
 Alternatives: a replacement perfect hash table would duplicate spill/publication machinery; aggregate pointer APIs would expand every executor contract. This derived index and private kernel dispatch keep those owners intact.
 

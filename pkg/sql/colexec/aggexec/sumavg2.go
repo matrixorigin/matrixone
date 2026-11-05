@@ -1411,6 +1411,14 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+	// The legacy combiner buffers only 255 groups and updates later groups
+	// directly. A checked large call must keep that order: a local subtotal
+	// may overflow even when adding each row to the existing state succeeds.
+	// With at most 256 rows, the 256th group can have only one input row.
+	if len(exec.state) == 1 && exec.state[0].length <= 256 &&
+		(exec.localAddSafe || len(groups) <= 256) {
+		return exec.batchFillDense(offset, groups, vectors[0])
+	}
 	if exec.isSum {
 		return exec.batchFillSum(offset, groups, vectors)
 	}
@@ -1418,9 +1426,6 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 }
 
 func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
-	if len(exec.state) == 1 && exec.state[0].length <= 256 {
-		return exec.batchFillDense(offset, groups, vectors[0])
-	}
 	vec := vectors[0]
 	n := len(groups)
 	if n == 0 {
@@ -1527,9 +1532,6 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 }
 
 func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
-	if len(exec.state) == 1 && exec.state[0].length <= 256 {
-		return exec.batchFillDense(offset, groups, vectors[0])
-	}
 	vec := vectors[0]
 	n := len(groups)
 	if n == 0 {
