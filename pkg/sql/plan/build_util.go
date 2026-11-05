@@ -1268,7 +1268,15 @@ func buildDefaultExprWithColumnsForceDomain(
 		// accepting both producer forms.
 		if unary, ok := semanticExpr.(*tree.UnaryExpr); ok {
 			if num, okNum := unary.Expr.(*tree.NumVal); okNum && num.String() != "" {
-				originString = "-" + num.String()
+				// Keep the actual authored unary operator: every persisted
+				// consumer reparses this text, so an unconditional minus
+				// would silently rebind the negative of the stored value
+				// for a unary plus default.
+				sign := "-"
+				if unary.Op == tree.UNARY_PLUS {
+					sign = "+"
+				}
+				originString = sign + num.String()
 			}
 		}
 	}
@@ -1488,16 +1496,16 @@ func isNewDDLLiteralDefaultConversionError(
 }
 
 // bareLiteralDefaultSource returns the literal behind a bare DEFAULT source:
-// a plain NumVal, or a NumVal in a single leading unary minus, which the
-// parser emits for signed decimal/float literals. The sign belongs to the
-// literal's constant value; parenthesized expression defaults are never
-// unwrapped.
+// a plain NumVal, or a NumVal in a single leading unary minus or unary plus,
+// which the parser emits for unparenthesized signed literals. The sign
+// belongs to the literal's constant value; parenthesized expression defaults
+// are never unwrapped.
 func bareLiteralDefaultSource(semanticExpr tree.Expr) (*tree.NumVal, bool) {
 	switch expr := semanticExpr.(type) {
 	case *tree.NumVal:
 		return expr, true
 	case *tree.UnaryExpr:
-		if expr.Op == tree.UNARY_MINUS {
+		if expr.Op == tree.UNARY_MINUS || expr.Op == tree.UNARY_PLUS {
 			if num, ok := expr.Expr.(*tree.NumVal); ok {
 				return num, true
 			}
@@ -1507,19 +1515,19 @@ func bareLiteralDefaultSource(semanticExpr tree.Expr) (*tree.NumVal, bool) {
 }
 
 // bareSignedDecimalCharFamilyDefault reports whether a DEFAULT source is a
-// bare signed plain-decimal literal (a single leading unary minus over a
-// NumVal, the form the parser emits for signed decimal literals) written into
-// a CHAR/VARCHAR destination. Only this shape is broken by the destination
-// type driving the literal bind: signed integers survive because their text
-// parses back, scientific floats never take the text path, string literals
-// keep their own domain, and non-CHAR/VARCHAR destinations keep their
-// existing owners.
+// bare signed plain-decimal literal (a single leading unary minus or unary
+// plus over a NumVal, the form the parser emits for unparenthesized signed
+// decimal literals) written into a CHAR/VARCHAR destination. Only this shape
+// is broken by the destination type driving the literal bind: signed integers
+// survive because their text parses back, scientific floats never take the
+// text path, string literals keep their own domain, and non-CHAR/VARCHAR
+// destinations keep their existing owners.
 func bareSignedDecimalCharFamilyDefault(typ plan.Type, semanticExpr tree.Expr) bool {
 	if typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
 		return false
 	}
 	unary, ok := semanticExpr.(*tree.UnaryExpr)
-	if !ok || unary.Op != tree.UNARY_MINUS {
+	if !ok || (unary.Op != tree.UNARY_MINUS && unary.Op != tree.UNARY_PLUS) {
 		return false
 	}
 	num, ok := unary.Expr.(*tree.NumVal)
@@ -1568,12 +1576,14 @@ func newDDLNumericLiteralDefaultExceedsCharWidth(
 		return false
 	}
 	// The probe must not truncate the converted text before it is measured:
-	// probing through the CHAR family maximum makes the probe's own cast clip
-	// every wider literal to that cap, so the widest value a CHAR destination
-	// can reject is silently admitted. Numeric-to-text conversion is
-	// family-independent — only the width cap differs — so both destinations
-	// measure their converted text through the far wider VARCHAR maximum.
-	probe := plan.Type{Id: int32(types.T_varchar), Width: int32(types.MaxVarcharLen)}
+	// any width-capped probe clips every wider literal to that cap, so at a
+	// maximum-width destination — the exact boundary this admission must
+	// decide — the clip equals the destination width and the wider value is
+	// silently admitted as a stored prefix. Numeric-to-text conversion is
+	// family-independent — only the width cap differs — so both destination
+	// families measure their converted text through the unbounded TEXT
+	// family's identical real cast, which has no capacity to clip.
+	probe := plan.Type{Id: int32(types.T_text)}
 	probeBinder := NewDefaultBinder(bindCtx, nil, nil, probe, nil)
 	if bareSignedDecimalCharFamilyDefault(typ, semanticExpr) {
 		probeBinder.baseBinder.suppressDefaultValueBindType = true
@@ -1602,7 +1612,8 @@ func newDDLNumericLiteralDefaultExceedsCharWidth(
 	if lit == nil || lit.Isnull {
 		return false
 	}
-	if folded.Typ.Id != int32(types.T_char) && folded.Typ.Id != int32(types.T_varchar) {
+	if folded.Typ.Id != int32(types.T_char) && folded.Typ.Id != int32(types.T_varchar) &&
+		folded.Typ.Id != int32(types.T_text) {
 		// The probe measures real destination text only; a non-string fold
 		// means the conversion did not happen and the authoring flow keeps
 		// the verdict.

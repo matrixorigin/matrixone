@@ -119,5 +119,28 @@ alter table abase modify column v char(255) default 1.22222222222222222222222222
 select 24 as recovered_after_modify_overflow;
 select v from lz1 order by id;
 
+-- Review 5771414743: a bare unary plus literal authored as new DDL is a bare
+-- literal like the existing unary minus form - out-of-range values remap to
+-- ER_INVALID_DEFAULT with the authored column name, fitting values keep
+-- storing the full converted value and serve INSERT, and every rejected
+-- statement is followed by a same-connection probe.
+create table up1(id int primary key, c tinyint default +300);
+select 31 as recovered_after_unary_plus_tinyint_overflow;
+create table up2(id int primary key, c int default +99999999999);
+select 32 as recovered_after_unary_plus_int_overflow;
+create table up3(id int primary key, c tinyint default +100);
+insert into up3 (id) values (1);
+select c from up3 order by id;
+create table up4(id int primary key, v varchar(5) default +1.25);
+insert into up4 (id) values (1);
+select v from up4 order by id;
+-- The persisted origin keeps the authored unary plus: SHOW CREATE reparses
+-- the stored origin string, and the ALTER round-trip must reproduce it.
+show create table up4;
+alter table up4 modify column v varchar(5) default +1.25;
+show create table up4;
+create table up5(id int primary key, v varchar(5) default +123456);
+select 33 as recovered_after_unary_plus_width_overflow;
+
 -- Same-connection recovery is proven; clean the catalog and restore sql_mode.
 drop database default_literal_admission_31860_31894;

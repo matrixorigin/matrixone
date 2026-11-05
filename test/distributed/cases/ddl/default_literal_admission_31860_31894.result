@@ -169,4 +169,36 @@ recovered_after_modify_overflow
 select v from lz1 order by id;
 v
 -1.25
+create table up1(id int primary key, c tinyint default +300);
+Invalid default value for 'c'
+select 31 as recovered_after_unary_plus_tinyint_overflow;
+recovered_after_unary_plus_tinyint_overflow
+31
+create table up2(id int primary key, c int default +99999999999);
+Invalid default value for 'c'
+select 32 as recovered_after_unary_plus_int_overflow;
+recovered_after_unary_plus_int_overflow
+32
+create table up3(id int primary key, c tinyint default +100);
+insert into up3 (id) values (1);
+select c from up3 order by id;
+c
+100
+create table up4(id int primary key, v varchar(5) default +1.25);
+insert into up4 (id) values (1);
+select v from up4 order by id;
+v
+1.25
+show create table up4;
+Table	Create Table
+up4	CREATE TABLE `up4` (\n  `id` int NOT NULL,\n  `v` varchar(5) DEFAULT +1.25,\n  PRIMARY KEY (`id`)\n)
+alter table up4 modify column v varchar(5) default +1.25;
+show create table up4;
+Table	Create Table
+up4	CREATE TABLE `up4` (\n  `id` int NOT NULL,\n  `v` varchar(5) DEFAULT +1.25,\n  PRIMARY KEY (`id`)\n)
+create table up5(id int primary key, v varchar(5) default +123456);
+Invalid default value for 'v'
+select 33 as recovered_after_unary_plus_width_overflow;
+recovered_after_unary_plus_width_overflow
+33
 drop database default_literal_admission_31860_31894;

@@ -136,7 +136,9 @@ func TestDDLLiteralDefaultConversionFailureReportsInvalidDefault(t *testing.T) {
 			{name: "int from bad string", decl: "c int default 'abc'", column: "'c'"},
 			{name: "int from prefixed digits", decl: "c int default '12x'", column: "'c'"},
 			{name: "int out of range", decl: "c int default 99999999999", column: "'c'"},
+			{name: "int unary plus bare literal out of range", decl: "c int default +99999999999", column: "'c'"},
 			{name: "tinyint out of range", decl: "c tinyint default 300", column: "'c'"},
+			{name: "tinyint unary plus bare literal out of range", decl: "c tinyint default +300", column: "'c'"},
 			{name: "date from bad string", decl: "c date default 'abc'", column: "'c'"},
 			{name: "add column names the new column", decl: "c2 int default 'abc'", column: "'c2'"},
 		} {
@@ -599,5 +601,83 @@ func TestDDLCharMaximumWidthBareNumericLiteralAdmission(t *testing.T) {
 	require.NoError(t, err, "the VARCHAR boundary keeps admitting its exact fit")
 	_, err = buildDDLColumnDefault(t, proc, "v varchar(255) default "+over)
 	require.Error(t, err, "a converted value wider than VARCHAR(255) is rejected")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
+}
+
+// A bare unary plus literal authored as new DDL is a bare literal like the
+// existing unary minus form (review 5771414743): a fitting value stays
+// admitted, the plus signed plain decimal keeps its true value text in a
+// CHAR/VARCHAR destination, the #31860 width admission judges it through the
+// converted text, and a parenthesized (+300) expression default keeps its
+// raw owner instead of the conversion remap.
+func TestDDLUnaryPlusBareLiteralAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	_, err := buildDDLColumnDefault(t, proc, "c tinyint default +100")
+	require.NoError(t, err, "a fitting bare unary plus value stays admitted")
+
+	value, err := buildDDLColumnDefault(t, proc, "v varchar(5) default +1.25")
+	require.NoError(t, err)
+	require.Equal(t, "1.25", value.Expr.GetLit().GetSval())
+	// The origin keeps the actual authored unary operator: every persisted
+	// consumer (catalog rebind, ALTER round-trip, table-dump analysis)
+	// reparses this text, so a dropped or flipped sign silently rebinds the
+	// negative of the stored value.
+	require.Equal(t, "+1.25", value.OriginString, "origin text keeps the actual unary plus operator, sign included")
+
+	leadingZero, err := buildDDLColumnDefault(t, proc, "v varchar(10) default +001.25")
+	require.NoError(t, err)
+	require.Equal(t, "1.25", leadingZero.Expr.GetLit().GetSval(), "the numeric-domain admission normalizes the value")
+	require.Equal(t, "+001.25", leadingZero.OriginString, "origin text keeps the raw leading-zero literal with its authored plus sign")
+
+	_, err = buildDDLColumnDefault(t, proc, "v varchar(5) default +123456")
+	require.Error(t, err, "the width admission judges the bare unary plus literal")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
+
+	_, err = buildDDLColumnDefault(t, proc, "c tinyint default (+300)")
+	require.Error(t, err)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault),
+		"the parenthesized expression default keeps its raw owner, got %v", err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+
+	// The persisted consumer reparses the origin: the plus form must
+	// self-verify through the real table-dump analysis exactly like the
+	// minus form in TestTableDumpVerifiesNewSignedDecimalLiteralDefault.
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t (v varchar(5) default +1.25)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	require.NotNil(t, source)
+	snapshot := proto.Clone(source)
+	_, err = AnalyzeTableDumpBindings(compiler, source, source)
+	require.NoError(t, err, "the persisted reading of a unary plus default must keep verifying: %v", err)
+	require.True(t, proto.Equal(snapshot, source), "dump verification must not mutate the persisted payload")
+}
+
+// #31860 at the VARCHAR maximum (review 5771414743): the width probe measures
+// the converted text before any capacity truncation, so an exact 65535-
+// character value is admitted unchanged while the one-character overflow
+// token from the review is rejected instead of being stored as a 65535
+// prefix. The control mirrors the collation-only binary family the review
+// names, which keeps T_varchar; CHARACTER SET binary conversion and the
+// unqualified UTF8 budget are not the witness.
+func TestDDLMaximumVarcharBareNumericLiteralAdmission(t *testing.T) {
+	fit := "1." + strings.Repeat("2", 65533)  // exactly 65535 characters
+	over := "1." + strings.Repeat("2", 65534) // exactly 65536 characters
+	proc := testutil.NewProcess(t)
+
+	value, err := buildDDLColumnDefault(t, proc, "v varchar(65535) collate binary default "+fit)
+	require.NoError(t, err, "an exact maximum-width converted value stays admitted")
+	require.Equal(t, fit, value.Expr.GetLit().GetSval())
+
+	_, err = buildDDLColumnDefault(t, proc, "v varchar(65535) collate binary default "+over)
+	require.Error(t, err, "a converted value wider than the VARCHAR maximum must not be stored as a prefix")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
+
+	_, err = buildDDLColumnDefault(t, proc, "v varchar(65534) default "+fit)
+	require.Error(t, err, "the nearest narrower VARCHAR boundary keeps rejecting the wider value")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
 }
