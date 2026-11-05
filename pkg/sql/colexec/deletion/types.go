@@ -301,83 +301,79 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
-		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
-		for blkid := range blockId_rowIdBatch {
-			//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
-			if ctr.blockId_type[blkid] == DeletionOnTxnUnCommit {
-				continue
+		err = func() (err error) {
+			blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
+			for blkid := range blockId_rowIdBatch {
+				//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
+				if ctr.blockId_type[blkid] == DeletionOnTxnUnCommit {
+					continue
+				}
+				blkids = append(blkids, blkid)
 			}
-			blkids = append(blkids, blkid)
-		}
 
-		var (
-			err       error
-			statsList []objectio.ObjectStats
-			s3writer  *colexec.CNS3Writer
-		)
+			var (
+				statsList []objectio.ObjectStats
+				s3writer  *colexec.CNS3Writer
+			)
 
-		defer func() {
-			if s3writer != nil {
-				s3writer.Close()
+			defer func() {
+				if s3writer != nil {
+					// Recording happens downstream; retain names on every exit.
+					ctr.unrecordedSinkNames = append(ctr.unrecordedSinkNames, s3writer.AbandonAndRetainableNames()...)
+					err = s3writer.CloseWithCleanup(proc.Ctx, err)
+				}
+			}()
+
+			slices.SortFunc(blkids, func(a, b types.Blockid) int {
+				return a.Compare(&b)
+			})
+			for _, blkid := range blkids {
+				bat := blockId_rowIdBatch[blkid]
+
+				if s3writer == nil {
+					pkType := *bat.Vecs[1].GetType()
+					s3writer = newDeletionTombstoneWriter(proc, fs, pkType)
+				}
+
+				if err = s3writer.Write(proc.Ctx, bat); err != nil {
+					return err
+				}
+
+				resSize += uint32(bat.Size())
+				bat.CleanOnlyData()
+				ctr.pool.put(bat)
+				delete(blockId_rowIdBatch, blkid)
 			}
-		}()
-
-		slices.SortFunc(blkids, func(a, b types.Blockid) int {
-			return a.Compare(&b)
-		})
-		for _, blkid := range blkids {
-			bat := blockId_rowIdBatch[blkid]
 
 			if s3writer == nil {
-				pkType := *bat.Vecs[1].GetType()
-				s3writer = newDeletionTombstoneWriter(proc, fs, pkType)
+				return nil
 			}
 
-			if err = s3writer.Write(proc.Ctx, bat); err != nil {
-				return 0, err
+			crs := analyzer.GetOpCounterSet()
+			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			if statsList, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+				return s3writer.Sync(newCtx)
+			}); err != nil {
+				return err
 			}
 
-			resSize += uint32(bat.Size())
-			bat.CleanOnlyData()
-			ctr.pool.put(bat)
-			delete(blockId_rowIdBatch, blkid)
-		}
+			for _, stats := range statsList {
+				bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+				if err = vector.AppendBytes(
+					bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
+					bat.Clean(proc.GetMPool())
+					return err
+				}
 
-		if s3writer == nil {
-			continue
-		}
-
-		crs := analyzer.GetOpCounterSet()
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		if statsList, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
-			return s3writer.Sync(newCtx)
-		}); err != nil {
+				bat.SetRowCount(bat.Vecs[0].Length())
+				ctr.partitionId_tombstoneObjectStatsBats[pidx] =
+					append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
+			}
+			return nil
+		}()
+		if err != nil {
 			return 0, err
-		}
-
-		// Issue #25590 round-21 review, finding G4 (design r5 §5.3): the
-		// writer's persisted names must leave the sinker BEFORE the
-		// function-level deferred Close drops the tracked references — the
-		// ObjectsMeta_ObjectStats record runs in the downstream
-		// merge-delete consumer, only after this flush returned, so the
-		// collection rides the container and the teardown hands it to the
-		// workspace retainer: the names stay out of the deletion queue
-		// while the recording statement is still in flight and the
-		// boundary re-checks recorded membership before enqueuing.
-		ctr.unrecordedSinkNames = append(
-			ctr.unrecordedSinkNames, s3writer.PersistedNames()...)
-
-		for _, stats := range statsList {
-			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-			if err = vector.AppendBytes(
-				bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
-				return 0, err
-			}
-
-			bat.SetRowCount(bat.Vecs[0].Length())
-			ctr.partitionId_tombstoneObjectStatsBats[pidx] =
-				append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
 		}
 	}
 	return resSize, nil
