@@ -9,7 +9,7 @@ e31232_ctrl  ¦  CREATE EXTERNAL TABLE `e31232_ctrl` (
   `id` int DEFAULT NULL,
   `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `flag` int DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+) INFILE{'FILEPATH'='$resources/load_data/issue_31232_inline_set.csv','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 select id, s, ifnull(flag,'N') as flag_isnull from e31232_ctrl order by id;
 ➤ id[4,32,0]  ¦  s[12,20,0]  ¦  flag_isnull[12,11,0]  𝄀
 1  ¦  alpha  ¦  N  𝄀
@@ -23,7 +23,7 @@ e31232_rowvar  ¦  CREATE EXTERNAL TABLE `e31232_rowvar` (
   `id` int DEFAULT NULL,
   `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `flag` int DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY ''
+) INFILE{'FILEPATH'='$resources/load_data/issue_31232_inline_set.csv','FORMAT'='csv'} FIELDS TERMINATED BY ',' ENCLOSED BY ''
 select id, s, flag from e31232_rowvar order by id;
 ➤ id[4,32,0]  ¦  s[12,20,0]  ¦  flag[4,32,0]  𝄀
 1  ¦  alpha  ¦  0  𝄀

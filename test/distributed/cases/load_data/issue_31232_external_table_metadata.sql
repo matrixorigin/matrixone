@@ -16,6 +16,12 @@ use external_31232_meta;
 -- mapping stays live (0 reads back as NULL, 7 stays 7).
 drop table if exists e31232_ctrl;
 create external table e31232_ctrl(id int, s varchar(20), flag int) infile{'filepath'='$resources/load_data/issue_31232_inline_set.csv','format'='csv'} fields terminated by ',' set flag=nullif(flag,0);
+-- @regex("CREATE EXTERNAL TABLE `e31232_ctrl`", true)
+-- @regex("`flag` int DEFAULT NULL", true)
+-- @regex("FILEPATH'='[^']*load_data/issue_31232_inline_set\\.csv'", true)
+-- @regex("'FORMAT'='csv'", true)
+-- @regex("FIELDS TERMINATED BY ',' ENCLOSED BY ''", true)
+-- @regex("INFILE\\{'FILEPATH'='',", false)
 show create table e31232_ctrl;
 select id, s, ifnull(flag,'N') as flag_isnull from e31232_ctrl order by id;
 drop table if exists e31232_ctrl;
@@ -26,6 +32,12 @@ drop table if exists e31232_ctrl;
 -- values read back unmodified.
 drop table if exists e31232_rowvar;
 create external table e31232_rowvar(id int, s varchar(20), flag int) infile{'filepath'='$resources/load_data/issue_31232_inline_set.csv','format'='csv'} fields terminated by ',' set flag=nullif(@v,'sentinel');
+-- @regex("CREATE EXTERNAL TABLE `e31232_rowvar`", true)
+-- @regex("`flag` int DEFAULT NULL", true)
+-- @regex("FILEPATH'='[^']*load_data/issue_31232_inline_set\\.csv'", true)
+-- @regex("'FORMAT'='csv'", true)
+-- @regex("FIELDS TERMINATED BY ',' ENCLOSED BY ''", true)
+-- @regex("INFILE\\{'FILEPATH'='',", false)
 show create table e31232_rowvar;
 select id, s, flag from e31232_rowvar order by id;
 drop table if exists e31232_rowvar;
