@@ -761,21 +761,25 @@ func TestAlterAddThenModifyDoesNotSeedOriginalGeneratedDependencies(t *testing.T
 }
 
 func TestAlterSourceAffectingGeneratedPrimaryKeyRebuildsAllIndexes(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	configureMockGeneratedPrimaryKey(t, mock)
-	base := mock.ctxt.tables["t_on_update_gen"]
-	addAlterTestIndex(t, mock, base, "idx_pk_payload", "updated_at", true)
+	for _, clause := range []string{"modify column val bigint", "modify column val bigint, add column extra int"} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			configureMockGeneratedPrimaryKey(t, mock)
+			base := mock.ctxt.tables["t_on_update_gen"]
+			addAlterTestIndex(t, mock, base, "idx_pk_payload", "updated_at", true)
 
-	logicPlan, err := runOneStmt(mock, t,
-		"alter table constraint_test.t_on_update_gen modify column val bigint")
-	require.NoError(t, err)
+			logicPlan, err := runOneStmt(mock, t,
+				"alter table constraint_test.t_on_update_gen "+clause)
+			require.NoError(t, err)
 
-	alter := logicPlan.GetDdl().GetAlterTable()
-	require.NotNil(t, alter)
-	require.Contains(t, strings.ToLower(alter.CreateTmpTableSql), "generated always as (val) stored",
-		"the generated primary-key expression must survive temporary-table serialization")
-	require.False(t, alter.Options.SkipIndexesCopy["idx_pk_payload"],
-		"secondary index entries carry the primary key and must be rebuilt when its generated value can change")
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.Contains(t, strings.ToLower(alter.CreateTmpTableSql), "generated always as (val) stored",
+				"the generated primary-key expression must survive temporary-table serialization")
+			require.False(t, alter.Options.SkipIndexesCopy["idx_pk_payload"],
+				"secondary index entries carry the primary key and must be rebuilt when its generated value can change")
+		})
+	}
 }
 
 func TestAlterPrimaryKeyImpactPersistsAcrossClauses(t *testing.T) {
@@ -783,6 +787,7 @@ func TestAlterPrimaryKeyImpactPersistsAcrossClauses(t *testing.T) {
 		"modify column id bigint, add column extra int",
 		"add column extra int, modify column id bigint",
 		"modify column id bigint, modify column updated_at timestamp",
+		"modify column id bigint, change column updated_at renamed timestamp",
 		"modify column id bigint, alter column updated_at set default null",
 	} {
 		t.Run(clause, func(t *testing.T) {
@@ -805,6 +810,9 @@ func TestAlterCompositePrimaryKeyRebuildsIndexes(t *testing.T) {
 		"modify column ps_suppkey bigint",
 		"change column ps_suppkey renamed bigint",
 		"modify column ps_partkey bigint, add column extra int",
+		"drop column ps_partkey",
+		"drop column ps_suppkey",
+		"modify column ps_partkey bigint, rename column ps_suppkey to renamed",
 	} {
 		t.Run(clause, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
