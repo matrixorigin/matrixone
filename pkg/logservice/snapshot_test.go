@@ -113,6 +113,27 @@ func TestInitSnapshotMgr(t *testing.T) {
 	assert.Equal(t, mgr.snapshots[nid].items[3].index, snapshotIndex(1324))
 }
 
+func TestSnapshotManagerFreshDisk(t *testing.T) {
+	const shardID, replicaID = uint64(1), uint64(2)
+	mgr := newSnapshotManager(&Config{
+		FS:                vfs.Default,
+		SnapshotExportDir: t.TempDir(),
+	})
+
+	// A new replica has no export directory yet. Startup must create it.
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	require.Zero(t, mgr.Count(shardID, replicaID))
+	_, err := mgr.cfg.FS.Stat(mgr.exportPath(shardID, replicaID))
+	require.NoError(t, err)
+
+	// A complete snapshot without an interruption marker must survive startup.
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	require.Equal(t, 1, mgr.Count(shardID, replicaID))
+}
+
 func TestReconcileInterruptedExport(t *testing.T) {
 	const shardID, replicaID = uint64(1), uint64(2)
 	mgr := newSnapshotManager(&Config{

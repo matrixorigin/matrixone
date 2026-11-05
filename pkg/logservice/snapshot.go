@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -262,7 +263,7 @@ func (sm *snapshotManager) snapshotPath(nodeID nodeID, index snapshotIndex) stri
 func (sm *snapshotManager) prepareDir(path string) error {
 	s, err := sm.cfg.FS.Stat(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		if e := sm.cfg.FS.MkdirAll(path, defaultExportedDirMode); e != nil {
@@ -296,7 +297,7 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 		}
 		dir := sm.cfg.FS.PathJoin(path, name)
 		_, err = sm.cfg.FS.Stat(sm.cfg.FS.PathJoin(dir, "dragonboat.snapshot.message"))
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -358,7 +359,7 @@ func (sm *snapshotManager) loadCompletedSnapshots(shardID uint64, replicaID uint
 	for _, index := range indexes {
 		dir := sm.snapshotPath(nid, index)
 		info, err := sm.cfg.FS.Stat(dir)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -369,7 +370,7 @@ func (sm *snapshotManager) loadCompletedSnapshots(shardID uint64, replicaID uint
 			continue
 		}
 		files, err := sm.cfg.FS.List(dir)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
