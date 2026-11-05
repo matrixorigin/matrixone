@@ -510,7 +510,7 @@ func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testi
 		fallback, _ := builder.runtimeFilterFallbackState()
 		if needUnique {
 			require.True(t, fallback)
-			require.Empty(t, builder.UniqueJoinKeys)
+			require.Empty(t, builder.uniqueKeys.first.vecs)
 			require.NotNil(t, builder.StrHashMap)
 			require.Equal(t, uint64(input.RowCount()), builder.StrHashMap.GroupCount())
 		}
@@ -2007,15 +2007,15 @@ func TestResetWithNilPointers(t *testing.T) {
 	hb.curVecs[1] = nil
 
 	// Test case 2: UniqueJoinKeys with nil pointers
-	hb.UniqueJoinKeys = make([]*vector.Vector, 3)
-	hb.UniqueJoinKeys[0] = nil
-	hb.UniqueJoinKeys[1] = nil
-	hb.UniqueJoinKeys[2] = nil
+	hb.uniqueKeys.first.vecs = make([]*vector.Vector, 3)
+	hb.uniqueKeys.first.vecs[0] = nil
+	hb.uniqueKeys.first.vecs[1] = nil
+	hb.uniqueKeys.first.vecs[2] = nil
 
 	// Reset should not panic
 	hb.Reset(proc, true)
 	require.Nil(t, hb.curVecs)
-	require.Nil(t, hb.UniqueJoinKeys)
+	require.Nil(t, hb.uniqueKeys.first.vecs)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -2033,12 +2033,12 @@ func TestResetWithMixedNilAndValidPointers(t *testing.T) {
 	hb.curVecs = []*vector.Vector{vec1, nil, vec2}
 
 	// Test case: UniqueJoinKeys with mix of nil and valid vectors
-	hb.UniqueJoinKeys = []*vector.Vector{nil}
+	hb.uniqueKeys.first.vecs = []*vector.Vector{nil}
 
 	// Reset should free valid vectors and not panic on nil
 	hb.Reset(proc, true)
 	require.Nil(t, hb.curVecs)
-	require.Nil(t, hb.UniqueJoinKeys)
+	require.Nil(t, hb.uniqueKeys.first.vecs)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -2048,14 +2048,14 @@ func TestFreeWithNilPointers(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
 
 	// Test case: UniqueJoinKeys with nil pointers
-	hb.UniqueJoinKeys = make([]*vector.Vector, 3)
-	hb.UniqueJoinKeys[0] = nil
-	hb.UniqueJoinKeys[1] = nil
-	hb.UniqueJoinKeys[2] = nil
+	hb.uniqueKeys.first.vecs = make([]*vector.Vector, 3)
+	hb.uniqueKeys.first.vecs[0] = nil
+	hb.uniqueKeys.first.vecs[1] = nil
+	hb.uniqueKeys.first.vecs[2] = nil
 
 	// Free should not panic
 	hb.Free(proc)
-	require.Nil(t, hb.UniqueJoinKeys)
+	require.Nil(t, hb.uniqueKeys.first.vecs)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -2069,10 +2069,10 @@ func TestFreeWithMixedNilAndValidPointers(t *testing.T) {
 	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil, proc.Mp())
 
 	// Test case: UniqueJoinKeys with mix of nil and valid vectors
-	hb.UniqueJoinKeys = []*vector.Vector{vec1, nil, vec2}
+	hb.uniqueKeys.first.vecs = []*vector.Vector{vec1, nil, vec2}
 
 	// Free should free valid vectors and not panic on nil
 	hb.Free(proc)
-	require.Nil(t, hb.UniqueJoinKeys)
+	require.Nil(t, hb.uniqueKeys.first.vecs)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
