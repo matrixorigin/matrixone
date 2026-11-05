@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-30",
+  "base": "b01e952ad1021ef8f188641f3a11a1360c001218",
+  "p0": "SELECTED_PK_CONTRACT_RECORDED",
+  "p1": "EXISTING_TRANSACTION_SUBSTRATE_QUALIFIED_IN_BWRAP",
+  "production_design": "P1_SUBSTRATE_GATE_CLEARED_P2_TYPED_EXECUTOR_REVIEW_PENDING",
+  "r1_native_replay": "NOT_IMPLEMENTED",
+  "r2_adapter_publication": "NOT_IMPLEMENTED",
+  "offline": {"status": "PASS", "tests": 27, "model": 10, "adapter_methods": 6, "wrapper": 11},
+  "local_go": {"status": "NOT_RUN_MISSING_NATIVE_PREREQUISITE", "compiled": false},
+  "linux": {
+    "host": "100.89.164.105",
+    "go": "1.27.1 linux/amd64",
+    "test_mode": "proot compiler/rootfs, ordinary build, no performance claims",
+    "cpu_quota": 4,
+    "memory_gib": 16,
+    "memory_swap_max": 0,
+    "host_swap_gate": "NONE",
+    "r1": {"run_id": "nrp1-20261029T104200Z-b01e952a", "status": "FAIL_WRAPPER_ARCHIVE_DIRECTORY_GUARD", "sql_executed": false},
+    "r2": {"run_id": "nrp1-20261029T104900Z-b01e952a", "status": "FAIL_MODULE_TRANSPORT", "native_build": "PASS", "sql_executed": false},
+    "r3": {"run_id": "nrp1-20261029T105700Z-b01e952a", "status": "PASS_PREREQUISITE_ONLY", "tests": {"TestRebaseTransactionPrerequisites": "PASS"}},
+    "r4": {"run_id": "nrp1-20261029T111100Z-b01e952a", "status": "PASS_PREREQUISITE_ONLY", "tests": {"TestRebaseTransactionPrerequisites": "PASS", "TestRebaseTransactionRestart": "PASS"}},
+    "r5": {
+      "run_id": "nrp1-20261029T111800Z-b01e952a",
+      "status": "FAIL_NATIVE_HEAP_ABORT",
+      "tests": {"TestRebaseTransactionCancellation": "PASS", "TestRebaseTransactionPrerequisites": "PASS", "TestRebaseTransactionRestart": "ABORTED_DURING_CLUSTER_START"},
+      "failure": "double free or corruption (out), SIGABRT during cgo execution",
+      "top_native_owner": "pkg/common/malloc.SimpleCAllocator.deallocateMemory",
+      "failed_test_source": "pkg/tests/issues/isolated/rebase_transaction_restart_test.go:34",
+      "rebase_fixture_sql_executed_in_failed_test": false,
+      "attribution": "UNRESOLVED; do not label a native Rebase defect, a proven baseline defect, or an environment-only issue",
+      "automatic_unchanged_retry": false
+    }
+  },
+  "latest_linux": {
+    "run_id": "nrp1-20261030T040500Z-b01e952a-native-p1",
+    "host": "100.89.164.105",
+    "base": "b01e952ad1021ef8f188641f3a11a1360c001218",
+    "status": "PASS_CORRECTED_P1_PROBES_ONLY",
+    "runtime": "bwrap kernel namespaces, original Ubuntu 22.04 rootfs; compiler unchanged",
+    "native_inputs_unchanged": true,
+    "tests": {
+      "TestRebaseSourceDropAdmission": {"status": "PASS", "seconds": 4.77, "success_and_cancellation": true, "exact_physical_waiter_key": true},
+      "TestRebaseCrashRecovery": {"status": "PASS", "seconds": 66.68, "real_sigkill": true, "fresh_process": true, "committed_data_base_edges_pins_recovered": true, "incomplete_target_edges_pins_absent": true}
+    },
+    "test_only_corrections": ["double_encode_catalog_primary_key_for_mo_locks", "120s_discovery_budget_allows_unchanged_60s_crashed_generation_expiry"],
+    "earlier_gc": {"run_id": "nrp1-20261030T044000Z-b01e952a-recovery", "status": "PASS_SCOPED_TEST_NOT_WHOLE_RUN", "seconds": 12.78, "physical_reclamation_verified": true},
+    "runtime_discriminator": {"run_id": "nrp1-20261030T035500Z-b01e952a-bwrap", "same_original_binary_bytes": true, "control": "PASS", "native_abort_observed": false, "original_tests": "FAIL_ON_SPECIFIC_FIXTURE_ASSERTIONS", "whole_run": "FAIL_PRESERVED"},
+    "old_proot_abort": "UNRESOLVED; qualified alternate runtime, not a proven allocator fix or precise proot root cause",
+    "lifecycle": {"units_independently_quiescent": 4, "empty_cgroups": true, "lease_absent": true, "old_failures_preserved": true},
+    "evidence_directory": "/Users/violet/Documents/Codex/2026-10-16/git-mo-129-skill-pr-matrixone/outputs/native-rebase-runtime-20261030"
+  },
+  "not_proven": [
+    "complete typed four-endpoint coordinator with bounded diff/apply",
+    "all-four-endpoint native coordinator concurrency and cancellation (executor not implemented)",
+    "native no-PK replay, custom resolvers or schema reconciliation",
+    "adapter generation publication/history/recovery",
+    "performance or speedup",
+    "full owning Go package suites or exact-head CI"
+  ],
+  "lifecycle": {"status": "PASS_OWNED_LIFECYCLE_CLOSED", "generations": 5, "quiescent_units": 10, "owned_lock_present": false, "foreign_resources_touched": false},
+  "evidence_directory": "/Users/violet/Documents/Codex/2026-10-16/git-mo-129-skill-pr-matrixone/outputs/native-rebase-p0-p1-20261029",
+  "archive_readback": "PASS_LOCAL_ARCHIVE_READBACK"
+}

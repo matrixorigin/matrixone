@@ -5640,12 +5640,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
+			txnOp = txnOperatorForSnapshot(c.proc, *node.ScanSnapshot.TS)
 
 			if node.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
@@ -10978,12 +10973,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
 			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
+			txnOp = txnOperatorForSnapshot(c.proc, *node.ScanSnapshot.TS)
 
 			if node.ScanSnapshot.Tenant != nil {
 				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)

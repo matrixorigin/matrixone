@@ -85,7 +85,7 @@ func changesSessionCatalog(stmt tree.Statement, queryPlan *plan.Plan) bool {
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchMerge,
-		*tree.DataBranchPick:
+		*tree.DataBranchPick, *tree.DataBranchRebase:
 		return true
 	}
 	return false
@@ -94,7 +94,7 @@ func changesSessionCatalog(stmt tree.Statement, queryPlan *plan.Plan) bool {
 func isDataBranchStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
-		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick, *tree.DataBranchRebase,
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 		return true
 	default:
@@ -345,6 +345,10 @@ func statementCanBeExecutedInUncommittedTransaction(
 		// PICK manages its own transaction and cannot follow an outer user
 		// transaction. Background sessions reuse the caller's shared transaction.
 		return ses.IsBackgroundSession(), nil
+	case *tree.DataBranchRebase:
+		// Explicit BEGIN can share its owner; implicit autocommit=0 must not
+		// accidentally start and commit a separate background transaction.
+		return ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.

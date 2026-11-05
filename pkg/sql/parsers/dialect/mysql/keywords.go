@@ -785,6 +785,7 @@ func init() {
 		"recovery_window":          RECOVERY_WINDOW,
 		"clone":                    CLONE,
 		"branch":                   BRANCH,
+		"rebase":                   REBASE,
 		"fail":                     CONFLICT_FAIL,
 		"skip":                     CONFLICT_SKIP,
 		"accept":                   CONFLICT_ACCEPT,

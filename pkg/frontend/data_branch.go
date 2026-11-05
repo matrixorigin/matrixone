@@ -460,6 +460,8 @@ func handleDataBranch(
 		return stats, handleBranchMerge(execCtx, ses, st)
 	case *tree.DataBranchPick:
 		return stats, handleBranchPick(execCtx, ses, st)
+	case *tree.DataBranchRebase:
+		return stats, handleBranchRebase(execCtx, ses, st)
 	default:
 		return stats, moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
@@ -2204,6 +2206,8 @@ func constructChangeHandle(
 		bTo := *betweenTo
 		j := 0
 		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
+		creation := make([]bool, 0, len(tarRange.rel))
+		boundaryIdents := make([]branchIdentity, 0, len(tarRange.rel))
 		for i := range tarRange.rel {
 			startBoundary := tarRange.startBoundary(i)
 			// Intersect: from = max(original, bFrom), end = min(original, bTo)
@@ -2226,6 +2230,10 @@ func constructChangeHandle(
 					tarRange.idents[j] = tarRange.idents[i]
 				}
 				boundaries = append(boundaries, startBoundary)
+				creation = append(creation, tarRange.isCreationBoundary(i))
+				if len(tarRange.startBoundaryIdents) != 0 {
+					boundaryIdents = append(boundaryIdents, tarRange.startBoundaryIdents[i])
+				}
 				j++
 			}
 		}
@@ -2236,6 +2244,8 @@ func constructChangeHandle(
 			tarRange.idents = tarRange.idents[:j]
 		}
 		tarRange.startBoundaryRel = boundaries
+		tarRange.creationBoundary = creation
+		tarRange.startBoundaryIdents = boundaryIdents
 	}
 	tarHydrationRel := tables.tarRel
 	tarHydrationSnapshot := tarSnapshot
@@ -2292,6 +2302,12 @@ func constructChangeHandle(
 			collectCtx = engine.WithVisibleStateStartRelation(
 				collectCtx, startBoundary,
 			)
+		}
+		if tarRange.isCreationBoundary(i) {
+			if ident, ok := tarRange.startBoundaryIdentity(i); ok {
+				collectCtx = engine.WithVisibleStateStartAccount(collectCtx, ident.account)
+			}
+			collectCtx = engine.WithVisibleStateBoundaryComparison(collectCtx)
 		}
 		if handle, err = collectFn(
 			collectCtx,
@@ -2353,6 +2369,12 @@ func constructChangeHandle(
 			collectCtx = engine.WithVisibleStateStartRelation(
 				collectCtx, startBoundary,
 			)
+		}
+		if baseRange.isCreationBoundary(i) {
+			if ident, ok := baseRange.startBoundaryIdentity(i); ok {
+				collectCtx = engine.WithVisibleStateStartAccount(collectCtx, ident.account)
+			}
+			collectCtx = engine.WithVisibleStateBoundaryComparison(collectCtx)
 		}
 		if handle, err = collectFn(
 			collectCtx,
@@ -2784,14 +2806,14 @@ func decideCollectRange(
 		if tarCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
 			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
-			nil, nil, types.TS{}, true,
+			nil, nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
 		if baseCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
 			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS,
-			nil, nil, types.TS{}, true,
+			nil, nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
@@ -2908,13 +2930,13 @@ func decideCollectRange(
 	var tarHasZeroHistory, baseHasZeroHistory bool
 	if tarCollectRange, tarHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(tarIdent, baseIdent), tarSp, tarCTS,
-		tarPath, tarPathTS, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
+		tarPath, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
 	); err != nil {
 		return
 	}
 	if baseCollectRange, baseHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, dedupeBranchIdentities(baseIdent, tarIdent), baseSp, baseCTS,
-		basePath, basePathTS, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
+		basePath, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
 	); err != nil {
 		return
 	}
@@ -3001,6 +3023,7 @@ func buildSideCollectRange(
 	endpointCTS types.TS,
 	selfPath []uint64,
 	selfPathTS []types.TS,
+	selfPathLineageOnly []bool,
 	otherPathTS []types.TS,
 	otherPathLineageOnly []bool,
 	otherSP types.TS,
@@ -3010,6 +3033,7 @@ func buildSideCollectRange(
 	endpointID := selfPath[len(selfPath)-1]
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 	var previousRel engine.Relation
+	var previousIdent branchIdentity
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -3081,6 +3105,21 @@ func buildSideCollectRange(
 			nodeCTS = ctsList[0]
 		}
 
+		// A logical clone can be modified in its creation transaction. Compare
+		// its protected parent at the fork with the child at that commit before
+		// consuming the usual post-creation incremental range.
+		kind, _ := dataBranchPrimaryKeyColumns(rel.GetTableDef(identityCtx(ctx, segIdent)))
+		if i > 0 && previousRel != nil && i < len(selfPathLineageOnly) && !selfPathLineageOnly[i] &&
+			kind != fakeKind && kind >= 0 && nodeCTS.LE(&windowEnd) {
+			cr.rel = append(cr.rel, rel)
+			cr.from = append(cr.from, nodeCTS)
+			cr.end = append(cr.end, nodeCTS)
+			cr.idents = append(cr.idents, segIdent)
+			cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+			cr.startBoundaryIdents = append(cr.startBoundaryIdents, previousIdent)
+			cr.creationBoundary = append(cr.creationBoundary, true)
+		}
+
 		// Window lower bound.
 		if wholeHistory && i == 0 {
 			windowFrom = types.MinTs()
@@ -3105,6 +3144,7 @@ func buildSideCollectRange(
 
 		if windowFrom.GT(&windowEnd) {
 			previousRel = rel
+			previousIdent = segIdent
 			continue
 		}
 		cr.rel = append(cr.rel, rel)
@@ -3112,7 +3152,10 @@ func buildSideCollectRange(
 		cr.end = append(cr.end, windowEnd)
 		cr.idents = append(cr.idents, segIdent)
 		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		cr.startBoundaryIdents = append(cr.startBoundaryIdents, previousIdent)
+		cr.creationBoundary = append(cr.creationBoundary, false)
 		previousRel = rel
+		previousIdent = segIdent
 	}
 	return
 }

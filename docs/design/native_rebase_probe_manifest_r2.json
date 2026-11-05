@@ -1,0 +1,10 @@
+{
+  "base": "b01e952ad1021ef8f188641f3a11a1360c001218",
+  "run_id": "nrp1-20261029T104900Z-b01e952a",
+  "purpose": "P1 prerequisite probe after git archive directory validation correction",
+  "inputs": {
+    "native_rebase_probe_linux.py": "89c2f2fd36c21318131242d679c820b46b1aecf7c4a3b2fde218b55f37c10c79",
+    "source.tar.gz": "4f2786033e5b73e06d1895d15e0ed71933c7230d78af9d35389d8c4025ef9186",
+    "rebase_transaction_prerequisites_test.go": "fe73e147f3bf8679875e7f05d38f9a69986548d4fcf6c50705df51acbc6ffeb9"
+  }
+}

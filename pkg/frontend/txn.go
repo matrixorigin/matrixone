@@ -804,7 +804,7 @@ func requiresPessimisticObjectLifecycleTxn(
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.AlterDatabase, *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
-		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick:
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick, *tree.DataBranchRebase:
 		return true
 	case *tree.DropTable:
 		// Ordinary DROP TABLE can resolve to a session temporary alias only after

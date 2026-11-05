@@ -63,7 +63,7 @@ func authenticateDataBranchStatement(
 		delta, err := authenticateDataBranchCreateTable(ctx, ses, st)
 		add(delta)
 		return stats, err
-	case *tree.DataBranchCreateDatabase:
+	case *tree.DataBranchCreateDatabase, *tree.DataBranchRebase:
 		// CREATE DATABASE source resolution must be shared with execution to
 		// avoid authorizing a different object set. It runs inside
 		// dataBranchCreateDatabase after collectCloneDatabaseSource.
