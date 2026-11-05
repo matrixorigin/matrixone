@@ -4449,6 +4449,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
 		builder.pushdownLimitToTableScan(rootID)
+		builder.attachProjectedFullTextMatches(rootID)
 		// Seed base-relation statistics so the early vector access-path builder
 		// can cost the hidden entries work before replacing the source scan.
 		ReCalcNodeStats(rootID, builder, true, false, true)

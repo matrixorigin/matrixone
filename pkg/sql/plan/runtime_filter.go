@@ -455,23 +455,24 @@ func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 }
 
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
-	builder.generateRuntimeFiltersInTree(nodeID, newDeepRuntimeFilterTree(builder.qry, nodeID))
+	point := &pointRuntimeFilterContext{root: nodeID}
+	builder.generateRuntimeFiltersInTree(nodeID, newDeepRuntimeFilterTree(builder.qry, nodeID), point)
 }
 
-func (builder *QueryBuilder) generateRuntimeFiltersInTree(nodeID int32, deepTree *deepRuntimeFilterTree) {
+func (builder *QueryBuilder) generateRuntimeFiltersInTree(nodeID int32, deepTree *deepRuntimeFilterTree, point *pointRuntimeFilterContext) {
 	for _, childID := range builder.qry.Nodes[nodeID].Children {
-		builder.generateRuntimeFiltersInTree(childID, deepTree)
+		builder.generateRuntimeFiltersInTree(childID, deepTree, point)
 	}
-	builder.generateNodeRuntimeFilterInTree(nodeID, 0, deepTree)
+	builder.generateNodeRuntimeFilterInTree(nodeID, 0, deepTree, point)
 }
 
 // keyBound is used only by the late, already-local DELETE maintenance pass.
 // It bounds distinct keys, never build rows or the mandatory join map.
 func (builder *QueryBuilder) generateNodeRuntimeFilter(nodeID int32, keyBound float64) {
-	builder.generateNodeRuntimeFilterInTree(nodeID, keyBound, nil)
+	builder.generateNodeRuntimeFilterInTree(nodeID, keyBound, nil, nil)
 }
 
-func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBound float64, deepTree *deepRuntimeFilterTree) {
+func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBound float64, deepTree *deepRuntimeFilterTree, point *pointRuntimeFilterContext) {
 	node := builder.qry.Nodes[nodeID]
 	sid := builder.compCtx.GetProcess().GetService()
 
@@ -685,6 +686,7 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 		}
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
 		componentFilter := false
+		pointAdmission := false
 		// LOCAL_COLOCATED gives up multi-CN scan bandwidth.  In phase 1 only
 		// enable right-SINGLE on the leading PK/cluster key, where exact IN can
 		// prune ranges predictably.  A scattered non-key filter may still scan
@@ -703,10 +705,14 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 				buildSize = keyBound
 			}
 			if buildSize/probeNdv >= 0.1 {
-				if keyBound == 0 {
-					builder.recordDeleteIndexCostRejection(node, leftChild)
+				if keyBound != 0 || sortOrder != 0 || 1/probeNdv >= 0.1 ||
+					!builder.pointRuntimeFilterCandidate(point, nodeID, node, leftChild, probeExprs[0]) {
+					if keyBound == 0 {
+						builder.recordDeleteIndexCostRejection(node, leftChild)
+					}
+					return
 				}
-				return
+				pointAdmission = true
 			}
 			if sortOrder != 0 {
 				if buildSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
@@ -737,6 +743,12 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 		inLimit := GetInFilterCardLimit(sid)
 		if sortOrder == 0 && !componentFilter {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		if pointAdmission {
+			if inLimit < 1 {
+				return
+			}
+			inLimit = 1
 		}
 		if keyBound > 0 && keyBound > float64(inLimit) {
 			return
@@ -774,7 +786,7 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 		// SINGLE output cardinality belongs to its semantic preserved side.  Do
 		// not feed the existing probe-side RF heuristic into SINGLE stats here;
 		// preserved-side cardinality and cost selection are a separate phase.
-		if node.JoinType != plan.Node_SINGLE && !deep && keyBound == 0 {
+		if node.JoinType != plan.Node_SINGLE && !deep && keyBound == 0 && !pointAdmission {
 			recalcStatsByRuntimeFilter(leftChild, node, builder)
 		}
 		return
