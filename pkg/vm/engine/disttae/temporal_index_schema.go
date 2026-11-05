@@ -260,8 +260,7 @@ func sameTemporalPhysicalType(a, b temporalColumn) bool {
 	return a.Type == b.Type && a.Width == b.Width && a.Scale == b.Scale && a.Charset == b.Charset && a.CollationVersion == b.CollationVersion
 }
 
-// TemporalSchemaRequest is a temporary input; ReadTemporalSchemaAt copies every
-// value in its result and never retains the request or catalog-owned objects.
+// supportedTemporalHiddenSchema admits only index layouts the reader can prove.
 func supportedTemporalHiddenSchema(hidden *plan.TableDef) bool {
 	if hidden == nil || hidden.Pkey == nil || hidden.TblId == 0 || len(hidden.Cols) < 2 || len(hidden.Cols) > 3 || hidden.IsTemporary || hidden.IsDynamic || hidden.FeatureFlag != features.IndexTable || hidden.KeyFormat != 0 || hidden.ClusterBy != nil || hidden.Pkey.PkeyColName != catalog.IndexTableIndexColName {
 		return false

@@ -161,31 +161,21 @@ func (proc *Process) BuildProcessInfo(
 				"invalid max_error_count %d", maxErrorCount)
 		}
 		offset, fixed := types.FixedZoneOffset(loc)
-		fixed = fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
-		encodedLoc := loc
 		zoneName := TimeZoneLocationName(loc)
+		var timeBytes []byte
 		if fixed {
-			encodedLoc = time.FixedZone("", offset)
+			if int64(offset) < math.MinInt32 || int64(offset) > math.MaxInt32 {
+				return procInfo, moerr.NewInvalidInputNoCtxf("invalid fixed time zone offset %d", offset)
+			}
 			zoneName = ""
 		} else {
 			offset = 0
-		}
-		timeBytes, err := time.Time{}.In(encodedLoc).MarshalBinary()
-		if err != nil {
-			return procInfo, err
-		}
-		if fixed {
-			// Legacy workers ignore the explicit offset fields. Their existing
-			// TimeZone bytes must still decode the exact offset, never UTC.
-			var legacy time.Time
-			if err := legacy.UnmarshalBinary(timeBytes); err != nil {
+			var err error
+			timeBytes, err = time.Time{}.In(loc).MarshalBinary()
+			if err != nil {
 				return procInfo, err
 			}
-			if _, decoded := legacy.Zone(); decoded != offset {
-				return procInfo, moerr.NewInvalidInputNoCtxf("fixed time zone offset %d cannot be represented by the legacy protocol", offset)
-			}
 		}
-
 		procInfo.SessionInfo = pipeline.SessionInfo{
 			Account:                proc.Base.SessionInfo.Account,
 			User:                   proc.Base.SessionInfo.GetUser(),

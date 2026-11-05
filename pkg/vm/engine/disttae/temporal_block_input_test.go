@@ -16,11 +16,13 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,6 +37,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTemporalInputReconnectPublishesFreshClient(t *testing.T) {
+	subscriber := newLogTailSubscriber()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	t.Cleanup(func() { require.NoError(t, subscriber.closeTransport()) })
+	factory := func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+		return nil, newCloseRaceStream(), nil
+	}
+	require.Nil(t, subscriber.client())
+	require.NoError(t, subscriber.init(ctx, "test", "test", factory))
+	first := subscriber.client()
+	require.NotNil(t, first)
+	require.NoError(t, subscriber.init(ctx, "test", "test", factory))
+	second := subscriber.client()
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	require.NoError(t, subscriber.closeClient())
+	require.Nil(t, subscriber.client())
+	initErr := errors.New("stream unavailable")
+	failed := func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+		return nil, nil, initErr
+	}
+	require.ErrorIs(t, subscriber.init(ctx, "test", "test", failed), initErr)
+	require.Nil(t, subscriber.client())
+}
 
 // Pause-free interleavings at the first block walk, after object admission has
 // charged the shared budget. No production hook or scheduler timing is needed.
@@ -63,19 +91,6 @@ func (c *temporalInputWorkContext) Err() error {
 		return context.Canceled
 	}
 	return nil
-}
-
-func TestTemporalInputTransportGenerationSaturates(t *testing.T) {
-	subscriber := &logTailSubscriber{transportGeneration: ^uint64(0) - 2}
-	client := &service.LogtailClient{}
-	subscriber.swapClient(client)
-	_, generation := subscriber.clientAndGeneration()
-	require.NotZero(t, generation)
-	subscriber.swapClient(nil)
-	subscriber.swapClient(client)
-	got, generation := subscriber.clientAndGeneration()
-	require.Same(t, client, got)
-	require.Zero(t, generation, "saturation must permanently decline the optional observation")
 }
 
 func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
@@ -165,7 +180,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	require.NoError(t, err)
 	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 	e.pClient.eng = e
-	e.pClient.subscriber = &logTailSubscriber{logTailClient: &service.LogtailClient{}, transportGeneration: 1}
+	e.pClient.subscriber = &logTailSubscriber{logTailClient: &service.LogtailClient{}}
 	e.pClient.subscribed.m = map[uint64]*subEntry{98: {dbID: 10, state: Subscribed}}
 	e.pClient.receivedLogTailTime.ready.Store(true)
 	e.pClient.receivedLogTailTime.tList = make([]atomic.Value, 1)
@@ -193,12 +208,12 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	req := engine.TemporalBlockInputRequest{Column: "d", Observed: f.stats, Stats: observation, BoundType: types.T_timestamp, Scale: 6, Op: types.TemporalGreater, Zone: time.UTC}
 	copy(req.Bound[:], types.EncodeTimestamp(&bound))
 	var visibleWork int
-	for _, scenario := range []string{"complete", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "generation unavailable", "entry replaced"} {
+	for _, scenario := range []string{"complete", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
 			ctx := f.ctx
 			budget := engine.MaxTemporalBindingWork
-			e.pClient.subscriber.transportGeneration = 1
+			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			switch scenario {
 			case "missing overlap":
@@ -231,8 +246,8 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 				t.Cleanup(func() { f.stats.BlockNumber = 2 })
 			case "pending":
 				e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Stamp.Snapshot)
-			case "generation unavailable":
-				e.pClient.subscriber.transportGeneration = 0
+			case "transport unavailable":
+				e.pClient.subscriber.swapClient(nil)
 			case "entry replaced":
 				e.pClient.subscribed.m[98] = &subEntry{dbID: 11, state: Subscribed}
 				t.Cleanup(func() { e.pClient.subscribed.m[98] = &subEntry{dbID: 10, state: Subscribed} })
@@ -257,7 +272,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	}
 	for _, scenario := range []string{"cancel during scan", "pending during scan", "transport during scan", "stats during scan", "partition during scan", "entry during scan"} {
 		t.Run(scenario, func(t *testing.T) {
-			e.pClient.subscriber.transportGeneration = 1
+			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			budget := engine.MaxTemporalBindingWork
 			ctx := &temporalInputWorkContext{Context: context.WithoutCancel(f.ctx), budget: &budget, below: budget - 4, done: make(chan struct{})}
@@ -267,11 +282,9 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 				case "pending during scan":
 					e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Stamp.Snapshot)
 				case "transport during scan":
-					// Reusing the very same client pointer must still invalidate the
-					// observation after the transport has been detached and restored.
-					old := e.pClient.subscriber.client()
+					// A reconnect detaches the old client and publishes a fresh one.
 					e.pClient.subscriber.swapClient(nil)
-					e.pClient.subscriber.swapClient(old)
+					e.pClient.subscriber.swapClient(&service.LogtailClient{})
 				case "stats during scan":
 					require.NoError(t, f.gs.PatchStats(f.key, &PatchArgs{MinValMap: map[string]float64{"d": 101}}))
 				case "partition during scan":
@@ -299,7 +312,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	// Place a missing cache entry after the valid object in name order. This
 	// must discard counts already obtained from the first surviving block.
 	t.Run("later cache miss", func(t *testing.T) {
-		e.pClient.subscriber.transportGeneration = 1
+		e.pClient.subscriber.swapClient(&service.LogtailClient{})
 		e.pClient.subscribed.m[98].pendingTo.Store(nil)
 		missing := stats
 		segment := stats.ObjectName().SegmentId()

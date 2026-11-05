@@ -2657,7 +2657,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	originalSafe := builder.temporalOriginalSafeScans[nodeID]
 	intent := builder.temporalPlanningIntent
 	_, fixedZone := types.FixedZoneOffset(intent.TimeZone)
-	if lateBaseStatsFinalized && originalSafe && !builder.sessionSelectLimitMayStopEarly && builder.hasTemporalPlanningIntent && intent.ParameterFree && fixedZone &&
+	if lateBaseStatsFinalized && originalSafe && !builder.isPrepareStatement && !builder.sessionSelectLimitMayStopEarly && builder.hasTemporalPlanningIntent && intent.ParameterFree && fixedZone &&
 		intent.MatchesProcess(builder.compCtx.GetProcess()) && intent.Placement.AllowsFixedTemporalCandidate() &&
 		!forceIndex && !ignoreStats && !preferSortedScan && best.indexPos == -1 && fallback.indexPos == -1 {
 		access, err := builder.enumerateTemporalIndexCandidates(nodeID, indexes, costCtx, func(candidate regularIndexAccessCandidate) {
@@ -3425,9 +3425,6 @@ type encodedRegularIndexCostContext struct {
 	relPos    int32
 	valid     bool
 	force     bool
-	// Some callers retain all residuals on the base side of an index join.
-	// They cannot credit optional hidden-scan predicate pushdown.
-	skipBackfillResidualCredit bool
 
 	statsTableCnt float64
 	baseRows      float64
@@ -4413,9 +4410,6 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
 		budgetSelectivity := candidateSelectivity
 		lowerHiddenSelectivity := lowerCandidateSelectivity
 		for filterIdx, fact := range ctx.filterFacts {
-			if ctx.skipBackfillResidualCredit {
-				break
-			}
 			if ctx.leadingFilters[filterIdx] || fact.directCol < 0 {
 				continue
 			}

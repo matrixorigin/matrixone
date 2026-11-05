@@ -168,6 +168,20 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 				require.Contains(t, path, "Index Table Scan on events.idx_d", path)
 			}
 		}
+		// A parameter-free prepared statement can be rebound after unrelated
+		// DDL. It must remain executable and return fresh results on each side
+		// of the selective-to-dense transition.
+		exec(fmt.Sprintf("set timestamp=%d", sparseClock))
+		exec("prepare temporal_prepared from 'select id,d from events where d > now(6)'")
+		require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), ids("execute temporal_prepared"))
+		exec("create table unrelated_ddl(id int)")
+		for _, clock := range []int64{sparseClock, denseClock, sparseClock} {
+			exec(fmt.Sprintf("set timestamp=%d", clock))
+			want := ids("select id,d from events ignore index(idx_d) where d > now(6)")
+			require.Equal(t, want, ids("execute temporal_prepared"))
+			require.Equal(t, want, ids("execute temporal_prepared"))
+		}
+		exec("deallocate prepare temporal_prepared")
 		for _, zone := range []string{"+14:00", "-12:00", "+00:00"} {
 			exec("set time_zone='" + zone + "'")
 			require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), ids(query))

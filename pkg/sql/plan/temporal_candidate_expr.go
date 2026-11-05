@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// temporalInteriorTimestampMargin includes the named-zone offset envelope,
+// temporalInteriorTimestampMargin includes the fixed-zone offset envelope,
 // the largest precision quantum and strict-bound arithmetic. Values inside
 // this domain cannot trigger the calendar interval's lo>hi reset for a ray.
 const temporalInteriorTimestampMargin = (int64(1)<<31+72*types.SecsPerHour+2)*types.MicroSecsPerSec + types.MicroSecsPerSec + 1

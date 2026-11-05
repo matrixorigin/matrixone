@@ -83,6 +83,10 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 	if timestampScale < 0 || timestampScale > 6 || op > TemporalGreaterEqual || zone == nil {
 		return temporalFull(), nil
 	}
+	offset, fixed := FixedZoneOffset(zone)
+	if !fixed || int64(offset) < math.MinInt32 || int64(offset) > math.MaxInt32 {
+		return temporalFull(), nil
+	}
 	maxDatetime := int64(DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
 	if keyKind == T_timestamp {
 		if bound != int64(ZeroDatetime) && (bound < 0 || bound > maxDatetime) {
@@ -113,10 +117,6 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 		return TemporalCandidate{Lo: lo, Hi: hi, Sentinel: lo}, nil
 	}
 	if keyKind != T_datetime {
-		return temporalFull(), nil
-	}
-	offset, fixed := FixedZoneOffset(zone)
-	if fixed && (int64(offset) < math.MinInt32 || int64(offset) > math.MaxInt32) {
 		return temporalFull(), nil
 	}
 	// These bounds cover the calendar domain only; the caller adds physical
@@ -210,32 +210,21 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 			}
 		}
 	}
-	if fixed {
-		offsetMicros := int64(offset) * MicroSecsPerSec
-		if lo != math.MinInt64 {
-			lo, ok = temporalAdd(lo, offsetMicros)
-			if !ok {
-				return temporalFull(), nil
-			}
-		}
-		if hi != math.MaxInt64 {
-			hi, ok = temporalAdd(hi, offsetMicros)
-			if !ok {
-				return temporalFull(), nil
-			}
-		}
-		lo = max(lo, 0)
-		hi = min(hi, maxDatetime)
-	} else {
-		var err error
-		lo, hi, ok, err = temporalNamedZoneRange(ctx, zone, lo, hi, maxDatetime)
-		if err != nil {
-			return TemporalCandidate{}, err
-		}
+	offsetMicros := int64(offset) * MicroSecsPerSec
+	if lo != math.MinInt64 {
+		lo, ok = temporalAdd(lo, offsetMicros)
 		if !ok {
 			return temporalFull(), nil
 		}
 	}
+	if hi != math.MaxInt64 {
+		hi, ok = temporalAdd(hi, offsetMicros)
+		if !ok {
+			return temporalFull(), nil
+		}
+	}
+	lo = max(lo, 0)
+	hi = min(hi, maxDatetime)
 	if lo > hi {
 		lo, hi = 0, 0
 	}

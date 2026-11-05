@@ -31,7 +31,7 @@ import (
 )
 
 func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
-	for _, scenario := range []string{"eligible", "missing scope", "missing original owner", "unproved original owner", "parameter provenance", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
+	for _, scenario := range []string{"eligible", "missing scope", "missing original owner", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
 			switch scenario {
@@ -51,6 +51,8 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
 				builder.temporalPlanningIntent.ParameterFree = false
+			case "prepared statement":
+				builder.isPrepareStatement = true
 			case "sirius":
 				builder.temporalPlanningIntent.Placement.Sirius = true
 			case "clock drift":

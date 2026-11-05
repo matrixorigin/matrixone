@@ -36,6 +36,9 @@ the temporal column. Prepared AUTO, named-zone AUTO, LIMIT/OFFSET, aggregates,
 joins, FORCE INDEX, and non-covering backfill remain on existing paths. This is
 best-effort optimization: no query is promised an index scan. In particular,
 the FORCE INDEX and LIMIT query from #31619 does not use this AUTO path.
+The demonstrated selected path is a DATETIME key compared with
+`CURRENT_TIMESTAMP`. A public TIMESTAMP-key/DATETIME-bound index selection has
+not been established; an explicit DATETIME cast currently retains BASE.
 
 ## Range and execution
 
@@ -44,6 +47,7 @@ It accounts for comparison direction, strictness, precision, rounding, NULL,
 zero and out-of-calendar physical tails. Its result is a necessary range, not
 an exact replacement for SQL comparison. Full or unprovable bounds fail open;
 the execution-time expression reads the current statement clock and zone.
+For named zones the bound stays Full; no transition-specific inverse is used.
 The reader receives a marked necessary block filter and the covering scan
 retains a separately remapped complete row filter. Copy, fold and protocol
 transport preserve the filter and empty-range provenance. Ordinary same-type
@@ -91,9 +95,9 @@ credit. For an eligible covering index, the existing relation synchronously
 observes cached metadata for the original BASE predicate and the current
 snapshot. The observation creates no subscription, performs no file read,
 retains no new cache, and is discarded if any metadata, stats, transaction,
-subscription or transport identity changes. A saturating generation attached to
-the existing subscriber lock prevents transport ABA. The regular logtail
-recovery state machine remains the sole recovery owner.
+subscription or transport identity changes. A held client pointer identifies
+the transport: every production reconnect publishes a newly constructed client.
+The regular logtail recovery state machine remains the sole recovery owner.
 
 The cached block walk is bounded by the shared 65,536-unit attempt budget;
 relation, index, column, expression, name and payload limits apply before
@@ -130,7 +134,7 @@ operand directions, comparison operators, precision, fixed-zone boundaries,
 NULL/sentinel/tails, unsupported expressions and fail-open readers. Verify
 AUTO against `IGNORE INDEX`, INDEX and BASE controls, sparse/dense transitions,
 prepared/same-domain controls, DDL/index removal, permissions, snapshots,
-metadata drift, cancellation and generation changes. Run affected normal and
+metadata drift, cancellation and transport changes. Run affected normal and
 race tests, public SQL/BVT and configured incremental SCA.
 
 Performance evidence uses identical main/candidate source, data, topology and

@@ -255,10 +255,7 @@ func (c *LogtailClient) completeReadBarrier(response *logtail.ReadBarrierRespons
 }
 
 func (c *LogtailClient) BreakoutReceive() {
-	select {
-	case c.breakChan <- struct{}{}:
-	default:
-	}
+	c.breakChan <- struct{}{}
 }
 
 // Receive fetches logtail response.

@@ -93,11 +93,17 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 		return result, false, nil
 	}
 	c := txn.engine.PushClient()
-	if c == nil || c.subscriber == nil {
+	if c == nil {
 		return result, false, nil
 	}
-	source, generation := c.subscriber.clientAndGeneration()
-	if source == nil || generation == 0 {
+	subscriber := c.subscriber
+	if subscriber == nil {
+		return result, false, nil
+	}
+	// Each production reconnect publishes a newly constructed client. Holding
+	// this pointer until validation prevents address reuse across a swap.
+	source := subscriber.client()
+	if source == nil {
 		return result, false, nil
 	}
 	state, entry, ok := c.temporalInputSnapshot(t.db.databaseId, t.tableId, read)
@@ -174,8 +180,8 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 		return result, false, nil
 	}
 	latest, latestEntry, valid := c.temporalInputSnapshot(t.db.databaseId, t.tableId, read)
-	transport, gen := c.subscriber.clientAndGeneration()
+	transport := subscriber.client()
 	current, ok, err = tbl.ReadTemporalCostStats(ctx, read, req.Observed, req.Column)
-	complete = err == nil && ok && current == req.Stats && valid && latest == state && latestEntry == entry && source == transport && gen == generation && temporalReadStillCurrent(tbl, ctx, read, t, txn)
+	complete = err == nil && ok && current == req.Stats && valid && latest == state && latestEntry == entry && source == transport && temporalReadStillCurrent(tbl, ctx, read, t, txn)
 	return result, complete, err
 }

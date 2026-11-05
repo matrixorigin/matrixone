@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// TimeZoneLocationName returns a portable IANA identity. Fixed zones keep the
-// legacy offset payload. Local must never mean another machine's local zone.
+// TimeZoneLocationName returns a portable IANA identity. Fixed zones use the
+// explicit offset fields. Local must never mean another machine's local zone.
 func TimeZoneLocationName(location *time.Location) string {
 	if location == nil || IsFixedTimeZone(location) || location.String() == "Local" || location.String() == "" {
 		return ""

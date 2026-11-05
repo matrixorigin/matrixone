@@ -2113,9 +2113,6 @@ type logTailSubscriber struct {
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
-	// transportGeneration is guarded by mu. Saturation disables optional
-	// metadata observation instead of permitting an ABA after counter wrap.
-	transportGeneration uint64
 
 	mu struct {
 		sync.RWMutex
@@ -2239,21 +2236,8 @@ func (s *logTailSubscriber) swapClient(client *service.LogtailClient) *service.L
 	s.mu.Lock()
 	old := s.logTailClient
 	s.logTailClient = client
-	if s.transportGeneration != ^uint64(0) {
-		s.transportGeneration++
-	}
 	s.mu.Unlock()
 	return old
-}
-
-func (s *logTailSubscriber) clientAndGeneration() (*service.LogtailClient, uint64) {
-	s.mu.RLock()
-	client, generation := s.logTailClient, s.transportGeneration
-	s.mu.RUnlock()
-	if generation == ^uint64(0) {
-		generation = 0
-	}
-	return client, generation
 }
 
 func (s *logTailSubscriber) client() *service.LogtailClient {

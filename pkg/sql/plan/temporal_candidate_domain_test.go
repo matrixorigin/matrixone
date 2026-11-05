@@ -116,8 +116,12 @@ func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64
 	}
 	interval, err := types.BuildTemporalCandidate(proc.Ctx, types.T_datetime, scale, int64(stamp), false, op, zone)
 	require.NoError(t, err)
-	if allow && literal == nil && clock == 1714067100123456000 && scale == 6 && (zone == time.UTC || zone.String() == "America/New_York") {
-		require.False(t, interval.Full, "the oracle must actually cover selective fixed/named ranges")
+	if allow && literal == nil && clock == 1714067100123456000 && scale == 6 {
+		if zone == time.UTC {
+			require.False(t, interval.Full, "the oracle must actually cover selective fixed-zone ranges")
+		} else if zone.String() == "America/New_York" {
+			require.True(t, interval.Full, "named zones retain the complete range")
+		}
 	}
 	if !allow {
 		interval = types.TemporalCandidate{Lo: math.MinInt64, Hi: math.MaxInt64, Sentinel: math.MinInt64, Full: true}

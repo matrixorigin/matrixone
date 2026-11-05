@@ -286,25 +286,14 @@ func TestProcessCodecHelpers(t *testing.T) {
 func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	defer proc.Free()
-	for _, offset := range []int{-14 * 3600, -120, -59, 0, 61, 14 * 3600} {
+	for _, offset := range []int{-14 * 3600, -120, -119, -61, -60, -59, 0, 61, 14 * 3600} {
 		proc.Base.SessionInfo.TimeZone = time.FixedZone("fixed", offset)
 		first, err := proc.BuildProcessInfo("select 1")
 		require.NoError(t, err)
 		require.True(t, first.SessionInfo.FixedOffsetPresent)
 		require.Equal(t, int64(offset), first.SessionInfo.FixedOffsetSeconds)
 		require.Empty(t, first.SessionInfo.TimeZoneName)
-		// Simulate a legacy worker, which never reads the new presence/offset
-		// fields and reconstructs the session from the existing bytes only.
-		var legacy time.Time
-		require.NoError(t, legacy.UnmarshalBinary(first.SessionInfo.TimeZone))
-		_, legacyOffset := legacy.Zone()
-		require.Equal(t, offset, legacyOffset)
-		oldSender := first.SessionInfo
-		oldSender.FixedOffsetPresent, oldSender.FixedOffsetSeconds = false, 0
-		fromOld, err := ConvertToProcessSessionInfo(oldSender)
-		require.NoError(t, err)
-		_, fromOldOffset := time.Now().In(fromOld.TimeZone).Zone()
-		require.Equal(t, offset, fromOldOffset)
+		require.Empty(t, first.SessionInfo.TimeZone)
 		wire, err := first.Marshal()
 		require.NoError(t, err)
 		var received pipeline.ProcessInfo
@@ -320,11 +309,12 @@ func TestProcessCodecFixedTimeZoneAcrossForwards(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, forwarded.SessionInfo.FixedOffsetPresent)
 		require.Equal(t, int64(offset), forwarded.SessionInfo.FixedOffsetSeconds)
+		require.Empty(t, forwarded.SessionInfo.TimeZone)
 	}
-	for _, offset := range []int{-119, -61, -60, 32768 * 60, -32769 * 60} {
+	for _, offset := range []int{1 << 32, -(1 << 32)} {
 		proc.Base.SessionInfo.TimeZone = time.FixedZone("", offset)
 		_, err := proc.BuildProcessInfo("select 1")
-		require.Error(t, err, "unrepresentable offsets must fail instead of publishing UTC")
+		require.Error(t, err, "out-of-range offsets must fail instead of publishing UTC")
 	}
 	_, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
 		FixedOffsetPresent: true, FixedOffsetSeconds: 1, TimeZoneName: "UTC",
