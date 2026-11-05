@@ -1281,35 +1281,50 @@ func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t
 	vec.Release()
 }
 
-// The full-object default is intentional: #12198 lets later reads reuse one
-// disk-cache artifact. A bounded entry must opt in to range policy explicitly.
+// The full-object default lets later reads reuse one disk-cache artifact.
+// Without a disk cache, the default must not expand a bounded entry.
 func TestS3FSReadPolicyPreservesFullObjectDefault(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		policy Policy
-		min    int64
-		max    *int64
+		name         string
+		policy       Policy
+		disk, memory bool
+		noCache      bool
+		min          int64
+		max          *int64
 	}{
-		{name: "default full object", min: 0},
-		{name: "explicit range", policy: SkipFullFilePreloads, min: 123, max: ptrTo(int64(130))},
+		{name: "default full object", disk: true, min: 0},
+		{name: "explicit range", disk: true, policy: SkipFullFilePreloads, min: 123, max: ptrTo(int64(130))},
+		{name: "zero cache capacities", min: 123, max: ptrTo(int64(130))},
+		{name: "memory cache only", memory: true, min: 123, max: ptrTo(int64(130))},
+		{name: "cache initialization disabled", disk: true, noCache: true, min: 123, max: ptrTo(int64(130))},
+		{name: "disk writes disabled", disk: true, policy: SkipDiskCacheWrites, min: 123, max: ptrTo(int64(130))},
+		{name: "disk reads disabled", disk: true, policy: SkipDiskCacheReads, min: 123, max: ptrTo(int64(130))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
+			config := CacheConfig{
+				MemoryCapacity: ptrTo[toml.ByteSize](0),
+				DiskCapacity:   ptrTo[toml.ByteSize](0),
+				DiskPath:       ptrTo(t.TempDir()),
+			}
+			if tc.disk {
+				config.DiskCapacity = ptrTo[toml.ByteSize](1 << 20)
+			}
+			if tc.memory {
+				config.MemoryCapacity = ptrTo[toml.ByteSize](1 << 20)
+			}
 			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
 					Name: "s3", Endpoint: "disk", Bucket: t.TempDir(),
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
 				},
-				CacheConfig{
-					DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
-				},
-				nil, false, false,
+				config,
+				nil, tc.noCache, false,
 			)
 			require.NoError(t, err)
 			t.Cleanup(func() { fs.Close(ctx) })
 
-			data := bytes.Repeat([]byte("abcd"), 1<<18)
+			data := bytes.Repeat([]byte("abcd"), 64)
 			require.NoError(t, fs.Write(ctx, IOVector{
 				FilePath: "foo/bar",
 				Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
@@ -1326,6 +1341,7 @@ func TestS3FSReadPolicyPreservesFullObjectDefault(t *testing.T) {
 			t.Cleanup(vec.Release)
 			require.NoError(t, fs.Read(ctx, vec))
 			require.Equal(t, data[123:130], vec.Entries[0].Data)
+			require.Equal(t, tc.policy, vec.Policy, "range selection must not mutate caller policy")
 
 			read, ok := recorder.lastRead()
 			require.True(t, ok)

@@ -17,13 +17,11 @@
 package cagra
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -81,21 +79,6 @@ func generateTestData(nVectors, dim int) []float32 {
 
 // ---- mock SQL helpers ----
 
-// mock_runSql_streaming_error always returns an error on the error channel.
-func mock_runSql_streaming_error(
-	ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	sql string,
-	ch chan executor.Result,
-	err_chan chan error,
-) (executor.Result, error) {
-	defer func() {
-		err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-		time.Sleep(10 * time.Millisecond)
-	}()
-	return executor.Result{}, moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-}
-
 // makeMetaBatch creates a metadata batch for a single CagraModel (mirrors hnsw makeMetaBatch).
 func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesize int64) *batch.Batch {
 	bat := batch.NewWithSize(4)
@@ -108,22 +91,6 @@ func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesi
 	vector.AppendBytes(bat.Vecs[1], []byte(checksum), false, proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[2], timestamp, false, proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[3], filesize, false, proc.Mp())
-	bat.SetRowCount(1)
-	return bat
-}
-
-// makeIndexBatch serves the content of a tar file as a single chunk (for small test files).
-func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
-
-	dat, err := os.ReadFile(tarPath)
-	if err != nil {
-		panic(fmt.Sprintf("makeIndexBatch: cannot read %s: %v", tarPath, err))
-	}
-	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
 }
@@ -169,9 +136,8 @@ func TestModelStreamError(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// Inject streaming error mock.
-	orig := runSql_streaming
-	runSql_streaming = mock_runSql_streaming_error
-	defer func() { runSql_streaming = orig }()
+	files := swapIndexFiles(t)
+	files.openErr = moerr.NewInternalErrorNoCtx("index file read failed")
 
 	// LoadIndex fires a tag=1 CDC event-log goroutine via runSql; mock it
 	// to return empty so it doesn't hit the production executor.
@@ -311,13 +277,7 @@ func TestModelLoadFromDB(t *testing.T) {
 	defer os.Remove(tarPath)
 
 	// Inject streaming mock that serves the tar content as one chunk.
-	orig := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		ch <- res
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = orig }()
+	swapIndexFiles(t).putFile(t, "test-from-db", tarPath)
 
 	// Also mock runSql for LoadMetadata.
 	origRunSql := runSql

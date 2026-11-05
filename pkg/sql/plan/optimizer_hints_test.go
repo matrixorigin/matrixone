@@ -115,6 +115,25 @@ func TestParseOptimizeHintsGlobalAndPerStatement(t *testing.T) {
 	require.Equal(t, 1, b.optimizerHints.applyIndices, "per-statement hint applied on top")
 }
 
+func TestParseOptimizeHintsUsesSessionValueNotCNRuntime(t *testing.T) {
+	b := builderWithHintCtx(t, "")
+	svc := b.compCtx.GetProcess().GetService()
+	setPlanTestGlobalVariable(t, svc, "optimizer_hints", "applyIndices=1")
+	mock := b.compCtx.(*MockCompilerContext)
+	mock.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+		if name == "optimizer_hints" {
+			require.True(t, system)
+			require.False(t, global)
+			return "aggPushDown=1", nil
+		}
+		return nil, nil
+	}
+	b.parseOptimizeHints()
+	require.NotNil(t, b.optimizerHints)
+	require.Equal(t, 0, b.optimizerHints.applyIndices)
+	require.Equal(t, 1, b.optimizerHints.aggPushDown)
+}
+
 func TestPreparedBlockFilterDisabledHintPersistsInPlan(t *testing.T) {
 	for _, tc := range []struct {
 		name, global, statement string

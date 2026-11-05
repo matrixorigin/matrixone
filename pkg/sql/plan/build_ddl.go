@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -168,35 +167,15 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 // This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
 // passed into the bind: that hook fires before createQuery, where an index rewrite has not
 // yet had its chance and every candidate expression still looks unresolved.
-// indexRewritesDisabled reports whether the global optimizer_hints variable turns off
-// applyIndices. Reads the same variable parseOptimizeHints does, in the same key=value
-// form, rather than depending on a QueryBuilder that genViewTableDef does not have.
+// indexRewritesDisabled uses the same effective session and statement hints as the
+// optimizer. A later applyIndices=0 must undo an earlier applyIndices=1.
 func indexRewritesDisabled(ctx CompilerContext) bool {
 	if ctx == nil {
 		return false
 	}
-	proc := ctx.GetProcess()
-	if proc == nil {
-		return false
-	}
-	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
-		return false
-	}
-	str, ok := v.(string)
-	if !ok || len(str) == 0 {
-		return false
-	}
-	// splitOptimizerHint, not a private copy of the split: this must answer "did applyIndices
-	// really get switched off", and only the parser the optimizer itself uses knows that. A
-	// copy that trimmed whitespace read ` applyIndices=1` as a hint the optimizer had ignored,
-	// so the rewrites ran while validation below was skipped as if they had not.
-	for _, kv := range strings.Split(str, ",") {
-		if key, value, ok := splitOptimizerHint(kv); ok && key == "applyIndices" && value != 0 {
-			return true
-		}
-	}
-	return false
+	builder := &QueryBuilder{compCtx: ctx}
+	builder.parseOptimizeHints()
+	return builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0
 }
 
 func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
@@ -204,11 +183,11 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 		return nil
 	}
 	// Every plugin's answer is inferred from whether its rewrite fired, so the inference is
-	// only valid when rewrites were allowed to run at all. The global optimizer_hints knob
+	// only valid when rewrites were allowed to run at all. The session optimizer_hints knob
 	// can switch applyIndices off wholesale (apply_indices.go), leaving every placeholder in
-	// place regardless of the catalog -- under `set global optimizer_hints = 'applyIndices=1'`
-	// this would refuse EVERY fulltext view, including ones with a perfectly good index, and
-	// keep refusing cluster-wide until someone noticed the hint. A diagnostic knob must not
+	// place regardless of the catalog -- under `set session optimizer_hints = 'applyIndices=1'`
+	// this would refuse EVERY fulltext view in that session, including ones with a perfectly
+	// good index. A diagnostic knob must not
 	// silently turn into a DDL policy, so skip validation entirely while it is set: being
 	// permissive costs an unrunnable view, being wrong here costs working ones.
 	if indexRewritesDisabled(ctx) {
@@ -2876,6 +2855,41 @@ func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	return nil
 }
 
+// marshalExternalTableParam publishes the CREATE EXTERNAL TABLE source param
+// into catalog metadata. The serialized payload must never carry a
+// non-reconstructible expression interface: UpdateExpr.Expr (and the load
+// column-list entries) hold tree.Expr values that encoding/json cannot decode
+// back, and InitNullMap keeps row-variable wrapper assignments attached to
+// the statement so LOAD replans can rebind them. Scans and SHOW CREATE
+// re-derive every usable option from the serialized reader options and the
+// NullMap this payload keeps, so the statement keeps its expressions and the
+// property strips them on a copy.
+func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
+	copied := *param
+	if param.Tail != nil {
+		copiedTail := *param.Tail
+		copiedTail.ColumnList = nil
+		if len(copiedTail.Assignments) > 0 {
+			assignments := make(tree.UpdateExprs, len(copiedTail.Assignments))
+			for i, assignment := range copiedTail.Assignments {
+				if assignment == nil {
+					continue
+				}
+				copiedAssignment := *assignment
+				copiedAssignment.Expr = nil
+				assignments[i] = &copiedAssignment
+			}
+			copiedTail.Assignments = assignments
+		}
+		copied.Tail = &copiedTail
+	}
+	payload, err := json.Marshal(&copied)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -3096,7 +3110,8 @@ func buildCreateTable(
 	}
 	// The catalog stores MEDIUMINT using the existing 32-bit OIDs plus Width=24.
 	// Old CNs can deserialize that metadata but do not enforce the narrower write
-	// domain, so only author the schema after the cluster protocol fence opens.
+	// domain; bf16/float16/float8/float4/vecf8/vecf4 OIDs are unknown to them.
+	// Only author the schema after the cluster protocol fence opens.
 	for _, col := range createTable.TableDef.Cols {
 		if err = requireMediumIntProtocolForAuthoring(
 			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
@@ -3330,7 +3345,7 @@ func buildCreateTable(
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
 			return nil, err
 		}
-		json_byte, err := json.Marshal(stmt.Param)
+		json_byte, err := marshalExternalTableParam(stmt.Param)
 		if err != nil {
 			return nil, err
 		}
@@ -3899,8 +3914,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
 					}
-					if types.T(colType.GetId()).IsArrayRelate() {
+					if types.T(colType.GetId()).IsArray() {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
+					}
+					if err := lowPrecisionKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "primary"); err != nil {
+						return err
 					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in primary key", colNameOrigin))
@@ -3927,6 +3945,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if isGeometryPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", colNameOrigin))
+					}
+					if err := lowPrecisionKeyError(ctx.GetContext(), colType.GetId(), colNameOrigin, "unique"); err != nil {
+						return err
 					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
@@ -4574,8 +4595,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		var clusterByKeys []string
 		for i := 0; i < lenClusterBy; i++ {
 			colName := stmt.ClusterByOption.ColumnList[i].ColName()
-			if _, ok := colMap[colName]; !ok {
+			col, ok := colMap[colName]
+			if !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' doesn't exist in table", stmt.ClusterByOption.ColumnList[i].ColNameOrigin())
+			}
+			if err := lowPrecisionKeyError(ctx.GetContext(), col.Typ.Id, stmt.ClusterByOption.ColumnList[i].ColNameOrigin(), "cluster"); err != nil {
+				return err
 			}
 			clusterByKeys = append(clusterByKeys, colName)
 		}
@@ -9418,11 +9443,14 @@ func validateAndSetHivePartitionOptions(ctx context.Context, proc *process.Proce
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
 		}
 		typId := types.T(col.Typ.Id)
-		if typId.IsArrayRelate() {
+		if typId.IsArray() {
 			// IsArrayRelate covers all six vector types: a vector can never
 			// round-trip through a `col=value` path component, so the rejection
 			// applies to the narrow types exactly as it does to vecf32/vecf64.
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
+		}
+		if typId.IsLowPrecisionFloat() {
+			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a %s type", pc, typId)
 		}
 		canonical := strings.ToLower(col.Name)
 		if seen[canonical] {

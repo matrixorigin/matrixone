@@ -485,8 +485,21 @@ func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 			expectResidentGather: true,
 		},
 		{
+			name:                 "derived candidate prefix",
+			sql:                  "select * from (select n_regionkey from nation order by n_regionkey) d limit 5 offset 2",
+			candidateLimit:       7,
+			offset:               2,
+			expectResidentGather: true,
+		},
+		{
 			name:           "candidate prefix above resident threshold",
 			sql:            "select n_regionkey from nation order by n_regionkey limit 8193 offset 8192",
+			candidateLimit: mergeTopResidentPlanThreshold + 1,
+			offset:         8192,
+		},
+		{
+			name:           "derived candidate prefix above resident threshold",
+			sql:            "select * from (select n_regionkey from nation order by n_regionkey) d limit 8193 offset 8192",
 			candidateLimit: mergeTopResidentPlanThreshold + 1,
 			offset:         8192,
 		},
@@ -610,24 +623,39 @@ func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
 
 func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 	for _, skip := range []bool{false, true} {
-		proc := testutil.NewProcess(t)
-		proc.BuildPipelineContext(context.Background())
-		reader := &mockReaderForParallelOrderBy{}
-		scope := &Scope{
-			RootOp: table_scan.NewArgument(),
-			Proc:   proc,
-			DataSource: &Source{
-				R:    reader,
-				Rel:  &mockRelationForMembershipFilter{},
-				node: &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip},
-			},
+		for _, fromObjRef := range []bool{false, true} {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip}
+			tableDef := &plan.TableDef{TblId: 42}
+			if fromObjRef {
+				// A rewritten scan can carry its table only in the object reference.
+				tableDef.TblId = 0
+				node.ObjRef = &plan.ObjectRef{Obj: 42}
+			}
+			scope := &Scope{
+				RootOp: table_scan.NewArgument(),
+				Proc:   proc,
+				DataSource: &Source{
+					R:        reader,
+					Rel:      &mockRelationForMembershipFilter{},
+					TableDef: tableDef,
+					node:     node,
+				},
+			}
+			require.NoError(t, scope.Run(&Compile{proc: proc}))
+			want := fileservice.Policy(0)
+			if skip {
+				want = fileservice.NarrowRead
+			}
+			require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
+			wantGroup := uint64(0)
+			if skip {
+				wantGroup = 42
+			}
+			require.Equal(t, []uint64{wantGroup}, reader.readGroups, "narrow reads are grouped by their table")
 		}
-		require.NoError(t, scope.Run(&Compile{proc: proc}))
-		want := fileservice.Policy(0)
-		if skip {
-			want = fileservice.NarrowRead
-		}
-		require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
 	}
 }
 
@@ -1226,27 +1254,63 @@ func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
 	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
 }
 
-func TestNewMergeScopeLimitsLoadReceiverChannelBuffer(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-
-	normalScope := &Scope{
-		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
-		Proc:     testCompile.proc.NewNoContextChildProc(0),
+func TestNewMergeScopeReceiverConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		workers      int
+		remote, load bool
+	}{{"empty", -1, false, false}, {"zero_workers", 0, false, false}, {"local", 1, false, false}, {"parallel", 8, false, false}, {"remote", 8, true, false}, {"load", 8, false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn1:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			var inputs []*Scope
+			if tc.workers >= 0 {
+				addr := c.addr
+				if tc.remote {
+					addr = "cn2:6001"
+				}
+				c.proc.Base.LoadTag = tc.load
+				input := newScope(Normal)
+				input.NodeInfo = engine.Node{Addr: addr, Mcpu: tc.workers}
+				input.Proc = c.proc.NewNoContextChildProc(0)
+				inputs = []*Scope{input}
+			}
+			s := c.newMergeScope(inputs)
+			t.Cleanup(func() { ReleaseScopes([]*Scope{s}) })
+			require.Equal(t, inputs, s.PreScopes)
+			require.True(t, c.hasMergeOp)
+			if len(inputs) == 0 {
+				require.Nil(t, s.Proc.Reg.MergeReceivers)
+				return
+			}
+			require.Len(t, s.Proc.Reg.MergeReceivers, 1)
+			reg := s.Proc.Reg.MergeReceivers[0]
+			require.Same(t, reg, inputs[0].RootOp.(*connector.Connector).Reg)
+			length, capacity := process.WaitRegisterChannelState(reg)
+			require.Zero(t, length)
+			wantCapacity := max(1, tc.workers)
+			if tc.load {
+				wantCapacity = loadMergeReceiverChannelBufferSize
+			}
+			require.Equal(t, wantCapacity, capacity)
+			wantEnds := tc.workers
+			if tc.remote {
+				wantEnds = 1
+			}
+			require.Equal(t, wantEnds, reg.NilBatchCnt)
+			select {
+			case <-reg.Done():
+				t.Fatal("fresh edge is terminal")
+			default:
+			}
+			select {
+			case <-reg.Aborted():
+				t.Fatal("fresh edge is aborted")
+			default:
+			}
+		})
 	}
-	normalMerge := testCompile.newMergeScope([]*Scope{normalScope})
-	_, normalCap := process.WaitRegisterChannelState(normalMerge.Proc.Reg.MergeReceivers[0])
-	require.Equal(t, 8, normalCap)
-
-	loadProc := testCompile.proc.NewNoContextChildProc(0)
-	loadProc.Base.LoadTag = true
-	loadScope := &Scope{
-		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
-		Proc:     loadProc,
-	}
-	loadMerge := testCompile.newMergeScope([]*Scope{loadScope})
-	_, loadCap := process.WaitRegisterChannelState(loadMerge.Proc.Reg.MergeReceivers[0])
-	require.Equal(t, loadMergeReceiverChannelBufferSize, loadCap)
 }
 
 func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
@@ -3202,6 +3266,7 @@ type mockReaderForParallelOrderBy struct {
 	onRead       func()
 	readErr      error
 	readPolicies []fileservice.Policy
+	readGroups   []uint64
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
@@ -3211,6 +3276,7 @@ func (m *mockReaderForParallelOrderBy) Close() error {
 
 func (m *mockReaderForParallelOrderBy) Read(ctx context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
 	m.readPolicies = append(m.readPolicies, fileservice.GetFileServicePolicy(ctx))
+	m.readGroups = append(m.readGroups, fileservice.GetPreloadGroup(ctx))
 	if m.onRead != nil {
 		m.onRead()
 	}
@@ -3368,20 +3434,22 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
 	payload, err := keys.MarshalBinary()
 	require.NoError(t, err)
+	keyPayload := testutil.RuntimeKeyPayload(t, payload)
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  spec.Tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-		Data: payload,
+		Keys: keyPayload,
 		Card: 1,
 	}, board)
 
 	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	defer releaseRuntimeKeyFilters(filters)
 	require.NoError(t, err)
 	require.False(t, empty)
 	require.Len(t, filters, 1)
 	require.Same(t, spec, filters[0].spec)
 	require.Nil(t, filters[0].expr)
-	require.Equal(t, payload, filters[0].data)
+	require.Same(t, keyPayload, filters[0].data)
 }
 
 func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
@@ -3434,7 +3502,8 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 			data, err := v.MarshalBinary()
 			require.NoError(t, err)
 			if tc.corrupt {
-				data = data[:3]
+				testutil.AssertInvalidRuntimeKeys(t, data[:3])
+				return
 			}
 			board := message.NewMessageBoard()
 			defer board.Reset()
@@ -3442,8 +3511,9 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 			spec := &plan.RuntimeFilterSpec{Tag: 112, MustApply: true, UseMembershipFilter: true,
 				Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
 			s := &Scope{Proc: proc, DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}}
-			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: data, Card: tc.card}, board)
+			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Keys: testutil.RuntimeKeyPayload(t, data), Card: tc.card}, board)
 			filters, empty, err := s.waitForRuntimeFilters(&Compile{proc: proc})
+			defer releaseRuntimeKeyFilters(filters)
 			require.False(t, empty)
 			if tc.name == "valid" {
 				require.NoError(t, err)
@@ -3469,7 +3539,7 @@ func TestRequiredVectorDomainAcceptsNormalizedCharMembership(t *testing.T) {
 	err = validateRequiredVectorMembership(spec, message.RuntimeFilterMessage{
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 		Card: 1,
-		Data: data,
+		Keys: testutil.RuntimeKeyPayload(t, data),
 	})
 	require.NoError(t, err)
 }
@@ -3496,22 +3566,18 @@ func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
 	require.False(t, empty)
 }
 
-func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
-	payload := []byte{2, 4, 6, 8}
+func TestVectorScanMembershipFilterExtractsTypedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	v := testutil.MakeInt64Vector([]int64{2, 4, 6, 8}, nil, proc.Mp())
+	defer v.Free(proc.Mp())
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	payload := testutil.RuntimeKeyPayload(t, data)
 	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true}
-	filter := receivedRuntimeFilter{
-		spec: spec,
-		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
-			{},
-			{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: payload}}},
-		}}}},
-	}
-
-	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
-
+	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{{spec: spec, data: payload}})
 	require.True(t, hasMembership)
 	require.True(t, required)
-	require.Equal(t, payload, membership)
+	require.Same(t, payload, membership)
 }
 
 // noSearchTestAlgo is a registered index algorithm without a scan reader.
@@ -3625,7 +3691,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
 		}}}},
 	}})
-	require.Equal(t, []byte{9, 8, 7}, membership)
+	require.Nil(t, membership, "ordinary IN payloads are not membership key payloads")
 	require.False(t, hasMembership)
 	require.False(t, required)
 }

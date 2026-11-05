@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -42,6 +44,8 @@ func TestIndexRewritesDisabled(t *testing.T) {
 		{"unset", "", false},
 		{"applyIndices on", "applyIndices=1", true},
 		{"applyIndices explicitly zero", "applyIndices=0", false},
+		{"last value enables rewrites", "applyIndices=1,applyIndices=0", false},
+		{"last value disables rewrites", "applyIndices=0,applyIndices=1", true},
 		{"among other hints", "aggPushDown=1,applyIndices=1,joinOrdering=0", true},
 		{"other hints only", "aggPushDown=1,joinOrdering=1", false},
 		// Whitespace is NOT trimmed, because handleOptimizerHints does not trim either: the
@@ -72,4 +76,11 @@ func TestIndexRewritesDisabled(t *testing.T) {
 	}
 
 	require.False(t, indexRewritesDisabled(nil), "a nil context must not panic")
+}
+
+func TestIndexRewritesDisabledStatementOverride(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "applyIndices=1")
+	ctx.SetContext(context.WithValue(context.Background(), defines.OptimizerHints{}, "applyIndices=0"))
+	require.False(t, indexRewritesDisabled(ctx))
 }

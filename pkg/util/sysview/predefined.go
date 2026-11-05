@@ -1007,9 +1007,9 @@ var (
 		"when `pt`.`partition_expression_str` like 'values in%' then " +
 		"  `pt`.`partition_expression_str` " +
 		"else `pt`.`partition_expression_str` end) AS `PARTITION_DESCRIPTION`," +
-		"mo_table_rows(`tbl`.`reldatabase`, `pt`.`partition_table_name`) AS `TABLE_ROWS`," +
+		"mo_table_rows(`tbl`.`reldatabase`, coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`," +
 		"0 AS `AVG_ROW_LENGTH`," +
-		"mo_table_size(`tbl`.`reldatabase`, `pt`.`partition_table_name`) AS `DATA_LENGTH`," +
+		"mo_table_size(`tbl`.`reldatabase`, coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`," +
 		"0 AS `MAX_DATA_LENGTH`," +
 		"0 AS `INDEX_LENGTH`," +
 		"0 AS `DATA_FREE`," +
@@ -1021,9 +1021,22 @@ var (
 		"'default' AS `NODEGROUP`," +
 		"NULL AS `TABLESPACE_NAME` " +
 		"FROM `__mo_visible_tables` `tbl` " +
-		"JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
-		"JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
-		"WHERE `tbl`.`account_id` = current_account_id()"
+		"LEFT JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
+		"LEFT JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
+		"WHERE `tbl`.`account_id` = current_account_id() " +
+		// With the outer joins every visible table yields the MySQL row
+		// shape: ordinary base tables get exactly one row with NULL
+		// partition fields while partitioned tables keep one row per
+		// physical partition. Guard the joined rows so partition
+		// sub-tables, views, sequences, temporary tables and internal
+		// index tables do not leak in as ordinary-table rows; stats stay
+		// one evaluation per row on the real base or physical partition
+		// identity (coalesce above).
+		" AND NOT startswith(`tbl`.`relname`, '" + catalog.IndexTableNamePrefix + "')" +
+		" AND " + catalog.NonTemporaryTableSQLPredicate("tbl") +
+		" AND `tbl`.`relname` != '" + catalog.MO_ACCOUNT_LOCK + "'" +
+		" AND `tbl`.`relkind` NOT IN ('" + catalog.SystemPartitionRel + "', '" +
+		catalog.SystemViewRel + "', '" + catalog.SystemSequenceRel + "')"
 
 	InformationSchemaViewsDDL = "CREATE VIEW information_schema.VIEWS AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +

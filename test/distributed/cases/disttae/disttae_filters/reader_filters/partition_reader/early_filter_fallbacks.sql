@@ -15,6 +15,11 @@ select pk from committed_spk
 where pk between 2 and 6 or pk between 4 and 8
 order by pk;
 
+-- Nullable IN constants require a writable copy before PK filter normalization.
+select pk from committed_spk where pk in (3, 1, null, 3) order by pk;
+select pk from committed_spk where pk in (3, 1, 3) order by pk;
+select pk from committed_spk where pk in (11, null, 11) order by pk;
+
 -- Once persisted, an unsupported conjunct must not discard the supported PK
 -- range from early object/block filtering. The residual evaluates both terms.
 -- @ignore:0
