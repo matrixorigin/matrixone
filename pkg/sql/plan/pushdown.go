@@ -42,6 +42,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	}
 
 	switch node.NodeType {
+	case plan.Node_PRE_INSERT_UK:
+		// Ordered actions consume every input row before producing the final
+		// image. A predicate on that image cannot filter attempted actions.
+		childID, residual := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+		if len(residual) > 0 {
+			childID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: residual}, nil)
+		}
+		node.Children[0] = childID
+		return originalNodeID, filters
+
 	case plan.Node_AGG:
 		// Legacy positional aggregates have no global binding tags. Keep filters
 		// above them because tag-based replacement cannot address their outputs.
@@ -166,7 +176,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		// Admission consumes the final row image. Optimize its source without
 		// moving resource checks below joins/projections. IsEnd is reserved for
 		// assertions that discard their output, so it cannot mark this filter.
-		if len(node.FilterList) > 0 && node.FilterList[0].GetF() != nil && node.FilterList[0].GetF().Func.ObjName == "_check_async_datalink_source" {
+		if node.FilterIsBarrier || (len(node.FilterList) > 0 && node.FilterList[0].GetF() != nil && node.FilterList[0].GetF().Func.ObjName == "_check_async_datalink_source") {
 			childID, residual := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
 			if len(residual) > 0 {
 				childID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: residual}, nil)
@@ -535,6 +545,21 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_PROJECT:
+		// Substituting a non-removable projection into a filter would evaluate
+		// it again, possibly producing a different value or repeating a side
+		// effect. Keep the filter above the materialization boundary.
+		if len(filters) > 0 {
+			for _, expr := range node.ProjectList {
+				if expr == nil || !exprCanRemoveProject(expr) {
+					childID, residual := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+					if len(residual) > 0 {
+						childID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: residual}, nil)
+					}
+					node.Children[0] = childID
+					return originalNodeID, filters
+				}
+			}
+		}
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
 			cantPushdown = filters

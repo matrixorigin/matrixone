@@ -16,6 +16,7 @@ package merge_test
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestMaterializedSinkScanProjectionReclaimsReaderBatches(t *testing.T) {
@@ -47,7 +49,7 @@ func TestMaterializedSinkScanProjectionReclaimsReaderBatches(t *testing.T) {
 		input.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
 		input.SetRowCount(1)
-		require.NoError(t, source.Append(input))
+		require.NoError(t, source.Append(t.Context(), input))
 		input.Clean(proc.Mp())
 	}
 	source.Finish(nil)
@@ -119,7 +121,7 @@ func TestMaterializedSinkScanReaderCleanup(t *testing.T) {
 			input.SetRowCount(1)
 			inputMemory := proc.Mp().CurrNB()
 			require.Positive(t, inputMemory)
-			require.NoError(t, source.Append(input))
+			require.NoError(t, source.Append(t.Context(), input))
 			storedBytes := proc.Mp().CurrNB()
 			reader := merge.NewArgument().WithSinkScan(true)
 			defer reader.Release()
@@ -160,7 +162,7 @@ func TestMaterializedSinkScanReaderCleanup(t *testing.T) {
 			require.Equal(t, inputMemory, proc.Mp().CurrNB())
 			if mode == "reset" {
 				require.NoError(t, source.Begin(proc.Mp()))
-				require.NoError(t, source.Append(input))
+				require.NoError(t, source.Append(t.Context(), input))
 				source.Finish(nil)
 				require.NoError(t, reader.Prepare(proc))
 				next, err := reader.Call(proc)
@@ -380,7 +382,7 @@ func TestMaterializedSinkScanOwnsBatchesThroughMergeOrderSpill(t *testing.T) {
 	}
 	inputMemory := proc.Mp().CurrNB()
 	for _, input := range inputs {
-		require.NoError(t, source.Append(input))
+		require.NoError(t, source.Append(t.Context(), input))
 	}
 	source.Finish(nil)
 
@@ -450,5 +452,78 @@ func TestMaterializedSinkScanOwnsBatchesThroughMergeOrderSpill(t *testing.T) {
 	require.Equal(t, inputMemory, proc.Mp().CurrNB())
 	for _, bat := range inputs {
 		bat.Clean(proc.Mp())
+	}
+}
+
+func TestMaterializedSpillChargeFollowsMergeBatch(t *testing.T) {
+	for _, terminal := range []string{"next call", "reset", "free"} {
+		t.Run(terminal, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+			input.SetRowCount(1)
+			source := materialized.NewSource(1)
+			owner := merge.NewArgument().WithSinkScan(true)
+			owner.MaterializedSource = source
+			budget := process.MustNewHashBuildBudget(2<<20, 2<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				owner.Reset(proc, false, nil)
+				owner.Free(proc, false, nil)
+				owner.Release()
+				source.Close()
+				input.Clean(proc.Mp())
+				require.Zero(t, generation.Used())
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Zero(t, generation.SpillFDUsed())
+				require.Zero(t, proc.Mp().CurrNB())
+				generation.Close()
+			})
+			spilled := false
+			config := materialized.SpillConfig{FileFactory: func(context.Context, string) (*os.File, error) {
+				spilled = true
+				file, err := os.CreateTemp(t.TempDir(), "merge-spill")
+				return file, err
+			}, Budget: materialized.SpillBudget{
+				ReserveMemory: func(size uint64) (materialized.Reservation, error) {
+					return generation.ReserveMemory(t.Context(), size)
+				},
+				ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) { return generation.ReserveSpillDisk(size) },
+				ReserveFD:   func(size uint64) (materialized.Reservation, error) { return generation.ReserveSpillFD(size) },
+			}}
+			require.NoError(t, source.Begin(proc.Mp(), config))
+			// Reach real metadata-pressure spilling using tiny batches rather
+			// than allocating a large payload or changing a production limit.
+			count := 0
+			for count < 8192 && !spilled {
+				require.NoError(t, source.Append(t.Context(), input))
+				count++
+			}
+			require.True(t, spilled)
+			source.Finish(nil)
+			require.NoError(t, owner.Prepare(proc))
+			for range count {
+				out, err := owner.Call(proc)
+				require.NoError(t, err)
+				require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], 0))
+			}
+			require.Positive(t, generation.Used(), "the last returned batch still borrows its spill frame")
+			denied, err := generation.ReserveMemory(t.Context(), 2<<20)
+			require.Error(t, err)
+			require.Nil(t, denied)
+			switch terminal {
+			case "next call":
+				out, err := owner.Call(proc)
+				require.NoError(t, err)
+				require.Nil(t, out.Batch)
+			case "reset":
+				owner.Reset(proc, false, nil)
+			case "free":
+				owner.Free(proc, false, nil)
+			}
+			require.Zero(t, generation.Used())
+		})
 	}
 }

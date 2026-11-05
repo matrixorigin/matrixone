@@ -226,6 +226,13 @@ func (cri *txnCommitRequestsIter) Entry() (entry any, err error) {
 	return
 }
 
+func effectivePKCheck(meta txn.TxnMeta, requested cmd_util.PKCheckType) cmd_util.PKCheckType {
+	if meta.Mode == txn.TxnMode_Optimistic && requested == cmd_util.IncrementalDedup {
+		return cmd_util.FullSkipWorkspaceDedup
+	}
+	return requested
+}
+
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
@@ -338,6 +345,15 @@ func (h *Handle) handleRequests(
 					}
 					continue
 				}
+			}
+
+			if policy := effectivePKCheck(txnMeta, wr.PkCheck); policy != wr.PkCheck {
+				// Skipping persisted source keys relies on the CN's key locks.
+				// Optimistic commits have no such lock owner. Preserve explicit
+				// policies and leave the borrowed request unchanged for retry.
+				adjusted := *wr
+				adjusted.PkCheck = policy
+				wr = &adjusted
 			}
 
 			if delM == nil {

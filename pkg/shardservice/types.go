@@ -181,5 +181,10 @@ type ReadRequest struct {
 	TableID uint64
 	Method  int
 	Param   pb.ReadParam
-	Apply   func([]byte)
+	// RequireSameCommit gates internal candidate filters that require matching
+	// reader semantics. It is checked for every remote recipient before send.
+	RequireSameCommit bool
+	// Apply consumes response bytes before their transport lifetime ends. Its
+	// error participates in the same ordered result as service/read failures.
+	Apply func([]byte) error
 }

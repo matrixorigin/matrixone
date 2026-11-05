@@ -41,6 +41,8 @@ type baseTable struct {
 	isTombstone bool
 
 	tableSpace *tableSpace
+	// A completed scan advances only this data/tombstone key domain.
+	dedupTS types.TS
 }
 
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {

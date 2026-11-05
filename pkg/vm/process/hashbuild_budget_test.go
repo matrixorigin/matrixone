@@ -15,6 +15,7 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -26,6 +27,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
+
+func TestHashBuildMemoryReservationSharesStatementCapacity(t *testing.T) {
+	b := MustNewHashBuildBudget(16, 16)
+	g, err := b.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.Close)
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cause := errors.New("cancel capture")
+	cancel(cause)
+	if r, err := g.ReserveMemory(ctx, 1); !errors.Is(err, cause) || r != nil {
+		t.Fatalf("cancelled admission = %v, %v", r, err)
+	}
+	r, err := g.ReserveMemory(t.Context(), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Release()
+	physical, err := acquireTestPhysicalAllocation(g, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer physical.Release()
+	if extra, err := g.ReserveMemory(t.Context(), 1); !errors.Is(err, ErrHashBuildBudgetAdmission) || extra != nil {
+		t.Fatalf("over-capacity admission = %v, %v", extra, err)
+	}
+	var released atomic.Int32
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			if r.Release() {
+				released.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if released.Load() != 1 || g.Used() != 8 || b.AggregateUsed() != 8 {
+		t.Fatal("concurrent release must preserve the physical allocation's capacity")
+	}
+	physical.Release()
+	if g.Used() != 0 || b.AggregateUsed() != 0 {
+		t.Fatal("mixed storage owners leaked capacity")
+	}
+}
 
 // testPhysicalAllocation exercises the capacity controller at the same
 // acquire/free boundary used by MPool without exposing a second production

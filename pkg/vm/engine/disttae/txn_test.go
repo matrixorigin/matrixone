@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -916,6 +917,71 @@ func TestTxnTableDeleteHonorsCanceledContext(t *testing.T) {
 	require.Empty(t, txn.writes)
 }
 
+func TestTxnTableDeletePublishesWorkspaceAndTNDeletesTogether(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		mixed, rejectEpoch bool
+	}{
+		{name: "raw workspace only"},
+		{name: "raw CN-object and committed rows", mixed: true},
+		{name: "epoch rejection preserves every delete representation", mixed: true, rejectEpoch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			colexec.NewServer("")
+			txn, tbl := newDumpInsertTxnForTest(t)
+			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false)
+			tbl.extraInfo = &api.SchemaExtra{}
+			defer cleanTxnWritesForTest(txn)
+			raw := newInsertBatchWithRowIDForTest(t, txn.proc, []int64{10, 11})
+			txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: raw})
+			input := newDeleteBatchForTest(t, txn.proc, []int64{10})
+			defer input.Clean(txn.proc.Mp())
+			rawID := vector.GetFixedAtNoTypeCheck[types.Rowid](raw.Vecs[0], 0)
+			vector.SetFixedAtNoTypeCheck(input.Vecs[0], 0, rawID)
+			cnID, committedID := types.RandomRowid(), types.RandomRowid()
+			if tc.mixed {
+				srv := colexec.MustGetServer("")
+				srv.PutCnSegment(txn.op.Txn().ID, 42, cnID.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
+				defer srv.DeleteTxnSegmentIds(txn.op.Txn().ID)
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], cnID, false, txn.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], committedID, false, txn.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(20), false, txn.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(30), false, txn.proc.Mp()))
+				input.SetRowCount(3)
+			}
+			if tc.rejectEpoch {
+				tbl.extraInfo.AutoIncrEpoch = 1
+				// Preserve the original operator/workspace but remove the guarded
+				// commit capability; preparation must fail before any selection.
+				txn.op = &unsupportedAutoIncrEpochTxnOperator{TxnOperator: txn.op}
+			}
+			err := tbl.Delete(context.Background(), input, "")
+			if tc.rejectEpoch {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+				require.Empty(t, txn.batchSelectList)
+				require.Zero(t, txn.deletedBlocks.size())
+				require.Len(t, txn.writes, 1)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, []int64{0}, txn.batchSelectList[raw])
+				if tc.mixed {
+					require.Equal(t, []int64{int64(cnID.GetRowOffset())}, txn.deletedBlocks.offsets[cnID.CloneBlockID()])
+					require.Len(t, txn.writes, 2)
+					require.Equal(t, []types.Rowid{committedID}, vector.MustFixedColNoTypeCheck[types.Rowid](txn.writes[1].bat.Vecs[0]))
+					require.Equal(t, []int64{30}, vector.MustFixedColNoTypeCheck[int64](txn.writes[1].bat.Vecs[1]))
+				} else {
+					require.Len(t, txn.writes, 1)
+				}
+			}
+			// The caller's borrowed input is unchanged, and all retained bytes
+			// still belong to the normal workspace accounting owner.
+			require.Equal(t, rawID, vector.GetFixedAtNoTypeCheck[types.Rowid](input.Vecs[0], 0))
+			require.Equal(t, 2, raw.RowCount())
+			require.NoError(t, txn.checkWorkspaceAccountingLocked())
+		})
+	}
+}
+
 func TestResolvePKCheckPosForWriteEarlyExit(t *testing.T) {
 	txn := &Transaction{}
 
@@ -1155,16 +1221,7 @@ func TestIssue25589MergeTxnWorkspacePreservesAccountingWhenCombiningBatches(t *t
 
 func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	colexec.NewServer("")
-	txn := newTransactionWithActivePKTableForTest(t, "pk")
-	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
-	require.NotNil(t, tbl)
-	tbl.tableDef.Cols[0].Typ = pbplan.Type{Id: int32(types.T_int64)}
-	txn.tnStores = []DNStore{{}}
-	txn.batchSelectList = make(map[*batch.Batch][]int64)
-	txn.tablesInVain = make(map[uint64]int)
-	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
-	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	txn, _ := newDumpInsertTxnForTest(t)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,
 		accountId:    1,
@@ -1189,6 +1246,93 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 
 	for i := range txn.writes {
 		txn.releaseWorkspaceEntryBatchLocked(i)
+	}
+}
+
+func TestDumpInsertAppliesWorkspaceDeletes(t *testing.T) {
+	colexec.NewServer("")
+	for _, tc := range []struct {
+		name    string
+		deleted []int64
+		want    []int64
+	}{
+		{name: "some rows", deleted: []int64{2, 0, 2}, want: []int64{2, 4}},
+		{name: "all rows", deleted: []int64{0, 1, 2, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn, tbl := newDumpInsertTxnForTest(t)
+			t.Cleanup(func() {
+				for i := range txn.writes {
+					txn.releaseWorkspaceEntryBatchLocked(i)
+				}
+			})
+			tbl.tableDef.Cols = append(tbl.tableDef.Cols, &pbplan.ColDef{
+				Name: "payload", Seqnum: 1, Typ: pbplan.Type{Id: int32(types.T_varchar), Width: 256},
+			})
+
+			prefix := newInsertBatchWithRowIDForTest(t, txn.proc, []int64{10, 11})
+			selected := newInsertBatchWithRowIDForTest(t, txn.proc, []int64{1, 2, 3, 4})
+			payloads := [][][]byte{
+				{[]byte("prefix"), nil},
+				{[]byte("deleted-first"), nil, []byte("deleted-third"), []byte("survivor")},
+			}
+			for i, bat := range []*batch.Batch{prefix, selected} {
+				payload := vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs = append(bat.Vecs, payload)
+				bat.Attrs = append(bat.Attrs, "payload")
+				for _, value := range payloads[i] {
+					require.NoError(t, vector.AppendBytes(payload, value, value == nil, txn.proc.Mp()))
+				}
+				txn.appendWorkspaceEntryLocked(Entry{
+					typ: INSERT, accountId: 1, databaseId: 7, tableId: 42,
+					databaseName: "db", tableName: "tbl", bat: bat,
+				})
+			}
+			txn.addBatchSelectionsLocked(prefix, []int64{1})
+			txn.addBatchSelectionsLocked(selected, tc.deleted)
+
+			fs, err := colexec.GetSharedFSFromProc(txn.proc)
+			require.NoError(t, err)
+			var pkCount int
+			txn.Lock()
+			err = txn.dumpInsertBatchLocked(context.Background(), fs, 1, &pkCount)
+			txn.Unlock()
+			require.NoError(t, err)
+			require.Equal(t, 4, pkCount)
+			require.Same(t, prefix, txn.writes[0].bat)
+			require.Equal(t, []int64{1}, txn.batchSelectList[prefix])
+			require.Equal(t, 2, txn.approximateInMemInsertCnt)
+			require.NoError(t, txn.checkWorkspaceAccountingLocked())
+
+			if len(tc.want) == 0 {
+				require.Len(t, txn.writes, 1)
+				require.NotContains(t, txn.batchSelectList, selected)
+				return
+			}
+			require.Len(t, txn.writes, 2)
+			stats := objectio.ObjectStats(txn.writes[1].bat.Vecs[1].GetBytesAt(0))
+			name := stats.ObjectName()
+			reader, err := ioutil.NewFileReaderNoCache(fs, name.String())
+			require.NoError(t, err)
+			bats, release, err := reader.LoadAllColumns(context.Background(), []uint16{0, 1}, txn.proc.Mp())
+			require.NoError(t, err)
+			defer release()
+			var got []int64
+			var gotPayload []string
+			for _, bat := range bats {
+				got = append(got, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+				for i := range bat.RowCount() {
+					if bat.Vecs[1].IsNull(uint64(i)) {
+						gotPayload = append(gotPayload, "<null>")
+					} else {
+						gotPayload = append(gotPayload, string(bat.Vecs[1].GetBytesAt(i)))
+					}
+				}
+			}
+			require.Equal(t, tc.want, got)
+			require.Equal(t, []string{"<null>", "survivor"}, gotPayload)
+			require.NotContains(t, txn.batchSelectList, selected)
+		})
 	}
 }
 
@@ -1313,7 +1457,7 @@ func newTxnOperatorForTestWithWorkspace(
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
-	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
+	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test-0000001")}).AnyTimes()
 	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
 	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
@@ -1360,6 +1504,21 @@ func newTransactionWithActivePKTableForTest(
 		},
 	)
 	return txn
+}
+
+func newDumpInsertTxnForTest(t *testing.T) (*Transaction, *txnTable) {
+	t.Helper()
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	require.NotNil(t, tbl)
+	tbl.tableDef.Cols[0].Typ = pbplan.Type{Id: int32(types.T_int64)}
+	txn.tnStores = []DNStore{{}}
+	txn.batchSelectList = make(map[*batch.Batch][]int64)
+	txn.tablesInVain = make(map[uint64]int)
+	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	return txn, tbl
 }
 
 // TestCheckPKDupSkipsNulls verifies that checkPKDup correctly skips NULL

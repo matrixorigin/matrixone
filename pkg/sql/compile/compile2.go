@@ -303,8 +303,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			runC.closePipelineSpoolsAfterReadersStopped()
 			defer runC.endImportMemory()
 		}
+		// runOnce has joined the local scope tree. View lookups own and close
+		// their remote readers before returning; release pins before sealing
+		// their allocation account or entering statement rollback/retry.
+		var viewErr error
+		if runC != nil {
+			viewErr = runC.closeODKUPriorData()
+		}
 		if allocationAttempt == nil {
-			return nil
+			return viewErr
 		}
 		attempt := allocationAttempt
 		allocationAttempt = nil
@@ -312,7 +319,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			runC.allocationAttempt = nil
 		}
 		_, finishErr := attempt.finish()
-		return finishErr
+		return joinAllocationLifecycleErrors(viewErr, finishErr)
 	}
 	finishCurrentAttempt := func(retried bool) {
 		if !attemptOpen {

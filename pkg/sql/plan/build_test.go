@@ -415,8 +415,8 @@ func nodeHasTextToCharOrVarcharCast(node *plan.Node) bool {
 			return true
 		}
 	}
-	if node.DedupJoinCtx != nil {
-		for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+	if c := node.PreInsertUkCtx.GetOdkuActions(); c != nil {
+		for _, expr := range c.UpdateExprs {
 			if exprHasTextToCharOrVarcharCast(expr) {
 				return true
 			}
@@ -516,8 +516,8 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 				return true
 			}
 		}
-		if node.DedupJoinCtx != nil {
-			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+		if c := node.PreInsertUkCtx.GetOdkuActions(); c != nil {
+			for _, expr := range c.UpdateExprs {
 				if visit(expr) {
 					return true
 				}
@@ -3622,7 +3622,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		})
 	}
 
-	t.Run("ODKU without unique key asserts on legacy fallback", func(t *testing.T) {
+	t.Run("ODKU without unique key enforces insert check", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		tableDef := mock.ctxt.tables["fake_pk_t"]
 		tableDef.Indexes = nil
@@ -3883,9 +3883,8 @@ func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	// fake_pk_t has no real PK, only unique key(a). ON DUPLICATE KEY UPDATE must
-	// be planned on the modern DEDUP JOIN + MULTI_UPDATE path (using the unique
-	// key for conflict detection), not fall back to the legacy
-	// Node_ON_DUPLICATE_KEY operator.
+	// use the ordered action owner and MULTI_UPDATE writer, with the unique key
+	// selecting conflicts even without a user-declared primary key.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO fake_pk_t VALUES (1, 'x') ON DUPLICATE KEY UPDATE b = 'y'")
 	if err != nil {
@@ -3896,17 +3895,17 @@ func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
 	assert.NotNil(t, query)
 
 	hasMultiUpdate := false
-	hasDedupJoin := false
+	hasActionOwner := false
 	for _, node := range query.Nodes {
 		switch {
 		case node.NodeType == plan.Node_MULTI_UPDATE:
 			hasMultiUpdate = true
-		case node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP:
-			hasDedupJoin = true
+		case node.PreInsertUkCtx.GetOdkuActions() != nil:
+			hasActionOwner = true
 		}
 	}
 	assert.True(t, hasMultiUpdate, "fake-PK ODKU plan should contain MULTI_UPDATE node")
-	assert.True(t, hasDedupJoin, "fake-PK ODKU plan should contain DEDUP JOIN node")
+	assert.True(t, hasActionOwner, "fake-PK ODKU plan should contain the ordered action owner")
 }
 
 func TestInsertOnDupFKUsesModernPath(t *testing.T) {
@@ -4142,12 +4141,8 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 	// conflicting row instead of raising a duplicate-entry error.
 	//
 	// The modern plan achieves this by resolving a single UPDATE target row up
-	// front: target_pk = coalesce(pk-existence-probe, uk1_pri, uk2_pri, ...),
-	// treating PRIMARY as the 0th index. The main DEDUP-update join then keys on
-	// target_pk so a cross-row UK conflict lands on the existing row's UPDATE.
-	// The per-UK FAIL dedup join is intentionally kept as in-batch protection
-	// (two brand-new rows sharing a new UK value still error, avoiding a
-	// duplicated unique-index entry).
+	// Snapshot probes prefetch the first eligible original row. The action
+	// operator selects targets against live statement keys and evaluates updates.
 	logicPlan, err := runOneStmt(mock, t,
 		"INSERT INTO dept VALUES (1, 'Sales', 'NY') ON DUPLICATE KEY UPDATE loc = 'LA'")
 	if err != nil {
@@ -4158,15 +4153,14 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 	assert.NotNil(t, query)
 
 	hasMultiUpdate := false
-	hasUpdateDedupJoin := false
+	hasActionOwner := false
 	hasTargetPkResolve := false
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_MULTI_UPDATE {
 			hasMultiUpdate = true
 		}
-		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
-			node.OnDuplicateAction == plan.Node_UPDATE {
-			hasUpdateDedupJoin = true
+		if node.PreInsertUkCtx.GetOdkuActions() != nil {
+			hasActionOwner = true
 		}
 		for _, expr := range node.ProjectList {
 			if exprContainsFuncName(expr, "coalesce") {
@@ -4175,10 +4169,10 @@ func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
 		}
 	}
 	assert.True(t, hasMultiUpdate, "real-PK ODKU plan should contain MULTI_UPDATE node")
-	assert.True(t, hasUpdateDedupJoin,
-		"real-PK ODKU plan should contain a DEDUP JOIN with OnDuplicateAction=UPDATE")
+	assert.True(t, hasActionOwner,
+		"real-PK ODKU plan should contain one ordered action owner")
 	assert.True(t, hasTargetPkResolve,
-		"real-PK ODKU must resolve a coalesce(pk, uk...) target so unique-key "+
+		"real-PK ODKU must prefetch the coalesce(pk, uk...) original so unique-key "+
 			"conflicts update the existing row (MySQL-aligned), not just dedup on PK")
 }
 

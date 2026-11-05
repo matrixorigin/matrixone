@@ -86,6 +86,9 @@ import (
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
+	if err := validateODKUScopeProtocol(s); err != nil {
+		return nil, err
+	}
 	p, err := fillPipeline(s)
 	if err != nil {
 		return nil, err
@@ -148,6 +151,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateODKUPipelineProtocol(p, proc); err != nil {
 		return nil, err
 	}
 	ctx := &scopeContext{
@@ -844,8 +850,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
 			LeftTypes:                       convertToPlanTypes(t.LeftTypes),
 			RightTypes:                      convertToPlanTypes(t.RightTypes),
-			UpdateColIdxList:                t.UpdateColIdxList,
-			UpdateColExprList:               t.UpdateColExprList,
 			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
 			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
 		}
@@ -867,8 +871,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
-			UpdateColIdxList:       t.UpdateColIdxList,
-			UpdateColExprList:      t.UpdateColExprList,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *apply.Apply:
@@ -1348,8 +1350,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
-		arg.UpdateColIdxList = t.UpdateColIdxList
-		arg.UpdateColExprList = t.UpdateColExprList
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
 		arg.SpillThreshold = opr.SpillMem
@@ -1369,8 +1369,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
-		arg.UpdateColIdxList = t.UpdateColIdxList
-		arg.UpdateColExprList = t.UpdateColExprList
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:

@@ -825,7 +825,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// irregular-index entries delete. For REPLACE the conflict may be on a non-PK
 	// unique key, so the deleted row's PK can differ from the inserted row's PK.
 	var replaceOldPkPos int32
-	var replaceOldPkTyp plan.Type
 	var replaceOldParentPos []int32
 	oldParentColFinalPos := make(map[string]int32)
 
@@ -893,7 +892,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		deleteCols[1].RelPos = finalProjTag
 		deleteCols[1].ColPos = int32(len(finalProjList))
 		replaceOldPkPos = int32(len(finalProjList))
-		replaceOldPkTyp = fullProjList[oldPkPos[1]].Typ
 		if useMergedMainScan {
 			// Merged-scan mode runs only when the table has no unique secondary
 			// key, so every REPLACE conflict is a PRIMARY-key conflict and the
@@ -903,7 +901,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			// natural position instead. (The base-table MULTI_UPDATE delete keeps
 			// using the captured old PK via deleteCols below.)
 			replaceOldPkPos = newPkIdx
-			replaceOldPkTyp = finalProjList[newPkIdx].Typ
 		}
 		lockTargets = append(lockTargets, &plan.LockTarget{
 			TableId:            tableDef.TblId,
@@ -1086,9 +1083,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// and let the main plan, the insert maintenance (new entries) and the delete
 	// maintenance (drop the old entries, keyed by the old PK) all read it.
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
-			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
+			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos,
 			irregularIndexes, tableDef, objRef)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if len(lockTargets) > 0 && !buildParentFKActions {

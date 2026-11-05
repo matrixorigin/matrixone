@@ -64,9 +64,9 @@ func TestScalarMaterializedBatchOwnership(t *testing.T) {
 			before := proc.Mp().CurrNB()
 			source := materialized.NewSource(1)
 			require.NoError(t, source.Begin(proc.Mp()))
-			require.NoError(t, source.Append(input))
+			require.NoError(t, source.Append(t.Context(), input))
 			if twoBatches {
-				require.NoError(t, source.Append(input))
+				require.NoError(t, source.Append(t.Context(), input))
 			}
 			source.Finish(nil)
 			op := merge.NewArgument().WithSinkScan(true)

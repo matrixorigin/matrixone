@@ -1,7 +1,7 @@
 -- Test: INSERT ON DUPLICATE KEY UPDATE on tables that previously fell back
 -- to the legacy operator path. Covers tables without an explicit primary key
 -- (fake PK + unique key) and tables with foreign keys, all handled by the
--- modern dedup-join + multi-update path.
+-- ordered action owner and multi-update writer.
 
 -- ============================================================
 -- Part 1: fake primary key + single-column unique key
@@ -132,8 +132,8 @@ select * from t_odku_realpk order by id;
 insert into t_odku_realpk values (5, NULL, NULL, 5) on duplicate key update val = val + 1;
 select * from t_odku_realpk order by id;
 
--- In-batch protection: two brand-new rows sharing a new unique-key value still
--- error deterministically (avoids a duplicated unique-index entry).
+-- A later row in the same batch can update the row inserted by an earlier row
+-- when both share a unique-key value.
 insert into t_odku_realpk values (20, 77, 701, 5), (21, 77, 702, 5) on duplicate key update val = val + 1;
 select * from t_odku_realpk order by id;
 
@@ -376,6 +376,8 @@ drop table if exists t_odku_sec_uk;
 -- primary key exists only on the stored row and must survive the FK lock barrier.
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+
+
 create table t_odku_fk_uk_parent(pid int primary key);
 create table t_odku_fk_uk_child(
   id bigint auto_increment primary key,
@@ -392,3 +394,15 @@ insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'new')
 select id, pid, attr_id, val from t_odku_fk_uk_child order by id;
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+
+-- Physical floating PK identities must stay distinct when UNIQUE conflicts
+-- select two original rows. Point probes also verify both index payloads.
+drop table if exists t_odku_float_identity;
+create table t_odku_float_identity(id double primary key, u int unique, v int);
+insert into t_odku_float_identity values(cast('-0' as double),10,100),(cast('0' as double),20,200);
+select u, v from t_odku_float_identity order by u;
+insert into t_odku_float_identity values(2,20,1),(3,10,1) on duplicate key update v=v+values(v);
+select u, v from t_odku_float_identity order by u;
+select u, v from t_odku_float_identity force index(u) where u=10;
+select u, v from t_odku_float_identity force index(u) where u=20;
+drop table t_odku_float_identity;
