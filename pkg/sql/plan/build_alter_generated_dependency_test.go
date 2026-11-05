@@ -777,3 +777,51 @@ func TestAlterSourceAffectingGeneratedPrimaryKeyRebuildsAllIndexes(t *testing.T)
 	require.False(t, alter.Options.SkipIndexesCopy["idx_pk_payload"],
 		"secondary index entries carry the primary key and must be rebuilt when its generated value can change")
 }
+
+func TestAlterPrimaryKeyImpactPersistsAcrossClauses(t *testing.T) {
+	for _, clause := range []string{
+		"modify column id bigint, add column extra int",
+		"add column extra int, modify column id bigint",
+		"modify column id bigint, modify column updated_at timestamp",
+		"modify column id bigint, alter column updated_at set default null",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := newGeneratedIndexAlterMock(t)
+			p, err := runOneStmt(mock, t, "alter table constraint_test.t_on_update_gen "+clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.NotEmpty(t, alter.CopyTableDef.Indexes)
+			for _, idx := range alter.CopyTableDef.Indexes {
+				require.False(t, alter.Options.SkipIndexesCopy[idx.IndexName], idx.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterCompositePrimaryKeyRebuildsIndexes(t *testing.T) {
+	for _, clause := range []string{
+		"modify column ps_partkey bigint",
+		"modify column ps_suppkey bigint",
+		"change column ps_suppkey renamed bigint",
+		"modify column ps_partkey bigint, add column extra int",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			base := mock.ctxt.tables["partsupp"]
+			base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
+			base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
+			addAlterTestIndex(t, mock, base, "idx_qty", "ps_availqty", false)
+			addAlterTestIndex(t, mock, base, "idx_cost", "ps_supplycost", true)
+			p, err := runOneStmt(mock, t, "alter table tpch.partsupp "+clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.Len(t, alter.CopyTableDef.Indexes, 2)
+			for _, idx := range alter.CopyTableDef.Indexes {
+				require.False(t, alter.Options.SkipIndexesCopy[idx.IndexName], idx.IndexName)
+			}
+		})
+	}
+}
