@@ -412,6 +412,44 @@ func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
+func TestRunRandomBytesDirectlyPreservesVolatility(t *testing.T) {
+	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
+		for _, constant := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%t", typ, constant), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+				input := vector.NewVec(typ.ToType())
+				t.Cleanup(func() { input.Free(proc.Mp()) })
+				if typ == types.T_int64 {
+					require.NoError(t, vector.AppendFixedList(input, []int64{1, 2}, nil, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixedList(input, []uint64{1, 2}, nil, proc.Mp()))
+				}
+				if constant {
+					input.ToConst()
+					input.SetLength(2)
+				}
+				fn, err := GetFunctionByName(proc.Ctx, "random_bytes", []types.Type{typ.ToType()})
+				require.NoError(t, err)
+				result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 2)
+				require.NoError(t, err)
+				t.Cleanup(func() { result.Free(proc.Mp()) })
+				require.Equal(t, 2, result.Length())
+				require.False(t, result.IsConst(), "volatile results must not collapse to the first row")
+				for row := 0; row < 2; row++ {
+					if !result.IsNull(uint64(row)) {
+						expectedLength := row + 1
+						if constant {
+							expectedLength = 1
+						}
+						require.Len(t, result.GetBytesAt(row), expectedLength)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestRunFunctionDirectly(t *testing.T) {
 	// fold case.
 	{
@@ -426,6 +464,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 10)
 		require.NoError(t, err)
 
+		require.True(t, v.IsConst())
 		require.Equal(t, 10, v.Length())
 		wrapper := vector.GenerateFunctionFixedTypeParameter[bool](v)
 		for i := 0; i < 10; i++ {
@@ -451,6 +490,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 2)
 		require.NoError(t, err)
 
+		require.False(t, v.IsConst())
 		require.Equal(t, 2, v.Length())
 		wrapper := vector.GenerateFunctionFixedTypeParameter[bool](v)
 		for i := 0; i < 2; i++ {

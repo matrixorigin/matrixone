@@ -1483,4 +1483,24 @@ select v from ifnull_nullable_result order by v;
 select table_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('coalesce_nullable_result','ifnull_nullable_result') and column_name='v' order by table_name;
 select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesce(x,0) order by v;
 select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
+
+-- IFNULL must not assume that two evaluations of a volatile source agree.
+-- Assert schema, cardinality and value domain, not particular random draws.
+create table ifnull_random_signed as select ifnull(case when ascii(random_bytes(cast(id as signed))) < 128 then 1 else null end,0) as v from l;
+create table ifnull_random_unsigned as select ifnull(case when ascii(random_bytes(cast(id as unsigned))) < 128 then 1 else null end,0) as v from l;
+create table ifnull_random_constant as select ifnull(case when ascii(random_bytes(1)) < 128 then 1 else null end,0) as v from l;
+create table coalesce_random as select coalesce(case when ascii(random_bytes(cast(id as signed))) < 128 then 1 else null end,0) as v from l;
+select table_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('ifnull_random_signed','ifnull_random_unsigned','ifnull_random_constant','coalesce_random') and column_name='v' order by table_name;
+select count(*) as row_count, sum(if(v is null or v in (0,1),1,0)) as valid_values from ifnull_random_signed;
+select count(*) as row_count, sum(if(v is null or v in (0,1),1,0)) as valid_values from ifnull_random_unsigned;
+select count(*) as row_count, sum(if(v is null or v in (0,1),1,0)) as valid_values from ifnull_random_constant;
+select count(*) as row_count, sum(if(v in (0,1),1,0)) as valid_values from coalesce_random;
+insert into ifnull_random_signed values(null);
+insert into ifnull_random_unsigned values(null);
+insert into ifnull_random_constant values(null);
+select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_signed;
+select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_unsigned;
+select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_constant;
+insert into coalesce_random values(null);
+select count(*) from coalesce_random;
 drop database ctas_output_nullability;

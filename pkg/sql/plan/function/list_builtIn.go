@@ -3231,6 +3231,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
@@ -3241,6 +3242,7 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 1,
+				volatile:   true,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()

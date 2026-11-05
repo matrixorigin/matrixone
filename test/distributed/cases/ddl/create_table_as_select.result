@@ -2064,4 +2064,43 @@ select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesc
 select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
 ➤ v[-5,64,0]  ¦  c[-5,64,0]  𝄀
 0  ¦  2
+create table ifnull_random_signed as select ifnull(case when ascii(random_bytes(cast(id as signed))) < 128 then 1 else null end,0) as v from l;
+create table ifnull_random_unsigned as select ifnull(case when ascii(random_bytes(cast(id as unsigned))) < 128 then 1 else null end,0) as v from l;
+create table ifnull_random_constant as select ifnull(case when ascii(random_bytes(1)) < 128 then 1 else null end,0) as v from l;
+create table coalesce_random as select coalesce(case when ascii(random_bytes(cast(id as signed))) < 128 then 1 else null end,0) as v from l;
+select table_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('ifnull_random_signed','ifnull_random_unsigned','ifnull_random_constant','coalesce_random') and column_name='v' order by table_name;
+➤ table_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+coalesce_random  ¦  NO  𝄀
+ifnull_random_constant  ¦  YES  𝄀
+ifnull_random_signed  ¦  YES  𝄀
+ifnull_random_unsigned  ¦  YES
+select count(*) as row_count, sum(if(v is null or v in (0,1),1,0)) as valid_values from ifnull_random_signed;
+➤ row_count[-5,64,0]  ¦  valid_values[-5,64,0]  𝄀
+2  ¦  2
+select count(*) as row_count, sum(if(v is null or v in (0,1),1,0)) as valid_values from ifnull_random_unsigned;
+➤ row_count[-5,64,0]  ¦  valid_values[-5,64,0]  𝄀
+2  ¦  2
+select count(*) as row_count, sum(if(v is null or v in (0,1),1,0)) as valid_values from ifnull_random_constant;
+➤ row_count[-5,64,0]  ¦  valid_values[-5,64,0]  𝄀
+2  ¦  2
+select count(*) as row_count, sum(if(v in (0,1),1,0)) as valid_values from coalesce_random;
+➤ row_count[-5,64,0]  ¦  valid_values[-5,64,0]  𝄀
+2  ¦  2
+insert into ifnull_random_signed values(null);
+insert into ifnull_random_unsigned values(null);
+insert into ifnull_random_constant values(null);
+select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_signed;
+➤ row_count[-5,64,0]  ¦  has_null[-7,1,0]  𝄀
+3  ¦  1
+select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_unsigned;
+➤ row_count[-5,64,0]  ¦  has_null[-7,1,0]  𝄀
+3  ¦  1
+select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_constant;
+➤ row_count[-5,64,0]  ¦  has_null[-7,1,0]  𝄀
+3  ¦  1
+insert into coalesce_random values(null);
+constraint violation: Column 'v' cannot be null
+select count(*) from coalesce_random;
+➤ count(*)[-5,64,0]  𝄀
+2
 drop database ctas_output_nullability;
