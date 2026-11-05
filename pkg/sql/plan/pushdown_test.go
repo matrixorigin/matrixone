@@ -625,6 +625,225 @@ func TestNestedLimitPushdownPreservesInnerWindow(t *testing.T) {
 	}
 }
 
+func TestDerivedSortPagination(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantLimit  uint64
+		wantOffset uint64
+	}{
+		{
+			name:      "direct control",
+			sql:       "select empno from constraint_test.emp order by empno desc limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "derived sort",
+			sql:       "select * from (select empno from constraint_test.emp order by empno desc) d limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:       "compose sorted windows",
+			sql:        "select * from (select empno from constraint_test.emp order by empno desc limit 5 offset 2) d limit 10 offset 1",
+			wantLimit:  4,
+			wantOffset: 3,
+		},
+		{
+			name:       "transparent nested aliases",
+			sql:        "select id from (select empno as id from (select empno from constraint_test.emp order by empno desc) a) b limit 3 offset 2",
+			wantLimit:  3,
+			wantOffset: 2,
+		},
+		{
+			name:      "distinct remains below sort",
+			sql:       "select * from (select distinct deptno from constraint_test.emp order by deptno desc) d limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "aggregate remains below sort",
+			sql:       "select * from (select deptno, count(*) from constraint_test.emp group by deptno order by deptno desc) d limit 3",
+			wantLimit: 3,
+		},
+		{
+			name:      "window remains below sort",
+			sql:       "select * from (select empno, sum(empno) over () from constraint_test.emp order by empno desc) d limit 3",
+			wantLimit: 3,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			sort := firstReachableNode(query, plan.Node_SORT)
+			require.NotNil(t, sort)
+			require.NotNil(t, sort.Limit, "the sort must own the bounded candidate window")
+			require.Equal(t, test.wantLimit, sort.Limit.GetLit().GetU64Val())
+			if test.wantOffset == 0 {
+				require.Nil(t, sort.Offset)
+			} else {
+				require.NotNil(t, sort.Offset)
+				require.Equal(t, test.wantOffset, sort.Offset.GetLit().GetU64Val())
+			}
+			require.Len(t, sort.OrderBy, 1)
+			require.NotZero(t, sort.OrderBy[0].Flag&plan.OrderBySpec_DESC)
+			scan := firstReachableNode(query, plan.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.Nil(t, scan.Limit, "pagination cannot move below ordering")
+			require.Nil(t, scan.Offset)
+			project := firstReachableNode(query, plan.Node_PROJECT)
+			require.NotNil(t, project)
+			require.Nil(t, project.Limit)
+			require.Nil(t, project.Offset)
+		})
+	}
+}
+
+func TestPushdownLimitToSortGuards(t *testing.T) {
+	col := GetColExpr(Type{Id: int32(types.T_int32)}, 1, 0)
+	tests := []struct {
+		name   string
+		change func(*QueryBuilder, *plan.Node, *plan.Node)
+		pushed bool
+	}{
+		{name: "column forwarding", pushed: true},
+		{name: "sort column forwarding", pushed: true, change: func(_ *QueryBuilder, _, sort *plan.Node) {
+			sort.ProjectList = []*plan.Expr{col}
+		}},
+		{name: "grouping set expansion", change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.ExtraOptions = groupingSetExpandOptionPrefix + "2"
+		}},
+		{name: "outer expression", change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.ProjectList = []*plan.Expr{makePlan2Int64ConstExprWithType(1)}
+		}},
+		{name: "sort expression", change: func(_ *QueryBuilder, _, sort *plan.Node) {
+			sort.ProjectList = []*plan.Expr{makePlan2Int64ConstExprWithType(1)}
+		}},
+		{name: "outer filter", change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(false)}
+		}},
+		{name: "sort filter", change: func(_ *QueryBuilder, _, sort *plan.Node) {
+			sort.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(false)}
+		}},
+		{name: "outer ordering", change: func(_ *QueryBuilder, project, sort *plan.Node) {
+			project.OrderBy = sort.OrderBy
+		}},
+		{name: "outer ranking", change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.RankOption = &plan.RankOption{Mode: "force"}
+		}},
+		{name: "inner ranking", change: func(_ *QueryBuilder, _, sort *plan.Node) {
+			sort.RankOption = &plan.RankOption{Mode: "force"}
+		}},
+		{name: "disabled hint", change: func(builder *QueryBuilder, _, _ *plan.Node) {
+			builder.optimizerHints = &OptimizerHints{pushDownLimitToScan: 1}
+		}},
+		{name: "dynamic outer window", pushed: true, change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.Limit = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			project.Offset = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+		}},
+		{name: "dynamic composition stays layered", change: func(_ *QueryBuilder, _, sort *plan.Node) {
+			sort.Limit = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		}},
+		{name: "offset only", pushed: true, change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.Limit = nil
+			project.Offset = makePlan2Uint64ConstExprWithType(2)
+		}},
+		{name: "zero limit keeps whole-query short circuit", change: func(_ *QueryBuilder, project, _ *plan.Node) {
+			project.Limit = makePlan2Uint64ConstExprWithType(0)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
+			scan := &plan.Node{NodeType: plan.Node_TABLE_SCAN}
+			sort := &plan.Node{NodeType: plan.Node_SORT, Children: []int32{0},
+				OrderBy: []*plan.OrderBySpec{{Expr: col, Flag: plan.OrderBySpec_DESC}}}
+			project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{1},
+				ProjectList: []*plan.Expr{col}, Limit: makePlan2Uint64ConstExprWithType(3)}
+			builder.qry.Nodes = []*plan.Node{scan, sort, project}
+			if test.change != nil {
+				test.change(builder, project, sort)
+			}
+			innerLimit, innerOffset := sort.Limit, sort.Offset
+			outerLimit, outerOffset := project.Limit, project.Offset
+			for range 2 {
+				builder.pushdownLimitToTableScan(2)
+				if test.pushed {
+					require.Equal(t, outerLimit, sort.Limit)
+					require.Equal(t, outerOffset, sort.Offset)
+					require.Nil(t, project.Limit)
+					require.Nil(t, project.Offset)
+				} else {
+					require.Equal(t, innerLimit, sort.Limit)
+					require.Equal(t, innerOffset, sort.Offset)
+					require.Equal(t, outerLimit, project.Limit)
+					require.Equal(t, outerOffset, project.Offset)
+				}
+				require.Nil(t, scan.Limit)
+				require.Nil(t, scan.Offset)
+			}
+		})
+	}
+}
+
+func TestDerivedSortPaginationKeepsBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{"zero outer limit", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d limit 0"},
+		{"filter above inner page", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d where empno < 5 limit 3"},
+		{"exhausted inner page", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d limit 3 offset 10"},
+		{"outer grouping", "select deptno, count(*) from (select deptno from constraint_test.emp order by deptno desc limit 10) d group by deptno limit 3"},
+		{"outer distinct", "select distinct deptno from (select deptno from constraint_test.emp order by deptno desc limit 10) d limit 3"},
+		{"outer window", "select empno, sum(empno) over () from (select empno from constraint_test.emp order by empno desc limit 10) d limit 3"},
+		{"different outer order", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d order by empno limit 3"},
+		{"found rows", "select sql_calc_found_rows * from (select empno from constraint_test.emp order by empno desc limit 10) d limit 3"},
+		{"computed ordering", "select * from (select empno from constraint_test.emp order by abs(empno) desc limit 10) d limit 3"},
+		{"materialized ordering expression", "select id, r from (select empno id, abs(empno) k, rand() r from constraint_test.emp order by k desc limit 10) d limit 3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			var innerSort *plan.Node
+			var visit func(int32)
+			visit = func(id int32) {
+				node := query.Nodes[id]
+				if node.NodeType == plan.Node_SORT && len(node.OrderBy) == 1 && node.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0 {
+					innerSort = node
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range query.Steps {
+				visit(root)
+			}
+			require.NotNil(t, innerSort)
+			require.NotNil(t, innerSort.Limit)
+			require.Equal(t, uint64(10), innerSort.Limit.GetLit().GetU64Val())
+			require.Nil(t, innerSort.Offset)
+		})
+	}
+}
+
+func TestDerivedSortPreparedPagination(t *testing.T) {
+	logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"prepare derived_page from 'select * from (select empno from constraint_test.emp order by empno desc) d limit ? offset ?'")
+	require.NoError(t, err)
+	query := logical.GetDcl().GetPrepare().GetPlan().GetQuery()
+	sort := firstReachableNode(query, plan.Node_SORT)
+	require.NotNil(t, sort)
+	for i, expr := range []*plan.Expr{sort.Limit, sort.Offset} {
+		require.NotNil(t, expr)
+		require.NotNil(t, expr.GetF())
+		require.Equal(t, "cast", expr.GetF().Func.ObjName)
+		require.NotNil(t, expr.GetF().Args[0].GetP())
+		require.Equal(t, int32(i), expr.GetF().Args[0].GetP().Pos)
+	}
+}
+
 func TestSetPhysicalEqualityFilterBoundary(t *testing.T) {
 	for _, kind := range []plan.Node_NodeType{
 		plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS,
