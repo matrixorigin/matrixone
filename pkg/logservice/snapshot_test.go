@@ -68,11 +68,13 @@ func testPrepareSnapshot(
 	metadataFile := "/snapshot.metadata"
 	err := mgr.cfg.FS.MkdirAll(mgr.snapshotPath(nid, index), defaultExportedDirMode)
 	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
-	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(
+	f, err := mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	f, err = mgr.cfg.FS.Create(
 		fmt.Sprintf("%s/snapshot-%016X.gbsnap", mgr.snapshotPath(nid, index), index))
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 }
 
 func TestInitSnapshotMgr(t *testing.T) {
@@ -160,6 +162,18 @@ type removeErrorFS struct{ vfs.FS }
 
 func (fs removeErrorFS) RemoveAll(string) error { return os.ErrPermission }
 
+type listErrorFS struct {
+	vfs.FS
+	path string
+}
+
+func (fs listErrorFS) List(path string) ([]string, error) {
+	if path == fs.path {
+		return nil, os.ErrPermission
+	}
+	return fs.FS.List(path)
+}
+
 func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
 	fs := vfs.NewStrictMem()
 	mgr := newSnapshotManager(&Config{
@@ -177,6 +191,80 @@ func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrPermission)
 	_, err = fs.Stat(dir)
 	require.NoError(t, err, "a failed cleanup must leave the directory visible")
+}
+
+func TestReconcileUncertainExportsRetriesFailedQuotaCleanup(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{
+		FS:                removeErrorFS{FS: fs},
+		SnapshotExportDir: "/tmp/exported",
+	})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	testPrepareSnapshot(t, mgr, nid, 200)
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	mgr.MarkExportUncertain(nid.shardID, nid.replicaID)
+
+	_, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 1)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.NoError(t, err)
+
+	mgr.cfg.FS = fs
+	newest, trimmed, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 1)
+	require.NoError(t, err)
+	require.True(t, trimmed)
+	require.Equal(t, uint64(100), newest)
+	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestReconcileUncertainExportsPreservesViewOnScanError(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	testPrepareSnapshot(t, mgr, nid, 200)
+	mgr.MarkExportUncertain(nid.shardID, nid.replicaID)
+
+	mgr.cfg.FS = listErrorFS{FS: fs, path: mgr.snapshotPath(nid, 200)}
+	_, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
+	dir, index := mgr.EvalImportSnapshot(nid.shardID, nid.replicaID, 200)
+	require.Equal(t, mgr.snapshotPath(nid, 100), dir)
+	require.Equal(t, uint64(100), index)
+
+	mgr.cfg.FS = fs
+	newest, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(200), newest)
+	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+}
+
+func TestReconcileUncertainExportsSkipsIncompleteFinal(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	testPrepareSnapshot(t, mgr, nid, 100)
+	flag := fs.PathJoin(mgr.snapshotPath(nid, 100), "dragonboat.snapshot.message")
+	f, err := fs.Create(flag)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	mgr.MarkExportUncertain(nid.shardID, nid.replicaID)
+
+	_, _, err = mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.NoError(t, err)
+	require.Zero(t, mgr.Count(nid.shardID, nid.replicaID))
+	require.NoError(t, fs.Remove(flag))
+	newest, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), newest)
+	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
 }
 
 func TestInitSnapshotMgrReplacesInMemoryView(t *testing.T) {
