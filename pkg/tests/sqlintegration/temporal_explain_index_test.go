@@ -133,9 +133,9 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 			require.GreaterOrEqual(t, id, int64(99901))
 		}
 
-		// The other mixed-domain direction uses a TIMESTAMP leading key and a
-		// DATETIME bound. Reuse this cluster/data while exercising its encoded
-		// index, reader and complete residual after final remapping.
+		// A cast on the original DATETIME bound has not been proved safe for
+		// eager evaluation. Keep this mixed-domain query on the ordinary path
+		// and compare complete results against an explicit index-disabled scan.
 		exec("create table reverse_events(id int primary key, ts timestamp(6), key idx_ts(ts))")
 		exec("insert into reverse_events select id,cast(d as timestamp(6)) from events")
 		var reverseIndex string
@@ -144,7 +144,9 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		exec("select mo_ctl('dn','flush','" + schema + "." + reverseIndex + "')")
 		exec("analyze table reverse_events(ts) fullscan")
 		const reverse = "select id,ts from reverse_events where ts > cast('2026-04-30 23:59:59' as datetime(6))"
-		require.Contains(t, explain("explain analyze ", reverse), "Index Table Scan on reverse_events.idx_ts")
+		reversePlan := explain("explain analyze ", reverse)
+		require.Contains(t, reversePlan, "Table Scan on "+schema+".reverse_events", reversePlan)
+		require.NotContains(t, reversePlan, "Index Table Scan on reverse_events.idx_ts", reversePlan)
 		reverseExpected := ids("select id,ts from reverse_events ignore index(idx_ts) where ts > cast('2026-04-30 23:59:59' as datetime(6))")
 		require.Len(t, reverseExpected, 100)
 		require.Equal(t, reverseExpected, ids(reverse))

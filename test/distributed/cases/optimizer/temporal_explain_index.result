@@ -34,12 +34,12 @@ analyze table events(d) fullscan;
 ➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
 temporal_explain_bvt.events  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  100000  ¦  1  ¦  100000  ¦  14  ¦  3200000  ¦  OK  ¦  q=1/1
 explain select id,d from events where d > now(6);
--- @regex("Index Table Scan on events.idx_d", true)
+-- @regex("Table Scan on temporal_explain_bvt.events", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
-  ->  Index Table Scan on events.idx_d [ForceOneCN]  𝄀
-        Filter Cond: (serial_extract(__mo_index_idx_col, 0, DATETIME)) > now(6))  𝄀
-        Block Filter Cond: (__mo_temporal_bound_not_empty(now(6), 3, 6) and (prefix_between(__mo_index_idx_col) or prefix_between(__mo_index_idx_col)))
+  ->  Table Scan on temporal_explain_bvt.events  𝄀
+        Filter Cond: (events.d > now(6))  𝄀
+        Block Filter Cond: (events.d > now(6))
 select count(*) from events where d > now(6);
 ➤ count(*)[-5,64,0]  𝄀
 100

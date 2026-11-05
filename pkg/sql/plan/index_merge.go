@@ -163,7 +163,7 @@ func (builder *QueryBuilder) applyRegularIndexMerge(
 			}
 			candidate.work += probeRows*pkWidth + inputRows*max(0, base.baseWidth-pkWidth) +
 				rows*(float64(len(node.FilterList))*regularIndexPredicateRowWork+base.outputWidth) + regularIndexJoinFixedWork
-			candidate.work += regularIndexBackfillPrepareWork(rows, base.serialWidths[pk], base.backfillReaders())
+			candidate.work += regularIndexBackfillPrepareWork(rows, base.serialWidths[pk], base.localScanReaders())
 			if !sortedPK {
 				candidate.work += probeRows * regularIndexInSearchComparisons(rows) * regularIndexPredicateRowWork
 			}

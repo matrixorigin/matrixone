@@ -415,7 +415,7 @@ func TestJSONOpaqueExistingConsumerFences(t *testing.T) {
 	}
 }
 
-func TestLocalSourceFenceFastScanRetainsCompleteMixedFeaturePriority(t *testing.T) {
+func TestLocalSourceFenceRetainsCompleteMixedFeaturePriority(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	trigger := bindJSONStringConsumerExpr(t, "concat")
@@ -430,7 +430,7 @@ func TestLocalSourceFenceFastScanRetainsCompleteMixedFeaturePriority(t *testing.
 		owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{trigger, extra}}}}
 		features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 		require.NoError(t, err)
-		require.True(t, features.RequiresLocalSourceFence())
+		require.True(t, features.JSONOpaqueTextContracts)
 		expected := validateRemoteExpressionFeatures(proc, features)
 		require.Error(t, expected)
 		actual := validateJSONStringConsumerProtocol(proc, owner)

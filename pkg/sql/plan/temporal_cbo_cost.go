@@ -42,14 +42,10 @@ func finiteNonnegative(v float64) bool {
 	return v >= 0 && !math.IsInf(v, 0) && !math.IsNaN(v)
 }
 
-// TemporalRangeStatistics contains only copied scalars from one existing
-// column observation. It has no authority over execution rows or metadata.
-type TemporalRangeStatistics = engine.TemporalStats
-
 // estimateTemporalRange uses the ordinary uniform/NDV approximation. The
 // inverse range is correct independently; this estimate can be wrong under
 // skew or different block layouts and must never become an execution filter.
-func estimateTemporalRange(s TemporalRangeStatistics, c types.TemporalCandidate, kind types.T) (float64, bool) {
+func estimateTemporalRange(s engine.TemporalStats, c types.TemporalCandidate, kind types.T) (float64, bool) {
 	if s.Kind != kind || (kind != types.T_datetime && kind != types.T_timestamp) ||
 		!finitePositive(s.Rows) || !finitePositive(s.NDV) || float64(s.Nulls) > s.Rows ||
 		math.IsNaN(s.Min) || math.IsNaN(s.Max) || math.IsInf(s.Min, 0) || math.IsInf(s.Max, 0) || s.Min > s.Max ||

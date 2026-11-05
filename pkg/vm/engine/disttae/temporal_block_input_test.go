@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -192,7 +193,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	req := engine.TemporalBlockInputRequest{Column: "d", Observed: f.stats, Stats: observation, BoundType: types.T_timestamp, Scale: 6, Op: types.TemporalGreater, Zone: time.UTC}
 	copy(req.Bound[:], types.EncodeTimestamp(&bound))
 	var visibleWork int
-	for _, scenario := range []string{"complete", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "generation unavailable", "entry replaced"} {
+	for _, scenario := range []string{"complete", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "generation unavailable", "entry replaced"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
 			ctx := f.ctx
@@ -200,6 +201,14 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 			e.pClient.subscriber.transportGeneration = 1
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			switch scenario {
+			case "missing overlap":
+				original := f.stats.ShuffleRangeMap
+				f.stats.ShuffleRangeMap = nil
+				t.Cleanup(func() { f.stats.ShuffleRangeMap = original })
+			case "NaN overlap":
+				original := f.stats.ShuffleRangeMap["d"].Overlap
+				f.stats.ShuffleRangeMap["d"].Overlap = math.NaN()
+				t.Cleanup(func() { f.stats.ShuffleRangeMap["d"].Overlap = original })
 			case "empty":
 				request.Op = types.TemporalLess
 				empty := date.ToTimestamp(time.UTC)
@@ -234,10 +243,13 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, scenario == "complete" || scenario == "empty", complete)
-			if scenario == "complete" {
+			wantRows := scenario == "complete" || scenario == "missing overlap" || scenario == "NaN overlap"
+			require.Equal(t, wantRows || scenario == "empty", complete)
+			if wantRows {
 				require.Equal(t, engine.TemporalBlockInput{Rows: 2, Blocks: 1}, input)
-				visibleWork = engine.MaxTemporalBindingWork - budget
+				if scenario == "complete" {
+					visibleWork = engine.MaxTemporalBindingWork - budget
+				}
 			} else {
 				require.Zero(t, input)
 			}

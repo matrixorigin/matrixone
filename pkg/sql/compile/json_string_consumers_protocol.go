@@ -25,12 +25,8 @@ import (
 // ODKU/session result contracts. CONCAT/WS keep overload 0 while their JSON
 // text rendering requires the independently detected floor.
 func validateJSONStringConsumerProtocol(proc *process.Process, owner any) error {
-	needed, err := plan.MayRequireLocalSourceFence(owner)
-	if err != nil || !needed {
-		return err
-	}
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
-	if err != nil || !features.RequiresLocalSourceFence() {
+	if err != nil || !(features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		return err
 	}
 	return validateRemoteExpressionFeatures(proc, features)

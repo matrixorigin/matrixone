@@ -18,9 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -94,11 +92,17 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 	if len(cost.unknownRangeLowerSelectivities) != 0 {
 		return temporalIndexAccess{}, nil
 	}
-	baseWork, ok := builder.temporalCBOBaseWork(scan, observation, selectivity, cost, &budget)
-	if !ok {
+	if !builder.temporalCBOBaseEligible(scan, observation, selectivity, &budget) {
 		return temporalIndexAccess{}, context.Cause(ctx)
 	}
 	needsBaseInput := len(scan.BlockFilterList) != 0
+	baseWork := 0.0
+	if !needsBaseInput {
+		baseWork = observation.Rows * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork)
+		if !finitePositive(baseWork) {
+			return temporalIndexAccess{}, nil
+		}
+	}
 	for indexPos, index := range indexes {
 		if index == nil {
 			continue
@@ -130,10 +134,27 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 				BoundType: scalar.typ.Oid, Scale: atom.scale, Op: atom.op, Zone: proc.GetSessionInfo().TimeZone}
 			copy(request.Bound[:], scalar.value)
 			input, complete, cause := provider.ObserveTemporalBlockInput(ctx, read, request, &budget)
-			if cause != nil || !complete || input.Rows == 0 || !builder.temporalPlanningIntent.MatchesProcess(proc) {
+			if cause != nil || !complete || input.Rows == 0 || input.Blocks == 0 || !builder.temporalPlanningIntent.MatchesProcess(proc) {
 				return temporalIndexAccess{}, cause
 			}
-			baseWork = float64(input.Rows) * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork)
+			// Compare the optimistic parallel BASE latency with the index's
+			// serial work. The normal scan owner supplies its local reader
+			// estimate; no more readers can run than there are matching blocks.
+			readers := 1.0
+			// GetExecType visits the whole query, including unreachable nodes.
+			// Only call it when that traversal is bounded by the simple shape.
+			classify := spendTemporalCostWork(ctx, &budget, 4*len(builder.qry.Nodes))
+			for _, node := range builder.qry.Nodes {
+				if node == nil || len(node.Children) > 1 ||
+					(node.NodeType != plan.Node_TABLE_SCAN && node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_FILTER) {
+					classify = false
+					break
+				}
+			}
+			if classify && GetExecType(builder.qry, false, builder.isPrepareStatement) != ExecTypeTP {
+				readers = min(cost.localScanReaders(), float64(input.Blocks))
+			}
+			baseWork = float64(input.Rows) * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork) / readers
 			if !finitePositive(baseWork) || budget <= 0 {
 				return temporalIndexAccess{}, context.Cause(ctx)
 			}
@@ -239,40 +260,23 @@ func prepayTemporalCBOConstruction(ctx context.Context, bound *plan.Expr, budget
 	return spendTemporalCostWork(ctx, budget, 16*(nodes+64)+16*bound.ProtoSize()) && *budget > 0
 }
 
-// Only the actual finalized reader predicate earns base block-pruning credit.
+// Only a finalized, executable reader predicate permits a block observation.
 // The cost-only range never becomes a base filter or changes shared stats.
-func (builder *QueryBuilder) temporalCBOBaseWork(scan *plan.Node, stats TemporalRangeStatistics, selectivity float64, cost *encodedRegularIndexCostContext, budget *int) (float64, bool) {
+func (builder *QueryBuilder) temporalCBOBaseEligible(scan *plan.Node, stats engine.TemporalStats, selectivity float64, budget *int) bool {
 	ctx := builder.GetContext()
 	if !finitePositive(selectivity) || selectivity > 1 || !finitePositive(stats.Rows) || !temporalBaseBlockFiltersFinal(ctx, scan, true, budget) {
-		return 0, false
+		return false
 	}
-	rows := stats.Rows
 	if len(scan.BlockFilterList) != 0 {
-		if len(scan.BlockFilterList) != 1 || len(scan.FilterList) != 1 || !stats.HasOverlap || stats.Blocks <= 0 ||
-			!finiteNonnegative(stats.Overlap) || stats.Overlap > 1 ||
+		if len(scan.BlockFilterList) != 1 || len(scan.FilterList) != 1 || stats.Blocks <= 0 ||
 			!temporalCostFiltersEqual(ctx, scan.BlockFilterList[0], scan.FilterList[0], budget) {
-			return 0, false
+			return false
 		}
 		nodes := 0
 		if !temporalCostExpressionFits(ctx, scan.FilterList[0], 0, &nodes, budget) || !spendTemporalCostWork(ctx, budget, 8*nodes) ||
 			!ScanStorageFilterEligible(builder.compCtx.GetProcess(), scan.BlockFilterList[0], false) {
-			return 0, false
+			return false
 		}
-		atom, admitted := temporalCandidateAtomForExpr(scan.FilterList[0])
-		if !admitted {
-			return 0, false
-		}
-		column := scan.TableDef.Cols[atom.column.GetCol().ColPos].Name
-		observation := &statsinfo.StatsInfo{ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{column: {Overlap: stats.Overlap}}}
-		header := *scan.FilterList[0]
-		header.Selectivity = selectivity
-		blockSel := estimateFilterBlockSelectivity(ctx, &header, scan.TableDef, observation)
-		if !finiteNonnegative(blockSel) || blockSel > 1 {
-			return 0, false
-		}
-		blockRows := min(stats.Rows, float64(estimatedBlocks(float64(stats.Blocks)*blockSel))*float64(objectio.BlockMaxRows))
-		rows = max(stats.Rows*selectivity, stats.Rows*blockSel, blockRows)
 	}
-	work := rows * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork)
-	return work, finitePositive(work) && budget != nil && *budget > 0 && context.Cause(ctx) == nil
+	return budget != nil && *budget > 0 && context.Cause(ctx) == nil
 }

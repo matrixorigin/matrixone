@@ -2,7 +2,7 @@
 
 Owning issue: #31619 (correctness fixed by #31624); performance integration: #31944.
 The single current access, admission, lifetime and validation contract is
-[temporal CBO design v2](20261030-temporal-cbo.md). This document defines only the
+[temporal CBO design](20261030-temporal-cbo.md). This document defines only the
 scalar semantics and the mathematical necessary-range transformation. It does not
 promise prepared, backfill, equality-prefix, arbitrary OR/IN, named-zone AUTO or
 multi-CN optimization support.

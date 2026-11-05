@@ -31,7 +31,7 @@ import (
 )
 
 func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
-	for _, scenario := range []string{"eligible", "missing scope", "missing original owner", "parameter provenance", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
+	for _, scenario := range []string{"eligible", "missing scope", "missing original owner", "unproved original owner", "parameter provenance", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
 			switch scenario {
@@ -39,6 +39,16 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				builder.temporalPlanningScope = nil
 			case "missing original owner":
 				builder.temporalOriginalSafeScans = nil
+			case "unproved original owner":
+				scan := builder.qry.Nodes[0]
+				scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
+				steps := builder.qry.Steps
+				builder.qry.Steps = nil // The original owner is captured before step publication.
+				builder.captureTemporalOriginalOwner(0)
+				builder.qry.Steps = steps
+				require.Contains(t, builder.temporalOriginalSafeScans, int32(0))
+				require.False(t, builder.temporalOriginalSafeScans[0])
+				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
 				builder.temporalPlanningIntent.ParameterFree = false
 			case "sirius":

@@ -2654,7 +2654,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	// A temporal path competes only where the original owner and the current
 	// rewritten path are both proved safe. Preserve FORCE, small-table and
 	// sorted-scan policies, and do not displace an unscorable existing path.
-	_, originalSafe := builder.temporalOriginalSafeScans[nodeID]
+	originalSafe := builder.temporalOriginalSafeScans[nodeID]
 	intent := builder.temporalPlanningIntent
 	_, fixedZone := types.FixedZoneOffset(intent.TimeZone)
 	if lateBaseStatsFinalized && originalSafe && !builder.sessionSelectLimitMayStopEarly && builder.hasTemporalPlanningIntent && intent.ParameterFree && fixedZone &&
@@ -2729,7 +2729,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 		return retID, nil
 	}
 
-	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx)
+	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx), nil
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
@@ -4120,10 +4120,9 @@ func regularIndexBackfillInputRows(scanRows, selectedRows float64) float64 {
 	return min(scanRows, max(selectedRows, math.Ceil(selectedRows)*float64(objectio.BlockMaxRows)))
 }
 
-// backfillReaders estimates local reader construction, not a cluster-wide
-// reader count. BuildReaders constructs each reader's packed PK filter, so
-// parallel scan width cannot make this preparation a single per-query cost.
-func (ctx *encodedRegularIndexCostContext) backfillReaders() float64 {
+// localScanReaders estimates local reader count using the same DOP policy as
+// scan planning, capped by the query limit and estimated physical blocks.
+func (ctx *encodedRegularIndexCostContext) localScanReaders() float64 {
 	cpus := max(1, system.GoMaxProcs())
 	if ctx.builder.qry != nil && ctx.builder.qry.MaxDop > 0 && ctx.builder.qry.MaxDop < int64(cpus) {
 		cpus = int(ctx.builder.qry.MaxDop)
@@ -4214,7 +4213,7 @@ func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfill(idxDef *I
 	// preparation, and only matching base rows. Do not assume scattered PKs
 	// or charge a second full scan; selective lookups must remain eligible.
 	work := matches*(encodedWidth+ctx.columnWidths[pkPos]+ctx.baseWidth) +
-		regularIndexBackfillPrepareWork(matches, ctx.serialWidths[pkPos], ctx.backfillReaders())
+		regularIndexBackfillPrepareWork(matches, ctx.serialWidths[pkPos], ctx.localScanReaders())
 	return finitePositive(work) && work >= ctx.baseWork
 }
 
@@ -4586,7 +4585,7 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimate(
 					}
 					prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
 				}
-				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.backfillReaders())
+				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.localScanReaders())
 				// Replace, rather than duplicate, the ranking's per-key proxy.
 				admissionExtra = candidateBuild - hiddenRows*regularIndexPredicateRowWork
 				if !sortedPK {

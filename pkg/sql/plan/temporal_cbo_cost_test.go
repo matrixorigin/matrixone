@@ -22,13 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTemporalRangeEstimateControls(t *testing.T) {
-	stats := TemporalRangeStatistics{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
+	stats := engine.TemporalStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
 	for _, tc := range []struct {
 		name string
 		c    types.TemporalCandidate
@@ -64,13 +63,13 @@ func TestTemporalRangeEstimateControls(t *testing.T) {
 }
 
 func TestTemporalRangeEstimateDeclinesUnusableEvidence(t *testing.T) {
-	base := TemporalRangeStatistics{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
-	for _, alter := range []func(*TemporalRangeStatistics){
-		func(s *TemporalRangeStatistics) { s.Rows = math.Inf(1) },
-		func(s *TemporalRangeStatistics) { s.NDV = math.NaN() },
-		func(s *TemporalRangeStatistics) { s.Nulls = 1001 },
-		func(s *TemporalRangeStatistics) { s.Min = 201 },
-		func(s *TemporalRangeStatistics) { s.Kind = types.T_datetime },
+	base := engine.TemporalStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
+	for _, alter := range []func(*engine.TemporalStats){
+		func(s *engine.TemporalStats) { s.Rows = math.Inf(1) },
+		func(s *engine.TemporalStats) { s.NDV = math.NaN() },
+		func(s *engine.TemporalStats) { s.Nulls = 1001 },
+		func(s *engine.TemporalStats) { s.Min = 201 },
+		func(s *engine.TemporalStats) { s.Kind = types.T_datetime },
 	} {
 		s := base
 		alter(&s)
@@ -142,27 +141,5 @@ func TestTemporalCBOIndexBlockFloorDoesNotChangeRowWork(t *testing.T) {
 			width = cost.serialWidths[0] + cost.serialWidths[1]
 		}
 		require.InDelta(t, (float64(objectio.BlockMaxRows)-100)*width, blockWork-rowWork, .000001)
-	}
-}
-
-func TestTemporalCBOBaseUsesExistingOverlapEstimator(t *testing.T) {
-	builder, source, _ := temporalCBOTraversalFixture(t)
-	scan := builder.qry.Nodes[0]
-	scan.BlockFilterList = []*plan.Expr{DeepCopyExpr(scan.FilterList[0])}
-	cost := builder.newEncodedRegularIndexCostContext(scan, map[[2]int32]int{{scan.BindingTags[0], 0}: 1})
-	observation := source.observation
-	observation.Blocks = 512
-	observation.HasOverlap = true
-	for _, overlap := range []float64{0, math.Nextafter(overlapThreshold/3, 0), overlapThreshold / 3, overlapThreshold, .5, .9, 1} {
-		observation.Overlap = overlap
-		header := *scan.FilterList[0]
-		header.Selectivity = .0001
-		stats := &statsinfo.StatsInfo{ShuffleRangeMap: map[string]*statsinfo.ShuffleRange{"d": {Overlap: overlap}}}
-		blockSel := estimateFilterBlockSelectivity(builder.GetContext(), &header, scan.TableDef, stats)
-		rows := max(observation.Rows*.0001, observation.Rows*blockSel, min(observation.Rows, float64(estimatedBlocks(float64(observation.Blocks)*blockSel))*float64(objectio.BlockMaxRows)))
-		budget := engine.MaxTemporalBindingWork
-		work, ok := builder.temporalCBOBaseWork(scan, observation, .0001, cost, &budget)
-		require.True(t, ok)
-		require.Equal(t, rows*(cost.baseWidth+regularIndexPredicateRowWork), work)
 	}
 }

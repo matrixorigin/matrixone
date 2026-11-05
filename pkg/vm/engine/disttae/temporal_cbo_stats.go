@@ -91,9 +91,6 @@ func (tbl *txnTableDelegate) ReadTemporalCostStats(ctx context.Context, read eng
 		var minOK, maxOK, ndvOK, kindOK, nullOK bool
 		var kind uint64
 		out.Rows, out.Blocks = current.TableCnt, current.BlockNumber
-		if distribution := current.ShuffleRangeMap[column]; distribution != nil {
-			out.Overlap, out.HasOverlap = distribution.Overlap, true
-		}
 		out.Min, minOK = current.MinValMap[column]
 		out.Max, maxOK = current.MaxValMap[column]
 		out.NDV, ndvOK = current.NdvMap[column]

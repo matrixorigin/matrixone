@@ -87,8 +87,6 @@ func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 	require.Equal(t, 1000., value.Rows)
 	require.Equal(t, 100., value.Min)
 	require.EqualValues(t, 10, value.Blocks)
-	require.True(t, value.HasOverlap)
-	require.Equal(t, .25, value.Overlap)
 	for _, scenario := range []string{"unbound", "missing nulls", "wrong pointer", "wrong version", "contended", "cancelled", "closed"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newTemporalNativeFixture(t)
@@ -136,8 +134,7 @@ func TestTemporalCBOStatsSnapshotConcurrentPatch(t *testing.T) {
 		<-start
 		for i := 1; i <= 128; i++ {
 			v := float64(i%8 + 1)
-			overlap := v / 8
-			if err := f.gs.PatchStats(f.key, &PatchArgs{ShuffleRangeMap: map[string]*ShuffleRangePartialUpdate{"d": {Overlap: &overlap}}, MinValMap: map[string]float64{"d": v}, MaxValMap: map[string]float64{"d": 2 * v}}); err != nil {
+			if err := f.gs.PatchStats(f.key, &PatchArgs{MinValMap: map[string]float64{"d": v}, MaxValMap: map[string]float64{"d": 2 * v}}); err != nil {
 				done <- err
 				return
 			}
@@ -150,7 +147,6 @@ func TestTemporalCBOStatsSnapshotConcurrentPatch(t *testing.T) {
 		require.NoError(t, err)
 		if ok {
 			require.Equal(t, 2*value.Min, value.Max)
-			require.Equal(t, value.Min/8, value.Overlap)
 		}
 	}
 	require.NoError(t, <-done)

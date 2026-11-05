@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -38,7 +39,7 @@ type temporalCBOTestTxn struct{ client.TxnOperator }
 type temporalCBOTestWorkspace struct{ client.Workspace }
 type temporalCBORelationFixture struct {
 	engine.Relation
-	observation     TemporalRangeStatistics
+	observation     engine.TemporalStats
 	unknown, verify bool
 	onRead          func()
 	onVerify        func(*int)
@@ -75,7 +76,7 @@ func TestTemporalCBOObservationRequiresUsableIndex(t *testing.T) {
 			builder, source, index := temporalCBOTraversalFixture(t)
 			scan := builder.qry.Nodes[0]
 			scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
-			source.observation.Blocks, source.observation.HasOverlap = 512, true
+			source.observation.Blocks = 512
 			source.input = &engine.TemporalBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
 			switch scenario {
 			case "not covering":
@@ -159,7 +160,7 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	builder.temporalPlanningIntent = intent
 	builder.hasTemporalPlanningIntent = true
 	builder.temporalOriginalSafeScans = map[int32]bool{0: true}
-	source := &temporalCBORelationFixture{verify: true, observation: TemporalRangeStatistics{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
+	source := &temporalCBORelationFixture{verify: true, observation: engine.TemporalStats{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
 	read := engine.TemporalRead{Op: proc.GetTxnOperator(), Stamp: client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}}
 	require.True(t, scope.AddNativeRelation(ref, base, source, read))
 	builder.compCtx = &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), scope: scope, hidden: &temporalCBORelationFixture{}, read: read}
@@ -266,8 +267,8 @@ func TestTemporalCBOConstructionBudgetBeforeCopy(t *testing.T) {
 	require.LessOrEqual(t, budget, 0)
 }
 
-func TestTemporalCBOBasePricesOnlyFinalReaderPruning(t *testing.T) {
-	for _, scenario := range []string{"empty", "mirror", "unknown overlap", "invalid overlap", "NaN overlap", "unknown blocks", "different predicate", "cancelled"} {
+func TestTemporalCBOBaseRequiresFinalReaderPruning(t *testing.T) {
+	for _, scenario := range []string{"empty", "mirror", "unknown blocks", "different predicate", "cancelled", "budget exhausted", "invalid selectivity"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, source, _ := temporalCBOTraversalFixture(t)
 			scan := builder.qry.Nodes[0]
@@ -277,18 +278,10 @@ func TestTemporalCBOBasePricesOnlyFinalReaderPruning(t *testing.T) {
 			oldWork := cost.baseWork
 			observation := source.observation
 			observation.Blocks = 512
-			observation.HasOverlap = true
-			observation.Overlap = 0
 			if scenario != "empty" {
 				scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
 			}
 			switch scenario {
-			case "unknown overlap":
-				observation.HasOverlap = false
-			case "invalid overlap":
-				observation.Overlap = 2
-			case "NaN overlap":
-				observation.Overlap = math.NaN()
 			case "unknown blocks":
 				observation.Blocks = 0
 			case "different predicate":
@@ -299,14 +292,17 @@ func TestTemporalCBOBasePricesOnlyFinalReaderPruning(t *testing.T) {
 				builder.compCtx.SetContext(ctx)
 			}
 			budget := engine.MaxTemporalBindingWork
-			work, ok := builder.temporalCBOBaseWork(scan, observation, .000001, cost, &budget)
+			selectivity := .000001
+			if scenario == "budget exhausted" {
+				budget = 0
+			}
+			if scenario == "invalid selectivity" {
+				selectivity = math.NaN()
+			}
+			ok := builder.temporalCBOBaseEligible(scan, observation, selectivity, &budget)
 			switch scenario {
-			case "empty":
+			case "empty", "mirror":
 				require.True(t, ok)
-				require.Equal(t, observation.Rows*(cost.baseWidth+regularIndexPredicateRowWork), work)
-			case "mirror":
-				require.True(t, ok)
-				require.Less(t, work, oldWork)
 			default:
 				require.False(t, ok)
 			}
@@ -316,23 +312,52 @@ func TestTemporalCBOBasePricesOnlyFinalReaderPruning(t *testing.T) {
 	}
 }
 
+func TestTemporalCBOBaseCostRespectsLocalReaders(t *testing.T) {
+	observe := func(maxDOP int64, blocks uint64, tp bool) float64 {
+		t.Helper()
+		builder, source, index := temporalCBOTraversalFixture(t)
+		scan := builder.qry.Nodes[0]
+		scan.Stats.BlockNum = 64
+		if tp {
+			scan.Stats.BlockNum, scan.Stats.Cost = 16, 1000
+		}
+		scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
+		builder.qry.MaxDop = maxDOP
+		source.observation.Blocks = 512
+		source.input = &engine.TemporalBlockInput{Rows: objectio.BlockMaxRows, Blocks: blocks}
+		cost := builder.newEncodedRegularIndexCostContext(scan, map[[2]int32]int{{scan.BindingTags[0], 0}: 1})
+		var work float64
+		_, err := builder.enumerateTemporalIndexCandidates(0, []*pb.IndexDef{index}, cost, func(candidate regularIndexAccessCandidate) {
+			work = candidate.baseWork
+		})
+		require.NoError(t, err)
+		require.Positive(t, work)
+		return work
+	}
+	serial := observe(1, 4, false)
+	parallel := observe(4, 4, false)
+	if system.GoMaxProcs() > 1 {
+		require.Less(t, parallel, serial, "a parallel base scan must receive its reader advantage")
+	} else {
+		require.Equal(t, serial, parallel)
+	}
+	require.Equal(t, serial, observe(4, 1, false), "a single matching block cannot use extra readers")
+	require.Equal(t, observe(1, 4, true), observe(4, 4, true), "TP execution uses one reader")
+}
+
 func TestTemporalCBOFinalReaderChangesActualSelection(t *testing.T) {
-	for _, scenario := range []string{"mirror low overlap", "mirror high overlap", "low overlap scattered", "high overlap ordered", "unknown layout", "empty reader"} {
+	for _, scenario := range []string{"ordered", "scattered", "unknown layout", "empty reader"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, source, _ := temporalCBOTraversalFixture(t)
 			scan := builder.qry.Nodes[0]
 			originalStats := *scan.Stats
 			source.observation.NDV = 100
 			source.observation.Blocks = 512
-			source.observation.HasOverlap = true
 			source.input = &engine.TemporalBlockInput{Rows: objectio.BlockMaxRows, Blocks: 1}
 			if scenario != "empty reader" {
 				scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
 			}
-			if scenario == "mirror high overlap" || scenario == "high overlap ordered" {
-				source.observation.Overlap = 1
-			}
-			if scenario == "mirror high overlap" || scenario == "low overlap scattered" {
+			if scenario == "scattered" {
 				source.input = &engine.TemporalBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
 			}
 			if scenario == "unknown layout" {
@@ -342,7 +367,7 @@ func TestTemporalCBOFinalReaderChangesActualSelection(t *testing.T) {
 			id, err := builder.applyIndicesWithOrder(0, map[[2]int32]int{{scan.BindingTags[0], 0}: 1}, mapping, false)
 			require.NoError(t, err)
 			require.Equal(t, originalStats, *scan.Stats)
-			if scenario == "mirror low overlap" || scenario == "high overlap ordered" || scenario == "unknown layout" {
+			if scenario == "ordered" || scenario == "unknown layout" {
 				require.Zero(t, id)
 				require.Empty(t, mapping)
 				require.Len(t, builder.qry.Nodes, 1)

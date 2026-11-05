@@ -47,8 +47,6 @@ type TemporalStats struct {
 	Nulls               uint64
 	Kind                types.T
 	Blocks              int64
-	Overlap             float64
-	HasOverlap          bool
 }
 
 type TemporalPairCheck struct {
