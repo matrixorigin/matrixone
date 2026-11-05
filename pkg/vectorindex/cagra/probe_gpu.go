@@ -17,8 +17,7 @@
 package cagra
 
 import (
-	"unsafe"
-
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -65,6 +64,6 @@ func probeRowsFitting[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, devi
 		return 0, 0, 0, 0, cerr
 	}
 	return cuvs.CagraRowsFitting(
-		uint64(idxcfg.CuvsCagra.Dimensions), uint64(unsafe.Sizeof(*new(Q))),
+		uint64(idxcfg.CuvsCagra.Dimensions), uint64(util.UnsafeSizeOf[Q]()),
 		uint64(bp.IntermediateGraphDegree), devices, mode)
 }

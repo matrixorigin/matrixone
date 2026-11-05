@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +39,29 @@ func TestBuildNotNullColumnValNarrowVectors(t *testing.T) {
 		// width 0 degenerates to the empty vector, same as vecf32 does.
 		col0 := &ColDef{Typ: plan.Type{Id: int32(oid), Width: 0}}
 		require.Equal(t, "'[]'", buildNotNullColumnVal(col0), "oid %s width 0", oid.String())
+	}
+}
+
+// TestBuildNotNullColumnValLowPrecisionFloats checks that ALTER TABLE ... ADD COLUMN of a
+// bf16/float16/float8/float4 NOT NULL column without a default backfills 0, as float does,
+// in the helper and in the COPY ALTER insert.
+func TestBuildNotNullColumnValLowPrecisionFloats(t *testing.T) {
+	for _, oid := range []types.T{types.T_float32, types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		require.Equal(t, "0", buildNotNullColumnVal(&ColDef{Typ: plan.Type{Id: int32(oid)}}), "oid %s", oid.String())
+	}
+	for _, typ := range []string{"FLOAT", "BF16", "FLOAT16", "FLOAT8", "FLOAT4"} {
+		sql := "ALTER TABLE t1 ADD COLUMN lp " + typ + " NOT NULL, ALGORITHM=COPY"
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err, sql)
+		alter := logicPlan.GetDdl().GetAlterTable()
+		require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType, sql)
+		selectParts := strings.SplitN(alter.InsertTmpDataSql, " SELECT ", 2)
+		require.Len(t, selectParts, 2, sql)
+		selectList, _, ok := strings.Cut(selectParts[1], " FROM ")
+		require.True(t, ok, sql)
+		items := strings.Split(selectList, ", ")
+		require.Contains(t, items, "0", "%s: %s", sql, selectList)
+		require.NotContains(t, items, "null", "%s: %s", sql, selectList)
 	}
 }
 

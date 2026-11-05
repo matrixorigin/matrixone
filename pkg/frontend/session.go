@@ -4818,7 +4818,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 
 func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
 	switch strings.ToLower(name) {
-	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+	case "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
 		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
 	case "disable_agg_statement":
 		boolVal := InitSystemVariableBoolType("_")
