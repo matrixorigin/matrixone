@@ -44,6 +44,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -392,6 +393,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		runCompile, errBuildCompile := receiver.newCompile()
 		if errBuildCompile != nil {
 			return errBuildCompile
+		}
+		if multi_update.ReceivingCNProbeEnabled {
+			if done := multi_update.ObserveReceivingCNReceiver(runCompile.proc); done != nil {
+				defer done()
+			}
 		}
 		var allocationAttempt *statementAllocationAttempt
 		var allocationParticipant *remoteAllocationStatementParticipant

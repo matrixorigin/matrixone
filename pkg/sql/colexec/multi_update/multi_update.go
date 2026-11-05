@@ -252,6 +252,9 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			if writer.outputBat.RowCount() == 0 {
 				return vm.CancelResult, err
 			}
+			if ReceivingCNProbeEnabled {
+				receivingCNProduced(proc, writer.outputBat)
+			}
 			if out == nil {
 				out = writer.outputBat
 			} else {
@@ -401,6 +404,9 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 		if err != nil {
 			return vm.CancelResult, err
+		}
+		if ReceivingCNProbeEnabled {
+			receivingCNApplied(proc, input.Batch, i)
 		}
 	}
 
