@@ -1762,8 +1762,9 @@ func (builder *QueryBuilder) resolveProjectMatchesOverJoin(projNode *plan.Node, 
 //
 // A scan is used only when every node between the PROJECT and the scan keeps the join output
 // rows of the remaining scan rows unchanged: SORT, FILTER, and a JOIN child accepted by
-// projectedFullTextMatchPassesJoin. A MATCH attached to no scan stays in the select list and
-// raises 20105.
+// projectedFullTextMatchPassesJoin. A node or scan with a LIMIT or OFFSET is a derived table's
+// pagination, which the MATCH must not filter below; the pagination of the PROJECT's own SELECT
+// sits above it. A MATCH attached to no scan stays in the select list and raises 20105.
 func (builder *QueryBuilder) attachProjectedFullTextMatches(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
@@ -1784,6 +1785,9 @@ func (builder *QueryBuilder) attachProjectedFullTextMatches(nodeID int32) {
 
 func (builder *QueryBuilder) attachProjectedFullTextMatchesBelow(nodeID int32, matches []*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
+	if node.Limit != nil || node.Offset != nil {
+		return
+	}
 	switch node.NodeType {
 	case plan.Node_SORT, plan.Node_FILTER:
 		if len(node.Children) == 1 {
@@ -1796,7 +1800,9 @@ func (builder *QueryBuilder) attachProjectedFullTextMatchesBelow(nodeID int32, m
 			}
 			child := builder.qry.Nodes[childID]
 			if child.NodeType == plan.Node_TABLE_SCAN {
-				builder.attachFullTextMatchesToScan(child, matches)
+				if child.Limit == nil && child.Offset == nil {
+					builder.attachFullTextMatchesToScan(child, matches)
+				}
 				continue
 			}
 			builder.attachProjectedFullTextMatchesBelow(childID, matches)

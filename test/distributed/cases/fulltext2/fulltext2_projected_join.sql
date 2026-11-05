@@ -68,4 +68,11 @@ select d.id, match(d.body) against('anchor') as score from vdocs d where exists 
 select d.id, match(d.body) against('anchor') as score from vdocs d join vmembers m on m.k = d.id order by l2_distance(d.v, '[0,0,0]'), d.id limit 3;
 select d.id, match(d.body) against('anchor') as score from vdocs d where match(d.body) against('needle') and d.id in (select k from vmembers) order by l2_distance(d.v, '[0,0,0]') limit 2;
 
+-- A derived table's LIMIT/OFFSET applies before a MATCH above it: not served, 20105.
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id order by d.id limit 1) q;
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id order by d.id limit 1 offset 1) q;
+select d.id, match(d.body) against('other') as score from (select * from docs order by id limit 1) d join members m on m.k = d.id;
+-- An unpaginated derived table is served, paginated after the MATCH.
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id) q order by q.id limit 1;
+
 drop database ft2_proj_join;

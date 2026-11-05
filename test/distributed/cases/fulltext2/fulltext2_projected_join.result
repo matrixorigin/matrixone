@@ -136,4 +136,13 @@ select d.id, match(d.body) against('anchor') as score from vdocs d where match(d
 ➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
 1  ¦  0.049216866  𝄀
 4  ¦  0.049216866
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id order by d.id limit 1) q;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id order by d.id limit 1 offset 1) q;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select d.id, match(d.body) against('other') as score from (select * from docs order by id limit 1) d join members m on m.k = d.id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select q.id, match(q.body) against('other') as score from (select d.id, d.body from docs d join members m on m.k = d.id) q order by q.id limit 1;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+2  ¦  0.15835625
 drop database ft2_proj_join;

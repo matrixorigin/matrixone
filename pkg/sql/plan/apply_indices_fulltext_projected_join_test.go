@@ -19,6 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -245,5 +247,53 @@ func TestAttachProjectedFullTextMatchesSkipsBooleanCompositionScan(t *testing.T)
 			}
 			require.Len(t, builder.qry.Nodes[docsID].FilterList, want)
 		})
+	}
+}
+
+// A projected MATCH is not served below the LIMIT or OFFSET of a derived table: the index would
+// filter the rows before the derived table paginates them. Pagination of the MATCH's own SELECT,
+// and of a SELECT over an unpaginated derived table, applies after it and is served.
+func TestFullTextProjectedMatchStopsAtDerivedPagination(t *testing.T) {
+	queries := []struct {
+		sql    string
+		served bool
+	}{
+		{"select f.id, match(f.title, f.body) against('hello') from ft f join base b on f.base_id = b.id order by f.id limit 1 offset 1", true},
+		{"select q.id, match(q.title, q.body) against('hello') from (select f.id, f.title, f.body from ft f join base b on f.base_id = b.id) q order by q.id limit 1", true},
+		{"select q.id, match(q.title, q.body) against('hello') from (select f.id, f.title, f.body from ft f join base b on f.base_id = b.id order by f.id limit 1) q", false},
+		{"select q.id, match(q.title, q.body) against('hello') from (select f.id, f.title, f.body from ft f join base b on f.base_id = b.id order by f.id limit 1 offset 1) q", false},
+		{"select f.id, match(f.title, f.body) against('hello') from (select * from ft limit 1) f join base b on f.base_id = b.id", false},
+		{"select f.id, match(f.title, f.body) against('hello') from (select * from ft limit 1 offset 1) f join base b on f.base_id = b.id", false},
+	}
+	for _, ft2 := range []bool{false, true} {
+		for _, q := range queries {
+			cc := newFullTextJoinMockCompilerContext(t)
+			builder := NewQueryBuilder(planpb.Query_SELECT, cc, false, true)
+			def := makeFullTextJoinTestTableDef("ft", true)
+			scan := makeFullTextJoinTestScan(def, 0, nil)
+			registerFullTextJoinRegularIndexTable(builder, def.Indexes[0].IndexTableName)
+			if ft2 {
+				convertFullTextJoinTestToFulltext2(builder, scan)
+				for _, idx := range def.Indexes {
+					registerFullTextJoinRegularIndexTable(builder, idx.IndexTableName)
+				}
+			}
+			cc.tables["ft"], cc.objects["ft"] = def, &planpb.ObjectRef{SchemaName: "test", ObjName: "ft"}
+			cc.tables["base"], cc.objects["base"] = makeFullTextJoinTestTableDef("base", false), &planpb.ObjectRef{SchemaName: "test", ObjName: "base"}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, q.sql, 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(cc, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+			query := p.GetQuery()
+			scans := countReachableFullTextScans(query) + countReachableFullText2Scans(query)
+			if q.served {
+				require.Equal(t, 1, scans, "ft2=%v: %s", ft2, q.sql)
+				require.Zero(t, countReachableFullTextMatches(query), "ft2=%v: %s", ft2, q.sql)
+			} else {
+				require.Zero(t, scans, "ft2=%v: %s", ft2, q.sql)
+				require.Equal(t, 1, countReachableFullTextMatches(query), "ft2=%v: %s", ft2, q.sql)
+			}
+		}
 	}
 }
