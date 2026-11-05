@@ -91,9 +91,18 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
 func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+	return builder.removeSimpleProjectionsUnder(nodeID, parentType, false, flag, colRefCnt)
+}
+
+// removeSimpleProjectionsUnder is removeSimpleProjections with matchAbove: the parent is a
+// PROJECT whose select list calls fulltext_match, a column pass-through PROJECT with
+// matchAbove, or a SORT with matchAbove under a PROJECT. The PROJECT that calls
+// fulltext_match can be the fulltext rewrite boundary for a scan below this node
+// (resolveFullTextIndexPath).
+func (builder *QueryBuilder) removeSimpleProjectionsUnder(nodeID int32, parentType plan.Node_NodeType, matchAbove bool, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_SINK {
-		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
+		return builder.removeSimpleProjectionsUnder(node.Children[0], plan.Node_UNKNOWN, false, flag, colRefCnt)
 	}
 	projMap := make(map[[2]int32]*plan.Expr)
 
@@ -103,14 +112,14 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER ||
 			node.JoinType == plan.Node_ASOF_LEFT
 
-		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
+		newChildID, childProjMap := builder.removeSimpleProjectionsUnder(node.Children[0], plan.Node_JOIN, false, leftFlag, colRefCnt)
 		node.Children[0] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
 		}
 
 		origRightID := node.Children[1]
-		newChildID, childProjMap = builder.removeSimpleProjections(node.Children[1], plan.Node_JOIN, rightFlag, colRefCnt)
+		newChildID, childProjMap = builder.removeSimpleProjectionsUnder(node.Children[1], plan.Node_JOIN, false, rightFlag, colRefCnt)
 		// When OldColCaptureList is set, the build-side (right child) PROJECT
 		// contains NULL placeholder slots that the DEDUP JOIN writes captured
 		// values into at runtime. Removing this PROJECT would lose those
@@ -127,8 +136,10 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL:
+		childMatchAbove := node.NodeType == plan.Node_PROJECT &&
+			(exprListCallsFullTextMatch(node.ProjectList) || (matchAbove && isColumnPassThroughProject(node)))
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, node.NodeType, childMatchAbove, false, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -137,7 +148,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 
 	case plan.Node_MULTI_UPDATE:
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, node.NodeType, false, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -154,7 +165,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			childParentType = plan.Node_UNKNOWN
 		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, childParentType, false, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -167,8 +178,9 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			// Keep the operand's positional schema boundary through identity wrappers.
 			childParentType = parentType
 		}
+		childMatchAbove := node.NodeType == plan.Node_SORT && parentType == plan.Node_PROJECT && matchAbove
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjectionsUnder(childID, childParentType, childMatchAbove, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -184,7 +196,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		replaceColumnsForExprList(right.TblFuncExprList, projMap)
 	}
 
-	if builder.canRemoveProject(parentType, node) {
+	if builder.canRemoveProject(parentType, node, matchAbove) {
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
@@ -226,7 +238,7 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 }
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
-func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node, matchAbove bool) bool {
 	if builder.isFullTextBooleanScoreProject(node) {
 		return false
 	}
@@ -272,9 +284,18 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
 	// A PROJECT is also the rewrite boundary for a fulltext-filtered scan.
 	// Removing it can expose the scan directly under a WINDOW or an outer JOIN,
-	// neither of which can safely perform the scan-local fulltext rewrite.
-	if childType == plan.Node_TABLE_SCAN && builder.scanHasMatchedFullTextFilter(builder.qry.Nodes[node.Children[0]]) {
-		return false
+	// neither of which can safely perform the scan-local fulltext rewrite. With
+	// matchAbove, the PROJECT above takes over as the boundary, and its own
+	// MATCHes, which read this PROJECT's columns, are served by the same rewrite.
+	// A scan LIMIT/OFFSET pages this block's relevance order; under a SORT the
+	// rewrite would move that page onto the SORT, so the boundary stays.
+	if childType == plan.Node_TABLE_SCAN {
+		scan := builder.qry.Nodes[node.Children[0]]
+		paged := scan.Limit != nil || scan.Offset != nil
+		if builder.scanHasMatchedFullTextFilter(scan) &&
+			(!matchAbove || (paged && parentType != plan.Node_PROJECT)) {
+			return false
+		}
 	}
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
 		return parentType == plan.Node_PROJECT
@@ -294,6 +315,29 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		}
 	}
 
+	return true
+}
+
+func exprListCallsFullTextMatch(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprCallsFunc(expr, "fulltext_match") {
+			return true
+		}
+	}
+	return false
+}
+
+// isColumnPassThroughProject reports a PROJECT without LIMIT/OFFSET whose select list is
+// column references only.
+func isColumnPassThroughProject(node *plan.Node) bool {
+	if node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		if expr.GetCol() == nil {
+			return false
+		}
+	}
 	return true
 }
 
