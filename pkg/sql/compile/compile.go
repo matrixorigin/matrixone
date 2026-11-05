@@ -2638,28 +2638,34 @@ func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam,
 
 func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
 	param := &tree.ExternParam{}
+	// Both file-backed and inline loads reconstruct the reader-visible param
+	// from the serialized source param planned into TableDef.Createsql, so the
+	// two scan types honor identical parsed options.
+	if err := json.Unmarshal([]byte(createsql), param); err != nil {
+		return nil, err
+	}
 	if externScan.LoadType == tree.INLINE {
+		// The serialized source param excludes the inline payload to keep it
+		// in ExternScan.Data once; restore the authoritative copy.
 		param.ScanType = int(externScan.LoadType)
 		param.Data = externScan.Data
-		param.Format = externScan.Format
-		param.Tail = new(tree.TailParameter)
-		param.Tail.IgnoredLines = externScan.IgnoredLines
-		param.Tail.Fields = &tree.Fields{
-			Terminated: &tree.Terminated{
-				Value: externScan.Terminated,
-			},
-			EnclosedBy: &tree.EnclosedBy{
-				Value: externScan.EnclosedBy[0],
-			},
-			EscapedBy: &tree.EscapedBy{
-				Value: externScan.EscapedBy[0],
-			},
+		// The flat proto keeps the established inline escape byte: both
+		// planners encode byte 0 (escape processing disabled) when ESCAPED
+		// BY is omitted or empty, and the explicit byte otherwise, while the
+		// serialized source param leaves the field nil for the omitted case,
+		// where the reader would enable its default backslash escape and
+		// change accepted data. Restore the escape byte so inline loads stay
+		// byte-compatible with the established behavior.
+		if param.Tail == nil {
+			param.Tail = new(tree.TailParameter)
 		}
-		param.JsonData = externScan.JsonType
-	} else {
-		if err := json.Unmarshal([]byte(createsql), param); err != nil {
-			return nil, err
+		if param.Tail.Fields == nil {
+			param.Tail.Fields = &tree.Fields{}
 		}
+		if param.Tail.Fields.EscapedBy == nil {
+			param.Tail.Fields.EscapedBy = &tree.EscapedBy{}
+		}
+		param.Tail.Fields.EscapedBy.Value = externScan.EscapedBy[0]
 	}
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
