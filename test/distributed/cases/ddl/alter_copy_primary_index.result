@@ -74,4 +74,58 @@ select * from c force index(ux) where u in (101,102,103) order by u;
 1.21  ¦  1  ¦  101  𝄀
 1.24  ¦  1  ¦  102  𝄀
 2.50  ¦  1  ¦  103
+create table renamed_key (a int, b int, u int, v int, payload int, primary key(a,b), unique key ux(u), key ix(v));
+insert into renamed_key values (1,11,101,201,31),(2,22,102,202,32);
+alter table renamed_key change column b renamed bigint;
+insert into renamed_key values (3,33,103,203,33);
+select a,renamed,u,v,payload from renamed_key where u in (101,102,103) order by a;
+➤ a[4,32,0]  ¦  renamed[-5,64,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  11  ¦  101  ¦  201  ¦  31  𝄀
+2  ¦  22  ¦  102  ¦  202  ¦  32  𝄀
+3  ¦  33  ¦  103  ¦  203  ¦  33
+select a,renamed,u,v,payload from renamed_key force index(ux) where u in (101,102,103) order by a;
+➤ a[4,32,0]  ¦  renamed[-5,64,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  11  ¦  101  ¦  201  ¦  31  𝄀
+2  ¦  22  ¦  102  ¦  202  ¦  32  𝄀
+3  ¦  33  ¦  103  ¦  203  ¦  33
+select a,renamed,u,v,payload from renamed_key force index(ix) where v in (201,202,203) order by a;
+➤ a[4,32,0]  ¦  renamed[-5,64,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  11  ¦  101  ¦  201  ¦  31  𝄀
+2  ¦  22  ¦  102  ¦  202  ¦  32  𝄀
+3  ¦  33  ¦  103  ¦  203  ¦  33
+select a,renamed,u,v,payload from renamed_key ignore index(ux,ix) order by a;
+➤ a[4,32,0]  ¦  renamed[-5,64,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  11  ¦  101  ¦  201  ¦  31  𝄀
+2  ¦  22  ¦  102  ¦  202  ¦  32  𝄀
+3  ¦  33  ¦  103  ¦  203  ¦  33
+create table cow_pk (id int primary key, u int, v int, payload varchar(10), unique key ux(u), key ix(v));
+insert into cow_pk values (1,101,201,'one'),(2,102,202,'two');
+alter table cow_pk modify column payload varchar(20), algorithm=copy;
+select id,u,v,payload from cow_pk force index(ux) where u in (101,102) order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[12,20,0]  𝄀
+1  ¦  101  ¦  201  ¦  one  𝄀
+2  ¦  102  ¦  202  ¦  two
+select id,u,v,payload from cow_pk force index(ix) where v in (201,202) order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[12,20,0]  𝄀
+1  ¦  101  ¦  201  ¦  one  𝄀
+2  ¦  102  ¦  202  ¦  two
+select id,u,v,payload from cow_pk ignore index(ux,ix) order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[12,20,0]  𝄀
+1  ¦  101  ¦  201  ¦  one  𝄀
+2  ¦  102  ¦  202  ¦  two
+create table cow_fake (id int, u int, v int, payload varchar(10), unique key ux(u), key ix(v));
+insert into cow_fake values (1,101,201,'one'),(2,102,202,'two');
+alter table cow_fake modify column payload varchar(20), algorithm=copy;
+select id,u,v,payload from cow_fake force index(ux) where u in (101,102) order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[12,20,0]  𝄀
+1  ¦  101  ¦  201  ¦  one  𝄀
+2  ¦  102  ¦  202  ¦  two
+select id,u,v,payload from cow_fake force index(ix) where v in (201,202) order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[12,20,0]  𝄀
+1  ¦  101  ¦  201  ¦  one  𝄀
+2  ¦  102  ¦  202  ¦  two
+select id,u,v,payload from cow_fake ignore index(ux,ix) order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  payload[12,20,0]  𝄀
+1  ¦  101  ¦  201  ¦  one  𝄀
+2  ¦  102  ¦  202  ¦  two
 drop database alter_copy_primary_index;
