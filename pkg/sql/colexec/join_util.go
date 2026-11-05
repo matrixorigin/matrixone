@@ -118,13 +118,17 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 		bs.Buf = nil
 	}
 	if originalTail != nil {
+		var rollbackErr error
 		for i := range originalTail.Vecs {
-			originalTail.Vecs[i].RollbackAppend(
+			rollbackErr = vector.JoinAppendRollbackError(rollbackErr, originalTail.Vecs[i].RollbackAppend(
 				tailCheckpoints[i],
 				DefaultBatchSize-originalTailRows,
-			)
+			))
 		}
-		originalTail.SetRowCount(originalTailRows)
+		if rollbackErr == nil {
+			originalTail.SetRowCount(originalTailRows)
+		}
+		err = vector.JoinAppendRollbackError(err, rollbackErr)
 	}
 	bs.MemSize = originalMemSize
 	return err
@@ -306,7 +310,7 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 	for i := range dst.Vecs {
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
 			for j := 0; j <= i; j++ {
-				dst.Vecs[j].RollbackAppend(checkpoints[j], length)
+				err = vector.JoinAppendRollbackError(err, dst.Vecs[j].RollbackAppend(checkpoints[j], length))
 			}
 			return 0, err
 		}
