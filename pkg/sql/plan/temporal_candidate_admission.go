@@ -317,7 +317,7 @@ func temporalOriginalOwnerFits(ctx context.Context, q *plan.Query, scan int32, b
 	return false
 }
 
-// Called only after the bounded full original-owner diagnostics proof. A bool
+// Called only after the bounded full original-owner diagnostics proof.
 // A true value grants cost evidence; false or absent declines the candidate.
 func temporalOriginalSingleMixedLeaf(q *plan.Query, scan int32) bool {
 	var predicate *plan.Expr
