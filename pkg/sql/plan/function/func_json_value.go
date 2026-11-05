@@ -105,22 +105,11 @@ func decodeJSONValueStoredRaw(data []byte) (bytejson.ByteJson, error) {
 	return value, nil
 }
 
-// decodeJSONValueStoredAdmitted decodes a T_json payload whose vector admission
-// has already run ValidateStoredJSONDocument. NewVecWithData has the same
-// trusted-input contract; callers must not use this helper for arbitrary bytes.
-func decodeJSONValueStoredAdmitted(data []byte) (value bytejson.ByteJson, err error) {
-	value, err = decodeJSONValueStoredRaw(data)
-	if err != nil {
-		return bytejson.Null, err
-	}
-	// Admission owns the complete stored-layout validation for immutable
-	// T_json vectors. Keep a recursive shape check at this executor boundary
-	// as well: a remote or otherwise mutable vector must not turn a malformed
-	// descendant into an ordinary path miss and silently bypass ON ERROR.
-	if !bytejson.IsValidByteJson(value) {
-		return bytejson.Null, moerr.NewInvalidInputNoCtx("invalid binary JSON document")
-	}
-	return value, nil
+// Vector admission validates the stored layout, but vector bytes can be
+// changed through borrowed aliases afterward. Recheck the current bytes,
+// including canonical key and string rules, before following any offsets.
+func decodeJSONValueStoredAdmitted(data []byte) (bytejson.ByteJson, error) {
+	return decodeJSONValueStored(data)
 }
 
 // JsonValue is the public executor entry point for both the persisted

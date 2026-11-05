@@ -39,8 +39,8 @@ func TestParseJSONValueDateRejectsTimeComponent(t *testing.T) {
 	require.Equal(t, "2024-01-02", got.String())
 }
 
-// Keep complete validation, admitted extraction and vector execution distinct:
-// the production executor uses the admitted path but still validates descendants.
+// Keep the direct and vector execution measurements distinct. Both extraction
+// paths validate the current stored bytes, including unselected descendants.
 func BenchmarkJSONValueStoredLargeDocumentSmallPath(b *testing.B) {
 	for _, count := range []int{16, 256, 4096} {
 		b.Run(fmt.Sprintf("elements=%d", count), func(b *testing.B) {

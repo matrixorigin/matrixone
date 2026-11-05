@@ -779,3 +779,54 @@ func TestStoredContainerSharesBoundsAndWork(t *testing.T) {
 		t.Fatalf("stored alias accepted=%v scalar visits=%d bytes=%d", valid, visits, len(data))
 	}
 }
+
+func TestStoredContainerNumericEncodingEquivalent(t *testing.T) {
+	nested := testScalarArray([]byte{typeInt64, typeUint64, typeFloat64, typeString}, [][]byte{make([]byte, 8), make([]byte, 8), make([]byte, 8), {1, 'x'}})
+	data := testScalarArray([]byte{typeLiteral, typeArray, typeString}, [][]byte{{1}, nested, {1, 'y'}})
+	check := func(d []byte, limit uint64) {
+		t.Helper()
+		want, wantDepth := StoredContainer(typeArray, d, benchmarkScalar, limit)
+		got, gotDepth := StoredContainerWithNumericEncoding(typeArray, d, benchmarkScalar, limit)
+		if got != want || gotDepth != wantDepth {
+			t.Fatalf("limit=%d data=%x got=%v/%v want=%v/%v", limit, d, got, gotDepth, want, wantDepth)
+		}
+	}
+	for i := range data {
+		for _, value := range []byte{0, 1, 2, typeInt64, typeUint64, typeFloat64, 0xfd, 0xff} {
+			d := append([]byte(nil), data...)
+			d[i] = value
+			for _, limit := range []uint64{0, 1, 20, 4096} {
+				check(d, limit)
+			}
+		}
+	}
+	for _, value := range []float64{0, math.Copysign(0, -1), math.SmallestNonzeroFloat64, math.MaxFloat64, math.Inf(1), math.Inf(-1), math.NaN()} {
+		payload := make([]byte, 8)
+		binary.LittleEndian.PutUint64(payload, math.Float64bits(value))
+		check(testScalarArray([]byte{typeFloat64}, [][]byte{payload}), 4096)
+	}
+	check(testWrapArray(nested, 2, true), 4096)
+	deep := nested
+	for i := 0; i < maxContainerDepth; i++ {
+		deep = testWrapArray(deep, 1, false)
+	}
+	check(deep, 1<<20)
+
+	ints := testScalarArray([]byte{typeInt64}, [][]byte{make([]byte, 8)})
+	if ok, _ := StoredContainer(typeArray, ints, func(byte, []byte) bool { return false }, 4096); ok {
+		t.Fatal("generic stored callback was bypassed")
+	}
+	if ok, _ := StoredContainerWithNumericEncoding(typeArray, ints, func(byte, []byte) bool { t.Fatal("numeric callback"); return false }, 4096); !ok {
+		t.Fatal("valid integer rejected")
+	}
+	mutated := testScalarArray([]byte{typeString, typeInt64}, [][]byte{{1, 'x'}, make([]byte, 8)})
+	visits := 0
+	ok, _ := StoredContainerWithNumericEncoding(typeArray, mutated, func(tp byte, data []byte) bool {
+		visits++
+		mutated[headerSize+valEntrySize] = 0xfd
+		return benchmarkScalar(tp, data)
+	}, 4096)
+	if ok || visits != 1 {
+		t.Fatalf("later corruption bypassed: ok=%v visits=%d", ok, visits)
+	}
+}

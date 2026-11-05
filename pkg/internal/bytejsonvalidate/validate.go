@@ -289,3 +289,12 @@ func uvarintSize(value uint64) int {
 	}
 	return size
 }
+
+// StoredContainerWithNumericEncoding validates the stored layout while
+// handling fixed-width numeric encodings without a scalar callback.
+// Its caller must use the numeric semantics of ContainerWithNumericEncoding.
+func StoredContainerWithNumericEncoding(tp byte, data []byte, validScalar func(byte, []byte) bool, workLimit uint64) (valid, depthExceeded bool) {
+	remaining := uint64(len(data))
+	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, true)
+	return
+}
