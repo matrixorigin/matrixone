@@ -339,18 +339,18 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			fourValue, four := decimalBoundZoneMap(t, decimalType.typ, decimalBound{"4.00", 2})
 
 			columnType := types.T(decimalType.typ.Id)
-			require.True(t, anyLTByBound(zm, oneValue, one, columnType).mayMatch())
-			require.True(t, anyLTByBound(zm, minusTwoValue, minusTwo, columnType).excludes())
-			require.True(t, anyLEByBound(zm, minusTwoValue, minusTwo, columnType).mayMatch())
-			require.True(t, anyGTByBound(zm, oneValue, one, columnType).mayMatch())
-			require.True(t, anyGTByBound(zm, twoValue, two, columnType).excludes())
-			require.True(t, anyGEByBound(zm, twoValue, two, columnType).mayMatch())
-			require.True(t, intersectsBound(zm, oneValue, one, columnType).mayMatch())
-			require.True(t, intersectsBound(zm, threeValue, three, columnType).excludes())
-			require.True(t, anyBetweenBounds(
+			require.True(t, index.AnyLTByBound(zm, oneValue, one, columnType).MayMatch())
+			require.True(t, index.AnyLTByBound(zm, minusTwoValue, minusTwo, columnType).Excludes())
+			require.True(t, index.AnyLEByBound(zm, minusTwoValue, minusTwo, columnType).MayMatch())
+			require.True(t, index.AnyGTByBound(zm, oneValue, one, columnType).MayMatch())
+			require.True(t, index.AnyGTByBound(zm, twoValue, two, columnType).Excludes())
+			require.True(t, index.AnyGEByBound(zm, twoValue, two, columnType).MayMatch())
+			require.True(t, index.IntersectsBound(zm, oneValue, one, columnType).MayMatch())
+			require.True(t, index.IntersectsBound(zm, threeValue, three, columnType).Excludes())
+			require.True(t, index.AnyBetweenBounds(
 				zm, minusOneValue, oneScale1Value, minusOne, oneScale1, columnType,
-			).mayMatch())
-			require.True(t, anyBetweenBounds(zm, threeValue, fourValue, three, four, columnType).excludes())
+			).MayMatch())
+			require.True(t, index.AnyBetweenBounds(zm, threeValue, fourValue, three, four, columnType).Excludes())
 
 			mismatchType := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0}
 			if types.T(decimalType.typ.Id) == types.T_decimal128 {
@@ -359,14 +359,14 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			mismatch := decimalZoneMap(t, mismatchType, "1")
 			// A persisted type mismatch makes index.ZM comparison return ok=false.
 			// Every decimal pruning helper must fail open in that case.
-			require.True(t, anyLTByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyLEByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyGTByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyGEByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, intersectsBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyBetweenBounds(zm, nil, nil, mismatch, mismatch, columnType).mayMatch())
+			require.True(t, index.AnyLTByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyLEByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyGTByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyGEByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.IntersectsBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyBetweenBounds(zm, nil, nil, mismatch, mismatch, columnType).MayMatch())
 			for hint := uint8(0); hint < 4; hint++ {
-				require.True(t, inRangeBounds(zm, nil, nil, mismatch, mismatch, hint, columnType).mayMatch())
+				require.True(t, index.InRangeBounds(zm, nil, nil, mismatch, mismatch, hint, columnType).MayMatch())
 			}
 		})
 	}
@@ -380,33 +380,33 @@ func TestJSONZoneMapValueComparisonsFailOpen(t *testing.T) {
 	index.UpdateZM(zm, low)
 	index.UpdateZM(zm, high)
 
-	for name, match := range map[string]zoneMapMatch{
-		"lt":      anyLTByBound(zm, low, nil, columnType),
-		"le":      anyLEByBound(zm, low, nil, columnType),
-		"gt":      anyGTByBound(zm, high, nil, columnType),
-		"ge":      anyGEByBound(zm, high, nil, columnType),
-		"equal":   intersectsBound(zm, low, nil, columnType),
-		"between": anyBetweenBounds(zm, low, high, nil, nil, columnType),
+	for name, match := range map[string]index.ZoneMapMatch{
+		"lt":      index.AnyLTByBound(zm, low, nil, columnType),
+		"le":      index.AnyLEByBound(zm, low, nil, columnType),
+		"gt":      index.AnyGTByBound(zm, high, nil, columnType),
+		"ge":      index.AnyGEByBound(zm, high, nil, columnType),
+		"equal":   index.IntersectsBound(zm, low, nil, columnType),
+		"between": index.AnyBetweenBounds(zm, low, high, nil, nil, columnType),
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.False(t, match.comparable)
-			require.True(t, match.mayMatch())
-			require.False(t, match.excludes())
+			require.False(t, match.Known)
+			require.True(t, match.MayMatch())
+			require.False(t, match.Excludes())
 		})
 	}
 
 	for hint := uint8(0); hint < 4; hint++ {
-		match := inRangeBounds(zm, low, high, nil, nil, hint, columnType)
-		require.Falsef(t, match.comparable, "range hint %d", hint)
-		require.Truef(t, match.mayMatch(), "range hint %d", hint)
+		match := index.InRangeBounds(zm, low, high, nil, nil, hint, columnType)
+		require.Falsef(t, match.Known, "range hint %d", hint)
+		require.Truef(t, match.MayMatch(), "range hint %d", hint)
 	}
 
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())
 	require.NoError(t, vector.AppendBytes(vec, low, false, mp))
-	match := anyInVector(zm, vec, columnType)
-	require.False(t, match.comparable)
-	require.True(t, match.mayMatch())
+	match := index.AnyInVector(zm, vec, columnType)
+	require.False(t, match.Known)
+	require.True(t, match.MayMatch())
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -506,7 +506,7 @@ func encodeReadutilJSON(t *testing.T, input string) []byte {
 	return encoded
 }
 
-var zoneMapMatchSink zoneMapMatch
+var zoneMapMatchSink index.ZoneMapMatch
 var zoneMapSeekSink int
 
 func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
@@ -532,54 +532,54 @@ func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
 
 	tests := []struct {
 		name string
-		fn   func() zoneMapMatch
+		fn   func() index.ZoneMapMatch
 	}{
 		{
 			name: "raw initialized",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(intZM, intBound, nil, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(intZM, intBound, nil, types.T_int64)
 			},
 		},
 		{
 			name: "raw unknown",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(unknownIntZM, intBound, nil, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(unknownIntZM, intBound, nil, types.T_int64)
 			},
 		},
 		{
 			name: "decimal initialized",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(decimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(decimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
 			},
 		},
 		{
 			name: "decimal unknown",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(unknownDecimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(unknownDecimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
 			},
 		},
 		{
 			name: "in initialized",
-			fn: func() zoneMapMatch {
-				return anyInVector(intZM, intInVec, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyInVector(intZM, intInVec, types.T_int64)
 			},
 		},
 		{
 			name: "in unknown",
-			fn: func() zoneMapMatch {
-				return anyInVector(unknownIntZM, intInVec, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyInVector(unknownIntZM, intInVec, types.T_int64)
 			},
 		},
 		{
 			name: "prefix initialized",
-			fn: func() zoneMapMatch {
-				return prefixEqByValue(prefixZM, prefixValue, types.T_varchar)
+			fn: func() index.ZoneMapMatch {
+				return index.PrefixEqByValue(prefixZM, prefixValue, types.T_varchar)
 			},
 		},
 		{
 			name: "prefix unknown",
-			fn: func() zoneMapMatch {
-				return prefixInVector(unknownPrefixZM, prefixInVec, types.T_varchar)
+			fn: func() index.ZoneMapMatch {
+				return index.PrefixInVector(unknownPrefixZM, prefixInVec, types.T_varchar)
 			},
 		},
 	}
@@ -627,8 +627,8 @@ func BenchmarkSeekFirstBlockByZoneMap(b *testing.B) {
 			for b.Loop() {
 				zoneMapSeekSink = seekFirstBlockByZoneMap(
 					dataMeta, 0, nil, types.T_int64,
-					func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGEByBound(zm, boundBytes, nil, types.T_int64)
+					func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyGEByBound(zm, boundBytes, nil, types.T_int64)
 					},
 				)
 			}

@@ -140,8 +140,8 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 		if objectZM.GetType() != types.T(column.Typ.Id) || objectZM.GetScale() != column.Typ.Scale {
 			return result, false, nil
 		}
-		keepObject, known := match(objectZM)
-		if !known {
+		objectMatch := match(objectZM)
+		if !objectMatch.Known {
 			return result, false, nil
 		}
 		var rows uint64
@@ -158,11 +158,11 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 			if zm.GetType() != types.T(column.Typ.Id) || zm.GetScale() != column.Typ.Scale {
 				return result, false, nil
 			}
-			keep, known := match(zm)
-			if !known {
+			blockMatch := match(zm)
+			if !blockMatch.Known {
 				return result, false, nil
 			}
-			if keepObject && keep {
+			if objectMatch.Match && blockMatch.Match {
 				result.Rows += uint64(block.Rows)
 				result.Blocks++
 			}

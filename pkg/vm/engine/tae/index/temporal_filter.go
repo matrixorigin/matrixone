@@ -26,11 +26,11 @@ type temporalRange struct {
 }
 
 // MakeMixedTemporalMatcher returns the zone-map test used for mixed
-// DATETIME/TIMESTAMP predicates. A false known result must retain the block.
+// DATETIME/TIMESTAMP predicates. An unknown result must retain the block.
 // The bound is the encoded scalar value in its SQL type; it is never a
 // candidate index boundary. Scale is the TIMESTAMP precision used by the SQL
 // comparison, which need not equal the DATETIME zone-map scale.
-func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.T, scale int32, zone *time.Location, op string) (func(ZM) (bool, bool), bool) {
+func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.T, scale int32, zone *time.Location, op string) (func(ZM) ZoneMapMatch, bool) {
 	if zone == nil || scale < 0 || scale > 6 || len(value) != 8 ||
 		!((columnType == types.T_datetime && valueType == types.T_timestamp) || (columnType == types.T_timestamp && valueType == types.T_datetime)) {
 		return nil, false
@@ -57,13 +57,13 @@ func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.
 		}
 	}
 	maxDatetime := types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999)
-	return func(zm ZM) (bool, bool) {
+	return func(zm ZM) ZoneMapMatch {
 		if !zm.Valid() || zm.GetType() != columnType {
-			return false, false
+			return ZoneMapMatch{}
 		}
 		low, high := zm.GetMinBuf(), zm.GetMaxBuf()
 		if len(low) != 8 || len(high) != 8 {
-			return false, false
+			return ZoneMapMatch{}
 		}
 		var values temporalRange
 		switch columnType {
@@ -79,7 +79,7 @@ func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.
 				// Noncanonical intervals may contain ZeroDatetime inside them,
 				// whose scalar conversion cannot be bounded by their endpoints.
 				if minimum < 0 || minimum > maximum || maximum > maxDatetime {
-					return false, false
+					return ZoneMapMatch{}
 				}
 				var minTS, maxTS types.Timestamp
 				if fixed {
@@ -90,31 +90,31 @@ func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.
 					var ok bool
 					minTS, maxTS, ok = types.DatetimeRangeToTimestampRange(minimum, maximum, zone)
 					if !ok {
-						return false, false
+						return ZoneMapMatch{}
 					}
 				}
 				// -1 is preserved as ZeroTimestamp, while nearby negative
 				// values can round to zero. Rounding endpoints is not monotone
 				// across that sentinel; retain the block instead of pruning.
 				if scale < 6 && minTS <= types.ZeroTimestamp && maxTS >= types.ZeroTimestamp {
-					return false, false
+					return ZoneMapMatch{}
 				}
 				values = temporalRange{min: minTS.TruncateToScale(scale), max: maxTS.TruncateToScale(scale)}
 			}
 		}
 		switch op {
 		case "=":
-			return values.max >= bound.min && values.min <= bound.max, true
+			return ZoneMapMatch{Match: values.max >= bound.min && values.min <= bound.max, Known: true}
 		case "<":
-			return values.min < bound.max, true
+			return ZoneMapMatch{Match: values.min < bound.max, Known: true}
 		case "<=":
-			return values.min <= bound.max, true
+			return ZoneMapMatch{Match: values.min <= bound.max, Known: true}
 		case ">":
-			return values.max > bound.min, true
+			return ZoneMapMatch{Match: values.max > bound.min, Known: true}
 		case ">=":
-			return values.max >= bound.min, true
+			return ZoneMapMatch{Match: values.max >= bound.min, Known: true}
 		default:
-			return false, false
+			return ZoneMapMatch{}
 		}
 	}, true
 }

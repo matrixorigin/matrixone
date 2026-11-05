@@ -42,12 +42,11 @@ func TestMixedTemporalZoneMatcher(t *testing.T) {
 	}{{"=", true}, {"<", false}, {"<=", true}, {">", false}, {">=", true}} {
 		match, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeInt64(&encoded), types.T_timestamp, 3, zone, tc.op)
 		require.True(t, ok)
-		got, known := match(zm)
-		require.True(t, known, tc.op)
-		require.Equal(t, tc.want, got, tc.op)
+		got := match(zm)
+		require.True(t, got.Known, tc.op)
+		require.Equal(t, tc.want, got.Match, tc.op)
 		for _, unknown := range []ZM{nil, {0}, NewZM(types.T_datetime, 6), wrongType} {
-			_, known = match(unknown)
-			require.False(t, known, "unknown or incompatible metadata cannot prune")
+			require.False(t, match(unknown).Known, "unknown or incompatible metadata cannot prune")
 		}
 	}
 	_, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeInt64(&encoded), types.T_timestamp, 7, zone, "=")
@@ -61,9 +60,9 @@ func TestMixedTemporalZoneMatcher(t *testing.T) {
 	// TIMESTAMP column's scale before comparing against its zone map.
 	match, ok := MakeMixedTemporalMatcher(types.T_timestamp, types.EncodeInt64(&v), types.T_datetime, 3, zone, "=")
 	require.True(t, ok)
-	matched, known := match(wrongType)
-	require.True(t, known)
-	require.True(t, matched)
+	matched := match(wrongType)
+	require.True(t, matched.Known)
+	require.True(t, matched.Match)
 }
 
 func TestMixedTemporalZoneMatcherSentinelRanges(t *testing.T) {
@@ -88,8 +87,7 @@ func TestMixedTemporalZoneMatcherSentinelRanges(t *testing.T) {
 			bound := types.Timestamp(0)
 			match, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeTimestamp(&bound), types.T_timestamp, 0, zone, "=")
 			require.True(t, ok)
-			_, known := match(zm)
-			require.False(t, known, "non-monotone intervals cannot establish exclusion or a lower-bound hit")
+			require.False(t, match(zm).Known, "non-monotone intervals cannot establish exclusion or a lower-bound hit")
 		})
 	}
 }
@@ -105,14 +103,13 @@ func TestMixedTemporalZoneMatcherMalformedEndpoints(t *testing.T) {
 		require.True(t, ok)
 		zm := NewZM(column, 6)
 		UpdateZM(zm, types.EncodeInt64(&zero))
-		got, known := match(zm)
-		require.True(t, got && known)
+		got := match(zm)
+		require.True(t, got.Match && got.Known)
 		for _, endpoint := range []int{30, 61} {
 			for _, width := range []byte{0, 7, 9} {
 				bad := append(ZM(nil), zm...)
 				bad[endpoint] = width
-				_, known := match(bad)
-				require.False(t, known, "type=%s endpoint=%d width=%d", column, endpoint, width)
+				require.False(t, match(bad).Known, "type=%s endpoint=%d width=%d", column, endpoint, width)
 			}
 		}
 	}
@@ -166,31 +163,31 @@ func TestMixedTemporalZoneMatcherScalarOracle(t *testing.T) {
 						for _, op := range []string{"=", "<", "<=", ">", ">="} {
 							match, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeTimestamp(&bound), types.T_timestamp, scale, zone, op)
 							require.True(t, ok)
-							got, known := match(zm)
+							got := match(zm)
 							if r[0] > r[1] || r[0] != r[1] && (r[0] < 0 || r[1] > maxDate) {
-								require.False(t, known)
+								require.False(t, got.Known)
 								continue
 							}
 							any := false
 							for _, row := range rows {
 								any = any || compare(row.ToTimestamp(zone).TruncateToScale(scale), bound, op)
 							}
-							if known && !got {
+							if got.Known && !got.Match {
 								require.False(t, any, "range=%v scale=%d bound=%d op=%s", r, scale, bound, op)
 							}
 							if r[0] == r[1] {
-								require.True(t, known)
-								require.Equal(t, any, got)
+								require.True(t, got.Known)
+								require.Equal(t, any, got.Match)
 							} else if ordered && !crossesSentinel {
-								require.True(t, known, "ordinary ordered metadata must remain usable")
+								require.True(t, got.Known, "ordinary ordered metadata must remain usable")
 								lo, hi := lo.TruncateToScale(scale), hi.TruncateToScale(scale)
 								want := compare(lo, bound, op) || compare(hi, bound, op)
 								if op == "=" {
 									want = lo <= bound && bound <= hi
 								}
-								require.Equal(t, want, got, "range=%v scale=%d bound=%d op=%s", r, scale, bound, op)
+								require.Equal(t, want, got.Match, "range=%v scale=%d bound=%d op=%s", r, scale, bound, op)
 							} else {
-								require.False(t, known)
+								require.False(t, got.Known)
 							}
 						}
 					}
@@ -211,16 +208,16 @@ func BenchmarkMixedTemporalZoneMatcher(b *testing.B) {
 		UpdateZM(zm, types.EncodeDatetime(&high))
 		fast, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeTimestamp(&bound), types.T_timestamp, 0, zone, "=")
 		require.True(b, ok)
-		calendar := func(zm ZM) (bool, bool) {
+		calendar := func(zm ZM) ZoneMapMatch {
 			lo, hi, known := types.DatetimeRangeToTimestampRange(zm.GetMin().(types.Datetime), zm.GetMax().(types.Datetime), zone)
 			if !known {
-				return false, false
+				return ZoneMapMatch{}
 			}
-			return lo.TruncateToScale(0) <= bound && hi.TruncateToScale(0) >= bound, true
+			return ZoneMapMatch{Match: lo.TruncateToScale(0) <= bound && hi.TruncateToScale(0) >= bound, Known: true}
 		}
 		for _, test := range []struct {
 			name  string
-			match func(ZM) (bool, bool)
+			match func(ZM) ZoneMapMatch
 		}{{"calendar", calendar}, {"fixed", fast}} {
 			b.Run(fmt.Sprintf("offset=%d/%s", offset, test.name), func(b *testing.B) {
 				b.ReportAllocs()
