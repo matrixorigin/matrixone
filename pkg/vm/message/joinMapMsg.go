@@ -159,6 +159,7 @@ type JoinMap struct {
 	delRows          *bitmap.Bitmap
 	batches          []*batch.Batch
 	releaseMemory    func()
+	membership       membershipState
 
 	// spill support
 	Spilled       bool
@@ -272,6 +273,8 @@ func (jm *JoinMap) IsDeleted(row uint64) bool {
 func (jm *JoinMap) SetMemoryRelease(release func()) { jm.releaseMemory = release }
 
 func (jm *JoinMap) FreeMemory() {
+	// The membership index borrows keys from batches, so retire it first.
+	jm.membership.free()
 	for i, fd := range jm.SpillBuildFds {
 		if fd != nil {
 			fd.Close()
@@ -308,14 +311,13 @@ func (jm *JoinMap) Free() {
 
 func (jm *JoinMap) Size() int64 {
 	// TODO: add the size of the other JoinMap parts
-	if jm.ihm == nil && jm.shm == nil {
-		return 0
-	}
+	size := jm.membership.size()
 	if jm.ihm != nil {
-		return jm.ihm.Size()
-	} else {
-		return jm.shm.Size()
+		size += jm.ihm.Size()
+	} else if jm.shm != nil {
+		size += jm.shm.Size()
 	}
+	return size
 }
 
 func (jm *JoinMap) PreAlloc(n uint64) error {

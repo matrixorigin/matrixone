@@ -48,6 +48,10 @@ type container struct {
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 	mp       *message.JoinMap
 
+	markProbeCol int
+	markBuildCol int
+	markType     types.Type
+
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
 	// probe row. rightBatchOffset[k] is the flat index of build batch k's
@@ -110,6 +114,7 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanHashMap()
 	ctr.state = Build
 	ctr.inBat = nil
+	ctr.probeIdx, ctr.batIdx = 0, 0
 	ctr.rightRowsMatched = nil
 	ctr.rightBatchOffset = nil
 	ctr.rightMatchedIter = nil
@@ -121,7 +126,8 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanNonEqCondExecutor()
-
+	ctr.cleanHashMap()
+	ctr.inBat = nil
 }
 
 func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
