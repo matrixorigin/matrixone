@@ -17,6 +17,10 @@
 package jobs
 
 import (
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -24,22 +28,60 @@ func init() {
 	activeM0WriteSchemaVersion = m0WriteSchemaVersion
 }
 
-func m0WriteSchemaVersion(schema *catalog.Schema, seqnums []uint16, fallback uint32) uint32 {
-	if schema == nil {
-		return fallback
+func m0WriteSchemaVersion(schema *catalog.Schema, seqnums []uint16, databaseID, relationID uint64, fallback uint32) (uint32, error) {
+	if schema == nil || schema.Extra == nil || schema.Extra.M0Evolution == nil {
+		return fallback, nil
 	}
-	version, err := catalog.M0DerivedAppendVersion(schema)
-	if err != nil {
-		return fallback
+	c := schema.Extra.M0Evolution
+	owner := m0read.EvolutionBinding{Account: schema.AcInfo.TenantID, Database: databaseID, Relation: relationID}
+	if err := m0read.ValidateEvolution(c, owner); err != nil {
+		return 0, err
 	}
-	next := schema.Extra.NextColSeqnum
-	if len(seqnums) < int(next) {
-		return fallback
-	}
-	for seq := uint32(0); seq < next; seq++ {
-		if seqnums[seq] != uint16(seq) {
-			return fallback
+	columns := 0
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		if int(col.SeqNum) >= len(c.Columns) {
+			return 0, moerr.NewInternalErrorNoCtx("M0: writer schema exceeds contract")
+		}
+		if int(col.SeqNum) != columns {
+			return 0, moerr.NewInternalErrorNoCtx("M0: writer schema has non-contiguous identities")
+		}
+		columns++
+		want := c.Columns[col.SeqNum]
+		actual, err := catalog.EvolutionSchemaColumnSemantic(schema, col, want.ColumnId)
+		if err != nil {
+			return 0, err
+		}
+		if !bytes.Equal(actual, want.Semantics) {
+			return 0, moerr.NewInternalErrorNoCtx("M0: writer semantics disagree with contract")
 		}
 	}
-	return version
+	if columns != len(c.Columns) {
+		return 0, moerr.NewInternalErrorNoCtx("M0: writer schema does not cover contract")
+	}
+	count := uint32(0)
+	for _, seq := range seqnums {
+		if seq >= objectio.SEQNUM_UPPER {
+			continue
+		}
+		if uint32(seq) != count {
+			return 0, moerr.NewInternalErrorNoCtx("M0: writer has incomplete declared layout")
+		}
+		count++
+	}
+	if count < c.RootColumns || int(count) > len(c.Columns) {
+		return 0, moerr.NewInternalErrorNoCtx("M0: writer layout outside contract")
+	}
+	// Match an explicitly recorded layout, including a pinned older prefix.
+	generation := c.Columns[count-1].IntroducedLayout
+	width, err := m0read.EvolutionWidth(c, owner, generation)
+	if err != nil {
+		return 0, err
+	}
+	if width != count {
+		return 0, moerr.NewInternalErrorNoCtx("M0: writer layout is not a complete contract generation")
+	}
+	return generation, nil
 }

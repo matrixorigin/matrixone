@@ -2250,7 +2250,7 @@ func collectTableStats(
 	// Phase 2: Sampled stats from ObjectMeta (requires IO)
 	var sampledRowCount float64
 	var sampledObjectCount int64
-	m0Base, m0AppendDomain := m0AppendBaseFromPlan(req.tableDef)
+	m0Base, _ := m0AppendBaseFromPlan(req.tableDef)
 
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		objName := obj.ObjectShortName()
@@ -2282,12 +2282,12 @@ func collectTableStats(
 			}
 		}
 
-		if m0AppendDomain {
-			var proofErr error
-			provenM0, _, proofErr = activeM0ReadObject(objCtx, req.tableDef, obj, fs)
-			if proofErr != nil {
-				return proofErr
-			}
+		// Contract parsing must also reject malformed authority that no longer
+		// matches the append-domain shape. The default hook is inert.
+		var proofErr error
+		provenM0, _, proofErr = activeM0ObjectReadLayout(objCtx, req.tableDef, obj, fs)
+		if proofErr != nil {
+			return proofErr
 		}
 
 		// Sampled object: read ObjectMeta (requires IO)
@@ -2301,6 +2301,11 @@ func collectTableStats(
 		defer updateMu.Unlock()
 
 		meta := objMeta.MustDataMeta()
+		if activeM0Enabled && !provenM0 {
+			if err := requirePhysicalMetadataColumns(meta, req.tableDef.Cols[:lenCols], req.tableDef); err != nil {
+				return err
+			}
+		}
 		sampledObjectCount++
 		objectRowCount := meta.BlockHeader().Rows()
 		sampledRowCount += float64(objectRowCount)

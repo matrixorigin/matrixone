@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -44,6 +46,53 @@ type storage struct {
 	sid  string
 	exec executor.SQLExecutor
 	eng  engine.Engine
+}
+
+// partitionMetadataScope binds the existing transaction-local cache to the
+// actual catalog read generation. It is not a lock for concurrent mutation.
+type partitionMetadataScope struct {
+	account           uint32
+	transactionID     string
+	snapshot          timestamp.Timestamp
+	transactionRev    uint64
+	workspaceRevision uint64
+}
+
+func (s partitionMetadataScope) matches(other partitionMetadataScope) bool {
+	return s.account == other.account && s.transactionID == other.transactionID &&
+		s.snapshot.Equal(other.snapshot) && s.transactionRev == other.transactionRev &&
+		s.workspaceRevision == other.workspaceRevision
+}
+
+type partitionMetadataCacheEntry struct {
+	scope    partitionMetadataScope
+	metadata partition.PartitionMetadata
+}
+
+func partitionMetadataReadScope(op client.TxnOperator, account uint32) (partitionMetadataScope, bool, error) {
+	provider, ok := op.(interface {
+		CatalogReadStamp() (client.CatalogReadStamp, error)
+	})
+	if !ok {
+		return partitionMetadataScope{}, false, nil
+	}
+	stamp, err := provider.CatalogReadStamp()
+	if err != nil {
+		return partitionMetadataScope{}, false, err
+	}
+	if stamp.TransactionID == "" || stamp.Snapshot.IsEmpty() || stamp.Workspace == nil {
+		return partitionMetadataScope{}, false, nil
+	}
+	visibility, ok := stamp.Workspace.(interface{ CatalogVisibility() (uint64, bool) })
+	if !ok {
+		return partitionMetadataScope{}, false, nil
+	}
+	revision, stable := visibility.CatalogVisibility()
+	if !stable {
+		return partitionMetadataScope{}, false, nil
+	}
+	return partitionMetadataScope{account: account, transactionID: stamp.TransactionID,
+		snapshot: stamp.Snapshot, transactionRev: stamp.Revision, workspaceRevision: revision}, true, nil
 }
 
 func NewStorage(
@@ -86,6 +135,8 @@ func (s *storage) GetMetadata(
 	}
 
 	key := ""
+	var scope partitionMetadataScope
+	var scoped bool
 
 	opts := executor.Options{}.
 		WithTxn(txnOp).
@@ -93,8 +144,24 @@ func (s *storage) GetMetadata(
 		WithAccountID(accountID)
 	if txnOp != nil {
 		key = fmt.Sprintf(txnBasedMetadataCacheKey, tableID)
-		if v, ok := txnOp.Get(key); ok {
-			return v.(partition.PartitionMetadata), true, nil
+		scope, scoped, err = partitionMetadataReadScope(txnOp, accountID)
+		if err != nil {
+			return partition.PartitionMetadata{}, false, err
+		}
+		if v, ok := txnOp.Get(key); ok && scoped {
+			if cached, ok := v.(partitionMetadataCacheEntry); ok && scope.matches(cached.scope) {
+				current, stable, err := partitionMetadataReadScope(txnOp, accountID)
+				if err != nil {
+					return partition.PartitionMetadata{}, false, err
+				}
+				if !stable || !scope.matches(current) {
+					return partition.PartitionMetadata{}, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				}
+				if err := ctx.Err(); err != nil {
+					return partition.PartitionMetadata{}, false, err
+				}
+				return *proto.Clone(&cached.metadata).(*partition.PartitionMetadata), true, nil
+			}
 		}
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -231,8 +298,24 @@ func (s *storage) GetMetadata(
 		},
 		opts,
 	)
-	if found && txnOp != nil {
-		txnOp.Set(key, metadata)
+	if err != nil {
+		return metadata, found, err
+	}
+	if err = ctx.Err(); err != nil {
+		return partition.PartitionMetadata{}, false, err
+	}
+	if txnOp != nil && scoped {
+		current, stable, scopeErr := partitionMetadataReadScope(txnOp, accountID)
+		if scopeErr != nil {
+			return partition.PartitionMetadata{}, false, scopeErr
+		}
+		if !stable || !scope.matches(current) {
+			return partition.PartitionMetadata{}, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		if found {
+			owned := *proto.Clone(&metadata).(*partition.PartitionMetadata)
+			txnOp.Set(key, partitionMetadataCacheEntry{scope: scope, metadata: owned})
+		}
 	}
 	return metadata, found, err
 }

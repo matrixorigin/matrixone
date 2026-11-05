@@ -16,19 +16,20 @@ package readutil
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var activeM0ReadLocationProofEnabled bool
+var activeM0StrictReader bool
 
-var activeM0ReadLocationProof = func(
+var activeM0ReadLayout = func(
 	context.Context,
 	*plan.TableDef,
 	objectio.Location,
 	fileservice.FileService,
-) (bool, objectio.M0ObjectProof, error) {
-	return false, objectio.M0ObjectProof{}, nil
+) (bool, m0read.ObjectReadLayout, error) {
+	return false, m0read.ObjectReadLayout{}, nil
 }

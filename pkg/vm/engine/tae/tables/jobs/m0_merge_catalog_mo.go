@@ -1,3 +1,5 @@
+//go:build mo_m0
+
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,16 +19,11 @@ package jobs
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/internal/m0catalog"
 )
 
-var activeM0MergeProof = func(
-	context.Context,
-	*catalog.Schema,
-	objectio.Location,
-	fileservice.FileService,
-) (bool, objectio.M0ObjectProof, error) {
-	return false, objectio.M0ObjectProof{}, nil
+func bindM0MergeSchema(ctx context.Context, txn txnif.AsyncTxn, table *catalog.TableEntry, schema *catalog.Schema) (*catalog.Schema, error) {
+	return m0catalog.BindMergeSchema(ctx, txn, table, schema)
 }

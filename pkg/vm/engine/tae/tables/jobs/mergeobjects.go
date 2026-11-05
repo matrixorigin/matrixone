@@ -65,11 +65,12 @@ type mergeObjectsTask struct {
 	level int8
 	note  string
 
-	blkCnt     []int
-	nMergedBlk []int
-	schema     *catalog.Schema
-	idxs       []int
-	attrs      []string
+	blkCnt             []int
+	nMergedBlk         []int
+	schema             *catalog.Schema
+	writeSchemaVersion uint32
+	idxs               []int
+	attrs              []string
 
 	targetObjSize uint32
 
@@ -80,8 +81,6 @@ type mergeObjectsTask struct {
 
 	arena      *objectio.WriteArena
 	tnDataBats []*containers.Batch // cached TN batch wrappers, one per merged object
-	m0Proofs   []objectio.M0ObjectProof
-	m0ProofSet []bool
 }
 
 func NewMergeObjectsTask(
@@ -117,8 +116,6 @@ func NewMergeObjectsTask(
 		nMergedBlk:       make([]int, len(mergedObjs)),
 		blkCnt:           make([]int, len(mergedObjs)),
 		tnDataBats:       make([]*containers.Batch, len(mergedObjs)),
-		m0Proofs:         make([]objectio.M0ObjectProof, len(mergedObjs)),
-		m0ProofSet:       make([]bool, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
 		segmentID:        objectio.NewSegmentid(),
@@ -270,24 +267,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	obj := task.mergedObjsHandle[objIdx]
 	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipAllCache)
 	ctx = tables.WithPreservePhysicalRows(ctx)
-	if !task.isTombstone {
-		if !task.m0ProofSet[objIdx] {
-			proven, proof, proofErr := activeM0MergeProof(
-				ctx,
-				task.schema,
-				task.mergedObjs[objIdx].GetLocation(),
-				task.rt.Fs,
-			)
-			if proofErr != nil {
-				return nil, nil, nil, proofErr
-			}
-			task.m0Proofs[objIdx] = proof
-			task.m0ProofSet[objIdx] = proven
-		}
-		if task.m0ProofSet[objIdx] {
-			ctx = objectio.WithM0ProvenObject(ctx, task.m0Proofs[objIdx])
-		}
-	}
+
 	if task.isTombstone {
 		err = obj.Scan(
 			ctx,
@@ -426,7 +406,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 	writer := ioutil.ConstructWriterWithSegmentID(
 		task.segmentID,
 		task.num,
-		activeM0WriteSchemaVersion(task.schema, seqnums, task.schema.Version),
+		task.writeSchemaVersion,
 		seqnums,
 		sortkeyPos,
 		sortkeyIsPK,
@@ -521,7 +501,29 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if task.HasBigDelEvent() {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
+	if !task.isTombstone {
+		phaseDesc = "1-bind-merge-schema"
+		var boundSchema *catalog.Schema
+		boundSchema, err = bindM0MergeSchema(ctx, task.txn, task.tableEntry, task.schema)
+		if err != nil {
+			return err
+		}
+		task.schema = boundSchema
+	}
 	phaseDesc = "1-DoMergeAndWrite"
+	task.writeSchemaVersion = task.schema.Version
+	if !task.isTombstone {
+		seqs := make([]uint16, 0, len(task.schema.ColDefs))
+		for _, col := range task.schema.ColDefs {
+			if !col.IsPhyAddr() {
+				seqs = append(seqs, col.SeqNum)
+			}
+		}
+		task.writeSchemaVersion, err = activeM0WriteSchemaVersion(task.schema, seqs, task.did, task.tid, task.schema.Version)
+		if err != nil {
+			return err
+		}
+	}
 	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task); err != nil {
 		return err
 	}

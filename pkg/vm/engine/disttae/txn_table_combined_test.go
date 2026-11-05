@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
@@ -42,10 +43,12 @@ import (
 
 func newMockCombinedTxnTable() *combinedTxnTable {
 	return &combinedTxnTable{
-		primary:     nil, // Will be set in individual tests
-		pruneFunc:   func(ctx context.Context, param engine.RangesParam) ([]engine.Relation, error) { return nil, nil },
-		tablesFunc:  func() ([]engine.Relation, error) { return nil, nil },
-		prunePKFunc: func(bat *batch.Batch, partitionIndex int32) ([]engine.Relation, error) { return nil, nil },
+		primary:    nil, // Will be set in individual tests
+		pruneFunc:  func(ctx context.Context, param engine.RangesParam) ([]engine.Relation, error) { return nil, nil },
+		tablesFunc: func(context.Context) ([]engine.Relation, error) { return nil, nil },
+		prunePKFunc: func(_ context.Context, bat *batch.Batch, partitionIndex int32) ([]engine.Relation, error) {
+			return nil, nil
+		},
 	}
 }
 
@@ -55,18 +58,18 @@ func TestNewCombinedTxnTableFiltersNilRelations(t *testing.T) {
 	returned := []engine.Relation{valid, nil}
 	table := newCombinedTxnTable(
 		nil,
-		func() ([]engine.Relation, error) {
+		func(context.Context) ([]engine.Relation, error) {
 			return returned, nil
 		},
 		func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
 			return returned, nil
 		},
-		func(*batch.Batch, int32) ([]engine.Relation, error) {
+		func(context.Context, *batch.Batch, int32) ([]engine.Relation, error) {
 			return returned, nil
 		},
 	)
 
-	relations, err := table.tablesFunc()
+	relations, err := table.tablesFunc(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, expected, relations)
 
@@ -74,11 +77,11 @@ func TestNewCombinedTxnTableFiltersNilRelations(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expected, relations)
 
-	relations, err = table.prunePKFunc(nil, 0)
+	relations, err = table.prunePKFunc(context.Background(), nil, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, relations)
 
-	relations, err = table.tablesFunc()
+	relations, err = table.tablesFunc(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, expected, relations)
 	assert.Equal(t, []engine.Relation{valid, nil}, returned)
@@ -91,18 +94,18 @@ func TestNewCombinedTxnTableFiltersNilRelations(t *testing.T) {
 func TestNewCombinedTxnTablePreservesRelationErrors(t *testing.T) {
 	table := newCombinedTxnTable(
 		nil,
-		func() ([]engine.Relation, error) {
+		func(context.Context) ([]engine.Relation, error) {
 			return []engine.Relation{nil}, assert.AnError
 		},
 		func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
 			return []engine.Relation{nil}, assert.AnError
 		},
-		func(*batch.Batch, int32) ([]engine.Relation, error) {
+		func(context.Context, *batch.Batch, int32) ([]engine.Relation, error) {
 			return []engine.Relation{nil}, assert.AnError
 		},
 	)
 
-	relations, err := table.tablesFunc()
+	relations, err := table.tablesFunc(context.Background())
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Nil(t, relations)
 
@@ -110,7 +113,7 @@ func TestNewCombinedTxnTablePreservesRelationErrors(t *testing.T) {
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Nil(t, relations)
 
-	relations, err = table.prunePKFunc(nil, 0)
+	relations, err = table.prunePKFunc(context.Background(), nil, 0)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Nil(t, relations)
 }
@@ -160,7 +163,7 @@ func TestCombinedTxnTable_CollectChangesOrdersPartitionsByCommitTS(t *testing.T)
 	later := newChangesTestBatch(t, mp, []int64{20}, []types.TS{types.BuildTS(20, 0)})
 	earliest := newChangesTestBatch(t, mp, []int64{10}, []types.TS{types.BuildTS(10, 0)})
 	table := newMockCombinedTxnTable()
-	table.tablesFunc = func() ([]engine.Relation, error) {
+	table.tablesFunc = func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
 				return &mockChangesHandle{data: []*batch.Batch{later}}, nil
@@ -207,7 +210,7 @@ func TestCombinedTxnTable_CollectChangesKeepsPartitionMoveAtomic(t *testing.T) {
 	delete := newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})
 	later := newChangesTestBatch(t, mp, []int64{3}, []types.TS{types.BuildTS(20, 0)})
 	table := newMockCombinedTxnTable()
-	table.tablesFunc = func() ([]engine.Relation, error) {
+	table.tablesFunc = func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
 				return &mockChangesHandle{changes: []mockChange{
@@ -260,7 +263,7 @@ func TestCombinedTxnTable_CollectChangesKeepsSnapshotBatchesBounded(t *testing.T
 		{data: newChangesTestBatch(t, mp, []int64{4}, []types.TS{types.BuildTS(snapshotTS, 0)}), hint: engine.ChangesHandle_Snapshot},
 	}}
 	table := newMockCombinedTxnTable()
-	table.tablesFunc = func() ([]engine.Relation, error) {
+	table.tablesFunc = func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
 				return first, nil
@@ -372,7 +375,7 @@ func TestCombinedTxnTable_CollectChangesClosesAcquiredHandlesOnError(t *testing.
 	acquired := &mockChangesHandle{}
 	expectedErr := errors.New("collect changes failed")
 	table := newMockCombinedTxnTable()
-	table.tablesFunc = func() ([]engine.Relation, error) {
+	table.tablesFunc = func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
 				return acquired, nil
@@ -396,7 +399,7 @@ func TestCombinedTxnTable_CollectChangesReturnsTablesError(t *testing.T) {
 
 	expectedErr := errors.New("list partitions failed")
 	table := newMockCombinedTxnTable()
-	table.tablesFunc = func() ([]engine.Relation, error) {
+	table.tablesFunc = func(context.Context) ([]engine.Relation, error) {
 		return nil, expectedErr
 	}
 
@@ -873,6 +876,46 @@ func TestCombinedTxnTable_Delete(t *testing.T) {
 func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("CancelDuringMemberConstruction", func(t *testing.T) {
+		for _, withRanges := range []bool{false, true} {
+			for _, cancelAtFirst := range []bool{true, false} {
+				t.Run(fmt.Sprintf("ranges_%t_first_%t", withRanges, cancelAtFirst), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					first := &partitionCountingReader{}
+					second := &partitionCountingReader{}
+					secondCalled := false
+					one := &mockRelation{buildReadersFunc: func(context.Context, any, *plan.Expr, engine.RelData, int, int, bool, engine.TombstoneApplyPolicy, engine.FilterHint) ([]engine.Reader, error) {
+						if cancelAtFirst {
+							cancel()
+						}
+						return []engine.Reader{first}, nil
+					}}
+					two := &mockRelation{buildReadersFunc: func(context.Context, any, *plan.Expr, engine.RelData, int, int, bool, engine.TombstoneApplyPolicy, engine.FilterHint) ([]engine.Reader, error) {
+						secondCalled = true
+						cancel()
+						return []engine.Reader{second}, nil
+					}}
+					table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
+						return []engine.Relation{one, two}, nil
+					}}
+					var ranges engine.RelData
+					if withRanges {
+						ranges = &CombinedRelData{relations: []engine.Relation{one, two}, tables: []engine.RelData{readutil.NewBlockListRelationData(0), readutil.NewBlockListRelationData(0)}}
+					}
+					readers, err := table.BuildReaders(ctx, nil, nil, ranges, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+					require.ErrorIs(t, err, context.Canceled)
+					require.Nil(t, readers)
+					require.Equal(t, !cancelAtFirst, secondCalled)
+					require.Equal(t, 1, first.closes)
+					if secondCalled {
+						require.Equal(t, 1, second.closes)
+					}
+				})
+			}
+		}
+	})
+
 	t.Run("RelDataNilSuccess", func(t *testing.T) {
 		reader1 := &mockReader{}
 		reader2 := &mockReader{}
@@ -896,7 +939,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -910,7 +953,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 
 	t.Run("TablesFuncError", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -929,7 +972,7 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -943,13 +986,13 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 	t.Run("AllNilRelationsUseEmptyReaders", func(t *testing.T) {
 		table := newCombinedTxnTable(
 			nil,
-			func() ([]engine.Relation, error) {
+			func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{nil, nil}, nil
 			},
 			func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
 				return []engine.Relation{nil, nil}, nil
 			},
-			func(*batch.Batch, int32) ([]engine.Relation, error) {
+			func(context.Context, *batch.Batch, int32) ([]engine.Relation, error) {
 				return nil, nil
 			},
 		)
@@ -1027,7 +1070,7 @@ func TestCombinedTxnTableBuildReadersPreparesMembershipFilterOnce(t *testing.T) 
 		return []engine.Reader{&mockReader{filter: share}}, nil
 	}
 
-	table := &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) {
+	table := &combinedTxnTable{tablesFunc: func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{buildReadersFunc: build},
 			&mockRelation{buildReadersFunc: build},
@@ -1093,7 +1136,7 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1108,7 +1151,7 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 	// Test case 2: Error when tablesFunc returns error
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1128,7 +1171,7 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1142,7 +1185,7 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 	// Test case 4: Empty tables list
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1185,7 +1228,7 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1214,7 +1257,7 @@ func TestCombinedTxnTable_ApproxObjectsNum(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1226,7 +1269,7 @@ func TestCombinedTxnTable_ApproxObjectsNum(t *testing.T) {
 	// Test case 2: Error when tablesFunc returns error
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1238,7 +1281,7 @@ func TestCombinedTxnTable_ApproxObjectsNum(t *testing.T) {
 	// Test case 3: Empty tables list
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1256,7 +1299,7 @@ func TestCombinedTxnTable_ApproxObjectsNum(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1300,7 +1343,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1316,7 +1359,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 	// Test case 2: Error when tablesFunc returns error
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1336,7 +1379,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1350,7 +1393,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 	// Test case 4: Empty tables list
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1374,7 +1417,7 @@ func TestCombinedTxnTable_CollectTombstones(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1402,7 +1445,7 @@ func TestCombinedTxnTable_Size(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1415,7 +1458,7 @@ func TestCombinedTxnTable_Size(t *testing.T) {
 	// Test case 2: Error when tablesFunc returns error
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1435,7 +1478,7 @@ func TestCombinedTxnTable_Size(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1449,7 +1492,7 @@ func TestCombinedTxnTable_Size(t *testing.T) {
 	// Test case 4: Empty tables list
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1468,7 +1511,7 @@ func TestCombinedTxnTable_Size(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1495,7 +1538,7 @@ func TestCombinedTxnTable_StarCount(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1507,7 +1550,7 @@ func TestCombinedTxnTable_StarCount(t *testing.T) {
 
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1526,7 +1569,7 @@ func TestCombinedTxnTable_StarCount(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1539,7 +1582,7 @@ func TestCombinedTxnTable_StarCount(t *testing.T) {
 
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1557,7 +1600,7 @@ func TestCombinedTxnTable_StarCount(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1584,7 +1627,7 @@ func TestCombinedTxnTable_EstimateCommittedTombstoneCount(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1596,7 +1639,7 @@ func TestCombinedTxnTable_EstimateCommittedTombstoneCount(t *testing.T) {
 
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1615,7 +1658,7 @@ func TestCombinedTxnTable_EstimateCommittedTombstoneCount(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1628,7 +1671,7 @@ func TestCombinedTxnTable_EstimateCommittedTombstoneCount(t *testing.T) {
 
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1646,7 +1689,7 @@ func TestCombinedTxnTable_EstimateCommittedTombstoneCount(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1672,7 +1715,7 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel1, mockRel2}, nil
 			},
 		}
@@ -1685,7 +1728,7 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 	// Test case 2: Error when tablesFunc returns error
 	t.Run("Error from tablesFunc", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return nil, assert.AnError
 			},
 		}
@@ -1705,7 +1748,7 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1719,7 +1762,7 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 	// Test case 4: Empty tables list
 	t.Run("Empty tables list", func(t *testing.T) {
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{}, nil
 			},
 		}
@@ -1738,7 +1781,7 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 		}
 
 		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
+			tablesFunc: func(context.Context) ([]engine.Relation, error) {
 				return []engine.Relation{mockRel}, nil
 			},
 		}
@@ -1757,7 +1800,7 @@ func TestCombinedTxnTable_Stats(t *testing.T) {
 	}
 	table := newCombinedTxnTable(
 		nil,
-		func() ([]engine.Relation, error) {
+		func(context.Context) ([]engine.Relation, error) {
 			return []engine.Relation{
 				nil,
 				&mockRelation{
@@ -1776,7 +1819,7 @@ func TestCombinedTxnTable_Stats(t *testing.T) {
 	assert.Equal(t, stats.BlockNumber, result.BlockNumber)
 	assert.Equal(t, stats.ApproxObjectNumber, result.ApproxObjectNumber)
 	assert.Equal(t, stats.TableCnt, result.TableCnt)
-	partial := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+	partial := newCombinedTxnTable(nil, func(context.Context) ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return stats, nil }},
 			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
@@ -1858,7 +1901,7 @@ func TestCombinedStatsPreserveByteCoverage(t *testing.T) {
 				}
 				rels[i] = &namedStatsRelation{name: name, mockRelation: mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return child, nil }}}
 			}
-			table := newCombinedTxnTable(nil, func() ([]engine.Relation, error) { return rels, nil }, nil, nil)
+			table := newCombinedTxnTable(nil, func(context.Context) ([]engine.Relation, error) { return rels, nil }, nil, nil)
 			got, err := table.Stats(t.Context(), false)
 			require.NoError(t, err)
 			require.Equal(t, tc.rows, got.TableCnt)
@@ -1874,7 +1917,7 @@ func TestCombinedStatsPreserveByteCoverage(t *testing.T) {
 	}
 	t.Run("unknown child does not hide later error", func(t *testing.T) {
 		failure := errors.New("partition stats failed")
-		table := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+		table := newCombinedTxnTable(nil, func(context.Context) ([]engine.Relation, error) {
 			return []engine.Relation{
 				&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
 				&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, failure }},

@@ -24,8 +24,12 @@ import (
 )
 
 func TestM0DefaultWriterPreservesDeclaredVersion(t *testing.T) {
-	require.Zero(t, activeM0WriterSchemaVersion(nil, []uint16{0, 1, 2}))
+	v, err := activeM0WriterSchemaVersion(nil, []uint16{0, 1, 2})
+	require.NoError(t, err)
+	require.Zero(t, v)
 	for _, seqnums := range [][]uint16{nil, {0, 1}, {7, 2, 0}} {
-		require.Equal(t, uint32(9), activeM0WriterSchemaVersion(&plan.TableDef{Version: 9}, seqnums))
+		v, err := activeM0WriterSchemaVersion(&plan.TableDef{Version: 9}, seqnums)
+		require.NoError(t, err)
+		require.Equal(t, uint32(9), v)
 	}
 }

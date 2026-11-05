@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -54,7 +55,13 @@ func m0PlanBaseWithConstraints(table *plan.TableDef, rejectConstraints bool) (ui
 	}
 	next := uint32(len(table.Cols) - 1)
 	base := uint32(pk.Seqnum) + 1
-	if table.Version != next-base {
+	generation := table.Version
+	if contract, err := m0read.PlanEvolution(table); err != nil {
+		return 0, err
+	} else if contract != nil {
+		generation = contract.LayoutGeneration
+	}
+	if generation != next-base {
 		return 0, moerr.NewInternalErrorNoCtxf("M0: table is outside the append-only version domain")
 	}
 	for pos, col := range table.Cols[:len(table.Cols)-1] {
@@ -147,6 +154,20 @@ func selectM0AddColumn(
 	}
 	if add == nil {
 		return false, nil
+	}
+	contract, err := m0read.PlanEvolution(table)
+	if err != nil {
+		return false, err
+	}
+	if contract == nil {
+		return false, nil
+	}
+	account, err := ctx.GetAccountId()
+	if err != nil {
+		return false, err
+	}
+	if err := m0read.ValidateEvolution(contract, m0read.EvolutionBinding{Account: account, Database: table.DbId, Relation: table.TblId}); err != nil {
+		return false, err
 	}
 	if err := m0ColumnDefinition(add, position); err != nil {
 		return false, nil

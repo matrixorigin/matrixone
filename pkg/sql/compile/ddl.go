@@ -4442,7 +4442,15 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err := c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts); err != nil {
 			return err
 		}
-		return c.runSqlWithAccountIdAndOptions(createSQL, int32(accountID), createOpts)
+		// Partition TRUNCATE supplies a table-extra adjuster for the newly
+		// created member. SHOW CREATE cannot represent the member's parent or
+		// feature flag, so preserve that callback across this internal CREATE.
+		result, err := c.runSqlWithResultAndOptionsAndExtra(createSQL, int32(accountID), createOpts, c.adjustTableExtraFunc)
+		if err != nil {
+			return err
+		}
+		result.Close()
+		return nil
 	}
 	if !isTemp {
 		err = c.withDropLifecycle(replacementAdmission, replace)
@@ -5479,6 +5487,11 @@ func (s *Scope) TableClone(c *Compile) error {
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
 		originalCtx := c.proc.Ctx
+		cloneCtx, bindErr := activeM0CloneCreateContext(c, clonePlan)
+		if bindErr != nil {
+			return bindErr
+		}
+		c.proc.Ctx = cloneCtx
 		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
 		if plan2.IsCheckConstraintRestoreReplay(originalCtx, marked) {
 			c.proc.Ctx = context.WithValue(originalCtx, defines.TrustedCheckConstraintNames{}, true)

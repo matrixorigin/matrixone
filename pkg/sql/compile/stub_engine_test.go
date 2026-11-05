@@ -137,6 +137,7 @@ type stubRelation struct {
 	tombstones            engine.Tombstoner
 	collectTombstonesErr  error
 	collectTombstonesCall int
+	collectTombstonesFn   func(context.Context, int, engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	tableID               uint64
 	tableDef              *plan.TableDef
 	defs                  []engine.TableDef
@@ -187,6 +188,9 @@ func (r *stubRelation) CollectTombstones(
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
 	r.collectTombstonesCall++
+	if r.collectTombstonesFn != nil {
+		return r.collectTombstonesFn(ctx, txnOffset, policy)
+	}
 	if r.collectTombstonesErr != nil {
 		return nil, r.collectTombstonesErr
 	}

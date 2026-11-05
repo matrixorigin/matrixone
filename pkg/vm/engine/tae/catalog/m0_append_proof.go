@@ -18,6 +18,7 @@ package catalog
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -41,15 +42,15 @@ func m0EncodedColumnNeedsBackfill(encoded []byte) (bool, error) {
 	return m0ColumnNeedsBackfill(&def), nil
 }
 
-func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
+func M0AppendLayoutFromSchema(s *Schema) (m0read.M0AppendLayout, error) {
 	if s == nil {
-		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil schema")
+		return m0read.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil schema")
 	}
 	pk := s.GetPrimaryKey()
 	if pk == nil {
-		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "missing primary key")
+		return m0read.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "missing primary key")
 	}
-	layout := objectio.M0AppendLayout{
+	layout := m0read.M0AppendLayout{
 		Version:       s.Version,
 		NextColSeqnum: s.Extra.NextColSeqnum,
 		PKSeqnum:      pk.SeqNum,
@@ -57,15 +58,21 @@ func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
 		HiddenPK:      pk.Hidden,
 		SingleSortKey: s.SortKey != nil && len(s.SortKey.Defs) == 1,
 	}
+	if c := s.Extra.M0Evolution; c != nil {
+		if err := m0read.ValidateEvolution(c, m0read.EvolutionBinding{Account: s.AcInfo.TenantID, Database: c.DatabaseId, Relation: c.RelationId}); err != nil {
+			return m0read.M0AppendLayout{}, err
+		}
+		layout.Version = c.LayoutGeneration
+	}
 	for _, col := range s.ColDefs {
 		if col.IsPhyAddr() {
 			continue
 		}
 		backfill, err := m0EncodedColumnNeedsBackfill(col.Default)
 		if err != nil {
-			return objectio.M0AppendLayout{}, err
+			return m0read.M0AppendLayout{}, err
 		}
-		layout.Columns = append(layout.Columns, objectio.M0AppendColumn{
+		layout.Columns = append(layout.Columns, m0read.M0AppendColumn{
 			Seqnum:        col.SeqNum,
 			Type:          col.Type.Oid,
 			Nullable:      col.NullAbility,
@@ -78,37 +85,6 @@ func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
 			OnUpdate:      len(col.OnUpdate) != 0,
 			Backfill:      backfill,
 		})
-	}
-	return layout, nil
-}
-
-// M0DerivedAppendVersion recovers the schema version represented by a complete
-// append-only schema. It is for the CN/TN writers that materialize the full
-// current batch after an in-memory or catalog version marker has gone stale.
-func M0DerivedAppendVersion(s *Schema) (uint32, error) {
-	layout, err := M0DerivedAppendLayout(s)
-	if err != nil {
-		return 0, err
-	}
-	return layout.Version, nil
-}
-
-// M0DerivedAppendLayout reconstructs the append-domain layout from complete
-// column identities. The local catalog Version is intentionally not used:
-// relation creation can restore all columns without restoring the inherited
-// append version, while background merge must still qualify read-only objects.
-func M0DerivedAppendLayout(s *Schema) (objectio.M0AppendLayout, error) {
-	layout, err := M0AppendLayoutFromSchema(s)
-	if err != nil {
-		return objectio.M0AppendLayout{}, err
-	}
-	base := uint32(layout.PKSeqnum) + 1
-	if layout.NextColSeqnum <= base {
-		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "schema has no append version")
-	}
-	layout.Version = layout.NextColSeqnum - base
-	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "%v", err)
 	}
 	return layout, nil
 }
@@ -145,16 +121,16 @@ func M0SchemaHasAppendDomainShape(s *Schema) bool {
 	return false
 }
 
-func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objectio.M0AppendLayout, error) {
+func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (m0read.M0AppendLayout, error) {
 	if table == nil || len(table.Cols) < 2 || table.Pkey == nil ||
 		table.Pkey.CompPkeyCol == nil || (table.Version == 0 && nextColSeqnum == 0) {
-		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "incomplete CN layout")
+		return m0read.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "incomplete CN layout")
 	}
 	pk := table.Pkey.CompPkeyCol
 	if !pk.Hidden || !pk.Primary || table.ClusterBy != nil {
-		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "CN primary-key anchor")
+		return m0read.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "CN primary-key anchor")
 	}
-	layout := objectio.M0AppendLayout{
+	layout := m0read.M0AppendLayout{
 		Version:       table.Version,
 		NextColSeqnum: nextColSeqnum,
 		PKSeqnum:      uint16(pk.Seqnum),
@@ -162,17 +138,25 @@ func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objecti
 		HiddenPK:      pk.Hidden,
 		SingleSortKey: true,
 	}
+	if c, err := m0read.PlanEvolution(table); err != nil {
+		return m0read.M0AppendLayout{}, err
+	} else if c != nil {
+		if err := m0read.ValidateEvolution(c, m0read.EvolutionBinding{Account: c.AccountId, Database: table.DbId, Relation: table.TblId}); err != nil {
+			return m0read.M0AppendLayout{}, err
+		}
+		layout.Version = c.LayoutGeneration
+	}
 	for pos, col := range table.Cols {
 		if col == nil {
-			return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil CN column")
+			return m0read.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil CN column")
 		}
 		if objectio.IsPhysicalAddr(col.Name) {
 			if pos != len(table.Cols)-1 {
-				return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "rowid is not last")
+				return m0read.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "rowid is not last")
 			}
 			continue
 		}
-		layout.Columns = append(layout.Columns, objectio.M0AppendColumn{
+		layout.Columns = append(layout.Columns, m0read.M0AppendColumn{
 			Seqnum:        uint16(col.Seqnum),
 			Type:          types.T(col.Typ.Id),
 			Nullable:      col.Default == nil || col.Default.NullAbility,
@@ -198,58 +182,19 @@ func M0PlanLooksLikeAppendDomain(table *plan.TableDef) bool {
 	}
 	base := uint32(table.Pkey.CompPkeyCol.Seqnum) + 1
 	next := uint32(len(table.Cols) - 1)
-	if table.Version != next-base {
+	generation := table.Version
+	if c, err := m0read.PlanEvolution(table); err != nil {
+		return false
+	} else if c != nil {
+		generation = c.LayoutGeneration
+	}
+	if generation != next-base {
 		return false
 	}
 	for i, col := range table.Cols {
-		if col == nil || uint32(col.Seqnum) != uint32(i) {
+		if col == nil || !objectio.IsPhysicalAddr(col.Name) && uint32(col.Seqnum) != uint32(i) {
 			return false
 		}
 	}
 	return true
-}
-
-// M0AppendBase validates one deliberately narrow transition domain:
-//   - version-zero CREATE/COPY puts the hidden composite PK last;
-//   - each independent autocommit ADD appends exactly one nullable column and
-//     advances the version once;
-//   - clone preserves the full layout AND version; other INPLACE DDL is refused;
-//   - COPY starts a new version-zero domain and rewrites all data objects.
-//
-// The mo_m0 SQL/CN/TN hooks enforce these transitions. This predicate remains
-// scoped to the restricted prototype and is not authorization for arbitrary
-// legacy tables.
-func M0AppendBase(s *Schema) (uint32, error) {
-	if err := validateM0Schema(s); err != nil {
-		return 0, err
-	}
-	layout, err := M0AppendLayoutFromSchema(s)
-	if err != nil {
-		return 0, err
-	}
-	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		return 0, wrapM0Error(ErrM0Layout, "%v", err)
-	}
-	return uint32(layout.PKSeqnum) + 1, nil
-}
-
-// M0ProveAbsentColumn returns true only for a nullable suffix that did not exist
-// at the object's version in the above domain. It validates every block's
-// complete expected prefix, rather than accepting MaxSeqnum alone. Metadata
-// must come from the standard object reader. An object must already be a member
-// of the relation being read; this does not invent cross-relation ownership.
-// There is no historical-schema lookup, NULL vector allocation or pruning hook.
-func M0ProveAbsentColumn(s *Schema, h objectio.Header, meta objectio.ObjectDataMeta, seq uint16) (bool, error) {
-	if _, err := M0AppendBase(s); err != nil {
-		return false, err
-	}
-	layout, err := M0AppendLayoutFromSchema(s)
-	if err != nil {
-		return false, err
-	}
-	absent, err := objectio.ProveM0AbsentColumn(layout, h, meta, seq)
-	if err != nil {
-		return false, wrapM0Error(ErrM0Layout, "%v", err)
-	}
-	return absent, nil
 }

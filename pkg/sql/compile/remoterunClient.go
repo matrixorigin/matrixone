@@ -77,6 +77,18 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("error", err.Error()))
 		}
 	}()
+	// Prepared scopes may be reused after the coordinator workspace changes.
+	// Repeat the single-remote admission check at dispatch, before encoding or
+	// opening a stream; retry must rebuild placement from the current workspace.
+	revalidateDispatch, err := captureM0SingleRemoteDispatch(s, c)
+	if err != nil {
+		return nil, err
+	}
+	if activeM0Enabled {
+		if err = validateM0SingleRemoteReadData(s); err != nil {
+			return nil, err
+		}
+	}
 	s.ScopeAnalyzer.Stop()
 
 	// encode structures which need to send.
@@ -133,6 +145,16 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	if exist {
 		if strings.Contains(c.sql, sub_sql) {
 			debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
+		}
+	}
+	if revalidateDispatch != nil {
+		if err = revalidateDispatch(); err != nil {
+			return sender, err
+		}
+	}
+	if activeM0Enabled {
+		if err = validateM0SingleRemoteReadData(s); err != nil {
+			return sender, err
 		}
 	}
 	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {

@@ -25,9 +25,13 @@ func getArrayPrunePKFunc(
 	relations []engine.Relation,
 ) prunePKFunc {
 	return func(
+		ctx context.Context,
 		bat *batch.Batch,
 		partitionIndex int32,
 	) ([]engine.Relation, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return relations, nil
 	}
 }
@@ -35,7 +39,10 @@ func getArrayPrunePKFunc(
 func getArrayTableFunc(
 	relations []engine.Relation,
 ) tablesFunc {
-	return func() ([]engine.Relation, error) {
+	return func(ctx context.Context) ([]engine.Relation, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return relations, nil
 	}
 }
@@ -47,6 +54,9 @@ func getArrayPruneTablesFunc(
 		ctx context.Context,
 		param engine.RangesParam,
 	) ([]engine.Relation, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return relations, nil
 	}
 }

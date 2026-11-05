@@ -83,6 +83,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 	// Check idempotent of each command
 	// Record all idempotent error commands and skip apply|rollback later
 	store.Observer.OnTimeStamp(txn.GetPrepareTS())
+	restoreReplayGeneratedColumns(store.Cmd)
 	for _, command := range store.Cmd.Cmds {
 		command.SetReplayTxn(txn)
 		store.prepareCmd(command)

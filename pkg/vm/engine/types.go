@@ -127,8 +127,16 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Properties:
+			configs := make([]*plan.Property, 0, len(defVal.Properties.GetProperties()))
+			for _, p := range defVal.Properties.GetProperties() {
+				// schema_extra is owned by the transactional catalog carrier,
+				// not a user/stream constraint copied by clone or COPY.
+				if p.Key != "schema_extra" {
+					configs = append(configs, p)
+				}
+			}
 			c.Cts = append(c.Cts, &StreamConfigsDef{
-				Configs: defVal.Properties.GetProperties(),
+				Configs: configs,
 			})
 		}
 	}

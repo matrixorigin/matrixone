@@ -187,12 +187,14 @@ func TestCompileClearResetsExecutionType(t *testing.T) {
 	c := &Compile{
 		proc:                   testutil.NewProcess(t),
 		execType:               plan2.ExecTypeAP_MULTICN,
+		TxnOffset:              7,
 		MessageBoard:           message.NewMessageBoard(),
 		affectRows:             new(atomic.Uint64),
 		prePipelineLockTableID: 42,
 	}
 	c.clear()
 	require.True(t, c.IsTpQuery())
+	require.Zero(t, c.TxnOffset, "pooled compiles must not retain another statement's workspace offset")
 	require.Zero(t, c.prePipelineLockTableID, "pooled compiles must not retain a backfill lock request")
 }
 

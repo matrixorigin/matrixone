@@ -19,7 +19,8 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 var activeM0WriteSchemaVersion = func(
 	_ *catalog.Schema,
 	_ []uint16,
+	_, _ uint64,
 	fallback uint32,
-) uint32 {
-	return fallback
+) (uint32, error) {
+	return fallback, nil
 }

@@ -17,6 +17,13 @@
 package colexec
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -38,16 +45,66 @@ func TestM0WriterSchemaVersionUsesCompleteBatchWidth(t *testing.T) {
 		},
 		Pkey: &plan.PrimaryKeyDef{
 			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{"a", "b"},
 			CompPkeyCol: &plan.ColDef{
 				Name: catalog.CPrimaryKeyColName, Seqnum: 2, Hidden: true, Primary: true,
 			},
 		},
 	}
 
-	require.Equal(t, uint32(3), m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 4, 5}))
-	require.Equal(t, tableDef.Version, m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 4}))
-	require.Equal(t, tableDef.Version, m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 5, 6}))
-
+	tableDef.TblId, tableDef.DbId = 42, 7
+	version, err := m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Equal(t, tableDef.Version, version, "ordinary writer must not infer provenance from width")
+	c := &api.M0EvolutionContract{FormatVersion: 1, RootId: []byte("0123456789abcdef"), DatabaseId: 7, RelationId: 42, RootColumns: 3, LayoutGeneration: 3}
+	for i, col := range tableDef.Cols[:6] {
+		col.ColId = uint64(i + 1)
+		b, err := m0read.PlanEvolutionColumnSemantic(tableDef, col)
+		require.NoError(t, err)
+		g := uint32(0)
+		if i >= 3 {
+			g = uint32(i - 2)
+		}
+		c.Columns = append(c.Columns, &api.M0EvolutionColumn{ColumnId: col.ColId, Seqnum: col.Seqnum, IntroducedLayout: g, Semantics: b})
+	}
+	c.SchemaDigest = m0read.EvolutionDigest(c.Columns)
+	extra := &api.SchemaExtra{M0Evolution: c}
+	tableDef.Defs = []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: "schema_extra", Value: string(api.MustMarshalTblExtra(extra))}}}}}}
+	version, err = m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), version)
+	for _, seqs := range [][]uint16{{0, 1, 2, 3, 4}, {0, 1, 2, 3, 5, 6}} {
+		_, err = m0WriterSchemaVersion(tableDef, seqs)
+		require.Error(t, err)
+	}
 	tableDef.ClusterBy = &plan.ClusterByDef{Name: "a"}
-	require.Equal(t, tableDef.Version, m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 4, 5}))
+	_, err = m0WriterSchemaVersion(tableDef, []uint16{0, 1, 2, 3, 4, 5})
+	require.Error(t, err)
+}
+
+func TestM0CNWriterRejectsMalformedContractBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	extra := &api.SchemaExtra{M0Evolution: &api.M0EvolutionContract{FormatVersion: 2}}
+	def := &plan.TableDef{TblId: 42, DbId: 7, Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{{Name: "a", ColId: 1, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}}},
+		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: "schema_extra", Value: string(api.MustMarshalTblExtra(extra))}}}}}}}
+	w := NewCNS3DataWriter(mp, fs, def, 1, false)
+	defer w.Close()
+	require.Error(t, w.Write(ctx, nil))
+	owned, err := w.WriteOwned(ctx, nil)
+	require.False(t, owned)
+	require.Error(t, err)
+	_, err = w.Sync(ctx)
+	require.Error(t, err)
+	_, err = w.SyncAndFillBlockInfoBat(ctx)
+	require.Error(t, err)
+	_, err = w.FillBlockInfoBat()
+	require.Error(t, err)
+	w.Reset()
+	require.Error(t, w.Write(ctx, nil), "reset cannot authorize an invalid schema")
+	require.NoError(t, w.Close())
+	require.Zero(t, mp.CurrNB())
 }

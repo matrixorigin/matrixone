@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func m0ProofBase(t *testing.T) *Schema {
+func objectReadLayoutBase(t *testing.T) *Schema {
 	t.Helper()
 	_, s := m0CustomerLayout(t)
 	// Rebuild a version-zero CREATE layout using the six original columns and
@@ -61,7 +61,7 @@ func m0Reindex(t *testing.T, s *Schema) {
 	require.NoError(t, s.Finalize(true))
 }
 
-func m0ProofAdd(t *testing.T, s *Schema, name string, typ plan.Type) *Schema {
+func objectReadLayoutAdd(t *testing.T, s *Schema, name string, typ plan.Type) *Schema {
 	t.Helper()
 	s = s.Clone()
 	require.NoError(t, s.ApplyAlterTable(api.NewAddColumnReq(0, 0, name, typ, -1)))
@@ -137,11 +137,11 @@ func TestM0AppendProofPersistedWithoutParentHistory(t *testing.T) {
 	}()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	base := m0ProofBase(t)
+	base := objectReadLayoutBase(t)
 	oldName := m0WriteProofObject(t, fs, mp, base, 0, -1)
-	parent := m0ProofAdd(t, base, "loyalty_tier", plan.Type{Id: int32(types.T_varchar), Width: 8})
+	parent := objectReadLayoutAdd(t, base, "loyalty_tier", plan.Type{Id: int32(types.T_varchar), Width: 8})
 	parentName := m0WriteProofObject(t, fs, mp, parent, 1, -1)
-	child := m0ProofAdd(t, parent.Clone(), "credit_lim", plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2})
+	child := objectReadLayoutAdd(t, parent.Clone(), "credit_lim", plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2})
 	newName := m0WriteProofObject(t, fs, mp, child, 2, -1)
 	for name, schema := range map[string]*Schema{"parent": parent, "snapshot": parent, "child": child} {
 		buf, err := schema.Marshal()
@@ -183,12 +183,12 @@ func TestM0AppendProofRejectsMissingExpectedColumnsAndForeignDomain(t *testing.T
 	defer fs.Close(ctx)
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	base := m0ProofBase(t)
-	a := m0ProofAdd(t, base, "a", plan.Type{Id: int32(types.T_varchar), Width: 8})
-	b := m0ProofAdd(t, base, "b", plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2})
+	base := objectReadLayoutBase(t)
+	a := objectReadLayoutAdd(t, base, "a", plan.Type{Id: int32(types.T_varchar), Width: 8})
+	b := objectReadLayoutAdd(t, base, "b", plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2})
 	require.Equal(t, a.Version, b.Version)
 	require.Error(t, ValidateM0CloneLayout(m0PlanFromSchema(a), a, m0PlanFromSchema(b), b))
-	sameType := m0ProofAdd(t, base, "different_name", plan.Type{Id: int32(types.T_varchar), Width: 8})
+	sameType := objectReadLayoutAdd(t, base, "different_name", plan.Type{Id: int32(types.T_varchar), Width: 8})
 	require.Error(t, ValidateM0CloneLayout(m0PlanFromSchema(a), a, m0PlanFromSchema(sameType), sameType))
 	reset := a.Clone()
 	reset.Version = 0
@@ -223,14 +223,14 @@ func TestM0AppendProofCOPYStartsNewDomain(t *testing.T) {
 	defer fs.Close(ctx)
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	base := m0ProofBase(t)
-	before := m0ProofAdd(t, base, "x", plan.Type{Id: int32(types.T_int32)})
+	base := objectReadLayoutBase(t)
+	before := objectReadLayoutAdd(t, base, "x", plan.Type{Id: int32(types.T_int32)})
 	oldName := m0WriteProofObject(t, fs, mp, base, 0, -1)
 	after := before.Clone()
 	after.ColDefs[6], after.ColDefs[7] = after.ColDefs[7], after.ColDefs[6]
 	after.Version = 0
 	m0Reindex(t, after) // CREATE/COPY reallocates; objects must be rewritten
-	after = m0ProofAdd(t, after, "z", plan.Type{Id: int32(types.T_int32)})
+	after = objectReadLayoutAdd(t, after, "z", plan.Type{Id: int32(types.T_int32)})
 	h, meta := m0ReadProofObject(t, fs, mp, oldName)
 	_, err = M0ProveAbsentColumn(after, h, meta, 8)
 	require.Error(t, err) // never apply the new mapping to the old shared object

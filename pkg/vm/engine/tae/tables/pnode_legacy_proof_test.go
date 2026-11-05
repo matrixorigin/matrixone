@@ -15,12 +15,10 @@
 package tables
 
 import (
-	"context"
 	"testing"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
@@ -32,10 +30,7 @@ func TestRelLogicalIDLegacyProofIsNarrow(t *testing.T) {
 	logicalSeqnum := moTables.ColDefs[logicalIdx].SeqNum
 	require.Equal(t, uint16(pkgcatalog.MO_TABLES_LOGICAL_ID_IDX), logicalSeqnum)
 	id := &common.ID{DbID: pkgcatalog.MO_CATALOG_ID, TableID: pkgcatalog.MO_TABLES_ID}
-	ctx := withRelLogicalIDLegacyProof(context.Background(), id, moTables, "mo_tables-object")
-	require.True(t, objectio.CanFillMissingColumn(ctx, "mo_tables-object", logicalSeqnum))
-	require.False(t, objectio.CanFillMissingColumn(ctx, "other-object", logicalSeqnum))
-	require.False(t, objectio.CanFillMissingColumn(ctx, "mo_tables-object", logicalSeqnum+1))
+	require.Equal(t, []uint16{logicalSeqnum}, legacyLogicalIDColumns(id, moTables))
 
 	for _, tc := range []struct {
 		name   string
@@ -57,16 +52,8 @@ func TestRelLogicalIDLegacyProofIsNarrow(t *testing.T) {
 			if tc.change != nil {
 				tc.change(schema)
 			}
-			ctx := withRelLogicalIDLegacyProof(context.Background(), tc.id, schema, "test-object")
-			for _, col := range schema.ColDefs {
-				if col != nil {
-					require.False(t, objectio.CanFillMissingColumn(ctx, "test-object", col.SeqNum))
-				}
-			}
+			require.Empty(t, legacyLogicalIDColumns(tc.id, schema))
 		})
 	}
-	ctx = withRelLogicalIDLegacyProof(context.Background(), id, nil, "test-object")
-	require.False(t, objectio.CanFillMissingColumn(ctx, "test-object", logicalSeqnum))
-	ctx = withRelLogicalIDLegacyProof(context.Background(), id, moTables, "")
-	require.False(t, objectio.CanFillMissingColumn(ctx, "", logicalSeqnum))
+	require.Empty(t, legacyLogicalIDColumns(id, nil))
 }

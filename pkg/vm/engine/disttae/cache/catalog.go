@@ -1018,7 +1018,11 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			case *engine.PrimaryKeyDef:
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
-				properties = append(properties, k.Configs...)
+				for _, property := range k.Configs {
+					if property.Key != catalog.PropSchemaExtra {
+						properties = append(properties, property)
+					}
+				}
 			}
 		}
 	}
@@ -1050,6 +1054,10 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Value: TableType,
 	})
 	props.Properties = append(props.Properties, engine.Property{
+		Key:   catalog.PropSchemaExtra,
+		Value: string(api.MustMarshalTblExtra(tblItem.ExtraInfo)),
+	})
+	properties = append(properties, &plan.Property{
 		Key:   catalog.PropSchemaExtra,
 		Value: string(api.MustMarshalTblExtra(tblItem.ExtraInfo)),
 	})

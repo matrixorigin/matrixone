@@ -37,5 +37,9 @@ func TestM0TNAppliedFaultInertByDefault(t *testing.T) {
 	require.NoError(t, fault.AddFaultPoint(t.Context(), point, ":::", "echo", 0, "must remain inert", false))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+	require.NoError(t, m0BeforeApplyAddColumn(ctx, nil, nil))
+	got, err := m0BindAddColumnContext(ctx, nil, nil)
+	require.NoError(t, err)
+	require.Same(t, ctx, got)
 	require.NoError(t, m0AfterApplyAddColumn(ctx))
 }

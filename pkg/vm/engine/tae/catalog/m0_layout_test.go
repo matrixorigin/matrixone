@@ -22,7 +22,6 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -180,33 +179,4 @@ func TestM0CloneRejectsActualCatalogRenumbering(t *testing.T) {
 	require.ErrorIs(t, ValidateM0CloneLayout(cn, tn, target, rebuilt), ErrM0Layout)
 	require.Equal(t, uint16(6), tn.GetPrimaryKey().SeqNum)
 	require.Equal(t, uint16(7), rebuilt.GetPrimaryKey().SeqNum)
-}
-
-func TestM0SchemaIdentityDoesNotGuessDestinationVersion(t *testing.T) {
-	_, schema := m0CustomerLayout(t)
-	c := MockCatalog(nil)
-	defer c.Close()
-	db, err := c.CreateDBEntry("m0", "", "", nil)
-	require.NoError(t, err)
-	owner, err := db.CreateTableEntry(schema, nil, nil)
-	require.NoError(t, err)
-	h := objectio.BuildHeader()
-	h.SetSchemaVersion(schema.Version)
-	// Use the object metadata representation returned by the real writer test
-	// for zero-origin coverage. Bound identities below are synthetic fixtures.
-	data := make(objectio.ObjectDataMeta, 1024)
-	data.BlockHeader().SetTableID(owner.ID)
-	resolved, err := resolveM0ObjectSchema(owner, h, data)
-	require.NoError(t, err)
-	require.Same(t, schema, resolved)
-	data.BlockHeader().SetTableID(owner.ID + 1)
-	_, err = resolveM0ObjectSchema(owner, h, data)
-	require.ErrorIs(t, err, objectio.ErrM0SchemaIdentityUnavailable)
-	data.BlockHeader().SetTableID(owner.ID)
-	h.SetSchemaVersion(schema.Version + 1)
-	_, err = resolveM0ObjectSchema(owner, h, data)
-	require.ErrorIs(t, err, objectio.ErrM0SchemaIdentityUnavailable)
-	data.BlockHeader().SetTableID(0)
-	_, err = resolveM0ObjectSchema(owner, h, data)
-	require.ErrorIs(t, err, objectio.ErrM0SchemaIdentityUnavailable)
 }

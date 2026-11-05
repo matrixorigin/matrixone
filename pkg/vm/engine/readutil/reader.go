@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"math"
 	"slices"
 	"strings"
@@ -298,8 +299,8 @@ type reader struct {
 	cacheVectors containers.Vectors
 
 	explainVectorTopStats *objectio.IndexReaderTopStats
-	m0Proof               objectio.M0ObjectProof
-	m0ProofSet            bool
+	objectReadLayout      m0read.ObjectReadLayout
+	objectLayoutReady     bool
 }
 
 type mergeReader struct {
@@ -1022,21 +1023,34 @@ func (r *reader) read(
 		r.explainVectorTopStats.BlocksRead++
 	}
 	provenM0 := false
-	if activeM0ReadLocationProofEnabled {
+	var readLayout *m0read.ObjectReadLayout
+	if activeM0StrictReader && r.tableDef != nil {
+		// This reader establishes its own object layout from its bound schema.
+		// Context values never confer missing-column authority.
 		var err error
 		objectName := blkInfo.MetaLocation().Name().String()
-		if proof, ok := objectio.M0ProvenObject(ctx); ok && proof.ObjectName == objectName {
-			provenM0, r.m0Proof, r.m0ProofSet = true, proof, true
-		} else if r.m0ProofSet && r.m0Proof.ObjectName == objectName {
+		if r.objectLayoutReady && r.objectReadLayout.ObjectName == objectName {
 			provenM0 = true
 		} else {
-			provenM0, r.m0Proof, err = activeM0ReadLocationProof(
+			provenM0, r.objectReadLayout, err = activeM0ReadLayout(
 				ctx, r.tableDef, blkInfo.MetaLocation(), r.fs,
 			)
 			if err != nil {
 				return false, false, err
 			}
-			r.m0ProofSet = provenM0
+			r.objectLayoutReady = provenM0
+		}
+		if provenM0 {
+			readLayout = &r.objectReadLayout
+		} else {
+			readLayout = &m0read.ObjectReadLayout{ObjectName: objectName}
+			if r.tableDef.DbId == catalog.MO_CATALOG_ID && r.tableDef.TblId == catalog.MO_TABLES_ID && r.tableDef.Name == catalog.MO_TABLES {
+				for _, col := range r.tableDef.Cols {
+					if col.Name == catalog.SystemRelAttr_LogicalID && col.Seqnum == uint32(catalog.MO_TABLES_LOGICAL_ID_IDX) && col.Typ.Id == int32(types.T_uint64) {
+						readLayout.LegacyNullColumns = []uint16{uint16(col.Seqnum)}
+					}
+				}
+			}
 		}
 	}
 	//read block
@@ -1047,9 +1061,6 @@ func (r *reader) read(
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = prepareGatherStats(ctx)
-	}
-	if provenM0 {
-		statsCtx = objectio.WithM0ProvenObject(statsCtx, r.m0Proof)
 	}
 
 	policy := fileservice.GetFileServicePolicy(ctx)
@@ -1095,6 +1106,7 @@ func (r *reader) read(
 			r.fs,
 			earlyColumns,
 			readerFilter,
+			readLayout,
 		)
 		if err == nil && preFilterRows == 1 {
 			// Preserve the exact-PK hit feedback that eager BlockDataRead records
@@ -1120,6 +1132,7 @@ func (r *reader) read(
 			r.cacheVectors,
 			mp,
 			r.fs,
+			readLayout,
 		)
 	}
 	if err != nil {

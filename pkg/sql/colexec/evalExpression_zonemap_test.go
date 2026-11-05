@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"math"
 	"strings"
 	"testing"
@@ -396,7 +397,7 @@ func TestEvaluateFilterByZoneMapNullComparisonsPrune(t *testing.T) {
 	})
 }
 
-func TestEvaluateFilterByZoneMapM0MissingColumnUsesObjectProof(t *testing.T) {
+func TestEvaluateFilterByZoneMapM0MissingColumnUsesExplicitLayout(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx
 	column := &plan.Expr{
@@ -408,9 +409,9 @@ func TestEvaluateFilterByZoneMapM0MissingColumnUsesObjectProof(t *testing.T) {
 
 	dataMeta := objectio.BuildMetaData(1, 1)
 	meta := dataMeta.GetBlockMeta(0)
-	proofCtx := objectio.WithM0ProvenObject(ctx, objectio.M0ObjectProof{
+	readLayout := &m0read.ObjectReadLayout{Evolution: true,
 		ObjectName: "customer-object", WrittenSize: 1, SchemaSize: 2,
-	})
+	}
 	for _, test := range []struct {
 		name   string
 		funcID string
@@ -424,7 +425,7 @@ func TestEvaluateFilterByZoneMapM0MissingColumnUsesObjectProof(t *testing.T) {
 			require.NoError(t, err)
 			zms, vecs := makeZoneMapEvalScratch(expr)
 			selected := colexec.EvaluateFilterByZoneMap(
-				proofCtx, proc, expr, meta, map[int]int{1: 1}, zms, vecs,
+				ctx, proc, expr, meta, map[int]int{1: 1}, zms, vecs, readLayout,
 			)
 			require.Equal(t, test.want, selected)
 		})

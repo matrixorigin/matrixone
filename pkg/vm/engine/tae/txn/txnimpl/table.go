@@ -1400,6 +1400,16 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 	default:
 		return moerr.NewNYIf(ctx, "alter table %s", req.Kind.String())
 	}
+	if req.Kind == apipb.AlterKind_AddColumn {
+		if err := m0BeforeApplyAddColumn(ctx, tbl, req); err != nil {
+			return err
+		}
+		var err error
+		ctx, err = m0BindAddColumnContext(ctx, tbl, req)
+		if err != nil {
+			return err
+		}
+	}
 	if err := tbl.store.IncreateWriteCnt("alter table"); err != nil {
 		return err
 	}

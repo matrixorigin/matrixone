@@ -17,7 +17,9 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -25,42 +27,42 @@ func init() {
 	activeM0WriterSchemaVersion = m0WriterSchemaVersion
 }
 
-func m0WriterSchemaVersion(tableDef *plan.TableDef, seqnums []uint16) uint32 {
-	if tableDef == nil || !m0WriterHasCompleteAppendPrefix(tableDef, seqnums) {
-		if tableDef == nil {
-			return 0
-		}
-		return tableDef.Version
+func m0WriterSchemaVersion(tableDef *plan.TableDef, seqnums []uint16) (uint32, error) {
+	if tableDef == nil {
+		return 0, nil
 	}
-	return uint32(len(seqnums)) - tableDef.Pkey.CompPkeyCol.Seqnum - 1
-}
-
-func m0WriterHasCompleteAppendPrefix(tableDef *plan.TableDef, seqnums []uint16) bool {
-	if tableDef.IsTemporary || tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil ||
-		tableDef.ClusterBy != nil || len(tableDef.Cols) < 2 ||
-		len(seqnums) != len(tableDef.Cols)-1 {
-		return false
+	c, err := m0read.PlanEvolution(tableDef)
+	if err != nil {
+		return 0, err
 	}
-
-	pk := tableDef.Pkey.CompPkeyCol
-	if !pk.Hidden || !pk.Primary || pk.Name == "" ||
-		tableDef.Pkey.PkeyColName != pk.Name ||
-		pk.Seqnum >= uint32(len(seqnums)) ||
-		!objectio.IsPhysicalAddr(tableDef.Cols[len(tableDef.Cols)-1].Name) {
-		return false
+	if c == nil {
+		return tableDef.Version, nil
 	}
-
-	for i, col := range tableDef.Cols {
-		if col == nil || col.Seqnum != uint32(i) {
-			return false
+	if tableDef.ClusterBy != nil || tableDef.IsTemporary || len(tableDef.Indexes) != 0 || len(tableDef.Fkeys) != 0 || len(tableDef.Checks) != 0 {
+		return 0, moerr.NewInternalErrorNoCtx("M0: writer schema outside contract domain")
+	}
+	owner := m0read.EvolutionBinding{Account: c.AccountId, Database: tableDef.DbId, Relation: tableDef.TblId}
+	if err := m0read.ValidateEvolution(c, owner); err != nil {
+		return 0, err
+	}
+	if len(seqnums) != len(c.Columns) {
+		return 0, moerr.NewInternalErrorNoCtx("M0: CN writer does not contain the complete bound layout")
+	}
+	for i, seq := range seqnums {
+		if uint32(seq) != c.Columns[i].Seqnum || int(seq) >= len(tableDef.Cols) {
+			return 0, moerr.NewInternalErrorNoCtx("M0: CN writer column identity mismatch")
 		}
-		if i == len(seqnums) {
-			continue
+		col := tableDef.Cols[seq]
+		if col == nil || col.ColId != c.Columns[i].ColumnId {
+			return 0, moerr.NewInternalErrorNoCtx("M0: CN writer stable identity mismatch")
 		}
-		if seqnums[i] != uint16(i) {
-			return false
+		encoded, err := m0read.PlanEvolutionColumnSemantic(tableDef, col)
+		if err != nil {
+			return 0, err
+		}
+		if !bytes.Equal(encoded, c.Columns[i].Semantics) {
+			return 0, moerr.NewInternalErrorNoCtx("M0: CN writer semantics mismatch")
 		}
 	}
-	anchor := tableDef.Cols[pk.Seqnum]
-	return anchor.Name == pk.Name && anchor.Hidden && anchor.Primary
+	return c.LayoutGeneration, nil
 }

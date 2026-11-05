@@ -17,14 +17,53 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func validateM0PartitionMetadata(metadata partition.PartitionMetadata, parentID uint64) error {
+	if activeM0Enabled && (parentID == 0 || metadata.TableID != parentID) {
+		return moerr.NewInternalErrorNoCtx("M0: partition metadata parent identity mismatch")
+	}
+	return nil
+}
+
+func validateM0IndexParent(ctx context.Context, index *txnTable, parent engine.Relation) error {
+	if !activeM0Enabled {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if index == nil || index.db == nil || index.extraInfo == nil || index.extraInfo.ParentTableID == 0 || parent == nil ||
+		parent.GetTableID(ctx) != index.extraInfo.ParentTableID || parent.GetDBID(ctx) != index.db.databaseId {
+		return moerr.NewInternalErrorNoCtx("M0: partition index parent identity mismatch")
+	}
+	return nil
+}
+
+// Partition metadata resolves members by name, but the name must still refer
+// to the relation identified by the same snapshot's partition record.
+func validateM0PartitionMember(ctx context.Context, metadata partition.PartitionMetadata, p partition.Partition, db *txnDatabase, rel engine.Relation) error {
+	if !activeM0Enabled {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if metadata.TableID == 0 || p.PrimaryTableID != metadata.TableID || p.PartitionID == 0 || db == nil || rel == nil ||
+		rel.GetDBID(ctx) != db.databaseId || rel.GetTableID(ctx) != p.PartitionID {
+		return moerr.NewInternalErrorNoCtx("M0: partition member identity mismatch")
+	}
+	return nil
+}
 
 func (t *combinedTxnTable) relationsForPKCheck(
 	ctx context.Context,
@@ -34,7 +73,7 @@ func (t *combinedTxnTable) relationsForPKCheck(
 	def := t.primary.GetTableDef(ctx)
 	if partitionIndex >= 0 && def.Partition != nil {
 		if _, ok := partitionSingleColumn(def); !ok {
-			return t.tablesFunc()
+			return t.tablesFunc(ctx)
 		}
 	}
 	if partitionIndex < 0 {
@@ -43,7 +82,7 @@ func (t *combinedTxnTable) relationsForPKCheck(
 			// In particular, ODKU can resolve an incoming PK to a different
 			// existing row through a UNIQUE key. Never prune by the incoming row.
 			if !partitionUsesOnlyPrimaryKey(def) {
-				return t.tablesFunc()
+				return t.tablesFunc(ctx)
 			}
 			partitionIndex = pkIndex
 			if bat.Vecs[0].GetType().Oid == types.T_Rowid {
@@ -52,7 +91,7 @@ func (t *combinedTxnTable) relationsForPKCheck(
 			}
 		}
 	}
-	return t.prunePKFunc(bat, partitionIndex)
+	return t.prunePKFunc(ctx, bat, partitionIndex)
 }
 
 func partitionUsesOnlyPrimaryKey(def *plan.TableDef) bool {
@@ -107,11 +146,17 @@ func getPartitionPrunePKFunc(
 	proc *process.Process,
 	metadata partition.PartitionMetadata,
 	db *txnDatabase,
+	owner uint32,
 ) prunePKFunc {
 	return func(
+		ctx context.Context,
 		bat *batch.Batch,
 		partitionIndex int32,
 	) ([]engine.Relation, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ctx = defines.AttachAccountId(ctx, owner)
 		res, err := partitionprune.Prune(proc, bat, metadata, partitionIndex)
 		if err != nil {
 			return nil, err
@@ -122,18 +167,28 @@ func getPartitionPrunePKFunc(
 		relations := make([]engine.Relation, 0, len(metadata.Partitions))
 		res.Iter(
 			func(p partition.Partition, bat *batch.Batch) bool {
+				if err = ctx.Err(); err != nil {
+					return false
+				}
 				rel, err = db.relation(
-					proc.Ctx,
+					ctx,
 					p.PartitionTableName,
 					proc,
 				)
 				if err != nil {
 					return false
 				}
+				if err = validateM0PartitionMember(ctx, metadata, p, db, rel); err != nil {
+					relations = nil
+					return false
+				}
 				relations = append(relations, rel)
 				return true
 			},
 		)
+		if err == nil {
+			err = ctx.Err()
+		}
 		return relations, err
 	}
 }
@@ -142,23 +197,37 @@ func getPartitionTableFunc(
 	proc *process.Process,
 	metadata partition.PartitionMetadata,
 	db *txnDatabase,
+	owner uint32,
 ) tablesFunc {
-	relations := make([]engine.Relation, 0, len(metadata.Partitions))
-	return func() ([]engine.Relation, error) {
-		if len(relations) > 0 {
-			return relations, nil
+	return func(ctx context.Context) ([]engine.Relation, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		// Metadata was loaded for this relation's catalog owner. Preserve that
+		// identity while keeping the requesting pipeline's cancellation.
+		ctx = defines.AttachAccountId(ctx, owner)
+		// Resolve through the transaction's relation cache for the bound owner
+		// rather than retaining members from an earlier read context.
+		relations := make([]engine.Relation, 0, len(metadata.Partitions))
 		for _, p := range metadata.Partitions {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			rel, err := db.relation(
-				proc.Ctx,
+				ctx,
 				p.PartitionTableName,
 				proc,
 			)
 			if err != nil {
-				relations = relations[:0]
+				return nil, err
+			}
+			if err = validateM0PartitionMember(ctx, metadata, p, db, rel); err != nil {
 				return nil, err
 			}
 			relations = append(relations, rel)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return relations, nil
 	}
@@ -168,11 +237,16 @@ func getPruneTablesFunc(
 	proc *process.Process,
 	metadata partition.PartitionMetadata,
 	db *txnDatabase,
+	owner uint32,
 ) pruneFunc {
 	return func(
 		ctx context.Context,
 		param engine.RangesParam,
 	) ([]engine.Relation, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ctx = defines.AttachAccountId(ctx, owner)
 		targets, err := partitionprune.Filter(
 			proc,
 			param.BlockFilters,
@@ -184,6 +258,9 @@ func getPruneTablesFunc(
 
 		relations := make([]engine.Relation, 0, len(targets))
 		for _, idx := range targets {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			rel, err := db.relation(
 				ctx,
 				metadata.Partitions[idx].PartitionTableName,
@@ -192,7 +269,13 @@ func getPruneTablesFunc(
 			if err != nil {
 				return nil, err
 			}
+			if err = validateM0PartitionMember(ctx, metadata, metadata.Partitions[idx], db, rel); err != nil {
+				return nil, err
+			}
 			relations = append(relations, rel)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return relations, nil
 	}

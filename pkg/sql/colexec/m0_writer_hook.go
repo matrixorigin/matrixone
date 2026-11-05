@@ -16,9 +16,9 @@ package colexec
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-var activeM0WriterSchemaVersion = func(tableDef *plan.TableDef, _ []uint16) uint32 {
+var activeM0WriterSchemaVersion = func(tableDef *plan.TableDef, _ []uint16) (uint32, error) {
 	if tableDef == nil {
-		return 0
+		return 0, nil
 	}
-	return tableDef.Version
+	return tableDef.Version, nil
 }

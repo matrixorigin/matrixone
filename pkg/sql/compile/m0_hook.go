@@ -14,7 +14,24 @@
 
 package compile
 
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
 var (
+	activeM0CaptureStatementView       = func(*Compile, *plan.Plan) (m0read.StatementReadView, error) { return nil, nil }
+	activeM0CloneCreateContext         = func(c *Compile, _ *plan.CloneTable) (context.Context, error) { return c.proc.Ctx, nil }
 	activeM0Enabled                    bool
 	activeM0DisableCountNotNullRewrite bool
+	activeM0ValidateRemoteReadBinding  = func(context.Context, *Source, *plan.TableDef, timestamp.Timestamp, plan2.LegacyTinyTextTableResolver) error {
+		return nil
+	}
+	activeM0CaptureRemoteReadGeneration = func(client.TxnOperator) (func() error, error) { return func() error { return nil }, nil }
+	activeM0WaitRemoteReadSnapshot      = func(context.Context, client.TxnClient, timestamp.Timestamp) error { return nil }
 )

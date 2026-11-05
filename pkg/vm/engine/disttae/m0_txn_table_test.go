@@ -22,7 +22,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -32,6 +34,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestM0AddRejectsUncommittedDataObject(t *testing.T) {
+	workspace := newCatalogCreateTxnForTest(t)
+	op := workspace.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
+	bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+	bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, workspace.proc.Mp()))
+	bat.SetRowCount(1)
+	t.Cleanup(func() { bat.Clean(workspace.proc.Mp()) })
+	table := &txnTable{tableId: 42, db: &txnDatabase{op: op, databaseId: 7}}
+	workspace.writes = []Entry{{typ: INSERT, tableId: 43, databaseId: 7, bat: bat}}
+	require.NoError(t, m0ValidateNoUncommittedData(table), "a different relation must not be treated as the target")
+	workspace.writes[0].tableId = 42
+	workspace.writes[0].typ = DELETE
+	require.NoError(t, m0ValidateNoUncommittedData(table), "tombstone objects are not data objects")
+	workspace.writes[0].typ = INSERT
+	require.ErrorContains(t, m0ValidateNoUncommittedData(table), "uncommitted data objects")
+	workspace.readOnly.Store(true)
+	require.ErrorContains(t, m0ValidateNoUncommittedData(table), "uncommitted data objects", "an inconsistent read-only flag cannot authorize an incomplete root")
+	workspace.readOnly.Store(false)
+	table.tableDef = m0TestAppendTableDef()
+	table.tableDef.Name2ColIndex = map[string]int32{"a": 0, "b": 1, "c": 3}
+	table.extraInfo = &api.SchemaExtra{NextColSeqnum: 4}
+	table.remoteWorkspace = true
+	buildOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	buildOp.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	buildOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	buildOp.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true}).AnyTimes()
+	buildOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).AnyTimes()
+	workspace.op = buildOp
+	table.db.op = buildOp
+	defs, err := buildM0CNAddColumn(table, t.Context(), api.NewAddColumnReq(7, 42, "new_column", plan.Type{Id: int32(types.T_int32)}, -1))
+	require.ErrorContains(t, err, "uncommitted data objects")
+	require.Nil(t, defs)
+	rows := batch.New([]string{"a"})
+	rows.SetVector(0, vector.NewVec(types.T_int32.ToType()))
+	require.NoError(t, vector.AppendFixed(rows.Vecs[0], int32(1), false, workspace.proc.Mp()))
+	rows.SetRowCount(1)
+	t.Cleanup(func() { rows.Clean(workspace.proc.Mp()) })
+	workspace.writes[0].bat = rows
+	require.ErrorContains(t, m0ValidateNoUncommittedData(table), "uncommitted data rows")
+	before := table.tableDef
+	defs, err = buildM0CNAddColumn(table, t.Context(), api.NewAddColumnReq(7, 42, "new_column", plan.Type{Id: int32(types.T_int32)}, -1))
+	require.ErrorContains(t, err, "uncommitted data rows")
+	require.Nil(t, defs)
+	require.Same(t, before, table.tableDef)
+	require.Len(t, workspace.writes, 1)
+	invalid := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+	invalid.SetRowCount(1)
+	workspace.writes[0].bat = invalid
+	require.ErrorContains(t, m0ValidateNoUncommittedData(table), "invalid uncommitted object metadata")
+}
 
 func TestM0CNAddColumnRejectsPartitionsBeforePublication(t *testing.T) {
 	for _, tc := range []struct {
@@ -64,6 +121,35 @@ func TestM0CNAddColumnRejectsPartitionsBeforePublication(t *testing.T) {
 			defs, err := buildM0CNAddColumn(table, context.Background(),
 				api.NewAddColumnReq(7, 42, "x", plan.Type{Id: int32(types.T_int32)}, -1))
 			require.ErrorContains(t, err, "partitioned tables and backing partitions require COPY")
+			require.Nil(t, defs)
+			require.Same(t, before, table.tableDef)
+			require.Empty(t, workspace.writes)
+			require.Empty(t, workspace.restoreTxnTableFunc)
+		})
+	}
+}
+
+func TestM0CNAddRejectsNonTailAndDuplicateBeforePublication(t *testing.T) {
+	for _, tc := range []struct {
+		name, column, message string
+		position              int32
+	}{
+		{"non-tail", "new_column", "must append before rowid", 1},
+		{"duplicate", "A", "duplicate appended column name", -1},
+		{"empty name", "", "appended column has no name", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			workspace := &Transaction{op: op}
+			op.EXPECT().IsSnapOp().Return(false)
+			op.EXPECT().GetWorkspace().Return(workspace)
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true})
+			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).Times(2)
+			table := &txnTable{db: &txnDatabase{op: op}, tableDef: m0TestAppendTableDef(), remoteWorkspace: true}
+			before := table.tableDef
+			defs, err := buildM0CNAddColumn(table, context.Background(),
+				api.NewAddColumnReq(7, 42, tc.column, plan.Type{Id: int32(types.T_int32)}, tc.position))
+			require.ErrorContains(t, err, tc.message)
 			require.Nil(t, defs)
 			require.Same(t, before, table.tableDef)
 			require.Empty(t, workspace.writes)

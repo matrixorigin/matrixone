@@ -577,6 +577,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		OriginName:       col.OriginName,
 		Alg:              col.Alg,
 		Typ:              *DeepCopyType(&col.Typ),
+		NotNull:          col.NotNull,
 		Default:          DeepCopyDefault(col.Default),
 		Primary:          col.Primary,
 		Unique:           col.Unique,

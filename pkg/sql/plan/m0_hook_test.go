@@ -23,9 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,6 +137,23 @@ func TestM0PlanAdmissionRejectsPartitions(t *testing.T) {
 
 func TestM0FormalAddBuildsInplaceAddColumnAction(t *testing.T) {
 	table := m0TestPlanTable()
+	// This is an explicitly authorized planner input fixture. Actual authority
+	// issuance is tested separately through real CREATE/COPY/ADD SQL.
+	table.TblId, table.DbId = 42, 7
+	table.Pkey.Names = []string{"c_w_id", "c_d_id", "c_id"}
+	contract := &api.M0EvolutionContract{FormatVersion: 1, RootId: []byte("0123456789abcdef"), DatabaseId: 7, RelationId: 42, RootColumns: 7, LayoutGeneration: 1}
+	for i, col := range table.Cols[:len(table.Cols)-1] {
+		semantic, err := m0read.PlanEvolutionColumnSemantic(table, col)
+		require.NoError(t, err)
+		generation := uint32(0)
+		if i == 7 {
+			generation = 1
+		}
+		contract.Columns = append(contract.Columns, &api.M0EvolutionColumn{ColumnId: col.ColId, Seqnum: col.Seqnum, IntroducedLayout: generation, Semantics: semantic})
+	}
+	contract.SchemaDigest = m0read.EvolutionDigest(contract.Columns)
+	table.Defs = []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: "schema_extra", Value: string(api.MustMarshalTblExtra(&api.SchemaExtra{M0Evolution: contract}))}}}}}}
+
 	proc := newPlanTestProcess(t)
 	txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true}).AnyTimes()
@@ -168,16 +189,21 @@ func TestM0FormalAddBuildsInplaceAddColumnAction(t *testing.T) {
 		"alter table constraint_test.customer add column commented int comment 'kept'")
 	require.ErrorContains(t, err, "only supports metadata-only ADD COLUMN")
 
-	_, err = buildSingleStmt(
-		mock,
-		t,
-		"alter table constraint_test.customer comment='changed'",
-	)
-	require.ErrorContains(t, err, "only supports metadata-only ADD COLUMN")
+	metadata, err := buildSingleStmt(mock, t, "alter table constraint_test.customer comment='changed'")
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_INPLACE, metadata.GetDdl().GetAlterTable().AlgorithmType)
+	ordinary := DeepCopyTableDef(table, true)
+	ordinary.Defs = nil
+	statement, err := mysql.ParseOne(t.Context(), "alter table constraint_test.customer add column no_authority int", 1)
+	require.NoError(t, err)
+	selected, err := selectM0AddColumn(&mock.ctxt, statement.(*tree.AlterTable).Options, ordinary)
+	require.NoError(t, err)
+	require.False(t, selected, "shape cannot grant authority")
 }
 
 func TestM0ClonePreservesInternalLayoutAndVersion(t *testing.T) {
 	source := m0TestPlanTable()
+	source.Cols[0].NotNull = true
 	create := &Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
 		Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{TableDef: &plan.TableDef{}}},
 	}}}
@@ -189,6 +215,7 @@ func TestM0ClonePreservesInternalLayoutAndVersion(t *testing.T) {
 	require.Equal(t, source.Pkey.CompPkeyCol.Seqnum, target.Pkey.CompPkeyCol.Seqnum)
 	for i := range source.Cols {
 		require.Equal(t, source.Cols[i].Name, target.Cols[i].Name)
+		require.Equal(t, source.Cols[i].NotNull, target.Cols[i].NotNull)
 		require.Equal(t, source.Cols[i].ColId, target.Cols[i].ColId)
 		require.Equal(t, source.Cols[i].Seqnum, target.Cols[i].Seqnum)
 	}

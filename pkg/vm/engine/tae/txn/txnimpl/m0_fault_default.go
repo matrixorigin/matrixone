@@ -16,6 +16,14 @@
 
 package txnimpl
 
-import "context"
+import (
+	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+)
+
+func m0BeforeApplyAddColumn(context.Context, *txnTable, *api.AlterTableReq) error { return nil }
+func m0BindAddColumnContext(ctx context.Context, _ *txnTable, _ *api.AlterTableReq) (context.Context, error) {
+	return ctx, nil
+}
 func m0AfterApplyAddColumn(context.Context) error { return nil }

@@ -47,6 +47,7 @@ const (
 )
 
 type CNS3Writer struct {
+	initErr             error
 	sinker              *ioutil.Sinker
 	isTombstone         bool
 	blockInfoBat        *batch.Batch
@@ -234,10 +235,12 @@ func newCNS3DataWriter(
 	writer := new(CNS3Writer)
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
+	writeVersion, initErr := activeM0WriterSchemaVersion(tableDef, sequms)
+	writer.initErr = initErr
 
 	factor := ioutil.NewFSinkerImplFactory(
 		sequms, sortKeyIdx, isPrimaryKey, false,
-		activeM0WriterSchemaVersion(tableDef, sequms),
+		writeVersion,
 	)
 	if memoryThreshold < 0 {
 		memoryThreshold = WriteS3Threshold
@@ -291,6 +294,9 @@ func chunkedColumnPolicyForService(serviceID string) objectio.ChunkedColumnPolic
 }
 
 func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
+	if w.initErr != nil {
+		return w.initErr
+	}
 	return w.sinker.Write(ctx, bat)
 }
 
@@ -299,10 +305,16 @@ func (w *CNS3Writer) MemorySizeThreshold() int {
 }
 
 func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, error) {
+	if w.initErr != nil {
+		return false, w.initErr
+	}
 	return w.sinker.WriteOwned(ctx, bat)
 }
 
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
+	if w.initErr != nil {
+		return nil, w.initErr
+	}
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
 	}
@@ -312,6 +324,9 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 }
 
 func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
+	if w.initErr != nil {
+		return nil, w.initErr
+	}
 	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
 	if err != nil {
 		return nil, err
@@ -417,6 +432,9 @@ func ExpandObjectStatsToBatch(
 }
 
 func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
+	if w.initErr != nil {
+		return nil, w.initErr
+	}
 
 	w.ResetBlockInfoBat()
 

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -194,6 +195,8 @@ type Scope struct {
 	StarCountOnly bool
 	// StarCountMergeGroup: set when StarCountOnly is true; resetForReuse clears its PartialResults.
 	StarCountMergeGroup *group.MergeGroup
+	// Bound only while building this execution's single-remote reader.
+	m0SingleRemoteHasShipped bool
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.
@@ -367,7 +370,8 @@ type Compile struct {
 	// a failed attempt cannot publish stale CURRVAL/LASTVAL values.
 	sequenceState sequenceStatementState
 	// TxnOffset read starting offset position within the transaction during the execute current statement
-	TxnOffset int
+	TxnOffset     int
+	statementView m0read.StatementReadView
 
 	MessageBoard *message.MessageBoard
 

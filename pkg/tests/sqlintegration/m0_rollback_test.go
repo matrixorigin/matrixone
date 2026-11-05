@@ -18,17 +18,22 @@ package sqlintegration
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -51,10 +56,17 @@ func m0SchemaProof(t *testing.T, ctx context.Context, db *sql.DB, schema, table 
 	t.Helper()
 	var tableID uint64
 	var version uint32
+	var extraBytes []byte
 	require.NoError(t, db.QueryRowContext(ctx,
-		"select rel_id,rel_version from mo_catalog.mo_tables where reldatabase=? and relname=?",
-		schema, table).Scan(&tableID, &version))
+		"select rel_id,rel_version,extra_info from mo_catalog.mo_tables where reldatabase=? and relname=?",
+		schema, table).Scan(&tableID, &version, &extraBytes))
 	proof := []string{fmt.Sprintf("table:%d:%d", tableID, version)}
+	var extra api.SchemaExtra
+	require.NoError(t, extra.Unmarshal(extraBytes))
+	require.NotNil(t, extra.M0Evolution)
+	contractBytes, err := extra.M0Evolution.Marshal()
+	require.NoError(t, err)
+	proof = append(proof, fmt.Sprintf("evolution:%x", sha256.Sum256(contractBytes)))
 
 	func() {
 		rows, err := db.QueryContext(ctx,
@@ -124,7 +136,7 @@ func m0ObjectHeaderProofs(
 			var meta objectio.ObjectMeta
 			meta, readErr = reader.ReadAllMeta(ctx, mp)
 			if readErr == nil {
-				version, versionErr := objectio.M0ObjectSchemaVersion(header)
+				version, versionErr := objectio.ObjectSchemaVersion(header)
 				require.NoError(t, versionErr)
 				dataMeta := meta.MustDataMeta()
 				widths := make([]uint16, 0, dataMeta.BlockCount())
@@ -448,6 +460,132 @@ func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool
 	})
 }
 
+// The SQL executor can borrow a transaction. This checks the specific
+// same-transaction interleaving; it does not assert that a normal client can
+// concurrently run two commands on one connection.
+func TestM0AlterBorrowedTxnInsertInterleave(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		const schema = "m0_borrowed_txn_interleave"
+		control, table := m0PrepareRollbackTable(t, ctx, cn, schema)
+		defer control.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		m0Exec(t, ctx, control, "alter table "+table+" add column baseline_ok int")
+		beforeSchema := m0SchemaProof(t, ctx, control, schema, "customer")
+		beforeObjects := m0ObjectHeaderProofs(t, ctx, control, cn, table)
+		service := cn.RawService().(cnservice.Service)
+		txnCtx, txnCancel := context.WithCancel(defines.AttachAccountId(ctx, 0))
+		defer txnCancel()
+		op, err := service.GetTxnClient().New(txnCtx, timestamp.Timestamp{},
+			client.WithBeginAutoCommit(false, true), client.WithTxnMode(txn.TxnMode_Pessimistic),
+			client.WithTxnIsolation(txn.TxnIsolation_RC))
+		require.NoError(t, err)
+		require.NoError(t, service.GetEngine().New(txnCtx, op))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_ = op.Rollback(cleanupCtx)
+		}()
+		waitName := disttae.M0FaultAfterDefs
+		getter := waitName + "/waiters"
+		alterDone := make(chan error, 1)
+		insertDone := make(chan error, 1)
+		alterStarted, alterJoined, insertStarted, insertJoined := false, false, false, false
+		defer func() {
+			txnCancel()
+			m0RemoveFaultPointQuiet(context.Background(), control, getter)
+			m0RemoveFaultPointQuiet(context.Background(), control, waitName)
+			if alterStarted && !alterJoined {
+				select {
+				case <-alterDone:
+				case <-time.After(10 * time.Second):
+					t.Error("ALTER cleanup failed to join")
+				}
+			}
+			if insertStarted && !insertJoined {
+				select {
+				case <-insertDone:
+				case <-time.After(10 * time.Second):
+					t.Error("INSERT cleanup failed to join")
+				}
+			}
+		}()
+		m0AddFaultPoint(t, ctx, control, waitName, "wait", "")
+		m0AddFaultPoint(t, ctx, control, getter, "getwaiters", waitName)
+		alterStarted = true
+		go func() {
+			result, execErr := service.GetSQLExecutor().Exec(txnCtx,
+				"alter table "+table+" add column borrowed_interleave int", executor.Options{}.WithTxn(op).WithKeepTxnAlive())
+			if execErr == nil {
+				result.Close()
+			}
+			alterDone <- execErr
+		}()
+		m0WaitForFaultWaiter(t, ctx, control, getter, 1)
+		insertStarted = true
+		go func() {
+			result, execErr := service.GetSQLExecutor().Exec(txnCtx,
+				"insert into "+table+" (c_id,c_d_id,c_w_id,c_credit_lim,c_ytd_payment,c_balance) values(4,4,4,40000,12000,40)",
+				executor.Options{}.WithTxn(op).WithKeepTxnAlive().WithDisableIncrStatement())
+			if execErr == nil {
+				result.Close()
+			}
+			insertDone <- execErr
+		}()
+		var insertErr error
+		insertFinished := false
+		select {
+		case insertErr = <-insertDone:
+			insertFinished = true
+			insertJoined = true
+			t.Log("borrowed INSERT finished before ALTER was released")
+		case <-time.After(2 * time.Second):
+			t.Log("borrowed INSERT waits while ALTER holds its locks")
+		}
+		m0RemoveFaultPoint(t, ctx, control, waitName)
+		alterErr := m0WaitForError(t, alterDone)
+		alterJoined = true
+		if !insertFinished {
+			insertErr = m0WaitForError(t, insertDone)
+			insertJoined = true
+		}
+		m0WaitForFaultWaiter(t, ctx, control, getter, 0)
+		m0RemoveFaultPoint(t, ctx, control, getter)
+		require.NoError(t, alterErr)
+		require.NoError(t, insertErr)
+		commitErr := op.Commit(txnCtx)
+		observer := openM0SQL(t, cn)
+		defer observer.Close()
+		observer.SetMaxIdleConns(0)
+		if commitErr != nil {
+			require.ErrorContains(t, commitErr, "schema changed, please rollback and retry")
+			t.Log("commit rejected the stale write; verifying rollback from a fresh connection")
+			rollbackErr := op.Rollback(txnCtx)
+			if rollbackErr != nil {
+				require.Equal(t, txn.TxnStatus_Aborted, op.Status(), "failed rollback must already be terminal")
+			}
+			require.Equal(t, 3, m0Count(t, ctx, observer, "select count(*) from "+table))
+			require.Equal(t, 0, m0Count(t, ctx, observer, "select count(*) from "+table+" where c_id=4"))
+			require.Equal(t, 3, m0Count(t, ctx, observer, "select count(*) from "+table+" where baseline_ok is null"))
+			require.Equal(t, 0, m0Count(t, ctx, observer,
+				"select count(*) from information_schema.columns where table_schema='"+schema+"' and table_name='customer' and column_name='borrowed_interleave'"))
+			require.Equal(t, beforeSchema, m0SchemaProof(t, ctx, observer, schema, "customer"))
+			require.Equal(t, beforeObjects, m0ObjectHeaderProofs(t, ctx, observer, cn, table))
+			m0Exec(t, ctx, observer, "alter table "+table+" add column retry_borrowed int")
+			require.Equal(t, 3, m0Count(t, ctx, observer, "select count(*) from "+table+" where retry_borrowed is null"))
+			m0Exec(t, ctx, observer, "insert into "+table+" (c_id,c_d_id,c_w_id,c_credit_lim,c_ytd_payment,c_balance) values(4,4,4,40000,12000,40)")
+			m0Exec(t, ctx, observer, "update "+table+" set retry_borrowed=5 where c_id=4")
+			require.Equal(t, 1, m0Count(t, ctx, observer, "select count(*) from "+table+" where c_id=4 and retry_borrowed=5"))
+			return
+		}
+		require.Equal(t, 4, m0Count(t, ctx, observer, "select count(*) from "+table))
+		require.Equal(t, 4, m0Count(t, ctx, observer, "select count(*) from "+table+" where borrowed_interleave is null"))
+	})
+}
+
 func TestM0AlterInsertInterleave(t *testing.T) {
 	t.Run("dml before alter", func(t *testing.T) {
 		runSQLIntegration(t, func(cluster embed.Cluster) {
@@ -562,9 +700,72 @@ func TestM0MergeReadsOldObjectsWithoutCallerProof(t *testing.T) {
 		m0Exec(t, ctx, db, "alter table "+table+" add column merged_old int")
 		require.Equal(t, objects, m0ObjectFingerprints(t, ctx, db, table))
 		m0RunL0Merge(t, ctx, db, table)
+		mergeDeadline := time.NewTimer(30 * time.Second)
+		defer mergeDeadline.Stop()
+		poll := time.NewTicker(100 * time.Millisecond)
+		defer poll.Stop()
+		for {
+			after := m0ObjectFingerprints(t, ctx, db, table)
+			if len(after) != 0 && !slices.Equal(objects, after) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				require.FailNow(t, "L0 merge did not replace source objects", ctx.Err())
+			case <-mergeDeadline.C:
+				require.FailNow(t, "L0 merge did not replace source objects")
+			case <-poll.C:
+			}
+		}
 		require.Equal(t, 4, m0Count(t, ctx, db, "select count(*) from "+table))
 		require.Equal(t, 4, m0Count(t, ctx, db, "select count(*) from "+table+" where merged_old is null"))
 		m0Exec(t, ctx, db, "update "+table+" set merged_old=c_id where c_id in (2,4)")
 		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where merged_old=c_id"))
+	})
+}
+
+// Mutate only the freshly opened transaction-owned definition, keeping the
+// actual persisted relation and old append-shaped objects unchanged.
+func TestM0EvolutionAuthorityControlsRealRelation(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(t.Context(), 0), 3*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		const schema = "m0_contract_authority"
+		db, table := m0PrepareRollbackTable(t, ctx, cn, schema)
+		defer db.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		before := m0SchemaProof(t, ctx, db, schema, "customer")
+		service := cn.RawService().(cnservice.Service)
+		for _, kind := range []string{"missing", "format", "binding", "semantics"} {
+			t.Run(kind, func(t *testing.T) {
+				op, err := service.GetTxnClient().New(ctx, timestamp.Timestamp{}, client.WithBeginAutoCommit(false, true), client.WithTxnMode(txn.TxnMode_Pessimistic), client.WithTxnIsolation(txn.TxnIsolation_RC))
+				require.NoError(t, err)
+				defer op.Rollback(ctx)
+				require.NoError(t, service.GetEngine().New(ctx, op))
+				database, err := service.GetEngine().Database(ctx, schema, op)
+				require.NoError(t, err)
+				rel, err := database.Relation(ctx, "customer", nil)
+				require.NoError(t, err)
+				extra := rel.GetExtraInfo()
+				require.NotNil(t, extra.M0Evolution)
+				switch kind {
+				case "missing":
+					extra.M0Evolution = nil
+				case "format":
+					extra.M0Evolution.FormatVersion++
+				case "binding":
+					extra.M0Evolution.RelationId++
+				case "semantics":
+					extra.M0Evolution.Columns[0].Semantics[0] ^= 1
+				}
+				err = rel.AlterTable(ctx, nil, []*api.AlterTableReq{api.NewAddColumnReq(rel.GetDBID(ctx), rel.GetTableID(ctx), "forbidden", plan.Type{Id: int32(types.T_int32)}, -1)})
+				require.Error(t, err)
+				require.ErrorContains(t, err, "evolution")
+			})
+		}
+		require.Equal(t, before, m0SchemaProof(t, ctx, db, schema, "customer"))
+		m0Exec(t, ctx, db, "alter table "+table+" add column accepted int")
 	})
 }

@@ -24,8 +24,8 @@ import (
 )
 
 func TestM0DefaultLocationHookDoesNotProveMissingColumns(t *testing.T) {
-	require.False(t, activeM0ReadLocationProofEnabled)
-	proven, proof, err := activeM0ReadLocationProof(context.Background(), nil, nil, nil)
+	require.False(t, activeM0StrictReader)
+	proven, proof, err := activeM0ReadLayout(context.Background(), nil, nil, nil)
 	require.NoError(t, err)
 	require.False(t, proven)
 	require.Zero(t, proof)

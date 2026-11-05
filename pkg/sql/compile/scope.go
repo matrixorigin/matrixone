@@ -18,8 +18,10 @@ import (
 	"context"
 	"maps"
 	"net"
+	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -57,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -291,6 +295,7 @@ func refreshGroupConcatExprMaxLen(
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
 	s.resourceExecutedLocally = false
+	s.m0SingleRemoteHasShipped = false
 
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
@@ -1178,19 +1183,128 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
-	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
+	return s.getRelDataWithTxn(c, blockExprList, nil)
+}
+
+func (c *Compile) captureM0ReadGenerations(selected client.TxnOperator) (func() error, error) {
+	parent := c.proc.GetTxnOperator()
+	if parent == nil || !reflect.ValueOf(parent).Comparable() {
+		return nil, moerr.NewInternalErrorNoCtx("M0: remote read has unbound transaction owner")
+	}
+	checkParent, err := activeM0CaptureRemoteReadGeneration(parent)
+	if err != nil {
+		return nil, err
+	}
+	checkSelected, err := activeM0CaptureRemoteReadGeneration(selected)
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		current := c.proc.GetTxnOperator()
+		if current == nil || !reflect.ValueOf(current).Comparable() || current != parent {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		if err := checkParent(); err != nil {
+			return err
+		}
+		return checkSelected()
+	}, nil
+}
+
+func (s *Scope) getRelDataWithTxn(c *Compile, blockExprList []*plan.Expr, bound client.TxnOperator) error {
+	s.m0SingleRemoteHasShipped = false
+	var pipelineCtx context.Context
+	if s.IsRemote && activeM0Enabled {
+		pipelineCtx = s.readerContext(c)
+		if pipelineCtx == nil {
+			return moerr.NewInternalErrorNoCtx("M0: remote range selection has no pipeline context")
+		}
+		if err := pipelineCtx.Err(); err != nil {
+			return err
+		}
+		if bound == nil {
+			var err error
+			bound, _, err = c.getCompileTableScanDataSourceTxn(s)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	rel, db, ctx, err := c.handleDbRelContextWithBoundTxn(s.DataSource.node, s.IsRemote, pipelineCtx, bound)
 	if err != nil {
 		return err
 	}
+	var validateRemoteBinding func() error
+	if s.IsRemote && activeM0Enabled {
+		txnOp := bound
+		validateGeneration, err := c.captureM0ReadGenerations(txnOp)
+		if err != nil {
+			return err
+		}
+		resolveLegacySource := func(resolveCtx context.Context, dbName, tableName string) (*plan.TableDef, error) {
+			if dbName == "" || s.DataSource.node.ObjRef.PubInfo != nil {
+				dbName = s.DataSource.SchemaName
+			}
+			// System sources can require a separate account selection that is
+			// not established by the target's relation context.
+			if util.DbIsSystemDb(strings.ToLower(dbName)) || util.TableIsLoggingTable(strings.ToLower(dbName), strings.ToLower(tableName)) {
+				return nil, nil
+			}
+			database, err := c.e.Database(resolveCtx, dbName, txnOp)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return nil, nil
+				}
+				return nil, err
+			}
+			sourceRel, err := database.Relation(resolveCtx, tableName, nil)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+					return nil, nil
+				}
+				return nil, err
+			}
+			definition := sourceRel.GetTableDef(resolveCtx)
+			if definition == nil {
+				return nil, nil
+			}
+			if err = plan.RequireLegacyCollations(definition); err != nil {
+				return nil, err
+			}
+			return plan2.CloneTableDefForPlan(definition, true), nil
+		}
+		validateRemoteBinding = func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := validateGeneration(); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				return err
+			}
+			return activeM0ValidateRemoteReadBinding(ctx, s.DataSource, rel.GetTableDef(ctx), txnOp.SnapshotTS(), resolveLegacySource)
+		}
+		if err = validateRemoteBinding(); err != nil {
+			return err
+		}
+	}
 
 	if s.NodeInfo.CNCNT == 1 {
+		var shipped engine.Tombstoner
+		if s.IsRemote && activeM0Enabled && s.NodeInfo.Data != nil {
+			shipped = s.NodeInfo.Data.GetTombstones()
+		}
 		rsp := &engine.RangesShuffleParam{
 			Node:  s.DataSource.node,
 			CNCNT: s.NodeInfo.CNCNT,
 			CNIDX: s.NodeInfo.CNIDX,
 			Init:  false,
 		}
-		s.NodeInfo.Data, err = c.expandRanges(
+		if s.IsRemote && activeM0Enabled {
+			ctx = m0read.WithRemoteMemberValidation(ctx)
+		}
+		ranges, err := c.expandRanges(
 			s.DataSource.node,
 			rel,
 			db,
@@ -1201,7 +1315,37 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		if _, ok := s.NodeInfo.Data.(*disttae.CombinedRelData); !ok {
+		if validateRemoteBinding != nil {
+			if err = validateRemoteBinding(); err != nil {
+				return err
+			}
+		}
+		hasShipped := shipped != nil && (shipped.HasAnyInMemoryTombstone() || shipped.HasAnyTombstoneFile())
+		if hasShipped {
+			if ranges == nil {
+				return moerr.NewInternalErrorNoCtx("M0: single remote ranges missing for shipped tombstones")
+			}
+			if _, combined := ranges.(*disttae.CombinedRelData); combined {
+				return moerr.NewInternalErrorNoCtx("M0: single remote combined ranges cannot bind shipped tombstones")
+			}
+			merged := readutil.NewEmptyTombstoneData()
+			if local := ranges.GetTombstones(); local != nil {
+				if err = merged.Merge(local); err != nil {
+					return err
+				}
+			}
+			if err = merged.Merge(shipped); err != nil {
+				return err
+			}
+			if err = ranges.AttachTombstones(merged); err != nil {
+				return err
+			}
+			s.m0SingleRemoteHasShipped = true
+		}
+		// Do not discard the received ranges on a failed selection or binding:
+		// they contain the sender's tombstones and may be needed by a retry.
+		s.NodeInfo.Data = ranges
+		if _, ok := s.NodeInfo.Data.(*disttae.CombinedRelData); !ok && !hasShipped {
 			err = s.aggOptimize(c, rel, ctx)
 			if err != nil {
 				return err
@@ -1259,6 +1403,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	)
 
 	if err == nil {
+		if validateRemoteBinding != nil {
+			if err = validateRemoteBinding(); err != nil {
+				return err
+			}
+		}
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		if err = commited.AttachTombstones(tombstones); err != nil {
 			return err
@@ -1874,19 +2023,18 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 }
 
 func (s *Scope) readerContext(c *Compile) context.Context {
-	// Reader construction belongs to the source scope's pipeline. Using the
-	// compile/root context here leaves ParallelRun's child context unaware of a
-	// StopSending cancellation until after BuildReaders returns, which races the
-	// build-failure cleanup classification. The source context is derived from
-	// the same query context and still carries the account/snapshot values that
-	// callers add below.
+	// Preserve the pipeline's cancellation and account/snapshot values. Only
+	// attach the compile-owned immutable view; never substitute the root context.
+	var ctx context.Context
 	if s != nil && s.Proc != nil && s.Proc.Ctx != nil {
-		return s.Proc.Ctx
+		ctx = s.Proc.Ctx
+	} else if c != nil && c.proc != nil {
+		ctx = c.proc.Ctx
 	}
-	if c != nil && c.proc != nil {
-		return c.proc.Ctx
+	if ctx != nil && c != nil {
+		ctx = m0read.WithStatementReadView(ctx, c.statementView)
 	}
-	return nil
+	return ctx
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
@@ -1923,7 +2071,63 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
-	err = s.getRelData(c, blockFilterList)
+	var m0ReaderAccount uint32
+	var m0ReaderAccountBound bool
+	var m0ReadTxn client.TxnOperator
+	if s.IsRemote && activeM0Enabled {
+		txnOp, bindingCtx, checkErr := c.getCompileTableScanDataSourceTxn(s)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		m0ReadTxn = txnOp
+		if s.NodeInfo.CNCNT == 1 {
+			if s.Proc == nil || c.proc.Base == nil {
+				return nil, moerr.NewInternalErrorNoCtx("M0: remote snapshot admission has no process")
+			}
+			if checkErr = activeM0WaitRemoteReadSnapshot(s.Proc.Ctx, c.proc.Base.TxnClient, txnOp.SnapshotTS()); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+		// The relation was opened under the snapshot/publication account in
+		// bindingCtx. Copy only that identity onto the pipeline's own context;
+		// replacing the context would disconnect reader cancellation.
+		snapshot := s.DataSource.node.GetScanSnapshot()
+		if snapshot != nil && snapshot.Tenant != nil && snapshot.TS != nil &&
+			!snapshot.TS.Equal(timestamp.Timestamp{}) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+			m0ReaderAccount, checkErr = defines.GetAccountId(bindingCtx)
+			m0ReaderAccountBound = checkErr == nil
+		}
+		validateGeneration, checkErr := c.captureM0ReadGenerations(txnOp)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		defer func() {
+			if err != nil {
+				return
+			}
+			readCtx := s.readerContext(c)
+			var checkErr error
+			if readCtx != nil {
+				checkErr = readCtx.Err()
+			}
+			if checkErr == nil {
+				checkErr = validateGeneration()
+				if readCtx != nil && readCtx.Err() != nil {
+					checkErr = readCtx.Err()
+				}
+			}
+			if checkErr != nil {
+				for _, reader := range readers {
+					if reader != nil {
+						_ = reader.Close()
+					}
+				}
+				readers = nil
+				err = checkErr
+			}
+		}()
+	}
+	err = s.getRelDataWithTxn(c, blockFilterList, m0ReadTxn)
 	if err != nil {
 		return
 	}
@@ -1940,8 +2144,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
-		if s.DataSource.AccountId != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
+		account := s.DataSource.AccountId
+		if account == nil && s.DataSource.node != nil && s.DataSource.node.ObjRef != nil {
+			account = s.DataSource.node.ObjRef.PubInfo
+		}
+		if account != nil {
+			ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
+		}
+		if m0ReaderAccountBound {
+			ctx = defines.AttachAccountId(ctx, m0ReaderAccount)
 		}
 		hint := engine.FilterHint{}
 		if tableDef := s.DataSource.TableDef; tableDef != nil {
@@ -1981,10 +2192,16 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if account != nil {
 				ctx = defines.AttachAccountId(ctx, uint32(account.GetTenantId()))
 			}
+			if m0ReaderAccountBound {
+				ctx = defines.AttachAccountId(ctx, m0ReaderAccount)
+			}
 		}
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+		if s.m0SingleRemoteHasShipped {
+			newCtx = m0read.WithSingleRemote(newCtx)
+		}
 
 		hint := engine.FilterHint{}
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -192,7 +193,7 @@ func m0CustomerEvaluation(t *testing.T, ctx context.Context, db *sql.DB, table, 
 	return evaluation
 }
 
-func m0DataMergeState(t *testing.T, ctx context.Context, db *sql.DB, table string) (completed, pending int) {
+func m0DataMergeState(t *testing.T, ctx context.Context, db *sql.DB, table string) (scheduled, pending int) {
 	t.Helper()
 	var payload string
 	require.NoError(t, db.QueryRowContext(ctx,
@@ -203,7 +204,7 @@ func m0DataMergeState(t *testing.T, ctx context.Context, db *sql.DB, table strin
 		case strings.HasPrefix(line, "total data merge tasks:"):
 			value := strings.TrimSpace(strings.TrimPrefix(line, "total data merge tasks:"))
 			var err error
-			completed, err = strconv.Atoi(value)
+			scheduled, err = strconv.Atoi(value)
 			require.NoError(t, err)
 		case strings.HasPrefix(line, "merge tasks in queue:"):
 			value := strings.TrimSpace(strings.TrimPrefix(line, "merge tasks in queue:"))
@@ -212,9 +213,11 @@ func m0DataMergeState(t *testing.T, ctx context.Context, db *sql.DB, table strin
 			require.NoError(t, err)
 		}
 	}
-	return completed, pending
+	return scheduled, pending
 }
 
+// m0RunL0Merge waits for task scheduling and queue drain. Callers must also
+// check object replacement to establish that the merge actually committed.
 func m0RunL0Merge(t *testing.T, ctx context.Context, db *sql.DB, table string) {
 	t.Helper()
 	before, _ := m0DataMergeState(t, ctx, db, table)
@@ -230,12 +233,12 @@ func m0RunL0Merge(t *testing.T, ctx context.Context, db *sql.DB, table string) {
 	for {
 		select {
 		case <-waitCtx.Done():
-			completed, pending := m0DataMergeState(t, ctx, db, table)
-			require.FailNowf(t, "L0 merge did not complete",
-				"completed=%d pending=%d before=%d: %v", completed, pending, before, waitCtx.Err())
+			scheduled, pending := m0DataMergeState(t, ctx, db, table)
+			require.FailNowf(t, "L0 merge was not scheduled or queue did not drain",
+				"scheduled=%d pending=%d before=%d: %v", scheduled, pending, before, waitCtx.Err())
 		case <-ticker.C:
-			completed, pending := m0DataMergeState(t, waitCtx, db, table)
-			if completed > before && pending == 0 {
+			scheduled, pending := m0DataMergeState(t, waitCtx, db, table)
+			if scheduled > before && pending == 0 {
 				return
 			}
 		}
@@ -348,6 +351,11 @@ func TestM0MetadataOnlyAddColumnSQL(t *testing.T) {
 
 		tableID, version := m0TableGeneration(t, ctx, db, schema, "customer")
 		require.Zero(t, version)
+		var rootExtra []byte
+		require.NoError(t, db.QueryRowContext(ctx, "select extra_info from mo_catalog.mo_tables where rel_id=?", tableID).Scan(&rootExtra))
+		var rootInfo api.SchemaExtra
+		require.NoError(t, rootInfo.Unmarshal(rootExtra))
+		require.NotNil(t, rootInfo.M0Evolution, "controlled CREATE must issue a persisted contract")
 		m0Exec(t, ctx, db, "alter table "+customer+" add column "+tierCol+" varchar(8)")
 		require.Equal(t, originalObjects, m0ObjectFingerprints(t, ctx, db, customer))
 		afterID, afterVersion := m0TableGeneration(t, ctx, db, schema, "customer")
@@ -370,6 +378,20 @@ func TestM0MetadataOnlyAddColumnSQL(t *testing.T) {
 		require.Equal(t, 3, m0Count(t, ctx, db, "select count(*) from "+customer+" where "+tierCol+" is null"))
 		require.Equal(t, 0, m0Count(t, ctx, db, "select count(*) from "+customer+" where "+tierCol+" is not null"))
 		require.Equal(t, 0, m0Count(t, ctx, db, "select count("+tierCol+") from "+customer))
+		ordered, err := db.QueryContext(ctx, "select c_id,"+tierCol+" from "+customer+" order by "+tierCol+",c_id")
+		require.NoError(t, err)
+		defer ordered.Close()
+		for id := 1; id <= 3; id++ {
+			require.True(t, ordered.Next())
+			var gotID int
+			var gotTier sql.NullString
+			require.NoError(t, ordered.Scan(&gotID, &gotTier))
+			require.Equal(t, id, gotID)
+			require.False(t, gotTier.Valid)
+		}
+		require.False(t, ordered.Next())
+		require.NoError(t, ordered.Err())
+		require.NoError(t, ordered.Close())
 
 		// A later non-null ADD that cannot use M0 must fail before changing the
 		// relation; the first successful independent ALTER remains installed.
@@ -530,7 +552,12 @@ func TestM0MetadataOnlyAddColumnSQL(t *testing.T) {
 		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+clone+"')")
 		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+history+"')")
 		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+branch+"')")
+		beforeMerge := m0ObjectFingerprints(t, ctx, db, clone)
+		require.NotEmpty(t, beforeMerge)
 		m0RunL0Merge(t, ctx, db, clone)
+		afterMerge := m0ObjectFingerprints(t, ctx, db, clone)
+		require.NotEmpty(t, afterMerge)
+		require.NotEqual(t, beforeMerge, afterMerge, "data merge must commit an object replacement")
 		m0Exec(t, ctx, db, "select mo_ctl('dn','globalcheckpoint','')")
 
 		tn := m0ServiceOfType(t, cluster, metadata.ServiceType_TN)

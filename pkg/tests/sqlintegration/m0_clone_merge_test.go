@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestM0CloneMergeProofUsesDerivedVersion(t *testing.T) {
+func TestM0CloneMergeUsesContractGenerations(t *testing.T) {
 	runSQLIntegration(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 		defer cancel()
@@ -173,8 +173,8 @@ func TestM0CloneMergeProofUsesDerivedVersion(t *testing.T) {
 			}
 			return true
 		}, "merge output did not carry the derived schema version: %v", afterHeaders)
-		completed, pending := m0DataMergeState(t, ctx, db, childT)
-		require.Positive(t, completed)
+		scheduled, pending := m0DataMergeState(t, ctx, db, childT)
+		require.Positive(t, scheduled)
 		require.Zero(t, pending)
 
 		require.Equal(t, 4, m0Count(t, ctx, db, "select count(*) from "+parentT))

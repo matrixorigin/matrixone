@@ -20,57 +20,74 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func init() {
-	activeM0ReadLocationProofEnabled = true
-	activeM0ReadLocationProof = proveM0ReadLocation
+	activeM0StrictReader = true
+	activeM0ReadLayout = buildM0ReadLayout
 }
 
-func proveM0ReadLocation(
+func buildM0ReadLayout(
 	ctx context.Context,
 	table *plan.TableDef,
 	location objectio.Location,
 	fs fileservice.FileService,
-) (bool, objectio.M0ObjectProof, error) {
-	candidate := catalog.M0PlanLooksLikeAppendDomain(table)
+) (bool, m0read.ObjectReadLayout, error) {
+	if table == nil {
+		return false, m0read.ObjectReadLayout{}, nil
+	}
+	raw, parseErr := m0read.PlanEvolution(table)
+	if parseErr != nil {
+		return true, m0read.ObjectReadLayout{}, parseErr
+	}
+	if raw == nil {
+		return false, m0read.ObjectReadLayout{}, nil
+	}
+	account, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return true, m0read.ObjectReadLayout{}, err
+	}
+	contract, err := m0read.ValidatePlanEvolution(table, account)
+	if err != nil {
+		return true, m0read.ObjectReadLayout{}, err
+	}
+	if contract == nil {
+		return false, m0read.ObjectReadLayout{}, nil
+	}
 	next := uint32(0)
-	if table != nil && len(table.Cols) > 0 {
+	if len(table.Cols) > 0 {
 		next = uint32(len(table.Cols) - 1)
 	}
 	layout, err := catalog.M0AppendLayoutFromPlan(table, next)
 	if err != nil {
-		if candidate {
-			return true, objectio.M0ObjectProof{}, err
-		}
-		return false, objectio.M0ObjectProof{}, nil
+		return true, m0read.ObjectReadLayout{}, err
 	}
-	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		if candidate {
-			return true, objectio.M0ObjectProof{}, err
-		}
-		return false, objectio.M0ObjectProof{}, nil
+	if err = m0read.ValidateM0AppendLayout(layout); err != nil {
+		return true, m0read.ObjectReadLayout{}, err
 	}
 	reader, err := objectio.NewObjectReaderWithStr(location.Name().String(), fs)
 	if err != nil {
-		return true, objectio.M0ObjectProof{}, err
+		return true, m0read.ObjectReadLayout{}, err
 	}
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	header, err := reader.ReadHeader(ctx, mp)
 	if err != nil {
-		return true, objectio.M0ObjectProof{}, err
+		return true, m0read.ObjectReadLayout{}, err
 	}
 	meta, err := reader.ReadAllMeta(ctx, mp)
 	if err != nil {
-		return true, objectio.M0ObjectProof{}, err
+		return true, m0read.ObjectReadLayout{}, err
 	}
-	width, err := objectio.ValidateM0Object(layout, header, meta.MustDataMeta())
-	return true, objectio.M0ObjectProof{
+	width, err := m0read.ValidateM0Object(layout, header, meta.MustDataMeta())
+	return true, m0read.ObjectReadLayout{
+		Evolution:   true,
 		ObjectName:  location.Name().String(),
 		WrittenSize: width,
 		SchemaSize:  layout.NextColSeqnum,

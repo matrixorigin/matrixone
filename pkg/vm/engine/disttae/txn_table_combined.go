@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -41,11 +42,12 @@ type pruneFunc func(
 ) ([]engine.Relation, error)
 
 type prunePKFunc func(
+	ctx context.Context,
 	bat *batch.Batch,
 	partitionIndex int32,
 ) ([]engine.Relation, error)
 
-type tablesFunc func() ([]engine.Relation, error)
+type tablesFunc func(context.Context) ([]engine.Relation, error)
 
 type combinedTxnTable struct {
 	primary     *txnTable
@@ -89,8 +91,8 @@ func filterNilRelations(relations []engine.Relation) []engine.Relation {
 }
 
 func filterNilTableRelations(fn tablesFunc) tablesFunc {
-	return func() ([]engine.Relation, error) {
-		relations, err := fn()
+	return func(ctx context.Context) ([]engine.Relation, error) {
+		relations, err := fn(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -113,10 +115,11 @@ func filterNilPrunedRelations(fn pruneFunc) pruneFunc {
 
 func filterNilPKPrunedRelations(fn prunePKFunc) prunePKFunc {
 	return func(
+		ctx context.Context,
 		bat *batch.Batch,
 		partitionIndex int32,
 	) ([]engine.Relation, error) {
-		relations, err := fn(bat, partitionIndex)
+		relations, err := fn(ctx, bat, partitionIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -128,9 +131,46 @@ func (t *combinedTxnTable) Ranges(
 	ctx context.Context,
 	param engine.RangesParam,
 ) (engine.RelData, error) {
+	var allMembers map[uint64]uint64
+	if activeM0Enabled && m0read.NeedsRemoteMemberValidation(ctx) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if t.tablesFunc == nil || t.pruneFunc == nil {
+			return nil, moerr.NewInternalErrorNoCtx("M0: remote combined relation has no member selector")
+		}
+		members, err := t.tablesFunc(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err = activeM0ValidateRemoteMembers(ctx, t.primary, members); err != nil {
+			return nil, err
+		}
+		allMembers = make(map[uint64]uint64, len(members))
+		for _, member := range members {
+			id, db := member.GetTableID(ctx), member.GetDBID(ctx)
+			if id == 0 || db == 0 {
+				return nil, moerr.NewInternalErrorNoCtx("M0: remote partition member has no identity")
+			}
+			if _, exists := allMembers[id]; exists {
+				return nil, moerr.NewInternalErrorNoCtx("M0: duplicate remote partition member")
+			}
+			allMembers[id] = db
+		}
+	}
 	relations, err := t.pruneFunc(ctx, param)
 	if err != nil {
 		return nil, err
+	}
+	if allMembers != nil {
+		if err = activeM0ValidateRemoteMembers(ctx, t.primary, relations); err != nil {
+			return nil, err
+		}
+		for _, member := range relations {
+			if db, ok := allMembers[member.GetTableID(ctx)]; !ok || db != member.GetDBID(ctx) {
+				return nil, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+		}
 	}
 
 	pd := newCombinedRelData()
@@ -153,6 +193,9 @@ func (t *combinedTxnTable) BuildReaders(
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
 		filterHint,
 		membershipFilterAdmissionForProcess(proc),
@@ -167,11 +210,15 @@ func (t *combinedTxnTable) BuildReaders(
 
 	var readers []engine.Reader
 	if relData == nil {
-		tables, err := t.tablesFunc()
+		tables, err := t.tablesFunc(ctx)
 		if err != nil {
 			return nil, err
 		}
 		for _, rel := range tables {
+			if err := ctx.Err(); err != nil {
+				closeReaders(readers)
+				return nil, err
+			}
 			r, err := rel.BuildReaders(
 				ctx,
 				proc,
@@ -189,11 +236,19 @@ func (t *combinedTxnTable) BuildReaders(
 			}
 			readers = append(readers, r...)
 		}
+		if err := ctx.Err(); err != nil {
+			closeReaders(readers)
+			return nil, err
+		}
 		return ensureReaders(readers, num), nil
 	}
 
 	r := relData.(*CombinedRelData)
 	for idx, data := range r.tables {
+		if err := ctx.Err(); err != nil {
+			closeReaders(readers)
+			return nil, err
+		}
 		rel := r.relations[idx]
 		r, err := rel.BuildReaders(
 			ctx,
@@ -211,6 +266,10 @@ func (t *combinedTxnTable) BuildReaders(
 			return nil, err
 		}
 		readers = append(readers, r...)
+	}
+	if err := ctx.Err(); err != nil {
+		closeReaders(readers)
+		return nil, err
 	}
 	return ensureReaders(readers, num), nil
 }
@@ -307,7 +366,7 @@ func (t *combinedTxnTable) BuildShardingReaders(
 func (t *combinedTxnTable) Rows(
 	ctx context.Context,
 ) (uint64, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -328,7 +387,7 @@ func (t *combinedTxnTable) Stats(
 	ctx context.Context,
 	sync bool,
 ) (*statsinfo.StatsInfo, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +446,7 @@ func (t *combinedTxnTable) Size(
 	ctx context.Context,
 	columnName string,
 ) (uint64, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -409,7 +468,7 @@ func (t *combinedTxnTable) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +491,7 @@ func (t *combinedTxnTable) CollectTombstones(
 }
 
 func (t *combinedTxnTable) StarCount(ctx context.Context) (uint64, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -449,7 +508,7 @@ func (t *combinedTxnTable) StarCount(ctx context.Context) (uint64, error) {
 }
 
 func (t *combinedTxnTable) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -471,7 +530,7 @@ func (t *combinedTxnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1032,7 +1091,7 @@ func (t *combinedTxnTable) CollectObjectList(
 }
 
 func (t *combinedTxnTable) ApproxObjectsNum(ctx context.Context) int {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return 0
 	}
@@ -1049,7 +1108,7 @@ func (t *combinedTxnTable) GetColumMetadataScanInfo(
 	name string,
 	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
-	tables, err := t.tablesFunc()
+	tables, err := t.tablesFunc(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1178,7 +1237,7 @@ func (t *combinedTxnTable) PrimaryKeysMayBeUpserted(
 	bat *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
-	relations, err := t.prunePKFunc(bat, -1)
+	relations, err := t.prunePKFunc(ctx, bat, -1)
 	if err != nil {
 		return false, err
 	}
