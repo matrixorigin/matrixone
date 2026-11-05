@@ -96,40 +96,31 @@ func TestGetReleasesAdmissionOnPanic(t *testing.T) {
 	require.Equal(t, 1, released)
 }
 
-// The ghost queue counts and drops only the entries it still remembers: a hit forgets its key
-// at once, a key added again is remembered once, at its newest place, and the forgotten
-// entries do not grow the queue.
-func TestGhostCountsRememberedEntries(t *testing.T) {
+// A ghost entry counts its bytes until it leaves the queue, after a hit has forgotten its key
+// too, and leaving forgets its key only when it is the key's latest entry: a key evicted, set
+// again from the ghost queue and evicted again stays remembered after its older entry leaves.
+func TestGhostEntriesCountUntilTheyLeave(t *testing.T) {
 	var total atomic.Int64
 	var g ghost
 	g.init(&total)
 	g.add(1, 10, 1)
-	g.add(2, 10, 2)
 	require.True(t, g.take(1))
-	require.False(t, g.take(1))
-	require.Equal(t, int64(10), total.Load())
-	require.Equal(t, uint64(2), g.head.Load())
-
-	g.add(3, 10, 3)
-	g.add(2, 10, 4)
+	require.False(t, g.contains(1))
+	require.Equal(t, int64(10), total.Load(), "the entry still counts")
+	g.add(2, 10, 2)
+	g.add(1, 10, 3)
+	require.Equal(t, uint64(1), g.head.Load())
+	g.drop()
+	require.True(t, g.contains(1), "the newer entry of key 1 is still in the queue")
+	require.True(t, g.contains(2))
 	require.Equal(t, int64(20), total.Load())
-	require.Equal(t, 2, g.len())
-	require.Equal(t, uint64(3), g.head.Load())
+	require.Equal(t, uint64(2), g.head.Load())
 	g.drop()
-	require.False(t, g.contains(3))
-	require.True(t, g.contains(2), "key 2 is remembered at its newest place")
 	g.drop()
+	require.False(t, g.contains(1))
 	require.Zero(t, total.Load())
 	require.Zero(t, g.len())
 	require.Equal(t, uint64(noOrder), g.head.Load())
-
-	g.add(100, 1, 5)
-	for order := uint64(6); order < 100000; order += 2 {
-		g.add(1, 10, order)
-		require.True(t, g.take(1))
-	}
-	require.Equal(t, int64(1), total.Load())
-	require.Less(t, len(g.ring), 4096)
 }
 
 // Concurrent sets, replaces, reads and deletes keep Used within the ceiling, a sixteenth over

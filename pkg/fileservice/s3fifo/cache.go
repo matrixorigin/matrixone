@@ -230,8 +230,7 @@ func (c *Cache[K, V]) Get(key K, admit func(size int64) (release func(), err err
 	}()
 	e.value.Retain()
 	retained = true
-	if f := e.freq.Load(); f < maxFreq {
-		e.freq.CompareAndSwap(f, f+1)
+	for f := e.freq.Load(); f < maxFreq && !e.freq.CompareAndSwap(f, f+1); f = e.freq.Load() {
 	}
 	return e.value, release, true, nil
 }

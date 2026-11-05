@@ -29,13 +29,20 @@ import (
 // empty: a small object read more than once moves to main.
 // From main, an object read since it was last passed over goes back with one read fewer. Any
 // other is evicted, and remembered in the ghost queue when it has bytes, as the cache it
-// replaces did for main too. The ghost queue holds at most nine tenths of the capacity, and
-// keeps at least one entry.
+// replaces did for main too. A hit forgets its ghost entry, whose bytes count until it leaves
+// the ghost queue, as in that cache. The ghost queue holds at most nine tenths of the capacity,
+// and keeps at least one entry.
 type model struct {
 	capacity    int64
 	small, main []*modelObject
-	ghost       []modelObject
+	ghost       []modelGhost
 	objects     map[int]*modelObject
+}
+
+type modelGhost struct {
+	key        int
+	size       int64
+	remembered bool
 }
 
 type modelObject struct {
@@ -64,7 +71,7 @@ func (m *model) mainBytes() int64 {
 }
 
 func (m *model) ghostBytes() int64 {
-	return bytesOf(m.ghost, func(o modelObject) int64 { return o.size })
+	return bytesOf(m.ghost, func(g modelGhost) int64 { return g.size })
 }
 
 func (m *model) used() int64 {
@@ -84,9 +91,9 @@ func (m *model) set(key int, size int64) {
 	defer m.evictOver()
 	o := &modelObject{key: key, size: size}
 	m.objects[key] = o
-	for i, g := range m.ghost {
-		if g.key == key {
-			m.ghost = append(m.ghost[:i:i], m.ghost[i+1:]...)
+	for i := range m.ghost {
+		if g := &m.ghost[i]; g.key == key && g.remembered {
+			g.remembered = false
 			m.main = append(m.main, o)
 			return
 		}
@@ -170,7 +177,12 @@ func (m *model) evict() {
 func (m *model) forget(o *modelObject) {
 	delete(m.objects, o.key)
 	if o.size > 0 {
-		m.ghost = append(m.ghost, *o)
+		for i := range m.ghost {
+			if m.ghost[i].key == o.key {
+				m.ghost[i].remembered = false
+			}
+		}
+		m.ghost = append(m.ghost, modelGhost{key: o.key, size: o.size, remembered: true})
 	}
 	for m.ghostBytes() > m.capacity-m.capacity/10 && len(m.ghost) > 1 {
 		m.ghost = m.ghost[1:]

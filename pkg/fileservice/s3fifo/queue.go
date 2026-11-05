@@ -129,14 +129,13 @@ func (q *fifo[K, V]) compact() {
 
 // ghost is one shard's part of the ghost queue: the hashes of recently evicted keys with their
 // bytes, oldest first. A hash is remembered by its latest entry until a hit takes it or that
-// entry leaves the queue; only remembered entries count, in total, the ghost queue's bytes over
-// all shards. head is the order of this part's oldest remembered entry, readable without the
-// shard lock.
+// entry leaves the queue. Every entry counts its bytes until it leaves the queue, as in the
+// cache this package replaces, in total, the ghost queue's bytes over all shards. head is the
+// order of this part's oldest entry, readable without the shard lock.
 type ghost struct {
-	latest map[uint64]ghostEntry
+	latest map[uint64]uint64
 	ring   []ghostEntry
 	first  int
-	dead   int
 	total  *atomic.Int64
 	head   atomic.Uint64
 }
@@ -148,13 +147,13 @@ type ghostEntry struct {
 }
 
 func (g *ghost) init(total *atomic.Int64) {
-	g.latest = make(map[uint64]ghostEntry)
+	g.latest = make(map[uint64]uint64)
 	g.total = total
 	g.head.Store(noOrder)
 }
 
 func (g *ghost) len() int {
-	return len(g.latest)
+	return len(g.ring) - g.first
 }
 
 func (g *ghost) contains(hash uint64) bool {
@@ -164,71 +163,41 @@ func (g *ghost) contains(hash uint64) bool {
 
 // take reports whether hash is remembered, and forgets it.
 func (g *ghost) take(hash uint64) bool {
-	e, ok := g.latest[hash]
-	if !ok {
+	if _, ok := g.latest[hash]; !ok {
 		return false
 	}
-	g.forget(e)
-	g.skipDead()
+	delete(g.latest, hash)
 	return true
 }
 
 func (g *ghost) add(hash uint64, size int64, order uint64) {
-	if e, ok := g.latest[hash]; ok {
-		g.forget(e)
-	}
-	e := ghostEntry{hash: hash, size: size, order: order}
-	g.ring = append(g.ring, e)
-	g.latest[hash] = e
+	g.ring = append(g.ring, ghostEntry{hash: hash, size: size, order: order})
+	g.latest[hash] = order
 	g.total.Add(size)
-	g.skipDead()
+	if g.len() == 1 {
+		g.head.Store(order)
+	}
 }
 
-// drop forgets the oldest remembered entry.
+// drop removes the oldest entry, forgetting its hash only if it is the hash's latest entry.
 func (g *ghost) drop() {
-	g.skipDead()
 	if g.first == len(g.ring) {
 		return
 	}
-	g.forget(g.ring[g.first])
-	g.skipDead()
-}
-
-func (g *ghost) live(e ghostEntry) bool {
-	cur, ok := g.latest[e.hash]
-	return ok && cur.order == e.order
-}
-
-func (g *ghost) forget(e ghostEntry) {
-	delete(g.latest, e.hash)
-	g.total.Add(-e.size)
-	g.dead++
-}
-
-// skipDead drops the forgotten entries at the front, compacts the ring once they outnumber the
-// remembered ones, and publishes the new head.
-func (g *ghost) skipDead() {
-	for g.first < len(g.ring) && !g.live(g.ring[g.first]) {
-		g.first++
-		g.dead--
-	}
-	if g.first == len(g.ring) {
-		g.ring, g.first, g.dead = g.ring[:0], 0, 0
-		g.head.Store(noOrder)
-		return
+	old := g.ring[g.first]
+	g.first++
+	g.total.Add(-old.size)
+	if order, ok := g.latest[old.hash]; ok && order == old.order {
+		delete(g.latest, old.hash)
 	}
 	if g.first > 1024 && g.first*2 > len(g.ring) {
 		n := copy(g.ring, g.ring[g.first:])
 		g.ring, g.first = g.ring[:n], 0
 	}
-	if g.dead > 1024 && g.dead*2 > len(g.ring)-g.first {
-		kept := g.ring[:0]
-		for _, e := range g.ring[g.first:] {
-			if g.live(e) {
-				kept = append(kept, e)
-			}
-		}
-		g.ring, g.first, g.dead = kept, 0, 0
+	if g.first == len(g.ring) {
+		g.ring, g.first = g.ring[:0], 0
+		g.head.Store(noOrder)
+		return
 	}
 	g.head.Store(g.ring[g.first].order)
 }
