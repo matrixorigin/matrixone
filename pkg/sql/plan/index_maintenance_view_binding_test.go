@@ -49,6 +49,7 @@ func TestIndexMaintenanceViewBindingDoesNotEvaluate(t *testing.T) {
 		"select n_name from tpch.nation where cast(enable_fault_injection() as signed) = 0",
 		"select o.o_orderkey, (with x as (select count(*) as c from tpch.orders i where i.o_orderkey = o.o_orderkey) select c + cast(enable_fault_injection() as signed) from x) as n from tpch.orders o",
 		"select cast(if(enable_fault_injection(), cast('2024-01-01 00:00:00' as datetime), cast('2025-01-01 00:00:00' as datetime)) as signed) from tpch.nation",
+		"select unzip_file(concat('/unused/',cast(enable_fault_injection() as char))) from tpch.nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)

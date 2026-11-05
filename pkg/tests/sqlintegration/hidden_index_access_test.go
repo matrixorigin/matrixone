@@ -381,14 +381,18 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 					require.True(t, sawBase, query)
 				}()
 			}
-			_, err := admin.ExecContext(ctx, "grant select on table "+renamed+" to hidden_access_role")
-			var grantError *mysql.MySQLError
-			require.ErrorAs(t, err, &grantError)
-			require.Contains(t, strings.ToLower(grantError.Message), "internal relation")
-			var exactGrants int
-			require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_role_privs where role_name='hidden_access_role' and obj_type='table' and obj_id=(select rel_logical_id from mo_catalog.mo_tables where reldatabase='hidden_access_db' and relname='renamed_child')").Scan(&exactGrants))
-			require.Zero(t, exactGrants)
-			exec(admin, "grant select on table hidden_access_db.t to hidden_access_role")
+			for _, tableKeyword := range []string{"table ", ""} {
+				_, err := admin.ExecContext(ctx, "grant select on "+tableKeyword+renamed+" to hidden_access_role")
+				var grantError *mysql.MySQLError
+				require.ErrorAs(t, err, &grantError)
+				require.Contains(t, strings.ToLower(grantError.Message), "internal relation")
+				var exactGrants int
+				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_role_privs where role_name='hidden_access_role' and obj_type='table' and obj_id=(select rel_logical_id from mo_catalog.mo_tables where reldatabase='hidden_access_db' and relname='renamed_child')").Scan(&exactGrants))
+				require.Zero(t, exactGrants)
+			}
+			exec(admin, "grant select on hidden_access_db.t to hidden_access_connect_role")
+			require.Equal(t, 2, count(connectOnly, "hidden_access_db.t"))
+			deny(connectOnly, "select count(*) from "+renamed)
 			for _, q := range []string{
 				"select count(*) from " + renamed,
 				"delete from " + renamed,

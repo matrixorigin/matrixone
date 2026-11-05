@@ -967,7 +967,7 @@ const (
 	EWM_CORR = 628
 
 	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
-	UNZIP_FILE = 632
+	UNZIP_FILE           = 632
 	MO_IS_PHYSICAL_INDEX = 633
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
