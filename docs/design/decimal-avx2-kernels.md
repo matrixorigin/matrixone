@@ -42,6 +42,21 @@ output untouched; later refusal completes the untouched suffix through the
 original exact scalar span, without replaying the prefix. Products retain their
 declared carriers. Do not remove necessary Decimal256 results or accumulators.
 
+The2026-11-05 kernel correction retains those admitted arithmetic families.
+Signed64 vector shifts require AVX-512 and cannot be used under an AVX2 guard.
+Sign extension instead uses AVX2 signed comparisons with zero. The signed32
+coefficient test adds2^31 modulo2^64 and tests whether the upper32 bits are
+zero, including the signed64 endpoints. Compiled-kernel instruction inspection
+must reject EVEX/AVX-512 instructions, in addition to arithmetic boundary tests.
+
+Widened add/sub derives the extra sign limb from the operands' signs and the
+wrapped result. For addition the sign is the majority of the two operand signs
+and result sign; subtraction complements the second operand sign. Equal signs
+retain their sign, while opposite signs use the wrapped result's sign. This
+preserves all65/129 significant bits while avoiding redundant upper carries.
+Multiplication establishes its checked input/output slice views once before
+the loop, retaining original row offsets for scalar-tail/refusal handling.
+
 ## Validation and delivery
 
 Independent exact boundary tests cover carry/borrow, every overflow lane,

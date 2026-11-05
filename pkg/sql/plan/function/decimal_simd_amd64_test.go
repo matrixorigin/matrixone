@@ -56,8 +56,12 @@ func TestDecimalSIMDExactAndFallback(t *testing.T) {
 						}
 						for i := 0; i < n+2; i++ {
 							a, b := int64(i%7-3), int64(i%5-2)
+							if op == MULTI {
+								bounds := []int64{math.MinInt32, math.MaxInt32, -1, 0, 1}
+								a, b = bounds[i%len(bounds)], bounds[(i+1)%len(bounds)]
+							}
 							if op != MULTI && rt == types.T_decimal128 {
-								bounds := []int64{math.MaxInt64, math.MinInt64, -1, 0, 1}
+								bounds := []int64{math.MaxInt64, math.MaxInt64, math.MinInt64, math.MinInt64, math.MaxInt64, -1, 0, 1}
 								a = bounds[i%len(bounds)]
 								b = bounds[(i+1)%len(bounds)]
 							}
@@ -192,6 +196,21 @@ func TestDecimalSIMDBroadcastAndDecline(t *testing.T) {
 		require.NoError(t, decimalArithmeticChunkScalar(op, x, y, want, 0, 0, 0, 257))
 		require.True(t, tryDecimalSIMD(op, x, y, out, 0, 0, 0, 257))
 		require.Equal(t, want.GetData(), out.GetData())
+	}
+	// Every lane of the first block must reject coefficients immediately
+	// outside signed32, including modular-addition wraparound at signed64 limits.
+	for _, value := range []int64{math.MinInt32 - 1, math.MaxInt32 + 1, math.MinInt64, math.MaxInt64} {
+		for lane := 0; lane < 4; lane++ {
+			t.Run(fmt.Sprintf("decline_%d_lane%d", value, lane), func(t *testing.T) {
+				values := vector.MustFixedColNoTypeCheck[types.Decimal64](y)
+				old := values[lane]
+				t.Cleanup(func() { values[lane] = old })
+				values[lane] = types.Decimal64(value)
+				before := append([]byte(nil), out.GetData()...)
+				require.False(t, tryDecimalSIMD(MULTI, x, y, out, 0, 0, 0, 257))
+				require.Equal(t, before, out.GetData())
+			})
+		}
 	}
 	before := append([]byte(nil), out.GetData()...)
 	y.GetNulls().Add(0)

@@ -95,6 +95,7 @@ func decimal128PreparedAdd256(a, b []types.Decimal128, out []types.Decimal256, n
 		bm = 0
 	}
 	ones := archsimd.BroadcastUint64x4(^uint64(0))
+	zero := archsimd.BroadcastUint64x4(0)
 	i := 0
 	for ; i+4 <= n; i += 4 {
 		al, ah := loadDecimal128Permuted(ad, i&am, am == 0)
@@ -102,7 +103,9 @@ func decimal128PreparedAdd256(a, b []types.Decimal128, out []types.Decimal256, n
 		lo := al.Add(bl)
 		carry := al.And(bl).Or(al.Or(bl).And(lo.Xor(ones))).ShiftAllRight(63)
 		hi := ah.Add(bh).Add(carry)
-		upper := (ah.AsInt64x4().ShiftAllRight(63).Add(bh.AsInt64x4().ShiftAllRight(63))).AsUint64x4().Add(ah.And(bh).Or(ah.Or(bh).And(hi.Xor(ones))).ShiftAllRight(63))
+		// A widened signed sum keeps the operands' common sign; with
+		// opposite signs it keeps the wrapped result's sign.
+		upper := decimalSIMDSign64(ah.And(bh).Or(ah.Or(bh).And(hi)), zero)
 		// A signed128 +/- signed128 result needs129 bits, so upper is
 		// already canonical sign extension. Keep all packing in registers.
 		l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
@@ -159,6 +162,7 @@ func decimal128PreparedSub256(a, b []types.Decimal128, out []types.Decimal256, n
 		bm = 0
 	}
 	ones := archsimd.BroadcastUint64x4(^uint64(0))
+	zero := archsimd.BroadcastUint64x4(0)
 	i := 0
 	for ; i+4 <= n; i += 4 {
 		al, ah := loadDecimal128Permuted(ad, i&am, am == 0)
@@ -166,7 +170,8 @@ func decimal128PreparedSub256(a, b []types.Decimal128, out []types.Decimal256, n
 		lo := al.Sub(bl)
 		carry := al.Xor(ones).And(bl).Or(al.Xor(bl).Xor(ones).And(lo)).ShiftAllRight(63)
 		hi := ah.Sub(bh).Sub(carry)
-		upper := (ah.AsInt64x4().ShiftAllRight(63).Sub(bh.AsInt64x4().ShiftAllRight(63))).AsUint64x4().Sub(ah.Xor(ones).And(bh).Or(ah.Xor(bh).Xor(ones).And(hi)).ShiftAllRight(63))
+		notBH := bh.Xor(ones)
+		upper := decimalSIMDSign64(ah.And(notBH).Or(ah.Or(notBH).And(hi)), zero)
 		// A signed128 +/- signed128 result needs129 bits, so upper is
 		// already canonical sign extension. Keep all packing in registers.
 		l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
@@ -293,7 +298,7 @@ func decimal64WideAdd(a, b []types.Decimal64, out []types.Decimal128, n int) {
 		bm = 0
 		bv = archsimd.BroadcastUint64x4(bd[0])
 	}
-	ones := archsimd.BroadcastUint64x4(^uint64(0))
+	zero := archsimd.BroadcastUint64x4(0)
 	i := 0
 	for ; i+4 <= n; i += 4 {
 		if am != 0 {
@@ -303,8 +308,8 @@ func decimal64WideAdd(a, b []types.Decimal64, out []types.Decimal128, n int) {
 			bv = archsimd.LoadUint64x4(bd[i : i+4])
 		}
 		lo := av.Add(bv)
-		carry := av.And(bv).Or(av.Or(bv).And(lo.Xor(ones))).ShiftAllRight(63)
-		hi := av.AsInt64x4().ShiftAllRight(63).AsUint64x4().Add(bv.AsInt64x4().ShiftAllRight(63).AsUint64x4()).Add(carry)
+		// The exact signed65 result has an all-zero or all-one upper limb.
+		hi := decimalSIMDSign64(av.And(bv).Or(av.Or(bv).And(lo)), zero)
 		l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
 		l.ConcatPermute128Scalars(0, 2, h).Store(dst[i*2 : i*2+4])
 		l.ConcatPermute128Scalars(1, 3, h).Store(dst[i*2+4 : i*2+8])
@@ -330,6 +335,7 @@ func decimal64WideSub(a, b []types.Decimal64, out []types.Decimal128, n int) {
 		bv = archsimd.BroadcastUint64x4(bd[0])
 	}
 	ones := archsimd.BroadcastUint64x4(^uint64(0))
+	zero := archsimd.BroadcastUint64x4(0)
 	i := 0
 	for ; i+4 <= n; i += 4 {
 		if am != 0 {
@@ -339,8 +345,8 @@ func decimal64WideSub(a, b []types.Decimal64, out []types.Decimal128, n int) {
 			bv = archsimd.LoadUint64x4(bd[i : i+4])
 		}
 		lo := av.Sub(bv)
-		carry := av.Xor(ones).And(bv).Or(av.Xor(bv).Xor(ones).And(lo)).ShiftAllRight(63)
-		hi := av.AsInt64x4().ShiftAllRight(63).AsUint64x4().Sub(bv.AsInt64x4().ShiftAllRight(63).AsUint64x4()).Sub(carry)
+		notB := bv.Xor(ones)
+		hi := decimalSIMDSign64(av.And(notB).Or(av.Or(notB).And(lo)), zero)
 		l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
 		l.ConcatPermute128Scalars(0, 2, h).Store(dst[i*2 : i*2+4])
 		l.ConcatPermute128Scalars(1, 3, h).Store(dst[i*2+4 : i*2+8])

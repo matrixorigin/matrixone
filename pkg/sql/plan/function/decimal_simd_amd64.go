@@ -155,6 +155,14 @@ func decimalSIMDFirstNarrow(v *vector.Vector, at int) bool {
 	}
 }
 
-func decimalSIMDFitsLane32(v archsimd.Uint64x4) bool {
-	return v.Equal(v.AsInt64x4().ShiftAllLeft(32).ShiftAllRight(32).AsUint64x4()).ToBits() == 15
+func decimalSIMDFitsLane32(v, bias, upperMask archsimd.Uint64x4) bool {
+	// Adding 2^31 maps exactly the signed32 range into [0, 2^32).
+	// AND plus IsZero lowers to VPTEST without transferring a mask to GPRs.
+	return v.Add(bias).And(upperMask).IsZero()
+}
+
+// Signed64 arithmetic shifts require AVX-512. A signed comparison supplies
+// the same all-zero/all-one sign mask using AVX2 VPCMPGTQ.
+func decimalSIMDSign64(v, zero archsimd.Uint64x4) archsimd.Uint64x4 {
+	return v.BitsToInt64().Less(zero.BitsToInt64()).ToInt64x4().ToBits()
 }

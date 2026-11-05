@@ -65,9 +65,9 @@ func decimal128SIMDAdd(a, b, out []types.Decimal128, n int) int {
 		al, ah := loadDecimal128Permuted(ad, i&am, am == 0)
 		bl, bh := loadDecimal128Permuted(bd, i&bm, bm == 0)
 		lo := al.Add(bl)
-		carry := (lo.Xor(sb).AsInt64x4().Less(al.Xor(sb).AsInt64x4())).ToInt64x4().AsUint64x4()
+		carry := (lo.Xor(sb).BitsToInt64().Less(al.Xor(sb).BitsToInt64())).ToInt64x4().ToBits()
 		hi := ah.Add(bh).Sub(carry)
-		mask := (ah.Xor(bh).Xor(ones).And(ah.Xor(hi))).AsInt64x4().Less(archsimd.BroadcastInt64x4(0)).ToBits()
+		mask := (ah.Xor(bh).Xor(ones).And(ah.Xor(hi))).BitsToInt64().Less(archsimd.BroadcastInt64x4(0)).ToBits()
 		// Lanes stay in 0,2,1,3 order throughout, removing four cross-lane
 		// permutations per block. Only the rare first-error index is reordered.
 		l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
@@ -123,9 +123,9 @@ func decimal128SIMDSub(a, b, out []types.Decimal128, n int) int {
 		al, ah := loadDecimal128Permuted(ad, i&am, am == 0)
 		bl, bh := loadDecimal128Permuted(bd, i&bm, bm == 0)
 		lo := al.Sub(bl)
-		carry := (al.Xor(sb).AsInt64x4().Less(bl.Xor(sb).AsInt64x4())).ToInt64x4().AsUint64x4()
+		carry := (al.Xor(sb).BitsToInt64().Less(bl.Xor(sb).BitsToInt64())).ToInt64x4().ToBits()
 		hi := ah.Sub(bh).Add(carry)
-		mask := (ah.Xor(bh).And(ah.Xor(hi))).AsInt64x4().Less(archsimd.BroadcastInt64x4(0)).ToBits()
+		mask := (ah.Xor(bh).And(ah.Xor(hi))).BitsToInt64().Less(archsimd.BroadcastInt64x4(0)).ToBits()
 		// Lanes stay in 0,2,1,3 order throughout, removing four cross-lane
 		// permutations per block. Only the rare first-error index is reordered.
 		l, h := lo.InterleaveLoGrouped(hi), lo.InterleaveHiGrouped(hi)
