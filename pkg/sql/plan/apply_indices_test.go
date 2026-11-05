@@ -6999,8 +6999,8 @@ func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
 	}
 }
 
-func TestHandleMessageFromTopToScanJSONFallback(t *testing.T) {
-	for _, typ := range []types.T{types.T_json, types.T_int64} {
+func TestHandleMessageFromTopToScanUnsupportedLeadingKey(t *testing.T) {
+	for _, typ := range []types.T{types.T_json, types.T_geometry, types.T_geometry32, types.T_int64} {
 		for _, flag := range []planpb.OrderBySpec_OrderByFlag{0, planpb.OrderBySpec_DESC} {
 			for _, multi := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/flag=%d/multi=%t", typ, flag, multi), func(t *testing.T) {
@@ -7024,8 +7024,8 @@ func TestHandleMessageFromTopToScanJSONFallback(t *testing.T) {
 					builder.handleMessageFromTopToScan(1)
 					require.Equal(t, order, sort.OrderBy)
 					require.Nil(t, scan.IndexReaderParam)
-					if typ == types.T_json {
-						require.Empty(t, sort.SendMsgList, "JSON semantic order cannot drive byte-ordered zonemap pruning")
+					if typ != types.T_int64 {
+						require.Empty(t, sort.SendMsgList, "leading-key pruning requires compatible SQL and zonemap comparators")
 						require.Empty(t, scan.RecvMsgList)
 						require.Empty(t, scan.OrderBy)
 					} else {

@@ -248,5 +248,70 @@ select id, k from json_keys order by k asc, id desc limit 1;
 select id, k from json_keys order by k desc, id desc limit 1;
 ➤ id[4,32,0]  ¦  k[-1,2147483647,0]  𝄀
 1  ¦  256
+create table geometry_keys (id int not null, k geometry not null);
+insert into geometry_keys values (1, st_geomfromtext('POINT(0 0)'));
+select mo_ctl('dn', 'flush', 'top_leading_key_filter.geometry_keys');
+➤ mo_ctl(dn, flush, top_leading_key_filter.geometry_keys)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into geometry_keys values (2, st_geomfromtext('POINT(1 1)'));
+select mo_ctl('dn', 'flush', 'top_leading_key_filter.geometry_keys');
+➤ mo_ctl(dn, flush, top_leading_key_filter.geometry_keys)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set session optimizer_hints = 'execType=1';
+select id from geometry_keys order by k asc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from geometry_keys order by k desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+select id from geometry_keys order by k asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from geometry_keys order by k desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+set session optimizer_hints = 'execType=1,sendMessageFromTopToScan=1';
+select id from geometry_keys order by k asc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from geometry_keys order by k desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+set session optimizer_hints = 'execType=2';
+select id from geometry_keys order by k asc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from geometry_keys order by k desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+select id from geometry_keys order by k asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from geometry_keys order by k desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select id from geometry_keys order by k asc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from geometry_keys order by k desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
 set session optimizer_hints = @saved_optimizer_hints;
 drop database top_leading_key_filter;

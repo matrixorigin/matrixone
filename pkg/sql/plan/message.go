@@ -88,9 +88,10 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if scanID == -1 || scanOrderExpr == nil {
 		return
 	}
-	// JSON Top compares semantic values, but zonemaps compare encoded bytes.
-	// Neither single-key nor multi-key Top can safely prune with that order.
-	if types.T(scanOrderExpr.Typ.Id) == types.T_json {
+	// Dynamic bounds require compatible SQL and zonemap comparators. JSON
+	// uses semantic order rather than byte order; geometry has no zonemap
+	// comparator. Neither single-key nor multi-key Top can prune these types.
+	if typ := types.T(scanOrderExpr.Typ.Id); typ == types.T_json || typ == types.T_geometry || typ == types.T_geometry32 {
 		return
 	}
 	// Zonemaps do not describe NULL ordering. Do not extend dynamic pruning to
