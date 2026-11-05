@@ -158,7 +158,7 @@ func (a *vectorTopAccumulator) consume(ctx context.Context, vec *vector.Vector, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if a.emptyRange {
+	if a.emptyRange || vec.IsConstNull() {
 		return nil
 	}
 	order := a.order
