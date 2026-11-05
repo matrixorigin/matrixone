@@ -1425,7 +1425,7 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 	if exec.bulkInput != 0 && len(groups) == 1 {
 		return exec.Fill(int(groups[0])-1, offset, vectors)
 	}
-	// Non-decimal instantiations keep their existing coalescers.
+	// Non-decimal instantiations keep the existing scalar dispatch.
 	if exec.bulkInput != 0 && exec.bulkState != 0 && len(groups) >= 256 && decimalReductionAvailable() {
 		v := vectors[0]
 		if v.GetType().Oid == exec.bulkInput && exec.aggInfo.stateTypes[0].Oid == exec.bulkState && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
@@ -1433,6 +1433,14 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 				return decimalBulkReduce(&exec.aggExec, exec.isSum, int(group-1), v, offset, len(groups))
 			}
 		}
+	}
+	// The legacy combiner buffers only 255 groups and updates later groups
+	// directly. A checked large call must keep that order: a local subtotal
+	// may overflow even when adding each row to the existing state succeeds.
+	// With at most 256 rows, the 256th group can have only one input row.
+	if len(exec.state) == 1 && exec.state[0].length <= 256 &&
+		(exec.localAddSafe || len(groups) <= 256) {
+		return exec.batchFillDense(offset, groups, vectors[0])
 	}
 	if exec.isSum {
 		return exec.batchFillSum(offset, groups, vectors)

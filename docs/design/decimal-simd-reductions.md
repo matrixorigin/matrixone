@@ -104,3 +104,14 @@ decimal BatchFill calls reuse the existing Fill operation, with retained scalar
 coalescers checking offset, unmatched, NULL/constant and error-state parity.
 Integer BatchFill keeps its original route. No TPC-H run accepts the failed
 control screen; archive it before measuring this revised source.
+
+## Dense-state integration
+
+Main781ebc03d9 adds compact group lookup and scalar dense-state decimal fills.
+The uniform SIMD admission remains ahead of the dense/general scalar dispatch;
+rejected spans retain main's exact dense eligibility, including its checked
+large-call publication guard. Integer and mixed-group calls use main's scalar
+paths. Focused dense-boundary, checked-overflow, uniform-span and compact/global
+Group tests pass in the required build modes. Earlier timing against007dd57a
+precedes this faster dense baseline and is historical; fresh performance
+qualification is required before readiness.
