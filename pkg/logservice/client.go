@@ -35,8 +35,9 @@ import (
 
 const (
 	defaultWriteSocketSize = 64 * 1024
-	// A Read is safe to repeat after an isolated connection stops answering.
-	// This leaves room to try another replica within the WAL caller's deadline.
+	// Read and GetTruncatedLsn are safe to repeat after an isolated connection
+	// stops answering. This leaves room to try another replica within the WAL
+	// caller's deadline.
 	defaultLogServiceReadAttemptTimeout = 7 * time.Second
 )
 
@@ -310,9 +311,16 @@ func (c *managedClient) GetTruncatedLsn(ctx context.Context) (Lsn, error) {
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
 		}
-		v, err := c.client.getTruncatedLsn(ctx)
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		v, err := c.client.getTruncatedLsn(attemptCtx)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
 		}
 		if c.isRetryableError(err) {
 			continue
