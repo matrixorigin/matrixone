@@ -1824,7 +1824,11 @@ func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 // storage metadata are proven to share the logical SQL ordering. Scalar float
 // encoding has an identity order over NaN payloads, while SQL makes all NaNs
 // peers and keeps them last in both directions, so encoded ordering cannot
-// replace the logical sort or drive early truncation.
+// replace the logical sort or drive early truncation. Case-insensitive
+// collations compare folded collation weights, while serialized hidden keys
+// and block zonemaps keep raw bytes: 'b' sorts before 'C' under
+// utf8mb4_general_ci although byte 0x62 > 0x43, so the physical order cannot
+// replace the logical sort or drive byte-threshold pruning there either.
 func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 	for _, expr := range orderExprs {
 		if expr == nil {
@@ -1832,6 +1836,9 @@ func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 		}
 		switch types.T(expr.Typ.Id) {
 		case types.T_float32, types.T_float64:
+			return false
+		}
+		if types.IsCaseInsensitiveCollation(uint8(expr.Typ.Charset)) {
 			return false
 		}
 	}

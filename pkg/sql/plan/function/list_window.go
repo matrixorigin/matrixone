@@ -761,5 +761,21 @@ func checkValueWindowDomain(inputs []types.Type) checkResult {
 		targets[0] = types.T_text.ToType()
 		return newCheckResultWithCast(0, targets)
 	}
+	// Native BIT value-window input adopts the unsigned integer result
+	// domain (issue #32125): LAG/LEAD/FIRST_VALUE/LAST_VALUE/NTH_VALUE over
+	// BIT derive BIGINT UNSIGNED like MySQL, so the operator receives a
+	// genuinely cast uint64 vector and LENGTH/CTAS/VIEW consumers see a
+	// numeric column instead of raw BIT bytes. A three-argument
+	// LAG/LEAD default in the same BIT domain is coerced with the value
+	// argument, mirroring the default's conversion to the result type;
+	// non-BIT defaults, offsets, frames and NULL markers keep their types.
+	if inputs[0].Oid == types.T_bit {
+		targets := append([]types.Type(nil), inputs...)
+		targets[0] = types.T_uint64.ToType()
+		if len(inputs) >= 3 && inputs[2].Oid == types.T_bit {
+			targets[2] = types.T_uint64.ToType()
+		}
+		return newCheckResultWithCast(0, targets)
+	}
 	return newCheckResultWithSuccess(0)
 }

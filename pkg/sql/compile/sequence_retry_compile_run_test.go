@@ -555,6 +555,31 @@ func (f *crFixture) run() error {
 	return runErr
 }
 
+// runInBubble keeps retry-window tests independent of host scheduling. The
+// fixture is built outside the bubble because setup may start runtime-owned
+// background work; the local query itself runs on the bubble's goroutine.
+func (f *crFixture) runInBubble(t *testing.T) error {
+	t.Helper()
+	require.True(t, f.compile.IsTpQuery())
+	require.Len(t, f.compile.scopes, 1)
+	require.False(t, f.compile.hasMergeOp)
+	scope := f.compile.scopes[0]
+	require.Contains(t, []magicType{Normal, Merge}, scope.Magic)
+	require.Empty(t, scope.PreScopes)
+	require.False(t, scope.ConcurrentPreScopes)
+	require.False(t, scope.LazyPreScopes)
+	require.False(t, scope.IsLoad)
+	require.False(t, scope.IsTbFunc)
+	require.False(t, scope.isTableScan())
+	var runErr error
+	synctest.Test(t, func(t *testing.T) {
+		defer f.proc.ResetQueryContext()
+		f.compile.startAt = time.Now()
+		runErr = f.run()
+	})
+	return runErr
+}
+
 func (f *crFixture) distinctDeadlines() []time.Time {
 	f.sink.mu.Lock()
 	defer f.sink.mu.Unlock()
@@ -857,9 +882,9 @@ func sleepUntilDeadlineDelta(st *process.SequenceRetryState, delta time.Duration
 // a baseline WITHOUT re-anchoring D (AdmitRetry preserves the live
 // deadline, G2), and its failure aborts the projection before seqa can
 // resolve, so the watch set retains {seqa, seqb} across every rebuild.
-// The window is doubled (600 ms) so seqb's full 8-attempt join cycle
-// (~90-330 ms on this harness) always exhausts strictly inside seqa's
-// first window — a live-window admission, never the expiry branch.
+// A virtual clock keeps seqb's full 8-attempt join cycle strictly inside
+// seqa's first window — a live-window admission, never the expiry branch,
+// even when a loaded runner deschedules the test.
 //
 // The episode runs TWO decisions. Window 1: both sequences' peers commit
 // forward ((5,1)), so the first decision — one interval after seqa's
@@ -905,7 +930,7 @@ func TestCompileRunSequenceRetryConjunctiveAdvancingPeerDoesNotRescueStalled(t *
 		}
 	}
 
-	runErr := f.run()
+	runErr := f.runInBubble(t)
 
 	require.Error(t, runErr)
 	require.ErrorContains(t, runErr,
@@ -943,9 +968,9 @@ func TestCompileRunSequenceRetryConjunctiveAdvancingPeerDoesNotRescueStalled(t *
 // check at all. The renewal is observed decision-relatively (a hook reads
 // the live deadline), upon which seqb's contention ends and the next
 // generation drains both sequences from the peers' committed state. The
-// doubled window keeps this at exactly one decision: seqb's join cycle
-// always exhausts inside the first window, and the resolving generation
-// lands far inside the renewed window, so no second decision can fire
+// doubled window keeps this at exactly one decision: under a virtual clock,
+// seqb's join cycle exhausts inside the first window and the resolving
+// generation lands far inside the renewed window, so no second decision can fire
 // and no quantity of generation-index arithmetic is load-sensitive.
 func TestCompileRunSequenceRetryConjunctiveBothAdvancingRenews(t *testing.T) {
 	f := newCrFixtureWindow(t, "select nextval('seqb'), nextval('seqa')", 2*crWindow)
@@ -978,7 +1003,7 @@ func TestCompileRunSequenceRetryConjunctiveBothAdvancingRenews(t *testing.T) {
 		}
 	}
 
-	runErr := f.run()
+	runErr := f.runInBubble(t)
 
 	require.NoError(t, runErr,
 		"conjunctive renewal holds while every contended identity observably changes")

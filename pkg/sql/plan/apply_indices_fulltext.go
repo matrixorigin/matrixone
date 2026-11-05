@@ -1750,9 +1750,116 @@ func (builder *QueryBuilder) resolveProjectMatchesOverJoin(projNode *plan.Node, 
 	return changed
 }
 
+// attachProjectedFullTextMatches adds each select-list MATCH of a PROJECT over a JOIN to the
+// FilterList of the TABLE_SCAN join child whose fulltext index answers it, unless an equal MATCH
+// is already there. Over a single scan a projected MATCH drives an INNER-joined index stream,
+// which filters the scan; the added filter applies the same filter over a join. The join-child
+// rewrite then serves it like a WHERE MATCH, and resolveProjectMatchesOverJoin replaces the
+// projected MATCH with its score.
+//
+// It runs before the early vector rewrite, so a vector pre-filter copied from the scan includes
+// the MATCH.
+//
+// A scan is used only when every node between the PROJECT and the scan keeps the join output
+// rows of the remaining scan rows unchanged: SORT, FILTER, and a JOIN child accepted by
+// projectedFullTextMatchPassesJoin. A node or scan with a LIMIT or OFFSET is a derived table's
+// pagination, which the MATCH must not filter below; the pagination of the PROJECT's own SELECT
+// sits above it. A MATCH attached to no scan stays in the select list and raises 20105.
+func (builder *QueryBuilder) attachProjectedFullTextMatches(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.attachProjectedFullTextMatches(childID)
+	}
+	if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
+		return
+	}
+	var matches []*plan.Expr
+	for _, expr := range node.ProjectList {
+		matches = collectNestedFullTextMatches(expr, matches)
+	}
+	if len(matches) == 0 || builder.resolveFullTextIndexPath(node) != nil {
+		return
+	}
+	builder.attachProjectedFullTextMatchesBelow(node.Children[0], matches)
+}
+
+func (builder *QueryBuilder) attachProjectedFullTextMatchesBelow(nodeID int32, matches []*plan.Expr) {
+	node := builder.qry.Nodes[nodeID]
+	if node.Limit != nil || node.Offset != nil {
+		return
+	}
+	switch node.NodeType {
+	case plan.Node_SORT, plan.Node_FILTER:
+		if len(node.Children) == 1 {
+			builder.attachProjectedFullTextMatchesBelow(node.Children[0], matches)
+		}
+	case plan.Node_JOIN:
+		for i, childID := range node.Children {
+			if !projectedFullTextMatchPassesJoin(node, i) {
+				continue
+			}
+			child := builder.qry.Nodes[childID]
+			if child.NodeType == plan.Node_TABLE_SCAN {
+				if child.Limit == nil && child.Offset == nil {
+					builder.attachFullTextMatchesToScan(child, matches)
+				}
+				continue
+			}
+			builder.attachProjectedFullTextMatchesBelow(childID, matches)
+		}
+	}
+}
+
+// fullTextJoinChildEligible reports whether applyFullTextFiltersForJoinChildren rewrites a
+// fulltext filter on join child childIdx (see the rules listed there).
+func fullTextJoinChildEligible(node *plan.Node, childIdx int) bool {
+	switch node.JoinType {
+	case plan.Node_INNER, plan.Node_SEMI,
+		plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
+		return true
+	case plan.Node_ANTI, plan.Node_MARK:
+		return antiMarkPreservesChild(node, childIdx)
+	default:
+		return nodeNullExtendsChild(node, childIdx)
+	}
+}
+
+// projectedFullTextMatchPassesJoin reports whether a filter on join child childIdx removes
+// exactly the join output rows built from the removed child rows: an eligible child the join
+// does not null-extend. On a null-extended child a removed row becomes a NULL-extended one.
+func projectedFullTextMatchPassesJoin(node *plan.Node, childIdx int) bool {
+	return fullTextJoinChildEligible(node, childIdx) && !nodeNullExtendsChild(node, childIdx)
+}
+
+// attachFullTextMatchesToScan skips a scan with a boolean-composition filter: the composition
+// path serves a projected MATCH there with a LEFT-attached score, 0 for a row it does not match.
+func (builder *QueryBuilder) attachFullTextMatchesToScan(scanNode *plan.Node, matches []*plan.Expr) {
+	if scanHasFullTextBooleanComposition(scanNode) {
+		return
+	}
+	for _, expr := range matches {
+		fn := expr.GetF()
+		if builder.findMatchFullTextIndex(fn, scanNode) == nil {
+			continue
+		}
+		dup := false
+		for _, filter := range scanNode.FilterList {
+			if f := filter.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "fulltext_match" &&
+				builder.equalsFullTextMatchFuncSameTable(fn, f) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			scanNode.FilterList = append(scanNode.FilterList, DeepCopyExpr(expr))
+		}
+	}
+}
+
 // scanHasMatchedFullTextFilter reports whether this scan's filters will be rewritten by the
 // fulltext path. Two guards depend on it: applyIndicesForFilters leaves such a scan to that
-// path, and removeSimpleProjections keeps the PROJECT above it as a rewrite boundary.
+// path, and removeSimpleProjections keeps the PROJECT above it as a rewrite boundary unless a
+// PROJECT above that one takes over (canRemoveProject).
 //
 // It must therefore cover everything the rewrite now drives from, wrapped MATCHes included --
 // a scan filtered only by `match(...) > 0.5` is just as much a fulltext scan as one filtered
@@ -1833,21 +1940,9 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 	if joinNode == nil {
 		return false, nil
 	}
-	eligible := func(i int) bool {
-		switch joinNode.JoinType {
-		case plan.Node_INNER, plan.Node_SEMI,
-			plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
-			return true
-		case plan.Node_ANTI, plan.Node_MARK:
-			return antiMarkPreservesChild(joinNode, i)
-		default:
-			return nodeNullExtendsChild(joinNode, i)
-		}
-	}
-
 	changed := false
 	for i, childID := range joinNode.Children {
-		if !eligible(i) {
+		if !fullTextJoinChildEligible(joinNode, i) {
 			continue
 		}
 		child := builder.qry.Nodes[childID]
