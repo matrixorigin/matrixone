@@ -855,13 +855,17 @@ func TestHashBuildRuntimeFilterLimitFailsOpenWithoutLosingJoinKeys(
 func TestRuntimeFilterDeduplicatesFanoutBeforeApplyingLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
+		limit    int32
 		values   []int32
 		nulls    []uint64
 		wantType int32
 		wantKeys []int32
+		probe    []int32
 	}{
-		{name: "duplicates and null at limit", values: []int32{1, 1, 2, 2, 3, 3, 0}, nulls: []uint64{6}, wantType: message.RuntimeFilter_IN, wantKeys: []int32{1, 2, 3}},
-		{name: "distinct values over limit", values: []int32{1, 1, 2, 2, 3, 3, 4, 0}, nulls: []uint64{7}, wantType: message.RuntimeFilter_PASS},
+		{name: "duplicates and null at limit", limit: 3, values: []int32{1, 1, 2, 2, 3, 3, 0}, nulls: []uint64{6}, wantType: message.RuntimeFilter_IN, wantKeys: []int32{1, 2, 3}},
+		{name: "distinct values over limit", limit: 3, values: []int32{1, 1, 2, 2, 3, 3, 4, 0}, nulls: []uint64{7}, wantType: message.RuntimeFilter_PASS},
+		{name: "one distinct key with fanout", limit: 1, values: []int32{7, 7, 7}, wantType: message.RuntimeFilter_IN, wantKeys: []int32{7}},
+		{name: "two keys exceed one-key estimate", limit: 1, values: []int32{7, 7, 8}, wantType: message.RuntimeFilter_PASS, probe: []int32{7, 8}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			typ := types.T_int32.ToType()
@@ -878,7 +882,7 @@ func TestRuntimeFilterDeduplicatesFanoutBeforeApplyingLimit(t *testing.T) {
 				fixture.proc.Free()
 				require.Zero(t, fixture.proc.Mp().CurrNB())
 			})
-			fixture.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(fixture.arg.JoinMapTag+802, 3, typ)
+			fixture.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(fixture.arg.JoinMapTag+802, tc.limit, typ)
 			fixture.arg.SetChildren([]vm.Operator{fixture.marg})
 			require.NoError(t, fixture.marg.Prepare(fixture.proc))
 			require.NoError(t, fixture.arg.Prepare(fixture.proc))
@@ -918,6 +922,18 @@ func TestRuntimeFilterDeduplicatesFanoutBeforeApplyingLimit(t *testing.T) {
 			require.NotNil(t, joinMap)
 			defer joinMap.Free()
 			require.Equal(t, int64(len(tc.values)), joinMap.GetRowCount())
+			if len(tc.probe) != 0 {
+				keys := testutil.MakeInt32Vector(tc.probe, nil, fixture.proc.Mp())
+				defer keys.Free(fixture.proc.Mp())
+				iterator := joinMap.NewIterator()
+				defer hashmap.IteratorClearOwner(iterator)
+				groups, zs, err := iterator.Find(0, len(tc.probe), []*vector.Vector{keys})
+				require.NoError(t, err)
+				require.Equal(t, []int64{1, 1}, zs)
+				require.NotZero(t, groups[0])
+				require.NotZero(t, groups[1])
+				require.NotEqual(t, groups[0], groups[1])
+			}
 		})
 	}
 }
