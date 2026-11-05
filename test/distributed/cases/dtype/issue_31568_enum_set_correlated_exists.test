@@ -47,6 +47,23 @@ select l.id from enum_l l where not exists(select 1 from enum_r r where l.id=r.i
 select l.id from enum_l l, enum_r r where l.id=r.id and cast(l.k as char)=cast(r.k as char) order by l.id;
 select l.id, r.k from enum_l l inner join enum_r r on l.k=r.k order by l.id;
 
+-- grouped subqueries: HAVING references the outer ENUM/SET key.
+select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from enum_l l where not exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from enum_l l where l.k in (select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from enum_l l where exists(select r.k from enum_r2 r group by r.k having r.k=l.k) order by l.id;
+
+-- outer primary key grouped: the outer ENUM key stays functionally dependent.
+select l.id from enum_l l group by l.id having exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+
+-- INT-key control with the same grouped-HAVING shape.
+select l.id from enum_l l where exists(select r.id from enum_r r group by r.id having r.id=l.id) order by l.id;
+
+-- SET keys share the contract.
+select l.id from set_l l where exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+select l.id from set_l l group by l.id having exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+
 -- after all the above, source data is intact and the connection is healthy.
 select 1, count(*) from enum_l;
 select 1, count(*) from enum_r;

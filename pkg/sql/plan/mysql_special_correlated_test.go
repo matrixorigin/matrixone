@@ -80,6 +80,46 @@ func newCorrelatedSpecialTypeMock(t testing.TB) *MockOptimizer {
 			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
 		},
 	}
+	// Two-column INT controls mirror the (id, k) shape of the ENUM/SET
+	// fixtures so ONLY_FULL_GROUP_BY decisions can be compared side by side.
+	mock.ctxt.objects["int2_l"] = &planpb.ObjectRef{Obj: 9107, ObjName: "int2_l"}
+	mock.ctxt.tables["int2_l"] = &planpb.TableDef{
+		TblId: 9107,
+		Name:  "int2_l",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "k", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+	}
+	mock.ctxt.objects["int2_r"] = &planpb.ObjectRef{Obj: 9108, ObjName: "int2_r"}
+	mock.ctxt.tables["int2_r"] = &planpb.TableDef{
+		TblId: 9108,
+		Name:  "int2_r",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "k", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+	}
+	// Primary-key variants: grouping the primary key makes the ungrouped key
+	// column functionally dependent, which MySQL's ONLY_FULL_GROUP_BY accepts.
+	addPK := func(name string, tblId uint64, k *planpb.Type) {
+		mock.ctxt.objects[name] = &planpb.ObjectRef{Obj: int64(9100 + tblId), ObjName: name}
+		mock.ctxt.tables[name] = &planpb.TableDef{
+			TblId: 9100 + tblId,
+			Name:  name,
+			Pkey:  &planpb.PrimaryKeyDef{PkeyColName: "id"},
+			Cols: []*planpb.ColDef{
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				{Name: "k", Typ: *k},
+			},
+		}
+	}
+	addPK("enump_l", 11, &planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"})
+	addPK("enump_r", 12, &planpb.Type{Id: int32(types.T_enum), Enumvalues: "b,a"})
+	addPK("setp_l", 13, &planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"})
+	addPK("setp_r", 14, &planpb.Type{Id: int32(types.T_uint64), Enumvalues: "b,a"})
+	addPK("intp_l", 15, &planpb.Type{Id: int32(types.T_int32)})
+	addPK("intp_r", 16, &planpb.Type{Id: int32(types.T_int32)})
 	return mock
 }
 
@@ -176,4 +216,91 @@ func planFunctionExprs(root *planpb.Expr, name string) []*planpb.Expr {
 	}
 	walk(root)
 	return found
+}
+
+// TestCorrelatedGroupedHavingOnEnumSetKeysPlans extends the #31568 proof to
+// ONLY_FULL_GROUP_BY grouped subqueries whose HAVING references the outer
+// ENUM/SET key. The Corr reference then nests inside the display wrapper;
+// until HavingBinder read that wrapped correlation, legal outer keys were
+// rejected with a GROUP BY error while their INT-key equivalents planned.
+func TestCorrelatedGroupedHavingOnEnumSetKeysPlans(t *testing.T) {
+	failing := []string{
+		// The inner block groups on its own key and references the outer
+		// ENUM/SET key in HAVING.
+		"select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+		"select l.id from enum_l l where not exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+		"select l.id from set_l l where exists(select r.k from set_r r group by r.k having r.k=l.k)",
+		"select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k)",
+		// Grouped outer blocks: the outer primary key is grouped, so the
+		// ungrouped outer key is functionally dependent and legal.
+		"select l.id from enump_l l group by l.id having exists(select r.k from enump_r r group by r.k having r.k=l.k)",
+		"select l.id from setp_l l group by l.id having exists(select r.k from setp_r r group by r.k having r.k=l.k)",
+	}
+	controls := []string{
+		// INT-key correlation with the same shapes keeps planning.
+		"select l.id from int_l l where exists(select r.id from int_r r group by r.id having r.id=l.id)",
+		"select l.id from intp_l l group by l.id having exists(select r.k from intp_r r group by r.k having r.k=l.k)",
+		// A grouped outer key resolves through the group splice, wrapper-free.
+		"select l.k from enum_l l group by l.k having exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+		// A grouped local ENUM key in the subquery HAVING keeps validating.
+		"select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=r.k)",
+	}
+	for _, sql := range append(append([]string{}, failing...), controls...) {
+		t.Run(sql, func(t *testing.T) {
+			p, err := runOneStmt(newCorrelatedSpecialTypeMock(t), t, sql)
+			require.NoError(t, err)
+			require.NotNil(t, p)
+		})
+	}
+}
+
+// TestCorrelatedGroupedHavingMatchesIntKeyPolicy pins the decision contract:
+// whatever ONLY_FULL_GROUP_BY decides for an outer INT key referenced in a
+// grouped subquery's HAVING, the verdict must be identical when the key is
+// ENUM/SET. The no-primary-key pairs keep the target-scope checks honest:
+// with the referenced outer key neither grouped nor functionally dependent,
+// both spellings must stay rejected.
+func TestCorrelatedGroupedHavingMatchesIntKeyPolicy(t *testing.T) {
+	pairs := []struct{ special, plain string }{
+		{
+			// Legal: the inner keys are grouped, the outer key is free.
+			"select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+			"select l.id from int2_l l where exists(select r.k from int2_r r group by r.k having r.k=l.k)",
+		},
+		{
+			// Legal: grouping the outer primary key makes the outer key
+			// functionally dependent.
+			"select l.id from enump_l l group by l.id having exists(select r.k from enump_r r group by r.k having r.k=l.k)",
+			"select l.id from intp_l l group by l.id having exists(select r.k from intp_r r group by r.k having r.k=l.k)",
+		},
+		{
+			// Illegal: the outer block groups neither the referenced key nor
+			// a primary key, so both spellings are rejected.
+			"select l.id from enum_l l group by l.id having exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+			"select l.id from int2_l l group by l.id having exists(select r.k from int2_r r group by r.k having r.k=l.k)",
+		},
+		{
+			// Illegal: the inner local key is not grouped; both spellings
+			// are rejected.
+			"select l.id from enum_l l where exists(select r.k from enum_r r group by r.id having r.k=l.k)",
+			"select l.id from int2_l l where exists(select r.k from int2_r r group by r.id having r.k=l.k)",
+		},
+	}
+	for _, pair := range pairs {
+		specialErr := correlatedHavingErrFor(t, pair.special)
+		plainErr := correlatedHavingErrFor(t, pair.plain)
+		if plainErr == nil {
+			require.NoErrorf(t, specialErr,
+				"special-typed key rejected while the INT key plans: %q", pair.special)
+		} else {
+			require.Errorf(t, specialErr,
+				"special-typed key accepted while the INT key is rejected: %q", pair.special)
+		}
+	}
+}
+
+func correlatedHavingErrFor(t *testing.T, sql string) error {
+	t.Helper()
+	_, err := runOneStmt(newCorrelatedSpecialTypeMock(t), t, sql)
+	return err
 }

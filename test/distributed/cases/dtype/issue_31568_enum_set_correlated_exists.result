@@ -60,6 +60,39 @@ select l.id, r.k from enum_l l inner join enum_r r on l.k=r.k order by l.id;
 ➤ id[4,32,0]  ¦  k[12,65535,0]  𝄀
 1  ¦  a  𝄀
 2  ¦  b
+select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where not exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from enum_l l where l.k in (select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where exists(select r.k from enum_r2 r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1
+select l.id from enum_l l group by l.id having exists(select r.k from enum_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from enum_l l where exists(select r.id from enum_r r group by r.id having r.id=l.id) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from set_l l where exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+3
+select l.id from set_l l group by l.id having exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
 select 1, count(*) from enum_l;
 ➤ 1[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
 1  ¦  3
