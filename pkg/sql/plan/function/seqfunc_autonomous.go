@@ -304,7 +304,7 @@ func seqLiveWindowExpiryDecision(proc *process.Process, env *seqExecEnv, db, tbl
 		}
 		return time.Time{}, true, env.ctx.Err()
 	case process.DecideExhausted:
-		return time.Time{}, true, seqTerminalExhaustedError(proc, retryState, outcome, db, tblname, wantRel)
+		return time.Time{}, true, SequenceRetryTerminalError(proc, outcome, process.WatchIdentity{DBName: db, TblName: tblname, WantRel: wantRel})
 	}
 	// Renew / Retire / Proceed: a live (renewed) window funds the
 	// continuation; a retired window (the episode closed, Z1) returns the
@@ -464,15 +464,14 @@ func seqUnwrapDerived(err error) error {
 	return err
 }
 
-// seqTerminalExhaustedError composes the exactly-once terminal surface of a
-// DecideExhausted outcome: the surfaced identity in first-recorded order,
-// its recorded conflict residue (or the decision's terminal error).
-func seqTerminalExhaustedError(proc *process.Process, retryState *process.SequenceRetryState, outcome process.DecideOutcome, db, tblname string, wantRel uint64) error {
+// SequenceRetryTerminalError composes the named terminal for an expiry
+// decision, using fallback when the decision could not identify a target.
+func SequenceRetryTerminalError(proc *process.Process, outcome process.DecideOutcome, fallback process.WatchIdentity) error {
 	target := outcome.Target
 	if target.WantRel == 0 {
-		target = process.WatchIdentity{DBName: db, TblName: tblname, WantRel: wantRel}
+		target = fallback
 	}
-	cause := retryState.TerminalCause()
+	cause := proc.GetSequenceRetryState().TerminalCause()
 	if cause == nil {
 		cause = outcome.Terminal
 	}
@@ -601,7 +600,7 @@ func seqConvertExhaustionToRetry(proc *process.Process, env *seqExecEnv, db, tbl
 			}
 			return env.ctx.Err()
 		case process.DecideExhausted:
-			return seqTerminalExhaustedError(proc, retryState, outcome, db, tblname, wantRel)
+			return SequenceRetryTerminalError(proc, outcome, id)
 		default:
 			// Renew (the episode continues under the renewed window) and
 			// Retire (the episode closed; this conversion re-admits it
