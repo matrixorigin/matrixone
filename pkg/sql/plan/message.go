@@ -17,6 +17,7 @@ package plan
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -85,6 +86,11 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	}
 	scanID, scanOrderExpr, staticLimitSafe, shuffleJoins := builder.gatherLeavesForMessageFromTopToScan(node.Children[0], node.OrderBy[0].Expr)
 	if scanID == -1 || scanOrderExpr == nil {
+		return
+	}
+	// JSON Top compares semantic values, but zonemaps compare encoded bytes.
+	// Neither single-key nor multi-key Top can safely prune with that order.
+	if types.T(scanOrderExpr.Typ.Id) == types.T_json {
 		return
 	}
 	// Zonemaps do not describe NULL ordering. Do not extend dynamic pruning to

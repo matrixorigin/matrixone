@@ -6999,6 +6999,46 @@ func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
 	}
 }
 
+func TestHandleMessageFromTopToScanJSONFallback(t *testing.T) {
+	for _, typ := range []types.T{types.T_json, types.T_int64} {
+		for _, flag := range []planpb.OrderBySpec_OrderByFlag{0, planpb.OrderBySpec_DESC} {
+			for _, multi := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/flag=%d/multi=%t", typ, flag, multi), func(t *testing.T) {
+					builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+					tag := builder.genNewBindTag()
+					keyType := planpb.Type{Id: int32(typ), NotNullable: true}
+					idType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+					scan := &planpb.Node{
+						NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{tag},
+						TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "k", Typ: keyType}, {Name: "id", Typ: idType}}},
+					}
+					order := []*planpb.OrderBySpec{{Expr: GetColExpr(keyType, tag, 0), Flag: flag}}
+					if multi {
+						order = append(order, &planpb.OrderBySpec{Expr: GetColExpr(idType, tag, 1), Flag: planpb.OrderBySpec_DESC})
+					}
+					sort := &planpb.Node{
+						NodeType: planpb.Node_SORT, NodeId: 1, Children: []int32{0},
+						OrderBy: order, Limit: makePlan2Uint64ConstExprWithType(1),
+					}
+					builder.qry.Nodes = []*planpb.Node{scan, sort}
+					builder.handleMessageFromTopToScan(1)
+					require.Equal(t, order, sort.OrderBy)
+					require.Nil(t, scan.IndexReaderParam)
+					if typ == types.T_json {
+						require.Empty(t, sort.SendMsgList, "JSON semantic order cannot drive byte-ordered zonemap pruning")
+						require.Empty(t, scan.RecvMsgList)
+						require.Empty(t, scan.OrderBy)
+					} else {
+						require.Len(t, sort.SendMsgList, 1)
+						require.Equal(t, sort.SendMsgList, scan.RecvMsgList)
+						require.Len(t, scan.OrderBy, 1)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
