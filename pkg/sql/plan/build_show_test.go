@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -607,4 +608,45 @@ func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
 			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
 		})
 	}
+}
+
+func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	ctx := opt.CurrentContext()
+
+	build := func(sql string) (*tree.ShowColumns, func()) {
+		t.Helper()
+		stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(stmts))
+		stmt := stmts[0]
+		sc, ok := stmt.(*tree.ShowColumns)
+		require.True(t, ok, sql)
+		_, err = BuildPlan(ctx, stmt, false)
+		require.NoError(t, err, sql)
+		return sc, func() { stmt.Free() }
+	}
+
+	// The frontend replans the SAME saved AST (computation_wrapper.go,
+	// mysql_cmd_executor.go), so after stored column spellings change only a
+	// per-plan re-derivation keeps a reused DESC correct while a fresh DESC
+	// matches. The derived predicate must never persist into the authored
+	// statement (#32197 review).
+	sc, free := build("desc nation n_name")
+	require.Nil(t, sc.Like, "saved prepared AST must stay pristine: the derived LIKE must not persist past the first build")
+	replan, err := BuildPlan(ctx, sc, false)
+	require.NoError(t, err)
+	require.NotNil(t, replan)
+	require.Nil(t, sc.Like, "a replan of the saved AST must regenerate the derived predicate, not retain it")
+	free()
+
+	authSC, freeAuth := build("show columns from nation like 'n_na%'")
+	require.NotNil(t, authSC.Like, "an authored SHOW COLUMNS ... LIKE keeps its own predicate")
+	freeAuth()
+	wildSC, freeWild := build("desc nation `n_na%`")
+	require.Nil(t, wildSC.Like, "the wildcard shortcut derives per plan and stays pristine")
+	freeWild()
+	missSC, freeMiss := build("desc nation nosuch")
+	require.Nil(t, missSC.Like, "the unknown-name shortcut derives per plan and stays pristine")
+	freeMiss()
 }
