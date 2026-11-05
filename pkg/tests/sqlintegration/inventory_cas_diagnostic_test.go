@@ -55,7 +55,24 @@ func TestInventoryCASOrdinaryInternalRC(t *testing.T) {
 }
 
 func TestInventoryCASOrdinaryPublicRC(t *testing.T) {
+	// Match package/coverage execution, where an earlier scenario leaves the
+	// canonical fixture idle but still owning the process-wide cluster lease.
+	shared := func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		var one int
+		require.NoError(t, db.QueryRowContext(ctx, "select 1").Scan(&one))
+		require.Equal(t, 1, one)
+	}
+	runSQLIntegration(t, shared)
 	testInventoryCAS(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_RC)
+	// The dedicated cluster must release ownership for later shared scenarios.
+	runSQLIntegration(t, shared)
 }
 
 func TestInventoryCASOrdinaryPublicRCReverse(t *testing.T) {
@@ -298,6 +315,9 @@ func withInventoryCASCluster(t *testing.T, fn func(embed.Cluster)) {
 
 func withInventoryCASClusterThreshold(t *testing.T, threshold time.Duration, fn func(embed.Cluster)) {
 	t.Helper()
+	// Custom TN policy and transfer thresholds require a dedicated generation.
+	// Release the idle canonical fixture first, using its cleanup owner.
+	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
 		s.Adjust(func(cfg *embed.ServiceConfig) {
 			if cfg.ServiceType == "TN" {
