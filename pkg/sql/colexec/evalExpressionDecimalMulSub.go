@@ -94,6 +94,22 @@ func decimalLiteral(e *plan.Expr) bool {
 // FuseDecimalAggregateArgument specializes only a complete aggregate argument.
 // Generic expression constructors never call it; ineligible roots retain their owner.
 func FuseDecimalAggregateArgument(e *plan.Expr, executor ExpressionExecutor) ExpressionExecutor {
+	if root, ok := executor.(*FunctionExpressionExecutor); !ok || root == nil {
+		return executor
+	}
+	if typed := prepareDecimalTyped(e, executor); typed != nil {
+		return typed
+	}
+	if fused := fuseDecimalMulSubArgument(e, executor); fused != executor {
+		return fused
+	}
+	if chain := prepareDecimalChain(e, executor); chain != nil {
+		return chain
+	}
+	return executor
+}
+
+func fuseDecimalMulSubArgument(e *plan.Expr, executor ExpressionExecutor) ExpressionExecutor {
 	root, ok := executor.(*FunctionExpressionExecutor)
 	if !ok {
 		return executor

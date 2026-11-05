@@ -120,6 +120,26 @@ func TestJSONValueAndConvertCharsetSynonyms(t *testing.T) {
 	}
 }
 
+func TestJSONValueAndSerialKeywordComposition(t *testing.T) {
+	for _, sql := range []string{
+		"select serial(1, 2), json_value(doc, '$.a' returning char(12) charset utf8mb4) from serial",
+		"select json_value(doc, '$.a'), serial_extract(serial(x'4142'), 0 as binary(255)) from serial",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err, sql)
+			defer stmt.Free()
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true))
+			require.Contains(t, formatted, "json_value(")
+			require.Contains(t, formatted, "serial(")
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			defer reparsed.Free()
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithQuoteString(true)))
+		})
+	}
+}
+
 func TestJSONValueDefaultLiteralAndClauseRejections(t *testing.T) {
 	for _, sql := range []string{
 		"select json_value(doc, '$' null on error null on empty)",

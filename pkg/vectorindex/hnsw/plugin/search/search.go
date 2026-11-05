@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -213,9 +215,9 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 }
 
 // setMembership builds the exact primary-key filter of the serialized key vector payload.
-func (s *searcher) setMembership(spec *plan.IndexSearchScan, payload []byte) (err error) {
+func (s *searcher) setMembership(spec *plan.IndexSearchScan, payload *keycodec.KeyPayload) (err error) {
 	s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
-		s.proc.GetService(), "hnsw", spec.SourceTableDef, payload)
+		s.proc.Ctx, s.proc.GetService(), "hnsw", spec.SourceTableDef, payload)
 	return err
 }
 

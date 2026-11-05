@@ -2274,7 +2274,7 @@ func (h *ParquetHandler) getMapperWithStaging(sc *parquet.Column, dt plan.Type, 
 			}
 			checkpoint := vec.MakeAppendCheckpoint()
 			rollback := func(err error) error {
-				vec.RollbackAppend(checkpoint, numRows)
+				err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, numRows))
 				return err
 			}
 			targetType := types.MustTypeFromPlan(dt)
@@ -2937,7 +2937,7 @@ func processStringToTimeAssignment(mp *columnMapper, page parquet.Page, proc *pr
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	if err := vec.UnionBatch(result.GetResultVector(), 0, text.Length(), nil, proc.Mp()); err != nil {
-		vec.RollbackAppend(checkpoint, text.Length())
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, text.Length()))
 		return err
 	}
 	return nil
@@ -3017,7 +3017,7 @@ func processStringToFixedWithTrim[T any](
 	vec.SetLength(numRows + length)
 	ret := vector.MustFixedColWithTypeCheck[T](vec)
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, numRows)
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, numRows))
 		return err
 	}
 
@@ -3110,7 +3110,7 @@ func processStringToJson(
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, numRows)
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, numRows))
 		return err
 	}
 	for i := 0; i < numRows; i++ {
@@ -3217,7 +3217,7 @@ func processStringToArrayEnc[T types.ArrayElement](
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, numRows)
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, numRows))
 		return err
 	}
 	for i := 0; i < numRows; i++ {
@@ -3443,7 +3443,7 @@ func processParquetListValuesToArrayEnc[T types.ArrayElement](
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, numRows)
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, numRows))
 		return err
 	}
 
@@ -3575,7 +3575,7 @@ func processParquetValuesToFixed[T any](
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, len(values))
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(values)))
 		return err
 	}
 	for i, v := range values {
@@ -3626,7 +3626,7 @@ func processParquetValuesToBytes(
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, len(values))
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(values)))
 		return err
 	}
 	for i, v := range values {
@@ -3681,7 +3681,7 @@ func processParquetValuesToStagingBytes(
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, len(values))
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(values)))
 		return err
 	}
 	for i, v := range values {
@@ -3811,7 +3811,7 @@ func processParquetValuesToJson(
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, len(values))
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(values)))
 		return err
 	}
 	for i, v := range values {
@@ -4899,7 +4899,7 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 	ret := vector.MustFixedColWithTypeCheck[bool](vec)
 	reader := page.Values()
 	rollback := func(err error) error {
-		vec.RollbackAppend(checkpoint, n)
+		err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, n))
 		return err
 	}
 	if !nc.noNulls {
@@ -5624,7 +5624,9 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				bat, length, length+int(toRead), batchBytesBefore, param)
 			accepted = int64(acceptedRows - length)
 			if accepted < toRead {
-				h.rollbackPageAppend(bat, checkpoints, int(toRead))
+				if rollbackErr := h.rollbackPageAppend(bat, checkpoints, int(toRead)); rollbackErr != nil {
+					return rollbackErr
+				}
 				warnings.Reset()
 				if accepted == 0 {
 					break
@@ -5755,8 +5757,7 @@ func (h *ParquetHandler) mapCurrentPageRows(
 	for i, colIdx := range h.dataColIndices {
 		vec := bat.Vecs[colIdx]
 		if vec == nil {
-			h.rollbackPageAppend(bat, checkpoints[:i], int(rows))
-			return nil, moerr.NewInternalErrorf(param.Ctx, "parquet output column %d is not allocated", colIdx)
+			return nil, vector.JoinAppendRollbackError(moerr.NewInternalErrorf(param.Ctx, "parquet output column %d is not allocated", colIdx), h.rollbackPageAppend(bat, checkpoints[:i], int(rows)))
 		}
 		checkpoints[i] = vec.MakeAppendCheckpoint()
 		startLength := vec.Length()
@@ -5768,14 +5769,12 @@ func (h *ParquetHandler) mapCurrentPageRows(
 			MapTime: time.Since(mapStart).Nanoseconds(),
 		})
 		if err != nil {
-			h.rollbackPageAppend(bat, checkpoints[:i+1], int(rows))
-			return nil, err
+			return nil, vector.JoinAppendRollbackError(err, h.rollbackPageAppend(bat, checkpoints[:i+1], int(rows)))
 		}
 		if vec.Length() != startLength+int(rows) {
-			h.rollbackPageAppend(bat, checkpoints[:i+1], int(rows))
-			return nil, moerr.NewInternalErrorf(param.Ctx,
+			return nil, vector.JoinAppendRollbackError(moerr.NewInternalErrorf(param.Ctx,
 				"parquet column %d appended %d rows, expected %d",
-				colIdx, vec.Length()-startLength, rows)
+				colIdx, vec.Length()-startLength, rows), h.rollbackPageAppend(bat, checkpoints[:i+1], int(rows)))
 		}
 	}
 	return checkpoints, nil
@@ -5785,10 +5784,11 @@ func (h *ParquetHandler) rollbackPageAppend(
 	bat *batch.Batch,
 	checkpoints []vector.AppendCheckpoint,
 	attemptedRows int,
-) {
+) (err error) {
 	for i, checkpoint := range checkpoints {
-		bat.Vecs[h.dataColIndices[i]].RollbackAppend(checkpoint, attemptedRows)
+		err = vector.JoinAppendRollbackError(err, bat.Vecs[h.dataColIndices[i]].RollbackAppend(checkpoint, attemptedRows))
 	}
+	return err
 }
 
 func (h *ParquetHandler) advanceCurrentPages(rows int64) {
