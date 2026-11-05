@@ -207,6 +207,66 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 	return partitions
 }
 
+// bytesOrderPartition is the ORDER BY counterpart of bytesPartition: peer
+// groups follow the SQL ORDER BY comparison domain. Case-insensitive
+// collations fold case (utf8mb4_general_ci weights, UCA keys for the native
+// Unicode identities); every other identity keeps byte equality.
+func bytesOrderPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	// See genericPartition: diffs is accumulated; never overwrite to false.
+	if !vec.IsConst() {
+		var n bool
+		var v []byte
+		typ := *vec.GetType()
+		caseInsensitive := types.IsCaseInsensitiveCollation(typ.Charset)
+
+		vs, area := vector.MustVarlenaRawData(vec)
+		nsp := vec.GetNulls()
+		if nsp.Any() {
+			for i, sel := range sels {
+				w := vs[sel].GetByteSlice(area)
+				isNull := nulls.Contains(nsp, uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else if !isNull {
+					if caseInsensitive {
+						diffs[i] = diffs[i] || types.CompareStringOrderValues(typ, v, w) != 0
+					} else {
+						diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+					}
+				}
+				// else: both NULL → equal, preserve diffs[i]
+				n = isNull
+				v = w
+			}
+		} else {
+			for i, sel := range sels {
+				w := vs[sel].GetByteSlice(area)
+				if caseInsensitive {
+					diffs[i] = diffs[i] || types.CompareStringOrderValues(typ, v, w) != 0
+				} else {
+					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				}
+				v = w
+			}
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
+
+	return partitions
+}
+
 // Partitions will return the rowSels; vs[rowSel] != vs[last_rowSel].
 // by default, the 0th row is always not equal to the one before it
 // (though it doesn't exist)
@@ -316,7 +376,8 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 
 // PartitionForOrder returns peer-group boundaries for SQL ORDER BY. Generic
 // Partition intentionally retains value-identity semantics for GROUP BY,
-// PARTITION BY, and storage callers; only scalar NaN equality differs here.
+// PARTITION BY, and storage callers; scalar NaN equality and case-insensitive
+// text collation differ here.
 func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
 	switch vec.GetType().Oid {
 	case types.T_float32:
@@ -333,6 +394,8 @@ func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vect
 		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float8])
 	case types.T_float4:
 		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionOrder[types.Float4])
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob:
+		return bytesOrderPartition(sels, diffs, partitions, vec)
 	default:
 		return Partition(sels, diffs, partitions, vec)
 	}

@@ -44,7 +44,8 @@ type Ref struct {
 	FirstChunk int64
 	Size       int64
 	Checksum   string
-	// Verify checks the assembled file against Checksum. Nil means a hex MD5 of the file.
+	// Verify checks the assembled file against Checksum. Nil means Checksum is the file's
+	// Checksum, or its hex MD5 for files written before.
 	Verify func(f *os.File, size int64, checksum string) error
 }
 
@@ -85,8 +86,8 @@ func pathSafe(s string) string {
 	return s
 }
 
-// VerifyMD5 checks that the first size bytes of f hash to the hex MD5 checksum.
-func VerifyMD5(f *os.File, size int64, checksum string) error {
+// verifyMD5 checks that the first size bytes of f hash to the hex MD5 checksum.
+func verifyMD5(f *os.File, size int64, checksum string) error {
 	h := md5.New()
 	if _, err := io.Copy(h, io.NewSectionReader(f, 0, size)); err != nil {
 		return err
@@ -104,8 +105,6 @@ const (
 	dataFile        = "data"
 	manifestFile    = "manifest"
 )
-
-var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 func encodeManifest(size int64, crc uint32) []byte {
 	b := make([]byte, manifestLen)
