@@ -156,6 +156,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	for _, spec := range validAlterSpecs {
+		clausePkAffected := false
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
@@ -171,7 +172,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				clausePkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
 				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
@@ -182,13 +183,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
 		case *tree.AlterAddCol:
-			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
-			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
-			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = appendAffectedAlterColumnNames(
 				affectedCols,
 				option.OldColumnName.ColName(),
@@ -198,7 +199,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.OldColumnName.ColName())
 		case *tree.AlterTableAlterColumnClause:
-			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
+			clausePkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
@@ -217,6 +218,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+		pkAffected = pkAffected || clausePkAffected
 	}
 
 	if pkAffected {

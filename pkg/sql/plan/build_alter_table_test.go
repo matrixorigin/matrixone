@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -795,4 +796,59 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		}
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
+}
+
+func TestAlterPrimaryKeyImpactPersistsAcrossClauses(t *testing.T) {
+	for _, clause := range []string{
+		"modify column id bigint, add column extra int",
+		"add column extra int, modify column id bigint",
+		"modify column id bigint, modify column val bigint",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			p, err := buildSingleStmt(mock, t, "alter table constraint_test.single_idx_t "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			if !assert.NotNil(t, alter) || !assert.NotEmpty(t, alter.CopyTableDef.Indexes) {
+				return
+			}
+			for _, idx := range alter.CopyTableDef.Indexes {
+				assert.False(t, alter.Options.SkipIndexesCopy[idx.IndexName], idx.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterCompositePrimaryKeyRebuildsIndexes(t *testing.T) {
+	for _, clause := range []string{
+		"modify column ps_partkey bigint",
+		"modify column ps_suppkey bigint",
+		"change column ps_suppkey renamed bigint",
+		"modify column ps_partkey bigint, add column extra int",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			base := mock.ctxt.tables["partsupp"]
+			// The legacy mock prepends empty entries to composite key metadata.
+			base.Pkey.Names = base.Pkey.Names[2:]
+			base.Pkey.Cols = base.Pkey.Cols[2:]
+			base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
+			base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
+			idx := *mock.ctxt.tables["single_idx_t"].Indexes[0]
+			idx.Parts = []string{"ps_availqty"}
+			base.Indexes = []*plan.IndexDef{&idx}
+			p, err := buildSingleStmt(mock, t, "alter table tpch.partsupp "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			if !assert.NotNil(t, alter) || !assert.Len(t, alter.CopyTableDef.Indexes, 1) {
+				return
+			}
+			assert.False(t, alter.Options.SkipIndexesCopy[idx.IndexName])
+		})
+	}
 }
