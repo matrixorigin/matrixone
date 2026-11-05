@@ -220,7 +220,7 @@ func newDiskCache(
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
-	ret.cache = lrucache.NewWithPrepareEvict(capacityFunc, nil, postSet, nil, prepareEvict, postEvict)
+	ret.cache = lrucache.NewWithPrepareEvict(capacityFunc, postSet, nil, prepareEvict, postEvict)
 	if opts.dirEntries {
 		ret.cache.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
 	}
