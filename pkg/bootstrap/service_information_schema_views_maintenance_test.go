@@ -63,6 +63,12 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 		return true, viewDefinition, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
@@ -116,6 +122,154 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 	require.Equal(t, 2, len(executed))
 }
 
+// currentPartitionsMaintenanceEntryForScenario pins an already-current
+// PARTITIONS entry for the pre-existing VIEWS-only scenarios, so the shared
+// reconciliation page does not run PARTITIONS work inside those tests.
+func currentPartitionsMaintenanceEntryForScenario() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		CheckFunc: func(executor.TxnExecutor, uint32) (bool, error) {
+			return true, nil
+		},
+	}
+}
+
+func TestMaintainInformationSchemaViewsReplacesStalePartitionsWhileViewsCurrent(t *testing.T) {
+	const accountID = int32(10)
+	const stalePartitions = "CREATE VIEW information_schema.PARTITIONS AS legacy inner join"
+	partitionDefinition := stalePartitions
+	var partitionsReplacements, viewsReplacements, accountLookups int
+
+	originalCheck := versions.CheckViewDefinition
+	versions.CheckViewDefinition = func(
+		_ executor.TxnExecutor,
+		id uint32,
+		schema string,
+		viewName string,
+	) (bool, string, error) {
+		require.Equal(t, uint32(accountID), id)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		switch viewName {
+		case "VIEWS", "views":
+			// The account is already current on VIEWS; the sibling
+			// PARTITIONS drift must still be repaired on the same page.
+			return true, sysview.InformationSchemaViewsDDL, nil
+		case "PARTITIONS", "partitions":
+			return true, partitionDefinition, nil
+		default:
+			return false, "", fmt.Errorf("unexpected view %s", viewName)
+		}
+	}
+	t.Cleanup(func() { versions.CheckViewDefinition = originalCheck })
+
+	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
+		switch {
+		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:126"}`), nil
+		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+			accountLookups++
+			require.Contains(t, sql, "limit 32")
+			if accountLookups == 1 || accountLookups == 3 {
+				require.Contains(t, sql, "account_id >= 0")
+				return buildInformationSchemaViewsMaintenanceAccountRows(accountID), nil
+			}
+			require.Contains(t, sql, "account_id >= 11")
+			return executor.Result{}, nil
+		case sql == strings.Replace(sysview.InformationSchemaPartitionsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+			partitionsReplacements++
+			partitionDefinition = sysview.InformationSchemaPartitionsDDL
+			return executor.Result{}, nil
+		case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+			viewsReplacements++
+			return executor.Result{}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}
+	})
+
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, 1, partitionsReplacements,
+		"the stale PARTITIONS definition must be replaced on the shared page")
+	require.Zero(t, viewsReplacements,
+		"an already-current VIEWS definition must not be rewritten")
+	require.Equal(t, sysview.InformationSchemaPartitionsDDL, partitionDefinition)
+	require.Equal(t, int32(accountID+1),
+		service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+
+	// The page wraps and rediscovers the account with both definitions
+	// current: converged pages replace nothing and still publish progress.
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, 1, partitionsReplacements)
+	require.Zero(t, viewsReplacements)
+	require.Equal(t, int32(accountID+1),
+		service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+}
+
+func TestMaintainInformationSchemaViewsRetriesPartitionsReplacementFailure(t *testing.T) {
+	const accountID = int32(10)
+	const stalePartitions = "CREATE VIEW information_schema.PARTITIONS AS legacy inner join"
+	partitionDefinition := stalePartitions
+	failPartitions := true
+	var successfulPartitionsReplacements int
+
+	originalCheck := versions.CheckViewDefinition
+	versions.CheckViewDefinition = func(
+		_ executor.TxnExecutor,
+		id uint32,
+		schema string,
+		viewName string,
+	) (bool, string, error) {
+		require.Equal(t, uint32(accountID), id)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		switch viewName {
+		case "VIEWS", "views":
+			return true, sysview.InformationSchemaViewsDDL, nil
+		case "PARTITIONS", "partitions":
+			return true, partitionDefinition, nil
+		default:
+			return false, "", fmt.Errorf("unexpected view %s", viewName)
+		}
+	}
+	t.Cleanup(func() { versions.CheckViewDefinition = originalCheck })
+
+	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
+		switch {
+		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:126"}`), nil
+		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+			return buildInformationSchemaViewsMaintenanceAccountRows(accountID), nil
+		case sql == strings.Replace(sysview.InformationSchemaPartitionsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+			if failPartitions {
+				failPartitions = false
+				return executor.Result{}, errors.New("replace PARTITIONS failed")
+			}
+			partitionDefinition = sysview.InformationSchemaPartitionsDDL
+			successfulPartitionsReplacements++
+			return executor.Result{}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}
+	})
+
+	err := service.maintainInformationSchemaViews(t.Context())
+	require.ErrorContains(t, err, "replace PARTITIONS failed")
+	require.Equal(t, stalePartitions, partitionDefinition,
+		"a failed transaction must retain the stale definition as the retry marker")
+	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor,
+		"a failed PARTITIONS replacement must not publish the page cursor")
+
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, sysview.InformationSchemaPartitionsDDL, partitionDefinition)
+	require.Equal(t, int32(accountID+1),
+		service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+	require.Equal(t, 1, successfulPartitionsReplacements)
+
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, 1, successfulPartitionsReplacements,
+		"a converged account must not be replaced again")
+}
+
 func TestMaintainInformationSchemaViewsDoesNotSwallowReplacementNotSupported(t *testing.T) {
 	const accountID = int32(10)
 	state := &transactionalInformationSchemaViewsState{
@@ -142,6 +296,12 @@ func TestMaintainInformationSchemaViewsDoesNotSwallowReplacementNotSupported(t *
 		return definition != "", definition, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 
 	service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
 	service.upgrade.informationSchemaViewsMaintenanceState.accountCursor = 0
@@ -183,6 +343,12 @@ func TestMaintainInformationSchemaViewsRollsBackOnMidPageProtocolLoss(t *testing
 		return true, sysview.InformationSchemaViewsLegacyDDL, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 
 	service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
 	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
@@ -332,6 +498,12 @@ func TestMaintainInformationSchemaViewsWaitsForProtocol(t *testing.T) {
 		return true, sysview.InformationSchemaViewsLegacyDDL, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
@@ -456,6 +628,12 @@ func TestMaintainInformationSchemaViewsSkipsAccountDroppedDuringScan(t *testing.
 		}
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
@@ -499,6 +677,12 @@ func TestMaintainInformationSchemaViewsFindsLateAccountAfterWrap(t *testing.T) {
 		return exists, definition, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
@@ -595,6 +779,12 @@ func installTransactionalInformationSchemaViewsCheck(
 		return definition != "", definition, nil
 	}
 	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+	// Keep this scenario about VIEWS: pin an already-current PARTITIONS
+	// entry so the shared page does not run PARTITIONS reconciliation here.
+	t.Cleanup(func() {
+		informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+	})
+	informationSchemaPartitionsMaintenanceEntry = currentPartitionsMaintenanceEntryForScenario
 }
 
 type transactionalInformationSchemaViewsState struct {
@@ -732,4 +922,126 @@ func (txn *transactionalInformationSchemaViewsTxn) Exec(
 	default:
 		return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
 	}
+}
+
+func TestMaintainInformationSchemaViewsPropagatesPartitionsTypedErrorForLiveTenant(t *testing.T) {
+	newFake := func(t *testing.T, partitionReplace func() (executor.Result, error), probeHasAccount bool) *service {
+		service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:126"}`), nil
+			case strings.Contains(sql, "where account_id = 10"):
+				if !probeHasAccount {
+					return executor.Result{}, nil
+				}
+				return buildInformationSchemaViewsMaintenanceAccountRows(10), nil
+			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+				require.Contains(t, sql, "limit 32")
+				if strings.Contains(sql, "account_id >= 0") {
+					return buildInformationSchemaViewsMaintenanceAccountRows(10), nil
+				}
+				return executor.Result{}, nil
+			case sql == strings.Replace(sysview.InformationSchemaPartitionsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+				return partitionReplace()
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		})
+		return service
+	}
+
+	t.Run("live tenant check typed NoSuchTable rolls back page", func(t *testing.T) {
+		t.Cleanup(func() {
+			informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+		})
+		informationSchemaPartitionsMaintenanceEntry = func() versions.UpgradeEntry {
+			return versions.UpgradeEntry{CheckFunc: func(executor.TxnExecutor, uint32) (bool, error) {
+				return false, moerr.NewNoSuchTableNoCtx("prt_acct_10", "information_schema")
+			}}
+		}
+		oldCheck := versions.CheckViewDefinition
+		versions.CheckViewDefinition = func(executor.TxnExecutor, uint32, string, string) (bool, string, error) {
+			return true, sysview.InformationSchemaViewsDDL, nil
+		}
+		t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+
+		service := newFake(t, func() (executor.Result, error) {
+			return executor.Result{}, fmt.Errorf("PARTITIONS replacement must not run when the typed check error propagated")
+		}, true)
+
+		err := service.maintainInformationSchemaViews(t.Context())
+		require.Error(t, err, "a typed definition error for a live tenant must roll the page back, not be skipped as account-gone")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+		require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor,
+			"a rolled-back page must not publish the cursor")
+	})
+
+	t.Run("live tenant staged replacement typed BadDB rolls back page", func(t *testing.T) {
+		stagedViews := 0
+		partitionTypedErr := true
+		oldCheck := versions.CheckViewDefinition
+		versions.CheckViewDefinition = func(executor.TxnExecutor, uint32, string, string) (bool, string, error) {
+			return false, "", nil
+		}
+		t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+
+		service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:126"}`), nil
+			case strings.Contains(sql, "where account_id = 10"):
+				return buildInformationSchemaViewsMaintenanceAccountRows(10), nil
+			case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+				require.Contains(t, sql, "limit 32")
+				if strings.Contains(sql, "account_id >= 0") {
+					return buildInformationSchemaViewsMaintenanceAccountRows(10), nil
+				}
+				return executor.Result{}, nil
+			case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+				stagedViews++
+				return executor.Result{}, nil
+			case sql == strings.Replace(sysview.InformationSchemaPartitionsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
+				if partitionTypedErr {
+					partitionTypedErr = false
+					return executor.Result{}, moerr.NewBadDBNoCtx("prt_acct_10")
+				}
+				return executor.Result{}, nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+			}
+		})
+
+		err := service.maintainInformationSchemaViews(t.Context())
+		require.Error(t, err, "a typed BadDB from the PARTITIONS replacement for a live tenant must roll the whole page back, including the staged VIEWS")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB))
+		require.Equal(t, 1, stagedViews, "the VIEWS replacement stays staged inside the page that then rolls back")
+		require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor,
+			"a rolled-back page must not publish the cursor")
+	})
+
+	t.Run("genuinely dropped tenant typed error still skipped", func(t *testing.T) {
+		const accountID = int32(10)
+		t.Cleanup(func() {
+			informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+		})
+		informationSchemaPartitionsMaintenanceEntry = func() versions.UpgradeEntry {
+			return versions.UpgradeEntry{CheckFunc: func(executor.TxnExecutor, uint32) (bool, error) {
+				return false, moerr.NewNoSuchTableNoCtx("prt_acct_10", "information_schema")
+			}}
+		}
+		oldCheck := versions.CheckViewDefinition
+		versions.CheckViewDefinition = func(executor.TxnExecutor, uint32, string, string) (bool, string, error) {
+			return true, sysview.InformationSchemaViewsDDL, nil
+		}
+		t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+
+		service := newFake(t, func() (executor.Result, error) {
+			return executor.Result{}, fmt.Errorf("PARTITIONS replacement must not run for a dropped account")
+		}, false)
+
+		require.NoError(t, service.maintainInformationSchemaViews(t.Context()),
+			"a positively confirmed dropped account keeps the historical skip behavior")
+		require.Equal(t, int32(accountID+1),
+			service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+	})
 }
