@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -54,7 +55,7 @@ type statementDigestSyntax struct {
 	// Lexical candidates only enable the final contextual walk. The same
 	// spelling can be an alias or appear in an unused CTE, so do not reject it.
 	checkTableNames    bool
-	invalidExpressions map[*tree.FuncExpr]struct{}
+	invalidExpressions map[tree.Expr]struct{}
 	temporalMode       digestTemporalMode
 }
 type digestSymbol struct {
@@ -371,7 +372,7 @@ func digestRowConstructorValid(parent *Scanner) bool {
 	return commas > 0
 }
 
-func digestSyntaxValid(statement tree.Statement, sqlMode SQLModeFlags) bool {
+func digestSyntaxValid(statement tree.Statement, sqlMode SQLModeFlags, syntax *statementDigestSyntax) bool {
 	switch stmt := statement.(type) {
 	case *tree.ShowColumns:
 		return digestShowFilterValid(stmt.Like, stmt.Where, true)
@@ -397,7 +398,7 @@ func digestSyntaxValid(statement tree.Statement, sqlMode SQLModeFlags) bool {
 		return digestShowFilterValid(stmt.Like, stmt.Where, allowed)
 	case *tree.CreateTable:
 		for _, definition := range stmt.Defs {
-			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column, true, sqlMode) {
+			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column, true, sqlMode, syntax) {
 				return false
 			}
 		}
@@ -405,15 +406,15 @@ func digestSyntaxValid(statement tree.Statement, sqlMode SQLModeFlags) bool {
 		for _, option := range stmt.Options {
 			switch option := option.(type) {
 			case *tree.AlterAddCol:
-				if !digestColumnValid(option.Column, true, sqlMode) {
+				if !digestColumnValid(option.Column, true, sqlMode, syntax) {
 					return false
 				}
 			case *tree.AlterTableModifyColumnClause:
-				if !digestColumnValid(option.NewColumn, false, sqlMode) {
+				if !digestColumnValid(option.NewColumn, false, sqlMode, syntax) {
 					return false
 				}
 			case *tree.AlterTableChangeColumnClause:
-				if !digestColumnValid(option.NewColumn, false, sqlMode) {
+				if !digestColumnValid(option.NewColumn, false, sqlMode, syntax) {
 					return false
 				}
 			case *tree.AlterTableAlterColumnClause:
@@ -436,7 +437,7 @@ func digestShowFilterValid(like *tree.ComparisonExpr, where *tree.Where, allowed
 	return like == nil && where == nil || allowed && (like == nil || where == nil)
 }
 
-func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool, sqlMode SQLModeFlags) bool {
+func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool, sqlMode SQLModeFlags, syntax *statementDigestSyntax) bool {
 	// Mirror column-attribute contextualization, not DDL execution. Attribute
 	// order matters; a table-level primary key is not applied here. New column
 	// definitions check character length, not execution-time empty/trailing-
@@ -465,7 +466,38 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool, sqlMod
 	generatedDisallowedAttribute, hasCollation := false, false
 	var lastDefault tree.Expr
 	hasConstantDefault, hasExpressionDefault := false, false
+	// Grammar and COLLATE are not overridden by a later DEFAULT. Check these
+	// on the source list, before selecting attributes for contextualization.
 	for index, attribute := range column.Attributes {
+		collation := ""
+		switch attr := attribute.(type) {
+		case *tree.AttributeCollate:
+			collation = attr.Collate
+		case *tree.AttributeDefault:
+			expression, name := tree.MySQLColumnDefaultExpression(attr.Expr)
+			collation = name
+			if name != "" {
+				if unary, ok := attr.Expr.(*tree.UnaryExpr); ok {
+					delete(syntax.invalidExpressions, unary.Expr)
+				} else {
+					delete(syntax.invalidExpressions, attr.Expr)
+				}
+			}
+			if !digestColumnDefaultSyntaxValid(expression) {
+				return false
+			}
+		}
+		if collation != "" {
+			if hasCollation || !digestColumnCollationValid(column, collation) {
+				return false
+			}
+			hasCollation = true
+		}
+		if _, charset := attribute.(*tree.AttributeCharset); charset && index != 0 {
+			return false
+		}
+	}
+	for index, attribute := range tree.MySQLEffectiveColumnAttributes(column.Attributes) {
 		switch attr := attribute.(type) {
 		case *tree.AttributeCharset:
 			// MySQL's charset belongs to the character type, before any column
@@ -503,29 +535,15 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool, sqlMod
 				return false
 			}
 			generatedDisallowedAttribute = true
-		case *tree.AttributeCollate:
-			if hasCollation {
-				return false
-			}
-			hasCollation = true
 		case *tree.AttributeColumnFormat, *tree.AttributeStorage:
 			generatedDisallowedAttribute = true
 		case *tree.AttributeDefault:
-			if !digestColumnExpressionValid(attr.Expr, false) || !digestTemporalAttributeValid(column, attr.Expr, false) {
+			expression, _ := tree.MySQLColumnDefaultExpression(attr.Expr)
+			if !digestColumnExpressionValid(expression, false) || !digestTemporalAttributeValid(column, expression, false) {
 				return false
 			}
-			if digestDefaultHasColumnCollation(attr.Expr) {
-				if hasCollation {
-					return false
-				}
-				hasCollation = true
-			}
 			hasDefault = true
-			lastDefault = attr.Expr
-			expression := attr.Expr
-			if collated, ok := expression.(*tree.CollateExpr); ok {
-				expression = collated.Expr
-			}
+			lastDefault = expression
 			// These are distinct native attribute classes: each is overridden
 			// by its own last occurrence, but the two classes cannot coexist.
 			value, literal := expression.(*tree.NumVal)
@@ -539,8 +557,20 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool, sqlMod
 			}
 		}
 	}
+	if autoIncrement {
+		typ, ok := column.Type.(*tree.T)
+		if !ok {
+			return false
+		}
+		switch typ.InternalType.Oid {
+		case uint32(defines.MYSQL_TYPE_TINY), uint32(defines.MYSQL_TYPE_SHORT), uint32(defines.MYSQL_TYPE_INT24),
+			uint32(defines.MYSQL_TYPE_LONG), uint32(defines.MYSQL_TYPE_LONGLONG), uint32(defines.MYSQL_TYPE_BOOL):
+		default:
+			return false
+		}
+	}
 	return !(hasConstantDefault && hasExpressionDefault) && digestLargeObjectDefaultValid(column, lastDefault, sqlMode) &&
-		!(notNull && nullDefault || autoIncrement && (hasExpressionDefault || hasDefault && !nullDefault) || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
+		!(notNull && nullDefault && !autoIncrement || autoIncrement && (hasExpressionDefault || hasDefault && !nullDefault) || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
 }
 
 // Create_field::init distinguishes a constant default from a parenthesized
@@ -666,15 +696,46 @@ func digestDefaultLiteralValid(expression tree.Expr, allowCollation bool) bool {
 	return false
 }
 
-func digestDefaultHasColumnCollation(expression tree.Expr) bool {
-	if _, ok := expression.(*tree.CollateExpr); ok {
+func digestColumnDefaultSyntaxValid(expression tree.Expr) bool {
+	if digestDefaultLiteralValid(expression, false) {
 		return true
 	}
-	if unary, ok := expression.(*tree.UnaryExpr); ok {
-		_, collated := unary.Expr.(*tree.CollateExpr)
-		return collated
+	function, ok := expression.(*tree.FuncExpr)
+	return ok && !function.IsTemporalLiteral && !function.IsGeneric && function.FuncName != nil &&
+		isDigestTemporalFunctionName(function.FuncName.Origin())
+}
+
+func digestColumnCollationValid(column *tree.ColumnTableDef, collation string) bool {
+	typ, ok := column.Type.(*tree.T)
+	if !ok {
+		return true
 	}
-	return false
+	charset := ""
+	switch digestKeywordUpper(typ.InternalType.FamilyString) {
+	case "BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB", "JSON",
+		"GEOMETRY", "GEOMETRYCOLLECTION", "POINT", "MULTIPOINT", "LINESTRING", "MULTILINESTRING", "POLYGON", "MULTIPOLYGON":
+		charset = "binary"
+	case "NCHAR", "NVARCHAR":
+		charset = "utf8mb3"
+	}
+	if len(column.Attributes) > 0 {
+		if attr, ok := column.Attributes[0].(*tree.AttributeCharset); ok {
+			charset = strings.ToLower(attr.Charset)
+		}
+	}
+	if charset == "" {
+		return true
+	}
+	if charset == "utf8" {
+		charset = "utf8mb3"
+	}
+	// Native collation families use the charset prefix; binary is the sole
+	// no-suffix identity. This checks compatibility, not registry existence.
+	family, _, _ := strings.Cut(strings.ToLower(collation), "_")
+	if family == "utf8" {
+		family = "utf8mb3"
+	}
+	return family == charset && (charset != "binary" || strings.EqualFold(collation, "binary"))
 }
 
 func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.Expr, onUpdate bool) bool {

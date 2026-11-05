@@ -12410,10 +12410,14 @@ charset_name:
 
 collate_name:
     name_string
+    {
+        $$ = $1
+        $<quotedIdentifier>$ = true
+    }
 |   BINARY
     {
-        if rejectDigestReservedKeyword(yylex, $1) { goto ret1 }
         $$ = $1
+        $<quotedIdentifier>$ = false
     }
 
 table_name_list:
@@ -13644,6 +13648,11 @@ simple_expr:
 |   simple_expr COLLATE collate_name
     {
         $$ = &tree.CollateExpr{Expr: $1, Collation: $3}
+        if syntax := yylex.(*Lexer).digest; syntax != nil && !$<quotedIdentifier>3 {
+            // A trailing column COLLATE is contextualized separately; an
+            // expression COLLATE requires a name token, not reserved BINARY.
+            syntax.rejectExpression($$)
+        }
     }
 |   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {
@@ -14935,8 +14944,20 @@ function_call_generic:
         }
         digestRegisterFunction(yylex, $$)
     }
+|   ident '.' ident '(' expression_list_opt ')'
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        name := tree.NewUnresolvedName($1, $3)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1.Origin()+"."+$3.Origin(), 1),
+            IsGeneric: true,
+            Exprs: $5,
+        }
+    }
 |   SERIAL '(' expression_list_opt ')'
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("SERIAL is not a native function name"); goto ret1 }
         // `serial` is a keyword (SERIAL column-alias type, see column_def) but
         // the serial(...)/serial_extract(serial(...))/composite-index consumers
         // use it as an ordinary generic function. Keep the generic-call shape

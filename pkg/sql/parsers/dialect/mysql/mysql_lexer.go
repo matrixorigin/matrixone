@@ -237,18 +237,27 @@ func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode stri
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
-	if err := validateSelectIntoStatements(lexer); err != nil {
-		return nil, err
-	}
 	if len(lexer.stmts) == 0 {
 		// Keep the existing empty/comment-only statement shape. Digest still
 		// rejects empty/whitespace input, but comments alone have an empty digest.
 		lexer.stmts = []tree.Statement{&tree.EmptyStmt{}}
 	}
 	if digest != nil && digest.normalized != nil {
-		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0], lexer.sqlMode) {
+		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0], lexer.sqlMode, digest) {
 			return nil, moerr.NewDigestParse(ctx)
 		}
+		// Reserved BINARY in expression COLLATE is a syntax error even in an
+		// unused CTE. Column-default trailing collations were classified above.
+		for expr := range digest.invalidExpressions {
+			if _, collated := expr.(*tree.CollateExpr); collated {
+				return nil, moerr.NewDigestParse(ctx)
+			}
+		}
+	}
+	if err := validateSelectIntoStatements(lexer); err != nil {
+		return nil, err
+	}
+	if digest != nil && digest.normalized != nil {
 		if control != nil {
 			// Syntax and normalization have independent, equally tight budgets.
 			control.work, control.tokens = 0, 0
@@ -575,6 +584,10 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			typ = DIGEST_INTERVAL
 		}
 		switch typ {
+		case SERIAL:
+			if l.lastToken == int('.') {
+				typ = ID
+			}
 		case NTILE:
 			typ = DIGEST_NTILE
 		case LEAD:

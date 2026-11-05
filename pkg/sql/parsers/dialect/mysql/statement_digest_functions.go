@@ -145,18 +145,16 @@ func digestRegisterFunction(yylex yyLexer, expr tree.Expr) {
 	}
 }
 
-func (syntax *statementDigestSyntax) rejectExpression(node *tree.FuncExpr) {
+func (syntax *statementDigestSyntax) rejectExpression(node tree.Expr) {
 	if syntax.invalidExpressions == nil {
-		syntax.invalidExpressions = make(map[*tree.FuncExpr]struct{})
+		syntax.invalidExpressions = make(map[tree.Expr]struct{})
 	}
 	syntax.invalidExpressions[node] = struct{}{}
 }
 
 func (syntax *statementDigestSyntax) checkExpression(expr tree.Expr) string {
-	if node, ok := expr.(*tree.FuncExpr); ok {
-		if _, invalid := syntax.invalidExpressions[node]; invalid {
-			return "Invalid digest expression"
-		}
+	if _, invalid := syntax.invalidExpressions[expr]; invalid {
+		return "Invalid digest expression"
 	}
 	return ""
 }

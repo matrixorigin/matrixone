@@ -21,6 +21,93 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestEffectiveColumnAttributes(t *testing.T) {
+	for _, test := range []struct {
+		sql    string
+		reject bool
+	}{
+		{"CREATE TABLE t(a INT DEFAULT (@v) DEFAULT (0))", false},
+		{"CREATE TABLE t(a INT DEFAULT ((SELECT 1)) DEFAULT (0))", false},
+		{"CREATE TABLE t(a INT DEFAULT (0) DEFAULT ((SELECT 1)))", true},
+		{"CREATE TABLE t(a INT DEFAULT (SELECT 1) DEFAULT (0))", true},
+		{"CREATE TABLE t(a INT DEFAULT (0) DEFAULT (@v))", true},
+		{"CREATE TABLE t(a INT DEFAULT (ABS()) DEFAULT (0))", false},
+		{"CREATE TABLE t(a INT DEFAULT (DATE 'bad') DEFAULT (0))", false},
+		{"CREATE TABLE t(a INT DEFAULT 1+1 DEFAULT 0)", true},
+		{"CREATE TABLE t(a INT DEFAULT CURRENT_TIMESTAMP DEFAULT NULL)", false},
+		{"CREATE TABLE t(a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP)", false},
+		{"CREATE TABLE t(a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP(3))", true},
+		{"CREATE TABLE t(a INT NOT NULL AUTO_INCREMENT DEFAULT NULL)", false},
+		{"CREATE TABLE t(a INT PRIMARY KEY AUTO_INCREMENT DEFAULT NULL)", false},
+		{"CREATE TABLE t(a SERIAL DEFAULT NULL)", false},
+		{"CREATE TABLE t(a FLOAT AUTO_INCREMENT)", true},
+		{"CREATE TABLE t(a YEAR AUTO_INCREMENT)", true},
+		{"CREATE TABLE t(a BIT AUTO_INCREMENT)", true},
+		{"CREATE TABLE t(a BOOL AUTO_INCREMENT)", false},
+		{"CREATE TABLE t(a INT1 NOT NULL AUTO_INCREMENT DEFAULT NULL)", false},
+		{"CREATE TABLE t(a INT8 NOT NULL AUTO_INCREMENT DEFAULT NULL)", false},
+		{"SELECT db.abs()", false},
+		{"SELECT db.count(1,2)", false},
+		{"CREATE TABLE t(a INT DEFAULT (db.serial(1)))", true},
+		{"CREATE TABLE t(a INT DEFAULT (db.serial(1)) DEFAULT (0))", false},
+		{"CREATE TABLE t(a INT AUTO_INCREMENT DEFAULT (NULL))", true},
+		{"SELECT serial(1)", true},
+		{"SELECT serial (1)", true},
+		{"WITH c AS (SELECT serial(1)) SELECT 1", true},
+		{"SELECT db.serial(1)", false},
+		{"SELECT `serial`(1)", false},
+		{"CREATE TABLE t(a BLOB COLLATE utf8mb4_bin)", true},
+		{"CREATE TABLE t(a JSON COLLATE binary)", false},
+		{"CREATE TABLE t(a BINARY(10) DEFAULT '' COLLATE utf8mb4_bin DEFAULT '')", true},
+		{"CREATE TABLE t(a NCHAR(10) COLLATE utf8mb3_bin)", false},
+		{"CREATE TABLE t(a VARCHAR(10) CHARSET latin1 COLLATE utf8mb4_bin)", true},
+		{"CREATE TABLE t(a INT DEFAULT (0) COLLATE binary)", false},
+		{"CREATE TABLE t(a INT DEFAULT (0 COLLATE binary))", true},
+		{"CREATE TABLE t(a INT DEFAULT (0 COLLATE binary) DEFAULT (1))", true},
+		{"WITH c AS (SELECT 'x' COLLATE binary) SELECT 1", true},
+		{"SELECT 'x' COLLATE binary", true},
+		{"SELECT 'x' COLLATE `binary`", false},
+		{"CREATE DATABASE d COLLATE binary", false},
+		{"ALTER TABLE t COLLATE binary", false},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, "")
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, _, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+			}
+		})
+	}
+	for _, sql := range []string{"SELECT serial(1)", "SELECT serial (1)", "SELECT 1 COLLATE binary", "CREATE TABLE t(a FLOAT AUTO_INCREMENT)"} {
+		func() {
+			stmts, err := Parse(t.Context(), sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+		}()
+	}
+}
+
+func TestOrdinaryQualifiedFunctionAdmission(t *testing.T) {
+	stmts, err := Parse(t.Context(), "SELECT db.serial(1)", 0)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Error(t, err)
+}
+
 func TestDigestColumnTypeAttributeDomains(t *testing.T) {
 	for _, test := range []struct {
 		sql, mode string

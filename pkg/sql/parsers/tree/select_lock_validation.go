@@ -155,6 +155,22 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 		}
 		if value.CanInterface() {
 			switch node := value.Interface().(type) {
+			case *ColumnTableDef:
+				if scope.checkExpr != nil || scope.checkTableNames {
+					// Itemization must not visit overridden column expressions.
+					// Keep the source AST and ordinary MO's attribute policy intact.
+					copy := *node
+					copy.Attributes = make([]ColumnAttribute, 0, len(node.Attributes))
+					for _, attr := range MySQLEffectiveColumnAttributes(node.Attributes) {
+						if def, ok := attr.(*AttributeDefault); ok {
+							defaultCopy := *def
+							defaultCopy.Expr, _ = MySQLColumnDefaultExpression(def.Expr)
+							attr = &defaultCopy
+						}
+						copy.Attributes = append(copy.Attributes, attr)
+					}
+					return validateSelectLockValue(reflect.ValueOf(copy), scope)
+				}
 			case *CreateView:
 				return validateDigestViewNames(value.Elem(), node.ColNames, scope)
 			case *AlterView:

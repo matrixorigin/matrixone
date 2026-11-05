@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v28，2026-11-05。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v29，2026-11-05。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -17,6 +17,15 @@ parser 将其降低为既有两个 SOUNDEX 调用的等值比较。SOUNDS 是非
 该方案优于新增 ComparisonOp 或独立执行函数：既有 AST、格式化、参数遍历、binder、执行器和持久化 view 消费者均可复用，不新增函数 ID 或 plan 字段。语法生成器必须无新增冲突，生成物必须可重复生成。
 
 ## STATEMENT_DIGEST / STATEMENT_DIGEST_TEXT
+
+### 列属性覆盖与语法/语义阶段
+
+- 对原生可覆盖属性按类别保留最后一项后才 itemize/contextualize，保留幸存项的原始相对顺序。常量默认值、表达式默认值、NULL 与 NOT NULL 分属不同类别；COLLATE 与可累加约束不去重。tree.MySQLEffectiveColumnAttributes 是摘要列校验与共享查询上下文 walker 的唯一选择规则；不修改原AST、不改变普通MO绑定属性策略。
+- 语法不能因覆盖而失效：DEFAULT 必须仍是signed literal/括号表达式/native NOW族，原生函数专用语法错误仍立即拒绝。已覆盖的表达式不再被工厂arity、typed literal、变量/子查询或默认值函数语义检查；未覆盖表达式仍正常检查。与默认值相邻的尾部COLLATE属独立列属性，不随DEFAULT覆盖消失。
+- AUTO_INCREMENT只允许原生整数类型（含BOOL/BOOLEAN别名，不含YEAR/BIT/FLOAT/DOUBLE/DECIMAL），合法的裸DEFAULT NULL不因NOT NULL/PRIMARY KEY被拒绝；括号表达式默认值即使(NULL)仍不允许。
+- 固定binary字符集的二进制字符串/LOB/JSON/空间类型只能配COLLATE binary；national类型仍隐式utf8mb3，显式charset按原生collation家族匹配。此处检查家族兼容，不新增配置或完整collation registry存在性模拟。
+- DDL collate_name允许原生BINARY token，表达式COLLATE要求名字token（引号允许）。复用parse-local invalidExpressions候选保存未分类CollateExpr，列声明识别并移除合法尾部候选；其余候选在作用域itemization前作为语法错误拒绝，因此未引用CTE或被覆盖表达式也不能藏起非法表达式COLLATE binary。无新map/池字段。
+- 普通MO serial(...)保留原语法；digest无限定SERIAL函数入口拒绝，quoted名称保持generic身份。摘要的schema.name(...)按原生qualified generic语法构建不可执行表达式，不应用builtin工厂；普通MO既有不支持的qualified函数仍拒绝，不查询UDF/存储过程目录。
 
 ### 列字符集与大对象默认值的解析准入
 
