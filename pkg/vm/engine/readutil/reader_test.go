@@ -1036,6 +1036,16 @@ func (fs *policyObservingFS) Read(ctx context.Context, v *fileservice.IOVector) 
 // A storage hint is optional pruning. Its disappearance or a wider admitted
 // block must leave the original mixed temporal predicate authoritative.
 func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reverse bool
+	}{{"datetime_key", false}, {"timestamp_key", true}} {
+		t.Run(tc.name, func(t *testing.T) { testReaderTemporalResidualAfterOptionalPKFilter(t, tc.reverse) })
+	}
+}
+
+func testReaderTemporalResidualAfterOptionalPKFilter(t *testing.T, reverse bool) {
+	t.Helper()
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.SetBaseProcessRunningStatus(true)
@@ -1046,14 +1056,23 @@ func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
 	defer fs.Close(ctx)
 	packer := types.NewPacker()
 	defer packer.Close()
-	encode := func(value types.Datetime) []byte {
+	encode := func(value int64) []byte {
 		packer.Reset()
-		packer.EncodeDatetime(value)
+		if reverse {
+			packer.EncodeTimestamp(types.Timestamp(value))
+		} else {
+			packer.EncodeDatetime(types.Datetime(value))
+		}
+		packer.EncodeInt64(7) // The secondary key includes the base primary key.
 		return append([]byte(nil), packer.GetBuf()...)
 	}
 	center := types.DatetimeFromClock(2024, 4, 25, 0, 0, 0, 123000)
-	values := []types.Datetime{center - 1, center, center + 456, center + 1000, center + 2000}
 	stamp := center.ToTimestamp(time.UTC)
+	keyCenter := int64(center)
+	if reverse {
+		keyCenter = int64(stamp)
+	}
+	values := []int64{keyCenter - 1, keyCenter, keyCenter + 456, keyCenter + 1000, keyCenter + 2000}
 	input := batch.NewWithSize(2)
 	defer input.Clean(proc.Mp())
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
@@ -1062,11 +1081,21 @@ func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
 	for i, value := range values {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], encode(value), false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
-		if value.ToTimestamp(time.UTC).TruncateToScale(3) > stamp {
+		var match bool
+		if reverse {
+			match = types.Timestamp(value) > stamp
+		} else {
+			match = types.Datetime(value).ToTimestamp(time.UTC).TruncateToScale(3) > stamp
+		}
+		if match {
 			expected = append(expected, int64(i))
 		}
 	}
-	require.Equal(t, []int64{3, 4}, expected)
+	if reverse {
+		require.Equal(t, []int64{2, 3, 4}, expected)
+	} else {
+		require.Equal(t, []int64{3, 4}, expected)
+	}
 	input.SetRowCount(len(values))
 	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, 0, false, false, fs)
 	_, err = writer.WriteBatch(input)
@@ -1088,14 +1117,19 @@ func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
 		return expr
 	}
 	key := MakeColExprForTest(0, types.T_varchar, "key")
-	extract := bind("serial_extract", key, plan2.MakePlan2Int64ConstExprWithType(0),
-		&plan.Expr{Typ: types.New(types.T_datetime, 0, 6).PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+	keyType := types.T_datetime
 	bound := &plan.Expr{Typ: types.New(types.T_timestamp, 0, 3).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: int64(stamp)}}}}
+	if reverse {
+		keyType = types.T_timestamp
+		bound = &plan.Expr{Typ: types.New(types.T_datetime, 0, 6).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Datetimeval{Datetimeval: int64(center)}}}}
+	}
+	extract := bind("serial_extract", key, plan2.MakePlan2Int64ConstExprWithType(0),
+		&plan.Expr{Typ: types.New(keyType, 0, 6).PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
 	residual := bind(">", extract, bound)
-	// This deliberately wider, valid encoded-key range includes equality and
-	// a fraction that rounds to equality. Neither is a true SQL match.
+	// The range includes equality; the forward direction also includes a
+	// fraction that rounds to equality. The residual must remove both.
 	hint := bind("prefix_between", key,
-		plan2.MakePlan2StringConstExprWithType(string(encode(center)), true),
+		plan2.MakePlan2StringConstExprWithType(string(encode(keyCenter)), true),
 		plan2.MakePlan2StringConstExprWithType(string(encode(values[len(values)-1])), true))
 	hint.TemporalCandidateFilter = true
 	var folds []colexec.ExpressionExecutor
@@ -1151,7 +1185,9 @@ func TestReaderTemporalResidualAfterOptionalPKFilter(t *testing.T) {
 							selected = append(selected, int64(i))
 						}
 					}
-					bat.Vecs[0].Shrink(selected, false)
+					if err := bat.Vecs[0].Shrink(selected, false, proc.Mp()); err != nil {
+						return engine.ReaderFilterResult{}, err
+					}
 					bat.SetRowCount(len(selected))
 					return engine.ReaderFilterResult{Sels: selected}, nil
 				}}, proc.Mp(), output)
