@@ -48,7 +48,10 @@ func TestMedianDecimal38UsesWideExactResult(t *testing.T) {
 			resultType := MedianReturnType([]types.Type{typ})
 			require.Equal(t, types.New(types.T_decimal256, 39, tc.scale+1), resultType)
 			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			defer func() { require.Zero(t, mp.CurrNB()) }()
 			input := vector.NewVec(typ)
+			defer input.Free(mp)
 			for _, value := range tc.input {
 				decimal, err := types.ParseDecimal128(value, 38, tc.scale)
 				require.NoError(t, err)
@@ -56,16 +59,18 @@ func TestMedianDecimal38UsesWideExactResult(t *testing.T) {
 			}
 			exec, err := MakeAgg(mp, AggIdOfMedian, false, typ)
 			require.NoError(t, err)
+			defer exec.Free()
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
 			results, err := exec.Flush()
+			for _, result := range results {
+				if result != nil {
+					defer result.Free(mp)
+				}
+			}
 			require.NoError(t, err)
 			require.Equal(t, resultType, *results[0].GetType())
 			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(resultType.Scale))
-			results[0].Free(mp)
-			exec.Free()
-			input.Free(mp)
-			require.Zero(t, mp.CurrNB())
 		})
 	}
 }

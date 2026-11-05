@@ -335,30 +335,38 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 }
 
 func TestDecimalAssignmentChecksPrecisionInStrictMode(t *testing.T) {
-	for _, sqlMode := range []string{"STRICT_TRANS_TABLES", ""} {
-		proc := testutil.NewProcess(t)
-		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
-			if name == "sql_mode" {
-				return sqlMode, nil
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "strict", sqlMode: "STRICT_TRANS_TABLES"},
+		{name: "non-strict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.sqlMode, nil
+				}
+				return nil, nil
+			})
+			source := vector.NewVec(types.T_bool.ToType())
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(source, true, false, proc.Mp()))
+			targetType := types.New(types.T_decimal64, 1, 1)
+			target := vector.NewConstNull(targetType, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.sqlMode != "" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "0.9", vector.MustFixedColWithTypeCheck[types.Decimal64](result.GetResultVector())[0].Format(1))
 			}
-			return nil, nil
 		})
-		source := vector.NewVec(types.T_bool.ToType())
-		require.NoError(t, vector.AppendFixed(source, true, false, proc.Mp()))
-		targetType := types.New(types.T_decimal64, 1, 1)
-		target := vector.NewConstNull(targetType, 1, proc.Mp())
-		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
-		require.NoError(t, result.PreExtendAndReset(1))
-		err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
-		if sqlMode != "" {
-			require.Error(t, err)
-		} else {
-			require.NoError(t, err)
-			require.Equal(t, "0.9", vector.MustFixedColWithTypeCheck[types.Decimal64](result.GetResultVector())[0].Format(1))
-		}
-		result.Free()
-		target.Free(proc.Mp())
-		source.Free(proc.Mp())
 	}
 }
 
@@ -380,18 +388,20 @@ func TestDateAssignmentKeepsZeroAndRejectsInvalidText(t *testing.T) {
 		{"0000-00-00", true},
 		{"2020-00-00", false},
 	} {
-		source := testutil.MakeVarcharVector([]string{tc.value}, nil, proc.Mp())
-		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
-		require.NoError(t, result.PreExtendAndReset(1))
-		err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
-		if tc.valid {
-			require.NoError(t, err)
-			require.Equal(t, types.ZeroDate, vector.MustFixedColWithTypeCheck[types.Date](result.GetResultVector())[0])
-		} else {
-			require.Error(t, err)
-		}
-		result.Free()
-		source.Free(proc.Mp())
+		t.Run(tc.value, func(t *testing.T) {
+			source := testutil.MakeVarcharVector([]string{tc.value}, nil, proc.Mp())
+			defer source.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, types.ZeroDate, vector.MustFixedColWithTypeCheck[types.Date](result.GetResultVector())[0])
+			} else {
+				require.Error(t, err)
+			}
+		})
 	}
 }
 
