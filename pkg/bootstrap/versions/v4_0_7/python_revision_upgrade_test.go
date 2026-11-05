@@ -16,6 +16,7 @@ package v4_0_7
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -114,12 +115,71 @@ func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 	}
 }
 
+func TestPythonRevisionColumnsUseOneTableRewrite(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		for _, present := range [][]string{
+			nil,
+			{"active_revision", "canonical_input_descriptor"},
+			{"active_revision", "namespace_version", "canonical_input_descriptor",
+				"return_descriptor", "signature_key_schema_version", "signature_fingerprint"},
+		} {
+			t.Run(fmt.Sprint(len(present)), func(t *testing.T) {
+				state := &pythonRevisionCatalogState{columns: make(map[string]bool)}
+				for _, name := range present {
+					state.columns[name] = true
+				}
+				tx := newRepairTxnExecutor(t, state)
+				index := len(tenantUpgEntries) - len(routineUpgEntries)
+				more, err := Handler.UpgradeTenantEntryPage(t.Context(), 7, index, tx,
+					versions.DefaultCatalogUpgradeObjectBytes, &TenantPageCursor{})
+				require.NoError(t, err)
+				require.False(t, more)
+				require.Len(t, state.columns, 6, "all missing columns must be published together")
+				if len(present) == 6 {
+					require.Empty(t, state.ddl)
+				} else {
+					require.Len(t, state.ddl, 1, "one table layout must require only one table copy")
+					for _, name := range present {
+						require.NotContains(t, state.ddl[0], "add column "+name+" ")
+					}
+				}
+				// Subsequent logical entries and a restart must not copy the table again.
+				for range 2 {
+					for i := range 6 {
+						_, err := Handler.UpgradeTenantEntryPage(t.Context(), 7, index+i, tx,
+							versions.DefaultCatalogUpgradeObjectBytes, &TenantPageCursor{})
+						require.NoError(t, err)
+					}
+				}
+				require.LessOrEqual(t, len(state.ddl), 1)
+			})
+		}
+		for _, failure := range []string{"check", "alter"} {
+			t.Run(failure, func(t *testing.T) {
+				sentinel := errors.New(failure)
+				state := &pythonRevisionCatalogState{columns: make(map[string]bool)}
+				if failure == "check" {
+					state.checkError = sentinel
+				} else {
+					state.ddlError = sentinel
+				}
+				err := upgradeRoutineColumns(newRepairTxnExecutor(t, state), 7)
+				require.ErrorIs(t, err, sentinel)
+				require.Empty(t, state.columns)
+				require.Empty(t, state.ddl)
+			})
+		}
+	})
+}
+
 type pythonRevisionCatalogState struct {
 	columns       map[string]bool
 	newIndex      bool
 	legacyIndex   bool
 	revisionTable bool
 	ddl           []string
+	checkError    error
+	ddlError      error
 }
 
 func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) executor.TxnExecutor {
@@ -142,6 +202,9 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 		case strings.HasPrefix(sql, "select count(distinct i.id)"):
 			return indexCatalogCounts(t, [3]int64{1, 1, 1}), nil
 		case strings.Contains(lower, "from mo_catalog.mo_columns"):
+			if state.checkError != nil {
+				return executor.Result{}, state.checkError
+			}
 			for column := range state.columns {
 				if strings.Contains(sql, fmt.Sprintf("attname = '%s'", column)) {
 					return repairColumnResult(t), nil
@@ -162,9 +225,12 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 			}
 			return executor.Result{}, nil
 		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
+			if state.ddlError != nil {
+				return executor.Result{}, state.ddlError
+			}
 			for column := range state.columns {
 				if strings.Contains(sql, "add column "+column+" ") {
-					return executor.Result{}, nil
+					return executor.Result{}, fmt.Errorf("duplicate column %s", column)
 				}
 			}
 			for _, column := range []string{
@@ -173,10 +239,10 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 			} {
 				if strings.Contains(sql, "add column "+column+" ") {
 					state.columns[column] = true
-					state.ddl = append(state.ddl, sql)
-					return executor.Result{}, nil
 				}
 			}
+			state.ddl = append(state.ddl, sql)
+			return executor.Result{}, nil
 		case strings.Contains(lower, "create unique index name_db_arg_types_descriptor"):
 			state.newIndex = true
 			state.ddl = append(state.ddl, sql)
@@ -192,7 +258,6 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 		default:
 			return executor.Result{}, fmt.Errorf("unexpected repair SQL: %s", sql)
 		}
-		return executor.Result{}, nil
 	}, txnOperator)
 }
 
