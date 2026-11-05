@@ -3092,6 +3092,56 @@ func Test_convertRowsIntoBatchVectorTextPresentation(t *testing.T) {
 	assert.True(t, data.Vecs[1].GetNulls().Contains(1))
 }
 
+func Test_convertRowsIntoBatchBlockScaledAndNarrowVectorText(t *testing.T) {
+	// BF16/Float16/int8 vector cells and a block-scaled (vecf8) cell published
+	// under VARCHAR metadata must save the same text the client-visible result
+	// presents; an unparseable block-scaled cell keeps the pre-fix "%v"
+	// rendering instead of failing the saved result (issue #31535).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+
+	vecCol := new(MysqlColumn)
+	vecCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	vecCol.SetName("v")
+	vecCol.SetCharset(charsetVarchar)
+
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(vecCol)
+	// Counterexample: fmt.Sprintf("%v") would render these as Go numeric
+	// lists such as "[16384 48640]".
+	mrs.AddRow([]any{[]types.BF16{types.BF16FromFloat32(2), types.BF16FromFloat32(-0.5)}})
+	mrs.AddRow([]any{[]types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(0.25)}})
+	mrs.AddRow([]any{[]int8{3, -7}})
+
+	cell, cellErr := types.StringToBlockScaled(types.BlockScaledMXFP8, "[1, 2]")
+	require.NoError(t, cellErr)
+	blockScaled := types.BlockScaledValue{Oid: types.T_array_float8, Cell: cell}
+	mrs.AddRow([]any{blockScaled})
+	corruptCell := types.BlockScaledValue{Oid: types.T_array_float8, Cell: []byte{}}
+	mrs.AddRow([]any{corruptCell})
+
+	data, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	require.NotNil(t, data)
+	require.Equal(t, 5, int(data.Vecs[0].Length()))
+
+	require.Equal(t, []byte("[2, -0.5]"), (data.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, []byte("[1.5, 0.25]"), (data.Vecs[0].GetBytesAt(1)))
+	require.Equal(t, []byte("[3, -7]"), (data.Vecs[0].GetBytesAt(2)))
+
+	// The client-visible presentation is the oracle for the block-scaled
+	// cell: the saved bytes must equal MysqlResultSet.GetString for it.
+	clientText, clientErr := mrs.GetString(context.TODO(), 3, 0)
+	require.NoError(t, clientErr)
+	require.Equal(t, []byte(clientText), (data.Vecs[0].GetBytesAt(3)))
+
+	// A cell that cannot be parsed keeps the pre-fix "%v" presentation
+	// instead of failing the whole saved result: BlockScaledValue implements
+	// fmt.Stringer through BlockScaledToJSON, whose text for a corrupt cell
+	// is "", so fmt.Sprintf("%v") saves the same empty text as before this fix.
+	require.Empty(t, (data.Vecs[0].GetBytesAt(4)))
+}
+
 func Test_convertRowsIntoBatchUnsignedRejections(t *testing.T) {
 	// Values that cannot be represented exactly must fail fast instead of
 	// panicking, wrapping sign, or truncating (issue #31498).
