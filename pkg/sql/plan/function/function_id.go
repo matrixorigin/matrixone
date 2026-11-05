@@ -966,11 +966,14 @@ const (
 	EWM_COV  = 627
 	EWM_CORR = 628
 
-	STATEMENT_DIGEST      = 632
-	STATEMENT_DIGEST_TEXT = 633
+	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
+	UNZIP_FILE = 632
+
+	STATEMENT_DIGEST      = 633
+	STATEMENT_DIGEST_TEXT = 634
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 634
+	FUNCTION_END_NUMBER = 635
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1348,6 +1351,7 @@ var functionIdRegister = map[string]int32{
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"unzip_file":                     UNZIP_FILE,
 	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,

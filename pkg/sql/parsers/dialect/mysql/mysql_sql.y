@@ -1185,6 +1185,10 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %token <str> AUTO_ID_CACHE
 // Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
 %left <str> SOUNDS
+// MySQL SERIAL column-alias type. Declared last so every existing token
+// keeps its generated lexer constant number, per the append-to-end contract
+// above.
+%token <str> SERIAL
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -2592,6 +2596,22 @@ grant_stmt:
             },
         }
     }
+|   GRANT priv_list ON priv_level TO role_spec_list grant_option_opt
+    {
+        // MySQL permits omitting object_type in `GRANT priv ON level`; the
+        // omitted form defaults to TABLE and shares the parse of the
+        // keyword form downstream.
+        $$ = &tree.Grant{
+            Typ: tree.GrantTypePrivilege,
+            GrantPrivilege: tree.GrantPrivilege{
+                Privileges: $2,
+                ObjType: tree.OBJECT_TYPE_TABLE,
+                Level: $4,
+                Roles: $6,
+                GrantOption: $7,
+            },
+        }
+    }
 |   GRANT role_spec_list TO drop_user_spec_list grant_role_option_opt
     {
         $$ = &tree.Grant{
@@ -2657,6 +2677,22 @@ revoke_stmt:
                 ObjType: $5,
                 Level: $6,
                 Roles: $8,
+            },
+        }
+    }
+|   REVOKE exists_opt priv_list ON priv_level FROM role_spec_list
+    {
+        // MySQL permits omitting object_type in `REVOKE priv ON level`; the
+        // omitted form defaults to TABLE and revokes the same grants as the
+        // keyword form.
+        $$ = &tree.Revoke{
+            Typ: tree.RevokeTypePrivilege,
+            RevokePrivilege: tree.RevokePrivilege{
+                IfExists: $2,
+                Privileges: $3,
+                ObjType: tree.OBJECT_TYPE_TABLE,
+                Level: $5,
+                Roles: $7,
             },
         }
     }
@@ -12836,6 +12872,31 @@ column_def:
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
+|   column_name SERIAL column_attribute_list_opt
+    {
+        // MySQL SERIAL is the alias for BIGINT UNSIGNED NOT NULL
+        // AUTO_INCREMENT UNIQUE. Expanding at the column-definition owner
+        // keeps the alias out of CAST/CONVERT, sequence AS, JSON_TABLE and
+        // ARRAY, which parse their types through column_type; CREATE and
+        // ALTER ADD both accept column definitions here.
+        locale := ""
+        typ := &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.IntFamily,
+                FamilyString: "bigint",
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+                Unsigned: true,
+            },
+        }
+        serialAttrs := []tree.ColumnAttribute{
+            tree.NewAttributeNull(false),
+            tree.NewAttributeAutoIncrement(),
+            tree.NewAttributeUnique(),
+        }
+        $$ = tree.NewColumnTableDef($1, typ, append(serialAttrs, $3...))
+    }
 
 column_name_unresolved:
     ident
@@ -14873,6 +14934,22 @@ function_call_generic:
             Exprs: $3,
         }
         digestRegisterFunction(yylex, $$)
+    }
+|   SERIAL '(' expression_list_opt ')'
+    {
+        // `serial` is a keyword (SERIAL column-alias type, see column_def) but
+        // the serial(...)/serial_extract(serial(...))/composite-index consumers
+        // use it as an ordinary generic function. Keep the generic-call shape
+        // of the ID arm above so the write/spellings, nesting and arity are
+        // byte-identical to what `serial` parsed as before the keyword was
+        // introduced (#31748).
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            Exprs: $3,
+        }
     }
 |   INTERVAL '(' bit_expr ',' expression_list ')'
     {
@@ -17272,6 +17349,7 @@ non_reserved_keyword:
 |   ASYNC
 |   BEGIN
 |   BIGINT
+|   SERIAL
 |   BIT
 |   BLOB
 |   BOOL

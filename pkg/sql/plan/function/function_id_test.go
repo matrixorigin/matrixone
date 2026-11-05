@@ -889,9 +889,10 @@ var predefinedFunids = map[int]int{
 	VECTOR_MATMUL:         629,
 	VECBLOCK_JSON:         630,
 	VECBLOCK_BINARY:       631,
-	STATEMENT_DIGEST:      632,
-	STATEMENT_DIGEST_TEXT: 633,
-	FUNCTION_END_NUMBER:   634,
+	UNZIP_FILE:            632,
+	STATEMENT_DIGEST:      633,
+	STATEMENT_DIGEST_TEXT: 634,
+	FUNCTION_END_NUMBER:   635,
 }
 
 func Test_funids(t *testing.T) {

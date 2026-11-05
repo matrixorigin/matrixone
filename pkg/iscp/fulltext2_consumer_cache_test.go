@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -183,6 +184,9 @@ func TestRunFulltext2RefreshesIdleCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	tx := executortest.NewMockTxnExecutor(ctrl)
 	exec.txn = tx
+	writeTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	writeTxn.EXPECT().Txn().Return(txn.TxnMeta{ID: []byte("ft2-flush")}).AnyTimes()
+	tx.EXPECT().Txn().Return(writeTxn).AnyTimes()
 	tx.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opt executor.StatementOption) (executor.Result, error) {
 		if opt.HasParams() {
 			v, err := opt.Params(exec.mp)

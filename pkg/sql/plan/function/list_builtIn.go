@@ -15658,6 +15658,50 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `unzip_file`
+	{
+		functionId: UNZIP_FILE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFilePath)
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFilePath)
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFileDatalink)
+				},
+			},
+		},
+	},
+
 	{
 		functionId: CHECK_ASYNC_DATALINK_SOURCE,
 		class:      plan.Function_INTERNAL,

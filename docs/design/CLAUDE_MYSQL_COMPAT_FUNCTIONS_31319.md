@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v27，2026-11-04。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v28，2026-11-05。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -75,7 +75,7 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - 所有新函数 ID 追加，既有 ID 不重排。无 wire/catalog 格式变更，不新增 MORPCVersion、capability gate 或迁移步骤；MO 使用全停机升级。
 - 不新增权限、跨租户或外部网络路径；SQL 文本只解析，错误不应暴露输入中其他行的敏感数据。
 - parser 生成物与 token 兼容表由各自生成器维护，不手改状态表；兼容表升级必须同时更新来源版本与独立 oracle。merge后的生成文件mtime可能更新而仍含冲突，必须强制运行生成目标并检查实际编译、零conflict/错误/冲突标记及重复cmp，不能只相信make up-to-date。
-- MO函数注册ID与MySQL摘要token编号是不同域。保留上游VECTOR_MATMUL/VECBLOCK_JSON/VECBLOCK_BINARY的629/630/631；本未发布功能的STATEMENT_DIGEST/STATEMENT_DIGEST_TEXT使用632/633，FUNCTION_END_NUMBER为634，所有消费者按符号引用，固定注册ID测试同步验证。不得挪动上游已分配编号来解决分支碰撞。
+- MO函数注册ID与MySQL摘要token编号是不同域。保留上游VECTOR_MATMUL/VECBLOCK_JSON/VECBLOCK_BINARY/UNZIP_FILE的629/630/631/632；本未发布功能的STATEMENT_DIGEST/STATEMENT_DIGEST_TEXT使用633/634，FUNCTION_END_NUMBER为635，所有消费者按符号引用，固定注册ID测试同步验证。不得挪动上游已分配编号来解决分支碰撞。
 - UT：parser/typed AST、兼容 token/hash/text、非法输入/预算/取消、NULL/selection/常量与列向量、DEFAULT 来源/错误和真实 binder 消费者。
 - BVT：用本任务服务和隔离 mo-tester workspace，独立运行新增/扩展 case；生成结果后逐项对照 MySQL，正常比较两次并验证资源清理。SQL 注释不写 issue 号。
 - 证据顺序：聚焦回归 → 所有者包/直接消费者 → 增量 gofmt/vet/lint → 服务构建/BVT。只有可达并发/持久化/分布式风险才增加 race/重启/多 CN 证据。大输入成本用专门 benchmark 或最小预算边界，不把普通 BVT 变成负载测试。
