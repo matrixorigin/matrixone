@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -64,5 +65,65 @@ func TestBetweenAfterShuffleInvalidatesSorted(t *testing.T) {
 			require.Equal(t, want, actual)
 			require.False(t, sorted)
 		})
+	}
+}
+
+func TestSortedConsumersAfterShuffle(t *testing.T) {
+	for _, buffered := range []bool{false, true} {
+		for _, tc := range []struct {
+			name   string
+			sels   []int64
+			sorted bool
+		}{
+			{"identity", []int64{0, 1, 2, 3}, true},
+			{"gaps_duplicates", []int64{0, 1, 1, 3}, true},
+			{"inversion", []int64{0, 2, 1, 3}, false},
+		} {
+			t.Run(fmt.Sprintf("buffered=%v/%s", buffered, tc.name), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				ints := vector.NewVec(types.T_int64.ToType())
+				strs := vector.NewVec(types.T_varchar.ToType())
+				t.Cleanup(func() { ints.Free(mp); strs.Free(mp); require.Zero(t, mp.CurrNB()) })
+				values := []int64{1, 2, 3, 4}
+				words := []string{"aa long external value 0", "ab long external value 1", "ab long external value 2", "cc long external value 3"}
+				require.NoError(t, vector.AppendFixedList(ints, values, nil, mp))
+				for _, word := range words {
+					require.NoError(t, vector.AppendBytes(strs, []byte(word), false, mp))
+				}
+				ints.SetSorted(true)
+				strs.SetSorted(true)
+				for _, v := range []*vector.Vector{ints, strs} {
+					if buffered {
+						var buf []byte
+						require.NoError(t, v.ShuffleWithBuf(tc.sels, mp, &buf))
+					} else {
+						require.NoError(t, v.Shuffle(tc.sels, mp))
+					}
+					require.Equal(t, tc.sorted, v.GetSorted())
+				}
+				n := len(tc.sels)
+				lower, err := vector.NewConstFixed(types.T_int64.ToType(), int64(2), n, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { lower.Free(mp) })
+				upper, err := vector.NewConstFixed(types.T_int64.ToType(), int64(3), n, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { upper.Free(mp) })
+				prefix, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("ab"), n, mp)
+				require.NoError(t, err)
+				t.Cleanup(func() { prefix.Free(mp) })
+				result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+				t.Cleanup(result.Free)
+				require.NoError(t, result.PreExtendAndReset(n))
+				require.NoError(t, betweenImpl([]*vector.Vector{ints, lower, upper}, result, nil, n, nil))
+				for i, sel := range tc.sels {
+					require.Equal(t, values[sel] >= 2 && values[sel] <= 3, vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())[i])
+				}
+				require.NoError(t, result.PreExtendAndReset(n))
+				require.NoError(t, PrefixEq([]*vector.Vector{strs, prefix}, result, nil, n, nil))
+				for i, sel := range tc.sels {
+					require.Equal(t, strings.HasPrefix(words[sel], "ab"), vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())[i])
+				}
+			})
+		}
 	}
 }

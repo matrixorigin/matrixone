@@ -331,8 +331,7 @@ func (ctr *container) appendBatchAccounted(
 		}
 		if err != nil {
 			for j := range ctr.batWaitForSort.Vecs {
-				ctr.batWaitForSort.Vecs[j].RollbackAppend(
-					checkpoints[j], bat.Vecs[j].Length())
+				err = vector.JoinAppendRollbackError(err, ctr.batWaitForSort.Vecs[j].RollbackAppend(checkpoints[j], bat.Vecs[j].Length()))
 			}
 			return err
 		}

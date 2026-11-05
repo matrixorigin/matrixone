@@ -253,6 +253,13 @@ Device kernels around the matmul, on the engine's stream:
   applies the global scales in double; another shape can select another cuBLASLt algorithm and
   fp32 summation order. `MatchesNvidiaBlockScaledGemm` in `cgo/cuvs/test/blockscaled_matmul_test.cu`
   checks it.
+- The Python SDK's `matrixone.vecblock.scaled_mm` runs `torch._scaled_mm` with alpha = 1 and
+  applies the global scales as the fix-up kernel does: the fp32 GEMM output × `g_row` ×
+  `g_query` in double, rounded once to fp32 (`test_scaled_mm_applies_global_scales_in_double`).
+  When PyTorch and the engine run the same cuBLASLt algorithm, the inner products equal
+  `vector_matmul` on the GPU bit for bit for both formats; `example_38_pytorch_gpu_scaled_mm.py`
+  measures it on 4096 `vecf8(256)` / `vecf4(256)` rows × 64 queries (sm_120, PyTorch 2.9.1,
+  CUDA 13.0).
 
 Two ways to read a tile's scores, both after the fix-up kernel:
 
