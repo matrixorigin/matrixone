@@ -451,7 +451,7 @@ func TestDedupLoadLateWaiterSharesCompletedTakeover(t *testing.T) {
 			require.True(t, waitForDedupLoadCompletion(fastDone))
 			require.ErrorIs(t, fastErr, tc.loadErr)
 			require.Equal(t, int32(1), fastLoads.Load())
-			_, cached := metaCache.Get(context.Background(), key)
+			_, cached := getMeta(key)
 			require.Equal(t, tc.capacity > int64(len(value)) && tc.loadErr == nil, cached)
 
 			// A terminal cohort must not retain a negative cache or let an old
@@ -506,7 +506,7 @@ func TestDedupLoadRechecksCacheBeforeElection(t *testing.T) {
 	key[0] = 104
 	ctx := context.Background()
 	value := []byte("already cached metadata")
-	metaCache.Set(ctx, key, value, int64(len(value)))
+	metaCache.Set(key, value, int64(len(value)))
 	loads := 0
 	got, err := dedupLoad(ctx, key, func() ([]byte, error) {
 		loads++

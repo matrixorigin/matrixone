@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package lrucache is a size-bounded cache with least-recently-used eviction, with the
-// methods and callbacks of fifocache.Cache.
+// methods and callbacks of a DiskCache index.
 package lrucache
 
 import (
@@ -53,7 +53,7 @@ type evicted[K comparable, V any] struct {
 	finish func()
 }
 
-// NewWithPrepareEvict returns a cache with the callbacks of fifocache.NewWithPrepareEvict:
+// NewWithPrepareEvict returns a cache with the callbacks of a DiskCache index:
 // prepareEvict runs for Delete and eviction while the item is removed, and the cleanup it
 // returns runs once after postEvict, outside the cache's lock. Replace does not invoke
 // prepareEvict. keyShardFunc is accepted for the same signature and not used.

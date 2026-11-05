@@ -34,9 +34,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/s3fifo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -86,6 +86,9 @@ type DiskCache struct {
 	beforeFilePublication func()
 	// beforeCacheDirFileOpen is a test-only hook between the files of one entry open.
 	beforeCacheDirFileOpen func()
+	// beforeEvictionStart is a test-only hook between an entry leaving the index and its
+	// eviction starting.
+	beforeEvictionStart func(path string)
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -143,7 +146,7 @@ type diskCacheOptions struct {
 }
 
 // diskCacheIndex accounts for the entries of a DiskCache and evicts them: a
-// fifocache.Cache, or an lrucache.Cache for an IndexFileCache.
+// diskIndex, or an lrucache.Cache for an IndexFileCache.
 type diskCacheIndex interface {
 	Set(ctx context.Context, key string, value struct{}, size int64) (inserted bool, rejected bool)
 	Get(ctx context.Context, key string) (struct{}, bool)
@@ -156,9 +159,84 @@ type diskCacheIndex interface {
 }
 
 var (
-	_ diskCacheIndex = (*fifocache.Cache[string, struct{}])(nil)
+	_ diskCacheIndex = diskIndex{}
 	_ diskCacheIndex = (*lrucache.Cache[string, struct{}])(nil)
 )
+
+// diskIndex is an S3-FIFO diskCacheIndex.
+type diskIndex struct {
+	c *s3fifo.Cache[string, diskFile]
+}
+
+// diskFile is a cached file, which needs no reference counting.
+type diskFile struct{}
+
+func (diskFile) Retain()  {}
+func (diskFile) Release() {}
+
+// newDiskIndex returns a diskIndex with the callbacks of lrucache.NewWithPrepareEvict, but for
+// the key shard function, which it uses as the hash.
+func newDiskIndex(
+	capacity fscache.CapacityFunc,
+	hash func(string) uint64,
+	postSet func(ctx context.Context, key string, value struct{}, size int64, seq uint64),
+	prepareEvict func(key string, value struct{}, size int64, seq uint64) func(),
+	postEvict func(ctx context.Context, key string, value struct{}, size int64, seq uint64),
+) diskIndex {
+	return diskIndex{c: s3fifo.New(s3fifo.Options[string, diskFile]{
+		Capacity: capacity,
+		Hash:     hash,
+		OnInsert: func(key string, _ diskFile, size int64, seq uint64) {
+			postSet(context.Background(), key, struct{}{}, size, seq)
+		},
+		OnRemove: func(key string, _ diskFile, size int64, seq uint64, reason s3fifo.Reason) {
+			var finish func()
+			if reason != s3fifo.Replaced {
+				finish = prepareEvict(key, struct{}{}, size, seq)
+			}
+			if finish != nil {
+				defer finish()
+			}
+			postEvict(context.Background(), key, struct{}{}, size, seq)
+		},
+	})}
+}
+
+func (x diskIndex) Set(_ context.Context, key string, _ struct{}, size int64) (bool, bool) {
+	return x.c.Set(key, diskFile{}, size)
+}
+
+func (x diskIndex) Get(_ context.Context, key string) (struct{}, bool) {
+	_, _, ok, _ := x.c.Get(key, nil)
+	return struct{}{}, ok
+}
+
+func (x diskIndex) Contains(key string) bool { return x.c.Contains(key) }
+
+func (x diskIndex) Delete(_ context.Context, key string) { x.c.Delete(key) }
+
+func (x diskIndex) Replace(_ context.Context, key string, _ struct{}, size int64) bool {
+	return x.c.Replace(key, diskFile{}, size)
+}
+
+// Evict evicts to the capacity less capacityCut and, when done is not nil, sends it that target.
+func (x diskIndex) Evict(ctx context.Context, done chan int64, capacityCut int64) {
+	target := max(x.c.Capacity()-capacityCut, 0)
+	x.c.EvictTo(ctx, target)
+	if done != nil {
+		done <- target
+	}
+}
+
+// ForceEvictWithWait evicts n bytes, or down to the capacity if that is lower.
+func (x diskIndex) ForceEvictWithWait(ctx context.Context, n int64) int64 {
+	if n <= 0 {
+		return x.c.Used()
+	}
+	return x.c.EvictTo(ctx, min(x.c.Used()-n, x.c.Capacity()))
+}
+
+func (x diskIndex) Used() int64 { return x.c.Used() }
 
 func newDiskCache(
 	ctx context.Context,
@@ -215,6 +293,9 @@ func newDiskCache(
 		capacityBytes.Set(float64(capacityFunc()))
 	}
 	prepareEvict := func(path string, _ struct{}, size int64, _ uint64) func() {
+		if ret.beforeEvictionStart != nil {
+			ret.beforeEvictionStart(path)
+		}
 		doneUpdate, ok := ret.startEviction(path, size)
 		if !ok {
 			return nil
@@ -244,7 +325,7 @@ func newDiskCache(
 		lru.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
 		ret.cache = lru
 	} else {
-		ret.cache = fifocache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
+		ret.cache = newDiskIndex(capacityFunc, keyShard, postSet, prepareEvict, postEvict)
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)
