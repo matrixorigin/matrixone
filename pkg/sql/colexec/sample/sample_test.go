@@ -637,3 +637,46 @@ func TestSamplePoolOthers(t *testing.T) {
 	require.Equal(t, false, s2.canCheckFull)
 	require.Equal(t, false, s3.canCheckFull)
 }
+
+// TestSamplePoolLowPrecisionFloats samples 3 of 20 rows of a bf16, float16, float8 and float4
+// column, which replaces pooled rows once the pool is full.
+func TestSamplePoolLowPrecisionFloats(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		t.Run(oid.String(), func(t *testing.T) {
+			b := batch.NewWithSize(1)
+			b.Vecs[0] = vector.NewVec(oid.ToType())
+			for i := 0; i < 20; i++ {
+				v := float32(i%6) - 2
+				var err error
+				switch oid {
+				case types.T_bf16:
+					err = vector.AppendFixed(b.Vecs[0], types.BF16FromFloat32(v), false, proc.Mp())
+				case types.T_float16:
+					err = vector.AppendFixed(b.Vecs[0], types.Float16FromFloat32(v), false, proc.Mp())
+				case types.T_float8:
+					err = vector.AppendFixed(b.Vecs[0], types.Float8FromFloat32(v), false, proc.Mp())
+				default:
+					err = vector.AppendFixed(b.Vecs[0], types.Float4FromFloat32(v), false, proc.Mp())
+				}
+				require.NoError(t, err)
+			}
+			b.SetRowCount(20)
+			defer b.Clean(proc.Mp())
+
+			pool := newSamplePoolByRows(proc, 3, 1, false)
+			defer pool.Free()
+			require.NoError(t, pool.sampleFromColumn(1, b.Vecs[0], b))
+			out, err := pool.Result(true)
+			require.NoError(t, err)
+			defer out.Clean(proc.Mp())
+			require.Equal(t, 3, out.Vecs[0].Length())
+			for i := 0; i < 3; i++ {
+				v, ok := vector.GetLowPrecisionFloatAt(out.Vecs[0], i)
+				require.True(t, ok)
+				require.Contains(t, []float32{-2, -1, 0, 1, 2, 3}, v)
+			}
+		})
+	}
+}

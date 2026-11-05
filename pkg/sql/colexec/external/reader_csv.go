@@ -370,6 +370,12 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			res[attr.ColFieldIndex] = csvparser.Field{Val: string(data)}
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res[attr.ColFieldIndex] = csvparser.Field{Val: text}
+			continue
+		}
 
 		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
@@ -430,6 +436,12 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			res = append(res, csvparser.Field{Val: string(data)})
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res = append(res, csvparser.Field{Val: text})
+			continue
+		}
 
 		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
@@ -438,6 +450,61 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		res = append(res, csvparser.Field{Val: val})
 	}
 	return res, nil
+}
+
+// vecBlockJSONText returns the JSON text of an object value of a vecf8/vecf4 column, the
+// exact form of the cell.
+func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
+	if !types.T(tp).IsBlockScaledArray() {
+		return "", false, nil
+	}
+	if g, ok := valN.V.(*bytejson.Group); !ok || !g.Obj {
+		return "", false, nil
+	}
+	var text strings.Builder
+	if err := writeJSONLexemes(&text, valN); err != nil {
+		return "", false, err
+	}
+	return text.String(), true, nil
+}
+
+// writeJSONLexemes writes a parsed JSON value as JSON text, numbers as their original
+// lexemes (-0 stays -0).
+func writeJSONLexemes(text *strings.Builder, node bytejson.Node) error {
+	switch v := node.V.(type) {
+	case *bytejson.Group:
+		lb, rb := byte('['), byte(']')
+		if v.Obj {
+			lb, rb = '{', '}'
+		}
+		text.WriteByte(lb)
+		for i, child := range v.Values {
+			if i > 0 {
+				text.WriteByte(',')
+			}
+			if v.Obj {
+				key, err := json.Marshal(v.Keys[i])
+				if err != nil {
+					return err
+				}
+				text.Write(key)
+				text.WriteByte(':')
+			}
+			if err := writeJSONLexemes(text, child); err != nil {
+				return err
+			}
+		}
+		text.WriteByte(rb)
+	case json.Number:
+		text.WriteString(v.String())
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		text.Write(b)
+	}
+	return nil
 }
 
 func (r *CsvReader) legacyJSONBinary() bool {
@@ -449,7 +516,7 @@ func (r *CsvReader) legacyJSONBinary() bool {
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
 func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T, legacyBinary bool) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
-	if !typ.IsArrayRelate() || !ok || group.Obj {
+	if !(typ.IsArrayRelate() || typ.IsBlockScaledArray()) || !ok || group.Obj {
 		//#30635: JSONLINE OUTFILE writes binary columns wrapped as
 		// {"$binary":"<base64>"} objects so the loader can tell MO-encoded
 		// binary payloads apart from plain-text JSON strings. Only the

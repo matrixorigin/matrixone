@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -64,6 +65,23 @@ type TableMetaReader struct {
 	immutableOnly bool
 	maxObjects    int
 	objectCount   int
+
+	// sinkerOption is the RECORDING transaction's per-object admission
+	// option (round-32 review, finding 2): the materializing writers this
+	// reader builds persist brand-new objects whose metadata the clone's
+	// destination relation records into the RECORDING transaction's
+	// workspace, so both writer families join the same capacity bound the
+	// other producers reserve under BEFORE anything goes durable — a
+	// saturated ledger refuses the spill with nothing half-persisted
+	// behind it. The option deliberately does NOT come from
+	// r.table.getTxn(): a snapshot-source clone reads through a snapshot
+	// operator, so sourcing it from the source table would park the
+	// reservations on a workspace that never records the metadata and
+	// whose terminal drain cannot convert them. table_clone passes the
+	// destination (recording) transaction's option through the
+	// constructor; an unbound reader keeps the pre-fix unhooked writers,
+	// exactly like the other producer families' forward-compat stance.
+	sinkerOption ioutil.SinkerOption
 }
 
 func (r *TableMetaReader) GetTableDef() *plan.TableDef {
@@ -98,8 +116,9 @@ func (r *TableMetaReader) addCloneSharedFile(
 func NewTableMetaReader(
 	ctx context.Context,
 	rel engine.Relation,
+	sinkerOpts ...ioutil.SinkerOption,
 ) (engine.Reader, error) {
-	return newTableMetaReader(ctx, rel, false)
+	return newTableMetaReader(ctx, rel, false, sinkerOpts...)
 }
 
 // NewImmutableTableMetaReader returns table metadata only when every visible
@@ -122,6 +141,7 @@ func newTableMetaReader(
 	ctx context.Context,
 	rel engine.Relation,
 	immutableOnly bool,
+	sinkerOpts ...ioutil.SinkerOption,
 ) (engine.Reader, error) {
 
 	var (
@@ -156,6 +176,10 @@ func newTableMetaReader(
 		return nil, err
 	}
 
+	var sinkerOption ioutil.SinkerOption
+	if len(sinkerOpts) > 0 {
+		sinkerOption = sinkerOpts[0]
+	}
 	return &TableMetaReader{
 		fs:        fs,
 		snapshot:  snapshot,
@@ -165,7 +189,25 @@ func newTableMetaReader(
 		pState: pState,
 
 		immutableOnly: immutableOnly,
+
+		sinkerOption: sinkerOption,
 	}, nil
+}
+
+// sinkerOptions carries the option to the materializing writers ONLY
+// when one is bound (round-33 review, finding 1): a nil option - the
+// exported constructor's defaulted form, or the explicit nil a
+// workspace without the owner surface resolves to - means the pre-fix
+// HOOKLESS writer. ioutil.NewSinker's option loop calls every element
+// without a nil check, so forwarding a nil option as a one-element
+// slice would panic the reader entering either materializing phase,
+// before any row knows whether it needs materialization; spreading a
+// nil slice passes exactly the pre-fix zero-option construction.
+func (r *TableMetaReader) sinkerOptions() []ioutil.SinkerOption {
+	if r.sinkerOption == nil {
+		return nil
+	}
+	return []ioutil.SinkerOption{r.sinkerOption}
 }
 
 func (r *TableMetaReader) Read(
@@ -449,6 +491,14 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 
 	s3Writer = colexec.NewCNS3DataWriterForService(
 		r.table.getTxn().proc.GetService(), mp, r.fs, r.table.tableDef, -1, false,
+		// round-32 review, finding 2: the data-materializing family joins
+		// the recording transaction's per-object admission - one
+		// in-flight unit per object BEFORE it goes durable, converted by
+		// the same record choke that admits the destination relation's
+		// metadata batch (issue #25590 invariant I4). The spread skips
+		// the option when nil so an unbound reader keeps its hookless
+		// pre-fix writer (round-33 review, finding 1).
+		r.sinkerOptions()...,
 	)
 	defer func() {
 		if dataReader != nil {
@@ -523,6 +573,14 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 
 	s3Writer = colexec.NewCNS3TombstoneWriterForService(
 		r.table.getTxn().proc.GetService(), mp, r.fs, colTypes[1], -1,
+		// round-32 review, finding 2: the tombstone-materializing family
+		// joins the recording transaction's per-object admission through
+		// the SAME option the data family carries - both writers a
+		// materializing pass builds reserve before persistence and the
+		// record choke converts (issue #25590 invariant I4). The spread
+		// skips the option when nil so an unbound reader keeps its
+		// hookless pre-fix writer (round-33 review, finding 1).
+		r.sinkerOptions()...,
 	)
 
 	defer func() {
