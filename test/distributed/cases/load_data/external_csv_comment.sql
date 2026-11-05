@@ -48,6 +48,23 @@ infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='cs
 fields terminated by ',' lines starting by 'REM';
 select a, b, __mo_file_line from t_start order by a;
 
+-- LOAD must count data records after skipping comments in both modes.
+create table t_load(a varchar(20), b varchar(20));
+load data infile {'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'} into table t_load fields terminated by ',' ignore 1 lines parallel 'false';
+select a, b from t_load order by a;
+truncate table t_load;
+load data infile {'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'} into table t_load fields terminated by ',' ignore 1 lines parallel 'true';
+select a, b from t_load order by a;
+truncate table t_load;
+-- IGNORE 0 preserves the first data record.
+load data infile {'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'} into table t_load fields terminated by ',' ignore 0 lines parallel 'true';
+select a, b from t_load order by a;
+truncate table t_load;
+-- Without COMMENT, IGNORE 1 consumes the first physical record.
+load data infile {'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv'} into table t_load fields terminated by ',' ignore 1 lines parallel 'true';
+select a, b from t_load order by a;
+drop table t_load;
+
 drop table if exists t_start;
 drop table if exists t_default;
 drop table if exists t_hash;

@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -1452,14 +1453,17 @@ func (t testErr) Error() string {
 func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
 	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	// MySQL's default (innodb_rollback_on_timeout=OFF) scopes an expired lock
+	// wait to the failing statement only; the transaction stays open, so the
+	// local and remote lock-wait-timeout codes are NOT whole-transaction fatal.
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRetryForCNRollingRestart()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
-	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
+	assert.Equal(t, false, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnUnknown(context.Background(), "test")))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
@@ -3080,8 +3084,10 @@ func Test_isLegal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equalf(t, tt.want, accountNameIsLegal(tt.args.name), "accountNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, dbNameIsLegal(tt.args.name), "dbNameIsLegal(%v)", tt.args.name)
-			assert.Equalf(t, tt.want, tableNameIsLegal(tt.args.name), "tableNameIsLegal(%v)", tt.args.name)
+			_, _, dbErr := CDCParseTableInfo(context.Background(), tt.args.name, cdc.CDCPitrGranularity_DB)
+			assert.Equalf(t, tt.want, dbErr == nil, "dbNameIsLegal(%v)", tt.args.name)
+			_, _, tableErr := CDCParseTableInfo(context.Background(), "*."+tt.args.name, cdc.CDCPitrGranularity_Table)
+			assert.Equalf(t, tt.want, tableErr == nil, "tableNameIsLegal(%v)", tt.args.name)
 		})
 	}
 }
@@ -3131,8 +3137,10 @@ func Test_islegal(t *testing.T) {
 
 func Test_accountNameIsLegal(t *testing.T) {
 	assert.False(t, accountNameIsLegal(",."))
-	assert.False(t, dbNameIsLegal(",."))
-	assert.False(t, tableNameIsLegal(",."))
+	_, _, dbErr := CDCParseTableInfo(context.Background(), ",.", cdc.CDCPitrGranularity_DB)
+	assert.Error(t, dbErr)
+	_, _, tableErr := CDCParseTableInfo(context.Background(), "*.,.", cdc.CDCPitrGranularity_Table)
+	assert.Error(t, tableErr)
 }
 
 func Test_replaceStr2(t *testing.T) {
@@ -3657,6 +3665,49 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
+}
+
+// TestLowPrecFloatFrontendPaths covers the frontend value paths for the scalar
+// low-precision float types (#20567): getValueFromVector (const scalar), the legacy
+// extractRowFromVector row path, and convertEngineTypeToMysqlType (presented as FLOAT).
+func TestLowPrecFloatFrontendPaths(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	ctx := context.Background()
+
+	cases := []struct {
+		oid types.T
+		app func(*vector.Vector, float32)
+	}{
+		{types.T_bf16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.BF16FromFloat32(f), false, mp) }},
+		{types.T_float16, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float16FromFloat32(f), false, mp) }},
+		{types.T_float8, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float8FromFloat32(f), false, mp) }},
+		{types.T_float4, func(v *vector.Vector, f float32) { vector.AppendFixed(v, types.Float4FromFloat32(f), false, mp) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// convertEngineTypeToMysqlType -> FLOAT.
+			col := &MysqlColumn{}
+			require.NoError(t, convertEngineTypeToMysqlType(ctx, c.oid, col))
+			require.Equal(t, defines.MYSQL_TYPE_FLOAT, col.ColumnType())
+
+			// getValueFromVector widens a const scalar to float32.
+			cv := vector.NewVec(c.oid.ToType())
+			defer cv.Free(mp)
+			c.app(cv, 1.5)
+			got, err := getValueFromVector(ctx, cv, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, float32(1.5), got)
+
+			// extractRowFromVector (legacy any-row path) yields float32.
+			rv := vector.NewVec(c.oid.ToType())
+			defer rv.Free(mp)
+			c.app(rv, -2.0)
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, nil, rv, 0, row, 0, false))
+			require.Equal(t, float32(-2.0), row[0])
+		})
+	}
 }
 
 func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {

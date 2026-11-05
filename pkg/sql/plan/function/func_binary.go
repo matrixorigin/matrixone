@@ -377,7 +377,8 @@ var ScaleTable = [...]uint64{
 	10000000000000000000, // 1 followed by 19 zeros, maxUint64 number has 20 digits, so the max scale is 1 followed by 19 zeroes
 }
 
-func floorUint64(x uint64, digits int64) uint64 {
+// truncateUnsignedDigits serves FLOOR and TRUNCATE for nonnegative integers.
+func truncateUnsignedDigits(x uint64, digits int64) uint64 {
 	switch {
 	case digits >= 0:
 		return x
@@ -391,7 +392,7 @@ func floorUint64(x uint64, digits int64) uint64 {
 }
 
 func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("floor", ivecs, result, proc, length, floorUint64, selectList)
+	return generalMathMulti("floor", ivecs, result, proc, length, truncateUnsignedDigits, selectList)
 }
 
 func floorInt64(x int64, digits int64) int64 {
@@ -671,21 +672,8 @@ func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 // TRUNCATE function implementations
 // TRUNCATE truncates a number to D decimal places without rounding
-func truncateUint64(x uint64, digits int64) uint64 {
-	switch {
-	case digits >= 0:
-		return x
-	case digits > -MaxUint64digits:
-		scale := ScaleTable[-digits]
-		x = x / scale * scale // truncate without rounding
-	case digits <= -MaxUint64digits:
-		x = 0
-	}
-	return x
-}
-
 func TruncateUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUint64, selectList)
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUnsignedDigits, selectList)
 }
 
 func truncateInt64(x int64, digits int64) int64 {
@@ -1331,6 +1319,34 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, coalesceValueArgument, coalesceCheckTypes)
+}
+
+func coalesceValueArgument(_, _ int) bool {
+	return true
+}
+
+func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, func(int) bool { return true }); ok {
+		return castFromWidened(coalesceCheck(overloads, widened), widened)
+	}
+	if target, ok := sameLowPrecisionFloatType(inputs); ok {
+		for i, over := range overloads {
+			if over.args[0] != target.Oid {
+				continue
+			}
+			castTypes := make([]types.Type, len(inputs))
+			aligned := true
+			for j, input := range inputs {
+				castTypes[j] = target
+				aligned = aligned && input.Oid == target.Oid
+			}
+			if aligned {
+				return newCheckResultWithSuccess(i)
+			}
+			return newCheckResultWithCast(i, castTypes)
+		}
+	}
 	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -1784,42 +1800,31 @@ func convertTimezone(tz string) *time.Location {
 	if tz == "" {
 		return nil
 	}
-
-	loc, err := time.LoadLocation(tz)
-	if err != nil && tz[0] != '+' && tz[0] != '-' {
-		return nil
-	}
-	// convert from timezone offset to location
-	if tz[0] == '+' || tz[0] == '-' {
-		parts := strings.Split(tz, ":")
-		if len(parts) != 2 {
-			return nil
-		}
-		hours, err := strconv.Atoi(parts[0])
+	if tz[0] != '+' && tz[0] != '-' {
+		loc, err := time.LoadLocation(tz)
 		if err != nil {
 			return nil
-		} else if hours < -13 || hours > 14 { // timezone should be in [-13:59, +14:00]
-			return nil
 		}
-		minutes, err := strconv.Atoi(parts[1])
-		if err != nil || minutes < 0 || minutes > 59 {
-			return nil
-		}
-		if (hours == 14 && minutes != 0) || (hours == -13 && minutes > 59) || hours < -13 {
-			return nil
-		}
-		if tz[0] == '-' {
-			minutes = -minutes
-		}
-		if tz[0] == '-' && hours == -14 {
-			return nil
-		}
-
-		offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
-		loc = time.FixedZone("GMT", int(offset.Seconds()))
+		return loc
 	}
 
-	return loc
+	hourPart, minutePart, found := strings.Cut(tz, ":")
+	if !found || strings.Contains(minutePart, ":") {
+		return nil
+	}
+	hours, err := strconv.Atoi(hourPart)
+	if err != nil || hours < -13 || hours > 14 {
+		return nil
+	}
+	minutes, err := strconv.Atoi(minutePart)
+	if err != nil || minutes < 0 || minutes > 59 || (hours == 14 && minutes != 0) {
+		return nil
+	}
+	if tz[0] == '-' {
+		minutes = -minutes
+	}
+	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	return time.FixedZone("GMT", int(offset.Seconds()))
 }
 
 // Arithmetic consumers distinguish invalid input from a valid computation
@@ -2713,8 +2718,10 @@ func dateStringInterval(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
+		// Match ParseDatetime normalization after success; diagnostics above use the raw input.
+		text = strings.TrimSpace(text)
 		// Compact 14-digit calendars carry a clock even without separators.
-		hasTimePart := strings.ContainsAny(text, " :") || len(text) >= 14 && isAllDigits(text)
+		hasTimePart := strings.ContainsAny(text, " :T") || len(text) >= 14 && isAllDigits(text[:14])
 		var formatted string
 		if !hasTimePart && !isTimeUnit {
 			formatted = dt.ToDate().String()
@@ -4066,7 +4073,7 @@ func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, erro
 	// to scan the suffix or allocate a string: the first non-digit terminates
 	// the prefix, and the bounded accumulator can decide overflow in one pass.
 	pos := 0
-	for pos < len(n) && isConvWhitespace(n[pos]) {
+	for pos < len(n) && isMySQLNumericWhitespace(n[pos]) {
 		pos++
 	}
 
@@ -4148,15 +4155,6 @@ func convDigitValue(ch byte) (uint8, bool) {
 		return ch - 'a' + 10, true
 	default:
 		return 0, false
-	}
-}
-
-func isConvWhitespace(ch byte) bool {
-	switch ch {
-	case ' ', '\t', '\n', '\v', '\f', '\r':
-		return true
-	default:
-		return false
 	}
 }
 
@@ -4552,9 +4550,44 @@ func appendTimeIntervalOverflowWarning(proc *process.Process) {
 	}
 }
 
+// timeArithmeticResult computes the ADDTIME/SUBTIME TIME-domain result and
+// clamps values beyond the MySQL TIME boundary to +-MySQLTimeMax, matching the
+// CAST-to-TIME path instead of discarding the computed duration as NULL.
+// The returned bool reports that clamping happened.
 func timeArithmeticResult(first, second types.Time, subtract bool) (types.Time, bool) {
-	result, overflow, _ := doTimeInterval(first, int64(second), types.MicroSecond, subtract)
-	return result, overflow
+	delta := int64(second)
+	if subtract {
+		if delta == math.MinInt64 {
+			// first - MinInt64 == first + 2^63 is never negative, so move the
+			// subtraction once into uint64 space where the exact result
+			// cannot overflow again. Only first within
+			// [MinInt64, MinInt64+MySQLTimeMax] stays inside the TIME range;
+			// the 2^63 offset is the exact unsigned form of -MinInt64.
+			sum64 := uint64(int64(first)) + (uint64(1) << 63)
+			if sum64 <= uint64(types.MySQLTimeMax) {
+				return types.Time(sum64), false
+			}
+			return types.MySQLTimeMax, true
+		}
+		delta = -delta
+	}
+	sum, ok := safeTimestampWindowSum(int64(first), delta)
+	if !ok {
+		// An int64 overflow needs same-sign operands, so the direction of the
+		// out-of-range result stays unambiguous.
+		if int64(first) < 0 || delta < 0 {
+			return -types.MySQLTimeMax, true
+		}
+		return types.MySQLTimeMax, true
+	}
+	value := types.Time(sum)
+	if value >= -types.MySQLTimeMax && value <= types.MySQLTimeMax {
+		return value, false
+	}
+	if value < 0 {
+		return -types.MySQLTimeMax, true
+	}
+	return types.MySQLTimeMax, true
 }
 
 // Both operands may use the wider internal duration domain; only the final
@@ -4619,13 +4652,9 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			resultTime, overflow := timeArithmeticResult(time1, time2, false)
-			if overflow {
+			resultTime, clamped := timeArithmeticResult(time1, time2, false)
+			if clamped {
 				appendTimeIntervalOverflowWarning(proc)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
@@ -4876,13 +4905,9 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			resultTime, overflow := timeArithmeticResult(time1, time2, true)
-			if overflow {
+			resultTime, clamped := timeArithmeticResult(time1, time2, true)
+			if clamped {
 				appendTimeIntervalOverflowWarning(proc)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
@@ -4980,7 +5005,14 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			fmt = functionUtil.QuickBytesToStr(fmtBytes)
 			null2 = null
 		}
-		if null1 || null2 || len(fmt) == 0 || (stringsInput != nil && len(value) == 0) {
+		if null1 || null2 || len(fmt) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else if stringsInput != nil && len(value) == 0 {
+			if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+			}
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4996,9 +5028,10 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				} else {
 					d, err = types.ParseDatetime(text, 6)
 					if err != nil {
-						// Keep the normal string-to-datetime expression cast policy:
-						// malformed values are NULL without statement diagnostics.
 						if isTemporalLexicalConversionError(err) {
+							if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+								appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+							}
 							if err = rs.AppendBytes(nil, true); err != nil {
 								return err
 							}
@@ -7130,6 +7163,9 @@ func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, is
 		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
 	case types.T_float32:
 		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(v, idx)
+		return strconv.FormatFloat(float64(f), 'g', -1, 64), false, false, nil
 	case types.T_float64:
 		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
 	case types.T_decimal64:
@@ -7210,27 +7246,6 @@ func FloatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
 	return sec, microseconds * 1_000, true
 }
 
-func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
-	if v.Sign() {
-		if v.B64_127 != ^uint64(0) || v.B128_191 != ^uint64(0) || v.B192_255 != ^uint64(0) {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		if v.B0_63 < 0x8000000000000000 {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		negated := v.Minus()
-		return -int64(negated.B0_63), nil
-	}
-
-	if v.B64_127 != 0 || v.B128_191 != 0 || v.B192_255 != 0 {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	return int64(v.B0_63), nil
-}
-
 func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
 	if n < 0 {
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
@@ -7263,7 +7278,7 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	if err != nil {
 		return 0, 0, false, nil
 	}
-	sec, err = decimal256ToInt64ForUnix(whole)
+	sec, err = decimal256ToInt64(whole)
 	if err != nil {
 		return 0, 0, false, nil
 	}
@@ -7319,7 +7334,7 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	if err != nil {
 		return 0, 0, false, err
 	}
-	microseconds, err := decimal256ToInt64ForUnix(frac)
+	microseconds, err := decimal256ToInt64(frac)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -7750,38 +7765,41 @@ func substringBounds(total int, start, length int64, withLength bool) (left, rig
 }
 
 func subStrIndex(str, delim string, count int64) (string, error) {
-	// if the length of delim is 0, return empty string
-	if len(delim) == 0 {
+	if len(delim) == 0 || count == 0 {
 		return "", nil
 	}
-	// if the count is 0, return empty string
-	if count == 0 {
-		return "", nil
-	}
-
-	partions := strings.Split(str, delim)
-	start, end := int64(0), int64(len(partions))
-
 	if count > 0 {
-		//is count is positive, reset the end position
-		if count < end {
-			end = count
-		}
-	} else {
-		count = -count
-
-		// -count overflows max int64, return the whole string.
-		if count < 0 {
-			return str, nil
-		}
-
-		//if count is negative, reset the start postion
-		if count < end {
-			start = end - count
+		offset := 0
+		for remaining := count; ; remaining-- {
+			i := strings.Index(str[offset:], delim)
+			if i < 0 {
+				return str, nil
+			}
+			offset += i
+			if remaining == 1 {
+				return str[:offset], nil
+			}
+			offset += len(delim)
 		}
 	}
-	subPartions := partions[start:end]
-	return strings.Join(subPartions, delim), nil
+	if count == math.MinInt64 {
+		return str, nil
+	}
+	// Count from the left before selecting a suffix. Searching backwards
+	// directly would choose different occurrences for overlapping delimiters.
+	occurrences := int64(strings.Count(str, delim))
+	wanted := -count
+	if wanted > occurrences {
+		return str, nil
+	}
+	offset := 0
+	for remaining := occurrences - wanted; ; remaining-- {
+		i := strings.Index(str[offset:], delim)
+		offset += i + len(delim)
+		if remaining == 0 {
+			return str[offset:], nil
+		}
+	}
 }
 
 func getCount[T number](typ types.Type, val T) int64 {
@@ -7852,7 +7870,7 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
-func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
@@ -7865,6 +7883,12 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		shaType, isnull2 := shaTypes.GetValue(i)
 
 		if isnull1 || isnull2 {
@@ -7895,7 +7919,7 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 // as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
 // string wrapper preserves binary bytes and avoids the lossy implicit cast to
 // VARCHAR that would otherwise happen before execution.
-func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaLengths := vector.GenerateFunctionStrParameter(args[1])
@@ -7918,6 +7942,12 @@ func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		var isnull2 bool
 		var shaType int64
 		if lengthIsConst {
@@ -8680,12 +8710,16 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 		if strlist == "" {
 			return toResult(0)
 		}
-		for j, s := range strings.Split(strlist, ",") {
-			if s == str {
-				return toResult(uint64(j + 1))
+		for position := uint64(1); ; position++ {
+			member, rest, more := strings.Cut(strlist, ",")
+			if member == str {
+				return toResult(position)
 			}
+			if !more {
+				return toResult(0)
+			}
+			strlist = rest
 		}
-		return toResult(0)
 	}
 
 	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)
@@ -10680,11 +10714,10 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	//
 	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
 	// float32-out by construction), which is the domain the scalar path answers in for float32
-	// elements. The two are NOT bit-identical for Metric_L2Distance: this path resolves
-	// L2DistanceSq[float32], which accumulates the square in float32, while the scalar
-	// moarray.L2Distance accumulates in float64 (l2DistanceF64, #29083). Measured at dim 768,
-	// 313 of 2000 random pairs differ, by at most 1.2e-07 relative -- one float32 ULP, the
-	// rounding this domain already carries. For float64 the resolver
+	// elements. The two are not guaranteed bit-identical for Metric_L2Distance: this path
+	// resolves L2DistanceSq[float32] and takes the root, while the scalar moarray.L2Distance
+	// calls metric.L2Distance[T]; both sum in float32, in an order that can differ, so a
+	// result can differ by one float32 ULP, the rounding this domain already carries. For float64 the resolver
 	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
 	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
 	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.
@@ -11075,16 +11108,16 @@ func StFrechetDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionR
 }
 
 func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteFrechetDistancePlanar)
 }
 
 func stFrechetDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteFrechetDistanceBySRID)
 }
 
-func stFrechetDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
+func stDiscreteDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -11137,28 +11170,13 @@ func StHausdorffDistanceGeodetic32(ivecs []*vector.Vector, result vector.Functio
 }
 
 func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteHausdorffDistancePlanar)
 }
 
 func stHausdorffDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteHausdorffDistanceBySRID)
-}
-
-func stHausdorffDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
-	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
-	if err != nil {
-		return err
-	}
-	if emptyBatch {
-		return nil
-	}
-	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		d, err := distanceFn(v1, v2, srid)
-		return T(d), err
-	}, selectList)
 }
 
 // StHausdorffDistanceWithUnit is the geographic ST_HausdorffDistance overload

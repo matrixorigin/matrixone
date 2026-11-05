@@ -544,7 +544,7 @@ func TestTenantUpgradePassRunsMaintenanceOnlyAfterFinalVersion(t *testing.T) {
 			require.False(t, hasUpgradeTenants)
 			require.Equal(t, test.wantLookup, lookup)
 			if test.final {
-				require.Equal(t, 4, checkedExecutor.transactions) // upgrade selection plus three maintenance owners
+				require.Equal(t, 3, checkedExecutor.transactions) // upgrade selection plus two maintenance owners
 			} else {
 				require.Equal(t, 1, checkedExecutor.transactions)
 			}

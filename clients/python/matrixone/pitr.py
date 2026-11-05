@@ -24,6 +24,7 @@ from .exceptions import PitrError
 from ._sql_literals import sql_literal
 from .snapshot import _snapshot_lookup_name
 from .version import requires_version
+from ._utils import rows_from_result
 
 
 class Pitr:
@@ -367,10 +368,11 @@ class PitrManager:
             sql = f"SHOW PITR WHERE pitr_name = LOWER({sql_literal(_snapshot_lookup_name(name))})"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise PitrError(f"PITR '{name}' not found")
 
-            row = result.rows[0]
+            row = rows[0]
             return self._row_to_pitr(row)
 
         except Exception as e:
@@ -417,10 +419,11 @@ class PitrManager:
             sql = f"SHOW PITR{where_clause}"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            return [self._row_to_pitr(row) for row in result.rows]
+            return [self._row_to_pitr(row) for row in rows]
 
         except Exception as e:
             raise PitrError(f"Failed to list PITRs: {e}") from e
@@ -676,10 +679,11 @@ class AsyncPitrManager:
             sql = f"SHOW PITR WHERE pitr_name = LOWER({sql_literal(_snapshot_lookup_name(name))})"
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise PitrError(f"PITR '{name}' not found")
 
-            row = result.rows[0]
+            row = rows[0]
             return self._row_to_pitr(row)
 
         except Exception as e:
@@ -713,10 +717,11 @@ class AsyncPitrManager:
             sql = f"SHOW PITR{where_clause}"
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            return [self._row_to_pitr(row) for row in result.rows]
+            return [self._row_to_pitr(row) for row in rows]
 
         except Exception as e:
             raise PitrError(f"Failed to list PITRs: {e}")

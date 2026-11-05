@@ -519,7 +519,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		CnCnt:   s.NodeInfo.CNCNT,
 		CnIdx:   s.NodeInfo.CNIDX,
 	}
-	ctx.pipe = p
 	ctx.scope = s
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
@@ -925,6 +924,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if len(t.ShuffleKeyColumns) > 0 {
+			return ctxId, nil, moerr.NewInternalErrorNoCtx("complete-key shuffle is coordinator-local")
+		}
 		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
 			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
 			// This appended wire opcode is deliberately unknown to pre-v33
@@ -1002,6 +1004,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
+			ExistenceOnly:          t.ExistenceOnly,
 			JoinType:               t.JoinType,
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
@@ -1649,6 +1652,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.HashJoin:
 		t := opr.GetHashJoin()
 		arg := hashjoin.NewArgument()
+		arg.ExistenceOnly = t.ExistenceOnly
 		arg.JoinType = t.JoinType
 		arg.IsRightJoin = t.IsRightJoin
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)

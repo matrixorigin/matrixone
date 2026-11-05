@@ -50,7 +50,7 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-		Data: data,
+		Keys: testutil.RuntimeKeyPayload(t, data),
 	}, mb)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: tag, UseMembershipFilter: true},
@@ -108,9 +108,9 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
 		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.RelationScanner = &scriptedRelationScanner{t: t}
+		sqlproc.RelationScanner = &scriptedRelationScanner{}
 		sqlproc.IvfHasMembershipFilter = true
-		sqlproc.IvfRuntimeFilterData = data
+		sqlproc.IvfRuntimeFilterData = testutil.RuntimeKeyPayload(t, data)
 		return sqlproc
 	}
 
@@ -131,7 +131,5 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 	require.False(t, exact)
 	require.True(t, empty)
 
-	sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
-	_, _, err = exactRelationMembershipScan(sqlproc)
-	require.Error(t, err)
+	testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 }

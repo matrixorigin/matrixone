@@ -45,8 +45,10 @@ never widened to float32 on its way to the index. A vector already in the type t
 is given to the HNSW library as it is; any other is converted to that type by MO, by value,
 exactly as IVF-Flat and IVF-PQ do. The library never receives a type other than the one the
 index stores, and one conversion rule per type is shared by build, sync and search. A finite element the
-stored type cannot hold (for example above 65504 for `float16`) is rejected, at build, sync
-and search, instead of being stored as infinity.
+stored type cannot hold (for example above 65504 for `float16`) is never stored as infinity.
+Its row is left out of the index and recorded as ignored, up to the index's `MAX_BAD_RECORDS`,
+past which a build fails and a sync stops (decisions of 2026-10-28 and 2026-10-30, see
+`20261028-index-ignored-rows.md`); a search vector with such an element is rejected.
 
 **D2 — The element type is chosen once.** `QUANTIZATION` is fixed at `CREATE INDEX`.
 Omitted, the index stores the column's own element type. REINDEX keeps it and rejects a new
@@ -118,7 +120,7 @@ rows it will receive, so a large capacity costs nothing on a small table.
 | C11 | A prefiltered search reports the exact-search threshold in `EXPLAIN VERBOSE` when it is positive and omits it when it is `0`; values outside `[0, 1e9]` are rejected. | C11 | `TestExplainSettings`, `TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan`, `TestHnswIterativeWidens` |
 | C12 | A prefiltered search whose qualifying rows are within the threshold returns the exact top-k of those rows, also on a sparse graph (small `m`, `ef_search`). | C12 | `TestFilteredSearchMembershipExact` (a sparse graph where the graph walk misses rows the exact search finds), `TestHnswSearchMembershipExactThreshold` |
 | C13 | Only an int8 / uint8 index has a dict table, which holds its range; the build trains it from a sample of a float column, or takes the type range of a `vecint8` / `vecuint8` column, and an index with no dict table reads no range. | C13 | `TestHnswCreateDict`, `TestHnswCreateEmptySource`, `TestHnswNeedsDict`, `TestGenBuildSQL`, `TestGenDeleteSQL` |
-| C14 | A finite vector element the stored type cannot hold fails the build or the search instead of being stored or compared as infinity. | C14 | `TestToStorage` |
+| C14 | A finite vector element the stored type cannot hold is never stored or compared as infinity: builds and syncs leave its row out of the index and record it as ignored up to `MAX_BAD_RECORDS`, and a search with it fails. | C14 | `TestToStorage`, `TestCheckStorable`, `TestHnswWriterIgnoresUnstorableVectors` |
 | C15 | `max_index_capacity` splits an index into models of at most that many rows, the last holding the rest; omitted, a model holds what fits 75% of available host memory. | C15 | `TestHnswCreateCapacity`, `TestBuildModelCapacity`, `TestPlanCapacity`, `TestSyncQuantizeBounds` (reserve) |
 | C16 | The build reads the source in one statement with no join: it counts, samples when needed, and streams the vectors; a failed read fails the build. | C16 | `TestHnswCreateBuildsFromSource`, `TestHnswCreateStreamError`, `TestBuildHnswCreate_WrongArgCount` |
 

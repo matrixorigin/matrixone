@@ -105,7 +105,7 @@ drop table test08;
 drop table if exists foreign01;
 drop table if exists foreign02;
 create table foreign01 (a int primary key, b varchar(5) unique key);
-create table foreign02 (a int ,b varchar(5), c int, foreign key(c) references foreign01(a));
+create table foreign02 (a int ,b varchar(5), c int, constraint fk_like_01 foreign key(c) references foreign01(a));
 insert into foreign01 values (101,'abc'),(102,'def');
 insert into foreign02 values (1,'zs1',101),(2,'zs2',102);
 drop table if exists foreign03;

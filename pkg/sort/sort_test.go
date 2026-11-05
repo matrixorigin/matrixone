@@ -186,6 +186,55 @@ func TestSortByVectorsUnicodeCollationUsesSecondaryKey(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
 }
 
+func TestSortByVectorsGeneralCICollation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	sorted := func(values []string, desc bool) []int64 {
+		vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
+		require.NoError(t, vector.AppendStringList(vec, values, nil, mp))
+		defer vec.Free(mp)
+		selectors := make([]int64, vec.Length())
+		for i := range selectors {
+			selectors[i] = int64(i)
+		}
+		SortByVectors(selectors, []*vector.Vector{vec}, []bool{desc}, []bool{false})
+		return selectors
+	}
+
+	// Issue #31174: under utf8mb4_general_ci, ORDER BY folds case per
+	// character, so letters interleave by their folded base letter.
+	require.Equal(t, []int64{1, 0, 2}, sorted([]string{"b", "A", "C"}, false))       // A, b, C
+	require.Equal(t, []int64{1, 0}, sorted([]string{"Z", "a"}, false))               // a, Z
+	require.Equal(t, []int64{0, 1, 2}, sorted([]string{"aaa", "BBB", "ccc"}, false)) // aaa, BBB, ccc
+	require.Equal(t, []int64{2, 0, 1}, sorted([]string{"b", "A", "C"}, true))        // C, b, A
+}
+
+func TestSortByVectorsGeneralCITieUsesSecondaryKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendStringList(first, []string{"ABC", "abc"}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []int64{2, 1}, nil, mp))
+
+	selectors := []int64{0, 1}
+	SortByVectors(selectors, []*vector.Vector{first, second}, []bool{false, false}, []bool{false, false})
+	require.Equal(t, []int64{1, 0}, selectors, "folded tie falls through to the secondary key")
+}
+
+func TestSortByVectorsKeepsByteOrderForBinaryCollations(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8MB4Bin, types.CharsetBinary, types.CharsetLegacy} {
+		mp := mpool.MustNewZero()
+		vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
+		require.NoError(t, vector.AppendStringList(vec, []string{"b", "A", "C"}, nil, mp))
+		selectors := []int64{0, 1, 2}
+		SortByVectors(selectors, []*vector.Vector{vec}, []bool{false}, []bool{false})
+		require.Equal(t, []int64{1, 2, 0}, selectors, "charset %d keeps byte order", charset)
+		vec.Free(mp)
+	}
+}
+
 func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
 	mp := mpool.MustNewZero()
 	physical := vector.NewVec(types.T_varchar.ToType())
@@ -640,4 +689,43 @@ func newTestCase(t *testing.T, desc bool, m *mpool.MPool, typ types.Type) testCa
 		proc: testutil.NewProcessWithMPool(t, "", m),
 		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
+}
+
+// TestSortLowPrecFloat verifies ORDER BY on the scalar low-precision float types sorts by
+// float VALUE, not raw bits: a negative value's raw uint bits exceed a positive's, so a
+// bit-wise sort would misorder them (#20567). Rows: [1.5, -2.0, 0.0].
+func TestSortLowPrecFloat(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	check := func(oid types.T, appended func(*vector.Vector)) {
+		t.Run(oid.String(), func(t *testing.T) {
+			require.True(t, IsSupportedType(oid))
+			vec := vector.NewVec(oid.ToType())
+			defer vec.Free(mp)
+			appended(vec)
+
+			// Ascending: -2.0 (row 1), 0.0 (row 2), 1.5 (row 0).
+			os := []int64{0, 1, 2}
+			Sort(false, false, false, os, vec)
+			require.Equal(t, []int64{1, 2, 0}, os, "asc %s", oid)
+
+			// Descending: 1.5, 0.0, -2.0.
+			os = []int64{0, 1, 2}
+			Sort(true, false, false, os, vec)
+			require.Equal(t, []int64{0, 2, 1}, os, "desc %s", oid)
+		})
+	}
+
+	check(types.T_bf16, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.0), types.BF16FromFloat32(0)}, nil, mp))
+	})
+	check(types.T_float16, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.0), types.Float16FromFloat32(0)}, nil, mp))
+	})
+	check(types.T_float8, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0)}, nil, mp))
+	})
+	check(types.T_float4, func(v *vector.Vector) {
+		require.NoError(t, vector.AppendFixedList(v, []types.Float4{types.Float4FromFloat32(1.5), types.Float4FromFloat32(-2.0), types.Float4FromFloat32(0)}, nil, mp))
+	})
 }

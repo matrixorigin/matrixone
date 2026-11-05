@@ -541,7 +541,7 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
     .map(match => [match[1], match[2]]));
   assert.match(sdk, /^  workflow_call:$/m);
   assert.doesNotMatch(sdk, /^  pull_request(?:_target)?:$/m);
-  assert.match(sdk, /branches: \[main, develop\]/);
+  assert.match(sdk, /branches: \[develop\]/);
   const offline = sections.offline;
   assert.match(offline, /timeout-minutes: 30/);
   assert.match(offline, /runs-on: ubuntu-latest/);
@@ -558,15 +558,19 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
   assert.match(offline, /flake8 matrixone --select=E9,F63,F7,F82/);
   assert.match(offline, /if: \$\{\{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' \}\}/);
   assert.match(offline, /fail-fast: false/);
-  const pythons = ['3.10', '3.12'];
-  const sqlalchemy = ['>=1.4,<1.5', '>=2.0,<2.1', '>=2.1,<3'];
-  for (const python of pythons) assert.ok(offline.includes(`'${python}'`));
-  for (const range of sqlalchemy) assert.ok(offline.includes(`'${range}'`));
+  assert.match(offline, /^        python: \['3\.10', '3\.12'\]$/m);
+  assert.match(offline, /^        sqlalchemy: \['>=1\.4\.54,<1\.5', '>=2\.0,<2\.1', '>=2\.1,<3'\]$/m);
   assert.match(offline, /exclude:\n          - python: '3.10'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /include:\n          - python: '3\.10'\n            sqlalchemy: '==1\.4\.54'/);
   assert.match(offline, /include:[\s\S]*?- python: '3.11'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /SQLALCHEMY_RANGE: \$\{\{ matrix\.sqlalchemy \}\}/);
+  assert.match(offline, /"SQLAlchemy\[asyncio\]\$\{SQLALCHEMY_RANGE\}"/);
+  assert.match(offline, /- name: Assert exact supported SQLAlchemy floor\n        if: \$\{\{ matrix\.sqlalchemy == '==1\.4\.54' \}\}\n        run: python -c "import sqlalchemy; assert sqlalchemy\.__version__ == '1\.4\.54', sqlalchemy\.__version__"/);
+  assert.ok(offline.indexOf('Assert exact supported SQLAlchemy floor') < offline.indexOf('Run required offline contracts without skips'));
   assert.match(offline, /name: python-sdk-\$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ strategy.job-index \}\}/);
   assert.match(offline, /if: \$\{\{ !cancelled\(\) \}\}/);
   const core = checkoutSpec(sections['core-import']);
+  assert.match(sections['core-import'], /include:\n          - python: '3\.8'\n            sqlalchemy: '==1\.4\.54'/);
   assert.equal(core.repository, checkout.repository);
   assert.equal(core.ref, checkout.ref);
   assert.equal(core['persist-credentials'], 'false');
@@ -587,7 +591,7 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
     assert.equal(result.status === 0, database !== '', result.stderr);
     if (!database) assert.match(result.stderr, /Configure MATRIXONE_DATABASE/);
   }
-  assert.match(offline, /python scripts\/run_contracts\.py --output offline-contracts/);
+  assert.match(offline, /- name: Run required offline contracts without skips\n        run: python scripts\/run_contracts\.py --output offline-contracts/);
   assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$SDK_SERVER_TARGET" --output online-contracts/);
   assert.ok(readFileSync(join(__dirname, '../../clients/python/scripts/run_contracts.py'), 'utf8').length > 0);
   const group = sdk.match(/^  group: (.*)$/m)[1];
@@ -621,4 +625,33 @@ test('Iceberg module checks retain the dependency path configuration', () => {
     '.github/workflows/iceberg-connector.yml', '.github/ci/**',
   ]);
   assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/iceberg-connector.yml'/);
+});
+
+test('main is validated before merge without post-merge test or cache producers', () => {
+  const workflow = name => readFileSync(join(__dirname, '../workflows', name), 'utf8');
+  const trigger = name => workflow(name).split('\npermissions:')[0].split('\njobs:')[0];
+  for (const name of ['merge-trigger-standalone.yaml', 'merge-trigger-tke.yaml']) {
+    assert.match(trigger(name), /branches: \[ '\[0-9\]\+\.\[0-9\]\+\*' \]/);
+    assert.doesNotMatch(trigger(name), /branches:.*\bmain\b/);
+  }
+  const sdk = trigger('python-sdk.yml');
+  assert.match(sdk, /workflow_call:/);
+  assert.match(sdk, /push:\n    branches: \[develop\]/);
+  assert.match(sdk, /workflow_dispatch:/);
+  assert.match(trigger('native-dependency-check.yml'), /pull_request:/);
+  assert.match(trigger('native-dependency-check.yml'), /workflow_dispatch:/);
+  for (const name of ['native-dependency-check.yml', 'sca-go-module-cache.yaml', 'jstfu-maven-cache.yaml']) {
+    assert.doesNotMatch(trigger(name), /^  push:/m);
+  }
+  for (const name of ['sca-go-module-cache.yaml', 'jstfu-maven-cache.yaml']) {
+    assert.match(trigger(name), /^  schedule:/m);
+    assert.match(trigger(name), /^  workflow_dispatch:/m);
+  }
+  const sca = workflow('sca-go-module-cache.yaml');
+  const saveTools = sca.indexOf('name: Save static-check tools');
+  assert.ok(saveTools >= 0);
+  assert.ok(saveTools < sca.indexOf('name: Restore golangci-lint analysis cache'));
+  assert.ok(saveTools < sca.indexOf('name: Build native SCA prerequisites'));
+  assert.match(trigger('entrypoint.yaml'), /branches: \[ main,/);
+  assert.match(trigger('ci-cancellation.yml'), /pull_request_target:\n    types: \[closed\]/);
 });

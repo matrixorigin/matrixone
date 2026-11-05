@@ -74,6 +74,19 @@ set @narrow_id=1;
 execute narrow_stmt using @narrow_id;
 deallocate prepare narrow_stmt;
 
+-- Non-NULL narrow vectors preserve signed minima and unsigned high bits on widening.
+create table narrow_cast_values(id int primary key,b tinyint not null,s smallint not null,i int not null,ub tinyint unsigned not null,us smallint unsigned not null,ui int unsigned not null);
+insert into narrow_cast_values values
+    (1,-128,-32768,-2147483648,0,0,0),
+    (2,0,0,0,128,32768,2147483648),
+    (3,127,32767,2147483647,255,65535,4294967295);
+-- @metacmp(true)
+select id,cast(b as signed) as b,cast(s as signed) as s,cast(i as signed) as i,cast(ub as unsigned) as ub,cast(us as unsigned) as us,cast(ui as unsigned) as ui from narrow_cast_values order by id;
+create table wide_cast_values(id int primary key,b bigint,s bigint,i bigint,ub bigint unsigned,us bigint unsigned,ui bigint unsigned);
+insert into wide_cast_values select * from narrow_cast_values;
+-- @metacmp(true)
+select * from wide_cast_values order by id;
+
 -- Lexical integer precision must not change numeric-to-text assignment.
 create table literal_texts(id int primary key,b binary(4),v varchar(4),j json);
 insert into literal_texts values(1,0002,0002,0002),(2,'0002','0002','"0002"');

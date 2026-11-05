@@ -168,62 +168,14 @@ func omitHistoricalFloatCoercibility(stored, candidate *planpb.Expr) {
 }
 
 func sameHistoricalFloatBoundExpression(stored, candidate *planpb.Expr) bool {
-	right := proto.Clone(candidate).(*planpb.Expr)
-	var project func(*planpb.Expr, *planpb.Expr)
-	project = func(a, b *planpb.Expr) {
-		if a == nil || b == nil {
-			return
-		}
-		omitHistoricalFloatCoercibility(a, b)
-		if x, y := a.GetF(), b.GetF(); x != nil && y != nil {
-			for i := 0; i < len(x.Args) && i < len(y.Args); i++ {
-				project(x.Args[i], y.Args[i])
-			}
-		}
-		if x, y := a.GetList(), b.GetList(); x != nil && y != nil {
-			for i := 0; i < len(x.List) && i < len(y.List); i++ {
-				project(x.List[i], y.List[i])
-			}
-		}
-		if x, y := a.GetLit(), b.GetLit(); x != nil && y != nil {
-			project(x.Src, y.Src)
-		}
-	}
-	project(stored, right)
-	return sameTableDumpBoundExpression(stored, right)
+	return sameProjectedBoundExpression(stored, candidate, boundExpressionHistorical)
 }
 
 // SQL-origin proof also recovers missing explicit-cast syntax markers from the
 // AST before rewriting. DUMP uses only the coercibility-only historical candidate
 // and continues to require exact syntax provenance.
 func sameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
-	right := proto.Clone(candidate).(*planpb.Expr)
-	var recoverMissingMarkers func(*planpb.Expr, *planpb.Expr)
-	recoverMissingMarkers = func(old, bound *planpb.Expr) {
-		if old == nil || bound == nil {
-			return
-		}
-		omitHistoricalFloatCoercibility(old, bound)
-		if a, b := old.GetF(), bound.GetF(); a != nil && b != nil && b.Func != nil {
-			id, overload := function.DecodeOverloadID(b.Func.Obj)
-			if id == function.CAST && overload == 0 && !a.SyntaxExplicitCast {
-				b.SyntaxExplicitCast = false
-			}
-			for i := 0; i < len(a.Args) && i < len(b.Args); i++ {
-				recoverMissingMarkers(a.Args[i], b.Args[i])
-			}
-		}
-		if a, b := old.GetList(), bound.GetList(); a != nil && b != nil {
-			for i := 0; i < len(a.List) && i < len(b.List); i++ {
-				recoverMissingMarkers(a.List[i], b.List[i])
-			}
-		}
-		if a, b := old.GetLit(), bound.GetLit(); a != nil && b != nil {
-			recoverMissingMarkers(a.Src, b.Src)
-		}
-	}
-	recoverMissingMarkers(stored, right)
-	return sameTableDumpBoundExpression(stored, right)
+	return sameProjectedBoundExpression(stored, candidate, boundExpressionLegacyOrigin)
 }
 
 func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, budget *tableDumpBindingBudget) (*planpb.Expr, error) {

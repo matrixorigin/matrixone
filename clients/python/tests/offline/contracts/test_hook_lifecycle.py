@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import QueuePool
 
 from matrixone.connection_hooks import ConnectionHook
@@ -67,3 +68,31 @@ def test_hook_failure_runs_once_per_physical_connection():
         assert callback.call_count == 2
     finally:
         engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'returns_awaitable', 'async'])
+@pytest.mark.parametrize('message', ['custom hook failed', "object NoneType can't be used in 'await' expression"])
+async def test_immediate_async_hook_reports_type_error(kind, message):
+    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+    client = Mock()
+    client._engine = engine
+
+    async def raise_error(client):
+        raise TypeError(message)
+
+    def fail_sync(client):
+        raise TypeError(message)
+
+    def return_awaitable(client):
+        return raise_error(client)
+
+    callbacks = {'sync': fail_sync, 'returns_awaitable': return_awaitable, 'async': raise_error}
+    hook = ConnectionHook(custom_hook=callbacks[kind])
+    try:
+        await hook.execute_async(client)
+        client.logger.warning.assert_called_once_with(f'Connection hook execution failed: {message}')
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql('SELECT 1')).scalar() == 1
+    finally:
+        await engine.dispose()
