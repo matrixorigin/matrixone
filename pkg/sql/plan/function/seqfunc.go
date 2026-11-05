@@ -322,12 +322,14 @@ type nextvalBatch struct {
 
 // sequenceRelationName maps the raw string argument of nextval/currval/setval
 // onto the identifier form CREATE SEQUENCE stored it under, applying the
-// session's real lower_case_table_names policy (#31909): the parser
-// normalizes the identifiers of the CREATE statement the same way, while the
+// session's real lower_case_table_names policy (#31909): the parser folds the
+// identifiers of the CREATE statement under that same policy, while the
 // sequence functions receive an opaque string literal that bypasses that path
-// and misses the stored name. Only identifier resolution is normalized; the
-// allocation identity, its session caches and all access checks keep keying
-// on the real relation ids.
+// and misses the stored name. The mysql lexer folds identifiers only under
+// mode 1 (GetDbOrTblName), so mode 0 and mixed mode 2 keep the authored
+// spelling — only identifier resolution is normalized, and the allocation
+// identity, its session caches and all access checks keep keying on the real
+// relation ids.
 func sequenceRelationName(proc *process.Process, name string) string {
 	// Default matches the frontend's lower_case_table_names fallback (1).
 	lowerCaseTableNames := int64(1)
@@ -338,7 +340,12 @@ func sequenceRelationName(proc *process.Process, name string) string {
 			}
 		}
 	}
-	return tree.NewCStr(name, lowerCaseTableNames).Compare()
+	// tree.NewCStr folds every non-zero policy, but CREATE folds only mode 1;
+	// matching it keeps the mixed mode's created spelling resolvable.
+	if lowerCaseTableNames != 1 {
+		return name
+	}
+	return tree.NewCStr(name, 1).Compare()
 }
 
 // resolveNextval resolves and validates the sequence relation inside the

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -121,6 +122,64 @@ func TestResolveNextvalAppliesSessionCasePolicy(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "MySeq", id.tblname)
 	})
+
+	t.Run("mixed mode 2 reaches the lookup with the created spelling", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		db := mock_frontend.NewMockDatabase(ctrl)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		txn := mock_frontend.NewMockTxnOperator(ctrl)
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		proc.Base.TxnOperator = txn
+		// The mysql lexer folds CREATE identifiers only under mode 1
+		// (GetDbOrTblName), so CREATE SEQUENCE MySeq in mode 2 stores
+		// "MySeq" and the function argument must match that spelling.
+		proc.SetResolveVariableFunc(sequenceCasePolicyResolver(2))
+
+		eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil)
+		db.EXPECT().Relation(gomock.Any(), "MySeq", nil).Return(rel, nil)
+		rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+			sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
+		}, nil)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("dbid")
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(314))
+
+		id, err := resolveNextval("MySeq", "db", proc, eng, txn)
+		require.NoError(t, err)
+		require.Equal(t, "MySeq", id.tblname,
+			"mode 2 must carry the created spelling into the relation lookup and identity")
+	})
+
+	t.Run("mode 2 lookup failure recovers on the next call", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		db := mock_frontend.NewMockDatabase(ctrl)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		txn := mock_frontend.NewMockTxnOperator(ctrl)
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		proc.Base.TxnOperator = txn
+		proc.SetResolveVariableFunc(sequenceCasePolicyResolver(2))
+
+		eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil).Times(2)
+		// First lookup fails; the failed attempt must not remap or cache the
+		// name, so the retry asks for the same authored spelling again.
+		db.EXPECT().Relation(gomock.Any(), "MySeq", nil).Return(nil, moerr.NewNoSuchTable(proc.Ctx, "db", "MySeq")).Times(1)
+		_, err := resolveNextval("MySeq", "db", proc, eng, txn)
+		require.Error(t, err)
+
+		db.EXPECT().Relation(gomock.Any(), "MySeq", nil).Return(rel, nil).Times(1)
+		rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+			sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
+		}, nil)
+		db.EXPECT().GetDatabaseId(gomock.Any()).Return("dbid")
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(314))
+
+		id, err := resolveNextval("MySeq", "db", proc, eng, txn)
+		require.NoError(t, err)
+		require.Equal(t, "MySeq", id.tblname)
+	})
 }
 
 // SETVAL resolves through the same boundary: the normalization decision is
@@ -140,6 +199,32 @@ func TestSetvalResolvesUnderSessionCasePolicy(t *testing.T) {
 	// The mixed-case argument must reach the engine as the stored lowercase
 	// name; the ordinary-table kind check then fires before any SQL.
 	db.EXPECT().Relation(gomock.Any(), "myseq", nil).Return(rel, nil)
+	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
+	}, nil)
+
+	_, err := setval("MySeq", "20", true, "db", proc, txn, eng)
+	require.EqualError(t, err, "internal error: Table input is not a sequence")
+}
+
+// Under the mixed policy the stored spelling is "MySeq" (CREATE folds
+// identifiers only in mode 1), so the SETVAL boundary must hand the authored
+// spelling to the relation lookup unchanged.
+func TestSetvalKeepsMode2CreatedSpelling(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Base.TxnOperator = txn
+	proc.SetResolveVariableFunc(sequenceCasePolicyResolver(2))
+
+	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil)
+	// The created spelling must reach the engine unchanged; the
+	// ordinary-table kind check then fires before any allocation SQL.
+	db.EXPECT().Relation(gomock.Any(), "MySeq", nil).Return(rel, nil)
 	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
 		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
 	}, nil)

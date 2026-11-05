@@ -26,9 +26,10 @@ import (
 
 // The normalization boundary must follow the session's real
 // lower_case_table_names policy exactly as the parser applies it to CREATE
-// identifiers (#31909): case-sensitive mode 0 keeps the name, every non-zero
-// mode lowercases, and an unavailable / non-int64 / failing resolver falls
-// back to the frontend default (1).
+// identifiers (#31909): the mysql lexer folds identifiers only under mode 1
+// (GetDbOrTblName), so mode 0 and the mixed mode 2 keep the authored spelling,
+// and an unavailable / non-int64 / failing resolver falls back to the
+// frontend default (1).
 func TestSequenceRelationNamePolicy(t *testing.T) {
 	newProc := func(t *testing.T) *process.Process {
 		proc := testutil.NewProcess(t)
@@ -49,11 +50,11 @@ func TestSequenceRelationNamePolicy(t *testing.T) {
 		require.Equal(t, "myseq", sequenceRelationName(proc, "MySeq"))
 	})
 
-	t.Run("mode 2 lowercases like every non-zero mode", func(t *testing.T) {
+	t.Run("mode 2 keeps the name like CREATE (folding is mode-1-only)", func(t *testing.T) {
 		proc := newProc(t)
 		defer proc.Free()
 		proc.SetResolveVariableFunc(sequenceCasePolicyResolver(2))
-		require.Equal(t, "myseq", sequenceRelationName(proc, "MySeq"))
+		require.Equal(t, "MySeq", sequenceRelationName(proc, "MySeq"))
 	})
 
 	t.Run("no resolver defaults to the frontend fallback 1", func(t *testing.T) {
