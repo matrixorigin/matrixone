@@ -54,6 +54,13 @@ func (v *versionHandle) UpgradeTenantEntryPage(_ context.Context, tenantID int32
 	tx = limitedCatalogTxn{TxnExecutor: tx, limit: objectLimit}
 	account := uint32(tenantID)
 	option := versions.UpgradeStatementOption(account)
+	// The pending routine columns describe one table layout. Adding them one
+	// at a time repeatedly copies that table inside the login upgrade deadline.
+	// Keep the logical entries (and version offset), but publish missing columns
+	// together in the first entry's transaction. Later checks become no-ops.
+	if index == len(tenantUpgEntries)-len(routineUpgEntries) {
+		return false, upgradeRoutineColumns(tx, account)
+	}
 	udf := entry.TableName == "mo_user_defined_function" && entry.UpgType == versions.MODIFY_METADATA
 	columns := entry.TableName == catalog.MO_COLUMNS && entry.UpgType == versions.MODIFY_METADATA
 	if !udf && !columns {

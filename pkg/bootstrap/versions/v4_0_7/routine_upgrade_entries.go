@@ -16,12 +16,40 @@ package v4_0_7
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+func upgradeRoutineColumns(tx executor.TxnExecutor, accountID uint32) error {
+	const prefix = "alter table mo_catalog.mo_user_defined_function "
+	var missing []string
+	for _, entry := range routineUpgEntries {
+		if entry.UpgType != versions.ADD_COLUMN {
+			break
+		}
+		present, err := entry.CheckFunc(tx, accountID)
+		if err != nil {
+			return err
+		}
+		if !present {
+			missing = append(missing, strings.TrimPrefix(entry.UpgSql, prefix))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	result, err := tx.Exec(prefix+strings.Join(missing, ", "), versions.UpgradeStatementOption(accountID))
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
+}
 
 // routineUpgEntries extend the pending release migration after the existing
 // UDF argument-type repair. They use the same bounded tenant-step owner.
