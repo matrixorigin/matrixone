@@ -27,23 +27,22 @@ type decimalReductionPrefix struct {
 }
 
 // Concrete carriers keep SIMD conversions out of scalar executor dictionaries.
-func decimalBulkReduce(exec *aggExec, isSum bool, groupIndex int, v *vector.Vector) error {
+func decimalBulkReduce(exec *aggExec, isSum bool, groupIndex int, v *vector.Vector, offset, n int) error {
 	x, y := exec.getXY(uint64(groupIndex))
 	state := exec.state[x].vecs[0]
 	target := exec.aggInfo.stateTypes[0].Oid
 	source := v.GetType().Oid
 	// Same rule as newSumAvgDecExec, restricted to its decimal inputs.
 	uncheckedLocal := source != types.T_decimal256
-	n := v.Length()
-	prefix := reduceDecimalPrefix(v, 0, n)
+	prefix := reduceDecimalPrefix(v, offset, n)
 	if target == types.T_decimal128 {
 		sum := prefix.sum
 		for i := prefix.rows; i < n; i++ {
 			var value types.Decimal128
 			if source == types.T_decimal64 {
-				value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](v, i)))
+				value = types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](v, offset+i)))
 			} else {
-				value = vector.GetFixedAtNoTypeCheck[types.Decimal128](v, i)
+				value = vector.GetFixedAtNoTypeCheck[types.Decimal128](v, offset+i)
 			}
 			var err error
 			if uncheckedLocal {
@@ -72,11 +71,11 @@ func decimalBulkReduce(exec *aggExec, isSum bool, groupIndex int, v *vector.Vect
 			var value types.Decimal256
 			switch source {
 			case types.T_decimal64:
-				value = types.Decimal256FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](v, i)))
+				value = types.Decimal256FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](v, offset+i)))
 			case types.T_decimal128:
-				value = types.Decimal256FromDecimal128(vector.GetFixedAtNoTypeCheck[types.Decimal128](v, i))
+				value = types.Decimal256FromDecimal128(vector.GetFixedAtNoTypeCheck[types.Decimal128](v, offset+i))
 			case types.T_decimal256:
-				value = vector.GetFixedAtNoTypeCheck[types.Decimal256](v, i)
+				value = vector.GetFixedAtNoTypeCheck[types.Decimal256](v, offset+i)
 			}
 			var err error
 			sum, err = sum.Add256(value)

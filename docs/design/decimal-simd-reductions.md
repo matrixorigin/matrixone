@@ -25,9 +25,9 @@ using private exact128 prefix totals and the original scalar suffix/final
 checked publication. Grouped coalescing is byte-identical to main. This is not
 yet an end-to-end acceptance result; no general small-group win is claimed.
 
-## Retained implementation
+## BulkFill-only checkpoint
 
-Only contiguous BulkFill is accelerated. SIMD-disabled/non-AVX2 targets keep
+At checkpoint9e200b7277, only contiguous BulkFill is accelerated. SIMD-disabled/non-AVX2 targets keep
 the original scalar dispatch. The generic executor records its physical Go
 input/state carrier codes once at construction, in existing struct padding;
 these are not SQL result precision or serialized state. SIMD conversions use
@@ -63,3 +63,44 @@ for NULL/constant/wide inputs, populated state, counts and overflow publication.
 
 The mixed SIMD/scalar slowdown remains an acceptance blocker until measured
 evidence clears it; faster packing alone does not clear that gate.
+
+## Uniform-span candidate
+
+The BulkFill-only checkpoint9e200b7277 fails independent TPC-H RAM acceptance:
+six paired process blocks give Total+1.02% [95% CI+0.07%,+1.97%]. Native shared
+libraries match main. Preserve those results; they do not accept this revision.
+Normal Group aggregation calls BatchFill, so isolated BulkFill gains do not
+establish acceleration of that consumer.
+
+Narrow the original approved one-to-four-group family to a single uniform
+group per BatchFill span. Before arithmetic or state mutation, prove that all
+group IDs match one nonzero ID with AVX2 comparisons. A differing/unmatched
+group immediately retains the existing coalescer for the entire span. This
+does not introduce another grouping algorithm or change mixed-group handling.
+Integer inputs, short spans, DISTINCT, NULLs/constants/grouping masks and
+non-AVX2 builds retain their existing paths.
+
+Reuse the contiguous reducer with explicit offset/count, including its exact
+private prefix, ordered wide-value suffix and final persistent-state update.
+Native SUM still maintains its count state; generic SUM still publishes NULL
+metadata in the original order. AVG counts only the requested span. No public
+API, allocation, retained state, schema, accumulator or configuration changes.
+
+Prove nonzero offsets, tails, every wide-refusal lane, early/late group mismatch,
+unmatched IDs, existing state and error publication against the retained scalar
+coalescers. Use the real Group consumer as well as the existing SQL comparison.
+First screen uniform and mixed/late-mismatch/nullable/integer controls with
+production alignment; discard a confirmed fallback regression before broad
+timing. Then independently compare all22 queries against clean main with the
+same local/SF100 gates. This new source must earn its own acceptance; it cannot
+reuse the failed source's performance verdict.
+
+The first uniform-span control screen retains its80–93% reductions for uniform
+256-row batches, but fails late-mismatch/unmatched and tiny Decimal64 controls.
+A complete admission scan followed by scalar coalescing duplicates the scan on
+late rejection. Check unequal first/last IDs before any SIMD scan. This is only
+an early refusal: all interior IDs are still checked before admission. One-row
+decimal BatchFill calls reuse the existing Fill operation, with retained scalar
+coalescers checking offset, unmatched, NULL/constant and error-state parity.
+Integer BatchFill keeps its original route. No TPC-H run accepts the failed
+control screen; archive it before measuring this revised source.

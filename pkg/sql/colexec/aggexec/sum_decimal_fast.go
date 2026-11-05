@@ -166,7 +166,7 @@ func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vec
 		return exec.Fill(groupIndex, 0, vectors)
 	}
 	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
-		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors)
+		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors, 0, v.Length())
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
@@ -218,12 +218,11 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroup(groupIndex int, vectors []
 	return nil
 }
 
-func (exec *sumDecimal64FastExec) bulkFillSingleGroupSIMD(groupIndex int, vectors []*vector.Vector) error {
+func (exec *sumDecimal64FastExec) bulkFillSingleGroupSIMD(groupIndex int, vectors []*vector.Vector, offset, n int) error {
 	vec := vectors[0]
 	if vec.IsConstNull() {
 		return nil
 	}
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -246,17 +245,17 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroupSIMD(groupIndex int, vector
 	var localCnt int64
 	var prefix decimalReductionPrefix
 	if n >= 256 && !hasNull && !vec.IsConst() {
-		prefix = reduceDecimalPrefix(vec, 0, n)
+		prefix = reduceDecimalPrefix(vec, offset, n)
 	}
 	if prefix.rows != 0 {
 		localSum = prefix.sum
 		localCnt = prefix.count
 	}
 	for i := prefix.rows; i < n; i++ {
-		if hasNull && np.Contains(uint64(i)) {
+		if hasNull && np.Contains(uint64(offset+i)) {
 			continue
 		}
-		raw := vals[i&constMask]
+		raw := vals[(offset+i)&constMask]
 		val := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
 		if localCnt == 0 {
 			localSum = val
@@ -276,6 +275,17 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroupSIMD(groupIndex int, vector
 func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	if len(groups) == 1 {
+		return exec.Fill(int(groups[0])-1, offset, vectors)
+	}
+	if len(groups) >= 256 && decimalReductionAvailable() {
+		v := vectors[0]
+		if !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+			if group, ok := decimalReductionGroup(groups); ok {
+				return exec.bulkFillSingleGroupSIMD(int(group-1), vectors, offset, len(groups))
+			}
+		}
 	}
 	return exec.batchFill(offset, groups, vectors)
 }
@@ -638,7 +648,7 @@ func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Ve
 		return exec.Fill(groupIndex, 0, vectors)
 	}
 	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
-		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors)
+		return exec.bulkFillSingleGroupSIMD(groupIndex, vectors, 0, v.Length())
 	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
@@ -704,12 +714,11 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroup(groupIndex int, vectors [
 	return nil
 }
 
-func (exec *sumDecimal128FastExec) bulkFillSingleGroupSIMD(groupIndex int, vectors []*vector.Vector) error {
+func (exec *sumDecimal128FastExec) bulkFillSingleGroupSIMD(groupIndex int, vectors []*vector.Vector, offset, n int) error {
 	vec := vectors[0]
 	if vec.IsConstNull() {
 		return nil
 	}
-	n := vec.Length()
 	if n == 0 {
 		return nil
 	}
@@ -733,17 +742,17 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroupSIMD(groupIndex int, vecto
 	var localCnt int64
 	var prefix decimalReductionPrefix
 	if n >= 256 && !hasNull && !vec.IsConst() {
-		prefix = reduceDecimalPrefix(vec, 0, n)
+		prefix = reduceDecimalPrefix(vec, offset, n)
 	}
 	if prefix.rows != 0 {
 		localSum = prefix.sum
 		localCnt = prefix.count
 	}
 	for i := prefix.rows; i < n; i++ {
-		if hasNull && np.Contains(uint64(i)) {
+		if hasNull && np.Contains(uint64(offset+i)) {
 			continue
 		}
-		val := vals[i&constMask]
+		val := vals[(offset+i)&constMask]
 		if localCnt == 0 {
 			localSum = val
 		} else {
@@ -776,6 +785,17 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroupSIMD(groupIndex int, vecto
 func (exec *sumDecimal128FastExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	if len(groups) == 1 {
+		return exec.Fill(int(groups[0])-1, offset, vectors)
+	}
+	if len(groups) >= 256 && decimalReductionAvailable() {
+		v := vectors[0]
+		if !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+			if group, ok := decimalReductionGroup(groups); ok {
+				return exec.bulkFillSingleGroupSIMD(int(group-1), vectors, offset, len(groups))
+			}
+		}
 	}
 	return exec.batchFill(offset, groups, vectors)
 }

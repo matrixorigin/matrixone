@@ -185,3 +185,28 @@ func TestDecimalContiguousConsumers(t *testing.T) {
 		}
 	}
 }
+
+func TestDecimalReductionGroup(t *testing.T) {
+	if !archsimd.X86.AVX2() {
+		t.Skip("AVX2 unavailable")
+	}
+	for _, n := range []int{0, 1, 3, 4, 255, 256, 257} {
+		groups := make([]uint64, n)
+		for i := range groups {
+			groups[i] = AggBatchSize + 1
+		}
+		group, ok := decimalReductionGroup(groups)
+		require.Equal(t, n != 0, ok)
+		if ok {
+			require.Equal(t, uint64(AggBatchSize+1), group)
+		}
+		for i := range groups {
+			for _, different := range []uint64{GroupNotMatched, 2} {
+				groups[i] = different
+				_, ok = decimalReductionGroup(groups)
+				require.Equal(t, n == 1 && different != GroupNotMatched, ok)
+			}
+			groups[i] = AggBatchSize + 1
+		}
+	}
+}

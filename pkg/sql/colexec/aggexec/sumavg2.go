@@ -1287,7 +1287,7 @@ func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vect
 		return exec.Fill(groupIndex, 0, vectors)
 	}
 	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() && exec.bulkInput != 0 && v.GetType().Oid == exec.bulkInput && exec.bulkState != 0 && exec.aggInfo.stateTypes[0].Oid == exec.bulkState {
-		return decimalBulkReduce(&exec.aggExec, exec.isSum, groupIndex, v)
+		return decimalBulkReduce(&exec.aggExec, exec.isSum, groupIndex, v, 0, v.Length())
 	}
 	if exec.isSum {
 		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
@@ -1421,6 +1421,18 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgRange(groupIndex, offset, n int, vec
 func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	if exec.bulkInput != 0 && len(groups) == 1 {
+		return exec.Fill(int(groups[0])-1, offset, vectors)
+	}
+	// Non-decimal instantiations keep their existing coalescers.
+	if exec.bulkInput != 0 && exec.bulkState != 0 && len(groups) >= 256 && decimalReductionAvailable() {
+		v := vectors[0]
+		if v.GetType().Oid == exec.bulkInput && exec.aggInfo.stateTypes[0].Oid == exec.bulkState && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+			if group, ok := decimalReductionGroup(groups); ok {
+				return decimalBulkReduce(&exec.aggExec, exec.isSum, int(group-1), v, offset, len(groups))
+			}
+		}
 	}
 	if exec.isSum {
 		return exec.batchFillSum(offset, groups, vectors)

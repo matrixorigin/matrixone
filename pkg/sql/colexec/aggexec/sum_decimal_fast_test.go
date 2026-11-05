@@ -1264,3 +1264,151 @@ func TestDecimalSingleRowBulkFill(t *testing.T) {
 		}
 	}
 }
+
+// Retained scalar coalescers are the oracle for final state and error publication.
+func TestDecimalUniformBatchFill(t *testing.T) {
+	for _, n := range []int{1, 257} {
+		for _, family := range []struct {
+			typ    types.Type
+			legacy bool
+		}{
+			{types.New(types.T_decimal64, 15, 2), false}, {types.New(types.T_decimal128, 18, 2), false},
+			{types.New(types.T_decimal128, 38, 2), false}, {types.New(types.T_decimal256, 65, 2), false},
+			{types.New(types.T_decimal128, 38, 2), true},
+		} {
+			typ := family.typ
+			for _, isSum := range []bool{false, true} {
+				if family.legacy && !isSum {
+					continue
+				}
+				for _, shape := range []string{"uniform", "late_group", "unmatched", "nullable", "wide", "local_overflow"} {
+					if (shape == "wide" || shape == "local_overflow") && typ.Width < 38 {
+						continue
+					}
+					for _, seeded := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%s/p%d/sum%t/%s/seed%t/rows%d/legacy%t", typ.Oid.String(), typ.Width, isSum, shape, seeded, n, family.legacy), func(t *testing.T) {
+							mp := mpool.MustNewZero()
+							t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
+							const offset = 3
+							v := vector.NewVec(typ)
+							t.Cleanup(func() { v.Free(mp) })
+							for i := 0; i < offset+n+3; i++ {
+								value := int64(3)
+								if i < offset || i >= offset+n {
+									value = 103 // Must not enter the requested span.
+								}
+								x128, x256 := types.Decimal128FromInt64(value), types.Decimal256FromInt64(value)
+								if shape == "wide" && i == offset+min(n-1, 254) {
+									x128 = types.Decimal128{B64_127: 1}
+									x256 = types.Decimal256{B128_191: 1}
+								}
+								if shape == "local_overflow" && (i == offset || i == offset+1) {
+									x128 = types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxInt64}
+									x256 = types.Decimal256{B0_63: math.MaxUint64, B64_127: math.MaxUint64, B128_191: math.MaxUint64, B192_255: math.MaxInt64}
+								}
+								null := shape == "nullable" && i == offset+min(n-1, 17)
+								switch typ.Oid {
+								case types.T_decimal64:
+									require.NoError(t, vector.AppendFixed(v, types.Decimal64(value), null, mp))
+								case types.T_decimal128:
+									require.NoError(t, vector.AppendFixed(v, x128, null, mp))
+								case types.T_decimal256:
+									require.NoError(t, vector.AppendFixed(v, x256, null, mp))
+								}
+							}
+							groups := make([]uint64, n)
+							for i := range groups {
+								groups[i] = 2
+							}
+							if shape == "late_group" {
+								groups[n-1] = 1
+							}
+							if shape == "unmatched" {
+								groups[n-1] = GroupNotMatched
+							}
+							id := AggIdOfAvg
+							if isSum {
+								id = AggIdOfSum
+							}
+							makeExec := func() AggFuncExec {
+								if family.legacy {
+									return newSumDecimal128LegacyStateExec(mp, id, false, typ, true)
+								}
+								return makeSumAvgExec(mp, isSum, id, false, typ)
+							}
+							actual := makeExec()
+							t.Cleanup(actual.Free)
+							expected := makeExec()
+							t.Cleanup(expected.Free)
+							require.NoError(t, actual.GroupGrow(2))
+							require.NoError(t, expected.GroupGrow(2))
+							input := []*vector.Vector{v}
+							reference := func(exec AggFuncExec) (*aggExec, func() error) {
+								switch e := exec.(type) {
+								case *sumDecimal64FastExec:
+									return &e.aggExec, func() error { return e.batchFill(offset, groups, input) }
+								case *sumDecimal128FastExec:
+									return &e.aggExec, func() error { return e.batchFill(offset, groups, input) }
+								case *sumAvgDecExec[types.Decimal128, types.Decimal256]:
+									return &e.aggExec, func() error {
+										if e.isSum {
+											return e.batchFillSum(offset, groups, input)
+										}
+										return e.batchFillAvg(offset, groups, input)
+									}
+								case *sumAvgDecExec[types.Decimal256, types.Decimal256]:
+									return &e.aggExec, func() error {
+										if e.isSum {
+											return e.batchFillSum(offset, groups, input)
+										}
+										return e.batchFillAvg(offset, groups, input)
+									}
+								default:
+									t.Fatalf("uncovered executor %T", exec)
+									return nil, nil
+								}
+							}
+							gotBase, _ := reference(actual)
+							wantBase, runReference := reference(expected)
+							if seeded {
+								for _, base := range []*aggExec{gotBase, wantBase} {
+									sums := base.state[0].vecs[0]
+									if sums.GetType().Oid == types.T_decimal128 {
+										chunkArr[types.Decimal128](sums)[1] = types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxInt64}
+									} else {
+										chunkArr[types.Decimal256](sums)[1] = types.Decimal256{B0_63: math.MaxUint64, B64_127: math.MaxUint64, B128_191: math.MaxUint64, B192_255: math.MaxInt64}
+									}
+									sums.UnsetNull(1)
+									if len(base.state[0].vecs) > 1 {
+										vector.MustFixedColNoTypeCheck[int64](base.state[0].vecs[1])[1] = 1
+									}
+								}
+							}
+							wantErr := runReference()
+							gotErr := actual.BatchFill(offset, groups, input)
+							wantCode, wantOK := moerr.GetMoErrCode(wantErr)
+							gotCode, gotOK := moerr.GetMoErrCode(gotErr)
+							require.Equal(t, wantOK, gotOK)
+							require.Equal(t, wantCode, gotCode)
+							if wantErr == nil {
+								require.NoError(t, gotErr)
+							} else {
+								require.EqualError(t, gotErr, wantErr.Error())
+							}
+							for i, want := range wantBase.state[0].vecs {
+								got := gotBase.state[0].vecs[i]
+								require.Equal(t, *want.GetType(), *got.GetType())
+								size := int(want.GetType().TypeSize()) * 2
+								require.Equal(t, want.GetData()[:size], got.GetData()[:size])
+								for group := uint64(0); group < 2; group++ {
+									require.Equal(t, want.IsNull(group), got.IsNull(group))
+								}
+							}
+						})
+					}
+				}
+			}
+		}
+
+	}
+}

@@ -20,6 +20,8 @@ import "github.com/matrixorigin/matrixone/pkg/container/vector"
 
 func decimalReductionAvailable() bool { return false }
 
+func decimalReductionGroup(_ []uint64) (uint64, bool) { return 0, false }
+
 func reduceDecimalPrefix(_ *vector.Vector, _ int, _ int) decimalReductionPrefix {
 	return decimalReductionPrefix{}
 }

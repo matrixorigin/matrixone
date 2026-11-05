@@ -25,6 +25,30 @@ import (
 
 func decimalReductionAvailable() bool { return archsimd.X86.AVX2() }
 
+// No state or arithmetic is published before the complete span is admitted.
+func decimalReductionGroup(groups []uint64) (uint64, bool) {
+	if len(groups) == 0 || groups[0] == GroupNotMatched {
+		return 0, false
+	}
+	group := groups[0]
+	if groups[len(groups)-1] != group {
+		return 0, false
+	}
+	want := archsimd.BroadcastUint64x4(group)
+	i := 0
+	for ; i+4 <= len(groups); i += 4 {
+		if !archsimd.LoadUint64x4(groups[i : i+4]).Xor(want).IsZero() {
+			return 0, false
+		}
+	}
+	for ; i < len(groups); i++ {
+		if groups[i] != group {
+			return 0, false
+		}
+	}
+	return group, true
+}
+
 func reduceDecimalPrefix(v *vector.Vector, offset int, n int) (r decimalReductionPrefix) {
 	if n < 256 || !archsimd.X86.AVX2() || v.IsConst() || v.HasNull() || v.HasGrouping() {
 		return
