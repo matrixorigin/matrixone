@@ -89,6 +89,19 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		require.Len(t, hidden, 2)
 		user := open("sys#hidden_access_user#hidden_access_role")
 		exec(user, "use hidden_access_db")
+		// The metadata view's physical-index predicate and main's vector
+		// functions must bind to distinct registry entries in the same query.
+		const vec = `cast('{"g":1,"s":[1],"v":[1,2]}' as vecf8(2))`
+		var vecJSON string
+		var vecBytes int
+		err = user.QueryRowContext(ctx, "select vecblock_json("+vec+"), length(vecblock_binary("+vec+")) from information_schema.tables where table_schema='hidden_access_db' and table_name='t'").Scan(&vecJSON, &vecBytes)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"g":1,"s":[1],"v":[1,2]}`, vecJSON)
+		require.Positive(t, vecBytes)
+		var matmul string
+		err = user.QueryRowContext(ctx, "select vector_matmul(1,id,cast('[1,0]' as vecf8(2)),'[[1,0]]') from hidden_access_db.t where id=1").Scan(&matmul)
+		require.NoError(t, err)
+		require.JSONEq(t, `[[["1",-1]]]`, matmul)
 		deny := func(conn *sql.Conn, q string) {
 			t.Helper()
 			rows, e := conn.QueryContext(ctx, q)
