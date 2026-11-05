@@ -309,19 +309,21 @@ func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {
 
 func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 	oldTable := &TableDef{
+		Cols: []*ColDef{{Name: "title"}},
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "idx_note", Unique: false, Parts: []string{"note"}},
 		},
 	}
 	newTable := &TableDef{
+		Cols: []*ColDef{{Name: "title"}},
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "uk_note", Unique: true, Parts: []string{"note"}},
 		},
 	}
 
-	skip := skipUniqueIdxDedup(oldTable, newTable)
+	skip := skipUniqueIdxDedup(oldTable, newTable, map[string]selectExpr{"title": {sexprType: exprColumnName, sexprStr: "title"}})
 	require.Equal(t, map[string]bool{"uk_title": true}, skip)
 }
 
