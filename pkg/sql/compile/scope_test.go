@@ -485,8 +485,21 @@ func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 			expectResidentGather: true,
 		},
 		{
+			name:                 "derived candidate prefix",
+			sql:                  "select * from (select n_regionkey from nation order by n_regionkey) d limit 5 offset 2",
+			candidateLimit:       7,
+			offset:               2,
+			expectResidentGather: true,
+		},
+		{
 			name:           "candidate prefix above resident threshold",
 			sql:            "select n_regionkey from nation order by n_regionkey limit 8193 offset 8192",
+			candidateLimit: mergeTopResidentPlanThreshold + 1,
+			offset:         8192,
+		},
+		{
+			name:           "derived candidate prefix above resident threshold",
+			sql:            "select * from (select n_regionkey from nation order by n_regionkey) d limit 8193 offset 8192",
 			candidateLimit: mergeTopResidentPlanThreshold + 1,
 			offset:         8192,
 		},
