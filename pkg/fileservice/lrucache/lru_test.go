@@ -204,3 +204,26 @@ func TestEvictionCleanupRunsWhenACallbackPanics(t *testing.T) {
 	require.ElementsMatch(t, []string{"a", "b", "c"}, finished)
 	require.Zero(t, c.Used())
 }
+
+func TestEvictionCallbacksMayUseTheCache(t *testing.T) {
+	ctx := context.Background()
+	var c *Cache[string, int]
+	c = NewWithPrepareEvict(
+		fscache.ConstCapacity(20), nil, nil, nil,
+		func(key string, _ int, _ int64, _ uint64) func() {
+			require.False(t, c.Contains(key))
+			if key == "a" {
+				c.Set(ctx, "a", 0, 10)
+			}
+			return func() { c.Used() }
+		},
+		func(context.Context, string, int, int64, uint64) { c.Used() },
+	)
+	c.Set(ctx, "a", 0, 10)
+	c.Set(ctx, "b", 1, 10)
+	c.Delete(ctx, "a")
+	c.Set(ctx, "c", 2, 10)
+	require.True(t, c.Contains("a"))
+	require.False(t, c.Contains("b"))
+	require.True(t, c.Contains("c"))
+}

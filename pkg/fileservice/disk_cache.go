@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -36,7 +35,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/s3fifo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -54,7 +52,7 @@ type DiskCache struct {
 		nextReadGeneration uint64
 	}
 
-	cache        diskCacheIndex
+	cache        *lrucache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
 	preloads     *preloadUsage
 	dirEntries   bool
@@ -140,103 +138,10 @@ func newDiskCacheWithMetricScope(
 
 type diskCacheOptions struct {
 	// dirEntries makes directories named with cacheDirSuffix cache entries
-	// (IndexFileCache), evicted least recently used first, never while held, and whose
+	// (IndexFileCache), never evicted while held, and whose
 	// capacity does not follow GlobalDiskCacheSizeHint.
 	dirEntries bool
 }
-
-// diskCacheIndex accounts for the entries of a DiskCache and evicts them: a
-// diskIndex, or an lrucache.Cache for an IndexFileCache.
-type diskCacheIndex interface {
-	Set(ctx context.Context, key string, value struct{}, size int64) (inserted bool, rejected bool)
-	Get(ctx context.Context, key string) (struct{}, bool)
-	Contains(key string) bool
-	Delete(ctx context.Context, key string)
-	Replace(ctx context.Context, key string, value struct{}, size int64) bool
-	Evict(ctx context.Context, done chan int64, capacityCut int64)
-	ForceEvictWithWait(ctx context.Context, n int64) int64
-	Used() int64
-}
-
-var (
-	_ diskCacheIndex = diskIndex{}
-	_ diskCacheIndex = (*lrucache.Cache[string, struct{}])(nil)
-)
-
-// diskIndex is an S3-FIFO diskCacheIndex.
-type diskIndex struct {
-	c *s3fifo.Cache[string, diskFile]
-}
-
-// diskFile is a cached file, which needs no reference counting.
-type diskFile struct{}
-
-func (diskFile) Retain()  {}
-func (diskFile) Release() {}
-
-// newDiskIndex returns a diskIndex with the callbacks of lrucache.NewWithPrepareEvict, but for
-// the key shard function, which it uses as the hash.
-func newDiskIndex(
-	capacity fscache.CapacityFunc,
-	hash func(string) uint64,
-	postSet func(ctx context.Context, key string, value struct{}, size int64, seq uint64),
-	prepareEvict func(key string, value struct{}, size int64, seq uint64) func(),
-	postEvict func(ctx context.Context, key string, value struct{}, size int64, seq uint64),
-) diskIndex {
-	return diskIndex{c: s3fifo.New(s3fifo.Options[string, diskFile]{
-		Capacity: capacity,
-		Hash:     hash,
-		OnInsert: func(key string, _ diskFile, size int64, seq uint64) {
-			postSet(context.Background(), key, struct{}{}, size, seq)
-		},
-		OnRemove: func(key string, _ diskFile, size int64, seq uint64, reason s3fifo.Reason) {
-			var finish func()
-			if reason != s3fifo.Replaced {
-				finish = prepareEvict(key, struct{}{}, size, seq)
-			}
-			if finish != nil {
-				defer finish()
-			}
-			postEvict(context.Background(), key, struct{}{}, size, seq)
-		},
-	})}
-}
-
-func (x diskIndex) Set(_ context.Context, key string, _ struct{}, size int64) (bool, bool) {
-	return x.c.Set(key, diskFile{}, size)
-}
-
-func (x diskIndex) Get(_ context.Context, key string) (struct{}, bool) {
-	_, _, ok, _ := x.c.Get(key, nil)
-	return struct{}{}, ok
-}
-
-func (x diskIndex) Contains(key string) bool { return x.c.Contains(key) }
-
-func (x diskIndex) Delete(_ context.Context, key string) { x.c.Delete(key) }
-
-func (x diskIndex) Replace(_ context.Context, key string, _ struct{}, size int64) bool {
-	return x.c.Replace(key, diskFile{}, size)
-}
-
-// Evict evicts to the capacity less capacityCut and, when done is not nil, sends it that target.
-func (x diskIndex) Evict(ctx context.Context, done chan int64, capacityCut int64) {
-	target := max(x.c.Capacity()-capacityCut, 0)
-	x.c.EvictTo(ctx, target)
-	if done != nil {
-		done <- target
-	}
-}
-
-// ForceEvictWithWait evicts n bytes, or down to the capacity if that is lower.
-func (x diskIndex) ForceEvictWithWait(ctx context.Context, n int64) int64 {
-	if n <= 0 {
-		return x.c.Used()
-	}
-	return x.c.EvictTo(ctx, min(x.c.Used()-n, x.c.Capacity()))
-}
-
-func (x diskIndex) Used() int64 { return x.c.Used() }
 
 func newDiskCache(
 	ctx context.Context,
@@ -258,8 +163,6 @@ func newDiskCache(
 	if cacheDataAllocator == nil {
 		cacheDataAllocator = DefaultCacheDataAllocator()
 	}
-
-	seed := maphash.MakeSeed()
 
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGaugeWithScope(metricScope, name, "disk")
 	capacityBytes.Set(float64(capacity()))
@@ -284,9 +187,6 @@ func newDiskCache(
 		preloads:     newPreloadUsage(),
 	}
 
-	keyShard := func(key string) uint64 {
-		return maphash.String(seed, key)
-	}
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.cached(path)
 		inuseBytes.Add(float64(size))
@@ -320,12 +220,9 @@ func newDiskCache(
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
+	ret.cache = lrucache.NewWithPrepareEvict(capacityFunc, nil, postSet, nil, prepareEvict, postEvict)
 	if opts.dirEntries {
-		lru := lrucache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
-		lru.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
-		ret.cache = lru
-	} else {
-		ret.cache = newDiskIndex(capacityFunc, keyShard, postSet, prepareEvict, postEvict)
+		ret.cache.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)

@@ -48,14 +48,9 @@ type item[K comparable, V any] struct {
 	seq   uint64
 }
 
-type evicted[K comparable, V any] struct {
-	item   item[K, V]
-	finish func()
-}
-
 // NewWithPrepareEvict returns a cache with the callbacks of a DiskCache index:
-// prepareEvict runs for Delete and eviction while the item is removed, and the cleanup it
-// returns runs once after postEvict, outside the cache's lock. Replace does not invoke
+// prepareEvict runs for Delete and eviction after the item is removed, then postEvict, then
+// the cleanup prepareEvict returns, all outside the cache's lock. Replace does not invoke
 // prepareEvict. keyShardFunc is accepted for the same signature and not used.
 func NewWithPrepareEvict[K comparable, V any](
 	capacity fscache.CapacityFunc,
@@ -155,9 +150,9 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 		c.mu.Unlock()
 		return
 	}
-	ev := c.removeLocked(e)
+	it := c.removeLocked(e)
 	c.mu.Unlock()
-	c.finishEvictions(ctx, []evicted[K, V]{ev})
+	c.finishEvictions(ctx, []item[K, V]{it})
 }
 
 // Replace sets the value and size of a present key, keeping its place, and returns
@@ -229,7 +224,7 @@ func (c *Cache[K, V]) Capacity() int64 {
 // evictTo removes the least recently used evictable items until at most target bytes
 // are used, and returns the bytes used after.
 func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
-	var evictions []evicted[K, V]
+	var evictions []item[K, V]
 	c.mu.Lock()
 	for e := c.order.Back(); e != nil && c.used > target; {
 		prev := e.Prev()
@@ -244,39 +239,37 @@ func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
 	return used
 }
 
-func (c *Cache[K, V]) removeLocked(e *list.Element) evicted[K, V] {
+func (c *Cache[K, V]) removeLocked(e *list.Element) item[K, V] {
 	it := *e.Value.(*item[K, V])
 	c.order.Remove(e)
 	delete(c.items, it.key)
 	c.used -= it.size
-	ev := evicted[K, V]{item: it}
-	if c.prepareEvict != nil {
-		ev.finish = c.prepareEvict(it.key, it.value, it.size, it.seq)
-	}
-	return ev
+	return it
 }
 
-// finishEvictions runs postEvict and the prepareEvict cleanup of each eviction, every
-// cleanup even if a callback panics.
-func (c *Cache[K, V]) finishEvictions(ctx context.Context, evictions []evicted[K, V]) {
+// finishEvictions runs the callbacks of each removed item, for every item even if a callback
+// panics.
+func (c *Cache[K, V]) finishEvictions(ctx context.Context, evictions []item[K, V]) {
 	next := 0
 	defer func() {
-		for ; next < len(evictions); next++ {
-			if f := evictions[next].finish; f != nil {
-				f()
-			}
+		if next < len(evictions) {
+			c.finishEvictions(ctx, evictions[next:])
 		}
 	}()
 	for next < len(evictions) {
-		ev := evictions[next]
+		it := evictions[next]
 		next++
-		func() {
-			if ev.finish != nil {
-				defer ev.finish()
-			}
-			if c.postEvict != nil {
-				c.postEvict(ctx, ev.item.key, ev.item.value, ev.item.size, ev.item.seq)
-			}
-		}()
+		c.finishEviction(ctx, it)
+	}
+}
+
+func (c *Cache[K, V]) finishEviction(ctx context.Context, it item[K, V]) {
+	if c.prepareEvict != nil {
+		if finish := c.prepareEvict(it.key, it.value, it.size, it.seq); finish != nil {
+			defer finish()
+		}
+	}
+	if c.postEvict != nil {
+		c.postEvict(ctx, it.key, it.value, it.size, it.seq)
 	}
 }
