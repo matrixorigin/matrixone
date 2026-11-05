@@ -157,9 +157,11 @@ show index ignored from ea0;
 create table ce(a int, e enum('x','y'), v vecf32(2), primary key(a, e));
 insert into ce values (1,'x','[1,1]'),(2,'y','[100000,1]');
 create index ice using ivfflat on ce(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;
+insert ignore into ce values (3,'zz','[200000,1]');
 show index ignored from ce;
 ➤ Key_name[12,65535,0]  ¦  Primary_key[-1,16383,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
-ice  ¦  (2, y)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:10:17
+ice  ¦  (2, y)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:10:17  𝄀
+ice  ¦  (3, 0)  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-03 15:10:17
 create table k(id bigint primary key, v vecf32(2));
 insert into k values (1,'[1,1]'),(2,'[2,2]'),(3,'[3,3]'),(4,'[100000,1]'),(5,'[200000,1]');
 create index ik using ivfflat on k(v) lists 4 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;

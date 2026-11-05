@@ -142,5 +142,6 @@ func TestIgnoredPkSql(t *testing.T) {
 	}
 	require.Equal(t, "CONCAT('(', CAST(SERIAL_EXTRACT(`__mo_index_pk`, 0 AS INT) AS VARCHAR), ', ', CAST(SERIAL_EXTRACT(`__mo_index_pk`, 1 AS VARCHAR(10)) AS VARCHAR), ')')", ignoredPkSql(def))
 	def.Cols[1].Typ = plan.Type{Id: int32(types.T_enum), Enumvalues: "x,it's"}
-	require.Contains(t, ignoredPkSql(def), "ELT(CAST(SERIAL_EXTRACT(`__mo_index_pk`, 1 AS ENUM('x','it''s')) AS INT), 'x', 'it''s')", "an ENUM part reads as its member")
+	num := "CAST(SERIAL_EXTRACT(`__mo_index_pk`, 1 AS ENUM('x','it''s')) AS INT)"
+	require.Contains(t, ignoredPkSql(def), "COALESCE(ELT("+num+", 'x', 'it''s'), CAST("+num+" AS VARCHAR))", "an ENUM part reads as its member, or its number")
 }

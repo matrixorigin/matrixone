@@ -135,6 +135,8 @@ show index ignored from ea0;
 create table ce(a int, e enum('x','y'), v vecf32(2), primary key(a, e));
 insert into ce values (1,'x','[1,1]'),(2,'y','[100000,1]');
 create index ice using ivfflat on ce(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;
+-- an ENUM part that names no member reads as its number
+insert ignore into ce values (3,'zz','[200000,1]');
 -- @ignore:4
 show index ignored from ce;
 -- rows left out of the samples may leave fewer of them than lists

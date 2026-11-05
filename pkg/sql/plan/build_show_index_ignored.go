@@ -114,13 +114,14 @@ func ignoredPkSql(tableDef *TableDef) string {
 		for _, col := range tableDef.Cols {
 			if col.Name == name {
 				if types.T(col.Typ.Id) == types.T_enum {
-					// the extracted ENUM is its number: ELT reads the member
+					// the extracted ENUM is its number: ELT reads the member, a number that
+					// names none reads as itself
 					members := strings.Split(col.Typ.Enumvalues, ",")
 					for j, member := range members {
 						members[j] = sqlquote.String(member)
 					}
-					parts = append(parts, fmt.Sprintf("ELT(CAST(SERIAL_EXTRACT(%s, %d AS ENUM(%s)) AS INT), %s)",
-						pk, i, strings.Join(members, ","), strings.Join(members, ", ")))
+					num := fmt.Sprintf("CAST(SERIAL_EXTRACT(%s, %d AS ENUM(%s)) AS INT)", pk, i, strings.Join(members, ","))
+					parts = append(parts, fmt.Sprintf("COALESCE(ELT(%s, %s), CAST(%s AS VARCHAR))", num, strings.Join(members, ", "), num))
 					break
 				}
 				typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
