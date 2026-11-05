@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
+
+func testUniqueKeyPayload(t *testing.T, values []byte) *keycodec.KeyPayload {
+	mp := mpool.MustNewZero()
+	v := vector.NewVec(types.T_uint8.ToType())
+	defer v.Free(mp)
+	require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	return testutil.RuntimeKeyPayload(t, data)
+}
 
 // mockMessage is a mock Message type to test continue branch
 type mockMessage struct {
@@ -103,7 +114,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: testUniqueKeyPayload(t, expectedData),
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -115,7 +126,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -125,7 +136,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		<-done
 
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, rtMsg.Keys, result)
+		result.Release()
 	})
 
 	t.Run("return nil when no matching message found", func(t *testing.T) {
@@ -178,7 +190,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: testUniqueKeyPayload(t, expectedData),
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -190,7 +202,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -201,7 +213,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		// Should skip the mock message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, rtMsg.Keys, result)
+		result.Release()
 	})
 
 	t.Run("skip non-BLOOMFILTER runtime filter types", func(t *testing.T) {
@@ -224,7 +237,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: testUniqueKeyPayload(t, expectedData),
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -236,7 +249,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -247,7 +260,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		// Should skip the PASS message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, rtMsg.Keys, result)
+		result.Release()
 	})
 }
 
@@ -267,9 +281,9 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
 		tag := int32(899)
-		payload := []byte{1, 2, 3}
+		payload := testUniqueKeyPayload(t, []byte{1, 2, 3})
 		message.SendMessage(message.RuntimeFilterMessage{
-			Tag: tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: payload,
+			Tag: tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Keys: payload,
 		}, mb)
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{
 			Tag: tag, UseMembershipFilter: true,
@@ -277,7 +291,8 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 
 		data, status, err := WaitUniqueJoinKeysWithStatus(sqlproc)
 		require.NoError(t, err)
-		require.Equal(t, payload, data)
+		defer data.Release()
+		require.Same(t, payload, data)
 		require.Equal(t, UniqueJoinKeysAvailable, status)
 	})
 
