@@ -504,7 +504,7 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 		if dataReader != nil {
 			dataReader.Close()
 		}
-		s3Writer.Close()
+		err = s3Writer.CloseWithCleanup(ctx, err)
 	}()
 
 	source, err := NewLocalDataSource(
@@ -590,7 +590,7 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		if iter != nil {
 			iter.Close()
 		}
-		s3Writer.Close()
+		err = s3Writer.CloseWithCleanup(ctx, err)
 
 		if tombstoneReader != nil {
 			tombstoneReader.Close()
