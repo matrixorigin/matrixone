@@ -369,7 +369,9 @@ func TestPrepareLoadScanPrescanAndFailure(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.wantOffset, offset)
-				require.Nil(t, param.Tail.ColumnList)
+				// prepareLoadScan serializes from a copy: the retained AST keeps
+				// the consumed column list for a PREPARE replan.
+				require.Len(t, param.Tail.ColumnList, 1)
 				require.NotEqual(t, "unchanged", table.Createsql)
 			}
 			for _, r := range fs.readers {
