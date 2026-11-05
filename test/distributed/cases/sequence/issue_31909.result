@@ -1,0 +1,33 @@
+drop database if exists issue31909;
+create database issue31909;
+use issue31909;
+create sequence MySeq;
+select nextval('MySeq');
+➤ nextval(MySeq)[12,65535,0]  𝄀
+1
+select currval('MYSEQ');
+➤ currval(MYSEQ)[12,65535,0]  𝄀
+1
+select setval('MySeq', 10);
+➤ setval(MySeq, 10)[12,65535,0]  𝄀
+10
+select nextval('myseq');
+➤ nextval(myseq)[12,65535,0]  𝄀
+11
+create table t2 (id int default nextval('MySeq'), v int);
+insert into t2(v) values (1);
+select * from t2;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+12  ¦  1
+select nextval('missing_seq');
+no such table issue31909.missing_seq
+select nextval(null);
+➤ nextval(null)[12,65535,0]  𝄀
+null
+create table ordinary(a int);
+select nextval('ordinary');
+internal error: Table input is not a sequence
+select lastval();
+➤ lastval()[12,65535,0]  𝄀
+12
+drop database if exists issue31909;
