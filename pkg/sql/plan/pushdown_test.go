@@ -748,7 +748,7 @@ func TestPushdownLimitToSortGuards(t *testing.T) {
 			project.Limit = nil
 			project.Offset = makePlan2Uint64ConstExprWithType(2)
 		}},
-		{name: "zero limit", pushed: true, change: func(_ *QueryBuilder, project, _ *plan.Node) {
+		{name: "zero limit keeps whole-query short circuit", change: func(_ *QueryBuilder, project, _ *plan.Node) {
 			project.Limit = makePlan2Uint64ConstExprWithType(0)
 		}},
 	}
@@ -791,6 +791,7 @@ func TestDerivedSortPaginationKeepsBoundaries(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{"zero outer limit", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d limit 0"},
 		{"filter above inner page", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d where empno < 5 limit 3"},
 		{"exhausted inner page", "select * from (select empno from constraint_test.emp order by empno desc limit 10) d limit 3 offset 10"},
 		{"outer grouping", "select deptno, count(*) from (select deptno from constraint_test.emp order by deptno desc limit 10) d group by deptno limit 3"},

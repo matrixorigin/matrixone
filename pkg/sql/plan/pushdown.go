@@ -1645,6 +1645,12 @@ func (builder *QueryBuilder) canPushLimitToSort(project, sort *plan.Node) bool {
 		len(project.FilterList) != 0 || len(sort.FilterList) != 0 {
 		return false
 	}
+	// The final PROJECT's literal LIMIT 0 also suppresses producer steps.
+	// Moving it to SORT would omit only the consumer, leaving recursive CTE
+	// producers waiting for receivers that compilation never constructs.
+	if limit, ok := getLiteralUint64(project.Limit); ok && limit == 0 {
+		return false
+	}
 	if _, expands := DecodeGroupingSetExpandOption(project.ExtraOptions); expands {
 		return false
 	}

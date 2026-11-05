@@ -50,4 +50,26 @@ set @inner_size = 2;
 execute nested_sort_page using @inner_size, @outer_size;
 deallocate prepare nested_sort_page;
 
+-- 多 step 递归查询的外层零需求必须同时省略 producer 与 consumer。
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n) d limit 0;
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n) d limit 0 offset 1;
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n limit 2 offset 1) d limit 0;
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select * from (select n from r order by n) d limit 2;
+
+-- 零与非零参数交替执行，不能遗留上次执行的短路状态。
+prepare recursive_sort_page from 'with recursive r(n) as (select 1 union all select n + 1 from r where n < 3) select * from (select n from r order by n) d limit ?';
+set @recursive_page_size = 2;
+execute recursive_sort_page using @recursive_page_size;
+set @recursive_page_size = 0;
+execute recursive_sort_page using @recursive_page_size;
+set @recursive_page_size = 1;
+execute recursive_sort_page using @recursive_page_size;
+set @recursive_page_size = 0;
+execute recursive_sort_page using @recursive_page_size;
+deallocate prepare recursive_sort_page;
+
 drop table offset_without_limit;
