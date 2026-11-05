@@ -198,6 +198,19 @@ func seqExecutorEnv(ctx context.Context, proc *process.Process, db string) (*seq
 			}
 		}
 	}
+	// The generated allocation SQL embeds physical identifiers that are
+	// already resolved under the session policy (sequenceRelationName ran
+	// before this point), so the internal execution must not re-fold them.
+	// The mysql lexer folds identifiers only under mode 1 while the bind
+	// side folds under every non-zero policy (tree.NewCStr), so executing a
+	// mode-2 session's statements at the session value re-folds the
+	// preserved spelling mid-statement (UPDATE target 'myseq', review
+	// 5776394217). Mode 2 therefore executes case-preserving; modes 0 and 1
+	// keep their historical execution values.
+	internalCasePolicy := lowerCaseTableNames
+	if lowerCaseTableNames == 2 {
+		internalCasePolicy = 0
+	}
 	// Sequence metadata is a catalog-owned mutable row; the BgKey marker is
 	// the internal-write contract that lets the planner accept the UPDATE.
 	// The caller picks the base context: allocation paths use proc.Ctx (alive
@@ -211,7 +224,7 @@ func seqExecutorEnv(ctx context.Context, proc *process.Process, db string) (*seq
 			WithDisableIncrStatement().
 			WithAccountID(accountID).
 			WithDatabase(db).
-			WithLowerCaseTableNames(&lowerCaseTableNames).
+			WithLowerCaseTableNames(&internalCasePolicy).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend),
