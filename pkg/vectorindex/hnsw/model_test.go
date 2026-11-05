@@ -710,6 +710,23 @@ func TestSearchReleasesSupersededModels(t *testing.T) {
 			require.Zero(t, fake.superseded, reason)
 		}
 	}
+
+	// A cache retry reuses the search for the next generation: once that generation is
+	// destroyed for another reason, its holds are released as a use.
+	s := NewHnswSearch[float32](cfg, tblcfg)
+	s.Indexes = []*HnswModel[float32]{{Id: "model", FileSize: built.FileSize, Checksum: built.Checksum}}
+	_, err = s.LoadIndex(sqlproc, s.Indexes)
+	require.NoError(t, err)
+	s.OnCacheInvalidated(veccache.ReasonGenerationChanged)
+	s.Destroy()
+	require.Equal(t, 1, fake.superseded)
+	s.Indexes = []*HnswModel[float32]{{Id: "model", FileSize: built.FileSize, Checksum: built.Checksum}}
+	_, err = s.LoadIndex(sqlproc, s.Indexes)
+	require.NoError(t, err)
+	s.OnCacheInvalidated("ttl_expired")
+	s.Destroy()
+	require.Equal(t, 1, fake.releases)
+	require.Zero(t, fake.superseded)
 }
 
 func TestModelNil(t *testing.T) {

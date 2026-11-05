@@ -275,8 +275,12 @@ func (s *HnswSearch[T]) Destroy() {
 	// metadata with a nil Index (and possibly a fetched Path), and a load abandoned between
 	// Preload and Load reaches here. HnswModel.Destroy nil-checks the handle and also releases
 	// the on-disk file and buffer, matching what LoadIndex's error path already does.
+	// The cache sets superseded and calls Destroy in one locked section; a retry reuses this
+	// object for the next generation, so Destroy clears it.
+	superseded := s.superseded
+	s.superseded = false
 	for _, idx := range s.Indexes {
-		idx.destroy(s.superseded)
+		idx.destroy(superseded)
 	}
 	s.Indexes = nil
 }
