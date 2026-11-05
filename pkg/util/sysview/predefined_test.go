@@ -489,6 +489,31 @@ func TestInformationSchemaColumnsDDL_UnsignedDecimalAncientConstructs(t *testing
 	require.Contains(t, window, "as varchar(65535))")
 }
 
+// TestInformationSchemaColumnsDDL_DefaultGeneratedExtraArm pins the
+// expression-default EXTRA publication (issue #31161): every current
+// branch marks expression defaults DEFAULT_GENERATED through the mode-7
+// mo_show_visible_bin classifier, layered after the generated-column arm
+// so auto-increment and generated columns keep precedence, while the
+// varchar(24) EXTRA cast still bounds the result. The frozen pre-change
+// identity keeps the previous EXTRA projection byte-stably.
+func TestInformationSchemaColumnsDDL_DefaultGeneratedExtraArm(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	require.Equal(t, 4, strings.Count(current,
+		"when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') "+
+			"when length(mo_show_visible_bin(mc.att_default, 7)) > 0 then 'DEFAULT_GENERATED' "+
+			"else '' end as varchar(24)) as EXTRA,"))
+	preChange := InformationSchemaColumnsPreDefaultGeneratedDDL()
+	require.Equal(t, 4, strings.Count(preChange,
+		"when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"))
+	require.NotContains(t, preChange, "mo_show_visible_bin(mc.att_default, 7)")
+	// The frozen-template rule: the arm composes only length, a literal
+	// comparison and the two-argument mo_show_visible_bin form the
+	// historical templates already use, so a persisted definition never
+	// depends on a builtin introduced after the historical template fence.
+	assertInformationSchemaInitSQLParses(t, current)
+	assertInformationSchemaInitSQLParses(t, preChange)
+}
+
 // TestInformationSchemaColumnsDDL_DeclaredLabelMetadataProjections pins the
 // projection rewrite every current branch takes: information_schema.COLUMNS
 // metadata must consult the declared ENUM/SET labels next to the physical

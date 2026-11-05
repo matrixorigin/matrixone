@@ -4313,7 +4313,7 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		want  string
 	}{
 		{"x", typWithLen, "short type encoding"},
-		{string(encoded), 255, "the second argument must be in [0, 6]"},
+		{string(encoded), 255, "the second argument must be in [0, 7]"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, []FunctionTestInput{

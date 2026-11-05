@@ -415,6 +415,49 @@ func informationSchemaColumnsWithUnsignedDecimalDDL() string {
 	return informationSchemaColumnsUnsignedDecimalColumnsTypeOver(informationSchemaCurrentColumnsDDL())
 }
 
+// columnsExtraDefaultGeneratedArm is the EXTRA arm publishing the
+// expression-default attribute (issue #31161): the mode-7 classifier marks
+// expression defaults DEFAULT_GENERATED while literal defaults keep empty
+// EXTRA. The arm composes after the generated-column arm, so auto-increment
+// and generated columns keep precedence, and the varchar(24) EXTRA cast
+// still bounds the result (DEFAULT_GENERATED is 17 characters).
+const columnsExtraDefaultGeneratedArm = "when length(mo_show_visible_bin(mc.att_default, 7)) > 0 then 'DEFAULT_GENERATED' "
+
+// informationSchemaColumnsDefaultGeneratedExtraOver layers the
+// expression-default EXTRA arm onto every branch of the given COLUMNS
+// template. The generated-column EXTRA tail is identical in all four
+// branches; mo_show_visible_bin with a two-argument mode is an ancient
+// construct the historical templates already use, so the frozen-template
+// rule is preserved.
+func informationSchemaColumnsDefaultGeneratedExtraOver(base string) string {
+	const extraTail = "when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"
+	return strings.ReplaceAll(base, extraTail,
+		"when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') "+
+			columnsExtraDefaultGeneratedArm+"else '' end as varchar(24)) as EXTRA,")
+}
+
+// informationSchemaColumnsWithDefaultGeneratedExtraDDL is the current
+// identity derivation: the expression-default EXTRA arm over the merged
+// attributed-DECIMAL chain.
+func informationSchemaColumnsWithDefaultGeneratedExtraDDL() string {
+	return informationSchemaColumnsDefaultGeneratedExtraOver(informationSchemaColumnsWithUnsignedDecimalDDL())
+}
+
+// InformationSchemaColumnsPreDefaultGeneratedDDL is the frozen pre-change
+// current identity for the DEFAULT_GENERATED revision: exactly what a
+// pre-change binary persisted as its live information_schema.COLUMNS
+// definition before the consolidated 4.0.7 entry recreates the view with
+// the expression-default arm. It is built only from frozen templates and
+// the fixed decoration/layer functions, never from the mutable current
+// constructor, so later revisions of the current derivation cannot drift
+// it; a test pins it byte-identical to the base derivation of the current
+// template.
+func InformationSchemaColumnsPreDefaultGeneratedDDL() string {
+	return informationSchemaColumnsUnsignedDecimalColumnsTypeOver(
+		informationSchemaColumnsUnboundedGeneratedExpressionDDL(
+			informationSchemaColumnsEnumSetDDL(InformationSchemaColumnsBinaryFamilyNullDDL())))
+}
+
 // The MEDIUMINT DATA_TYPE arm distinguishes the pre-change current template
 // from its frozen V109 lineage: the pre-change current text is exactly the
 // V109 historical constructor with this arm layered into DATA_TYPE.
@@ -527,6 +570,15 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	if definition == InformationSchemaColumns4018DDL() {
 		return definition, true
 	}
+	// The pre-change identity of the DEFAULT_GENERATED revision (issue
+	// #31161, design D3): exactly what binaries between the merged current
+	// and this revision persisted as their live definition. It is fully
+	// derived and already carries current column authority and projections,
+	// so it passes through byte-stable under the same rule as its 4.0.18
+	// predecessor.
+	if definition == InformationSchemaColumnsPreDefaultGeneratedDDL() {
+		return definition, true
+	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
@@ -545,7 +597,8 @@ func ViewMetadataColumnsDDL(definition string) (string, bool) {
 		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL() ||
 		isPreAttributesColumnsDDL(definition) ||
 		definition == InformationSchemaColumnsV110DDL() || definition == InformationSchemaColumnsBinaryFamilyNullDDL() ||
-		definition == InformationSchemaColumns4018DDL()
+		definition == InformationSchemaColumns4018DDL() ||
+		definition == InformationSchemaColumnsPreDefaultGeneratedDDL()
 	if !known {
 		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 			derived := informationSchemaDerivedColumnsDDL(legacy)
@@ -583,7 +636,8 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 // snapshot binding. The gates are the on-demand-format generations recent
 // binaries persisted as their current definition: the protocol-100
 // definition, the V110 MEDIUMINT template, its base-era NULL-selector
-// variant, the upstream 4.0.18 published identity, and the current
+// variant, the upstream 4.0.18 published identity, the pre-change identity
+// of the DEFAULT_GENERATED revision, and the current
 // (merged) definition. The historical protocol-109
 // definition is an input to the adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
@@ -592,6 +646,7 @@ func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 		definition == InformationSchemaColumnsV110DDL() ||
 		definition == InformationSchemaColumnsBinaryFamilyNullDDL() ||
 		definition == InformationSchemaColumns4018DDL() ||
+		definition == InformationSchemaColumnsPreDefaultGeneratedDDL() ||
 		definition == InformationSchemaColumnsDDL
 }
 
@@ -836,7 +891,7 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaColumnsWithUnsignedDecimalDDL()
+	InformationSchemaColumnsDDL = informationSchemaColumnsWithDefaultGeneratedExtraDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
