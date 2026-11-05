@@ -404,6 +404,8 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
+	primaryAffected := alterColumnIsPrimary(tableDef, column)
+
 	// A replacement keeps index bindings, but never the dropped column's source
 	// mapping. Genuine removals retain the existing index cleanup authority.
 	if preserveIndexes {
@@ -448,7 +450,7 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return primaryAffected, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
