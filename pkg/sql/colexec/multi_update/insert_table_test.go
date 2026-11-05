@@ -62,7 +62,6 @@ type insertTableHarness struct {
 	info      *updateCtxInfo
 	written   []*batch.Batch // captured batches passed to Source.Write
 	insertBuf *batch.Batch   // pre-allocated buffer (used by non-contiguous path)
-	tableName string
 }
 
 func newInsertTableHarness(
@@ -81,7 +80,7 @@ func newInsertTableHarness(
 		TableDef:   nil,
 	}
 
-	h := &insertTableHarness{tableName: tableName, updateCtx: updateCtx}
+	h := &insertTableHarness{updateCtx: updateCtx}
 
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().

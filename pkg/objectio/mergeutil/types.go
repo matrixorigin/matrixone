@@ -80,6 +80,18 @@ func MergeSortBatches(
 	case types.T_float64:
 		ds := &fixedDataSlice[float64]{getFixedCols[float64](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[float64], ds, nulls)
+	case types.T_bf16:
+		ds := &fixedDataSlice[types.BF16]{getFixedCols[types.BF16](batches, sortKeyIdx)}
+		merge = newMerge(sort.LowPrecisionLess[types.BF16], ds, nulls)
+	case types.T_float16:
+		ds := &fixedDataSlice[types.Float16]{getFixedCols[types.Float16](batches, sortKeyIdx)}
+		merge = newMerge(sort.LowPrecisionLess[types.Float16], ds, nulls)
+	case types.T_float8:
+		ds := &fixedDataSlice[types.Float8]{getFixedCols[types.Float8](batches, sortKeyIdx)}
+		merge = newMerge(sort.LowPrecisionLess[types.Float8], ds, nulls)
+	case types.T_float4:
+		ds := &fixedDataSlice[types.Float4]{getFixedCols[types.Float4](batches, sortKeyIdx)}
+		merge = newMerge(sort.LowPrecisionLess[types.Float4], ds, nulls)
 	case types.T_date:
 		ds := &fixedDataSlice[types.Date]{getFixedCols[types.Date](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.Date], ds, nulls)
@@ -124,7 +136,7 @@ func MergeSortBatches(
 	// existing comparison path. For all totally ordered key types, disjoint
 	// ranges can be copied in bulk without changing the merged order.
 	sortType := batches[0].Vecs[sortKeyIdx].GetType().Oid
-	if sortType != types.T_float32 && sortType != types.T_float64 {
+	if sortType != types.T_float32 && sortType != types.T_float64 && !sortType.IsLowPrecisionFloat() {
 		if order := merge.disjointBatchOrder(); order != nil {
 			return concatDisjointBatches(batches, order, merge, buffer, sinker, mp, putBack)
 		}

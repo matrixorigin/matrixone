@@ -251,19 +251,20 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 		exeTyp := types.MustTypeFromPlan(colTyp)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
-				Name:          col.GetOriginCaseName(),
-				Alg:           alg,
-				Type:          exeTyp,
-				Default:       planCols[i].GetDefault(),
-				OnUpdate:      planCols[i].GetOnUpdate(),
-				GeneratedCol:  col.GetGeneratedCol(),
-				Primary:       col.GetPrimary(),
-				Comment:       col.GetComment(),
-				ClusterBy:     col.ClusterBy,
-				AutoIncrement: col.Typ.GetAutoIncr(),
-				IsHidden:      col.Hidden,
-				Seqnum:        uint16(col.Seqnum),
-				EnumVlaues:    colTyp.GetEnumvalues(),
+				Name:              col.GetOriginCaseName(),
+				Alg:               alg,
+				Type:              exeTyp,
+				Default:           planCols[i].GetDefault(),
+				OnUpdate:          planCols[i].GetOnUpdate(),
+				GeneratedCol:      col.GetGeneratedCol(),
+				Primary:           col.GetPrimary(),
+				Comment:           col.GetComment(),
+				ClusterBy:         col.ClusterBy,
+				AutoIncrement:     col.Typ.GetAutoIncr(),
+				IsHidden:          col.Hidden,
+				Seqnum:            uint16(col.Seqnum),
+				EnumVlaues:        colTyp.GetEnumvalues(),
+				NumericAttributes: uint8(colTyp.GetNumericAttributes() & types.NumericAttributeMask),
 			},
 		}
 	}
@@ -302,6 +303,11 @@ type Attribute struct {
 	EnumVlaues string
 	// GeneratedCol is for generated (computed) columns
 	GeneratedCol *plan.GeneratedCol
+	// NumericAttributes carries the DECIMAL UNSIGNED(bit 0)/ZEROFILL(bit 1)
+	// attribute mask. It is an in-memory mirror only: the durable record is
+	// mo_columns.att_is_unsigned, rebuilt into this field on every catalog
+	// read. Zero for every non-decimal type.
+	NumericAttributes uint8
 }
 
 type PropertiesDef struct {
@@ -1282,6 +1288,16 @@ type ReaderFilter func(
 	loadedColumns []int,
 ) (ReaderFilterResult, error)
 
+// ReaderFilterRequest owns one prepared scan's two execution forms. Readers
+// invoke Apply on owned batches unless Exact completed the same predicate chain.
+// Observe consumes scalar input/work metadata only; cached vectors never escape.
+// Like ReaderFilter, requests are sequential and must not be shared concurrently.
+type ReaderFilterRequest struct {
+	Apply   ReaderFilter
+	Exact   *objectio.ExactScanState
+	Observe func(objectio.ExactScanStats)
+}
+
 // LateMaterializationReader is an optional Reader capability. It reads the
 // early columns, applies filter, and materializes the remaining columns only
 // for surviving persisted rows. Readers must fall back to an eager read for
@@ -1291,7 +1307,7 @@ type LateMaterializationReader interface {
 		ctx context.Context,
 		cols []string,
 		earlyColumns []int,
-		filter ReaderFilter,
+		filter *ReaderFilterRequest,
 		mp *mpool.MPool,
 		outBatch *batch.Batch,
 	) (isEnd bool, err error)
@@ -1307,7 +1323,7 @@ type FilteredTopKReader interface {
 		ctx context.Context,
 		cols []string,
 		earlyColumns []int,
-		filter ReaderFilter,
+		filter *ReaderFilterRequest,
 		indexParam *plan.IndexReaderParam,
 		mp *mpool.MPool,
 		outBatch *batch.Batch,

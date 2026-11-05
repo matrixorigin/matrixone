@@ -185,4 +185,15 @@ func TestPKCommitTSMatchedInRange(t *testing.T) {
 	changed, ok = pkCommitTSMatchedInRange(constant, nil, []int64{3}, from, to)
 	require.True(t, ok)
 	require.True(t, changed)
+
+	aborts := vector.NewVec(types.T_bool.ToType())
+	defer aborts.Free(mp)
+	require.NoError(t, vector.AppendFixedList(aborts, []bool{true, false, false, false}, nil, mp))
+	changed, ok = pkCommitTSMatchedInRange(constant, aborts, []int64{0}, from, to)
+	require.True(t, ok)
+	require.False(t, changed, "an aborted version is not a committed PK conflict")
+	aborts.SetNull(1)
+	changed, ok = pkCommitTSMatchedInRange(constant, aborts, []int64{1}, from, to)
+	require.False(t, ok, "unknown abort metadata must remain conservative")
+	require.False(t, changed)
 }

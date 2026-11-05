@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -130,6 +131,7 @@ func initRelAndReader(
 	idxRelMap map[string]engine.Relation,
 	idxReaderMap map[string]engine.Reader,
 	metadata partition.PartitionMetadata,
+	sinkerOption ioutil.SinkerOption,
 ) (err error) {
 
 	var (
@@ -148,7 +150,7 @@ func initRelAndReader(
 			relMap[p.Name] = tmpRel
 
 			if readerMap != nil {
-				if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+				if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel, sinkerOption); err != nil {
 					return err
 				}
 				readerMap[p.Name] = tmpReader
@@ -162,7 +164,7 @@ func initRelAndReader(
 					return err
 				}
 
-				if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+				if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel, sinkerOption); err != nil {
 					return err
 				}
 
@@ -190,7 +192,7 @@ func initRelAndReader(
 		relMap["p0"] = tmpRel
 
 		if readerMap != nil {
-			if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+			if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel, sinkerOption); err != nil {
 				return err
 			}
 			readerMap["p0"] = tmpReader
@@ -208,7 +210,7 @@ func initRelAndReader(
 			key := idx.IndexName + "." + idx.IndexAlgoTableType
 
 			if idxReaderMap != nil {
-				if idxReaderMap[key], err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+				if idxReaderMap[key], err = disttae.NewTableMetaReader(ctx, tmpRel, sinkerOption); err != nil {
 					return err
 				}
 			}
@@ -296,6 +298,22 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		metadata    partition.PartitionMetadata
 	)
 
+	// Round-32 review, finding 2 (issue #25590 invariant I4): the clone
+	// materializes the source's rows and tombstones into brand-new
+	// objects whose metadata the DESTINATION relations record into THIS
+	// transaction (proc's txn - the recording transaction), so both
+	// materializing writer families join the same per-object admission
+	// the other producers reserve under: one in-flight unit before an
+	// object goes durable, converted by the record choke that admits the
+	// destination's metadata batch. The option resolves through the
+	// RECORDING transaction's workspace - never through the source
+	// relation's workspace, which for a snapshot clone belongs to a
+	// snapshot operator that never records this metadata: reservations
+	// parked there would be unconvertible. An unbound workspace (no
+	// transaction operator, or a workspace without the SinkerOwner
+	// surface) keeps an unhooked writer, exactly the pre-fix behavior.
+	recSinkerOption := colexec.WorkspaceSinkerCapacityOption(proc)
+
 	partitioned =
 		pSrv.Enabled() &&
 			features.IsPartitioned(tc.Ctx.SrcTblDef.FeatureFlag)
@@ -313,6 +331,7 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		if err = initRelAndReader(
 			tc.Ctx.SrcCtx, srcDB, tc.Ctx.SrcTblDef.Name, tc.srcRel,
 			tc.srcReader, nil, tc.srcIdxReader, metadata,
+			recSinkerOption,
 		); err != nil {
 			return err
 		}
@@ -335,6 +354,7 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		if err = initRelAndReader(
 			proc.Ctx, dstDB, tc.dstMasterRel.GetTableName(),
 			tc.dstRel, nil, tc.dstIdxRel, nil, metadata,
+			recSinkerOption,
 		); err != nil {
 			return err
 		}

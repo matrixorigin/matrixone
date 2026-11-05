@@ -181,6 +181,13 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	if input.Oid == types.T_bit {
 		return 20, 0, true
 	}
+	// TRUE/FALSE participate in exact numeric coercion as 1/0 with one
+	// integral digit and zero scale, matching the comparison aligner; without
+	// this a full-scale DECIMAL128 operand would miss the Decimal256 widening
+	// an integer operand receives and overflow during execution.
+	if input.Oid == types.T_bool {
+		return 1, 0, true
+	}
 	return 0, 0, false
 }
 
@@ -380,7 +387,11 @@ func alignDecimalComparisonTypesMode(targets, inputs []types.Type, legacy bool) 
 		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
 			target = targets[i]
 		}
-		if input.Oid.IsDecimal() || input.IsIntOrUint() {
+		// BOOL participates in the decimal comparison domain as a 0/1 value
+		// with one integral digit (MySQL TRUE/FALSE semantics), so its digit
+		// contribution is computed from the operand itself rather than from
+		// the catch-all cast envelope of the fixed rule table.
+		if input.Oid.IsDecimal() || input.IsIntOrUint() || input.Oid == types.T_bool {
 			sources[i] = input
 			if input.Oid.IsDecimal() && input.Width <= 0 {
 				sources[i].Width = input.Oid.ToType().Width
@@ -809,7 +820,7 @@ var supportedOperators = []FuncNew{
 		functionId: NOT,
 		class:      plan.Function_STRICT,
 		layout:     UNARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    logicalFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -830,29 +841,7 @@ var supportedOperators = []FuncNew{
 		functionId: AND,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     MULTIARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			cost := 0
-			for _, source := range inputs {
-				if source.Oid != types.T_bool {
-					can, _ := fixedImplicitTypeCast(source, types.T_bool)
-					if !can {
-						return newCheckResultWithFailure(failedFunctionParametersWrong)
-					}
-					cost++
-				}
-			}
-
-			if cost == 0 {
-				return newCheckResultWithSuccess(0)
-			} else {
-				castTypes := make([]types.Type, len(inputs))
-				boolType := types.T_bool.ToType()
-				for i := range castTypes {
-					castTypes[i] = boolType
-				}
-				return newCheckResultWithCast(0, castTypes)
-			}
-		},
+		checkFn:    logicalOperatorTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -872,29 +861,7 @@ var supportedOperators = []FuncNew{
 		functionId: OR,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     MULTIARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			cost := 0
-			for _, source := range inputs {
-				if source.Oid != types.T_bool {
-					can, _ := fixedImplicitTypeCast(source, types.T_bool)
-					if !can {
-						return newCheckResultWithFailure(failedFunctionParametersWrong)
-					}
-					cost++
-				}
-			}
-
-			if cost == 0 {
-				return newCheckResultWithSuccess(0)
-			} else {
-				castTypes := make([]types.Type, len(inputs))
-				boolType := types.T_bool.ToType()
-				for i := range castTypes {
-					castTypes[i] = boolType
-				}
-				return newCheckResultWithCast(0, castTypes)
-			}
-		},
+		checkFn:    logicalOperatorTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -914,7 +881,7 @@ var supportedOperators = []FuncNew{
 		functionId: XOR,
 		class:      plan.Function_STRICT,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    logicalFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -1330,6 +1297,48 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[uint64]().operatorIn
 				},
 			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -1610,6 +1619,48 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorFixedIn[uint64]().operatorNotIn
+				},
+			},
+			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
+			// equality of the codes is equality of the values
+			{
+				overloadId: 103,
+				args:       []types.T{types.T_bf16, types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.BF16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 104,
+				args:       []types.T{types.T_float16, types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float16]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 105,
+				args:       []types.T{types.T_float8, types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float8]().operatorNotIn
+				},
+			},
+			{
+				overloadId: 106,
+				args:       []types.T{types.T_float4, types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Float4]().operatorNotIn
 				},
 			},
 		},
@@ -2026,7 +2077,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_PLUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryPlusMatch,
 
 		Overloads: []overload{
 			{
@@ -2728,6 +2779,62 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 32,
+				args:       []types.T{types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bf16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.BF16]
+				},
+			},
+			{
+				overloadId: 33,
+				args:       []types.T{types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float16]
+				},
+			},
+			{
+				overloadId: 34,
+				args:       []types.T{types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float8]
+				},
+			},
+			{
+				overloadId: 35,
+				args:       []types.T{types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float4.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float4]
+				},
+			},
+			{
+				overloadId: 36,
+				args:       []types.T{types.T_array_float8},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 37,
+				args:       []types.T{types.T_array_float4},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
 		},
 	},
 
@@ -2815,6 +2922,13 @@ var supportedOperators = []FuncNew{
 				overloadId: int(TemporalIntegerArgumentCastOverload),
 				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
+			},
+			{
+				overloadId:      int(TemporalCastIntegerOverload),
+				volatile:        true,
+				executionStable: true,
+				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
 			},
 		},
 	},
@@ -2909,6 +3023,102 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return NewAssignIgnoreCast
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission`
+	// Plan-internal domain admission for attributed (UNSIGNED/ZEROFILL)
+	// DECIMAL assignment targets. It runs on the raw source value before the
+	// assignment cast quantizes to the target scale; the result type equals
+	// the input type. parameters[1] is the target type carrier, exactly like
+	// cast; parameters[2] is a constant carrying the destination column name
+	// for the 1264 strict/lenient diagnostics. Volatile so prepared
+	// statements resolve sql_mode at execution time, mirroring cast_assign.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmission
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission_strict`
+	// Authoring-time entry: always strict, used only inside the DDL DEFAULT
+	// validation composition so a non-strict authoring session cannot route
+	// the check through a clip+warning branch.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION_STRICT,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmissionStrict
+				},
+			},
+		},
+	},
+
+	// operator `unsigned_decimal_admission_ignore`
+	// INSERT/UPDATE IGNORE entry: always adjusts out-of-domain values with the
+	// truncation diagnostic preceding the 1264 clip diagnostic.
+	{
+		functionId: UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 && inputs[1].Oid.IsDecimal() &&
+				(inputs[2].Oid == types.T_varchar || inputs[2].Oid == types.T_char) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewUnsignedDecimalAdmissionIgnore
 				},
 			},
 		},
@@ -3041,7 +3251,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3062,7 +3272,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3083,7 +3293,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3104,7 +3314,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3529,7 +3739,12 @@ var supportedOperators = []FuncNew{
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
-		types.T_int32, types.T_uint32:
+		types.T_int32, types.T_uint32,
+		// DECIMAL targets join the explicit-name allow-list for the
+		// authoring-time unsigned-DECIMAL DEFAULT validation composition
+		// (MEDIUMINT int32/uint32 precedent). No plan-side selector chooses
+		// cast_strict for decimals, so ordinary casts are unaffected.
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false

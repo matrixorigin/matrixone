@@ -54,11 +54,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-BASE = ['mysql', '--no-defaults', '--no-login-paths', '--protocol=TCP',
+BASE = ['mysql', '--no-login-paths', '--protocol=TCP',
         '-h', os.environ.get('MO_HOST', '127.0.0.1'),
         '-P', os.environ['MO_PORT'],
         '-u', os.environ.get('MO_USER', 'dump'),
-        '--password=' + os.environ.get('MO_PASS', '111'), '-N', '--raw']
+        '-N', '--raw']
 EVIDENCE = Path(tempfile.mkdtemp(prefix='mo-defect-hunt-'))
 
 def show(name, sql, db=None, timeout=120):
@@ -66,11 +66,25 @@ def show(name, sql, db=None, timeout=120):
     (case / 'query.sql').write_text(sql, encoding='utf-8')
     result = {'case': name, 'database': db, 'timeout_seconds': timeout,
               'status': 'exited', 'rc': None, 'evidence': str(case)}
-    command = BASE + (['-D', db] if db is not None else []) + ['-e', sql]
+    password = os.environ.get('MO_PASS', '111')
+    if any(char in password for char in ('\r', '\n', '\x00')):
+        raise ValueError('MO_PASS contains unsupported control characters')
     try:
-        with (case / 'stdout').open('wb') as out, (case / 'stderr').open('wb') as err:
-            p = subprocess.run(command, stdout=out, stderr=err, timeout=timeout)
-            result['rc'] = p.returncode
+        # MySQL requires --defaults-file before ordinary client options.
+        # Use an owner-only, per-call file instead of exposing the secret in argv.
+        with tempfile.TemporaryDirectory(prefix='mo-probe-auth-') as auth_dir:
+            auth_file = Path(auth_dir) / 'client.cnf'
+            # MySQL option files use their own escapes, not JSON's. Preserve
+            # other bytes and quote only backslashes and double quotes.
+            escaped = os.fsencode(password).replace(b'\\', b'\\\\').replace(b'"', b'\\"')
+            fd = os.open(auth_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as config:
+                config.write(b'[client]\npassword="' + escaped + b'"\n')
+            command = [BASE[0], f'--defaults-file={auth_file}', *BASE[1:]]
+            command += (['-D', db] if db is not None else []) + ['-e', sql]
+            with (case / 'stdout').open('wb') as out, (case / 'stderr').open('wb') as err:
+                p = subprocess.run(command, stdout=out, stderr=err, timeout=timeout)
+                result['rc'] = p.returncode
     except subprocess.TimeoutExpired:
         result['status'] = 'timeout'
     except OSError as exc:
@@ -85,8 +99,10 @@ database. For stateful cases, create and clean only the schema owned by the
 probe. `status=exited` describes client completion, not whether an assertion
 passed; inspect `rc` and the raw streams. Timeout preserves partial output and
 terminates the local client; it does not establish server cancellation. Inspect
-server work before retrying. Preserve binary/text boundaries in comparisons;
-choose explicit SQL predicates when client rendering is ambiguous.
+server work before retrying. An uncatchable process termination can leave the
+private temporary credential file behind and require manual cleanup. Preserve
+binary/text boundaries in comparisons; choose explicit SQL predicates when
+client rendering is ambiguous.
 
 ## Issue search and policy, when preparing an issue
 

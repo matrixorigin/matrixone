@@ -24,14 +24,15 @@ configuration changes also retain the full scan.
 
 Both pinned analyzers receive the identical selection. Graph verification or an
 analyzer failure fails the target. An empty inventory/selection cannot pass.
-`err-check` still runs over the complete source tree. No assertions, analyzer
-rules, platform flags, concurrency settings, or coverage instrumentation change.
+`err-check` still runs over the complete source tree. Platform flags, concurrency
+settings, and coverage instrumentation are unchanged by package selection.
 
-The pinned molint analyzers inspect package AST/types/direct imports. Its
-`pkgblocklist` also resolves each import's module with `go/packages`; a module
-change therefore retains the full scan. The configured golangci analyzers use
-package/import analysis; Go and golangci continue to resolve dependency facts.
-Changes to analyzer versions/rules require reviewing this package-local contract.
+`molint check` loads the selected packages and their dependencies through Go's
+package graph. It checks authored imports and their module owners against that
+fresh graph, then runs typed checks through Go vet. A module or analyzer change
+retains the full scan. The configured golangci analyzers use package/import
+analysis; Go and golangci continue to resolve dependency facts. Changes to
+analyzer versions or rules require reviewing this package-local contract.
 
 ## Full checks and rollout
 

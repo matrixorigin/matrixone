@@ -106,7 +106,7 @@ set amount = 1234567890123456789012345678901232.2222,
 note = 'right'
 where id = 1;
 data branch pick t2 into t1 keys(1) when conflict fail;
-internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+conflict: t2 INSERT and t1 INSERT on pk(1) with different values
 data branch pick t2 into t1 keys(1) when conflict skip;
 select * from t1 where id = 1;
 ➤ id[4,32,0]  ¦  amount[3,39,4]  ¦  note[12,-1,0]  𝄀

@@ -24,6 +24,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// applyRemapDb applies the same policy to each statement via the production entry point.
+func applyRemapDb(ctx context.Context, stmts []tree.Statement, remap map[string]string, lowerCaseTableNames int64) error {
+	remaps := make([]map[string]string, len(stmts))
+	for i := range remaps {
+		remaps[i] = remap
+	}
+	return applyRemapDbByStatement(ctx, stmts, remaps, lowerCaseTableNames)
+}
+
 // applyRemapDbToSQL parses sql, runs applyRemapDb with the given remap, and
 // returns the re-stringified statement.
 func applyRemapDbToSQL(t *testing.T, sql string, remap map[string]string) string {

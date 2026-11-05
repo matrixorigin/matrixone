@@ -415,6 +415,9 @@ type Sinker struct {
 		tailSizeCap         int
 		offHeap             bool
 		chunkedColumnPolicy objectio.ChunkedColumnPolicy
+		// capacityHook gates each object right before it persists; nil
+		// in every caller without an engine capacity ledger.
+		capacityHook UncommittedCapacityHook
 	}
 	fSinker struct {
 		executor FileSinker
@@ -548,12 +551,26 @@ func DeleteUnpublishedObjects(
 	return len(unique), nil
 }
 
-// DeletePersisted deletes every object that this sinker has persisted, or may
-// have persisted after a commit-ambiguous Sync error, but has not transferred
-// out of its lifecycle yet. It returns the exact ownership snapshot on both
-// success and failure. The tracked references are retained when deletion fails
-// so the caller may retry or hand them off before closing the sinker.
-func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
+// PersistedNames takes this sinker's exact ownership snapshot — every
+// object it persisted, or may have persisted after a commit-ambiguous
+// Sync error, and has not transferred out of its lifecycle yet — WITHOUT
+// deleting anything (issue #25590 round-15 review): a caller on a
+// lock-holding or user-blocking path (a transaction's statement
+// admission) can transfer the names to its asynchronous cleanup owner
+// instead of synchronously deleting them on a file service whose
+// deletion a stalled context cannot move. The snapshot follows the same
+// completeness rule as DeletePersisted: a still-running pipeline is
+// drained first so no sibling write's file can be missed, and the tracked
+// references stay inside the sinker — closing it drops them exactly as
+// DeletePersisted's callers have always done after taking the snapshot.
+func (sinker *Sinker) PersistedNames() []string {
+	return sinker.persistedSnapshot()
+}
+
+// persistedSnapshot assembles the persisted/possibly-persisted name
+// snapshot shared by DeletePersisted (which deletes it) and
+// PersistedNames (which only hands it out).
+func (sinker *Sinker) persistedSnapshot() []string {
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		// A failed pipeline may still have successful sibling writes. Wait for
 		// all of them before taking the ownership snapshot.
@@ -577,7 +594,16 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
 		files = append(files, sinker.pipe.result.unpublished...)
 		sinker.pipe.result.mu.RUnlock()
 	}
-	files = normalizeUnpublishedObjectNames(files)
+	return normalizeUnpublishedObjectNames(files)
+}
+
+// DeletePersisted deletes every object that this sinker has persisted, or may
+// have persisted after a commit-ambiguous Sync error, but has not transferred
+// out of its lifecycle yet. It returns the exact ownership snapshot on both
+// success and failure. The tracked references are retained when deletion fails
+// so the caller may retry or hand them off before closing the sinker.
+func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
+	files := sinker.persistedSnapshot()
 	_, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
 		return files, err
@@ -606,6 +632,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	}
 
 	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
+		// Earlier vectors may already have allocated before a later one failed.
+		// The fetched batch is no longer owned by the freelist, so release it.
+		bat.Clean(sinker.mp)
 		return nil, err
 	}
 	return bat, nil
@@ -715,11 +744,12 @@ func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) e
 	}
 	waitStart := time.Now()
 	err := GetDefaultSinkPool().Submit(&poolSinkJob{
-		data:    data,
-		factory: sinker.fSinker.factory,
-		mp:      sinker.mp,
-		fs:      sinker.fs,
-		result:  sinker.pipe.result,
+		data:         data,
+		factory:      sinker.fSinker.factory,
+		mp:           sinker.mp,
+		fs:           sinker.fs,
+		result:       sinker.pipe.result,
+		capacityHook: sinker.config.capacityHook,
 	})
 	atomic.AddInt64(&sinker.timing.waitNs, int64(time.Since(waitStart)))
 	return err
@@ -812,6 +842,76 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	return err
 }
 
+// UncommittedCapacityHook gates one object sitting on the edge of
+// persistence: the file sinker calls it right BEFORE its Sync would make
+// the object durable, with the object's name, and a returned error aborts
+// that spill before anything persists. The engine uses this hook to
+// reserve capacity for each unpublished object as it is created, in
+// object units rather than writer units, so a workspace dump whose
+// writer spills several objects consumes one reservation per object and
+// a refusal stops the spilling writer with no partially-persisted
+// object behind it (issue #25590 round-18 review).
+type UncommittedCapacityHook func(name string) error
+
+// WithUncommittedCapacityHook installs the capacity hook consulted
+// before each object persists. It is nil in production unless the
+// caller's persistence is bounded by an engine admission ledger.
+func WithUncommittedCapacityHook(hook UncommittedCapacityHook) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.capacityHook = hook
+	}
+}
+
+// SinkerOwner is the structural interface to a workspace that owns the
+// uncommitted-capacity admission for the S3 writers its statements build:
+// the pipeline's direct-S3 insert operator resolves the transaction
+// operator's workspace through it and appends the option to its writer's
+// options, binding the SAME per-object reservation-before-persistence
+// admission the workspace dump carries — WITHOUT the operator's package
+// importing the workspace's engine (issue #25590 round-19 review: an
+// unbound direct-S3 writer persisted objects at saturation whose
+// metadata could never be recorded, and the pipeline's teardown dropped
+// them with no cleanup owner).
+type SinkerOwner interface {
+	SinkerCapacityOption() SinkerOption
+}
+
+// UnrecordedSinkerObjectsRetainer is the structural interface through
+// which a writer being unwound, after its metadata publication failed or
+// the pipeline broke down between persistence and recording, transfers
+// its persisted-or-possibly-persisted names to the workspace's
+// asynchronous cleanup obligation: those names are the only surviving
+// reference to physical objects whose metadata record was refused, and
+// closing a writer always dropped it (issue #25590 round-19 review).
+// The owner already counts every recorded name through its own registries,
+// so it filters those out and takes over only the UNRECORDED remainder.
+type UnrecordedSinkerObjectsRetainer interface {
+	RetainUnrecordedS3Objects(persisted []string, reason string)
+}
+
+// HasUncommittedCapacityHook reports whether a capacity hook guards this
+// sinker's persistence — the assertion point of the writer-binding
+// regressions (issue #25590 round-19 review).
+func (sinker *Sinker) HasUncommittedCapacityHook() bool {
+	return sinker != nil && sinker.config.capacityHook != nil
+}
+
+// RebindUncommittedCapacityHook installs hook as the per-object admission
+// this sinker consults before each object persists, replacing whatever
+// earlier hook (or none) it carried; nil removes it. Writers that
+// outlive their binding transaction — a cached plan keeps the
+// multi_update delegate's persistent insert sinkers alive exactly for
+// their buffer pools and arenas — must rebind to the CURRENT execution's
+// workspace when they are reused: the workspace that built them settles
+// its own reservations at its terminal, and the next execution's objects
+// reserve under a workspace whose release path can still reach them
+// (issue #25590 round-35 review: without the rebind, every reused
+// writer's next spill reserved against the finalized first workspace,
+// stranding engine-wide admission capacity permanently).
+func (sinker *Sinker) RebindUncommittedCapacityHook(hook UncommittedCapacityHook) {
+	sinker.config.capacityHook = hook
+}
+
 // syncFileSinker persists the file sinker's data. On error, the caller is
 // responsible for cleanup via resetFileSinker(); the executor is eventually
 // closed in Sinker.Close().
@@ -824,6 +924,13 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 		}
 	}
 	syncStart := time.Now()
+	if sinker.config.capacityHook != nil {
+		if name := activeFileSinkerObjectName(fSinker); name != "" {
+			if err := sinker.config.capacityHook(name); err != nil {
+				return err
+			}
+		}
+	}
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
 	if err != nil {
@@ -857,7 +964,8 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
-			return nil, err
+			// Keep ownership of the merge buffer so the caller can recycle it.
+			return data, err
 		}
 		atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 		data.CleanOnlyData()
@@ -914,6 +1022,7 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	if err := containers.DedupSortedBatches(
 		sinker.schema.sortKeyIdx,
 		sorted,
+		sinker.mp,
 	); err != nil {
 		return err
 	}
@@ -1043,7 +1152,9 @@ func (sinker *Sinker) Write(
 					return
 				}
 			} else if curr.RowCount() == objectio.BlockMaxRows {
-				if err = sinker.pushStaged(ctx, curr); err != nil {
+				staged := curr
+				curr = nil // pushStaged takes ownership even if it returns an error.
+				if err = sinker.pushStaged(ctx, staged); err != nil {
 					return
 				}
 				if curr, err = sinker.fetchBuffer(); err != nil {
@@ -1061,16 +1172,19 @@ func (sinker *Sinker) Write(
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
-			if err = sinker.pushStaged(ctx, curr); err != nil {
+			staged := curr
+			curr = nil
+			if err = sinker.pushStaged(ctx, staged); err != nil {
 				return
 			}
-			curr = nil
 		}
 		left -= toAdd
 		offset += toAdd
 	}
 	if curr != nil && curr.RowCount() > 0 {
-		if err = sinker.pushStaged(ctx, curr); err != nil {
+		staged := curr
+		curr = nil
+		if err = sinker.pushStaged(ctx, staged); err != nil {
 			return
 		}
 	}
@@ -1079,6 +1193,7 @@ func (sinker *Sinker) Write(
 
 // WriteOwned stages a full-block batch directly without copying. The caller
 // transfers ownership: the sinker will clean the batch later.
+// When owned is true, the caller must release its reference even if err is non-nil.
 // If the batch is not exactly BlockMaxRows or there is a partially-filled
 // staged buffer, falls back to Write (which copies).
 func (sinker *Sinker) WriteOwned(
@@ -1145,6 +1260,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 			if err := containers.DedupSortedBatches(
 				sinker.schema.sortKeyIdx,
 				sinker.staged.inMemory,
+				sinker.mp,
 			); err != nil {
 				return err
 			}
@@ -1235,6 +1351,9 @@ func (sinker *Sinker) Close() error {
 	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
 		drainErr = sinker.drainPipeline()
+		// No more jobs will use this context after Close. Release its
+		// registration with the parent even when every job succeeded.
+		sinker.pipe.result.cancel()
 	}
 	sinker.cleanupInMemoryStaged()
 	if sinker.buf.buffers != nil {
@@ -1268,7 +1387,8 @@ func (sinker *Sinker) Close() error {
 // It is safe to call after an aborted pipeline execution so that the next
 // Write/Sync cycle starts from a clean state. The buf pool, file-sinker
 // executor (and its arena), mpool, and fileservice references are all kept
-// alive so they can be reused without reallocation.
+// alive so they can be reused without reallocation. Callers must publish,
+// delete, or transfer cleanup ownership of persisted objects before Reset.
 func (sinker *Sinker) Reset() {
 	// Drain any in-flight pipeline jobs before clearing state, so pool
 	// workers don't race with the cleanup below. Clearing pipe.result
@@ -1276,11 +1396,13 @@ func (sinker *Sinker) Reset() {
 	// doesn't inherit stale errors or persisted stats.
 	if sinker.pipe.result != nil {
 		sinker.drainPipeline()
+		sinker.pipe.result.cancel()
 		sinker.pipe.result = nil
 	}
 
 	sinker.cleanupInMemoryStaged()
 	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.staged.unpublished = nil
 
 	for i := range sinker.result.tail {
 		if sinker.result.tail[i] != nil {

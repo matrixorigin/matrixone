@@ -175,6 +175,10 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	if ciParallel <= 0 {
 		t.Fatal("CI workflow must supply a positive UT parallel budget")
 	}
+	ciPlanParallel := "1"
+	if ciParallel == 8 {
+		ciPlanParallel = "2"
+	}
 
 	// CI uses a detached, untagged shallow checkout. Reproduce its real Git
 	// diagnostics without cloning a repository or changing this worktree.
@@ -212,8 +216,13 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "embedded-batches-rollback", args: []string{"UT_EMBEDDED_BATCHES=1"}, want: "8 2 2 0", embeddedBatches: "1", accepted: true},
 		{name: "embedded-batches-invalid", args: []string{"UT_EMBEDDED_BATCHES=8"}, want: "8 2 2 0", embeddedBatches: "8", validationError: "UT_EMBEDDED_BATCHES must be"},
 		{name: "bounded-issues-default", want: "8 2 2 0", accepted: true},
-		{name: "ci-issues-budget", args: []string{"UT_PARALLEL=" + strconv.Itoa(ciParallel)}, want: "8 4 4 0", accepted: true},
-		{name: "eight-core-linux-default", args: []string{"UT_PARALLEL=8"}, want: "8 4 4 0", accepted: true},
+		{name: "ci-issues-budget", args: []string{"UT_PARALLEL=" + strconv.Itoa(ciParallel)}, want: "8 4 4 0", planParallel: ciPlanParallel, accepted: true},
+		{name: "eight-core-linux-default", args: []string{"UT_PARALLEL=8"}, want: "8 4 4 0", planParallel: "2", accepted: true},
+		{name: "eight-core-one-heavy-slot", args: []string{"UT_PARALLEL=8", "HEAVY_RACE_PARALLEL=1"}, want: "8 4 4 0", planParallel: "1", accepted: true},
+		{name: "eight-core-explicit-plan-overrides-heavy-slot", args: []string{"UT_PARALLEL=8", "HEAVY_RACE_PARALLEL=1", "PLAN_RACE_PARALLEL=2"}, want: "8 4 4 0", planParallel: "2", accepted: true},
+		{name: "eight-core-one-plan-shard", args: []string{"UT_PARALLEL=8", "PLAN_RACE_SHARDS=1"}, want: "8 4 4 0", planParallel: "1", accepted: true},
+		{name: "eight-core-explicit-plan-overrides-shard", args: []string{"UT_PARALLEL=8", "PLAN_RACE_SHARDS=1", "PLAN_RACE_PARALLEL=2"}, want: "8 4 4 0", planParallel: "2", accepted: true},
+		{name: "nine-core-linux-unmeasured", args: []string{"UT_PARALLEL=9"}, want: "8 4 4 0", accepted: true},
 		{name: "seven-core-linux-default", args: []string{"UT_PARALLEL=7"}, want: "8 2 2 0", accepted: true},
 		{name: "eight-core-darwin-default", args: []string{"UNAME_S=darwin", "UT_PARALLEL=8"}, want: "8 2 2 0", accepted: true},
 		{name: "explicit-three-issues-workers", args: []string{"UT_ISSUES_BATCH_PARALLEL=3"}, want: "8 3 2 0", accepted: true},
@@ -235,6 +244,7 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "8 18446744073709551618 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "8 2 18446744073709551618 0", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
 		{name: "explicit-plan-two-worker-opt-in", args: []string{"UT_PARALLEL=8", "PLAN_RACE_PARALLEL=2"}, want: "8 4 4 0", planParallel: "2", accepted: true},
+		{name: "explicit-plan-serial-rollback", args: []string{"UT_PARALLEL=8", "PLAN_RACE_PARALLEL=1"}, want: "8 4 4 0", planParallel: "1", accepted: true},
 		{name: "explicit-plan-two-on-small-budget", args: []string{"UT_PARALLEL=7", "PLAN_RACE_PARALLEL=2"}, want: "8 2 2 0", planParallel: "2", accepted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,7 +264,7 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 			for _, value := range append(os.Environ(), "UT_PARALLEL=8") {
 				key, _, _ := strings.Cut(value, "=")
 				switch key {
-				case "UT_PARALLEL", "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "PLAN_RACE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+				case "UT_PARALLEL", "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "HEAVY_RACE_PARALLEL", "PLAN_RACE_PARALLEL", "PLAN_RACE_SHARDS", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
 					continue
 				}
 				cmd.Env = append(cmd.Env, value)

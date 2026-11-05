@@ -70,10 +70,10 @@ no such table fk_self_refer4.t1
 select * from t1;
 SQL parser error: table "t1" does not exist
 drop table t1;
-no such table fk_self_refer4.t1
+Unknown table 'fk_self_refer4.t1'
 drop table t2;
 drop table t1;
-no such table fk_self_refer4.t1
+Unknown table 'fk_self_refer4.t1'
 create table t1(a int primary key ,b int);
 alter table t1 add constraint `fk1` foreign key (b) references t1(a);
 alter table t1 add constraint `fk2` foreign key (b) references t1(a);

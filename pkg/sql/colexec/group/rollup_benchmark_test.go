@@ -433,6 +433,11 @@ func newRollupBenchmarkRunner(
 		runner.aggs = []aggexec.AggFuncExecExpression{countStarAgg()}
 	case "avg":
 		runner.aggs = []aggexec.AggFuncExecExpression{avgAgg(int32(keyCount))}
+	case "multi":
+		runner.aggs = []aggexec.AggFuncExecExpression{countStarAgg()}
+		for key := 0; key < keyCount; key++ {
+			runner.aggs = append(runner.aggs, sumAgg(int32(keyCount+key)), avgAgg(int32(keyCount+key)))
+		}
 	default:
 		return nil, fmt.Errorf("invalid rollup benchmark aggregate: %s", aggregate)
 	}
@@ -449,10 +454,16 @@ func newRollupBenchmarkRunner(
 	// Keep one independent process/mpool per legacy branch. It models the
 	// branch-local aggregate state and lets the parallel case run without
 	// sharing mutable operator state.
+	measureCount := 0
+	if aggregate == "avg" {
+		measureCount = 1
+	} else if aggregate == "multi" {
+		measureCount = keyCount
+	}
 	for i := 0; i <= keyCount; i++ {
 		mp := mpool.MustNewZero()
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-		base, err := makeRollupBenchmarkBatch(proc, rows, ndvByKey, keyCount, ordered, aggregate == "avg")
+		base, err := makeRollupBenchmarkBatch(proc, rows, ndvByKey, keyCount, ordered, measureCount)
 		if err != nil {
 			if base != nil {
 				base.Clean(proc.Mp())
@@ -497,15 +508,12 @@ func makeRollupBenchmarkGroupBy(prefix int) []*plan.Expr {
 
 func makeRollupBenchmarkBatch(
 	proc *process.Process,
-	rows int, ndvByKey []int, keyCount int, ordered bool, withMeasure bool,
+	rows int, ndvByKey []int, keyCount int, ordered bool, measureCount int,
 ) (*batch.Batch, error) {
 	if len(ndvByKey) != keyCount {
 		return nil, fmt.Errorf("invalid per-key NDV shape: got %d keys, want %d", len(ndvByKey), keyCount)
 	}
-	columnCount := keyCount
-	if withMeasure {
-		columnCount++
-	}
+	columnCount := keyCount + measureCount
 	bat := batch.NewWithSize(columnCount)
 	allValues := make([][]int32, keyCount)
 	for key := 0; key < keyCount; key++ {
@@ -519,10 +527,10 @@ func makeRollupBenchmarkBatch(
 		}
 		allValues[key] = values
 	}
-	if withMeasure {
+	for measure := 0; measure < measureCount; measure++ {
 		values := make([]int32, rows)
 		for row := range values {
-			values[row] = int32((row*31 + 7) % 1000003)
+			values[row] = int32((row*31 + 7 + measure*101) % 1000003)
 		}
 		allValues = append(allValues, values)
 	}
@@ -540,7 +548,7 @@ func makeRollupBenchmarkBatch(
 			}
 			return left < right
 		})
-		for key := 0; key < keyCount; key++ {
+		for key := range allValues {
 			sortedValues := make([]int32, rows)
 			for row, sourceRow := range order {
 				sortedValues[row] = allValues[key][sourceRow]
@@ -632,8 +640,10 @@ func (runner *rollupBenchmarkRunner) runHashShared() (int64, error) {
 	for key := 0; key < groupCount; key++ {
 		projectList = append(projectList, colExpr(int32(key), types.T_int32))
 	}
-	if runner.aggregate == "avg" {
-		projectList = append(projectList, colExpr(int32(groupCount), types.T_int32))
+	// Aggregate arguments must survive grouping-set NULL substitution. Keep
+	// independent measure columns, as the real planner does for these inputs.
+	for col := groupCount; col < len(source.base.Vecs); col++ {
+		projectList = append(projectList, colExpr(int32(col), types.T_int32))
 	}
 	projectList = append(projectList,
 		&plan.Expr{

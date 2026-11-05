@@ -162,3 +162,27 @@ func TestWhitespaceRecordCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestUnterminatedEnclosureErrorsAndHeader(t *testing.T) {
+	for _, input := range []string{"\"a", "\"a\\"} {
+		cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: "\"", FieldsEscapedBy: "\\", AllowUnterminatedEnclosureAtEOF: true}
+		p, err := NewCSVParser(&cfg, iotest.TimeoutReader(strings.NewReader(input)), 1, false)
+		require.NoError(t, err)
+		_, err = p.Read(nil)
+		require.ErrorIs(t, err, iotest.ErrTimeout)
+		require.False(t, IsSyntaxError(err))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: "\"", FieldsEscapedBy: "\\", AllowUnterminatedEnclosureAtEOF: true, Context: ctx}
+	p, err := NewCSVParser(&cfg, strings.NewReader("\"a"), 1, false)
+	require.NoError(t, err)
+	_, err = p.Read(nil)
+	require.ErrorIs(t, err, context.Canceled)
+	cfg.Context = nil
+	cfg.HeaderSchemaMatch = true
+	p, err = NewCSVParser(&cfg, strings.NewReader("\"\\N"), 1, true)
+	require.NoError(t, err)
+	require.ErrorIs(t, p.ScanRecord(), io.EOF)
+	require.Equal(t, []string{"\"n"}, p.Columns())
+}

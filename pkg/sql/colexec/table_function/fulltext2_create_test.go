@@ -578,11 +578,7 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
 				require.NoError(t, err)
 				require.Empty(t, files, "the spill is unlinked while its handle serves the insert")
-				if opts.HasParams() {
-					vec, err := opts.Params(mp)
-					require.NoError(t, err)
-					require.NotEmpty(t, vec.GetRawBytesAt(1))
-					vec.Free(mp)
+				if strings.Contains(sql, "index_file_chunks") {
 					return executor.Result{}, tc.err
 				}
 				return executor.Result{}, nil
@@ -643,7 +639,7 @@ func newFT2PipelineHarness(t *testing.T, writeErr error) *ft2PipelineHarness {
 	t.Cleanup(func() { fulltext2_runSql = prev })
 	fulltext2_runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) { return executor.Result{}, nil }
 	mockIndexTxn(t, h.proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
-		if opts.HasParams() {
+		if strings.Contains(sql, "index_file_chunks") {
 			return executor.Result{}, h.writeErr
 		}
 		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "INSERT ") {

@@ -1,0 +1,61 @@
+drop database if exists prepared_nonfinite_float_param;
+create database prepared_nonfinite_float_param;
+use prepared_nonfinite_float_param;
+create table vals(v int);
+insert into vals values (1),(2),(3);
+prepare cont_p from 'select percentile_cont(?) within group (order by v) from vals';
+prepare disc_p from 'select percentile_disc(?) within group (order by v) from vals';
+prepare approx_p from 'select approx_percentile(v, ?) from vals';
+prepare mul_p from 'select cast(? * 1e0 as char) as product, cast(cast(? as double) as char) as as_double';
+set @p = bit_cast(unhex('000000000000f87f') as double);
+select cast(@p as char) as p, cast(@p * 1e0 as char) as product;
+➤ p[12,65535,0]  ¦  product[12,65535,0]  𝄀
+NaN  ¦  NaN
+execute mul_p using @p, @p;
+➤ product[12,65535,0]  ¦  as_double[12,65535,0]  𝄀
+NaN  ¦  NaN
+execute cont_p using @p;
+invalid input: percentile argument of percentile_cont must be finite and in [0,1], got NaN
+execute disc_p using @p;
+invalid input: percentile argument of percentile_disc must be finite and in [0,1], got NaN
+execute approx_p using @p;
+invalid input: percentile argument of approx_percentile must be finite and in [0,1], got NaN
+set @p = bit_cast(unhex('000000000000f07f') as double);
+execute mul_p using @p, @p;
+➤ product[12,65535,0]  ¦  as_double[12,65535,0]  𝄀
++Inf  ¦  +Inf
+execute cont_p using @p;
+invalid input: percentile argument of percentile_cont must be finite and in [0,1], got +Inf
+execute disc_p using @p;
+invalid input: percentile argument of percentile_disc must be finite and in [0,1], got +Inf
+set @p = bit_cast(unhex('000000000000f0ff') as double);
+execute mul_p using @p, @p;
+➤ product[12,65535,0]  ¦  as_double[12,65535,0]  𝄀
+-Inf  ¦  -Inf
+execute cont_p using @p;
+invalid input: percentile argument of percentile_cont must be finite and in [0,1], got -Inf
+execute disc_p using @p;
+invalid input: percentile argument of percentile_disc must be finite and in [0,1], got -Inf
+set @p = 0.5e0;
+execute cont_p using @p;
+➤ percentile_cont(?) within group (order by v)[8,53,31]  𝄀
+2.0
+execute disc_p using @p;
+➤ percentile_disc(?) within group (order by v)[4,32,0]  𝄀
+2
+set @p = 1.5e0;
+execute cont_p using @p;
+invalid input: percentile argument of percentile_cont must be finite and in [0,1], got 1.5
+set @p = '0.5';
+execute cont_p using @p;
+➤ percentile_cont(?) within group (order by v)[8,53,31]  𝄀
+2.0
+set @p = 'NaN';
+execute mul_p using @p, @p;
+➤ product[12,65535,0]  ¦  as_double[12,65535,0]  𝄀
+0  ¦  0
+deallocate prepare cont_p;
+deallocate prepare disc_p;
+deallocate prepare approx_p;
+deallocate prepare mul_p;
+drop database prepared_nonfinite_float_param;

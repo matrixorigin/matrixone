@@ -140,6 +140,20 @@ class TestVersionComparison(unittest.TestCase):
         self.assertFalse(self.version_manager.is_version_compatible("3.0.1", operator="!="))
         self.assertTrue(self.version_manager.is_version_compatible("3.0.2", operator="!="))
 
+    def test_invalid_operator_rejected_without_backend_version(self):
+        for backend in (None, "3.0.1"):
+            manager = VersionManager()
+            if backend is not None:
+                manager.set_backend_version(backend)
+            with self.subTest(backend=backend):
+                with self.assertRaisesRegex(ValueError, "Unsupported operator"):
+                    manager.is_version_compatible("3.0.0", operator="===")
+
+    def test_unknown_backend_still_accepts_supported_operators(self):
+        for operator in (">=", ">", "<=", "<", "==", "!="):
+            with self.subTest(operator=operator):
+                self.assertTrue(self.version_manager.is_version_compatible("3.0.0", operator=operator))
+
 
 class TestFeatureRequirements(unittest.TestCase):
     """Test feature requirement functionality"""

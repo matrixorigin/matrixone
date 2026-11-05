@@ -125,9 +125,13 @@ func TestShowTableStatusWithIndexes(t *testing.T) {
 			_, err := conn.ExecContext(cleanup, "rollback")
 			assert.NoError(t, err)
 			_, err = conn.ExecContext(cleanup, "drop database `"+dbName+"`")
-			assert.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 			var remaining int
-			assert.NoError(t, conn.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_database where datname = ?", dbName).Scan(&remaining))
+			if !assert.NoError(t, conn.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_database where datname = ?", dbName).Scan(&remaining)) {
+				return
+			}
 			assert.Zero(t, remaining)
 		}()
 		for _, statement := range []string{
