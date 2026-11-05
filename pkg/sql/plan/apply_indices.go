@@ -4101,6 +4101,11 @@ func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfill(idxDef *I
 	if !ctx.valid || ctx.force || IsDefaultStats(ctx.node.Stats) || !finitePositive(buildRows) {
 		return false
 	}
+	// Removing index pruning exposes scan residuals to more rows. Preserve
+	// the established path unless evaluating every residual is provably safe.
+	if !regularIndexFiltersHaveStableEvaluation(ctx.node) {
+		return false
+	}
 	matches := min(ctx.node.Stats.TableCnt, buildRows)
 	if !idxDef.Unique {
 		wrapper := ctx.builder.getStatsInfoByTableID(ctx.node.TableDef.TblId)

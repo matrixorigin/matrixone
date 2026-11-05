@@ -29,17 +29,26 @@ func TestJoinIndexCostsProbeFanout(t *testing.T) {
 		name      string
 		ndv       float64
 		hint      string
+		residual  string
 		wantIndex bool
 	}{
 		{name: "many matches from few build keys", ndv: 1_000},
 		{name: "selective index control", ndv: 600_000, wantIndex: true},
 		{name: "force retains broad lookup", ndv: 1_000, hint: "force index(idx_membership)", wantIndex: true},
 		{name: "ignore retains scan", ndv: 600_000, hint: "ignore index(idx_membership)"},
+		{name: "safe residual permits costing", ndv: 1_000, residual: " and amount > 0"},
+		{name: "JSON cast retains evaluation domain", ndv: 1_000, residual: " and cast(payload as json) is not null", wantIndex: true},
+		{name: "JSON function retains evaluation domain", ndv: 1_000, residual: " and json_extract(payload, '$.x') is not null", wantIndex: true},
+		{name: "nested unsafe residual retains evaluation domain", ndv: 1_000, residual: " and (amount > 0 or cast(payload as json) is not null)", wantIndex: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := newEncodedExistsPlanTestContext(t, tc.ndv)
 			activity := ctx.tables["cost_activity"]
 			activity.Cols[2].Typ = activity.Cols[0].Typ
+			activity.Name2ColIndex["payload"] = int32(len(activity.Cols))
+			activity.Cols = append(activity.Cols, &planpb.ColDef{
+				Name: "payload", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 16}, Default: &planpb.Default{},
+			})
 			activity.Indexes = nil
 			addCostActivityRegularIndex(t, ctx, "idx_membership", []string{
 				"state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
@@ -52,7 +61,7 @@ func TestJoinIndexCostsProbeFanout(t *testing.T) {
 			ctx.statsCache.Set(ctx.tables["cost_tags"].TblId, buildStats)
 			optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
 			query, err := runOneStmt(optimizer, t, "select count(*) from cost_activity "+tc.hint+
-				" where state in (select tenant_id from cost_tags where tenant_id < 100)")
+				" where state in (select tenant_id from cost_tags where tenant_id < 100)"+tc.residual)
 			require.NoError(t, err)
 			require.True(t, reachablePlanHasJoinType(query.GetQuery(), planpb.Node_SEMI))
 			require.Equal(t, tc.wantIndex, planHasIndexJoin(query))
