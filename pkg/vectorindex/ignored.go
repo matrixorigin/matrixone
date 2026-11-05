@@ -24,6 +24,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -40,13 +41,25 @@ const Float16Overflow = float32(65520)
 var UnstorableCodes = []uint16{moerr.ErrIndexVectorDimension, moerr.ErrIndexVectorNonFinite, moerr.ErrIndexVectorOutOfRange,
 	moerr.ErrIndexInvalidJSON, moerr.ErrIndexDatalink}
 
+// MaxIgnoredReason is the number of bytes of a message an ignored row records.
+const MaxIgnoredReason = 1024
+
 // IgnoredReason returns the message an ignored row of err records: the message of err when its
-// code needs the row's own detail, "" when the message of the code is enough.
+// code needs the row's own detail, "" when the message of the code is enough. A message longer
+// than MaxIgnoredReason bytes is cut at a character boundary and ends with "...".
 func IgnoredReason(err error) string {
 	code, _ := moerr.GetMoErrCode(err)
 	switch code {
 	case moerr.ErrIndexInvalidJSON, moerr.ErrIndexDatalink:
-		return err.Error()
+		msg := strings.ToValidUTF8(err.Error(), "�")
+		if len(msg) <= MaxIgnoredReason {
+			return msg
+		}
+		cut := MaxIgnoredReason - len("...")
+		for cut > 0 && !utf8.RuneStart(msg[cut]) {
+			cut--
+		}
+		return msg[:cut] + "..."
 	}
 	return ""
 }

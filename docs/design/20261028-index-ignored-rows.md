@@ -104,7 +104,7 @@ It returns one row per ignored source row of every index of the table:
 | `Key_name` | the index |
 | `Primary_key` | the primary key of the source row |
 | `Error_code` | the error code of why the index cannot store the row |
-| `Reason` | the message of the row, or of its code |
+| `Reason` | the message of the row, at most 1024 bytes, or of its code |
 | `Ignored_at` | when the row was recorded |
 
 A single-column key is its value as text. A composite key is the hex literal of its serial,
@@ -272,3 +272,4 @@ and I19–I20 of `test/distributed/cases/pessimistic_transaction/fulltext2/fullt
 | I19 | A FULLTEXT2 build leaves out, and records with its message, a row whose text is not JSON or whose DATALINK it cannot read, within its limit; a DATALINK error that may pass is retried. | `TestFulltext2CreateLeavesOutInvalidJSON`, `TestDatalinkError`, `TestJSONError`, `TestFulltext2BuildRecordsIgnoredRows` |
 | I20 | The FULLTEXT2 sync records the rows and follows the source rows, stops past the limit, and restarts with ALTER REINDEX. | `TestFulltext2WriterIgnoresInvalidJSON`, `TestFulltext2WriterIgnoredNativeKey`, `TestValidateReindexParams_MaxBadRecords` |
 | I21 | A composite key reads as the hex literal of its serial in `SHOW INDEX IGNORED` and in the errors of the limit; keys that differ only in fractional seconds read differently, and the literal finds its source row by `serial` of the key columns. | `TestIgnoredPkSql`, `TestSerialPkString`, `TestIgnoredRowsPkString`, `TestIvfflatWriterIgnoredTable`; `vector_ivfflat_ignored.sql` |
+| I22 | The message an ignored row records is at most 1024 bytes, cut at a character boundary, so a value of any length the column holds is left out within the limit by a build and by the sync. | `TestIgnoredReason`; `fulltext2_ignored.sql` |

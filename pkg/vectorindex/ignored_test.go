@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,6 +60,20 @@ func TestIgnoredReason(t *testing.T) {
 	require.Equal(t, err.Error(), IgnoredReason(err))
 	err = moerr.NewIndexInvalidJSONNoCtx("json text {")
 	require.Equal(t, err.Error(), IgnoredReason(err))
+
+	// a message longer than the bound is cut at a character boundary
+	for _, doc := range []string{strings.Repeat("{", 65535), strings.Repeat("é", 40000)} {
+		err = moerr.NewIndexInvalidJSONNoCtx(doc)
+		reason := IgnoredReason(err)
+		require.LessOrEqual(t, len(reason), MaxIgnoredReason)
+		require.True(t, utf8.ValidString(reason))
+		require.True(t, strings.HasSuffix(reason, "..."))
+		require.True(t, strings.HasPrefix(err.Error(), strings.TrimSuffix(reason, "...")))
+	}
+	// invalid UTF-8 is replaced
+	reason := IgnoredReason(moerr.NewIndexDatalinkNoCtx("a\xffb"))
+	require.True(t, utf8.ValidString(reason))
+	require.Contains(t, reason, "a\uFFFDb")
 }
 
 func TestUnstorableCode(t *testing.T) {

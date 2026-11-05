@@ -44,6 +44,21 @@ show index ignored from j;
 show index status from j;
 show create table j;
 
+-- ---------------- I22: the reason of a row is bounded -----
+-- a malformed value as long as the column builds, and the sync records another
+create table big(id bigint primary key, body text);
+insert into big values (1,'{"a":"red"}'),(2,concat('{', repeat('x', 65534)));
+create fulltext2 index fbig on big(body) with parser json max_bad_records 2;
+-- @ignore:3,4
+show index ignored from big where length(`Reason`) <= 1024;
+insert into big values (3,concat('[', repeat('y', 65534)));
+-- @ignore:3,4
+-- @wait_expect(2, 60)
+show index ignored from big where length(`Reason`) <= 1024;
+-- @ignore:6
+-- @wait_expect(2, 60)
+show index status from big;
+
 -- ---------------- I8: an index on text that needs no parsing is unchanged -----
 create table p(id bigint primary key, body varchar(200));
 insert into p values (1,'{not json but plain text}');
