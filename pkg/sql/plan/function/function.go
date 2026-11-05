@@ -971,6 +971,15 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 			(types.T(args[0].Typ.Id) == types.T_date || types.T(args[0].Typ.Id) == types.T_datetime) {
 			return false
 		}
+		// Explicit binary->text casts (overload 1, castModeExplicit) synthesize
+		// NULL with Warning 1300 when the source bytes are not valid UTF-8
+		// (func_cast.go binarySourceToText guard). A NOT NULL binary-domain
+		// source can therefore still produce NULL. Implicit, assignment,
+		// comparison and set-operation casts, binary-charset text targets and
+		// non-text targets keep their existing inference.
+		if oid == 1 && len(args) == 2 && explicitBinaryToTextCastMaySynthesizeNull(args) {
+			return false
+		}
 	case OCT:
 		// New string executors produce NULL for empty non-NULL input.
 		// Preserve the persisted legacy and numeric overload contracts.
@@ -1118,6 +1127,28 @@ func isTemporalPromotion(arg *plan.Expr) bool {
 	source := types.T(fn.Args[0].Typ.Id)
 	target := types.T(arg.Typ.Id)
 	return source.IsDateRelate() && target.IsDateRelate() && source != target
+}
+
+// explicitBinaryToTextCastMaySynthesizeNull mirrors the executor's
+// binarySourceToText guard (func_cast.go, castModeExplicit) at the inference
+// level: an explicit CAST into a non-binary-charset char/varchar/text target
+// synthesizes NULL with Warning 1300 on invalid UTF-8 whenever the source
+// carries binary domain evidence. That evidence is NOT only static:
+// stringDomainMode/binaryStringAt read legitimate runtime binary state
+// (types.StringSemanticState) that producers can set on text-shaped results
+// (binary_string_semantics.go setContributingStringResultDomain), and the
+// planner has no authoritative provenance to exclude it. Any MySQL string
+// source is therefore treated conservatively; non-string sources cannot
+// carry string domain state and keep their existing inference.
+func explicitBinaryToTextCastMaySynthesizeNull(args []*plan.Expr) bool {
+	dst := types.T(args[1].Typ.Id)
+	if dst != types.T_char && dst != types.T_varchar && dst != types.T_text {
+		return false
+	}
+	if args[1].Typ.Charset == uint32(types.CharsetBinary) {
+		return false
+	}
+	return types.T(args[0].Typ.Id).IsMySQLString()
 }
 
 // ProducesNoNull reports whether a function's contract guarantees a non-NULL

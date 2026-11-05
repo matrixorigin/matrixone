@@ -264,7 +264,18 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
+			// A user-written explicit CAST is a semantic boundary: its source
+			// must bind exactly as in a SELECT projection. Without
+			// suppression, an INSERT/REPLACE value binder pre-coerces a
+			// binary-domain source literal (x'FF', b'...', _binary'...') to
+			// the destination column type, erasing the binary domain before
+			// the explicit cast can apply its own conversion contract
+			// (invalid UTF-8 -> NULL + Warning 1300). The outer assignment
+			// cast still consumes the explicit cast's result.
+			suppress := b.suppressDefaultValueBindType
+			b.suppressDefaultValueBindType = true
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+			b.suppressDefaultValueBindType = suppress
 		}
 		b.numericParamType = parentParamType
 		if err != nil {

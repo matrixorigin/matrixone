@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -12584,7 +12585,7 @@ func appendSelectListWithGroupingOrder(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.appendHeading(tree.String(expr, dialect.MYSQL), headingProvenance{})
+				ctx.appendHeading(legalUTF8GeneratedHeading(tree.String(expr, dialect.MYSQL)), headingProvenance{})
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -12604,10 +12605,10 @@ func appendSelectListWithGroupingOrder(
 					}
 				}
 				if heading, ok := tree.NameConstHeading(expr); ok {
-					ctx.appendHeading(heading, headingProvenance{})
+					ctx.appendHeading(legalUTF8GeneratedHeading(heading), headingProvenance{})
 				} else {
 					heading, provenance := formatSelectExpressionHeading(expr)
-					ctx.appendHeading(heading, provenance)
+					ctx.appendHeading(legalUTF8GeneratedHeading(heading), provenance)
 				}
 			}
 
@@ -12729,6 +12730,18 @@ func qualifyGroupingSetHiddenOrderExpr(
 	orderCtx := *ctx
 	orderCtx.aliasMap = aliasMap
 	return orderCtx.qualifyColumnNames(qualified, AliasAfterColumn)
+}
+
+// legalUTF8GeneratedHeading enforces the wire contract for GENERATED select
+// headings only: a driver-facing column name must be legal UTF-8. The source
+// text of an unaliased expression can carry raw literal bytes (e.g. a _binary
+// literal), so the derived name gets invalid sequences replaced. Aliases and
+// catalog names are appended by other sites and are intentionally untouched.
+func legalUTF8GeneratedHeading(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "�")
 }
 
 // DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string literals.
