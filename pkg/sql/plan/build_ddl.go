@@ -2855,6 +2855,41 @@ func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	return nil
 }
 
+// marshalExternalTableParam publishes the CREATE EXTERNAL TABLE source param
+// into catalog metadata. The serialized payload must never carry a
+// non-reconstructible expression interface: UpdateExpr.Expr (and the load
+// column-list entries) hold tree.Expr values that encoding/json cannot decode
+// back, and InitNullMap keeps row-variable wrapper assignments attached to
+// the statement so LOAD replans can rebind them. Scans and SHOW CREATE
+// re-derive every usable option from the serialized reader options and the
+// NullMap this payload keeps, so the statement keeps its expressions and the
+// property strips them on a copy.
+func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
+	copied := *param
+	if param.Tail != nil {
+		copiedTail := *param.Tail
+		copiedTail.ColumnList = nil
+		if len(copiedTail.Assignments) > 0 {
+			assignments := make(tree.UpdateExprs, len(copiedTail.Assignments))
+			for i, assignment := range copiedTail.Assignments {
+				if assignment == nil {
+					continue
+				}
+				copiedAssignment := *assignment
+				copiedAssignment.Expr = nil
+				assignments[i] = &copiedAssignment
+			}
+			copiedTail.Assignments = assignments
+		}
+		copied.Tail = &copiedTail
+	}
+	payload, err := json.Marshal(&copied)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -3310,7 +3345,7 @@ func buildCreateTable(
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
 			return nil, err
 		}
-		json_byte, err := json.Marshal(stmt.Param)
+		json_byte, err := marshalExternalTableParam(stmt.Param)
 		if err != nil {
 			return nil, err
 		}
