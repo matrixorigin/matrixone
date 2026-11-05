@@ -59,17 +59,17 @@ func (b *optionalIndexBudget) admit(hb *HashmapBuilder, proc *process.Process, r
 	return nil
 }
 
-func (b *HashBuild) buildOptionalIndex(proc *process.Process) error {
-	hb := &b.ctr.hashmapBuilder
-	bound, known := hb.buildMemoryBound(proc.Ctx, b.Conditions, false, false, 0)
+func (hashBuild *HashBuild) buildOptionalIndex(proc *process.Process) error {
+	hb := &hashBuild.ctr.hashmapBuilder
+	bound, known := hb.buildMemoryBound(proc.Ctx, hashBuild.Conditions, false, false, 0)
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
 	// Prove key/executor scratch once. Table capacity is instead admitted
 	// incrementally, so duplicate input rows do not count as distinct keys.
 	available := min(proc.Mp().Cap()-proc.Mp().CurrNB(), mpool.GlobalCap()-mpool.GlobalStats().NumCurrBytes.Load())
-	if b.ctr.spillThreshold > 100000 {
-		available = min(available, b.ctr.spillThreshold-hb.Batches.Allocated())
+	if hashBuild.ctr.spillThreshold > 100000 {
+		available = min(available, hashBuild.ctr.spillThreshold-hb.Batches.Allocated())
 	}
 	_, initialPeak, ok := hashtable.BuildMemoryBound(0, hb.UsesStringKeys())
 	if !known || !ok || bound < initialPeak {
