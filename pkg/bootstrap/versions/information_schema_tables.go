@@ -24,3 +24,12 @@ import (
 func InformationSchemaTablesUpgradeEntry() UpgradeEntry {
 	return InformationSchemaViewUpgradeEntry("TABLES", sysview.InformationSchemaTablesV118DDL, defines.MORPCVersion118)
 }
+
+// InformationSchemaPartitionsUpgradeEntry refreshes the current PARTITIONS
+// definition on the startup rail InitSystemViews already applies for TABLES.
+// Tenants crossing versions keep using the v4_0_7 tenant upgrade entry; this
+// entry makes a cluster already at the current version converge a persisted
+// old PARTITIONS definition, with the same idempotent no-op definition check.
+func InformationSchemaPartitionsUpgradeEntry() UpgradeEntry {
+	return InformationSchemaViewUpgradeEntry("PARTITIONS", sysview.InformationSchemaPartitionsDDL, defines.MORPCVersion41)
+}
