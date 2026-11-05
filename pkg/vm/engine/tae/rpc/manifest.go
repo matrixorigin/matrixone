@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -95,9 +97,23 @@ func GenerateManifest(table *catalog.TableEntry, dataDir string) ([]byte, error)
 		}
 	}
 
-	// Enumerate visible objects using a mock "now" transaction
-	// (sees all committed objects, not MVCC-bound to a user txn)
-	readTxn := txnbase.MockTxnReaderWithNow()
+	// Enumerate the visible objects as a normal "now" reader.
+	//
+	// The object iterator classifies a reader with an empty txn context as
+	// a mock status reader: it skips an entry as soon as it has a delete
+	// counterpart — even one still uncommitted by an in-flight physical
+	// merge — and skips the merge's still-creating replacement. Applied to
+	// a merge in progress, that enumerated zero objects and the manifest
+	// reported a successful empty list for a nonempty table (#32215).
+	//
+	// Binding the now snapshot to a normal txn context makes the iterator
+	// apply real MVCC visibility instead: the sources of an uncommitted
+	// merge stay visible until the replacement commits, and the
+	// replacement only appears once its own commit is visible. The
+	// manifest therefore always enumerates one complete committed object
+	// generation.
+	now := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	readTxn := txnbase.NewTxn(nil, nil, []byte("tae-manifest-reader"), now, now)
 	it := table.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
 
