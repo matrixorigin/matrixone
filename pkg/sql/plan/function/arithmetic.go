@@ -44,6 +44,7 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -464,6 +465,10 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32], selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64], selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, int64](parameters, result, proc, length, func(v1, v2 types.MoYear) int64 {
+			return int64(v1) + int64(v2)
+		}, selectList)
 	}
 	panic("unreached code")
 }
