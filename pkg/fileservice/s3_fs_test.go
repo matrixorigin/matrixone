@@ -26,6 +26,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -242,8 +243,16 @@ type blockingReadObjectStorage struct {
 
 type generatedRangeObjectStorage struct {
 	dummyObjectStorage
-	mu    sync.Mutex
-	reads []objectStorageReadRange
+	mu          sync.Mutex
+	reads       []objectStorageReadRange
+	readStarted chan struct{}
+	readOnce    sync.Once
+}
+
+type notifyReadObjectStorage struct {
+	ObjectStorage
+	reads      atomic.Int64
+	secondRead chan struct{}
 }
 
 type heldWriter struct {
@@ -289,6 +298,9 @@ func (g *generatedRangeObjectStorage) Read(
 	min *int64,
 	max *int64,
 ) (io.ReadCloser, error) {
+	if g.readStarted != nil {
+		g.readOnce.Do(func() { close(g.readStarted) })
+	}
 	g.mu.Lock()
 	g.reads = append(g.reads, objectStorageReadRange{
 		key: key,
@@ -300,6 +312,13 @@ func (g *generatedRangeObjectStorage) Read(
 		return nil, errors.New("expected a bounded range read")
 	}
 	return io.NopCloser(bytes.NewReader(make([]byte, *max-*min))), nil
+}
+
+func (s *notifyReadObjectStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	if s.reads.Add(1) == 2 {
+		close(s.secondRead)
+	}
+	return s.ObjectStorage.Read(ctx, key, min, max)
 }
 
 func (g *generatedRangeObjectStorage) readRanges() []objectStorageReadRange {
@@ -1405,16 +1424,21 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { fs.Close(ctx) })
+	safeToRelease := true
+	t.Cleanup(func() {
+		if safeToRelease {
+			fs.Close(ctx)
+		}
+	})
 
-	data := make([]byte, (9<<20)+1)
-	data[0] = 1
-	data[len(data)-1] = 2
+	data := []byte{1, 2}
 	require.NoError(t, fs.Write(ctx, IOVector{
 		FilePath: "foo/bar",
 		Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy:   SkipAllCache,
 	}))
+	storage := &notifyReadObjectStorage{ObjectStorage: fs.storage, secondRead: make(chan struct{})}
+	fs.storage = storage
 
 	writer := &heldWriter{
 		started: make(chan struct{}),
@@ -1433,12 +1457,18 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
 			{Offset: 0, Size: 1},
-			{Offset: 9 << 20, Size: 1},
+			{Offset: 1, Size: 1},
 		},
 	}
-	t.Cleanup(followerVector.Release)
+	t.Cleanup(func() {
+		if safeToRelease {
+			followerVector.Release()
+		}
+	})
 	require.False(t, fs.readMergeKey(leaderVector).CacheFill)
 	require.True(t, fs.readMergeKey(followerVector).CacheFill)
+	require.True(t, fs.readMergeKey(leaderVector).FullObject)
+	require.True(t, fs.readMergeKey(followerVector).FullObject)
 	require.NotEqual(t, fs.readMergeKey(leaderVector), fs.readMergeKey(followerVector))
 
 	leaderDone := make(chan error, 1)
@@ -1447,8 +1477,9 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		releaseWriter()
 		select {
 		case err := <-leaderDone:
-			require.NoError(t, err)
-		case <-time.After(5 * time.Second):
+			assert.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			safeToRelease = false
 			t.Error("non-cache-producing leader did not terminate")
 		}
 	})
@@ -1458,20 +1489,42 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		t.Fatal("non-cache-producing leader did not reach its writer")
 	}
 	require.False(t, fs.ioMerger.IsMerging(fs.readMergeKey(leaderVector)))
+	require.EqualValues(t, 1, storage.reads.Load())
 
-	followerDone := make(chan error, 1)
-	go func() { followerDone <- fs.Read(ctx, followerVector) }()
-	select {
-	case err := <-followerDone:
-		require.NoError(t, err)
-	case <-time.After(2 * time.Second):
+	followerCtx, cancelFollower := context.WithCancel(ctx)
+	followerResult := make(chan error, 1)
+	followerDone := make(chan struct{})
+	go func() {
+		defer close(followerDone)
+		followerResult <- fs.Read(followerCtx, followerVector)
+	}()
+	t.Cleanup(func() {
+		cancelFollower()
 		releaseWriter()
 		select {
 		case <-followerDone:
-		case <-time.After(5 * time.Second):
+		case <-time.After(10 * time.Second):
+			safeToRelease = false
+			t.Error("cache-producing follower did not exit during cleanup")
+		}
+	})
+	select {
+	case <-storage.secondRead:
+	case <-time.After(10 * time.Second):
+		releaseWriter()
+		cancelFollower()
+		select {
+		case <-followerDone:
+		case <-time.After(10 * time.Second):
 			t.Fatal("cache-producing follower did not terminate after leader release")
 		}
 		t.Fatal("cache-producing follower waited for a non-cache-producing leader")
+	}
+	select {
+	case <-followerDone:
+		require.NoError(t, <-followerResult)
+	case <-time.After(10 * time.Second):
+		t.Fatal("cache-producing follower did not finish its independent read")
 	}
 	require.Equal(t, []byte{1}, followerVector.Entries[0].Data)
 	require.Equal(t, []byte{2}, followerVector.Entries[1].Data)
@@ -1500,39 +1553,80 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { fs.Close(ctx) })
-	storage := &generatedRangeObjectStorage{}
-	fs.storage = storage
-	vector := &IOVector{
-		FilePath: "foo/bar",
-		Policy:   SkipFullFilePreloads,
-		Entries:  []IOEntry{{Offset: 0, Size: 1}},
-	}
-	t.Cleanup(vector.Release)
-	finishMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(vector), maxIOWaitDuration)
-	require.NotNil(t, finishMerge)
-	require.Nil(t, waitMerge)
-	releaseMerge := sync.OnceFunc(finishMerge)
-	t.Cleanup(releaseMerge)
+	safeToRelease := true
+	t.Cleanup(func() {
+		if safeToRelease {
+			fs.Close(ctx)
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		storage := &generatedRangeObjectStorage{readStarted: make(chan struct{})}
+		fs.storage = storage
+		vector := &IOVector{
+			FilePath: "foo/bar",
+			Policy:   SkipFullFilePreloads,
+			Entries:  []IOEntry{{Offset: 0, Size: 1}},
+		}
+		defer func() {
+			if safeToRelease {
+				vector.Release()
+			}
+		}()
+		finishMerge, waitMerge := fs.ioMerger.Merge(fs.readMergeKey(vector), maxIOWaitDuration)
+		require.NotNil(t, finishMerge)
+		require.Nil(t, waitMerge)
+		releaseMerge := sync.OnceFunc(finishMerge)
+		defer releaseMerge()
 
-	readDone := make(chan error, 1)
-	go func() { readDone <- fs.Read(context.Background(), vector) }()
-	select {
-	case err := <-readDone:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		releaseMerge()
+		readCtx, cancelRead := context.WithCancel(context.Background())
+		readResult := make(chan error, 1)
+		readDone := make(chan struct{})
+		go func() {
+			defer close(readDone)
+			readResult <- fs.Read(readCtx, vector)
+		}()
+		defer func() {
+			cancelRead()
+			releaseMerge()
+			select {
+			case <-readDone:
+			case <-time.After(10 * time.Second):
+				safeToRelease = false
+				t.Error("range follower did not exit during cleanup")
+			}
+		}()
+
+		// The leader stays blocked throughout. Virtual time proves S3FS uses
+		// the configured bound instead of merely completing within a loose
+		// wall-clock watchdog under a favorable scheduler.
+		synctest.Wait()
+		time.Sleep(maxIOWaitDuration - time.Millisecond)
+		synctest.Wait()
+		select {
+		case <-storage.readStarted:
+			t.Fatal("range follower read before the merge wait expired")
+		case <-readDone:
+			t.Fatal("range follower finished before the merge wait expired")
+		default:
+		}
+		time.Sleep(time.Millisecond)
+		synctest.Wait()
+		select {
+		case <-storage.readStarted:
+		default:
+			t.Fatal("range follower did not start reading when the merge wait expired")
+		}
 		select {
 		case <-readDone:
-		case <-time.After(time.Second):
-			t.Fatal("range follower did not terminate after merge release")
+			require.NoError(t, <-readResult)
+		case <-time.After(10 * time.Second):
+			t.Fatal("range follower reached storage but did not finish")
 		}
-		t.Fatal("range follower rejoined a timed-out merge generation")
-	}
-	reads := storage.readRanges()
-	require.Len(t, reads, 1)
-	require.Equal(t, int64(0), *reads[0].min)
-	require.Equal(t, int64(1), *reads[0].max)
+		reads := storage.readRanges()
+		require.Len(t, reads, 1)
+		require.Equal(t, int64(0), *reads[0].min)
+		require.Equal(t, int64(1), *reads[0].max)
+	})
 }
 
 func TestS3FSSingleEntryFallbackCoalescesExactRange(t *testing.T) {
