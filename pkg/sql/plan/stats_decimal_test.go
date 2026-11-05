@@ -473,6 +473,55 @@ func TestCalcSelectivityByMinMaxForDecimal(t *testing.T) {
 	})
 }
 
+func TestFractionalRangeSelectivityClipsToDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		lower, upper, want float64
+	}{
+		{name: "below domain", lower: 9.5, upper: 9.75, want: 1e-8},
+		{name: "above domain", lower: 20.5, upper: 20.75, want: 1e-8},
+		{name: "left overlap", lower: 5.5, upper: 12.25, want: 0.325},
+		{name: "right overlap", lower: 17.5, upper: 25.25, want: 0.35},
+		{name: "inside domain", lower: 12.5, upper: 14.25, want: 0.275},
+		{name: "covers domain", lower: 5.5, upper: 25.25, want: 1},
+		{name: "reversed subunit range", lower: 12.5, upper: 12.25, want: 1e-8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			literals := []*plan.Literal{
+				{Value: &plan.Literal_Dval{Dval: tc.lower}},
+				{Value: &plan.Literal_Dval{Dval: tc.upper}},
+			}
+			require.InDelta(t, tc.want,
+				calcSelectivityByMinMax("between", 10, 20, types.T_float64, literals), 1e-12)
+
+			for _, decimal128 := range []bool{false, true} {
+				expr := makeDecimalBetweenExpr(tc.lower, tc.upper, 2)
+				// Each endpoint owns its scale; neither column scale nor the other endpoint's scale applies.
+				for i, value := range []float64{tc.lower, tc.upper} {
+					arg := expr.GetF().Args[i+1]
+					scale := int32(1 + 2*i)
+					arg.Typ.Scale = scale
+					if decimal128 {
+						dec, err := types.Decimal128FromFloat64(value, 38, scale)
+						require.NoError(t, err)
+						arg.Typ.Id, arg.Typ.Width = int32(types.T_decimal128), 38
+						arg.GetLit().Value = &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{
+							A: int64(dec.B0_63), B: int64(dec.B64_127),
+						}}
+					} else {
+						dec, err := types.Decimal64FromFloat64(value, 18, scale)
+						require.NoError(t, err)
+						arg.GetLit().Value = &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: int64(dec)}}
+					}
+				}
+				require.InDelta(t, tc.want,
+					calcSelectivityByMinMaxForDecimal("between", 10, 20, expr), 1e-12,
+					"decimal128=%t", decimal128)
+			}
+		})
+	}
+}
+
 // TestDecimalSelectivityRegression tests the specific Q19 scenario that caused performance regression
 func TestDecimalSelectivityRegression(t *testing.T) {
 	t.Run("Q19 l_quantity filter should have reasonable selectivity", func(t *testing.T) {
