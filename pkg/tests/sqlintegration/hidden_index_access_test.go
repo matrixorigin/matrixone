@@ -126,11 +126,19 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&n))
 			return n
 		}
+		// The normal LOAD path must retain main's inline source options while
+		// direct LOAD into physical index tables remains forbidden.
+		exec(user, "load data inline format='csv', data='3,30,0\n' into table hidden_access_db.t fields terminated by ',' set u=nullif(u,0)")
+		var loadedU sql.NullInt64
+		require.NoError(t, user.QueryRowContext(ctx, "select u from hidden_access_db.t where id=3").Scan(&loadedU))
+		require.False(t, loadedU.Valid)
+		exec(user, "delete from hidden_access_db.t where id=3")
 		for _, name := range hidden {
 			target := "hidden_access_db.`" + name + "`"
 			func() {
 				for _, q := range []string{
 					"select count(*) from " + target,
+					"load data inline format='csv', data='3,30\n' into table " + target + " fields terminated by ','",
 					"insert into " + target + " select * from " + target + " limit 0",
 					"update " + target + " set __mo_index_pri_col=99999",
 					"delete from " + target,
