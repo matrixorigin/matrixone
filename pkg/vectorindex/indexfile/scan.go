@@ -39,12 +39,18 @@ var scanColumns = []string{
 }
 
 // openRelation opens ref's storage table in env's transaction.
-func openRelation(ctx context.Context, env *Env, ref *Ref) (engine.Relation, error) {
+func openRelation(ctx context.Context, env *Env, ref *Ref, proc *process.Process) (engine.Relation, error) {
 	db, err := env.Engine.Database(ctx, ref.DB, env.Txn)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := db.Relation(ctx, ref.Table, env.Proc)
+	// A nil process is passed as an untyped nil: the storage engine then binds the relation to
+	// the transaction's process, while a typed nil binds it to none.
+	var p any
+	if proc != nil {
+		p = proc
+	}
+	rel, err := db.Relation(ctx, ref.Table, p)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +80,10 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 		defer mpool.DeleteMPool(mp)
 		proc = process.NewTopProcess(ctx, mp, nil, env.Txn, nil, nil, nil, nil, nil, nil, nil)
 		defer proc.Free()
+		// rel was opened without a process, and Ranges reads the relation's process.
+		if rel, err = openRelation(ctx, env, ref, proc); err != nil {
+			return err
+		}
 	}
 	txnOffset := workspaceOffset(env)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{

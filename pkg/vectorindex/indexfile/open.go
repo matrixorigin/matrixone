@@ -89,7 +89,7 @@ func Open(ctx context.Context, env *Env, ref Ref) (*File, error) {
 	if err := ref.validate(); err != nil {
 		return nil, err
 	}
-	rel, err := openRelation(ctx, env, &ref)
+	rel, err := openRelation(ctx, env, &ref, env.Proc)
 	if err != nil {
 		return nil, err
 	}

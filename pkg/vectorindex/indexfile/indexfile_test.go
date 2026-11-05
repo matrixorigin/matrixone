@@ -327,8 +327,8 @@ func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *filese
 }
 
 // newEnvWithProc is newEnv for a caller with process proc; nil is a background job, which
-// opens the relation without one, reads the whole workspace, and builds its readers on a
-// process of the read's own.
+// reads the whole workspace and scans on a process of the read's own. Ranges on a relation
+// opened without a process fails, as the storage engine reads the relation's process there.
 func newEnvWithProc(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *fileservice.IndexFileCache, proc *process.Process) *Env {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -337,7 +337,24 @@ func newEnvWithProc(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache
 	ws := mock_frontend.NewMockWorkspace(ctrl)
 
 	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), "idx", proc).Return(rel, nil).AnyTimes()
+	noProc := mock_frontend.NewMockRelation(ctrl)
+	noProc.EXPECT().GetTableID(gomock.Any()).Return(tbl.tableID).AnyTimes()
+	noProc.EXPECT().GetTableDef(gomock.Any()).Return(storageTableDef()).AnyTimes()
+	noProc.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(context.Context, engine.RangesParam) (engine.RelData, error) {
+			t.Error("Ranges on a relation opened without a process")
+			return nil, moerr.NewInternalErrorNoCtx("relation opened without a process")
+		}).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "idx", gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ string, p any) (engine.Relation, error) {
+			if got, _ := p.(*process.Process); got == nil {
+				return noProc, nil
+			}
+			if proc != nil {
+				require.Same(t, proc, p)
+			}
+			return rel, nil
+		}).AnyTimes()
 	rel.EXPECT().GetTableID(gomock.Any()).Return(tbl.tableID).AnyTimes()
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(storageTableDef()).AnyTimes()
 	txn.EXPECT().GetWorkspace().Return(ws).AnyTimes()
