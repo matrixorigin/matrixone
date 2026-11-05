@@ -306,8 +306,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RoleId = tenant.GetDefaultRoleID()
 	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
-	stm.Host = ses.respr.GetStr(PEER)
-	stm.Database = ses.respr.GetStr(DBNAME)
+	stm.Host = ses.GetResponser().GetStr(PEER)
+	stm.Database = ses.GetResponser().GetStr(DBNAME)
 	stm.StatementFingerprint = "" // fixme= (Reserved)
 	stm.StatementTag = ""         // fixme= (Reserved)
 	stm.SqlSourceType = sqlType
