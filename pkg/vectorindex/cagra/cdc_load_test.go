@@ -17,7 +17,6 @@
 package cagra
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -236,12 +235,7 @@ func TestLoadIndex_WithCdcDeltas(t *testing.T) {
 
 	// Inject mocks. Streaming returns the model tar; runSql dispatches on
 	// the SQL's tag.
-	origStream := runSql_streaming
-	runSql_streaming = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, errChan chan error) (executor.Result, error) {
-		ch <- executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc, tarPath)}}
-		return executor.Result{}, nil
-	}
-	defer func() { runSql_streaming = origStream }()
+	swapIndexFiles(t).putFile(t, "cdc-deltas", tarPath)
 
 	origRunSql := runSql
 	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {

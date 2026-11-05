@@ -81,6 +81,7 @@ const (
 	GroupAllocationSiteSpillRows
 	GroupAllocationSiteDistinctRecord
 	GroupAllocationSiteDistinctCopy
+	GroupAllocationSiteCompactLookup
 )
 
 var _ vm.Operator = &Group{}

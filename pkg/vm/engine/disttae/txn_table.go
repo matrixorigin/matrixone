@@ -2340,8 +2340,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		// the physical objects to its asynchronous cleanup owner
 		// instead of dropping the last reference to persisted files
 		// (issue #25590 round-19 review).
-		persisted = s3Writer.PersistedNames()
-		s3Writer.Close()
+		persisted = s3Writer.AbandonAndRetainableNames()
+		if closeErr := s3Writer.Close(); err == nil {
+			err = closeErr
+		}
 	}()
 
 	var stats []objectio.ObjectStats

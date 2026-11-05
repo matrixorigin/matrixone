@@ -47,7 +47,11 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 		if t.Oid.IsMySQLString() {
 			hasString = true
 		}
-		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
+		// MySQL treats TRUE/FALSE as the integers 1/0, so BOOL counts as
+		// numeric here: a string value branch next to a BOOL branch resolves
+		// to a string result instead of casting the string to BOOL
+		// (issue #31294).
+		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() || t.Oid == types.T_bool {
 			hasNumeric = true
 		}
 		if hasString && hasNumeric {
