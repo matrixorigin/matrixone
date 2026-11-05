@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -462,20 +463,33 @@ func (c *closeTrackingRPCClient) CloseBackend() error {
 // commit even though its caller cannot learn the result.
 func startDroppingResponseProxy(t *testing.T, target string) (string, *atomic.Bool, func()) {
 	t.Helper()
+	address, drop, cleanup, _ := startDroppingResponseProxyWithDial(t, target, net.DialTimeout)
+	return address, drop, cleanup
+}
+
+func startDroppingResponseProxyWithDial(
+	t *testing.T,
+	target string,
+	dial func(string, string, time.Duration) (net.Conn, error),
+) (string, *atomic.Bool, func(), <-chan struct{}) {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	var drop atomic.Bool
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	connections := make(map[net.Conn]struct{})
-	track := func(conn net.Conn, add bool) {
+	registrationClosed := make(chan struct{})
+	closing := false
+	register := func(clientConn, serverConn net.Conn) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		if add {
-			connections[conn] = struct{}{}
-		} else {
-			delete(connections, conn)
+		if closing {
+			return false
 		}
+		connections[clientConn] = struct{}{}
+		connections[serverConn] = struct{}{}
+		return true
 	}
 	wg.Add(1)
 	go func() {
@@ -485,18 +499,25 @@ func startDroppingResponseProxy(t *testing.T, target string) (string, *atomic.Bo
 			if err != nil {
 				return
 			}
-			serverConn, err := net.DialTimeout("tcp", target, time.Second)
+			serverConn, err := dial("tcp", target, time.Second)
 			if err != nil {
 				clientConn.Close()
 				continue
 			}
-			track(clientConn, true)
-			track(serverConn, true)
+			if !register(clientConn, serverConn) {
+				clientConn.Close()
+				serverConn.Close()
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				defer track(clientConn, false)
-				defer track(serverConn, false)
+				defer func() {
+					mu.Lock()
+					delete(connections, clientConn)
+					delete(connections, serverConn)
+					mu.Unlock()
+				}()
 				defer clientConn.Close()
 				defer serverConn.Close()
 				forwardDone := make(chan struct{})
@@ -525,13 +546,61 @@ func startDroppingResponseProxy(t *testing.T, target string) (string, *atomic.Bo
 	cleanup := func() {
 		listener.Close()
 		mu.Lock()
+		closing = true
+		close(registrationClosed)
 		for conn := range connections {
 			conn.Close()
 		}
 		mu.Unlock()
 		wg.Wait()
 	}
-	return listener.Addr().String(), &drop, cleanup
+	return listener.Addr().String(), &drop, cleanup, registrationClosed
+}
+
+func TestDroppingResponseProxyCleanupClosesLateDial(t *testing.T) {
+	proxyConn, peerConn := net.Pipe()
+	dialEntered := make(chan struct{})
+	releaseDial := make(chan struct{})
+	address, _, cleanup, registrationClosed := startDroppingResponseProxyWithDial(
+		t, "unused",
+		func(network, address string, timeout time.Duration) (net.Conn, error) {
+			close(dialEntered)
+			<-releaseDial
+			return proxyConn, nil
+		})
+	var cleanupOnce sync.Once
+	doCleanup := func() { cleanupOnce.Do(cleanup) }
+	defer doCleanup()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseDial) }) }
+	defer release()
+	defer proxyConn.Close()
+	defer peerConn.Close()
+
+	clientConn, err := net.DialTimeout("tcp", address, time.Second)
+	require.NoError(t, err)
+	defer clientConn.Close()
+	select {
+	case <-dialEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy did not start dialing the target")
+	}
+	cleanupDone := make(chan struct{})
+	go func() {
+		doCleanup()
+		close(cleanupDone)
+	}()
+	select {
+	case <-registrationClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy cleanup did not close connection registration")
+	}
+	release()
+	select {
+	case <-cleanupDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy cleanup did not close the late dial connection")
+	}
 }
 
 func TestReadRetriesBlackholedEstablishedConnection(t *testing.T) {
@@ -616,6 +685,49 @@ func TestGetTruncatedLsnRetriesBlackholedEstablishedConnection(t *testing.T) {
 		defer shortCancel()
 		_, err = shortClient.GetTruncatedLsn(shortCtx)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
+func TestAppendBlackholedResponseReturnsUnknownBeforeCallerDeadline(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+		// After the unknown result, the next request may choose a live address.
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+
+		record := throughProxy.GetLogRecord(8)
+		copy(record.Data[12:], "first123")
+		started := time.Now()
+		_, err = throughProxy.Append(ctx, record)
+		require.Error(t, err)
+		// The socket can first finish an idle read window and then one full
+		// request window. Both together must leave room to reconcile before
+		// the outer attempt deadline.
+		require.Less(t, time.Since(started), 3*defaultLogServiceBackendReadTimeout)
+		require.NoError(t, ctx.Err(), "the outer attempt still has time to reconcile")
+
+		records, _, err := healthy.Read(ctx, 1, 1<<20)
+		require.NoError(t, err)
+		committed := 0
+		for _, got := range records {
+			if bytes.Equal(got.Data, record.Data) {
+				committed++
+			}
+		}
+		require.Equal(t, 1, committed, "the client must not silently replay an ambiguous Append")
+
+		next := throughProxy.GetLogRecord(8)
+		copy(next.Data[12:], "next4567")
+		_, err = throughProxy.Append(ctx, next)
+		require.NoError(t, err)
 	})
 }
 

@@ -502,6 +502,29 @@ func (l *store) startReplicas(ctx context.Context) error {
 			}
 		}
 	}
+	if !l.catalogExecutor.enabled {
+		if replicaID, bootstrapping := l.cfg.Bootstrapping(); bootstrapping {
+			found := false
+			for _, shard := range checkShards {
+				if shard.ShardID == hakeeper.DefaultHAKeeperShardID && shard.ReplicaID == replicaID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				// The initial ID may remain in bootstrap config after L/Kill has
+				// removed it from local metadata. Check it before bootstrap can
+				// replay its old Dragonboat files; do not persist this candidate.
+				candidate := metadata.LogShard{
+					LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID},
+					ReplicaID:      replicaID,
+				}
+				// Give the bootstrap decision the first share of the bounded
+				// startup check, ahead of unrelated data-shard replicas.
+				checkShards = append([]metadata.LogShard{candidate}, checkShards...)
+			}
+		}
+	}
 	zombies := l.checkZombieReplicas(ctx, checkShards)
 	if err := ctx.Err(); err != nil {
 		return err

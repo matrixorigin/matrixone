@@ -39,6 +39,9 @@ const (
 	// stops answering. This leaves room to try another replica within the WAL
 	// caller's deadline.
 	defaultLogServiceReadAttemptTimeout = 7 * time.Second
+	// A stalled established socket must fail before the WAL's one-minute
+	// attempt expires. A timed-out Append still has an unknown commit outcome.
+	defaultLogServiceBackendReadTimeout = 8 * time.Second
 )
 
 var (
@@ -546,7 +549,7 @@ func connectToLogServiceAddress(
 		c.respPool,
 		c.cfg.MaxMessageSize,
 		cfg.EnableCompress,
-		0,
+		defaultLogServiceBackendReadTimeout,
 		cfg.Tag,
 	)
 	if err != nil {
