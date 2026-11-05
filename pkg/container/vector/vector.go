@@ -864,6 +864,8 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	if dataLen > 0 {
 		v.data = data[:dataLen]
 		data = data[dataLen:]
+	} else {
+		v.data = nil
 	}
 
 	// read area
@@ -872,6 +874,8 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	if areaLen > 0 {
 		v.area = data[:areaLen]
 		data = data[areaLen:]
+	} else {
+		v.area = nil
 	}
 
 	// read nsp
