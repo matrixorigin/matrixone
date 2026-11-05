@@ -18,6 +18,7 @@ import (
 	"bytes"
 	stdcmp "cmp"
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -372,27 +373,92 @@ func blockPKRangeHint(op int) uint8 {
 	}
 }
 
-// orderedInUnsortedSearch searches unsorted block rows using the normalized,
-// sorted IN values. Callers with an unnormalized vector retain the exact
-// linear search; its values may not be reordered because they can be borrowed
-// from the serialized expression.
-func orderedInUnsortedSearch[T types.OrderedT](values []T, sorted bool) func(*vector.Vector) []int64 {
+// Bound the additional Go heap per search closure. Small lists retain binary
+// search; larger lists fall back to it when building a set would be too costly.
+const (
+	minUnsortedINHashKeys = 64
+	maxUnsortedINHashKeys = 16 * 1024
+)
+
+// Integer-backed types have a total order, unlike floating-point NaNs.
+type orderedIntegerBacked interface {
+	~int8 | ~int16 | ~int32 | ~int64 | ~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+// orderedInSearchFuncs builds both searches from the same immutable values.
+// Unnormalized candidates retain exact linear search; eligible larger lists
+// use either ordered rows or a lazily built hash set.
+func orderedInSearchFuncs[T orderedIntegerBacked](values []T, sorted bool) (func(*vector.Vector) []int64, func(*vector.Vector) []int64) {
+	sortedSearch := vector.OrderedBinarySearchOffsetByValFactory(values)
+	if sorted && len(values) >= minUnsortedINHashKeys && len(values) <= maxUnsortedINHashKeys {
+		return sortedSearch, hashInUnsortedSearch(values, sortedSearch)
+	}
+	return sortedSearch, orderedInUnsortedBinarySearch(values, sorted)
+}
+
+func orderedInUnsortedBinarySearch[T types.OrderedT](values []T, sorted bool) func(*vector.Vector) []int64 {
 	if !sorted || len(values) <= 4 {
 		return vector.OrderedLinearSearchOffsetByValFactory(values, nil)
 	}
 	return func(vec *vector.Vector) []int64 {
-		var offsets []int64
-		for row, value := range vector.MustFixedColNoTypeCheck[T](vec) {
-			lo, hi := 0, len(values)
-			for lo < hi {
-				mid := lo + (hi-lo)/2
-				if values[mid] < value {
-					lo = mid + 1
-				} else {
-					hi = mid
-				}
+		return orderedInUnsortedBinaryRows(values, vector.MustFixedColNoTypeCheck[T](vec))
+	}
+}
+
+func orderedInUnsortedBinaryRows[T types.OrderedT](values, rows []T) []int64 {
+	var offsets []int64
+	for row, value := range rows {
+		lo, hi := 0, len(values)
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			if values[mid] < value {
+				lo = mid + 1
+			} else {
+				hi = mid
 			}
-			if lo < len(values) && values[lo] == value {
+		}
+		if lo < len(values) && values[lo] == value {
+			offsets = append(offsets, int64(row))
+		}
+	}
+	return offsets
+}
+
+// Keep hash construction separate so the short-list search does not retain
+// initialization state. orderedSearch must capture the same immutable values
+// for the lifetime of the returned function.
+func hashInUnsortedSearch[T orderedIntegerBacked](values []T, orderedSearch func(*vector.Vector) []int64) func(*vector.Vector) []int64 {
+	// Charge map construction against this vector alone. The key count is capped
+	// by the caller, so the rounded-up division cannot overflow.
+	minRows := max(objectio.BlockMaxRows/2, (len(values)+1)/2)
+	lookup := sync.OnceValue(func() map[T]struct{} {
+		set := make(map[T]struct{}, len(values))
+		for _, value := range values {
+			set[value] = struct{}{}
+		}
+		return set
+	})
+	return func(vec *vector.Vector) []int64 {
+		rows := vector.MustFixedColNoTypeCheck[T](vec)
+		if len(rows) < minRows {
+			return orderedInUnsortedBinaryRows(values, rows)
+		}
+		// A block marked unsorted can still have ordered physical rows. Prove
+		// the order for this vector before using the sorted-block search.
+		ordered := true
+		for i := 1; i < len(rows); i++ {
+			if rows[i] < rows[i-1] {
+				ordered = false
+				break
+			}
+		}
+		if ordered {
+			return orderedSearch(vec)
+		}
+		set := lookup()
+		var offsets []int64
+		for row, value := range rows {
+			if _, ok := set[value]; ok {
 				offsets = append(offsets, int64(row))
 			}
 		}
@@ -676,53 +742,40 @@ func buildBlockPKSearchFuncs(
 				unSortedSearchFunc = linearBoolSearchOffsetByValFactory(values)
 			}
 		case types.T_bit:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint64](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[uint64](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[uint64](vec), vec.GetSorted())
 		case types.T_int8:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int8](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[int8](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[int8](vec), vec.GetSorted())
 		case types.T_int16:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int16](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[int16](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[int16](vec), vec.GetSorted())
 		case types.T_int32:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int32](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[int32](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[int32](vec), vec.GetSorted())
 		case types.T_int64:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[int64](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[int64](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[int64](vec), vec.GetSorted())
 		case types.T_uint8:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint8](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[uint8](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[uint8](vec), vec.GetSorted())
 		case types.T_uint16:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint16](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[uint16](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[uint16](vec), vec.GetSorted())
 		case types.T_uint32:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint32](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[uint32](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[uint32](vec), vec.GetSorted())
 		case types.T_uint64:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[uint64](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[uint64](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[uint64](vec), vec.GetSorted())
 		case types.T_float32:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[float32](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[float32](vec), vec.GetSorted())
+			// Floating-point map probes cost more than binary search on this path.
+			unSortedSearchFunc = orderedInUnsortedBinarySearch(vector.MustFixedColNoTypeCheck[float32](vec), vec.GetSorted())
 		case types.T_float64:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[float64](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[float64](vec), vec.GetSorted())
+			unSortedSearchFunc = orderedInUnsortedBinarySearch(vector.MustFixedColNoTypeCheck[float64](vec), vec.GetSorted())
 		case types.T_date:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Date](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[types.Date](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[types.Date](vec), vec.GetSorted())
 		case types.T_time:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Time](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[types.Time](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[types.Time](vec), vec.GetSorted())
 		case types.T_datetime:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Datetime](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[types.Datetime](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[types.Datetime](vec), vec.GetSorted())
 		case types.T_timestamp:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Timestamp](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[types.Timestamp](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[types.Timestamp](vec), vec.GetSorted())
 		case types.T_year:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.MoYear](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[types.MoYear](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[types.MoYear](vec), vec.GetSorted())
 		case types.T_decimal64:
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Decimal64](vec), types.CompareDecimal64)
 			values := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
@@ -758,8 +811,7 @@ func buildBlockPKSearchFuncs(
 			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory(values)
 			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory(values)
 		case types.T_enum:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Enum](vec))
-			unSortedSearchFunc = orderedInUnsortedSearch(vector.MustFixedColNoTypeCheck[types.Enum](vec), vec.GetSorted())
+			sortedSearchFunc, unSortedSearchFunc = orderedInSearchFuncs(vector.MustFixedColNoTypeCheck[types.Enum](vec), vec.GetSorted())
 		case types.T_uuid:
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Uuid](vec), types.CompareUuid)
 			values := vector.MustFixedColNoTypeCheck[types.Uuid](vec)

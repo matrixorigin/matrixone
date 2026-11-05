@@ -26,9 +26,9 @@ const (
 	SkipFullFilePreloads
 	SkipRemoteCacheReads
 	SkipRemoteCacheWrites
-	// NarrowRead marks a read of a small share of each object. It acts as
-	// SkipFullFilePreloads while the disk cache evicts whole-object files before
-	// most of their bytes are read.
+	// NarrowRead marks a read of a small share of each object. Its reader skips
+	// whole-object preloads while the disk cache evicts the whole-object files of
+	// the reader's table before most of their bytes are read.
 	NarrowRead
 )
 

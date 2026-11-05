@@ -56,7 +56,7 @@ func bindTestFunction(t testing.TB, proc *process.Process, name string, args ...
 }
 
 // bindTestCast retains the requested registered identity, including private casts.
-func bindTestCast(t *testing.T, proc *process.Process, overload int32, source *plan.Expr, target types.Type) *plan.Expr {
+func bindTestCast(t testing.TB, proc *process.Process, overload int32, source *plan.Expr, target types.Type) *plan.Expr {
 	t.Helper()
 	sourceType, err := types.TypeFromPlan(source.Typ)
 	require.NoError(t, err)
@@ -5212,4 +5212,31 @@ func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
 		}
 		require.Same(t, sink, proc.WarningSink)
 	}
+}
+
+// TestVecBlockVectorLiteral checks that a vecf8/vecf4 vector literal is a constant of its
+// stored cell, and that a vector literal of a type without a constant form is an error.
+func TestVecBlockVectorLiteral(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		cell, err := types.AppendBlockScaled(nil, f, []float32{1, -2, 0.5})
+		require.NoError(t, err)
+		oid := types.T_array_float8
+		if f == types.BlockScaledNVFP4 {
+			oid = types.T_array_float4
+		}
+		vec, err := generateConstExpressionExecutor(proc, types.New(oid, 3, 0), &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(cell)},
+		}, nil)
+		require.NoError(t, err)
+		require.True(t, vec.IsConst())
+		require.Equal(t, oid, vec.GetType().Oid)
+		require.Equal(t, cell, vec.GetBytesAt(0))
+		vec.Free(proc.Mp())
+	}
+	_, err := generateConstExpressionExecutor(proc, types.T_int64.ToType(), &plan.Literal{
+		Value: &plan.Literal_VecVal{VecVal: "\x00"},
+	}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
 }

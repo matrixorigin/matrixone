@@ -28,12 +28,22 @@ import (
 // SELECT title FROM t1 ORDER BY l2_distance(v, '[1,1,1]') LIMIT 10 and returns the
 // builder and the base table scan node.
 func rewriteIvfflatProjectingTitle(t *testing.T, includedColumns []string) (*QueryBuilder, *plan.Node) {
+	return rewriteIvfflat(t, includedColumns, false)
+}
+
+// rewriteIvfflat applies the IVFFLAT sort rewrite to SELECT title FROM t1 [WHERE
+// title = 'x'] ORDER BY l2_distance(v, '[1,1,1]') LIMIT 10, with the filter pushed down
+// to the search when filtered.
+func rewriteIvfflat(t *testing.T, includedColumns []string, filtered bool) (*QueryBuilder, *plan.Node) {
 	baseMockCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
 			switch varName {
 			case "enable_vector_prefilter_by_default":
+				if filtered {
+					return int8(1), nil
+				}
 				return int8(0), nil
 			case "ivf_threads_search":
 				return int64(4), nil
@@ -84,6 +94,14 @@ func rewriteIvfflatProjectingTitle(t *testing.T, includedColumns []string) (*Que
 		TableDef:    tableDef,
 		ObjRef:      &plan.ObjectRef{SchemaName: "db"},
 		BindingTags: []int32{builder.genNewBindTag()},
+	}
+	if filtered {
+		titleEq, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanNode.BindingTags[0], ColPos: 2, Name: "title"}}},
+			makePlan2StringConstExprWithType("x"),
+		})
+		require.NoError(t, err)
+		scanNode.FilterList = []*plan.Expr{titleEq}
 	}
 	scanNodeID := builder.appendNode(scanNode, ctx)
 	for int(scanNodeID) >= len(builder.ctxByNode) {
@@ -140,6 +158,18 @@ func TestIvfflatJoinBackScanIsNarrow(t *testing.T) {
 	require.True(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
 		"a projected column outside the index must be read back from the base table")
 	require.True(t, scanNode.NarrowScan)
+}
+
+func TestIvfflatPreFilterJoinBackScanIsNarrow(t *testing.T) {
+	builder, scanNode := rewriteIvfflat(t, nil, true)
+	require.True(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
+		"the pre-filtered candidates are joined back to the base table")
+	require.True(t, scanNode.NarrowScan)
+	for _, n := range builder.qry.Nodes {
+		if n.NodeType == plan.Node_TABLE_SCAN && n != scanNode && n.TableDef.GetName() == "t1" {
+			require.False(t, n.NarrowScan, "the filter scan reads the whole base table")
+		}
+	}
 }
 
 func TestIvfflatIndexOnlyBaseScanIsNotNarrow(t *testing.T) {

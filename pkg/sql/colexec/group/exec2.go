@@ -311,7 +311,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 			for i, arg := range ag.GetArgExpressions() {
 				// Most aggregate arguments need no specialization discovery.
-				if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "*" && types.T(arg.Typ.Id) == types.T_decimal128 {
+				if f := arg.GetF(); f != nil && f.Func != nil && (f.Func.ObjName == "+" || f.Func.ObjName == "-" || f.Func.ObjName == "*") && types.T(arg.Typ.Id).IsDecimal() {
 					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
 				}
 			}
@@ -373,6 +373,9 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 		}
 		if id == types.T_array_bf16 || id == types.T_array_float16 {
 			width *= 2
+		}
+		if f, ok := id.BlockScaledFormat(); ok {
+			width = types.BlockScaledCellSize(f, width)
 		}
 		// T_array_int8 / T_array_uint8 are 1 byte/element -> width unchanged
 		// (width0 already counts).

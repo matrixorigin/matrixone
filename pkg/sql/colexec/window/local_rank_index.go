@@ -68,6 +68,7 @@ func (ctr *container) freeLocalRankIndex() {
 
 func localRankNaN(v *vector.Vector, row int) bool {
 	row = localRankRow(v, row)
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to float32 when the window function binds
 	switch v.GetType().Oid {
 	case types.T_float32:
 		return math.IsNaN(float64(vector.MustFixedColNoTypeCheck[float32](v)[row]))
