@@ -15,13 +15,57 @@
 package cdc
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCDCRetryErrorTransportEquivalence(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		retry bool
+	}{
+		{"native deadlock", moerr.NewDeadLockDetectedNoCtx(), true},
+		{"production MO deadlock", &mysql.MySQLError{Number: 20701, Message: "opaque"}, true},
+		{"upstream MO deadlock", &gomysql.MySQLError{Number: 20701, Message: "opaque"}, true},
+		{"production MySQL deadlock", &mysql.MySQLError{Number: 1213, Message: "opaque"}, true},
+		{"upstream MySQL deadlock", &gomysql.MySQLError{Number: 1213, Message: "opaque"}, true},
+		{"production lock timeout", &mysql.MySQLError{Number: 1205}, true},
+		{"native bind changed", moerr.NewLockTableBindChangedNoCtx(), true},
+		{"wire bind changed", &mysql.MySQLError{Number: 20702}, true},
+		{"permission", &mysql.MySQLError{Number: 1045, Message: "network unavailable"}, false},
+		{"syntax", &mysql.MySQLError{Number: 1064}, false},
+		{"canceled", errors.Join(context.Canceled, &mysql.MySQLError{Number: 1213}), false},
+		{"opaque", errors.New("deadlock detected"), false},
+	} {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/wrapped=%t", tc.name, wrapped), func(t *testing.T) {
+				cause := tc.err
+				if wrapped {
+					cause = fmt.Errorf("target operation: %w", cause)
+				}
+				s := &mysqlSinker2{}
+				s.SetError(cause)
+				require.Equal(t, tc.retry, (&TableChangeStream{}).determineRetryable(cause))
+				require.Equal(t, tc.retry, (&TableChangeStream{}).determineRetryable(s.Error()))
+				if tc.retry || errors.Is(cause, context.Canceled) {
+					require.ErrorIs(t, s.Error(), cause)
+				}
+			})
+		}
+	}
+	require.False(t, (&TableChangeStream{}).determineRetryable(nil))
+}
 
 func TestIsPauseOrCancelError(t *testing.T) {
 	tests := []struct {

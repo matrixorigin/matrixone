@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	mysql "github.com/matrixorigin/mysql"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,9 +42,10 @@ type fakeMySQLServer struct {
 	queries  chan string
 	errs     chan error
 	wg       sync.WaitGroup
+	onQuery  func(string) uint16
 }
 
-func startFakeMySQLServer(t *testing.T) *fakeMySQLServer {
+func startFakeMySQLServer(t *testing.T, onQuery ...func(string) uint16) *fakeMySQLServer {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -52,6 +55,9 @@ func startFakeMySQLServer(t *testing.T) *fakeMySQLServer {
 		listener: listener,
 		queries:  make(chan string, 4),
 		errs:     make(chan error, 1),
+	}
+	if len(onQuery) > 0 {
+		server.onQuery = onQuery[0]
 	}
 	server.wg.Add(1)
 	go server.serve()
@@ -115,7 +121,19 @@ func (s *fakeMySQLServer) serve() {
 		case 0x01: // COM_QUIT
 			return
 		case 0x03: // COM_QUERY
-			s.queries <- string(payload[1:])
+			query := string(payload[1:])
+			s.queries <- query
+			if s.onQuery != nil {
+				if code := s.onQuery(query); code != 0 {
+					response := binary.LittleEndian.AppendUint16([]byte{0xff}, code)
+					response = append(response, []byte("#HY000controlled target error")...)
+					if err := writeMySQLPacket(conn, 1, response); err != nil {
+						s.reportErr(err)
+						return
+					}
+					continue
+				}
+			}
 			if err := writeMySQLOK(conn, 1); err != nil {
 				s.reportErr(err)
 				return
@@ -663,6 +681,53 @@ func TestExecutor_ExecSQLAfterTryConnUsesReuseQueryBuf(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for COM_QUERY")
+	}
+}
+
+func TestExecutorDeadlockWireIdentity(t *testing.T) {
+	for _, code := range []uint16{20701, 1213} {
+		t.Run(strconv.Itoa(int(code)), func(t *testing.T) {
+			server := startFakeMySQLServer(t, func(query string) uint16 {
+				if strings.HasPrefix(query, "REPLACE") {
+					return code
+				}
+				return 0
+			})
+			host, port := server.addr(t)
+			cfg, err := makeMysqlConfig("user", "password", host, port, "5s")
+			require.NoError(t, err)
+			cfg.MaxAllowedPacket = 64 << 20
+			db, err := tryConn(cfg)
+			require.NoError(t, err)
+			// One extra attempt detects statement retry without overflowing the
+			// fake server's bounded query recorder on the failing implementation.
+			e := &Executor{conn: db, retryTimes: 1, retryDuration: time.Minute}
+			t.Cleanup(func() { require.NoError(t, e.Close()) })
+			e.initRetryPolicy()
+			e.retryPolicy.Backoff = nil
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			t.Cleanup(cancel)
+			require.NoError(t, e.BeginTx(ctx))
+			err = e.ExecSQL(ctx, nil, []byte("     REPLACE INTO t VALUES (1)"), true)
+			var wire *mysql.MySQLError
+			require.ErrorAs(t, err, &wire)
+			require.Equal(t, code, wire.Number)
+			s := &mysqlSinker2{}
+			s.SetError(err)
+			require.ErrorIs(t, s.Error(), err)
+			require.True(t, (&TableChangeStream{}).determineRetryable(s.Error()))
+			require.NoError(t, e.RollbackTx(ctx))
+			for _, query := range []string{"START TRANSACTION", "REPLACE INTO t VALUES (1)", "ROLLBACK"} {
+				select {
+				case got := <-server.queries:
+					require.Equal(t, query, got)
+				case err := <-server.errs:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+		})
 	}
 }
 
