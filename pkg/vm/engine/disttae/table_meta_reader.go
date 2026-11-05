@@ -515,7 +515,10 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 		objRelData.GetBlockInfoSlice(),
 		nil,
 		false,
-		engine.Policy_SkipUncommitedInMemory,
+		// Rewritten rows receive new rowids, so apply transaction deletes
+		// while their original rowids can still be matched. Shared objects
+		// retain their rowids and still need the separately collected tombstones.
+		engine.Policy_CheckAll,
 		engine.GeneralLocalDataSource,
 	)
 	if err != nil {
