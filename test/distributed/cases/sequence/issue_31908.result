@@ -1,0 +1,67 @@
+drop database if exists issue31908;
+create database issue31908;
+use issue31908;
+create sequence s1 as smallint start with 70000;
+invalid input: STARTVALUE (70000) is out of range for sequence data type SMALLINT
+select nextval('s1');
+no such table issue31908.s1
+create sequence s2 as smallint unsigned start with -1;
+invalid input: STARTVALUE (-1) is out of range for sequence data type SMALLINT UNSIGNED
+select nextval('s2');
+no such table issue31908.s2
+create sequence s3 as int minvalue -4294967296 maxvalue 10;
+invalid input: MINVALUE (-4294967296) is out of range for sequence data type INT
+select nextval('s3');
+no such table issue31908.s3
+create sequence s4 as smallint maxvalue 99999;
+invalid input: MAXVALUE (99999) is out of range for sequence data type SMALLINT
+create sequence s5 start with 9223372036854775808;
+invalid input: STARTVALUE (9223372036854775808) is out of range for sequence data type BIGINT
+create sequence b1 as smallint minvalue -32768 maxvalue 32767 start with 32767;
+select nextval('b1');
+➤ nextval(b1)[12,65535,0]  𝄀
+32767
+create sequence b2 as smallint unsigned minvalue 0 maxvalue 65535 start with 65535;
+select nextval('b2');
+➤ nextval(b2)[12,65535,0]  𝄀
+65535
+create sequence b3 as bigint minvalue -9223372036854775808 maxvalue 9223372036854775807 start with -9223372036854775808;
+select nextval('b3');
+➤ nextval(b3)[12,65535,0]  𝄀
+-9223372036854775808
+create sequence b4 as bigint unsigned minvalue 0 maxvalue 18446744073709551615 start with 18446744073709551615;
+select nextval('b4');
+➤ nextval(b4)[12,65535,0]  𝄀
+18446744073709551615
+create sequence b5 as int minvalue -2147483648 maxvalue 2147483647 start with 2147483647;
+select nextval('b5');
+➤ nextval(b5)[12,65535,0]  𝄀
+2147483647
+create sequence b6 as int unsigned minvalue 0 maxvalue 4294967295 start with 4294967295;
+select nextval('b6');
+➤ nextval(b6)[12,65535,0]  𝄀
+4294967295
+drop sequence b1;
+drop sequence b2;
+drop sequence b3;
+drop sequence b4;
+drop sequence b5;
+drop sequence b6;
+create sequence s7 as smallint start with 10;
+select nextval('s7');
+➤ nextval(s7)[12,65535,0]  𝄀
+10
+alter sequence s7 start with 70000;
+invalid input: STARTVALUE (70000) is out of range for sequence data type SMALLINT
+select currval('s7');
+➤ currval(s7)[12,65535,0]  𝄀
+10
+select nextval('s7');
+➤ nextval(s7)[12,65535,0]  𝄀
+11
+show sequences;
+➤ Names[12,5000,0]  ¦  Data Type[12,65535,0]  𝄀
+s7  ¦  SMALLINT
+create sequence s8 as int increment by 4294967297;
+alter sequence s7 increment by 65537;
+drop database if exists issue31908;

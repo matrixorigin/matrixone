@@ -2131,6 +2131,14 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	switch vec.GetType().Oid {
 	case types.T_json:
 		val := types.DecodeJson(vec.GetBytesAt(i))
+		// #31277: a top-level JSON null marshals to the same "null" member
+		// value as a SQL NULL, and the jsonline loader reads every bare null
+		// back as SQL NULL, so the format cannot carry the distinction.
+		// Reject the export instead of silently changing the value.
+		if val.IsNull() {
+			return nil, moerr.NewNotSupported(context.Background(),
+				"JSONLINE OUTFILE cannot encode a top-level JSON null; it would load back as SQL NULL; use CSV to preserve the distinction")
+		}
 		// Return as raw JSON string to be embedded
 		return json.RawMessage(val.String()), nil
 	case types.T_bool:

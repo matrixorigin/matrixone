@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1060,6 +1062,124 @@ func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
 	succeeded := <-bytesChan
 	require.NoError(t, succeeded.err)
 	require.Equal(t, []byte("{\"value\":\"next\"}\n"), succeeded.writeByte)
+	require.Zero(t, mp.CurrNB(), "successful batch must release its worker allocation")
+}
+
+// encodeJSONForExportTest encodes JSON text the same way the storage layer
+// stores a JSON column value, for building export test vectors.
+func encodeJSONForExportTest(t *testing.T, text string) []byte {
+	t.Helper()
+	var bj bytejson.ByteJson
+	require.NoError(t, bj.UnmarshalJSON([]byte(text)))
+	data, err := types.EncodeJson(bj)
+	require.NoError(t, err)
+	return data
+}
+
+// TestVectorValueToJSONTopLevelJSONNull pins the #31277 contract: a top-level
+// JSON literal null has no JSONLINE encoding that loads back as a JSON value,
+// so the converter must reject it instead of colliding with SQL NULL, while
+// nested nulls, the JSON string "null" and every other JSON value keep their
+// exact raw encoding.
+func TestVectorValueToJSONTopLevelJSONNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	t.Run("top-level JSON null is rejected", func(t *testing.T) {
+		nullViaEncode, err := types.EncodeJson(bytejson.Null)
+		require.NoError(t, err)
+		for _, encoded := range [][]byte{
+			encodeJSONForExportTest(t, "null"),
+			nullViaEncode,
+		} {
+			func() {
+				vec := vector.NewVec(types.T_json.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+				_, err := vectorValueToJSON(vec, 0, nil, nil)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.Contains(t, err.Error(), "JSONLINE")
+				require.Contains(t, err.Error(), "JSON null")
+			}()
+		}
+	})
+
+	t.Run("nested null, string null and other JSON values still encode", func(t *testing.T) {
+		for _, tc := range []struct{ in, want string }{
+			{`{"a":null}`, `{"a":null}`},
+			{`[null]`, `[null]`},
+			{`"null"`, `"null"`},
+			{`true`, `true`},
+			{`false`, `false`},
+			{`0`, `0`},
+			{`{"a":1}`, `{"a":1}`},
+		} {
+			func() {
+				vec := vector.NewVec(types.T_json.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, encodeJSONForExportTest(t, tc.in), false, mp))
+				got, err := vectorValueToJSON(vec, 0, nil, nil)
+				require.NoError(t, err)
+				// constructJSONLine embeds the value in a row map and marshals
+				// it with encoding/json, which compacts the raw message; pin
+				// the exact bytes that land in the export file.
+				wire, err := json.Marshal(got)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, string(wire))
+			}()
+		}
+	})
+}
+
+// TestConstructJSONLineRejectsTopLevelJSONNullAndReleasesBatch proves the
+// batch worker reports the top-level JSON null error without publishing a
+// partial prefix, releases the batch, and still exports SQL NULL, nested JSON
+// null, the JSON string "null" and ordinary JSON with distinct encodings.
+func TestConstructJSONLineRejectsTopLevelJSONNullAndReleasesBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	bytesChan := make(chan *BatchByte, 2)
+
+	badBatch := batch.NewOffHeapWithSize(1)
+	badVec := vector.NewOffHeapVecWithType(types.T_json.ToType())
+	badBatch.Vecs[0] = badVec
+	defer badBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(badVec, encodeJSONForExportTest(t, `{"a":1}`), false, mp))
+	require.NoError(t, vector.AppendBytes(badVec, encodeJSONForExportTest(t, `null`), false, mp))
+	badBatch.SetRowCount(2)
+	require.Positive(t, mp.CurrNB())
+	constructJSONLine(context.Background(), ses, badBatch, 0, bytesChan, ep)
+	failed := <-bytesChan
+	require.Error(t, failed.err)
+	require.True(t, moerr.IsMoErrCode(failed.err, moerr.ErrNotSupported), "%v", failed.err)
+	require.Contains(t, failed.err.Error(), "JSON null")
+	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
+	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
+
+	goodBatch := batch.NewOffHeapWithSize(1)
+	goodVec := vector.NewOffHeapVecWithType(types.T_json.ToType())
+	goodBatch.Vecs[0] = goodVec
+	defer goodBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(goodVec, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(goodVec, encodeJSONForExportTest(t, `{"a":null}`), false, mp))
+	require.NoError(t, vector.AppendBytes(goodVec, encodeJSONForExportTest(t, `"null"`), false, mp))
+	require.NoError(t, vector.AppendBytes(goodVec, encodeJSONForExportTest(t, `{"a":1}`), false, mp))
+	goodBatch.SetRowCount(4)
+	constructJSONLine(context.Background(), ses, goodBatch, 1, bytesChan, ep)
+	succeeded := <-bytesChan
+	require.NoError(t, succeeded.err)
+	require.Equal(t, []byte("{\"value\":null}\n{\"value\":{\"a\":null}}\n{\"value\":\"null\"}\n{\"value\":{\"a\":1}}\n"), succeeded.writeByte)
 	require.Zero(t, mp.CurrNB(), "successful batch must release its worker allocation")
 }
 
