@@ -511,21 +511,37 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 // vectorIndexCdcFields is VectorIndexCdc without its methods, decoded by UnmarshalJSON.
 type vectorIndexCdcFields[T types.ArrayElement] VectorIndexCdc[T]
 
-// UnmarshalJSON decodes a batch from ToJson: float32 vectors with encoding/json, other
-// element types (integers, float64) with sonic.
+// floatElements reports whether T is float32 or float64, whose vectors a batch encodes and
+// decodes with encoding/json.
+func floatElements[T types.ArrayElement]() bool {
+	k := reflect.TypeFor[T]().Kind()
+	return k == reflect.Float32 || k == reflect.Float64
+}
+
+// UnmarshalJSON decodes a batch from ToJson: float vectors with encoding/json, other element
+// types (integers) with sonic.
 func (h *VectorIndexCdc[T]) UnmarshalJSON(data []byte) error {
-	if reflect.TypeFor[T]().Kind() == reflect.Float32 {
+	if floatElements[T]() {
 		// Not sonic: its native decoder rounds float32 twice (text -> float64 -> float32),
 		// unfixed upstream in every release (bytedance/sonic#884), so a synced vector would
-		// differ from the stored one (7.038531e-26 reads as the next float32). encoding/json
-		// parses each value with strconv.ParseFloat(text, 32), a single rounding.
+		// differ from the stored one (7.038531e-26 reads as the next float32), and it reads
+		// -0 as 0. encoding/json parses each value with strconv.ParseFloat(text, bits), a
+		// single rounding.
 		return json.Unmarshal(data, (*vectorIndexCdcFields[T])(h))
 	}
 	return sonic.Unmarshal(data, (*vectorIndexCdcFields[T])(h))
 }
 
+// ToJson encodes the batch: float vectors with encoding/json, which writes -0 as -0 where
+// sonic on arm64 writes 0, other element types with sonic.
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
-	b, err := sonic.Marshal(h)
+	var b []byte
+	var err error
+	if floatElements[T]() {
+		b, err = json.Marshal((*vectorIndexCdcFields[T])(h))
+	} else {
+		b, err = sonic.Marshal(h)
+	}
 	if err != nil {
 		return "", err
 	}
