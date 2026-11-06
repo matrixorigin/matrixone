@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -628,6 +629,302 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestCastPreservesNonNull(t *testing.T) {
+	numeric := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128, types.T_decimal256}
+	scalars := append(append([]types.T{}, numeric...), types.T_bool, types.T_bit)
+	targets := append(append([]types.T{}, scalars...), types.T_char, types.T_varchar, types.T_text)
+	for _, from := range scalars {
+		for _, to := range targets {
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(to)}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(from)}}, {Typ: plan.Type{Id: int32(to)}}},
+			}}}
+			want := !(from == types.T_bool && (to.IsFloat() || to.IsDecimal())) &&
+				!(from.IsDecimal() && to == types.T_bool)
+			require.Equal(t, want, castPreservesNonNull(expr), "%v to %v", from, to)
+			require.False(t, isNonNullLiteralFallback(expr), "nonliteral casts cannot prove a constant fallback")
+		}
+	}
+	for _, test := range []struct {
+		from types.T
+		to   types.T
+		want bool
+	}{
+		{types.T_decimal64, types.T_float64, true},
+		{types.T_decimal128, types.T_float64, true},
+		{types.T_decimal256, types.T_float64, true},
+		{types.T_int64, types.T_decimal64, true},
+		{types.T_uint64, types.T_decimal128, true},
+		{types.T_int64, types.T_decimal256, true},
+		{types.T_varchar, types.T_decimal64, true},
+		{types.T_char, types.T_decimal128, true},
+		{types.T_text, types.T_decimal256, true},
+		{types.T_char, types.T_varchar, true},
+		{types.T_varchar, types.T_varchar, true},
+		{types.T_text, types.T_varchar, true},
+		{types.T_varchar, types.T_text, true},
+		{types.T_varchar, types.T_float64, false},
+		{types.T_varchar, types.T_date, false},
+		{types.T_json, types.T_varchar, false},
+		{types.T_bit, types.T_timestamp, false},
+		{types.T_int64, types.T_timestamp, false},
+		{types.T_bool, types.T_date, false},
+	} {
+		expr := &plan.Expr{Typ: plan.Type{Id: int32(test.to)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(test.from)}}, {Typ: plan.Type{Id: int32(test.to)}}},
+		}}}
+		require.Equal(t, test.want, castPreservesNonNull(expr), "%v to %v", test.from, test.to)
+		require.False(t, isNonNullLiteralFallback(expr), "conversion proof alone must not turn a nonliteral into a constant proof")
+	}
+}
+
+func TestNonNullLiteralFallback(t *testing.T) {
+	literal := func(typ types.T, null bool) *plan.Expr {
+		lit := &plan.Literal{Isnull: null, Value: &plan.Literal_I64Val{I64Val: 0}}
+		if typ == types.T_int32 {
+			lit.Value = &plan.Literal_I32Val{I32Val: 0}
+		} else if typ == types.T_uint64 {
+			lit.Value = &plan.Literal_U64Val{U64Val: 0}
+		} else if typ == types.T_float64 {
+			lit.Value = &plan.Literal_Dval{Dval: 0}
+		} else if typ == types.T_float32 {
+			lit.Value = &plan.Literal_Fval{Fval: 0}
+		} else if typ == types.T_varchar {
+			lit.Value = &plan.Literal_Sval{Sval: "0"}
+		}
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_Lit{Lit: lit}}
+	}
+	cast := func(input *plan.Expr, typ types.T) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+			Args: []*plan.Expr{input, {Typ: plan.Type{Id: int32(typ)}}},
+		}}}
+	}
+	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	fixedDouble := cast(literal(types.T_int64, false), types.T_float64)
+	fixedDouble.Typ.Width = 10
+	fixedDouble.GetF().Args[1].Typ.Width = 10
+	otherOverload := cast(literal(types.T_int64, false), types.T_float64)
+	otherOverload.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
+	missingTarget := cast(literal(types.T_int64, false), types.T_float64)
+	missingTarget.GetF().Args = missingTarget.GetF().Args[:1]
+	for _, test := range []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{"literal", literal(types.T_int64, false), true},
+		{"null literal", literal(types.T_int64, true), false},
+		{"integer double", cast(literal(types.T_int64, false), types.T_float64), true},
+		{"unsigned double", cast(literal(types.T_uint64, false), types.T_float64), true},
+		{"same double", cast(literal(types.T_float64, false), types.T_float64), true},
+		{"float widening", cast(literal(types.T_float32, false), types.T_float64), true},
+		{"integer widening", cast(literal(types.T_int32, false), types.T_int64), true},
+		{"nested widening", cast(cast(literal(types.T_int32, false), types.T_int64), types.T_float64), true},
+		{"integer narrowing is nonnull or error", cast(literal(types.T_int64, false), types.T_int32), true},
+		{"sign change is nonnull or error", cast(literal(types.T_int64, false), types.T_uint64), true},
+		{"string conversion", cast(literal(types.T_varchar, false), types.T_float64), false},
+		{"null conversion", cast(literal(types.T_int64, true), types.T_float64), false},
+		{"column annotation", column, false},
+		{"converted column", cast(column, types.T_float64), false},
+		{"fixed double is nonnull or error", fixedDouble, true},
+		{"other cast overload", otherOverload, false},
+		{"missing cast target", missingTarget, false},
+	} {
+		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.want, isNonNullLiteralFallback(test.expr)) })
+	}
+}
+
+func TestRefreshConditionalNullabilityNeverStrengthens(t *testing.T) {
+	for _, fid := range []int32{function.CASE, function.IFF} {
+		for _, initiallyNonNull := range []bool{false, true} {
+			for _, resultNonNull := range []bool{false, true} {
+				args := []*plan.Expr{
+					{Typ: plan.Type{NotNullable: false}},
+					{Typ: plan.Type{NotNullable: resultNonNull}},
+					{Typ: plan.Type{NotNullable: true}},
+				}
+				expr := &plan.Expr{Typ: plan.Type{NotNullable: initiallyNonNull}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(fid, 0)}, Args: args,
+				}}}
+				refreshExprNullabilityFromInput(expr, nil)
+				require.Equal(t, initiallyNonNull && resultNonNull, expr.Typ.NotNullable)
+			}
+		}
+		for _, args := range [][]*plan.Expr{nil, {{Typ: plan.Type{NotNullable: true}}, {Typ: plan.Type{NotNullable: true}}}} {
+			expr := &plan.Expr{Typ: plan.Type{NotNullable: true}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(fid, 0)}, Args: args,
+			}}}
+			refreshExprNullabilityFromInput(expr, nil)
+			require.False(t, expr.Typ.NotNullable, "missing ELSE or invalid shape cannot preserve a proof")
+		}
+	}
+}
+
+func TestCreateTableAsSelectOutputNullability(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		nullable []bool
+	}{
+		{"count control", "select count(*) as c from nation", []bool{false}},
+		{"union null right", "select count(*) as c from nation union all select null", []bool{true}},
+		{"union null left", "select null as c union all select count(*) from nation", []bool{true}},
+		{"union nonnull control", "select count(*) as c from nation union all select 1", []bool{false}},
+		{"union distinct", "select count(*) as c from nation union select null", []bool{true}},
+		{"union three branches", "select count(*) as c from nation union all select null union all select 1", []bool{true}},
+		{"union derived", "select c from (select count(*) as c from nation union all select null) u", []bool{true}},
+		{"union cte", "with u as (select count(*) as c from nation union all select null) select c from u", []bool{true}},
+		{"left join", "select n.n_nationkey as l, r.r_regionkey as r from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false, true}},
+		{"right join", "select n.n_nationkey as l, r.r_regionkey as r from nation n right join region r on n.n_regionkey=r.r_regionkey", []bool{true, false}},
+		{"full join", "select n.n_nationkey as l, r.r_regionkey as r from nation n full join region r on n.n_regionkey=r.r_regionkey", []bool{true, true}},
+		{"inner join control", "select n.n_nationkey as l, r.r_regionkey as r from nation n join region r on n.n_regionkey=r.r_regionkey", []bool{false, false}},
+		{"null extending expression", "select r.r_regionkey+1 as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce control", "select coalesce(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
+		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
+		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce mixed dynamic fallback", "select coalesce(r.r_name,cast(1/r.r_regionkey as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull mixed dynamic fallback", "select ifnull(r.r_name,cast(1/r.r_regionkey as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce mixed null fallback", "select coalesce(r.r_name,cast(null as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull mixed null fallback", "select ifnull(r.r_name,cast(null as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce mixed string source", "select coalesce(r.r_name,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull mixed string source", "select ifnull(r.r_name,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce mixed numeric source", "select coalesce(r.r_regionkey,'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull mixed numeric source", "select ifnull(r.r_regionkey,'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull float fallback", "select ifnull(1/r.r_regionkey,cast(0 as float)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce float fallback", "select coalesce(1/r.r_regionkey,cast(0 as float)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull unsigned fallback", "select ifnull(1/r.r_regionkey,cast(0 as unsigned)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce unsigned fallback", "select coalesce(1/r.r_regionkey,cast(0 as unsigned)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull decimal fallback", "select ifnull(1/r.r_regionkey,0.0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce decimal fallback", "select coalesce(1/r.r_regionkey,0.0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull decimal128 fallback", "select ifnull(1/r.r_regionkey,cast(0 as decimal(38,1))) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce decimal128 fallback", "select coalesce(1/r.r_regionkey,cast(0 as decimal(38,1))) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull converted integer source", "select ifnull(r.r_regionkey,0e0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull explicitly converted source", "select ifnull(cast(r.r_name as varchar(20)),'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull converted string source", "select ifnull(r.r_name,'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull converted integer fallback", "select ifnull(1/r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce converted integer fallback", "select coalesce(1/r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull explicit double fallback", "select ifnull(1/r.r_regionkey,cast(0 as double)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce explicit double fallback", "select coalesce(1/r.r_regionkey,cast(0 as double)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull direct double fallback", "select ifnull(1/r.r_regionkey,0e0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce direct double fallback", "select coalesce(1/r.r_regionkey,0e0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"case untrusted division branch", "select case when n_comment='x' then 1/n_nationkey else 7 end as v from nation", []bool{true}},
+		{"if untrusted division branch", "select if(n_comment='x',1/n_nationkey,7) as v from nation", []bool{true}},
+		{"case untrusted regex branch", "select case when n_comment='x' then regexp_substr(n_name,'z') else '7' end as v from nation", []bool{true}},
+		{"if untrusted regex branch", "select if(n_comment='x',regexp_substr(n_name,'z'),'7') as v from nation", []bool{true}},
+		{"case nullable condition nonnull branches", "select case when r.r_regionkey=1 then 11 else 22 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"if nullable condition nonnull branches", "select if(r.r_regionkey=1,11,22) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"case multiple conditions", "select case when r.r_regionkey=1 then 11 when r.r_regionkey=2 then 22 else 33 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"case implicit null else", "select case when r.r_regionkey=1 then 11 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"case nullable then", "select case when n.n_nationkey=1 then r.r_regionkey else 22 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"if nullable else", "select if(n.n_nationkey=1,11,r.r_regionkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"case explicit null else", "select case when r.r_regionkey=1 then 11 else null end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"nested case if", "select case when r.r_regionkey=1 then if(r.r_regionkey=2,11,22) else 33 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull control", "select ifnull(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"random bytes signed zero group", "select random_bytes(cast(0 as signed)) as v,count(*) as c from nation group by random_bytes(cast(0 as signed))", []bool{true, false}},
+		{"random bytes unsigned zero group", "select random_bytes(cast(0 as unsigned)) as v,count(*) as c from nation group by random_bytes(cast(0 as unsigned))", []bool{true, false}},
+		{"random bytes signed large group", "select random_bytes(cast(1025 as signed)) as v,count(*) as c from nation group by random_bytes(cast(1025 as signed))", []bool{true, false}},
+		{"random bytes unsigned large group", "select random_bytes(cast(1025 as unsigned)) as v,count(*) as c from nation group by random_bytes(cast(1025 as unsigned))", []bool{true, false}},
+		{"random bytes signed zero distinct", "select distinct random_bytes(cast(0 as signed)) as v from nation", []bool{true}},
+		{"random bytes unsigned zero distinct", "select distinct random_bytes(cast(0 as unsigned)) as v from nation", []bool{true}},
+		{"random bytes signed large distinct", "select distinct random_bytes(cast(1025 as signed)) as v from nation", []bool{true}},
+		{"random bytes unsigned large distinct", "select distinct random_bytes(cast(1025 as unsigned)) as v from nation", []bool{true}},
+		{"ifnull random bytes signed", "select ifnull(case when ascii(random_bytes(cast(n_nationkey as signed))) < 128 then 1 else null end,0) as v from nation", []bool{true}},
+		{"ifnull random bytes unsigned", "select ifnull(case when ascii(random_bytes(cast(n_nationkey as unsigned))) < 128 then 1 else null end,0) as v from nation", []bool{true}},
+		{"ifnull random bytes constant", "select ifnull(case when ascii(random_bytes(1)) < 128 then 1 else null end,0) as v from nation", []bool{true}},
+		{"coalesce random bytes control", "select coalesce(case when ascii(random_bytes(cast(n_nationkey as signed))) < 128 then 1 else null end,0) as v from nation", []bool{false}},
+		{"intersect left control", "select count(*) as c from nation intersect select null", []bool{false}},
+		{"minus nullable left", "select null as c minus select count(*) from nation", []bool{true}},
+		{"union intersect precedence", "select null as c union all select count(*) from nation intersect select 1", []bool{true}},
+		{"pruned union output", "select c from (select 1 as k, count(*) as c from nation union all select 2, null) u", []bool{true}},
+		{"coalesce null-producing fallback", "select coalesce(n_comment,1/n_nationkey) as v from nation", []bool{true}},
+		{"ifnull null-producing fallback", "select ifnull(n_comment,1/n_nationkey) as v from nation", []bool{true}},
+		{"coalesce derived fallback", "select coalesce(x,d) as v from (select n_comment as x,1/n_nationkey as d from nation) t", []bool{true}},
+		{"ifnull derived fallback", "select ifnull(x,d) as v from (select n_comment as x,1/n_nationkey as d from nation) t", []bool{true}},
+		{"coalesce join fallback", "select coalesce(r.r_regionkey,1/n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull join fallback", "select ifnull(r.r_regionkey,1/n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+			p, err := buildSingleStmt(mock, t, "create table ctas_nullability as "+test.query)
+			require.NoError(t, err)
+			var cols []*plan.ColDef
+			for _, col := range p.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+				if !col.Hidden {
+					cols = append(cols, col)
+				}
+			}
+			require.Len(t, cols, len(test.nullable))
+			for i, nullable := range test.nullable {
+				require.Equal(t, nullable, cols[i].GetDefault().GetNullAbility(), "column %d default", i)
+				require.Equal(t, !nullable, cols[i].Typ.NotNullable, "column %d type", i)
+			}
+		})
+	}
+}
+
+func TestCreateTableAsSelectBoolBitFallback(t *testing.T) {
+	for _, typ := range []types.T{types.T_bool, types.T_bit} {
+		for _, fn := range []string{"ifnull", "coalesce"} {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["region"].Cols[0].Typ = plan.Type{Id: int32(typ), Width: 8, NotNullable: true}
+			p, err := buildSingleStmt(mock, t, "create table bool_bit_fallback as select "+fn+"(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=1")
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.True(t, col.Typ.NotNullable, "%v %s", typ, fn)
+			require.False(t, col.Default.NullAbility, "%v %s", typ, fn)
+		}
+	}
+}
+
+func TestCreateTableAsSelectDecimalFallback(t *testing.T) {
+	for _, decimal := range []types.T{types.T_decimal64, types.T_decimal128} {
+		for _, expr := range []string{"ifnull(r.r_regionkey,0)", "coalesce(r.r_regionkey,0.0)", "ifnull(r.r_regionkey,cast(0 as float))", "coalesce(r.r_regionkey,cast(0 as unsigned))"} {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["region"].Cols[0].Typ = plan.Type{Id: int32(decimal), Width: 18, Scale: 2, NotNullable: true}
+			p, err := buildSingleStmt(mock, t, "create table decimal_fallback as select "+expr+" as v from nation n left join region r on n.n_regionkey=r.r_regionkey")
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.True(t, col.Typ.NotNullable, "%v %s", decimal, expr)
+			require.False(t, col.Default.NullAbility, "%v %s", decimal, expr)
+		}
+	}
+}
+
+func TestCreateTableAsSelectPreservesSourceMetadata(t *testing.T) {
+	for name, outerJoin := range map[string]bool{"direct": false, "null extended": true} {
+		t.Run(name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			source := mock.ctxt.tables["nation"].Cols[1]
+			source.Typ.Id = int32(types.T_enum)
+			source.Typ.Enumvalues = "low,high"
+			mock.ctxt.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "7", NullAbility: false}
+			query := "select n.n_name as priority, n.n_nationkey as source_key from nation n"
+			if outerJoin {
+				query += " right join region r on n.n_regionkey=r.r_regionkey"
+			}
+			p, err := buildSingleStmt(mock, t, "create table ctas_metadata as "+query)
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.Equal(t, int32(types.T_enum), col.Typ.Id)
+			require.Equal(t, "low,high", col.Typ.Enumvalues)
+			key := p.GetDdl().GetCreateTable().GetTableDef().Cols[1]
+			require.Equal(t, "7", key.Default.OriginString)
+			require.Equal(t, outerJoin, key.Default.NullAbility)
+			require.Equal(t, outerJoin, col.Default.NullAbility)
+			require.Equal(t, !outerJoin, col.Typ.NotNullable)
+			require.True(t, source.Typ.NotNullable, "join must not mutate source metadata")
+		})
+	}
 }
 
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {

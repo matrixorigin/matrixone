@@ -305,6 +305,149 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 	return nil
 }
 
+// UNION can emit either input, so both must prove NOT NULL. Filtering set
+// operations retain the left input contract.
+func setOperationOutputType(nodeType plan.Node_NodeType, left, right plan.Type) plan.Type {
+	if nodeType == plan.Node_UNION || nodeType == plan.Node_UNION_ALL {
+		left.NotNullable = left.NotNullable && right.NotNullable
+	}
+	return left
+}
+
+func outputTypeAfterNullExtension(node *plan.Node, childIdx int, typ plan.Type) plan.Type {
+	nullExtended := false
+	switch node.JoinType {
+	case plan.Node_LEFT:
+		nullExtended = childIdx == 1
+	case plan.Node_RIGHT:
+		nullExtended = childIdx == 0
+	case plan.Node_OUTER:
+		nullExtended = true
+	case plan.Node_SINGLE:
+		nullExtended = (childIdx == 0) == node.IsRightJoin
+	}
+	if nullExtended {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+// A converted literal can provide an independent fallback guarantee. Do not
+// substitute an arbitrary expression's (possibly optimistic) type annotation.
+func isNonNullLiteralFallback(expr *plan.Expr) bool {
+	if lit := expr.GetLit(); lit != nil {
+		return !lit.Isnull
+	}
+	return castPreservesNonNull(expr) && isNonNullLiteralFallback(expr.GetF().Args[0])
+}
+
+// Only the audited conversions below preserve non-NULL input as a value or
+// error. This is a nullness proof, not a precision or value-equivalence proof.
+func castPreservesNonNull(expr *plan.Expr) bool {
+	cast := expr.GetF()
+	if cast == nil || cast.Func.ObjName != "cast" || len(cast.Args) != 2 {
+		return false
+	}
+	fid, overload := function.DecodeOverloadID(cast.Func.Obj)
+	if fid != function.CAST || overload != 0 {
+		return false
+	}
+	from, to := types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id)
+	textResult := to == types.T_char || to == types.T_varchar || to == types.T_text
+	numericInput := from.IsInteger() || from.IsFloat() || from.IsDecimal()
+	numericResult := to.IsInteger() || to.IsFloat() || to.IsDecimal()
+	// BOOL has no direct float/decimal CAST implementation. BIT uses the
+	// unsigned numeric conversions; its text encoding preserves nullness too.
+	if from == types.T_bool {
+		return to.IsInteger() || to == types.T_bool || to == types.T_bit || textResult
+	}
+	if from == types.T_bit {
+		return numericResult || to == types.T_bool || to == types.T_bit || textResult
+	}
+	// Numeric conversions return a value or error for non-NULL input.
+	// DECIMAL to BOOL is not implemented; numeric to BIT can fail on overflow.
+	if numericInput && (numericResult || textResult || to == types.T_bit ||
+		(to == types.T_bool && !from.IsDecimal())) {
+		return true
+	}
+	// The binder represents decimal syntax such as 0.0 as a string-to-decimal
+	// cast. strToDecimal and strToStr return a value or error for non-NULL input.
+	return (from == types.T_char || from == types.T_varchar || from == types.T_text) &&
+		(to.IsDecimal() || textResult)
+}
+
+func isIfNullCase(fn *plan.Function) bool {
+	if fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return false
+	}
+	condition := fn.Args[0].GetF()
+	if condition == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
+		return false
+	}
+	// Reconciliation can wrap the ELSE source in a cast that preserves non-NULL input.
+	// Stop at the original source, including any casts already inside it.
+	otherwise := fn.Args[2]
+	for !exprStructuralEqual(condition.Args[0], otherwise) {
+		if !castPreservesNonNull(otherwise) {
+			return false
+		}
+		otherwise = otherwise.GetF().Args[0]
+	}
+	// Two evaluations of a volatile source need not produce the same value.
+	return checkExprForVolatileFunc(context.Background(), condition.Args[0]) == nil
+}
+
+// Refresh references recursively after remapping: a function's bind-time
+// non-null inputs may now be null-extended join or UNION outputs.
+func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		expr.Typ.NotNullable = input[impl.Col.ColPos].Typ.NotNullable
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			refreshExprNullabilityFromInput(arg, input)
+		}
+		// Ordinary inference may only weaken the bind-time contract. In
+		// particular, a function argument marked NOT NULL is not proof that
+		// it cannot produce NULL itself (for example, division by zero).
+		fid, _ := function.DecodeOverloadID(impl.F.Func.Obj)
+		args := impl.F.Args
+		switch fid {
+		case function.CASE:
+			// Preserve an existing proof when only conditions became nullable.
+			// Never establish a new proof from possibly optimistic branch types.
+			expr.Typ.NotNullable = expr.Typ.NotNullable && len(args) >= 3 && len(args)%2 == 1
+			if len(args) > 0 {
+				expr.Typ.NotNullable = expr.Typ.NotNullable && args[len(args)-1].Typ.NotNullable
+			}
+			for i := 1; i < len(args)-1; i += 2 {
+				expr.Typ.NotNullable = expr.Typ.NotNullable && args[i].Typ.NotNullable
+			}
+		case function.IFF:
+			expr.Typ.NotNullable = expr.Typ.NotNullable && len(args) == 3 &&
+				args[1].Typ.NotNullable && args[2].Typ.NotNullable
+		default:
+			expr.Typ.NotNullable = expr.Typ.NotNullable &&
+				function.DeduceNotNullable(impl.F.Func.Obj, args)
+		}
+		if impl.F.Func.ObjName == "coalesce" {
+			for _, arg := range impl.F.Args {
+				if isNonNullLiteralFallback(arg) {
+					// A proven non-NULL constant is an independent guarantee,
+					// unlike a potentially stale argument type annotation.
+					expr.Typ.NotNullable = true
+					break
+				}
+			}
+		} else if isIfNullCase(impl.F) {
+			// IFNULL is bound as CASE WHEN x IS NULL THEN fallback ELSE x.
+			if isNonNullLiteralFallback(impl.F.Args[1]) {
+				expr.Typ.NotNullable = true
+			}
+		}
+	}
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -694,6 +837,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if err != nil {
 				return nil, err
 			}
+			expr.Typ = setOperationOutputType(node.NodeType,
+				builder.qry.Nodes[leftID].ProjectList[idx].Typ, rightNode.ProjectList[idx].Typ)
 		}
 
 	case plan.Node_JOIN:
@@ -793,11 +938,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			remapping.addColRef(globalRef)
-			if node.JoinType == plan.Node_RIGHT {
-				childProjList[i].Typ.NotNullable = false
-			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: childProjList[i].Typ,
+				Typ: outputTypeAfterNullExtension(node, 0, childProjList[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -834,12 +976,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 				remapping.addColRef(globalRef)
 
-				if node.JoinType == plan.Node_LEFT {
-					childProjList[i].Typ.NotNullable = false
-				}
-
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: childProjList[i].Typ,
+					Typ: outputTypeAfterNullExtension(node, 1, childProjList[i].Typ),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 1,
@@ -898,6 +1036,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
+			refreshExprNullabilityFromInput(expr, builder.qry.Nodes[node.Children[0]].ProjectList)
 			globalRef := [2]int32{groupTag, int32(idx)}
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -1559,10 +1698,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				return nil, err
 			}
 
-			switch ne := expr.Expr.(type) {
-			case *plan.Expr_Col:
-				expr.Typ.NotNullable = childProjList[ne.Col.ColPos].Typ.NotNullable
-			}
+			refreshExprNullabilityFromInput(expr, childProjList)
 
 			globalRef := [2]int32{projectTag, needed}
 			remapping.addColRef(globalRef)
@@ -2382,15 +2518,17 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}
 	}
 
-	firstSelectProjectNode := builder.qry.Nodes[nodes[0]]
 	// set ctx's headings  projects  results
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 
-	getProjectList := func(tag int32, thisTag int32) []*plan.Expr {
-		projectList := make([]*plan.Expr, len(firstSelectProjectNode.ProjectList))
-		for i, expr := range firstSelectProjectNode.ProjectList {
+	getProjectList := func(nodeType plan.Node_NodeType, leftID, rightID, thisTag int32) []*plan.Expr {
+		left := builder.qry.Nodes[leftID]
+		right := builder.qry.Nodes[rightID]
+		tag := left.BindingTags[0]
+		projectList := make([]*plan.Expr, len(left.ProjectList))
+		for i, expr := range left.ProjectList {
 			projectList[i] = &plan.Expr{
-				Typ: expr.Typ,
+				Typ: setOperationOutputType(nodeType, expr.Typ, right.ProjectList[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: tag,
@@ -2413,12 +2551,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		lastNewNodeIdx := len(newNodes) - 1
 		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
 			lastTag = builder.genNewBindTag()
-			leftNodeTag := builder.qry.Nodes[newNodes[lastNewNodeIdx]].BindingTags[0]
 			newNodeID := builder.appendNode(&plan.Node{
 				NodeType:    unionTypes[utIdx],
 				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
 				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(leftNodeTag, lastTag),
+				ProjectList: getProjectList(unionTypes[utIdx], newNodes[lastNewNodeIdx], nodes[i], lastTag),
 			}, ctx)
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
@@ -2432,13 +2569,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	for i := 1; i < len(newNodes); i++ {
 		utIdx := i - 1
 		lastTag = builder.genNewBindTag()
-		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    newUnionType[utIdx],
 			Children:    []int32{lastNodeID, newNodes[i]},
 			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(leftNodeTag, lastTag),
+			ProjectList: getProjectList(newUnionType[utIdx], lastNodeID, newNodes[i], lastTag),
 		}, ctx)
 	}
 
@@ -2453,7 +2589,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		ctx.aliasFrequency[v]++
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = v
 	}
-	for i, expr := range firstSelectProjectNode.ProjectList {
+	for i, expr := range builder.qry.Nodes[lastNodeID].ProjectList {
 		ctx.projects = append(ctx.projects, &plan.Expr{
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
