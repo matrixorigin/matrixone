@@ -111,6 +111,41 @@ func TestODKUSystematicSQL(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, count, q)
 		}
+		t.Run("ordered Top source preserves typed NULL rows", func(t *testing.T) {
+			exec(t, "create table top_odku_source(v int)")
+			exec(t, "insert into top_odku_source values(2)")
+			exec(t, "create table top_odku_target(id int primary key,u int,v int,unique key uk(u))")
+			for _, source := range []string{
+				"select cast(null as signed) as v union all select v from top_odku_source",
+				"select v from top_odku_source union all select cast(null as signed) as v",
+			} {
+				for _, order := range []struct{ direction, want string }{{"asc", "NULL"}, {"desc", "2"}} {
+					exec(t, "truncate table top_odku_target")
+					exec(t, "insert into top_odku_target values(1,10,5)")
+					input := "select 1,10,v from (" + source + ") s order by v is null " + order.direction + ",v desc limit 2"
+					statement := "insert into top_odku_target " + input + " on duplicate key update v=values(v)"
+					planRows := rows(t, "explain "+statement)
+					explained := strings.Join(planRows, "\n")
+					boundedSort := false
+					for i, line := range planRows {
+						if !strings.Contains(line, "Sort") {
+							continue
+						}
+						for _, attribute := range planRows[i+1:] {
+							if strings.Contains(attribute, "->") {
+								break
+							}
+							boundedSort = boundedSort || strings.Contains(attribute, "Limit: 2")
+						}
+					}
+					require.True(t, boundedSort, "ordered source must execute a bounded Sort/Top:\n%s", explained)
+					t.Logf("ordered typed-NULL source plan:\n%s", explained)
+					affected(t, 4, statement)
+					require.Equal(t, []string{"1|10|" + order.want}, rows(t, "select id,u,v from top_odku_target"))
+					require.Equal(t, []string{"1|" + order.want}, rows(t, "select id,v from top_odku_target force index(uk) where u=10"))
+				}
+			}
+		})
 		t.Run("physical floating key identities", func(t *testing.T) {
 			for _, primary := range []bool{false, true} {
 				for _, negativeFirst := range []bool{false, true} {
