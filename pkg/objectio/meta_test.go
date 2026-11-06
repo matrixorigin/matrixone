@@ -370,7 +370,7 @@ func TestEvictCacheToCapacityPercent(t *testing.T) {
 	ctx := context.Background()
 	var key mataCacheKey
 	key[0] = 3
-	metaCache.Set(ctx, key, []byte("1234567890"), 10)
+	metaCache.Set(key, []byte("1234567890"), 10)
 
 	used := EvictCacheToCapacityPercent(ctx, 50)
 
@@ -390,7 +390,7 @@ func TestMetaCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	ctx := context.Background()
 	var existingKey mataCacheKey
 	existingKey[0] = 4
-	metaCache.Set(ctx, existingKey, []byte("12345"), 5)
+	metaCache.Set(existingKey, []byte("12345"), 5)
 
 	SetMetaCachePressureTargetPercent(50, time.Now().Add(time.Minute))
 
@@ -403,7 +403,7 @@ func TestMetaCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 	assert.Equal(t, []byte("6"), v)
 	assert.Equal(t, int64(5), metaCache.Used())
 
-	_, ok := metaCache.Get(ctx, key)
+	_, ok := getMeta(key)
 	assert.False(t, ok)
 }
 

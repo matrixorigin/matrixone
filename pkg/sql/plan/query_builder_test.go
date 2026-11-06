@@ -7054,6 +7054,12 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			notNullable: false,
 		},
 		{
+			// Explicit casts of non-NULL literals with exactly known valid
+			// UTF-8 bytes can never hit the Warning 1300 NULL guard, so the
+			// corrected inference is precisely NOT NULL and the common VALUES
+			// type stays NOT NULL for these rows. Unknown/runtime-binary
+			// sources (and string-to-DATETIME casts, see above) still infer
+			// conservative nullable.
 			name:        "char width grows",
 			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
 			oid:         types.T_char,

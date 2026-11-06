@@ -5386,6 +5386,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			return err
 		}
 		if isNull {
+			// Invalid bytes for the requested charset already produced NULL;
+			// attach the boundary diagnostic MySQL requires (Warning 1300).
+			appendBinaryToTextUtf8Warning(proc, value)
 			err = rs.AppendMustNullForBytesResult()
 		} else {
 			err = rs.AppendMustBytesValue(value)

@@ -247,6 +247,14 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		// residual and enumerate every duplicate-key match.
 		return false
 	}
+	if _, protected := builder.materializedLockKeyProjects[node.NodeId]; protected {
+		// The barrier CHECK/FK FILTER consumes this project's computed
+		// unique lock-key columns positionally, and the restored row image
+		// exports them as columns to every downstream writer. Inlining the
+		// project would re-evaluate the key expression once per consumer
+		// after arbitration rows were already filtered.
+		return false
+	}
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
 		return false
 	}

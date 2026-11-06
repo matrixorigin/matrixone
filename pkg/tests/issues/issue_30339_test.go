@@ -57,6 +57,21 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 					assert.NoError(t, err)
 				}()
 				exec(t, "use "+database)
+				// Setup and each independent diagnostic have separate budgets.
+				// Finish setup now so no scenario can accidentally reuse its context.
+				cancel()
+				runScenario := func(name string, fn func(*testing.T)) {
+					t.Run(name, func(t *testing.T) {
+						setup := ctx
+						var stop context.CancelFunc
+						ctx, stop = context.WithTimeout(t.Context(), 90*time.Second)
+						defer func() {
+							stop()
+							ctx = setup
+						}()
+						fn(t)
+					})
+				}
 				checkError := func(t *testing.T, err error, entry, key string) {
 					t.Helper()
 					var me *mysql.MySQLError
@@ -96,7 +111,7 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 				for _, tc := range []struct{ name, key, entry string }{
 					{"single", "s", "alpha"}, {"prefix", "s(3)", "alp"}, {"composite", "s,n", "(alpha,7)"},
 				} {
-					t.Run(tc.name, func(t *testing.T) {
+					runScenario(tc.name, func(t *testing.T) {
 						table := "u_" + tc.name
 						exec(t, "create table "+table+"(id int primary key,s varchar(30) collate utf8mb4_unicode_ci,n int,unique key uk_named("+tc.key+"))")
 						exec(t, "insert into "+table+" values(1,'Alpha',7),(2,NULL,9),(3,'Beta',8)")
@@ -128,24 +143,24 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 						require.Equal(t, 4, count)
 					})
 				}
-				t.Run("single_constraint_ignore", func(t *testing.T) {
+				runScenario("single_constraint_ignore", func(t *testing.T) {
 					exec(t, "create table u_only(s varchar(30) collate utf8mb4_unicode_ci,unique key uk_only(s))")
 					exec(t, "insert into u_only values('Alpha')")
 					warning(t, "insert ignore into u_only values('alpha')", "alpha", "uk_only", 0, 1)
 					warning(t, "insert ignore into u_only values('Beta'),('beta')", "beta", "uk_only", 1, 1)
 				})
 
-				t.Run("auto_increment_ignore", func(t *testing.T) {
+				runScenario("auto_increment_ignore", func(t *testing.T) {
 					exec(t, "create table u_auto(id int auto_increment primary key,s varchar(30) collate utf8mb4_unicode_ci,unique key uk_auto(s))")
 					exec(t, "insert into u_auto(s) values('Alpha')")
 					warning(t, "insert ignore into u_auto(s) values('alpha')", "alpha", "uk_auto", 0, 1)
 					exec(t, "insert into u_auto(s) values('Beta')")
 				})
-				t.Run("repeated_target_update_ignore", func(t *testing.T) {
+				runScenario("repeated_target_update_ignore", func(t *testing.T) {
 					// Preserve the two existing alias-stage warnings; both must render the rejected spelling.
 					warning(t, "update ignore u_single a join u_single b on a.id=1 and b.id=3 set a.s='Alpha',b.s='ALPHA'", "ALPHA", "uk_named", 0, 2)
 				})
-				t.Run("prepared_reuse", func(t *testing.T) {
+				runScenario("prepared_reuse", func(t *testing.T) {
 					stmt, err := conn.PrepareContext(ctx, "insert into u_single values(?,?,7)")
 					require.NoError(t, err)
 					defer stmt.Close()
@@ -154,13 +169,13 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 						checkError(t, err, value, "uk_named")
 					}
 				})
-				t.Run("controls", func(t *testing.T) {
+				runScenario("controls", func(t *testing.T) {
 					duplicate(t, "insert into u_single values(1,'Other',1)", "1", "id")
 					exec(t, "create table u_binary(s varchar(30) collate utf8mb4_bin unique)")
 					exec(t, "insert into u_binary values('Alpha'),('alpha')")
 					duplicate(t, "insert into u_binary values('alpha')", "alpha", "s")
 				})
-				t.Run("nullable_sibling_keys", func(t *testing.T) {
+				runScenario("nullable_sibling_keys", func(t *testing.T) {
 					for _, tc := range []struct{ name, typ, value, entry string }{
 						{"integer", "int", "7", "7"},
 						{"binary", "varchar(30) collate utf8mb4_bin", "'dup'", "dup"},
@@ -176,7 +191,7 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 						})
 					}
 				})
-				t.Run("optimistic_si", func(t *testing.T) {
+				runScenario("optimistic_si", func(t *testing.T) {
 					exec(t, "create table u_concurrent(id int primary key,s varchar(30) collate utf8mb4_unicode_ci,unique key uk_s(s))")
 					var previousPKCheck int
 					require.NoError(t, conn.QueryRowContext(ctx, "select @@mo_pk_check_by_dn").Scan(&previousPKCheck))
@@ -284,7 +299,7 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 					})
 				})
 				if cnIndex == 0 {
-					t.Run("snapshot_clone_restore", func(t *testing.T) {
+					runScenario("snapshot_clone_restore", func(t *testing.T) {
 						snapshot := database + "_snapshot"
 						clone := database + "_clone"
 						exec(t, "create snapshot "+snapshot+" for database "+database)

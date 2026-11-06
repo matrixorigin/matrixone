@@ -11168,7 +11168,9 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 					// COUNT(lit) e.g. count(1) from count(*): set ObjName+Obj so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
-					return partialResults, partialResultTypes, columnMap
+					// Keep validating the remaining aggregates: the complete node
+					// takes the metadata fast path only if every aggregate is eligible.
+					continue
 				}
 				return nil, nil, nil
 			} else {
@@ -11195,6 +11197,13 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				return nil, nil, nil
 			}
 			if node.TableDef == nil {
+				return nil, nil, nil
+			}
+			// Zone-map metadata cannot replace scanning this block: tae zonemaps
+			// intentionally skip T_decimal256 maintenance (zm.go), so a
+			// decimal256 MIN/MAX would contribute a nil partial and drop the
+			// block's real rows. Decline the complete aggregate.
+			if types.T(node.TableDef.Cols[col.Col.ColPos].Typ.Id) == types.T_decimal256 {
 				return nil, nil, nil
 			}
 			columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
