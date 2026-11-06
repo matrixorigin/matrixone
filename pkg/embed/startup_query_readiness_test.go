@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,7 +110,8 @@ func TestStartupQueryReadiness(t *testing.T) {
 			defer db.Close()
 			var viewDefinition string
 			require.NoError(t, db.QueryRowContext(ctx, "select view_definition from information_schema.views where table_schema='startup_query_readiness' and table_name='startup_view'").Scan(&viewDefinition))
-			require.Contains(t, viewDefinition, "startup_query_readiness")
+			require.Contains(t, viewDefinition, "`t`.`id`")
+			require.NotContains(t, strings.ToLower(viewDefinition), "create view")
 			var tables int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema='startup_query_readiness' and table_name='t'").Scan(&tables))
 			require.Equal(t, 1, tables)
