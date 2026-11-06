@@ -19,6 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
+// InformationSchemaViewsUpgradeEntry is shared by tenant upgrade and startup.
+func InformationSchemaViewsUpgradeEntry() UpgradeEntry {
+	return InformationSchemaViewUpgradeEntry("VIEWS", sysview.InformationSchemaViewsDDL, defines.MORPCVersion126)
+}
+
 // InformationSchemaTablesUpgradeEntry refreshes the current TABLES definition.
 // Historical and forward handlers share the same idempotent view repair.
 func InformationSchemaTablesUpgradeEntry() UpgradeEntry {

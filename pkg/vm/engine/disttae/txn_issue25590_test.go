@@ -3519,6 +3519,15 @@ func issue25590QueuedNames(e *Engine) []string {
 	return slices.Clone(e.unpublishedPending.names)
 }
 
+type issue25590ObservedDeleteFS struct {
+	fileservice.FileService
+	deleteFn func(context.Context, ...string) error
+}
+
+func (fs *issue25590ObservedDeleteFS) Delete(ctx context.Context, paths ...string) error {
+	return fs.deleteFn(ctx, paths...)
+}
+
 // TestIssue25590FailedBatchRetainsWhileLaterBatchesCollect covers the
 // round-10 P2 finding on batch liveness: the storage-side delete stops at
 // its first failing 1000-name batch, so with 1001 queued names one
@@ -3536,9 +3545,8 @@ func TestIssue25590FailedBatchRetainsWhileLaterBatchesCollect(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Release() })
 
-	ctx := context.Background()
+	ctx := t.Context()
 	failFS := issue25590SwapProcSharedFS(t, txn)
-	txn.engine.fs = failFS
 	require.NoError(t, txn.engine.ResetGCWorkerPool(pool))
 
 	// Physical objects: the published survivor, the poisoned first-batch
@@ -3549,68 +3557,132 @@ func TestIssue25590FailedBatchRetainsWhileLaterBatchesCollect(t *testing.T) {
 		names = append(names, fmt.Sprintf("%s-%04d", unique, i))
 	}
 	poisonPath, latePath := names[0], names[1000]
+	laterOrphan := unique + "-2001"
 	publishedName := unique + "-published"
 	issue25590WriteRawFile(t, failFS.FileService, poisonPath)
 	issue25590WriteRawFile(t, failFS.FileService, latePath)
 	issue25590WriteRawFile(t, failFS.FileService, publishedName)
+	issue25590WriteRawFile(t, failFS.FileService, laterOrphan)
+
+	lastFirstBatch, laterDeleted := make(chan struct{}), make(chan struct{})
+	releaseFirst, releaseLater := make(chan struct{}), make(chan struct{})
+	var firstOnce, laterOnce sync.Once
+	unblockFirst := func() { firstOnce.Do(func() { close(releaseFirst) }) }
+	unblockLater := func() { laterOnce.Do(func() { close(releaseLater) }) }
+	drainIdle := func() <-chan struct{} {
+		txn.engine.unpublishedPending.mu.Lock()
+		defer txn.engine.unpublishedPending.mu.Unlock()
+		return txn.engine.unpublishedPending.drainIdle
+	}
+	stopScheduler := func() <-chan struct{} {
+		txn.engine.gcMu.Lock()
+		cancel, done := txn.engine.gcSchedulerCancel, txn.engine.gcSchedulerDone
+		txn.engine.gcMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return done
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		unblockFirst()
+		unblockLater()
+		join := func(done <-chan struct{}) {
+			if done == nil {
+				return
+			}
+			select {
+			case <-done:
+			case <-cleanup.Done():
+				t.Errorf("pending GC cleanup did not finish: %v", cleanup.Err())
+			}
+		}
+		join(stopScheduler())
+		txn.engine.cancelUnpublishedPendingDrains()
+		join(drainIdle())
+	})
+	wait := func(done <-chan struct{}) {
+		t.Helper()
+		require.NotNil(t, done)
+		guard, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		select {
+		case <-done:
+		case <-guard.Done():
+			t.Fatal(guard.Err())
+		}
+	}
+	var lastFirstPaths []string
+	var firstHealthyCall, laterHealthyCall int
+	txn.engine.fs = &issue25590ObservedDeleteFS{
+		FileService: failFS,
+		deleteFn: func(deleteCtx context.Context, paths ...string) error {
+			call := failFS.deleteCallCount() + 1
+			if call == 9 {
+				lastFirstPaths = slices.Clone(paths)
+				close(lastFirstBatch)
+				select {
+				case <-releaseFirst:
+				case <-deleteCtx.Done():
+					return context.Cause(deleteCtx)
+				}
+			}
+			err := failFS.Delete(deleteCtx, paths...)
+			if err == nil && len(paths) == 1 {
+				if paths[0] == latePath {
+					firstHealthyCall = call
+				} else if paths[0] == laterOrphan {
+					laterHealthyCall = call
+					close(laterDeleted)
+					// Physical deletion precedes both Delete completion and
+					// retirement from the engine's pending queue.
+					select {
+					case <-releaseLater:
+					case <-deleteCtx.Done():
+					}
+				}
+			}
+			return err
+		},
+	}
 
 	// One poisoned object in the first 1000-name batch: every deletion
 	// call that contains it fails, persistently and object-specifically.
 	failFS.armDeleteFailureFor(poisonPath)
 	txn.engine.enqueueUnpublishedPending(names)
+	firstIdle := drainIdle()
+	wait(lastFirstBatch)
+	require.Contains(t, lastFirstPaths, poisonPath)
+	require.NotContains(t, lastFirstPaths, laterOrphan)
+	require.Equal(t, 2, firstHealthyCall, "the healthy 1001st name is deleted in the first round")
 
-	// The healthy 1001st name is collected by the very first drain round -
-	// it never waits for the poisoned batch.
-	require.Eventually(t, func() bool {
-		_, statErr := failFS.StatFile(ctx, latePath)
-		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
-	}, 10*time.Second, 20*time.Millisecond,
-		"the healthy 1001st name must be collected while the poisoned first batch keeps failing")
-	// The poisoned batch stays owned: exactly the thousand names of the
-	// first batch remain queued once the first ladder ran out.
-	require.Eventually(t, func() bool {
-		return failFS.deleteCallCount() == 9
-	}, 15*time.Second, 50*time.Millisecond,
-		"the first ladder makes exactly nine storage calls: two batches in its first round, the poisoned one alone in rounds two to eight")
-	require.Equal(t, 1000, len(issue25590QueuedNames(txn.engine)),
-		"only the poisoned batch's thousand names stay queued")
-	require.NotContains(t, issue25590QueuedNames(txn.engine), latePath)
-	require.Contains(t, issue25590QueuedNames(txn.engine), poisonPath)
-	issue25590RequireKept(t, failFS.FileService, poisonPath,
-		"the poisoned first-batch object stays on storage")
-	issue25590RequireKept(t, failFS.FileService, publishedName,
-		"the published object of the recorded file entry")
+	// This arrival coalesces behind the first ladder's final failed batch.
+	// No scheduler exists yet; enqueue cannot start the next ladder.
+	txn.engine.enqueueUnpublishedPending([]string{laterOrphan})
+	unblockFirst()
+	wait(firstIdle)
+	require.Equal(t, 9, failFS.deleteCallCount())
+	wantPending := append(slices.Clone(names[:1000]), laterOrphan)
+	require.Equal(t, wantPending, issue25590QueuedNames(txn.engine))
+	_, err = failFS.StatFile(ctx, latePath)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	issue25590RequireKept(t, failFS.FileService, laterOrphan, "the later arrival awaits the scheduler tick")
 
-	// The accumulation counterexample: a healthy orphan arriving LATER
-	// must drain behind the still-failing batch, not queue behind it. The
-	// engine's own GC-lifecycle tick - the autonomous retry owner of the
-	// r9 review - hands the poisoned-plus-healthy queue to a fresh ladder
-	// no matter when the tail of the first ladder released its slot:
-	// this phase schedules nothing manually.
+	// Only the real engine scheduler can start the second ladder.
 	issue25590WithPendingGCTicker(t, 5*time.Millisecond)
 	issue25590RunEngineGCScheduler(t, txn.engine)
-	laterOrphan := unique + "-2001"
-	issue25590WriteRawFile(t, failFS.FileService, laterOrphan)
-	txn.engine.enqueueUnpublishedPending([]string{laterOrphan})
-	require.Eventually(t, func() bool {
-		_, statErr := failFS.StatFile(ctx, laterOrphan)
-		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
-	}, 15*time.Second, 20*time.Millisecond,
-		"a healthy orphan arriving later drains behind the poisoned batch exactly once")
-	// Stop the GC scheduler so the second ladder is the last one: the
-	// exact-call oracle below stays deterministic.
-	txn.engine.gcMu.Lock()
-	schedCancel := txn.engine.gcSchedulerCancel
-	txn.engine.gcMu.Unlock()
-	if schedCancel != nil {
-		schedCancel()
-	}
-	require.Eventually(t, func() bool {
-		return failFS.deleteCallCount() == 18
-	}, 15*time.Second, 50*time.Millisecond,
-		"the second ladder adds exactly nine more storage calls on the same shape")
-	require.Equal(t, 1000, len(issue25590QueuedNames(txn.engine)),
-		"only the poisoned batch's thousand names remain queued forever failing")
+	wait(laterDeleted)
+	require.Equal(t, 11, laterHealthyCall)
+	_, err = failFS.StatFile(ctx, laterOrphan)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	require.Equal(t, wantPending, issue25590QueuedNames(txn.engine), "physical deletion is not queue settlement")
+	wait(stopScheduler())
+	secondIdle := drainIdle()
+	unblockLater()
+	wait(secondIdle)
+	require.Equal(t, 18, failFS.deleteCallCount())
+	require.Equal(t, names[:1000], issue25590QueuedNames(txn.engine))
 	issue25590RequireKept(t, failFS.FileService, poisonPath,
 		"the poisoned object is still on storage after both ladders")
 	issue25590RequireKept(t, failFS.FileService, publishedName,
