@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,8 +98,13 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		"the #31461-era derivation of the pre-change template is the pre-decoration current")
 	require.Equal(t, informationSchemaColumnsWithUnsignedDecimalDDL(), InformationSchemaColumnsPreDefaultGeneratedDDL(),
 		"the frozen pre-change identity of the DEFAULT_GENERATED revision is exactly the previous current derivation")
-	require.Equal(t, informationSchemaColumnsDefaultGeneratedExtraOver(InformationSchemaColumnsPreDefaultGeneratedDDL()), InformationSchemaColumnsDDL,
-		"the current identity layers the expression-default EXTRA arm over the frozen pre-change identity")
+	withoutPhysicalFilter := strings.NewReplacer(
+		" AND "+catalog.NonIndexRelationSQLPredicate("tbl"), "",
+		" AND "+catalog.NonIndexRelationSQLPredicate("mt"), "",
+		" AND "+catalog.NonIndexRelationSQLPredicateForColumns("mc.att_relname", "mc.relkind", "mc.extra_info"), "",
+	).Replace(InformationSchemaColumnsDDL)
+	require.Equal(t, informationSchemaColumnsDefaultGeneratedExtraOver(InformationSchemaColumnsPreDefaultGeneratedDDL()), withoutPhysicalFilter,
+		"the current identity combines expression-default metadata with physical-index filters")
 	require.NotEqual(t, InformationSchemaColumnsDDL, preAttributes,
 		"the decorated current template differs from the pre-change identity")
 	require.NotEqual(t, InformationSchemaColumnsDDL, preAttributesBinaryNull,

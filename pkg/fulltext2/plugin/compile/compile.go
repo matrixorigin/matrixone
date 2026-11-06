@@ -28,6 +28,7 @@ import (
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
@@ -196,7 +197,7 @@ func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.I
 	if err != nil {
 		return err
 	}
-	return ctx.RunSql(sql)
+	return maintenance.RunSQL(ctx, sql, "fulltext2_create", storeDef.IndexName)
 }
 
 // resolveFulltext2ThreadsBuild reads the fulltext2_threads_build session variable. It only
@@ -392,7 +393,7 @@ func handleMergeCompact(ctx compileplugin.CompileContext, storeDef, metaDef *pla
 		sqlquote.String(strconv.FormatInt(capacity, 10)),
 		sqlquote.String(strconv.FormatBool(positionFree)),
 		sqlquote.String(strconv.FormatInt(postingCap, 10)))
-	return ctx.RunSql(sql)
+	return maintenance.RunSQL(ctx, sql, "fulltext2_compact", storeDef.IndexName)
 }
 
 // RestoreInitSQL — the clone copies the storage+metadata rows; register CDC from

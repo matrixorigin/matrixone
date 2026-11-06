@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -596,7 +597,7 @@ func TestCreateTenantInformationSchemaRequiresCurrentProtocol(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesV118DDL,
+			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesCurrentDDL,
 				sysview.InformationSchemaSchemataDDL, sysview.InformationSchemaViewsDDL} {
 				require.Contains(t, executed, ddl)
 			}
@@ -9119,6 +9120,9 @@ func Test_doGrantPrivilege(t *testing.T) {
 					})
 					bh.sql2result[sql] = mrs
 					registerLockedSQL(bh, sql, mrs)
+					grantSQL, err := lockedGrantRelationSQL(ses.GetTxnHandler().GetTxnCtx(), dbName, tableName, 0)
+					require.NoError(t, err)
+					bh.sql2result[grantSQL] = newMrsForLockedGrantRelation(0, catalog.SystemOrdinaryRel, "")
 				}
 			}
 
@@ -9290,6 +9294,17 @@ func Test_doGrantPrivilege(t *testing.T) {
 	})
 }
 
+func newMrsForLockedGrantRelation(id int64, kind, extra string) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"rel_logical_id", "relkind", "extra_info"} {
+		col := &MysqlColumn{}
+		col.SetName(name)
+		mrs.AddColumn(col)
+	}
+	mrs.AddRow([]interface{}{id, kind, extra})
+	return mrs
+}
+
 func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newSes(nil, ctrl)
@@ -9306,6 +9321,8 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		return strings.TrimSuffix(sql, ";") + " for share;"
 	}
+	grantRelationSQL, err := lockedGrantRelationSQL(ctx, "d", "t", 42)
+	require.NoError(t, err)
 	lockedViewSQL := func(viewName string) string {
 		sql, err := getSqlForCheckDatabaseView(ctx, "d", viewName)
 		require.NoError(t, err)
@@ -9346,7 +9363,7 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
 			},
 			objectID:     42,
-			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t")},
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t"), grantRelationSQL},
 		},
 		{
 			name:       "exact view locks database before relation",
@@ -9364,6 +9381,10 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			bh := &backgroundExecTest{}
 			bh.init()
 			for _, sql := range testCase.expectedSQLs {
+				if sql == grantRelationSQL {
+					bh.sql2result[sql] = newMrsForLockedGrantRelation(testCase.objectID, catalog.SystemOrdinaryRel, "")
+					continue
+				}
 				objectID := testCase.objectID
 				if sql == lockedDatabaseSQL("d") && len(testCase.expectedSQLs) > 1 {
 					objectID = 11
@@ -9378,6 +9399,50 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			require.Equal(t, testCase.expectedSQLs, bh.executedSQLs)
 		})
 	}
+
+	t.Run("renamed physical relation cannot receive an exact grant", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, kind string
+			extra      string
+		}{
+			{"feature bit", catalog.SystemOrdinaryRel, string(api.MustMarshalTblExtra(&api.SchemaExtra{FeatureFlag: features.IndexTable}))},
+			{"legacy plugin kind", "unregistered_plugin_index", ""},
+			{"invalid metadata", catalog.SystemOrdinaryRel, "\xff"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bh := &backgroundExecTest{}
+				bh.init()
+				bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+				bh.sql2result[lockedTableSQL("t")] = newMrsForCheckDatabaseTable([][]interface{}{{int64(42)}})
+				bh.sql2result[grantRelationSQL] = newMrsForLockedGrantRelation(42, tc.kind, tc.extra)
+				roleSQL, roleErr := getSqlForRoleIdOfRole(ctx, "r1")
+				require.NoError(t, roleErr)
+				bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+				stmt := &tree.GrantPrivilege{
+					Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+					ObjType:    tree.OBJECT_TYPE_TABLE,
+					Level:      &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t"},
+					Roles:      []*tree.Role{{UserName: "r1"}},
+				}
+				require.Error(t, doGrantPrivilege(ctx, ses, stmt, bh))
+				for _, sql := range bh.executedSQLs {
+					require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_privs")
+					require.NotContains(t, strings.ToLower(sql), "update mo_catalog.mo_role_privs")
+				}
+			})
+		}
+	})
+
+	t.Run("locked grant relation preserves catalog decoding errors", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		result := mock_frontend.NewMockExecResult(ctrl)
+		result.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		decodeErr := errors.New("catalog logical ID decode failed")
+		result.EXPECT().GetInt64(ctx, uint64(0), uint64(0)).Return(int64(0), decodeErr)
+		bh.sql2result[grantRelationSQL] = result
+		require.ErrorIs(t, checkLockedGrantRelation(ctx, bh, "d", "t", 42), decodeErr)
+	})
 
 	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
 		bh := &backgroundExecTest{}

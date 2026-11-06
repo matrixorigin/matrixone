@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -90,15 +89,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, err
 	}
 	defer newStmt.Free()
-	if stmt.Where != nil {
-		newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = stmt.Where
-	}
-	p, err := getReturnDdlBySelectStmt(ctx, newStmt, plan.DataDefinition_SHOW_INDEX)
-	if err != nil {
-		return nil, err
-	}
-	readOnBehalfOf(p, ignoredTables, objRef)
-	return p, nil
+	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef)
 }
 
 // tableWithPartitions returns tableDef and the definitions of its partitions, with the names
@@ -126,19 +117,4 @@ func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef)
 		}
 	}
 	return defs, names, nil
-}
-
-// readOnBehalfOf makes the scans of the hidden tables of p checked as reads of the table objRef.
-func readOnBehalfOf(p *Plan, hidden map[string]struct{}, objRef *ObjectRef) {
-	if objRef == nil {
-		return
-	}
-	for _, node := range p.GetQuery().GetNodes() {
-		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
-			continue
-		}
-		if _, ok := hidden[node.ObjRef.ObjName]; ok {
-			node.ParentObjRef = DeepCopyObjectRef(objRef)
-		}
-	}
 }

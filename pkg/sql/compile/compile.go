@@ -513,6 +513,9 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.auxiliaryProductScopes = nil
 	c.pn = nil
+	c.indexMaintenanceSpec = nil
+	c.indexMaintenanceLiterals = nil
+	c.indexMaintenanceNodeID = 0
 	c.fill = nil
 	c.buildPlanFunc = nil
 	c.preparedParamValues = nil
@@ -5366,6 +5369,7 @@ func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) 
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = c.proc.NewNoContextChildProc(0)
 	op := constructTableFunction(node, c.pn.GetQuery())
+	c.attachIndexMaintenance(node, op)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ds.setRootOperator(op)
 	ss := []*Scope{ds}
@@ -5380,6 +5384,7 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		ds := newScope(Merge)
 		currMcpu := min(c.cnList[i].Mcpu, parallelSize)
 		op := constructTableFunction(node, c.pn.GetQuery())
+		c.attachIndexMaintenance(node, op)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 
 		if currMcpu > 1 {
@@ -5445,6 +5450,7 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 	}
 	for i := range ss {
 		op := constructTableFunction(node, c.pn.GetQuery())
+		c.attachIndexMaintenance(node, op)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -7618,6 +7624,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
+			c.attachIndexMaintenance(right, op.TableFunction)
 			op.TxnOffset = c.TxnOffset
 			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
@@ -7628,6 +7635,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)
+			c.attachIndexMaintenance(right, op.TableFunction)
 			op.TxnOffset = c.TxnOffset
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
@@ -11467,6 +11475,16 @@ func (c *Compile) runSqlWithResultAndOptions(
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
+	return c.runSqlWithResultAndMaintenance(sql, accountId, options, nil, nil)
+}
+
+func (c *Compile) runSqlWithResultAndMaintenance(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+	spec *executor.IndexMaintenanceSpec,
+	validator executor.IndexMaintenanceValidator,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -11489,12 +11507,12 @@ func (c *Compile) runSqlWithResultAndOptions(
 	// process. Carry the parent session names explicitly so SQL file
 	// authorization sees the same authenticated identity after planning. This
 	// is independent of accountId, which only selects catalog execution scope.
-	var accountName, roleName string
+	var accountName, roleName, userName string
 	if c.proc != nil && c.proc.Base != nil {
 		parentInfo := c.proc.GetSessionInfo()
-		accountName, roleName = parentInfo.Account, parentInfo.Role
+		accountName, roleName, userName = parentInfo.Account, parentInfo.Role, parentInfo.User
 	}
-	options = options.WithSessionIdentity(accountName, roleName)
+	options = options.WithSessionIdentity(accountName, roleName).WithSessionUser(userName)
 	// Propagate the IsFrontend signal from the outer Compile's proc
 	// to the sub-execution. Without this, sub-Compiles spawned for
 	// internal sub-SQL (e.g. ALTER TABLE COPY's CreateTmpTableSql)
@@ -11516,6 +11534,9 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithStatementOption(options).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc()).
 		WithFrontend(c.proc.Base.IsFrontend)
+	if spec != nil || validator != nil {
+		opts = opts.WithIndexMaintenanceSpec(spec).WithIndexMaintenanceValidator(validator)
+	}
 
 	ctx := c.proc.Ctx
 	if ctx == nil {
