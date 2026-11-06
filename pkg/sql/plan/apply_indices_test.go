@@ -6959,6 +6959,91 @@ func TestApplyIndicesForProjectSkipsOrderedLimitForCaseInsensitiveSortKey(t *tes
 	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
+func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		flag     planpb.OrderBySpec_OrderByFlag
+		nullable bool
+		offset   bool
+		quoted   bool
+	}{
+		{name: "descending", flag: planpb.OrderBySpec_DESC},
+		{name: "mixed"},
+		{name: "offset", offset: true},
+		{name: "nullable_fallback", nullable: true},
+		{name: "quoted_column_fallback", quoted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			scan, sort := builder.qry.Nodes[0], builder.qry.Nodes[1]
+			sort.OrderBy[0].Expr.Typ.NotNullable = !tc.nullable
+			if tc.quoted {
+				scan.TableDef.Cols[1].Name = "k.part"
+			}
+			sort.OrderBy = append(sort.OrderBy, &planpb.OrderBySpec{
+				Expr: GetColExpr(scan.TableDef.Cols[0].Typ, scan.BindingTags[0], 0), Flag: tc.flag,
+			})
+			if tc.offset {
+				sort.Offset = makePlan2Uint64ConstExprWithType(1)
+			}
+			original := DeepCopyExpr(sort.OrderBy[0].Expr)
+			builder.handleMessageFromTopToScan(rootID)
+			require.Equal(t, original, sort.OrderBy[0].Expr, "多键不能改写为单键索引截断顺序")
+			require.Nil(t, scan.IndexReaderParam, "不能按首键截断掉次键胜者")
+			if tc.nullable || tc.quoted {
+				require.Empty(t, sort.SendMsgList)
+				require.Empty(t, scan.OrderBy)
+				return
+			}
+			require.Len(t, sort.SendMsgList, 1)
+			require.Equal(t, sort.SendMsgList, scan.RecvMsgList)
+			require.Len(t, scan.OrderBy, 1)
+			require.Equal(t, original, scan.OrderBy[0].Expr)
+			require.Len(t, sort.OrderBy, 2)
+		})
+	}
+}
+
+func TestHandleMessageFromTopToScanUnsupportedLeadingKey(t *testing.T) {
+	for _, typ := range []types.T{types.T_json, types.T_geometry, types.T_geometry32, types.T_int64} {
+		for _, flag := range []planpb.OrderBySpec_OrderByFlag{0, planpb.OrderBySpec_DESC} {
+			for _, multi := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/flag=%d/multi=%t", typ, flag, multi), func(t *testing.T) {
+					builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+					tag := builder.genNewBindTag()
+					keyType := planpb.Type{Id: int32(typ), NotNullable: true}
+					idType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+					scan := &planpb.Node{
+						NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{tag},
+						TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "k", Typ: keyType}, {Name: "id", Typ: idType}}},
+					}
+					order := []*planpb.OrderBySpec{{Expr: GetColExpr(keyType, tag, 0), Flag: flag}}
+					if multi {
+						order = append(order, &planpb.OrderBySpec{Expr: GetColExpr(idType, tag, 1), Flag: planpb.OrderBySpec_DESC})
+					}
+					sort := &planpb.Node{
+						NodeType: planpb.Node_SORT, NodeId: 1, Children: []int32{0},
+						OrderBy: order, Limit: makePlan2Uint64ConstExprWithType(1),
+					}
+					builder.qry.Nodes = []*planpb.Node{scan, sort}
+					builder.handleMessageFromTopToScan(1)
+					require.Equal(t, order, sort.OrderBy)
+					require.Nil(t, scan.IndexReaderParam)
+					if typ != types.T_int64 {
+						require.Empty(t, sort.SendMsgList, "leading-key pruning requires compatible SQL and zonemap comparators")
+						require.Empty(t, scan.RecvMsgList)
+						require.Empty(t, scan.OrderBy)
+					} else {
+						require.Len(t, sort.SendMsgList, 1)
+						require.Equal(t, sort.SendMsgList, scan.RecvMsgList)
+						require.Len(t, scan.OrderBy, 1)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
@@ -7188,6 +7273,21 @@ func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *test
 	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
 	require.Equal(t, pkPos, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().ColPos)
 	require.Equal(t, uint64(1000), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+
+	// Multi-key support adds dynamic bounds, not another static-limit path.
+	multiBuilder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	multiScan, multiSort := DeepCopyNode(scanNode), DeepCopyNode(sortNode)
+	multiScan.OrderBy, multiScan.RecvMsgList, multiScan.IndexReaderParam = nil, nil, nil
+	multiSort.SendMsgList = nil
+	multiSort.OrderBy[0].Expr.Typ.NotNullable = true
+	multiSort.OrderBy = append(multiSort.OrderBy, &planpb.OrderBySpec{
+		Expr: GetColExpr(scanNode.TableDef.Cols[0].Typ, tag, 0), Flag: planpb.OrderBySpec_DESC,
+	})
+	multiBuilder.qry.Nodes = []*planpb.Node{multiScan, multiSort}
+	multiBuilder.handleMessageFromTopToScan(1)
+	require.Len(t, multiScan.OrderBy, 1)
+	require.Len(t, multiSort.SendMsgList, 1)
+	require.Nil(t, multiScan.IndexReaderParam)
 
 	// A column-independent function is a runtime constant to the SQL executor,
 	// but it is not necessarily compiled into the storage PK filter. It must not

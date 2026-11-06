@@ -6051,6 +6051,12 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 		return nil
 	}
 
+	// Also retry validation after an earlier failed advance; a statement error
+	// must not allow COMMIT to use the already advanced read snapshot unchecked.
+	if err := txn.validateOptimisticWritesLocked(ctx); err != nil {
+		return err
+	}
+
 	if txn.transfer.pendingTransfer ||
 		forceTransfer(ctx) ||
 		!skipTransfer(ctx, txn) {

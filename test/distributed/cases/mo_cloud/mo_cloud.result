@@ -580,7 +580,7 @@ Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 DESC `mysql`.`db` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -615,7 +615,7 @@ Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦  
 DESC `mysql`.`tables_priv` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -623,7 +623,7 @@ Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 DESC `mysql`.`user` ;
