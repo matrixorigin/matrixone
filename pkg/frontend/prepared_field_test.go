@@ -308,7 +308,7 @@ func TestPreparedFieldCandidateHistory(t *testing.T) {
 				retry := cw.preparedExecutionRetry()
 				require.NotNil(t, retry)
 				require.Same(t, prepared.fieldTypes, retry.fieldTypes)
-				retryPlan, err := buildPlanForCompileRetry(ec.reqCtx, ses, ses.GetTxnCompileCtx(), prepared.PrepareStmt, false, retry, retry.executionIntent)
+				retryPlan, err := buildPlanForCompileRetry(ec.reqCtx, ses, ses.GetTxnCompileCtx(), prepared.PrepareStmt, false, retry, nil)
 				require.NoError(t, err)
 				retryQuery := retryPlan.GetQuery()
 				func() {

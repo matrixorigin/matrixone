@@ -256,15 +256,11 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 		return
 	}
 	builder.temporalOriginalScan = temporalOriginalScan{}
-	if builder.qry == nil {
+	if builder.qry == nil || builder.compCtx == nil || builder.isReusablePlan() {
 		return
 	}
 	input := builder.planningInput
-	lifetime := builder.compCtx != nil && !builder.isPrepareStatement && (input == nil || input.intent.ParameterFree)
-	capture := input != nil && input.intent.ParameterFree && len(builder.qry.Steps) == 0
-	if !lifetime && !capture {
-		return
-	}
+	capture := input != nil && len(builder.qry.Steps) == 0
 	owner := *builder.qry
 	var root [1]int32
 	if len(owner.Steps) == 0 {
@@ -277,10 +273,7 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 	if !ok || len(owner.Params) != 0 {
 		return
 	}
-	ctx := context.Background()
-	if builder.compCtx != nil {
-		ctx = builder.GetContext()
-	}
+	ctx := builder.GetContext()
 	var proof originalTemporalProof
 	proved := false
 	originalProof := func() originalTemporalProof {
@@ -292,14 +285,8 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 		}
 		return proof
 	}
-	if lifetime && potentialTemporalPath(&owner, path) {
-		state := preparedBindingState(ctx)
-		if state != nil || !originalTemporalPathExcludesIndex(ctx, owner.Nodes[path.ids[path.len-1]], originalProof()) {
-			builder.qry.ExecutionDependentAccess = true
-			if state != nil {
-				state.valueDependent = true
-			}
-		}
+	if potentialTemporalPath(&owner, path) && !originalTemporalPathExcludesIndex(ctx, owner.Nodes[path.ids[path.len-1]], originalProof()) {
+		builder.qry.ExecutionDependentAccess = true
 	}
 	if capture && temporalPathExpressionsSafe(&owner, path) {
 		proof := originalProof()

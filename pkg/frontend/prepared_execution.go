@@ -156,7 +156,7 @@ func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
 }
 
 func buildPreparedBoundQuery(ctx context.Context, ses FeSession, compiler plan2.CompilerContext,
-	stmt tree.Statement, bindings []plan2.PreparedSourceBinding, values []any, intent *plan2.ExecutionIntent) (*plan2.PreparedExecutionPlan, error) {
+	stmt tree.Statement, bindings []plan2.PreparedSourceBinding, values []any) (*plan2.PreparedExecutionPlan, error) {
 	previous := compiler.GetContext()
 	planning := ctx
 	if planning == nil {
@@ -179,7 +179,7 @@ func buildPreparedBoundQuery(ctx context.Context, ses FeSession, compiler plan2.
 		var selected bool
 		bound, selected, buildErr = buildViewSchemaValidationPreparedPlan(planning, ses, compiler, stmt, bindings, values)
 		if !selected {
-			bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values, intent, planningCompiler(compiler))
+			bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
 		}
 		if buildErr != nil {
 			return nil, buildErr
@@ -215,11 +215,6 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
 		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	}
-	var intent *plan2.ExecutionIntent
-	if cwft.executionIntentValidated && cwft.executionIntent != nil {
-		copy := *cwft.executionIntent
-		intent = &copy
-	}
 	return &preparedExecutionRetry{
 		fieldTypes:         fieldTypes,
 		temporalTypes:      temporalTypes,
@@ -228,7 +223,6 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,
 		diagnosticFreeJoin: cwft.preparedJoinDiagnosticFree,
-		executionIntent:    intent,
 	}
 }
 

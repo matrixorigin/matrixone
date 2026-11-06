@@ -29,13 +29,15 @@ import (
 )
 
 func TestPlanningInputIsSingleUseAndRootOwned(t *testing.T) {
-	root := &tree.Select{}
-	other := &tree.Select{}
-	intent := ExecutionIntent{ParameterFree: true}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	root := stmt.(*tree.Select)
+	other := &tree.Select{Select: root.Select}
+	intent := ExecutionIntent{}
 	scope := NewPlanningInput(root, intent, nil)
 	require.False(t, scope.claim(other))
 	require.True(t, scope.claim(root))
-	require.True(t, scope.intent.ParameterFree)
 	require.False(t, scope.claim(root))
 	var absent *PlanningInput
 	require.False(t, absent.claim(root))
@@ -57,6 +59,14 @@ func TestPlanningInputIsSingleUseAndRootOwned(t *testing.T) {
 	wg.Wait()
 	require.EqualValues(t, 1, successes.Load())
 	require.True(t, NewPlanningInput(root, intent, nil).claim(root))
+	for _, sql := range []string{"select ?", "select now(?)", "select 1 where exists (select ?)"} {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			require.Nil(t, NewPlanningInput(stmt.(*tree.Select), intent, nil), sql)
+		}()
+	}
 }
 
 func TestTemporalIntentRejectsSessionLimitDrift(t *testing.T) {
@@ -98,26 +108,15 @@ func TestPlanningInputFollowsRootStatementWrappers(t *testing.T) {
 				root, _ = s.Statement.(*tree.Select)
 			}
 			require.NotNil(t, root)
-			scope := NewPlanningInput(root, ExecutionIntent{ParameterFree: true}, nil)
+			scope := NewPlanningInput(root, ExecutionIntent{}, nil)
 			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false, scope)
 			require.NoError(t, err)
 			require.False(t, scope.claim(root), "the actual root builder must consume the one-shot scope")
-			other := &tree.Select{}
-			mismatch := NewPlanningInput(other, ExecutionIntent{ParameterFree: true}, nil)
+			other := &tree.Select{Select: root.Select}
+			mismatch := NewPlanningInput(other, ExecutionIntent{}, nil)
 			_, err = BuildPlan(ctx, stmt, false, mismatch)
 			require.NoError(t, err)
 			require.True(t, mismatch.claim(other), "a different root must not consume the scope")
-			if sql == "select 1" {
-				prepared := &tree.PrepareStmt{Name: "temporal_scope", Stmt: root}
-				preparedScope := NewPlanningInput(root, ExecutionIntent{ParameterFree: true}, nil)
-				_, err = BuildPlan(ctx, prepared, false, preparedScope)
-				require.NoError(t, err)
-				require.False(t, preparedScope.claim(root), "the explicit prepared AST must reach its own optimizer attempt")
-				stringScope := NewPlanningInput(root, ExecutionIntent{ParameterFree: true}, nil)
-				_, err = BuildPlan(ctx, tree.NewPrepareString("temporal_text", "select 1"), false, stringScope)
-				require.NoError(t, err)
-				require.True(t, stringScope.claim(root), "a separately parsed PREPARE string must not consume another AST's scope")
-			}
 		})
 	}
 }

@@ -120,9 +120,6 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 	builder.collectOriginalTemporalOwner(1)
 	project.ProjectList = project.ProjectList[:1] // a later rewrite removes the unsafe expression
 	require.False(t, builder.temporalOriginalScan.safe)
-	builder.planningInput.intent.ParameterFree = false
-	builder.collectOriginalTemporalOwner(1)
-	require.False(t, builder.temporalOriginalScan.safe)
 	builder.planningInput = nil
 	builder.collectOriginalTemporalOwner(1)
 	require.False(t, builder.temporalOriginalScan.safe)
@@ -131,7 +128,6 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 func TestTemporalOriginalSingleLeafHasIndependentCostEvidence(t *testing.T) {
 	builder, _, _ := temporalCBOTraversalFixture(t)
 	builder.qry.Steps = nil
-	builder.planningInput.intent.ParameterFree = true
 	builder.collectOriginalTemporalOwner(0)
 	require.True(t, builder.temporalOriginalScan.safe)
 	scan := builder.qry.Nodes[0]
@@ -164,15 +160,14 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 		dependent bool
 	}{
 		{name: "suffix", safe: true},
-		{name: "prepared suffix", replan: true, safe: true, dependent: true},
+		{name: "prepared suffix"},
 		{name: "unsafe projection", replan: true},
 		{name: "no index", safe: true},
 		{name: "already published root", replan: true},
 		{name: "cancelled", replan: true},
 		{name: "unproved parameter", replan: true},
-		{name: "prepare statement", safe: true},
+		{name: "prepare statement"},
 		{name: "no resolver", replan: true, safe: true},
-		{name: "parameter-bearing rejected resolver"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, _, index := temporalCBOTraversalFixture(t)
@@ -205,9 +200,6 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 				builder.isPrepareStatement = true
 			case "no resolver":
 				builder.planningInput.owner = nil
-				builder.borrowResolutionAllowed = false
-			case "parameter-bearing rejected resolver":
-				builder.planningInput.intent.ParameterFree = false
 				builder.borrowResolutionAllowed = false
 			}
 			builder.collectOriginalTemporalOwner(root)

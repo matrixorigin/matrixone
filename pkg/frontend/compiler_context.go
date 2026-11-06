@@ -189,8 +189,7 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 		tcc.execCtx.ses,
 		tcc.tcw.(*TxnComputationWrapper),
 		execPlan,
-		"",
-		false, // EXPLAIN EXECUTE compiles with the outer statement's scheduling.
+		"", // EXPLAIN EXECUTE compiles with the outer statement's scheduling.
 	)
 	if err == nil && !tcc.execCtx.ses.IsBackgroundSession() {
 		// EXPLAIN delegates EXECUTE binding here rather than through the ordinary

@@ -38,7 +38,7 @@ func (builder *QueryBuilder) applyTemporalIndexOnlyScanResolved(scanID int32, in
 		index == nil || !cost.indexCoversRequiredColumns(index) {
 		return scanID, false, nil
 	}
-	atom, admitted, err := temporalIndexOperands(builder.GetContext(), builder.qry, scanID, true, index, 0)
+	atom, admitted, err := temporalIndexOperands(builder.GetContext(), builder.qry, scanID, index, 0)
 	if err != nil || !admitted {
 		return scanID, false, err
 	}

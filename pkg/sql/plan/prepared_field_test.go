@@ -64,7 +64,7 @@ func TestPreparedFieldResolvedStringDomain(t *testing.T) {
 				defer stmt.Free()
 				source := sourceOID.ToType()
 				bindings := []PreparedSourceBinding{{Position: 0, Type: source}}
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, []any{ParamValue{Value: "a", SourceType: source, HasSourceType: true}}, nil, nil)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, []any{ParamValue{Value: "a", SourceType: source, HasSourceType: true}})
 				require.NoError(t, err)
 				field := findPlanFunctionExpr(bound.Plan, "field")
 				require.NotNil(t, field)
@@ -591,7 +591,7 @@ func TestPreparedFieldTypeHistory(t *testing.T) {
 				if state != nil {
 					priorType = state.cases[0].result
 				}
-				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 				require.NoError(t, err)
 				require.NotNil(t, bound.FieldTypes)
 				if state != nil {
@@ -640,7 +640,7 @@ func TestPreparedFieldHistoryRelations(t *testing.T) {
 				if state != nil {
 					priorType = state.cases[0].result
 				}
-				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 				require.NoError(t, err)
 				if state != nil {
 					require.Same(t, state, bound.FieldTypes, "compatible string/NULL changes cannot reset history")
@@ -709,7 +709,7 @@ func TestPreparedFieldUnrelatedStatementsKeepNoHistory(t *testing.T) {
 				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_text.ToType()}
 				values[i] = ParamValue{Value: "1", SourceType: bindings[i].Type, HasSourceType: true}
 			}
-			bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+			bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 			require.NoError(t, err)
 			require.Nil(t, bound.FieldTypes)
 		})
@@ -741,7 +741,7 @@ func TestPreparedFieldWrappedTypeHistory(t *testing.T) {
 					}
 					values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
 					ctx.SetContext(WithPreparedFieldTypes(context.Background(), state))
-					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 					require.NoError(t, err)
 					require.NotNil(t, bound.FieldTypes, "the wrapper must retain its parameter dependency")
 					require.Equal(t, want, bound.FieldTypes.cases[0].result.Oid)

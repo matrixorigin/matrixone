@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -72,25 +73,21 @@ type planningInputWorkContext struct {
 	below  int
 	action func()
 	fired  bool
-	stop   bool
-	done   chan struct{}
+	skip   int
 }
 
-func (c *planningInputWorkContext) Done() <-chan struct{} { return c.done }
 func (c *planningInputWorkContext) Err() error {
 	if !c.fired && *c.budget < c.below {
+		if c.skip > 0 {
+			c.skip--
+			return c.Context.Err()
+		}
 		c.fired = true
 		if c.action != nil {
 			c.action()
 		}
-		if c.stop {
-			close(c.done)
-		}
 	}
-	if c.fired && c.stop {
-		return context.Canceled
-	}
-	return nil
+	return c.Context.Err()
 }
 
 func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
@@ -115,7 +112,7 @@ func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
 	require.True(t, ok)
 	require.Same(t, part.Snapshot(), state)
 	require.Same(t, c.subscribed.m[98], entry)
-	for _, scenario := range []string{"pending", "waterline", "not ready", "unsubscribed", "wrong database", "historical"} {
+	for _, scenario := range []string{"pending", "waterline", "not ready", "unsubscribed", "wrong database", "subscription contended", "engine contended", "historical"} {
 		t.Run(scenario, func(t *testing.T) {
 			c.receivedLogTailTime.ready.Store(true)
 			c.receivedLogTailTime.tList[0].Store(f.read.Snapshot.Prev())
@@ -132,6 +129,12 @@ func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
 				c.subscribed.m[98].state = Unsubscribing
 			case "wrong database":
 				c.subscribed.m[98].dbID++
+			case "subscription contended":
+				c.subscribed.rw.Lock()
+				t.Cleanup(c.subscribed.rw.Unlock)
+			case "engine contended":
+				e.Lock()
+				t.Cleanup(e.Unlock)
 			case "historical":
 				ps, release := part.MutateState()
 				ps.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
@@ -139,6 +142,10 @@ func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
 			}
 			_, _, ok := c.planningInputSnapshot(10, 98, read)
 			require.False(t, ok)
+			if scenario == "engine contended" {
+				require.True(t, c.subscribed.rw.TryLock(), "failed engine acquisition must release the subscription lock")
+				c.subscribed.rw.Unlock()
+			}
 		})
 	}
 }
@@ -180,7 +187,9 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	require.NoError(t, err)
 	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 	e.pClient.eng = e
-	e.pClient.subscriber = &logTailSubscriber{logTailClient: &service.LogtailClient{}}
+	e.pClient.subscriber = newLogTailSubscriber()
+	e.pClient.subscriber.swapClient(&service.LogtailClient{})
+	e.pClient.subscriber.setReady()
 	e.pClient.subscribed.m = map[uint64]*subEntry{98: {dbID: 10, state: Subscribed}}
 	e.pClient.receivedLogTailTime.ready.Store(true)
 	e.pClient.receivedLogTailTime.tList = make([]atomic.Value, 1)
@@ -208,7 +217,8 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	req := engine.TemporalBlockInputRequest{Column: "d", Observed: f.stats, Stats: observation, BoundType: types.T_timestamp, Scale: 6, Op: types.TemporalGreater, Zone: time.UTC}
 	copy(req.Bound[:], types.EncodeTimestamp(&bound))
 	var visibleWork int
-	for _, scenario := range []string{"complete", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced"} {
+	stopCause := errors.New("optional observation cancelled")
+	for _, scenario := range []string{"complete", "two matching blocks", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced", "unrelated subscription", "engine contended", "subscriber contended"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
 			ctx := f.ctx
@@ -216,6 +226,9 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			switch scenario {
+			case "two matching blocks":
+				bound := date.ToTimestamp(time.UTC)
+				copy(request.Bound[:], types.EncodeTimestamp(&bound))
 			case "missing overlap":
 				original := f.stats.ShuffleRangeMap
 				f.stats.ShuffleRangeMap = nil
@@ -231,9 +244,9 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			case "budget":
 				budget = 2
 			case "cancelled":
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
+				var cancel context.CancelCauseFunc
+				ctx, cancel = context.WithCancelCause(ctx)
+				cancel(stopCause)
 			case "stale stats":
 				request.Stats.Rows++
 			case "row population":
@@ -251,17 +264,50 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			case "entry replaced":
 				e.pClient.subscribed.m[98] = &subEntry{dbID: 11, state: Subscribed}
 				t.Cleanup(func() { e.pClient.subscribed.m[98] = &subEntry{dbID: 10, state: Subscribed} })
+			case "unrelated subscription":
+				subscriber := e.pClient.subscriber
+				previous := subscriber.sendSubscribe
+				entered, release := make(chan struct{}), make(chan struct{})
+				done := make(chan error, 1)
+				subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+					close(entered)
+					<-release
+					return nil
+				}
+				go func() {
+					_, _, err := e.pClient.isNotUnsubscribing(f.ctx, 10, 999)
+					done <- err
+				}()
+				t.Cleanup(func() {
+					close(release)
+					require.NoError(t, <-done)
+					subscriber.sendSubscribe = previous
+					e.pClient.subscribed.rw.Lock()
+					delete(e.pClient.subscribed.m, 999)
+					e.pClient.subscribed.rw.Unlock()
+				})
+				<-entered
+			case "engine contended":
+				e.Lock()
+				t.Cleanup(e.Unlock)
+			case "subscriber contended":
+				e.pClient.subscriber.mu.Lock()
+				t.Cleanup(e.pClient.subscriber.mu.Unlock)
 			}
 			input, complete, err := f.base.ObserveTemporalBlockInput(ctx, f.read, request, &budget)
 			if scenario == "cancelled" {
-				require.ErrorIs(t, err, context.Canceled)
+				require.ErrorIs(t, err, stopCause)
 			} else {
 				require.NoError(t, err)
 			}
-			wantRows := scenario == "complete" || scenario == "missing overlap" || scenario == "NaN overlap"
+			wantRows := scenario == "complete" || scenario == "two matching blocks" || scenario == "missing overlap" || scenario == "NaN overlap"
 			require.Equal(t, wantRows || scenario == "empty", complete)
 			if wantRows {
-				require.Equal(t, engine.IndexBlockInput{Rows: 2, Blocks: 1}, input)
+				want := engine.IndexBlockInput{Rows: 2, Blocks: 1}
+				if scenario == "two matching blocks" {
+					want = engine.IndexBlockInput{Rows: 4, Blocks: 2}
+				}
+				require.Equal(t, want, input)
 				if scenario == "complete" {
 					visibleWork = engine.MaxIndexPlanningWork - budget
 				}
@@ -270,15 +316,23 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			}
 		})
 	}
-	for _, scenario := range []string{"cancel during scan", "pending during scan", "transport during scan", "stats during scan", "partition during scan", "entry during scan"} {
+	for _, scenario := range []string{"cancel during scan", "pending during scan", "transport during scan", "stats during scan", "partition during scan", "entry during scan", "subscription contended", "engine contended", "subscriber contended", "cancel with subscription contended"} {
 		t.Run(scenario, func(t *testing.T) {
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			budget := engine.MaxIndexPlanningWork
-			ctx := &planningInputWorkContext{Context: context.WithoutCancel(f.ctx), budget: &budget, below: budget - 4, done: make(chan struct{})}
-			ctx.stop = scenario == "cancel during scan"
+			parent, cancel := context.WithCancelCause(context.WithoutCancel(f.ctx))
+			defer cancel(nil)
+			// With two matching blocks, skip the first checkpoint so a real
+			// partial count exists before invalidation at the second block.
+			ctx := &planningInputWorkContext{Context: parent, budget: &budget, below: budget - 4, skip: 1}
+			request := req
+			allBlocks := date.ToTimestamp(time.UTC)
+			copy(request.Bound[:], types.EncodeTimestamp(&allBlocks))
 			ctx.action = func() {
 				switch scenario {
+				case "cancel during scan":
+					cancel(stopCause)
 				case "pending during scan":
 					e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Snapshot)
 				case "transport during scan":
@@ -286,6 +340,9 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 					e.pClient.subscriber.swapClient(nil)
 					e.pClient.subscriber.swapClient(&service.LogtailClient{})
 				case "stats during scan":
+					t.Cleanup(func() {
+						require.NoError(t, f.gs.PatchStats(f.key, &PatchArgs{MinValMap: map[string]float64{"d": 100}}))
+					})
 					require.NoError(t, f.gs.PatchStats(f.key, &PatchArgs{MinValMap: map[string]float64{"d": 101}}))
 				case "partition during scan":
 					_, release := part.MutateState()
@@ -294,19 +351,29 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 					e.pClient.subscribed.rw.Lock()
 					e.pClient.subscribed.m[98] = &subEntry{dbID: 10, state: Subscribed}
 					e.pClient.subscribed.rw.Unlock()
+				case "subscription contended", "cancel with subscription contended":
+					e.pClient.subscribed.rw.Lock()
+					t.Cleanup(e.pClient.subscribed.rw.Unlock)
+					if scenario == "cancel with subscription contended" {
+						cancel(stopCause)
+					}
+				case "engine contended":
+					e.Lock()
+					t.Cleanup(e.Unlock)
+				case "subscriber contended":
+					e.pClient.subscriber.mu.Lock()
+					t.Cleanup(e.pClient.subscriber.mu.Unlock)
 				}
 			}
-			input, complete, err := f.base.ObserveTemporalBlockInput(ctx, f.read, req, &budget)
-			if ctx.stop {
-				require.ErrorIs(t, err, context.Canceled)
+			input, complete, err := f.base.ObserveTemporalBlockInput(ctx, f.read, request, &budget)
+			if scenario == "cancel during scan" || scenario == "cancel with subscription contended" {
+				require.ErrorIs(t, err, stopCause)
 			} else {
 				require.NoError(t, err)
 			}
 			require.True(t, ctx.fired, "the observation must reach the controlled interleaving")
 			require.False(t, complete)
 			require.Zero(t, input, "late invalidation must discard every partial count")
-			// Restore the ordinary observation before the next independent case.
-			require.NoError(t, f.gs.PatchStats(f.key, &PatchArgs{MinValMap: map[string]float64{"d": 100}}))
 		})
 	}
 	// Place a missing cache entry after the valid object in name order. This

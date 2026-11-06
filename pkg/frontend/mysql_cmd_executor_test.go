@@ -8747,7 +8747,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 		},
 	})
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, retry, retry.executionIntent)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, retry, nil)
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()),
 		"definition-change retry returned the prepare-time parameterized plan: %s", retryPlan.String())
@@ -8795,21 +8795,21 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 		{Position: 0, Type: types.T_text.ToType()},
 		{Position: 1, Type: types.T_int64.ToType()},
 	}
-	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, retry.executionIntent)
+	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, nil)
 	require.NoError(t, err)
 	require.NotNil(t, safe.GetQuery())
 	require.Positive(t, scanFilters(safe.GetQuery()), "safe values must restore selective scans")
 
 	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
 	retry.paramVals[0] = plan.ParamValue{Value: "900:00:00"}
-	unsafe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, retry.executionIntent)
+	unsafe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, nil)
 	require.NoError(t, err)
 	require.NotNil(t, unsafe.GetQuery())
 	require.Zero(t, scanFilters(unsafe.GetQuery()), "warning-producing values keep the JOIN boundary")
 
 	require.NoError(t, vector.SetStringAt(params, 0, "01:00:00", proc.Mp()))
 	retry.paramVals[0] = plan.ParamValue{Value: "01:00:00"}
-	again, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, retry.executionIntent)
+	again, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry, nil)
 	require.NoError(t, err)
 	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
 
@@ -8817,7 +8817,7 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	invalid, err := parsers.ParseOne(ctx, dialect.MYSQL, "select missing_column", 1)
 	require.NoError(t, err)
 	defer invalid.Free()
-	_, err = buildPreparedBoundQuery(ctx, ses, compilerCtx, invalid, nil, nil, nil)
+	_, err = buildPreparedBoundQuery(ctx, ses, compilerCtx, invalid, nil, nil)
 	require.Error(t, err)
 	require.Same(t, previousCtx, compilerCtx.GetContext())
 }
@@ -13244,7 +13244,7 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 	for _, value := range []int64{2, 7, 2} {
 		require.NoError(t, vector.SetStringAt(params, 0, fmt.Sprint(value), proc.Mp()))
 		retry := newPreparedExecutionRetry([]any{plan.ParamValue{Value: value}})
-		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry, retry.executionIntent)
+		got, err := buildPlanForCompileRetry(ctx, ses, compiler, stmt, false, retry, nil)
 		require.NoError(t, err)
 		require.Empty(t, queryParamPositions(got.GetDdl().Query))
 		cols := got.GetDdl().GetCreateTable().TableDef.Cols

@@ -126,7 +126,7 @@ func TestPreparedFieldProducerProvenance(t *testing.T) {
 					values[0], values[1] = values[1], values[0]
 				}
 				ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
-				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 				require.NoError(t, err)
 				require.NotNil(t, bound.FieldTypes)
 				require.Len(t, bound.FieldTypes.cases, 1)
@@ -177,7 +177,7 @@ func TestPreparedFieldWindowDefaultParameters(t *testing.T) {
 					bindings := []PreparedSourceBinding{{Position: 0, Type: condition}, {Position: 1, Type: oid.ToType()}, {Position: 2, Type: oid.ToType()}}
 					values := []any{ParamValue{Value: c, SourceType: condition, HasSourceType: true}, ParamValue{Value: value, SourceType: oid.ToType(), HasSourceType: true}, ParamValue{Value: value, SourceType: oid.ToType(), HasSourceType: true}}
 					ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
-					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 					require.NoError(t, err)
 					require.NotNil(t, bound.FieldTypes)
 					require.Len(t, bound.FieldTypes.cases, 1)
@@ -293,7 +293,7 @@ func TestPreparedFieldRetainedProvenance(t *testing.T) {
 						facts = maps.Clone(prior.cases)
 					}
 					ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
-					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 					require.NoError(t, err)
 					require.NotNil(t, bound.FieldTypes)
 					if prior != nil {
@@ -340,7 +340,7 @@ func TestPreparedFieldStringConsumerWithoutHistory(t *testing.T) {
 					value = nil
 				}
 				values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
-				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 				require.NoError(t, err)
 				require.Nil(t, bound.FieldTypes, "reading a string declaration must not acquire FIELD history")
 			})
@@ -366,7 +366,7 @@ func TestPreparedConditionalDeclarationWithoutHistory(t *testing.T) {
 				bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}
 				values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}}
 				for range 2 {
-					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 					require.NoError(t, err)
 					require.Nil(t, bound.FieldTypes, "the condition alone does not require result-type history")
 					reverse := findPlanFunctionExpr(bound.Plan, "reverse")
@@ -396,7 +396,7 @@ func TestPreparedFieldSetResolvedDeclaration(t *testing.T) {
 					defer stmt.Free()
 					bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: oid.ToType()}}
 					values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: "a", SourceType: bindings[1].Type, HasSourceType: true}}
-					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 					require.NoError(t, err)
 					require.Nil(t, bound.FieldTypes)
 					field := findPlanFunctionExpr(bound.Plan, "field")
@@ -425,7 +425,7 @@ func TestPreparedFieldProvenanceReprepare(t *testing.T) {
 		bindings := []PreparedSourceBinding{{Position: 0, Type: condition.ToType()}, {Position: 1, Type: source.ToType()}}
 		values := []any{ParamValue{Value: c, SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
 		ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
-		bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+		bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 		require.NoError(t, err)
 		require.NotNil(t, bound.FieldTypes)
 		require.Len(t, bound.FieldTypes.cases, 1)
@@ -456,7 +456,7 @@ func TestPreparedFieldNullIfReprepare(t *testing.T) {
 		bindings := []PreparedSourceBinding{{Position: 0, Type: condition.ToType()}, {Position: 1, Type: source.ToType()}}
 		values := []any{ParamValue{Value: c, SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: "a", SourceType: bindings[1].Type, HasSourceType: true}}
 		ctx.SetContext(WithPreparedFieldTypes(context.Background(), snapshot))
-		bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+		bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 		require.NoError(t, err)
 		require.NotNil(t, bound.FieldTypes)
 		want := types.T_text

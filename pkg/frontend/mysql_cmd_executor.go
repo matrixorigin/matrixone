@@ -2615,10 +2615,9 @@ func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt 
 	}
 	//get query optimizer and execute Optimize
 	var exPlan *plan.Plan
-	root, intent, eligible := executionIntentForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
+	input, intent, eligible := planningInputForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
 	if eligible {
 		compiler := ses.GetTxnCompileCtx()
-		input := plan2.NewPlanningInput(root, intent, planningCompiler(compiler))
 		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, compiler, stmt.Statement, input)
 		if err == nil {
 			exPlan, _, err = validateCandidatePlanBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {

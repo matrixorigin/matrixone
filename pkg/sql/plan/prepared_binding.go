@@ -1226,34 +1226,10 @@ func preparedUnderlyingSelect(stmt tree.Statement) bool {
 
 // BuildPreparedExecutionPlan binds SQL source domains before optimization.
 // The caller installs the current Process parameter vector before invoking it.
-// It creates a fresh one-shot input
-// for each optimizer attempt, including the FIELD metadata rebind.
+// Prepared templates and bound execution plans keep their reusable-plan owner;
+// they do not receive an optional candidate planning input.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
-	bindings []PreparedSourceBinding, values []any, intent *ExecutionIntent, owner CompilerContext) (*PreparedExecutionPlan, error) {
-	var root *tree.Select
-	inner := stmt
-	for inner != nil {
-		switch wrapped := inner.(type) {
-		case *tree.ExplainStmt:
-			inner = wrapped.Statement
-		case *tree.ExplainAnalyze:
-			inner = wrapped.Statement
-		case *tree.ExplainPhyPlan:
-			inner = wrapped.Statement
-		case *tree.Select:
-			root, inner = wrapped, nil
-		case *tree.ParenSelect:
-			root, inner = wrapped.Select, nil
-		default:
-			inner = nil
-		}
-	}
-	newInput := func() *PlanningInput {
-		if intent == nil || intent.ParameterFree && tree.ParameterCount(stmt) != 0 {
-			return nil
-		}
-		return NewPlanningInput(root, *intent, owner)
-	}
+	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
 	previous := ctx.GetContext()
 	if tree.ParameterCount(stmt) != len(bindings) {
 		return nil, moerr.NewWrongArguments(previous, "EXECUTE")
@@ -1267,7 +1243,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
-	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false, newInput())
+	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1278,7 +1254,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		preparedBindingState(planning).fieldTypes = fieldTypes
 		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 		ctx.SetContext(planning)
-		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false, newInput())
+		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false, nil)
 		if err != nil {
 			return nil, err
 		}

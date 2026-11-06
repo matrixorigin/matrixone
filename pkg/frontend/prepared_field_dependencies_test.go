@@ -114,7 +114,7 @@ func TestPreparedFieldNumericModeActualCastContract(t *testing.T) {
 			for _, increment := range []int32{8, 0} {
 				current := function.WithDivPrecisionIncrement(previous, increment)
 				compiler.SetContext(current)
-				bound, err := plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, []any{int64(1), "a", int64(5)}, nil, nil)
+				bound, err := plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, []any{int64(1), "a", int64(5)})
 				require.NoError(t, err)
 				require.Equal(t, tc.changed, preparedFieldNumericModeAffectsTypes(bound.Plan, previous, current, false),
 					"an execution CAST1 declaration must survive an inner typed CAST0(P), increment %d", increment)

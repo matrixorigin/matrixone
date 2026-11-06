@@ -1861,7 +1861,7 @@ func TestSQLPreparedBooleanDirectResultIsIndependentOfNumericSibling(t *testing.
 					controlStmt, parseErr := mysql.ParseOne(execCtx.reqCtx, "select ?", 1)
 					require.NoError(t, parseErr)
 					defer controlStmt.Free()
-					control, bindErr := buildPreparedBoundQuery(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), controlStmt, []plan2.PreparedSourceBinding{cw.paramBindings[test.directIndex]}, cw.paramVals, nil)
+					control, bindErr := buildPreparedBoundQuery(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), controlStmt, []plan2.PreparedSourceBinding{cw.paramBindings[test.directIndex]}, cw.paramVals)
 					require.NoError(t, bindErr)
 					controlQuery := control.Plan.GetQuery()
 					controlExpr := controlQuery.Nodes[controlQuery.Steps[0]].ProjectList[0]
@@ -3629,7 +3629,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 		[]bool{false, false},
 		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
 	)
-	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	freeStmt(stmt, owned)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -3658,7 +3658,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 		[]bool{false, false},
 		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
 	)
-	retComp, secondPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	retComp, secondPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	freeStmt(stmt, owned)
 	require.NoError(t, err)
 	require.Same(t, runtimeCompile, retComp,
@@ -3673,7 +3673,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 		[]bool{false, false},
 		[]defines.MysqlType{defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_LONGLONG},
 	)
-	retComp, floatPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	retComp, floatPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	freeStmt(stmt, owned)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -3692,7 +3692,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 		[]bool{false, false},
 		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
 	)
-	retComp, integerPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	retComp, integerPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	freeStmt(stmt, owned)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -3710,7 +3710,7 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 		[]bool{true, false},
 		[]defines.MysqlType{defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_LONGLONG},
 	)
-	retComp, _, stmt, _, owned, err = initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	retComp, _, stmt, _, owned, err = initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	freeStmt(stmt, owned)
 	require.NoError(t, err)
 	require.NotSame(t, integerCompile, retComp,
@@ -3770,7 +3770,7 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 				t.Helper()
 				// Match the real Compile entry when reusing this test wrapper.
 				cw.discardRuntimeCacheCandidate()
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler, true)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -3961,7 +3961,7 @@ func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
 			execute := func() (*compile.Compile, *plan.Plan) {
 				t.Helper()
 				cw.discardRuntimeCacheCandidate()
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -4038,7 +4038,7 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 		byte(defines.MYSQL_TYPE_LONGLONG), 0,
 		byte(defines.MYSQL_TYPE_LONGLONG), 0,
 	}
-	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	require.NoError(b, err)
 	if owned && stmt != nil {
 		stmt.Free()
@@ -4055,7 +4055,7 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		retComp, currentPlan, currentStmt, _, currentOwned, runErr := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+		retComp, currentPlan, currentStmt, _, currentOwned, runErr := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 		if runErr != nil {
 			b.Fatal(runErr)
 		}
@@ -4104,7 +4104,7 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 			}
 			compiler := &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}
 			execute := func() (*compile.Compile, *plan.Plan) {
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler, true)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -4192,7 +4192,7 @@ func TestPreparedIntegerAssignmentReusesBoundCompile(t *testing.T) {
 					require.NoError(t, vector.AppendBytes(prepareStmt.params, nil, true, cw.proc.Mp()))
 					prepareStmt.ParamTypes = append(prepareStmt.ParamTypes, byte(defines.MYSQL_TYPE_NULL), 0)
 				}
-				comp, currentPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+				comp, currentPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -4210,7 +4210,7 @@ func TestPreparedIntegerAssignmentReusesBoundCompile(t *testing.T) {
 						cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 					require.True(t, cw.installRuntimeCacheCandidate(comp))
 				}
-				repeated, repeatedPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+				repeated, repeatedPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -4247,7 +4247,7 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 			prepareStmt.compile = compile.NewCompile(
 				"", "", prepareStmt.Sql, "", "", nil,
 				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-			_, firstPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+			_, firstPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 			require.NoError(b, err)
 			if owned && stmt != nil {
 				stmt.Free()
@@ -4262,7 +4262,7 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				comp, currentPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+				comp, currentPlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 				if err != nil || comp != cachedCompile || currentPlan != firstPlan {
 					b.Fatalf("unexpected prepared cache miss: %v", err)
 				}
@@ -4286,7 +4286,7 @@ func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
 	require.NoError(b, vector.AppendBytes(
 		prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
-	_, preparePlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+	_, preparePlan, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 	require.NoError(b, err)
 	if owned && stmt != nil {
 		stmt.Free()
@@ -4297,7 +4297,7 @@ func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, currentPlan, currentStmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}, true)
+		_, currentPlan, currentStmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, optimizer.CurrentContext().Resolve, &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc})
 		if err != nil || currentPlan != preparePlan {
 			b.Fatalf("unexpected execution result: plan=%p want=%p err=%v",
 				currentPlan, preparePlan, err)
@@ -5565,7 +5565,7 @@ func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
 				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
 			},
 			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
-	}, ses.GetTxnCompileCtx(), true)
+	}, ses.GetTxnCompileCtx())
 	require.NoError(t, err)
 	require.Same(t, sentinel, retComp)
 	require.Same(t, sentinel, prepareStmt.compile)
@@ -5590,7 +5590,7 @@ func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, resolve, ses.GetTxnCompileCtx(), true)
+		_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, resolve, ses.GetTxnCompileCtx())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -5969,7 +5969,7 @@ func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
 	prepareStmt.Name = "prepared_view"
 	ses.SetSql(executeSQL)
 
-	rebuilt, err := rebuildPreparePlan(execCtx, ses, prepareStmt, nil, func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement, _ *plan2.PlanningInput) (*plan2.Plan, error) {
+	rebuilt, err := rebuildPreparePlan(execCtx, ses, prepareStmt, func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 		return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
 	})
 	require.NoError(t, err)
@@ -5995,7 +5995,7 @@ func TestRebuildPreparePlanUsesFreshCloneStatement(t *testing.T) {
 		_ context.Context,
 		_ FeSession,
 		_ plan2.CompilerContext,
-		stmt tree.Statement, _ *plan2.PlanningInput,
+		stmt tree.Statement,
 	) (*plan2.Plan, error) {
 		buildCount++
 		inner := stmt.(*tree.PrepareStmt).Stmt.(*tree.CloneTable)
@@ -6006,34 +6006,13 @@ func TestRebuildPreparePlanUsesFreshCloneStatement(t *testing.T) {
 		return &plan2.Plan{}, nil
 	}
 
-	_, err := rebuildPreparePlan(execCtx, ses, prepareStmt, nil, buildFn)
+	_, err := rebuildPreparePlan(execCtx, ses, prepareStmt, buildFn)
 	require.NoError(t, err)
-	_, err = rebuildPreparePlan(execCtx, ses, prepareStmt, nil, buildFn)
+	_, err = rebuildPreparePlan(execCtx, ses, prepareStmt, buildFn)
 	require.NoError(t, err)
 	require.Equal(t, 2, buildCount)
 	require.Empty(t, clone.SrcTable.SchemaName)
 	require.Empty(t, clone.CreateTable.Table.SchemaName)
-}
-
-func TestRebuildPreparePlanScopesBorrowedSelect(t *testing.T) {
-	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 109, "select 1")
-	defer prepared.Close()
-	root := planningInputRoot(prepared.PrepareStmt)
-	require.NotNil(t, root)
-	intent := &plan2.ExecutionIntent{ParameterFree: true}
-	for _, wantScope := range []bool{true, false} {
-		currentIntent := intent
-		if !wantScope {
-			currentIntent = nil
-		}
-		_, err := rebuildPreparePlan(execCtx, ses, prepared, currentIntent,
-			func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement, scope *plan2.PlanningInput) (*plan2.Plan, error) {
-				require.Same(t, root, stmt.(*tree.PrepareStmt).Stmt)
-				require.Equal(t, wantScope, scope != nil)
-				return &plan2.Plan{}, nil
-			})
-		require.NoError(t, err)
-	}
 }
 
 func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
@@ -6049,7 +6028,7 @@ func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	require.True(t, preparePlanNeedsRebuild(false, modeMismatch, false))
 	require.True(t, preparePlanNeedsRebuild(false, false, true))
 
-	rebuilt, err := rebuildPreparePlan(execCtx, ses, prepareStmt, nil, func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement, _ *plan2.PlanningInput) (*plan2.Plan, error) {
+	rebuilt, err := rebuildPreparePlan(execCtx, ses, prepareStmt, func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 		return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
 	})
 	require.NoError(t, err)
@@ -7183,7 +7162,7 @@ func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.
 	sentinel := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
 	prepared.compile = sentinel
 	for range 2 {
-		ret, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx, true)
+		ret, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
 		if owned && stmt != nil {
 			stmt.Free()
 		}
@@ -7192,7 +7171,7 @@ func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.
 		require.True(t, cw.planGenerationReused)
 	}
 	ctx.err = fmt.Errorf("statistics admission failed")
-	_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx, true)
+	_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
 	require.ErrorIs(t, err, ctx.err)
 	require.True(t, prepared.needsRebuild, "a rejected generation must not be admitted on a later execute")
 	require.Same(t, sentinel, prepared.compile, "existing rebuild/Close owns exactly-once compile cleanup")
@@ -7245,7 +7224,7 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	// factor must replan from that new generation rather than slide the old one.
 	for _, rows := range []float64{256, 128} {
 		ctx.stats = &pbstats.StatsInfo{TableCnt: rows, BlockNumber: 1, AccurateObjectNumber: 1}
-		_, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx, true)
+		_, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
 		if owned && stmt != nil {
 			stmt.Free()
 		}
@@ -7260,7 +7239,7 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 		original = fresh
 	}
 	ctx.stats = &pbstats.StatsInfo{TableCnt: 1e9, BlockNumber: 1e6, AccurateObjectNumber: 1}
-	ret, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx, true)
+	ret, fresh, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
 	if owned && stmt != nil {
 		stmt.Free()
 	}
@@ -7343,7 +7322,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 				}
 			}
 			bind(1)
-			ret, runtimePlan, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
+			ret, runtimePlan, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 			require.NoError(t, err)
 			require.Nil(t, ret)
 			for _, node := range runtimePlan.GetQuery().Nodes {
@@ -7363,7 +7342,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 			for i := 2; i <= 21; i++ {
 				ctx.stats.TableCnt = float64(127 + i)
 				bind(i)
-				ret, reused, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
+				ret, reused, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 				require.NoError(t, err)
 				require.Same(t, sentinel, ret)
 				require.Same(t, runtimePlan, reused)
@@ -7373,7 +7352,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 			}
 			ctx.stats.TableCnt = 128 // rollback returns to the original observation
 			bind(1)
-			ret, reused, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
+			ret, reused, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 			require.NoError(t, err)
 			require.Same(t, sentinel, ret)
 			require.Same(t, runtimePlan, reused)
@@ -7405,7 +7384,7 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 			require.NoError(b, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONG), 0}
 			execute := func() {
-				ret, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx, true)
+				ret, _, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, base.Resolve, ctx)
 				if owned && stmt != nil {
 					stmt.Free()
 				}

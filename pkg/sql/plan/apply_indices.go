@@ -2661,7 +2661,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	if input != nil {
 		_, fixedZone = types.FixedZoneOffset(input.intent.TimeZone)
 	}
-	if lateBaseStatsFinalized && originalSafe && builder.qry.ExecutionDependentAccess && !builder.isPrepareStatement && !builder.sessionSelectLimitMayStopEarly && input != nil && input.intent.ParameterFree && fixedZone &&
+	if lateBaseStatsFinalized && originalSafe && builder.qry.ExecutionDependentAccess && !builder.isReusablePlan() && !builder.sessionSelectLimitMayStopEarly && input != nil && fixedZone &&
 		input.intent.MatchesProcess(builder.compCtx.GetProcess()) && input.intent.Placement.AllowsPinnedLocalAccess() &&
 		!forceIndex && !ignoreStats && !preferSortedScan && best.indexPos == -1 && fallback.indexPos == -1 {
 		access, err := builder.enumerateTemporalIndexCandidates(nodeID, indexes, costCtx, func(candidate regularIndexAccessCandidate) {

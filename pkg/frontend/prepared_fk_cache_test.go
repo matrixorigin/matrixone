@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -68,15 +67,11 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 	require.False(t, checkNodeCanCache(subscriptionMetadataPlan))
 }
 
-func TestTemporalIndexReplansAcrossCacheOwners(t *testing.T) {
+func TestExecutionDependentAccessRejectsOrdinaryCache(t *testing.T) {
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT, ExecutionDependentAccess: true}}}
 	require.False(t, checkNodeCanCache(p))
-	require.False(t, planReuse(false, p, preparedPhysicalCompile).reusable)
-	require.True(t, !planReuse(false, p, preparedLogicalPlan).reusable)
 	p.GetQuery().ExecutionDependentAccess = false
 	require.True(t, checkNodeCanCache(p))
-	require.True(t, planReuse(false, p, preparedPhysicalCompile).reusable)
-	require.False(t, !planReuse(false, p, preparedLogicalPlan).reusable)
 }
 
 func TestExecutionIntentUsesStatementSQL(t *testing.T) {
@@ -86,10 +81,9 @@ func TestExecutionIntentUsesStatementSQL(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	raw := "select /*+ SET_VAR(query_max_workers=2) */ 1"
-	root, intent, ok := executionIntentForStatement(ses, ses.GetProc(), raw, "", stmt)
+	input, intent, ok := planningInputForStatement(ses, ses.GetProc(), raw, "", stmt)
 	require.True(t, ok)
-	require.Same(t, stmt.(*tree.Select), root)
-	require.True(t, intent.ParameterFree)
+	require.NotNil(t, input)
 	require.Equal(t, schedule.WorkerSetMax, intent.Placement.Scheduling.WorkerSet.Mode)
 	require.Equal(t, 2, intent.Placement.Scheduling.WorkerSet.MaxWorkers)
 	proc := ses.GetProc()
@@ -106,20 +100,17 @@ func TestExecutionIntentUsesStatementSQL(t *testing.T) {
 	proc.Base.UnixTime++
 	require.False(t, intent.MatchesProcess(proc), "clock drift must invalidate the sample")
 	proc.Base.UnixTime = oldTime
-	_, intent, ok = executionIntentForStatement(ses, ses.GetProc(), "/*+ SIDECAR */ select 1", "", stmt)
+	_, intent, ok = planningInputForStatement(ses, ses.GetProc(), "/*+ SIDECAR */ select 1", "", stmt)
 	require.True(t, ok)
 	require.True(t, intent.Placement.Sirius)
-	_, _, ok = executionIntentForStatement(ses, ses.GetProc(), "", "", stmt)
+	_, _, ok = planningInputForStatement(ses, ses.GetProc(), "", "", stmt)
 	require.False(t, ok, "missing raw statement SQL cannot authorize a candidate")
 	parameterized, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select ?", 1)
 	require.NoError(t, err)
 	defer parameterized.Free()
-	_, _, ok = executionIntentForStatement(ses, ses.GetProc(), "select ?", "", parameterized)
+	_, _, ok = planningInputForStatement(ses, ses.GetProc(), "select ?", "", parameterized)
 	require.False(t, ok)
-	root, intent, ok = executionIntentForExecution(ses, ses.GetProc(), "select ?", "", parameterized, true)
-	require.True(t, ok)
-	require.Same(t, parameterized.(*tree.Select), root)
-	require.False(t, intent.ParameterFree, "placement is not a parameter diagnostic proof")
+	require.False(t, executionIntentMatchesCompile(&intent, ses, ses.GetProc(), "select ?", "", parameterized), "compile independently rejects parameterized roots")
 }
 
 func TestExecutionIntentForExplain(t *testing.T) {
@@ -137,45 +128,15 @@ func TestExecutionIntentForExplain(t *testing.T) {
 			stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			root, _, ok := executionIntentForStatement(ses, ses.GetProc(), tc.sql, "", stmt)
+			input, _, ok := planningInputForStatement(ses, ses.GetProc(), tc.sql, "", stmt)
 			require.Equal(t, tc.eligible, ok)
 			if ok {
-				require.Same(t, planningInputRoot(stmt), root)
-				_, _, ok = executionIntentForStatement(ses, ses.GetProc(), "", "", stmt)
+				require.NotNil(t, input)
+				_, _, ok = planningInputForStatement(ses, ses.GetProc(), "", "", stmt)
 				require.False(t, ok, "missing statement-local SQL cannot grant a scope")
 			}
 		})
 	}
-}
-
-func TestTemporalIndexPrepareRebuildsAtExecution(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 121)
-	defer prepareStmt.Close()
-	oldPlan := prepareStmt.PreparePlan
-	query := oldPlan.GetDcl().GetPrepare().GetPlan().GetQuery()
-	require.NotNil(t, query)
-	query.ExecutionDependentAccess = true
-	_, rebuilt, stmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	require.NotNil(t, rebuilt)
-	require.NotNil(t, stmt)
-	require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
-}
-
-func TestPreparedRetrySnapshotsTemporalIntent(t *testing.T) {
-	cw := &TxnComputationWrapper{
-		paramVals: []any{int64(1)},
-		executionIntent: &plan2.ExecutionIntent{
-			Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn-a"}},
-		},
-	}
-	retry := cw.preparedExecutionRetry()
-	require.Nil(t, retry.executionIntent, "an unvalidated planning snapshot cannot authorize a retry")
-	cw.executionIntentValidated = true
-	retry = cw.preparedExecutionRetry()
-	require.NotNil(t, retry.executionIntent)
-	cw.executionIntent.Placement.CurrentCN.ID = "cn-b"
-	require.Equal(t, "cn-a", retry.executionIntent.Placement.CurrentCN.ID)
 }
 
 func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
@@ -185,7 +146,7 @@ func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	const sql = "select /*+ SET_VAR(query_max_workers=2) */ 1"
-	_, intent, ok := executionIntentForStatement(ses, ses.GetProc(), sql, "", stmt)
+	_, intent, ok := planningInputForStatement(ses, ses.GetProc(), sql, "", stmt)
 	require.True(t, ok)
 	marked := &plan.Expr{CandidateFilter: true}
 	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
@@ -229,37 +190,10 @@ func TestTemporalSafeRebuildDropsStaleSnapshot(t *testing.T) {
 	}
 }
 
-func TestPreparedTemporalDriftRebuildsFromInnerStatement(t *testing.T) {
-	ses, prepared, cw, execCtx := newPreparedExecuteEnv(t, 125)
-	defer prepared.Close()
-	cw.preparedStmt = prepared
-	cw.planGenerationReused = true
-	cw.setPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123})
-	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
-		require.Len(t, columns, 1)
-		return [][]byte{[]byte("fresh metadata")}, nil
-	}
-	execCtx.prepareColDef = [][]byte{[]byte("stale metadata")}
-	marked := &plan.Expr{CandidateFilter: true}
-	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
-	safe, err := cw.validatePreparedCandidatePlan(execCtx, ses, prepared.PrepareStmt, prepared.Sql, candidate)
-	require.NoError(t, err)
-	require.NotNil(t, safe.GetQuery())
-	require.False(t, cw.planGenerationReused)
-	require.False(t, cw.executionIntentValidated)
-	require.Equal(t, [][]byte{[]byte("fresh metadata")}, execCtx.prepareColDef, "binary metadata must belong to the replacement plan")
-	if cw.proc.GetTxnOperator() == nil {
-		require.False(t, cw.hasPlanSnapshotTS)
-	} else {
-		require.Equal(t, currentTxnSnapshotTSForProcess(cw.proc), cw.planSnapshotTS)
-	}
-}
-
 func TestCreateCompileTemporalDriftPreservesRequestState(t *testing.T) {
 	ses, prepared, cw, execCtx := newPreparedExecuteEnv(t, 126)
 	defer prepared.Close()
-	_, intent, ok := executionIntentForStatement(ses, cw.proc, prepared.Sql, "", prepared.PrepareStmt)
+	_, intent, ok := planningInputForStatement(ses, cw.proc, prepared.Sql, "", prepared.PrepareStmt)
 	require.True(t, ok)
 	intent.UnixTime++
 	marked := &plan.Expr{CandidateFilter: true}

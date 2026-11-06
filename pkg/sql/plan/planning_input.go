@@ -26,10 +26,9 @@ import (
 
 // ExecutionIntent describes one execution, not a reusable plan.
 type ExecutionIntent struct {
-	Placement     schedule.LocalAccessIntent
-	ParameterFree bool
-	TimeZone      *time.Location
-	UnixTime      int64
+	Placement schedule.LocalAccessIntent
+	TimeZone  *time.Location
+	UnixTime  int64
 }
 
 // MatchesProcess rejects changes to execution state used by candidate estimation.
@@ -61,7 +60,7 @@ type PlanningInput struct {
 }
 
 func NewPlanningInput(root *tree.Select, intent ExecutionIntent, owner CompilerContext) *PlanningInput {
-	if root == nil {
+	if root == nil || root.Select == nil || tree.ParameterCount(root) != 0 {
 		return nil
 	}
 	return &PlanningInput{root: root, intent: intent, owner: owner}
