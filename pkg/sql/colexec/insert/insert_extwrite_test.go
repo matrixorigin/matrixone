@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -406,4 +407,257 @@ func TestExternalInsertPreservesWriterAcrossYield(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newExternalIgnoreLoadProc builds the session-facing process of the
+// external IGNORE legs: the statement's IGNORE runtime profile and the
+// warning-collecting session the fill flushes through.
+func newExternalIgnoreLoadProc(t *testing.T, q *mpool.MPool) *process.Process {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", q)
+	session := &extIgnoreWarningSession{}
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	return proc
+}
+
+func int64SupplyVec(t *testing.T, q *mpool.MPool, rows int) *vector.Vector {
+	t.Helper()
+	vec := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed[int64](vec, int64(100+i), false, q))
+	}
+	return vec
+}
+
+// TestExternalInsertOwnsConstFillReplacements walks the actual
+// Projection-to-external-Insert lifecycle the allocation-ownership review is
+// about, batch after batch: a folded NULL default (the omitted BIGINT NOT
+// NULL DEFAULT (abs(null)) column) broadcasts as a constant NULL with no
+// backing storage, and under statement IGNORE the gate replaces it with a
+// fresh constant allocation installed straight into the projection's reused
+// batch. The projection overwrites every slot on its next Call and frees
+// only its own executor-owned vectors, the external path writes the child's
+// batch in place, and the writer consumes it synchronously - so once a
+// batch's write finished, a correctly owned replacement can be released
+// immediately, while a dropped one stays recorded in the mpool's pointer
+// registry forever. OnHeapOutstanding - the registry-backed on-heap bytes and
+// object counter the mpool closes on - is the steady-state oracle, snapshotted
+// after every driven batch: flat across batches once every replacement is
+// released, one retained block set per batch when one is not.
+func TestExternalInsertOwnsConstFillReplacements(t *testing.T) {
+	q := mpool.MustNewZero()
+	proc := newExternalIgnoreLoadProc(t, q)
+
+	const batches = 6
+	const rowsPerBatch = 3
+	inputs := make([]*batch.Batch, 0, batches)
+	for range batches {
+		src := batch.New([]string{"b"})
+		src.Vecs[0] = int64SupplyVec(t, q, rowsPerBatch)
+		src.SetRowCount(rowsPerBatch)
+		inputs = append(inputs, src)
+	}
+	inputs = append(inputs, nil) // EOF closes the writer
+
+	proj := projection.NewArgument()
+	proj.ProjectList = []*plan.Expr{
+		{ // DEFAULT (abs(null)) folds to a constant NULL broadcast.
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		},
+	}
+	proj.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+	require.NoError(t, proj.Prepare(proc))
+
+	ins := NewArgument()
+	defer ins.Release()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "b"}, AddAffectedRows: true}
+	ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+	ins.ctr.extCols = []*plan.ColDef{notNullCol("a"), nullableCol("b")}
+	writer := &mockExtWriter{}
+	ins.ctr.extWriter = writer
+	ins.AppendChild(proj)
+
+	objectsAfterBatch := make([]int64, batches)
+	bytesAfterBatch := make([]int64, batches)
+	for i := range batches {
+		ins.OpAnalyzer.Start()
+		_, err := ins.Call(proc)
+		ins.OpAnalyzer.Stop()
+		require.NoError(t, err)
+		bytesAfterBatch[i], objectsAfterBatch[i] = q.OnHeapOutstanding()
+	}
+	ins.OpAnalyzer.Start()
+	_, err := ins.Call(proc) // EOF: flush and finalize the writer's file
+	ins.OpAnalyzer.Stop()
+	require.NoError(t, err)
+	ins.Free(proc, false, nil)
+
+	require.Equal(t, uint64(batches)*uint64(rowsPerBatch), writer.rows,
+		"every driven batch wrote its rows")
+	require.Equal(t, 1, writer.closes)
+	require.Equal(t, uint64(batches)*uint64(rowsPerBatch), proc.Session.(*extIgnoreWarningSession).total,
+		"one warning per adjusted broadcast row of every driven batch")
+	for i := 1; i < batches; i++ {
+		require.Equal(t, objectsAfterBatch[0], objectsAfterBatch[i],
+			"a constant replacement must not stay recorded in the mpool past its own batch")
+		require.Equal(t, bytesAfterBatch[0], bytesAfterBatch[i],
+			"a constant replacement's storage must not stay recorded in the mpool past its own batch")
+	}
+	for _, b := range inputs {
+		if b != nil {
+			b.Clean(q)
+		}
+	}
+}
+
+// TestExternalInsertReleasesFillOnWriteFailure walks the same ownership
+// across the pipeline's write-error path: the fill books its replacement,
+// the writer rejects the batch, and the statement fails - the replacement
+// must be released with the failed batch instead of staying recorded in
+// the mpool's pointer registry, and the outstanding counters must return to
+// the value before that call.
+func TestExternalInsertReleasesFillOnWriteFailure(t *testing.T) {
+	q := mpool.MustNewZero()
+	proc := newExternalIgnoreLoadProc(t, q)
+
+	newPipeline := func() (*projection.Projection, *Insert, *mockExtWriter, *batch.Batch) {
+		src := batch.New([]string{"b"})
+		src.Vecs[0] = int64SupplyVec(t, q, 3)
+		src.SetRowCount(3)
+		proj := projection.NewArgument()
+		proj.ProjectList = []*plan.Expr{
+			{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			},
+		}
+		proj.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{src, nil}))
+		require.NoError(t, proj.Prepare(proc))
+		ins := NewArgument()
+		ins.ToExternal = true
+		ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "b"}, AddAffectedRows: true}
+		ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+		ins.ctr.extCols = []*plan.ColDef{notNullCol("a"), nullableCol("b")}
+		writer := &mockExtWriter{}
+		ins.ctr.extWriter = writer
+		ins.AppendChild(proj)
+		return proj, ins, writer, src
+	}
+
+	// A clean statement first: the fill's replacement settles inside the
+	// call, so the outstanding level a failed statement must return to is
+	// known.
+	_, ins, writer, cleanSrc := newPipeline()
+	beforeBytes, beforeObjects := q.OnHeapOutstanding()
+	ins.OpAnalyzer.Start()
+	_, err := ins.Call(proc)
+	ins.OpAnalyzer.Stop()
+	require.NoError(t, err)
+	afterBytes, afterObjects := q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes, "the replacement is released within the call")
+	require.Equal(t, beforeObjects, afterObjects)
+	require.Equal(t, uint64(3), writer.rows)
+	ins.OpAnalyzer.Start()
+	_, err = ins.Call(proc) // EOF: flush and finalize the file
+	ins.OpAnalyzer.Stop()
+	require.NoError(t, err)
+	require.Equal(t, 1, writer.closes)
+	ins.Free(proc, false, nil)
+	ins.Release()
+	cleanSrc.Clean(q)
+
+	// The failing statement: the replacement installed for the write must
+	// die with the failed batch, not with the operator's teardown.
+	_, ins, writer, failSrc := newPipeline()
+	writer.failure = errors.New("simulated stage write failure")
+	beforeBytes, beforeObjects = q.OnHeapOutstanding()
+	ins.OpAnalyzer.Start()
+	_, err = ins.Call(proc)
+	ins.OpAnalyzer.Stop()
+	require.Error(t, err)
+	require.Zero(t, writer.rows, "the failed batch wrote no rows")
+	afterBytes, afterObjects = q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes,
+		"the failed batch's replacement is released with the error")
+	require.Equal(t, beforeObjects, afterObjects)
+	ins.Reset(proc, true, err)
+	ins.Free(proc, true, err)
+	afterBytes, afterObjects = q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes)
+	require.Equal(t, beforeObjects, afterObjects)
+	require.Equal(t, 1, writer.aborts)
+	failSrc.Clean(q)
+}
+
+// TestExternalInsertReleasesPartialFillOnViolation pins the release owner's
+// bookkeeping on the partial-fill error path: a batch whose first NOT NULL
+// column broadcasts a fillable constant NULL and whose second NOT NULL
+// column broadcasts the constant NULL of a type without an implicit default
+// (geometry here) forces the shared fill to install the first column's
+// replacement and then fail on the second. That intermediate state must not
+// stay owned by nobody with the failed statement either: the installed
+// replacement is released (the mpool's outstanding on-heap counters return
+// to the pre-call value) and the child's slot is handed back to the
+// borrowed vector.
+func TestExternalInsertReleasesPartialFillOnViolation(t *testing.T) {
+	q := mpool.MustNewZero()
+	proc := newExternalIgnoreLoadProc(t, q)
+
+	const rowsPerBatch = 3
+	src := batch.New([]string{"b"})
+	src.Vecs[0] = int64SupplyVec(t, q, rowsPerBatch)
+	src.SetRowCount(rowsPerBatch)
+
+	proj := projection.NewArgument()
+	proj.ProjectList = []*plan.Expr{
+		{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		},
+		{ // geometry has no implicit default, so its fill stays a violation.
+			Typ:  plan.Type{Id: int32(types.T_geometry)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		},
+	}
+	proj.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{src, nil}))
+	require.NoError(t, proj.Prepare(proc))
+
+	ins := NewArgument()
+	defer ins.Release()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "g"}, AddAffectedRows: true}
+	ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+	ins.ctr.extCols = []*plan.ColDef{notNullCol("a"), notNullCol("g")}
+	writer := &mockExtWriter{}
+	ins.ctr.extWriter = writer
+	ins.AppendChild(proj)
+
+	beforeBytes, beforeObjects := q.OnHeapOutstanding()
+	ins.OpAnalyzer.Start()
+	_, err := ins.Call(proc)
+	ins.OpAnalyzer.Stop()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Column 'g' cannot be null")
+	require.Zero(t, writer.writes, "the violating batch never reached the writer")
+	afterBytes, afterObjects := q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes,
+		"the replacement installed for the fillable column before the violation is released too")
+	require.Equal(t, beforeObjects, afterObjects)
+	ins.Reset(proc, true, err)
+	ins.Free(proc, true, err)
+	afterBytes, afterObjects = q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes)
+	require.Equal(t, beforeObjects, afterObjects)
+	src.Clean(q)
 }
