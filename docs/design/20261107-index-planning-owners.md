@@ -97,6 +97,17 @@ The data is bounded by one statement/optimizer attempt. Disttae retains its
 readonly/DDL, engine, tenant, base/hidden schema, table identity, subscription,
 budget and final pair checks. Cost statistics never grant authority.
 
+Optional block observation tries the subscription and engine read locks in
+their existing order, and tries the subscriber's client lock. Cached column
+metadata uses the FIFO owner's try-get operation, sharing ordinary hit, ghost,
+retention and callback behavior while declining a contended shard. The metadata
+cache has no post-get callback; the generic try operation only promises not to
+wait for the shard lock. Initial sampling and final revalidation use these same
+operations. A failed try discards all partial counts. Final stats and read-domain
+checks still run after an unavailable final snapshot or transport. The existing
+final cancellation-cause check retains its error precedence and iterator cleanup.
+No optional observation waits for a subscription, transport, engine or cache lock.
+
 ## Ordinary resolution and root lifetime
 
 Add a variadic optional `*TableResolution` output to the ordinary name/index
@@ -152,7 +163,7 @@ demonstrate another producer. Reader support already handles generic OR,
 unknown and seek behavior and must retain their controls.
 
 Execution intent remains an immutable value snapshot of current clock, zone,
-parameter provenance, placement and offload facts. Its owner is the existing
+placement and offload facts. Its owner is the existing
 statement/root planning/compile attempt, not a second temporal lifecycle. Use
 the ordinary scheduler for local placement and retain fixed-zone admission,
 ForceOneCN, sticky candidate topology, reset rejection and retry/rebuild fences.
@@ -185,6 +196,23 @@ reuse. Preserve existing time-zone cache invalidation and AST ownership.
 an INDEX: a later clock can change cost and make an index worthwhile. A fresh
 runtime endpoint cannot recost a previously selected BASE. Do not broaden
 function safety/admission or rebuild every statement-stable expression.
+
+`NewPlanningInput` admits only parameter-free parser roots; compile-time intent
+matching independently rejects parameterized roots. Parameter admission is not
+a copied flag on execution intent. Prepared templates and bound execution plans
+are identified by the planner's existing reusable-plan state and cannot produce
+temporal candidates or an execution-dependent temporal lifetime. This distinction
+also applies when no optional input exists: removing a prepared input must not
+disable prepared plan reuse.
+
+Prepared execution retains its ordinary parameter binding, declaration history,
+schema and time-zone checks, scheduling, binary metadata, authorization and
+definition-change retry. It carries no candidate input, execution intent,
+candidate-only validation/rebuild path or candidate retry snapshot. The bound
+planner and frontend APIs take only their actual binding inputs. Ordinary
+candidate retries continue to carry the execution intent through the existing
+Compile owner. Remove prepared-only marker/intent tests while retaining real
+prepared and ordinary candidate behavior and resource/error oracles.
 
 ## Compatibility and costs
 
