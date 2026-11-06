@@ -1,10 +1,10 @@
-# Consolidate catalog upgrades for 4.1 and 4.2 sources
+# Catalog upgrade consolidation and 4.2 stopped-upgrade cleanup
 
 Status: design reviewed; validation is required for the final change before delivery. Issue: [#31490](https://github.com/matrixorigin/matrixone/issues/31490). Main base: `f84780380228`; source controls: v4.1.0 `c58a0e62c382`, v4.2.6 `71498157cc21`, and 4.2-dev `86a45d39df3d`.
 
 ## Scope and observed behavior
 
-The requested source is a stopped, intact deployment whose current released version is 4.1 or 4.2. Direct upgrades from 3.x and all unreleased main catalogs (including prior 4.0.7 and 4.0.18/19 identities), downgrade and mixed-version operation are out of scope. This boundary does not erase older data: a 4.1 or 4.2 source can contain snapshots created before that release. The migration must preserve data, existing snapshot records and retention. Ambiguous historical snapshot ownership must follow the user's explicit decision: pause and obtain administrator confirmation by snapshot UUID; do not guess from the snapshot name alone.
+The original #31490 design considered stopped, intact 4.1 and 4.2 deployments. For the #32278 follow-up, the supported source is a stopped 4.2 release upgraded directly to current main; intermediate main versions, mixed-version operation and downgrade are out of scope. References to a 4.1 source below describe the earlier design, not an additional acceptance target for this follow-up. This boundary does not erase older data: a 4.2 source can contain snapshots created before that release. The migration must preserve data, existing snapshot records and retention. Ambiguous historical snapshot ownership must follow the user's explicit decision: pause and obtain administrator confirmation by snapshot UUID; do not guess from the snapshot name alone.
 
 The target catalog version is `4.0.7`, above published 4.2's `4.0.6/5`; its offset follows the existing handler metadata contract and is fixed when the final entry set is frozen. Freeze the released 4.0.6 effects; place necessary subsequent effects in 4.0.7, using the version/tenant task and startup reconciliation owners described below. Do not register unpublished 4.0.8–4.0.19 identities as new upgrade steps. Before release, fold the later COLUMNS and prefix-aware STATISTICS refreshes into the existing 4.0.7 entries: 27 tenant entries and 14 cluster entries, offset 41. COLUMNS uses the current declared-type definition; STATISTICS uses the current numeric prefix-length projection, with SQL NULL for whole-column indexes. This explicitly supersedes the previous assumption that main's unreleased 4.0.7 was already frozen. Its identity becomes immutable when released, not merely when merged into main. Preserve unrelated current-main behavior.
 
@@ -100,7 +100,9 @@ The scope of #29433 is not closed here. The view-refresh tables, admission, life
 
 Validation must include a real stopped 4.2 upgrade with live and stale grants in multiple accounts, existing trace metadata, ambiguous user and branch snapshots, idempotent restart, failures and competing workers; fresh startup must expose current system views and omit retired trace objects. Test source-export results against the existing decision reader/publisher, including nulls, maximum IDs, malformed input, stale preimages and >128 records. Exercise view protocol/floor transitions and no-op restart, orphan paging, cancellation and commit uncertainty. Compare affected SQL/RPC work with 1/2 CN and several tenant counts, run affected race/static checks, and report any unmeasured or unsupported boundary explicitly.
 
-## Acceptance evidence
+## Original #31490 acceptance evidence
+
+These are the earlier design's acceptance targets; the #32278 follow-up uses the 4.2-only boundary and validation stated above.
 
 - Assert that the registered current target is 4.0.7/41 and released 4.0.6 remains at offset 5. Verify declared DECIMAL attributes in COLUMNS and numeric/NULL SUB_PART values for prefix/full-column indexes through real SQL after upgrade and for fresh tenants. Preserve idempotence, failure rollback, CDC rejection and interrupted-route oracles when retiring the 4.0.18/19 test fixtures.
 - Upgrade preserved copies of real 4.1.0 and 4.2.6 data in a single shutdown/start cycle, plus representative interrupted published routes and fresh tenants. Compare final cluster and tenant version, indexed and FK behavior, routine results, user and branch snapshots, old snapshot/PITR reads and restore, and internal index visibility.

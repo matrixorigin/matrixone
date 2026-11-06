@@ -1,5 +1,9 @@
 # Stopped upgrade from 4.2 to catalog 4.0.7
 
+This procedure upgrades a stopped 4.2 release directly to current main.
+Intermediate development versions, mixed-version operation and downgrade are
+outside this upgrade contract. Existing data and snapshots in 4.2 remain in scope.
+
 Before starting any new-version service, connect to the running 4.2 deployment
 as a system administrator and check for CDC tasks across all accounts:
 
