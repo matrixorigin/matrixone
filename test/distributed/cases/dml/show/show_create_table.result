@@ -16,7 +16,7 @@ b    int    NO        10
 c    int    YES        20        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 show create table t;
 Table    Create Table
 t    CREATE TABLE `t` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
@@ -31,7 +31,7 @@ b    int    NO        10
 c    int    YES        20        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 yy    varchar(50)    NO        foo
 show create table t;
 Table    Create Table
@@ -46,7 +46,7 @@ b    int    NO        10
 c    int    YES        20        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 yy    varchar(50)    NO        foo
 zz    varchar(50)    NO        null        
 show create table t;
@@ -69,7 +69,7 @@ b    int    NO        10
 c    int    YES        20        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
@@ -86,7 +86,7 @@ b    int    NO        10
 c    bigint    NO        100        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` bigint NOT NULL DEFAULT 100,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
@@ -105,7 +105,7 @@ b    int    NO        10
 c    int    YES        20        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` int DEFAULT 20,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
@@ -120,7 +120,7 @@ b    int    NO        10
 c    bigint    YES        100        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` bigint DEFAULT 100,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
@@ -134,7 +134,7 @@ b    int    NO        10
 c    bigint    YES        100        
 d    varchar(20)    NO        xxx
 e    timestamp    YES        null        
-f    timestamp    YES        CURRENT_TIMESTAMP()        
+f    timestamp    YES        CURRENT_TIMESTAMP()    DEFAULT_GENERATED
 show create table t2;
 Table    Create Table
 t2    CREATE TABLE `t2` (\n  `a` int NOT NULL,\n  `b` int NOT NULL DEFAULT 10,\n  `c` bigint DEFAULT 100,\n  `d` varchar(20) NOT NULL DEFAULT 'xxx',\n  `e` timestamp NULL DEFAULT NULL,\n  `f` timestamp DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`a`)\n)
