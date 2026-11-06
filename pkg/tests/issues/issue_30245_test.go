@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -202,9 +201,15 @@ func TestIssue30245LockingReadRetriesBeforeLimit(t *testing.T) {
 							t.Fatal(queryCtx.Err())
 						}
 						if tc.repeatable {
-							var conflict *mysql.MySQLError
-							require.ErrorAs(t, result.err, &conflict)
-							require.Equal(t, uint16(20619), conflict.Number)
+							// A REPEATABLE READ locking read whose lock wait
+							// resolved behind a committed holder now
+							// current-reads the holder's committed value and
+							// commits cleanly (locking-read current read);
+							// the pre-#30955 corner failed here with the
+							// 20619 "SI not support retry" w-w conflict.
+							require.NoError(t, result.err)
+							require.Equal(t, 1, result.value)
+							require.NoError(t, readTxn.Commit())
 							return
 						}
 						require.NoError(t, result.err)

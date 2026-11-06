@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
@@ -294,6 +296,29 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			switch n.NodeType {
 			case plan.Node_LOCK_OP:
 				op, err = constructLockOp(n, c.e)
+				// Runtime-created LockOps of a dependent (correlation) plan are
+				// invisible to the pre-pipeline stamp sweep, so the attempt's
+				// frontier is installed here at construction (pre-PR review
+				// P2): an inactive attempt — declined statement, below-gate
+				// cluster, unattempted compile — leaves the marks inert and
+				// the lock on today's behavior. The occurrence presence and
+				// its raw explicit-snapshot provenance are installed by
+				// constructLockOp from the plan target's own per-occurrence
+				// fields (round-10 finding 2; rev 24 round 11), so the
+				// runtime stamp publishes the frontier AND resolves each
+				// runtime-created occurrence's EFFECTIVE activation for
+				// this execution against the executing SnapshotTS.
+				if err == nil {
+					if lockOp, ok := op.(*lockop.LockOp); ok {
+						if active, frontier := c.executionReadStatementFrontier(); active {
+							execSnapshotTS := timestamp.Timestamp{}
+							if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+								execSnapshotTS = txnOp.Txn().SnapshotTS
+							}
+							lockOp.SetLockingReadCurrentFrontier(frontier, execSnapshotTS)
+						}
+					}
+				}
 			case plan.Node_PRE_INSERT:
 				op, err = constructPreInsert(c.anal.qry.Nodes, n, c.e, proc)
 			case plan.Node_PRE_INSERT_UK:

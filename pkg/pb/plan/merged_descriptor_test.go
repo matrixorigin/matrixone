@@ -31,6 +31,10 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults": {"collation_revision": 6},
 		"ColDef":           {"result_column_kind": 23},
+		// Upstream main owns Node field 97 (narrow_scan); this branch's
+		// scan_read_role moved 97 -> 98 when the upstream field landed. Both
+		// additive contracts must survive regeneration with distinct numbers.
+		"Node": {"narrow_scan": 97, "scan_read_role": 98},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {

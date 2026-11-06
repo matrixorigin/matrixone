@@ -1230,7 +1230,7 @@ func TestCompileLockCandidateLoadKeepsCanonicalTableTarget(t *testing.T) {
 		"physical annotations must stay on the compiler-local copy")
 }
 
-func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
+func TestCompileLockNonCandidateKeepsCanonicalTableTarget(t *testing.T) {
 	c := NewMockCompile(t)
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 		StmtType: plan.Query_INSERT,
@@ -1243,7 +1243,14 @@ func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
 	got, err := c.compileLock(node, []*Scope{{}})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	require.Empty(t, node.LockTargets)
+	// The promotion moves only the PHYSICAL disposition below; the
+	// canonical plan keeps its bind-time lock targets so the presence
+	// consumers (Run capability validation, covering parent admission,
+	// cache marking) keep seeing the statement. The pre-change strip that
+	// emptied this list for non-candidate statements destroys that
+	// provenance (pre-PR review round 7, finding 1).
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets,
+		"a non-candidate statement's canonical plan is never rewritten")
 	require.Same(t, target, c.lockTables[target.TableId])
 }
 

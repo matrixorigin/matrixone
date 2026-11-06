@@ -515,6 +515,36 @@ func (de *TestDisttaeEngine) GetTable(
 	return
 }
 
+// GetTableWithTxnOptions is GetTable with an explicit TxnOption set so a
+// harness can pin the isolation whose invariants it asserts (the test
+// client defaults to RC; SI subject transactions must be created with
+// WithTxnIsolation(TxnIsolation_SI) rather than inheriting that default).
+func (de *TestDisttaeEngine) GetTableWithTxnOptions(
+	ctx context.Context,
+	databaseName, tableName string,
+	opts ...client.TxnOption,
+) (
+	database engine.Database,
+	relation engine.Relation,
+	txn client.TxnOperator,
+	err error,
+) {
+
+	if txn, err = de.NewTxnOperator(ctx, de.Now(), opts...); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if database, err = de.Engine.Database(ctx, databaseName, txn); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if relation, err = database.Relation(ctx, tableName, nil); err != nil {
+		return nil, nil, nil, err
+	}
+
+	return
+}
+
 func (de *TestDisttaeEngine) CreateDatabaseAndTable(
 	ctx context.Context,
 	databaseName, tableName string,

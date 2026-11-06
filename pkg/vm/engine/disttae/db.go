@@ -805,8 +805,12 @@ func (e *Engine) getOrCreateSnapPartBy(
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString())
 	}
-	// Try to find existing snapshot that can serve this timestamp
-	if ps := e.snapshotMgr.Find(tbl.db.databaseId, tbl.tableId, ts); ps != nil {
+	// Try to find existing snapshot that can serve this timestamp. The
+	// serving predicate is enforced at this boundary so the caller receives
+	// a state that provably covers the REQUESTED read point (a cache entry
+	// serving an earlier snapshot never substitutes for it): a miss falls
+	// through to rebuilding from the authoritative checkpoints below.
+	if ps := e.snapshotMgr.Find(tbl.db.databaseId, tbl.tableId, ts); ps != nil && ps.CanServe(ts) {
 		return ps, nil
 	}
 
