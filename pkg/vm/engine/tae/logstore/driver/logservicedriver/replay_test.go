@@ -98,6 +98,41 @@ func Test_MockBackend1(t *testing.T) {
 	assert.Equal(t, 3, len(loaded))
 }
 
+func TestReplayCheckpointedInteriorHoleAfterPhysicalTruncate(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		boundary  uint64
+		wantError bool
+	}{
+		{"checkpoint recorded", 3, false},
+		{"old truncate without boundary", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newMockDriver(2, [][5]uint64{
+				{uint64(Cmd_Normal), 1, 1, 1, 0},
+				{uint64(Cmd_Normal), 2, 3, 3, 1},
+				{uint64(Cmd_Normal), 3, 2, 2, 1},
+				{uint64(Cmd_Normal), 4, 4, 4, 4},
+			}, 2)
+			d.checkpointedDSN = tc.boundary
+			var applied []uint64
+			r := newReplayer(mockHandleFactory(1, func(e *entry.Entry) {
+				applied = append(applied, e.DSN)
+			}), d, 2,
+				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+				WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(d)))
+			err := r.Replay(context.Background())
+			if tc.wantError {
+				require.ErrorContains(t, err, "dsn 3 not found")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, []uint64{2, 4}, applied)
+				require.Equal(t, uint64(2), r.ExportDSNStats().Min)
+			}
+		})
+	}
+}
+
 func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()

@@ -67,6 +67,41 @@ func TestClientAcquisitionFailureCompletesWaiterBeforePanic(t *testing.T) {
 	require.NoError(t, d.Close())
 }
 
+func TestTruncateOnFlyClientFactoryErrorCanRetry(t *testing.T) {
+	backend := NewMockBackend()
+	var fail atomic.Bool
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			if fail.Load() {
+				return nil, errors.New("factory unavailable")
+			}
+			return newMockBackendClient(backend), nil
+		}))
+	cfg.ClientRetryTimes = 1
+	cfg.ClientRetryInterval = time.Nanosecond
+	cfg.ClientRetryDuration = time.Nanosecond
+	pool := newClientPool(&cfg)
+	defer pool.Close()
+	d := &LogServiceDriver{clientPool: pool, config: cfg}
+
+	fail.Store(true)
+	_, err := d.truncateFromRemote(context.Background(), 1, 1, 0)
+	require.ErrorContains(t, err, "factory unavailable")
+	psn, checkpointedDSN, err := backend.GetWALTruncate(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, psn)
+	require.Zero(t, checkpointedDSN)
+
+	fail.Store(false)
+	psn, err = d.truncateFromRemote(context.Background(), 1, 1, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), psn)
+	psn, checkpointedDSN, err = backend.GetWALTruncate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), psn)
+	require.Equal(t, uint64(1), checkpointedDSN)
+}
+
 type blockingBackendClient struct {
 	*mockBackendClient
 	appendStarted chan struct{}

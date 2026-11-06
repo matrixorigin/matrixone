@@ -44,12 +44,14 @@ type MockBackend interface {
 		ctx context.Context, firstPSN, maxSize uint64,
 	) ([]logservice.LogRecord, uint64, error)
 	GetTruncatedLsn(ctx context.Context) (uint64, error)
+	GetWALTruncate(ctx context.Context) (psn, checkpointedDSN uint64, err error)
 
 	Append(
 		ctx context.Context,
 		buf logservice.LogRecord,
 	) (psn uint64, err error)
 	Truncate(ctx context.Context, psn uint64) error
+	TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error
 }
 
 type BackendClient interface {
@@ -60,12 +62,14 @@ type BackendClient interface {
 		ctx context.Context, firstPSN, maxSize uint64,
 	) ([]logservice.LogRecord, uint64, error)
 	GetTruncatedLsn(ctx context.Context) (uint64, error)
+	GetWALTruncate(ctx context.Context) (psn, checkpointedDSN uint64, err error)
 
 	Append(
 		ctx context.Context,
 		buf logservice.LogRecord,
 	) (psn uint64, err error)
 	Truncate(ctx context.Context, psn uint64) error
+	TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error
 }
 
 type writeTokenController struct {
@@ -208,7 +212,13 @@ func (c *wrappedClient) Append(
 		ctx, cancel := context.WithTimeoutCause(
 			ctx, DefaultOneTryTimeout, timeoutCause,
 		)
-		psn, err = c.wrapped.Append(ctx, c.buf)
+		if walClient, ok := c.wrapped.(interface {
+			AppendWAL(context.Context, logservice.LogRecord) (uint64, error)
+		}); ok {
+			psn, err = walClient.AppendWAL(ctx, c.buf)
+		} else {
+			psn, err = c.wrapped.Append(ctx, c.buf)
+		}
 		cancel()
 		if err == nil {
 			break

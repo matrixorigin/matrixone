@@ -337,11 +337,15 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 	case pb.TSO_UPDATE:
 		return s.handleTsoUpdate(ctx, req), pb.LogRecordResponse{}
 	case pb.APPEND:
-		return s.handleAppend(ctx, req, payload), pb.LogRecordResponse{}
+		return s.handleAppend(ctx, req, payload, false), pb.LogRecordResponse{}
+	case pb.APPEND_WAL:
+		return s.handleAppend(ctx, req, payload, true), pb.LogRecordResponse{}
 	case pb.READ:
 		return s.handleRead(ctx, req)
 	case pb.TRUNCATE:
 		return s.handleTruncate(ctx, req), pb.LogRecordResponse{}
+	case pb.TRUNCATE_WAL:
+		return s.handleTruncateWAL(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_TRUNCATE:
 		return s.handleGetTruncatedIndex(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_LEASEHOLDER_ID:
@@ -384,6 +388,10 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetLatestLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.SET_REQUIRED_LSN:
 		return s.handleSetRequiredLsn(ctx, req), pb.LogRecordResponse{}
+	case pb.SET_REQUIRED_LSN_IF_CURRENT:
+		return s.handleSetRequiredLsnIfCurrent(ctx, req), pb.LogRecordResponse{}
+	case pb.CLAIM_REQUIRED_LSN:
+		return s.handleClaimRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_REQUIRED_LSN:
 		return s.handleGetRequiredLsn(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_LEADER_ID:
@@ -521,10 +529,11 @@ func (s *Service) handleConnectRO(ctx context.Context, req pb.Request) pb.Respon
 	return resp
 }
 
-func (s *Service) handleAppend(ctx context.Context, req pb.Request, payload []byte) pb.Response {
+func (s *Service) handleAppend(ctx context.Context, req pb.Request, payload []byte, walRequest ...bool) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.append(ctx, r.ShardID, payload)
+	wal := len(walRequest) != 0 && walRequest[0]
+	lsn, err := s.store.append(ctx, r.ShardID, payload, wal)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
@@ -573,14 +582,24 @@ func (s *Service) handleTruncate(ctx context.Context, req pb.Request) pb.Respons
 	return resp
 }
 
+func (s *Service) handleTruncateWAL(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.truncateWAL(ctx, r.ShardID, r.Lsn, r.CheckpointedDSN); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
 func (s *Service) handleGetTruncatedIndex(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.getTruncatedLsn(ctx, r.ShardID)
+	state, err := s.store.getWALTruncate(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.Lsn = lsn
+		resp.LogResponse.Lsn = state.psn
+		resp.LogResponse.CheckpointedDSN = state.dsn
 	}
 	return resp
 }
@@ -751,14 +770,37 @@ func (s *Service) handleSetRequiredLsn(ctx context.Context, req pb.Request) pb.R
 	return resp
 }
 
+func (s *Service) handleSetRequiredLsnIfCurrent(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.setRequiredLsnIfCurrent(ctx, r.ShardID, r.Lsn,
+		r.ExpectedRequiredLsn, r.RequiredLsnRevision, r.RequiredLsnOwner); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
+func (s *Service) handleClaimRequiredLsn(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.store.claimRequiredLsn(ctx, r.ShardID, r.ExpectedRequiredLsn,
+		r.RequiredLsnRevision, r.RequiredLsnOwner,
+		r.RequiredLsnLeaderTerm, r.RequiredLsnLeaderID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
 func (s *Service) handleGetRequiredLsn(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.getRequiredLsn(ctx, r.ShardID)
+	state, err := s.store.getRequiredLsnState(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LogResponse.Lsn = lsn
+		resp.LogResponse.Lsn = state.lsn
+		resp.LogResponse.RequiredLsnRevision = state.revision
+		resp.LogResponse.RequiredLsnOwner = state.owner
 	}
 	return resp
 }
@@ -766,11 +808,12 @@ func (s *Service) handleGetRequiredLsn(ctx context.Context, req pb.Request) pb.R
 func (s *Service) handleGetLeaderID(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	leaderID, err := s.store.leaderID(r.ShardID)
+	leaderID, term, err := s.store.leaderState(r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.LogResponse.LeaderID = leaderID
+		resp.LogResponse.LeaderTerm = term
 	}
 	return resp
 }

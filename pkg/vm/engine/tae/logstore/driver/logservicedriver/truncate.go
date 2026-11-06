@@ -110,6 +110,7 @@ func (d *LogServiceDriver) doTruncate() {
 	if psnTruncated, err = d.truncateFromRemote(
 		context.Background(),
 		psnIntent,
+		dsnIntent,
 		10,
 	); err != nil {
 		// PXU TODO: metrics
@@ -118,12 +119,39 @@ func (d *LogServiceDriver) doTruncate() {
 			zap.Uint64("psn-intent", psnIntent),
 			zap.Error(err),
 		)
+		if err != ErrClientPoolClosed {
+			d.scheduleTruncateRetry()
+		}
 		return
 	}
 	if psnTruncated > d.truncatedPSN {
 		d.truncatedPSN = psnTruncated
 	}
 	d.truncateByPSN(psnTruncated)
+}
+
+func (d *LogServiceDriver) scheduleTruncateRetry() {
+	if !d.truncateRetryScheduled.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(max(5*time.Second, d.config.RetryInterval(1)))
+		defer timer.Stop()
+		select {
+		case <-d.closeC:
+			d.truncateRetryScheduled.Store(false)
+			return
+		case <-timer.C:
+		}
+		d.truncateRetryScheduled.Store(false)
+		if _, err := d.truncateQueue.Enqueue(struct{}{}); err != nil {
+			select {
+			case <-d.closeC:
+			default:
+				logutil.Error("Wal-Truncate-Retry-Enqueue", zap.Error(err))
+			}
+		}
+	}()
 }
 
 // it is only called by the replayer and no concurrent scenario
@@ -139,6 +167,7 @@ func (d *LogServiceDriver) commitTruncateInfo(psn uint64) {
 func (d *LogServiceDriver) truncateFromRemote(
 	ctx context.Context,
 	psnIntent uint64,
+	dsnIntent uint64,
 	maxRetry int,
 ) (psnTruncated uint64, err error) {
 	var (
@@ -162,7 +191,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 		)
 	}()
 
-	if client, err = d.clientPool.GetOnFly(); err == ErrClientPoolClosed {
+	if client, err = d.clientPool.GetOnFly(); err != nil {
 		return
 	}
 	defer client.Putback()
@@ -175,7 +204,7 @@ func (d *LogServiceDriver) truncateFromRemote(
 		loopCtx, cancel = context.WithTimeoutCause(
 			ctx, d.config.MaxTimeout, moerr.CauseTruncateLogservice,
 		)
-		err = client.wrapped.Truncate(loopCtx, psnIntent)
+		err = client.wrapped.TruncateWAL(loopCtx, psnIntent, dsnIntent)
 		err = moerr.AttachCause(loopCtx, err)
 		cancel()
 
@@ -184,20 +213,54 @@ func (d *LogServiceDriver) truncateFromRemote(
 			loopCtx, cancel = context.WithTimeoutCause(
 				ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate,
 			)
-			psnTruncated, err = d.getTruncatedPSNFromBackend(loopCtx)
+			var checkpointedDSN uint64
+			psnTruncated, checkpointedDSN, err = d.getWALTruncateFromBackend(loopCtx)
 			cancel()
 			if err != nil {
 				return
 			}
-			if psnTruncated >= psnIntent {
+			if psnTruncated >= psnIntent && checkpointedDSN >= dsnIntent {
 				break
 			}
+			err = moerr.NewInternalErrorf(ctx,
+				"WAL truncate has PSN %d but checkpointed DSN %d, expected at least %d",
+				psnTruncated, checkpointedDSN, dsnIntent)
+			return
 		}
 		if err == nil {
 			break
 		}
 	}
 	return
+}
+
+func (d *LogServiceDriver) getWALTruncateFromBackend(
+	ctx context.Context,
+) (psn, checkpointedDSN uint64, err error) {
+	start := time.Now()
+	retryTimes := 0
+	client, err := d.clientPool.Get()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer client.Putback()
+	for {
+		attempt, cancel := context.WithTimeoutCause(
+			ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate)
+		psn, checkpointedDSN, err = client.wrapped.GetWALTruncate(attempt)
+		cancel()
+		if err == nil || ctx.Err() != nil || time.Since(start) >= d.config.MaxTimeout {
+			return
+		}
+		retryTimes++
+		timer := time.NewTimer(d.config.RetryInterval(retryTimes))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, 0, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (d *LogServiceDriver) getTruncatedPSNFromBackend(

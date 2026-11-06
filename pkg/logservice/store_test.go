@@ -1606,6 +1606,33 @@ func TestGetLeaderID(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	leaderID, term, err := store1.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), leaderID)
+	require.NoError(t, store1.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leaderID))
+	require.NoError(t, store1.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	require.NoError(t, store1.requestLeaderTransfer(1, 2))
+	require.Eventually(t, func() bool {
+		id, currentTerm, leaderErr := store2.leaderState(1)
+		return leaderErr == nil && id == 2 && currentTerm > term
+	}, 10*time.Second, 10*time.Millisecond)
+	// The old owner and revision still match: only the new Raft term may
+	// reject this reset before the new DataSync worker claims an owner.
+	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
+	state, err := store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
+}
+
 func TestAddLogShard(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)

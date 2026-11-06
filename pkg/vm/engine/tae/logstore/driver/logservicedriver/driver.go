@@ -83,14 +83,15 @@ type LogServiceDriver struct {
 	clientPool *clientPool
 	committer  *groupCommitter
 
-	commitLoop      sm.Queue
-	commitWaitQueue chan any
-	pendingWait     atomic.Int64
-	pendingMu       sync.Mutex
-	pendingZero     chan struct{}
-	waitCommitLoop  *sm.Loop
-	postCommitQueue chan any
-	truncateQueue   sm.Queue
+	commitLoop             sm.Queue
+	commitWaitQueue        chan any
+	pendingWait            atomic.Int64
+	pendingMu              sync.Mutex
+	pendingZero            chan struct{}
+	waitCommitLoop         *sm.Loop
+	postCommitQueue        chan any
+	truncateQueue          sm.Queue
+	truncateRetryScheduled atomic.Bool
 
 	closeC chan struct{}
 
