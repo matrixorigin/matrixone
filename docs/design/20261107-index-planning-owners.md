@@ -70,8 +70,11 @@ budget and final pair checks. Cost statistics never grant authority.
 
 ## Ordinary resolution and root lifetime
 
-Add a variadic optional `*TableResolution` output to the two ordinary resolver
-methods. Zero-output calls keep the old work: no stamp capture, native lookup,
+Add a variadic optional `*TableResolution` output to the ordinary name/index
+resolver methods, including the real `ResolveWithoutTemporaryAlias` namespace
+variant. Resolution function values, prepared schema resolvers and modification
+checks use this final signature directly, with no old-signature adapter.
+Zero-output calls keep the old work: no stamp capture, native lookup,
 allocation or subscription is added to the ordinary non-candidate path. The
 root builder requests one output only when its execution input is admitted.
 The resolver clears requested outputs before work and fills them only after
