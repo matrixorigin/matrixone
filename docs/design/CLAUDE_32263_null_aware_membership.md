@@ -1,6 +1,6 @@
 # 4.1.6-hotfix：有界 NULL-aware membership 索引
 
-关联 issue：#32263。版本：v2，2026-11-06。实施 PR：尚未创建。
+关联 issue：#32263。版本：v2，2026-11-06。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
 
 v2 明确独立 pipeline 的取消隔离：builder 取消只禁用共享优化，不取消仍有效的兄弟消费者；其余设计保持 v1。
 
