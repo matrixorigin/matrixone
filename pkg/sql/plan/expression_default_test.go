@@ -333,7 +333,7 @@ func TestLoadDefaultMaterialization(t *testing.T) {
 			node.ProjectList = makeCastExpr(load, "row.csv", table, node, supplied)
 			require.Same(t, before, node.ProjectList[2], "default is already typed")
 		}
-		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil)
+		id, err := builder.appendLoadDefaultProjections(bindCtx, node, table, supplied, nil, nil)
 		require.NoError(t, err)
 		last := builder.qry.Nodes[id]
 		require.Equal(t, []int32{2}, collectRefColPos(last.ProjectList[3]))

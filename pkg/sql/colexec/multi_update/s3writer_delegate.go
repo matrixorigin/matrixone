@@ -91,6 +91,7 @@ type s3WriterDelegate struct {
 	action             actionType
 	isRemote           bool
 	rejectZeroTemporal bool
+	fillInsertOwned    bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -150,6 +151,7 @@ func newS3Writer(
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
+		fillInsertOwned:     update.insertNotNullFillOwned(),
 		addAffectedRows:     update.addAffectedRowsFunc,
 		takeAffectedRows:    update.takeS3AffectedRowsFunc,
 		seenTargetRows:      update.ctr.seenTargetRows,
@@ -355,6 +357,18 @@ func (writer *s3WriterDelegate) append(
 
 		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
+			// Under statement IGNORE adjust NULL cells of NOT NULL columns
+			// before the shared legs below; every filtered or checked copy
+			// inherits the adjusted values from the shared vectors. Rows with
+			// a NULL primary key are dropped here, so the selection sharing
+			// the vectors must re-count after the drop.
+			_, droppedRows, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, contextBatch, false, writer.fillInsertOwned)
+			if fillErr != nil {
+				return fillErr
+			}
+			if droppedRows {
+				projBat.SetRowCount(contextBatch.RowCount())
+			}
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
 				// This validation copy leaves any allocation-accounted join owner;

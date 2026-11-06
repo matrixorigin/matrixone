@@ -233,6 +233,19 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 // checkExternalNotNull rejects NULLs in NOT NULL columns. ctr.extCols is
 // aligned with InsertCtx.Attrs (and therefore with the leading batch vectors).
 func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) error {
+	if len(insert.ctr.extCols) == 0 {
+		return nil
+	}
+	if proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore() {
+		// A minimal external-insert plan runs no PreInsert, so this is the
+		// single NOT NULL gate. Under statement IGNORE apply the same rule
+		// PreInsert uses for normal tables: keep the row, set the implicit
+		// default of the column type, and warn per adjusted cell.
+		_, err := colexec.BatchDataNotNullFillForIgnore(
+			bat.Vecs, insert.InsertCtx.Attrs, insert.ctr.extCols, proc)
+		return err
+	}
 	for j, col := range insert.ctr.extCols {
 		if col == nil || j >= len(bat.Vecs) {
 			continue

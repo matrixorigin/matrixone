@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -156,6 +157,66 @@ func TestCheckExternalNotNull(t *testing.T) {
 	bat5.SetRowCount(1)
 	defer bat5.Clean(mp)
 	require.NoError(t, ins3.checkExternalNotNull(proc, bat5))
+}
+
+// extIgnoreWarningSession collects flushed warning batches for the IGNORE leg.
+type extIgnoreWarningSession struct {
+	total    uint64
+	codes    []uint16
+	messages []string
+}
+
+func (*extIgnoreWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*extIgnoreWarningSession) AddTempTable(string, string, string)        {}
+func (*extIgnoreWarningSession) RemoveTempTable(string, string)             {}
+func (*extIgnoreWarningSession) RemoveTempTableByRealName(string)           {}
+func (*extIgnoreWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	return false, false
+}
+
+func (s *extIgnoreWarningSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	s.total += total
+	for i := 0; i < len(codes) && i < len(messages); i++ {
+		s.codes = append(s.codes, codes[i])
+		s.messages = append(s.messages, messages[i])
+	}
+}
+
+// TestCheckExternalNotNullIgnoreAdjustsInsteadOfRejecting pins the writable
+// external-table gate: under statement IGNORE the same NULL cell that strict
+// mode rejects is adjusted to the implicit default with one warning and the
+// row is kept.
+func TestCheckExternalNotNullIgnoreAdjustsInsteadOfRejecting(t *testing.T) {
+	proc := testutil.NewProc(t)
+	session := &extIgnoreWarningSession{}
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	defer proc.Free()
+	mp := mpool.MustNewZero()
+
+	ins := NewArgument()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a"}}
+	ins.ctr.extCols = []*plan.ColDef{notNullCol("a")}
+	defer ins.Release()
+
+	vec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](vec, 7, false, mp))
+	require.NoError(t, vector.AppendFixed[int64](vec, 0, true, mp))
+	bat := batch.New([]string{"a"})
+	bat.Vecs[0] = vec
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](vec, 0))
+	require.False(t, vec.GetNulls().Contains(1))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](vec, 1),
+		"the NULL cell was adjusted to the implicit default")
+	require.Equal(t, uint64(1), session.total)
+	require.Equal(t, []uint16{moerr.ER_BAD_NULL_ERROR}, session.codes)
+	require.Equal(t, []string{"Column 'a' cannot be null"}, session.messages)
 }
 
 // TestExternalResetAborts: a writer still alive at Reset/Free means the stream
