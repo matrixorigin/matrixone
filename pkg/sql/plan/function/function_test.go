@@ -412,6 +412,32 @@ func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
+func TestConditionalResultNullability(t *testing.T) {
+	nonNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+	for _, test := range []struct {
+		name string
+		fid  int32
+		args []*plan.Expr
+		want bool
+	}{
+		{"case nullable condition", CASE, []*plan.Expr{nullable, nonNull, nonNull}, true},
+		{"case multiple conditions", CASE, []*plan.Expr{nullable, nonNull, nullable, nonNull, nonNull}, true},
+		{"case nullable then", CASE, []*plan.Expr{nonNull, nullable, nonNull}, false},
+		{"case nullable else", CASE, []*plan.Expr{nonNull, nonNull, nullable}, false},
+		{"case no else", CASE, []*plan.Expr{nonNull, nonNull}, false},
+		{"case empty", CASE, nil, false},
+		{"if nullable condition", IFF, []*plan.Expr{nullable, nonNull, nonNull}, true},
+		{"if nullable then", IFF, []*plan.Expr{nonNull, nullable, nonNull}, false},
+		{"if nullable else", IFF, []*plan.Expr{nonNull, nonNull, nullable}, false},
+		{"if malformed", IFF, []*plan.Expr{nonNull, nonNull}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, DeduceNotNullable(EncodeOverloadID(test.fid, 0), test.args))
+		})
+	}
+}
+
 func TestRandomBytesNullabilityContract(t *testing.T) {
 	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
 		t.Run(typ.String(), func(t *testing.T) {
