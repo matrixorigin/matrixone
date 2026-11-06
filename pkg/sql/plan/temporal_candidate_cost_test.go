@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 			case "missing scope":
 				builder.temporalResolverAllowed = false
 			case "missing original owner":
-				builder.temporalOriginalSafeScans = nil
+				builder.temporalOriginalScan = temporalOriginalScan{}
 			case "unproved original owner":
 				scan := builder.qry.Nodes[0]
 				scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
@@ -50,8 +51,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				builder.qry.Steps = nil // The original owner is captured before step publication.
 				builder.collectOriginalTemporalOwner(0)
 				builder.qry.Steps = steps
-				require.Contains(t, builder.temporalOriginalSafeScans, int32(0))
-				require.False(t, builder.temporalOriginalSafeScans[0])
+				require.False(t, builder.temporalOriginalScan.safe)
 				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
 				builder.temporalInput.intent.ParameterFree = false
@@ -80,6 +80,26 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				require.Empty(t, mapping)
 				require.Len(t, builder.qry.Nodes, 1)
 			}
+		})
+	}
+}
+
+func TestTemporalMissingBorrowPreservesCancellation(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "disabled"}[disabled], func(t *testing.T) {
+			builder, _, _ := temporalCBOTraversalFixture(t)
+			builder.clearTemporalBorrows()
+			builder.temporalBorrowDisabled = disabled
+			stop := errors.New("planning stopped")
+			ctx, cancel := context.WithCancelCause(builder.GetContext())
+			cancel(stop)
+			builder.compCtx.SetContext(ctx)
+			scan := builder.qry.Nodes[0]
+			mapping := make(map[[2]int32]*plan.Expr)
+			_, err := builder.applyIndices(0, map[[2]int32]int{{scan.BindingTags[0], 0}: 1}, mapping)
+			require.ErrorIs(t, err, stop)
+			require.Empty(t, mapping)
+			require.Len(t, builder.qry.Nodes, 1)
 		})
 	}
 }
@@ -156,6 +176,16 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	require.Zero(t, resolver.base, "a parameterized attempt cannot use a temporal borrow")
 	require.Zero(t, resolver.hidden)
 	require.False(t, bound.Plan.GetQuery().GetTemporalIndexNeedsReplan())
+
+	missing, err := mysql.ParseOne(compiler.GetContext(), "select * from missing_table where id = ?", 1)
+	require.NoError(t, err)
+	defer missing.Free()
+	_, err = BuildPreparedExecutionPlanWithTemporalIntent(compiler, missing,
+		[]PreparedSourceBinding{{Position: 0, Type: source}},
+		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, resolver)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+	require.Equal(t, 2, compiler.resolves, "the failed lookup must also use the ordinary resolver once")
+	require.Zero(t, resolver.base)
 }
 
 func TestTemporalPlanningResolverIdentityChanges(t *testing.T) {

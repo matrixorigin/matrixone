@@ -44,12 +44,11 @@ func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
 	source.observation.Kind = types.T_timestamp
 	source.observation.Min = float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC))
 	source.observation.Max = float64(bound.ToTimestamp(time.UTC) + 100*types.MicroSecsPerSec)
-	builder.temporalOriginalSafeScans = nil
 	steps := builder.qry.Steps
 	builder.qry.Steps = nil
 	builder.collectOriginalTemporalOwner(0)
 	builder.qry.Steps = steps
-	require.True(t, builder.temporalOriginalSafeScans[0], "the original typed predicate must be admitted")
+	require.True(t, builder.temporalOriginalScan.safe, "the original typed predicate must be admitted")
 	id, err := builder.applyIndicesWithOrder(0, map[[2]int32]int{{scan.BindingTags[0], 0}: 1}, make(map[[2]int32]*pb.Expr), false)
 	require.NoError(t, err)
 	require.NotZero(t, id, "the typed path must actually select the covering index")

@@ -103,74 +103,81 @@ func TestTemporalCandidatePredicateAdmission(t *testing.T) {
 }
 
 func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
-	col := GetColExpr(Type{Id: int32(types.T_datetime)}, 1, 0)
-	scan := &plan.Node{NodeType: plan.Node_TABLE_SCAN}
+	builder, _, _ := temporalCBOTraversalFixture(t)
+	query := builder.qry
+	query.Steps = nil
+	scan := query.Nodes[0]
+	col := GetColExpr(scan.TableDef.Cols[0].Typ, scan.BindingTags[0], 0)
 	project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: []*Expr{col}}
-	query := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{scan, project}}
-	builder := &QueryBuilder{qry: query, temporalInput: &TemporalPlanningInput{intent: TemporalPlanningIntent{ParameterFree: true}}}
+	query.Nodes = append(query.Nodes, project)
 	builder.collectOriginalTemporalOwner(1)
-	require.Contains(t, builder.temporalOriginalSafeScans, int32(0))
+	require.True(t, builder.temporalOriginalScan.safe)
+	require.Equal(t, int32(0), builder.temporalOriginalScan.scanID)
 	require.Empty(t, query.Steps, "proof must not mutate the original plan")
 
 	unsafe := &Expr{Typ: Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
 	project.ProjectList = append(project.ProjectList, unsafe)
-	builder.temporalOriginalSafeScans = nil
 	builder.collectOriginalTemporalOwner(1)
 	project.ProjectList = project.ProjectList[:1] // a later rewrite removes the unsafe expression
-	require.Empty(t, builder.temporalOriginalSafeScans)
+	require.False(t, builder.temporalOriginalScan.safe)
 	builder.temporalInput.intent.ParameterFree = false
 	builder.collectOriginalTemporalOwner(1)
-	require.Empty(t, builder.temporalOriginalSafeScans)
+	require.False(t, builder.temporalOriginalScan.safe)
 	builder.temporalInput = nil
 	builder.collectOriginalTemporalOwner(1)
-	require.Empty(t, builder.temporalOriginalSafeScans)
+	require.False(t, builder.temporalOriginalScan.safe)
 }
 
 func TestTemporalOriginalSingleLeafHasIndependentCostEvidence(t *testing.T) {
 	builder, _, _ := temporalCBOTraversalFixture(t)
 	builder.qry.Steps = nil
 	builder.temporalInput.intent.ParameterFree = true
-	builder.temporalOriginalSafeScans = nil
 	builder.collectOriginalTemporalOwner(0)
-	require.True(t, builder.temporalOriginalSafeScans[0])
+	require.True(t, builder.temporalOriginalScan.safe)
 	scan := builder.qry.Nodes[0]
+	other := *scan
+	builder.qry.Nodes = append(builder.qry.Nodes, &other)
+	builder.collectOriginalTemporalOwner(1)
+	require.True(t, builder.temporalOriginalScan.safe)
+	require.Equal(t, int32(1), builder.temporalOriginalScan.scanID)
+	builder.collectOriginalTemporalOwner(-1)
+	require.False(t, builder.temporalOriginalScan.safe, "an invalid new root must not retain another scan's proof")
+	builder.collectOriginalTemporalOwner(0)
+	require.True(t, builder.temporalOriginalScan.safe)
+	require.Equal(t, int32(0), builder.temporalOriginalScan.scanID)
 	scan.FilterList[0].GetF().Args[0].GetCol().RelPos++
 	builder.collectOriginalTemporalOwner(0)
-	_, admitted := builder.temporalOriginalSafeScans[0]
-	require.True(t, admitted)
-	require.False(t, builder.temporalOriginalSafeScans[0], "a foreign source cannot grant single-leaf cost")
+	require.False(t, builder.temporalOriginalScan.safe, "a foreign source cannot grant single-leaf cost")
 	scan.FilterList[0].GetF().Args[0].GetCol().RelPos--
 	scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
 	builder.collectOriginalTemporalOwner(0)
-	require.False(t, builder.temporalOriginalSafeScans[0])
+	require.False(t, builder.temporalOriginalScan.safe)
 	scan.FilterList = scan.FilterList[:1]
-	require.False(t, builder.temporalOriginalSafeScans[0], "later optimizer removal cannot recover original single-leaf evidence")
+	require.False(t, builder.temporalOriginalScan.safe, "later optimizer removal cannot recover original single-leaf evidence")
 }
 
 func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		replan      bool
-		safePresent bool
-		safe        bool
-		dependent   bool
+		name      string
+		replan    bool
+		safe      bool
+		dependent bool
 	}{
-		{name: "suffix", safePresent: true, safe: true},
-		{name: "prepared suffix", replan: true, safePresent: true, safe: true, dependent: true},
+		{name: "suffix", safe: true},
+		{name: "prepared suffix", replan: true, safe: true, dependent: true},
 		{name: "unsafe projection", replan: true},
-		{name: "no index", safePresent: true, safe: true},
+		{name: "no index", safe: true},
 		{name: "already published root", replan: true},
-		{name: "cancelled", replan: true, safePresent: true},
+		{name: "cancelled", replan: true},
 		{name: "unproved parameter", replan: true},
-		{name: "prepare statement", safePresent: true, safe: true},
-		{name: "no resolver", replan: true, safePresent: true, safe: true},
+		{name: "prepare statement", safe: true},
+		{name: "no resolver", replan: true, safe: true},
 		{name: "parameter-bearing rejected resolver"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, _, index := temporalCBOTraversalFixture(t)
 			builder.qry.Steps = nil
 			builder.qry.TemporalIndexNeedsReplan = false
-			builder.temporalOriginalSafeScans = nil
 			scan := builder.qry.Nodes[0]
 			root := int32(0)
 			compiler := builder.compCtx.(*temporalCBOContext).encodedIndexCostTestContext.MockCompilerContext
@@ -205,9 +212,7 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 			}
 			builder.collectOriginalTemporalOwner(root)
 			require.Equal(t, tc.replan, builder.qry.TemporalIndexNeedsReplan)
-			safe, present := builder.temporalOriginalSafeScans[0]
-			require.Equal(t, tc.safePresent, present)
-			require.Equal(t, tc.safe, safe)
+			require.Equal(t, tc.safe, builder.temporalOriginalScan.safe)
 			state := preparedBindingState(builder.GetContext())
 			require.Equal(t, tc.dependent, state != nil && state.valueDependent)
 		})

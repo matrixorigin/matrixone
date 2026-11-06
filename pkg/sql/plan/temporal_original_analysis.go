@@ -88,6 +88,12 @@ type originalTemporalProof struct {
 	atom         temporalCandidateAtom
 }
 
+// A builder analyzes at most one original unary path before publishing steps.
+type temporalOriginalScan struct {
+	scanID int32
+	safe   bool
+}
+
 func proveOriginalTemporalPath(ctx context.Context, query *plan.Query, path temporalCandidatePath) originalTemporalProof {
 	proof := originalTemporalProof{remaining: 4096}
 	var predicate *plan.Expr
@@ -246,7 +252,11 @@ func originalTemporalPathExcludesIndex(ctx context.Context, scan *plan.Node, pro
 // collectOriginalTemporalOwner keeps the conservative cache-lifetime result
 // separate from the positive scan proof, while sharing their bound owner.
 func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
-	if builder == nil || builder.qry == nil {
+	if builder == nil {
+		return
+	}
+	builder.temporalOriginalScan = temporalOriginalScan{}
+	if builder.qry == nil {
 		return
 	}
 	input := builder.temporalInput
@@ -293,9 +303,6 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 	}
 	if capture && temporalPathExpressionsSafe(&owner, path) {
 		proof := originalProof()
-		if builder.temporalOriginalSafeScans == nil {
-			builder.temporalOriginalSafeScans = make(map[int32]bool)
-		}
-		builder.temporalOriginalSafeScans[path.ids[path.len-1]] = proof.fits && proof.single
+		builder.temporalOriginalScan = temporalOriginalScan{scanID: path.ids[path.len-1], safe: proof.fits && proof.single}
 	}
 }

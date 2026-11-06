@@ -186,10 +186,9 @@ func TestTemporalScanBorrowDeclinesDuplicatesAndOverflow(t *testing.T) {
 			builder.qry.Nodes = builder.qry.Nodes[:1]
 			builder.qry.Steps = nil
 			builder.qry.TemporalIndexNeedsReplan = false
-			builder.temporalOriginalSafeScans = nil
 			builder.collectOriginalTemporalOwner(0)
 			require.True(t, builder.qry.TemporalIndexNeedsReplan)
-			require.True(t, builder.temporalOriginalSafeScans[0])
+			require.True(t, builder.temporalOriginalScan.safe)
 		})
 	}
 }

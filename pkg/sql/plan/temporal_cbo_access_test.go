@@ -164,7 +164,6 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	cache.Set(base.TblId, stats)
 	builder.compCtx = &encodedIndexCostTestContext{MockCompilerContext: mock, statsCache: cache}
 	intent := TemporalPlanningIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "cn:6001", Route: schedule.WorkerRouteLocal}}}
-	builder.temporalOriginalSafeScans = map[int32]bool{0: true}
 	source := &temporalCBORelationFixture{verify: true, observation: engine.TemporalStats{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
 	read := engine.TemporalRead{Op: proc.GetTxnOperator(), Stamp: client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}}
 	compiler := &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), hidden: &temporalCBORelationFixture{}, read: read}
@@ -172,7 +171,11 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	builder.temporalInput = &TemporalPlanningInput{intent: intent, resolver: compiler}
 	builder.temporalResolverAllowed = true
 	builder.rememberTemporalScan(0, ref, base, &BorrowedTable{Relation: source, Read: read})
+	steps := builder.qry.Steps
+	builder.qry.Steps = nil
 	builder.collectOriginalTemporalOwner(0)
+	builder.qry.Steps = steps
+	require.True(t, builder.temporalOriginalScan.safe)
 	require.True(t, builder.qry.GetTemporalIndexNeedsReplan())
 	return builder, source, index
 }

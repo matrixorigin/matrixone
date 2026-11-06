@@ -2655,7 +2655,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	// rewritten path are both proved safe. Preserve FORCE, small-table and
 	// sorted-scan policies, and do not displace an unscorable existing path.
 	// An admitted path must always carry the execution-dependent lifetime.
-	originalSafe := builder.temporalOriginalSafeScans[nodeID]
+	originalSafe := builder.temporalOriginalScan.safe && builder.temporalOriginalScan.scanID == nodeID
 	input := builder.temporalInput
 	fixedZone := false
 	if input != nil {
