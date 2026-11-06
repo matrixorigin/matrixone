@@ -27,11 +27,14 @@ import (
 // arithmetic/comparison operator must bind the same way YEAR on the left
 // already does (MySQL treats YEAR as a numeric year value in both orders).
 // Also YEAR + YEAR must bind (MINUS/MULTI already did), and '/' must bind
-// integral/YEAR in both orders via the rule-2 FLOAT64 cast targets.
+// integral/YEAR in both orders via the rule-2 FLOAT64 cast targets, while
+// 'div' must bind the same pairs as well: for signed integral x YEAR it
+// resolves the exact INT64 coercion targets from integerDivExactTypes (see
+// TestYearIntegerDivExact) instead of the rule-2 FLOAT64 corridor.
 func TestYearOperatorSymmetry(t *testing.T) {
 	ctx := context.Background()
 	year := types.T_year.ToType()
-	ops := []string{"+", "-", "*", "/", "=", "<>", ">", "<", ">=", "<="}
+	ops := []string{"+", "-", "*", "/", "div", "=", "<>", ">", "<", ">=", "<="}
 
 	// Column INT is T_int32; TINYINT is T_int8. Only T_int64 x YEAR existed.
 	for _, num := range []types.Type{
@@ -56,6 +59,8 @@ func TestYearOperatorSymmetry(t *testing.T) {
 	require.NoError(t, err, "YEAR + YEAR")
 	_, err = GetFunctionByName(ctx, "-", []types.Type{year, year})
 	require.NoError(t, err, "YEAR - YEAR")
+	_, err = GetFunctionByName(ctx, "div", []types.Type{year, year})
+	require.NoError(t, err, "YEAR div YEAR")
 }
 
 // Test_PlusFn_Year executes plusFn with T_year operands so the YEAR plus
@@ -96,4 +101,54 @@ func Test_PlusFn_Year(t *testing.T) {
 		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+// TestYearIntegerDivExact pins the #31902 follow-up: integer DIV with a YEAR
+// operand must resolve the exact INT64 coercion targets produced by
+// integerDivExactTypes instead of falling through to the rule-2 FLOAT64
+// corridor, which rounds BIGINT dividends before division.
+func TestYearIntegerDivExact(t *testing.T) {
+	year := types.T_year.ToType()
+	cases := [][2]types.Type{
+		{types.T_int8.ToType(), year},
+		{types.T_int16.ToType(), year},
+		{types.T_int32.ToType(), year},
+		{types.T_int64.ToType(), year},
+		{year, types.T_int8.ToType()},
+		{year, types.T_int16.ToType()},
+		{year, types.T_int32.ToType()},
+		{year, types.T_int64.ToType()},
+		{year, year},
+	}
+	for _, c := range cases {
+		result := legacyIntegerDivCheck([]types.Type{c[0], c[1]})
+		require.Equal(t, succeedWithCast, result.status, "%s div %s", c[0].Oid, c[1].Oid)
+		require.Len(t, result.finalType, 2)
+		require.Equal(t, types.T_int64, result.finalType[0].Oid, "%s div %s", c[0].Oid, c[1].Oid)
+		require.Equal(t, types.T_int64, result.finalType[1].Oid, "%s div %s", c[0].Oid, c[1].Oid)
+	}
+}
+
+// Test_IntegerDivFn_YearBoundary pins the INT64-domain division boundary from
+// #31902: once INT64 x YEAR DIV binds the exact INT64 coercion targets, the
+// YEAR operand is evaluated in the INT64 domain. The FLOAT64 corridor would
+// round 9007199254741999 to 9007199254742000 before dividing and report
+// 4503599627371, while the exact INT64 division reports 4503599627370.
+func Test_IntegerDivFn_YearBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := tcTemp{
+		info: "select 9007199254741999 div 2000, 1 div 2000, 2024 div null",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{9007199254741999, 1, 2024}, []bool{false, false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{2000, 2000, 2000}, []bool{false, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{4503599627370, 0, 0}, []bool{false, false, true}),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
+	succeed, info := tcc.RunAndFree()
+	require.True(t, succeed, tc.info, info)
 }
