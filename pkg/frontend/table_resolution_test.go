@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	mockfrontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -32,26 +34,26 @@ import (
 
 func TestTemporalNativeSnapshotOverridePreservesCurrentReads(t *testing.T) {
 	for _, snapshot := range []*pbplan.Snapshot{nil, {}, {TS: &timestamp.Timestamp{}}} {
-		require.False(t, temporalNativeSnapshotOverride(snapshot))
+		require.False(t, borrowSnapshotOverride(snapshot))
 	}
 	for _, snapshot := range []*pbplan.Snapshot{
 		{TS: &timestamp.Timestamp{PhysicalTime: 1}},
 		{Tenant: &pbplan.SnapshotTenant{}},
 		{ExtraInfo: &pbplan.SnapshotExtraInfo{}},
 	} {
-		require.True(t, temporalNativeSnapshotOverride(snapshot))
+		require.True(t, borrowSnapshotOverride(snapshot))
 	}
 }
 
 type temporalCaptureRelation struct{ engine.Relation }
 
-func (*temporalCaptureRelation) ReadTemporalCostStats(context.Context, engine.TemporalRead, *statsinfo.StatsInfo, string) (engine.TemporalStats, bool, error) {
-	return engine.TemporalStats{}, false, nil
+func (*temporalCaptureRelation) ReadIndexCostStats(context.Context, client.CatalogReadStamp, *statsinfo.StatsInfo, string) (engine.IndexCostStats, bool, error) {
+	return engine.IndexCostStats{}, false, nil
 }
-func (*temporalCaptureRelation) ObserveTemporalBlockInput(context.Context, engine.TemporalRead, engine.TemporalBlockInputRequest, *int) (engine.TemporalBlockInput, bool, error) {
-	return engine.TemporalBlockInput{}, false, nil
+func (*temporalCaptureRelation) ObserveTemporalBlockInput(context.Context, client.CatalogReadStamp, engine.TemporalBlockInputRequest, *int) (engine.IndexBlockInput, bool, error) {
+	return engine.IndexBlockInput{}, false, nil
 }
-func (*temporalCaptureRelation) VerifyTemporalIndexPair(context.Context, engine.TemporalRead, engine.TemporalPairCheck, *int) (bool, error) {
+func (*temporalCaptureRelation) VerifyIndexPair(context.Context, client.CatalogReadStamp, engine.IndexPairCheck, *int) (bool, error) {
 	return false, nil
 }
 
@@ -60,7 +62,7 @@ func TestTemporalNativeReadIsLexicalAndRejectsChangedOwner(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			f := newViewSchemaOwnedFixture(t)
 			f.op.SetSnapshotTS(timestamp.Timestamp{PhysicalTime: 3})
-			var capture temporalReadCapture
+			var capture tableReadCapture
 			capture.begin(f.parent, f.op)
 			require.True(t, capture.valid)
 			ctx, cancel := context.WithCancel(f.ctx)
@@ -81,18 +83,18 @@ func TestTemporalNativeReadIsLexicalAndRejectsChangedOwner(t *testing.T) {
 				ctx, cancelDeadline = context.WithDeadline(f.ctx, time.Now().Add(-time.Second))
 				defer cancelDeadline()
 			case "nested resolve":
-				var nested temporalReadCapture
+				var nested tableReadCapture
 				nested.begin(f.parent, f.op)
 				require.NotNil(t, nested.finish(f.parent, ctx, relation, ref, full))
 			case "nested execution restored":
 				previous := f.parent.execCtx
 				f.parent.SetExecCtx(&ExecCtx{reqCtx: f.ctx, ses: f.session, proc: f.proc})
-				var nested temporalReadCapture
+				var nested tableReadCapture
 				nested.begin(f.parent, f.op)
 				nestedBorrow := nested.finish(f.parent, ctx, relation, ref, full)
 				require.NotNil(t, nestedBorrow)
 				f.parent.SetExecCtx(previous)
-				require.False(t, f.parent.BorrowStillCurrent(f.parent, f.proc, nestedBorrow))
+				require.False(t, f.parent.BorrowedTableStillCurrent(f.proc, nestedBorrow))
 			case "execution replaced":
 				previous := f.parent.execCtx
 				f.parent.SetExecCtx(&ExecCtx{reqCtx: f.ctx, ses: f.session, proc: f.proc})
@@ -117,8 +119,8 @@ func TestTemporalNativeReadIsLexicalAndRejectsChangedOwner(t *testing.T) {
 				require.NotNil(t, borrow)
 				require.Same(t, relation, borrow.Relation)
 				require.Same(t, f.op, borrow.Read.Op)
-				require.Same(t, f.workspace, borrow.Read.Stamp.Workspace)
-				require.True(t, f.parent.BorrowStillCurrent(f.parent, f.proc, borrow))
+				require.Same(t, f.workspace, borrow.Read.Workspace)
+				require.True(t, f.parent.BorrowedTableStillCurrent(f.proc, borrow))
 			} else {
 				require.Nil(t, borrow)
 			}
@@ -129,15 +131,13 @@ func TestTemporalNativeReadIsLexicalAndRejectsChangedOwner(t *testing.T) {
 func TestPlanningResolverRejectsPromotedWrapper(t *testing.T) {
 	compiler := &TxnCompilerContext{}
 	wrapper := &viewSchemaCompilerContext{TxnCompilerContext: compiler}
-	require.Same(t, compiler, planningResolver(compiler))
-	require.Nil(t, planningResolver(wrapper))
+	require.Same(t, compiler, planningCompiler(compiler))
+	require.Nil(t, planningCompiler(wrapper))
 	// This method is promoted by Go embedding; it must not turn the wrapper's
 	// publisher-specific Resolve into an ordinary compiler lookup.
-	require.False(t, wrapper.IsSameCompiler(wrapper))
-	require.True(t, compiler.IsSameCompiler(compiler))
-	require.Nil(t, planningResolver(nil))
+	require.Nil(t, planningCompiler(nil))
 	var typedNil *TxnCompilerContext
-	require.Nil(t, planningResolver(typedNil))
+	require.Nil(t, planningCompiler(typedNil))
 }
 
 func TestPlanningResolverUsesOneOrdinaryLookup(t *testing.T) {
@@ -161,16 +161,20 @@ func TestPlanningResolverUsesOneOrdinaryLookup(t *testing.T) {
 			var err error
 			if index {
 				base := &pbplan.ObjectRef{Obj: 1, SchemaName: catalog.MO_CATALOG, ObjName: "base"}
-				obj, def, borrow, err = f.parent.ResolveIndexForPlanning(base, "events", nil)
+				var resolvedBorrow1 plan.TableResolution
+				obj, def, err = f.parent.ResolveIndexTableByRef(base, "events", nil, &resolvedBorrow1)
+				borrow = resolvedBorrow1.Borrow
 			} else {
-				obj, def, borrow, err = f.parent.ResolveBaseForPlanning(catalog.MO_CATALOG, "events", nil)
+				var resolvedBorrow2 plan.TableResolution
+				obj, def, err = f.parent.Resolve(catalog.MO_CATALOG, "events", nil, &resolvedBorrow2)
+				borrow = resolvedBorrow2.Borrow
 			}
 			require.NoError(t, err)
 			require.EqualValues(t, 42, obj.Obj)
 			require.EqualValues(t, 42, def.TblId)
 			require.NotNil(t, borrow)
 			require.Same(t, f.op, borrow.Read.Op)
-			require.True(t, f.parent.BorrowStillCurrent(f.parent, f.proc, borrow))
+			require.True(t, f.parent.BorrowedTableStillCurrent(f.proc, borrow))
 		})
 	}
 }

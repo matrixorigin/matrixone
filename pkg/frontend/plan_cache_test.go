@@ -861,8 +861,8 @@ func TestPlanCacheRejectsExecutionDependentAccess(t *testing.T) {
 		cacheable bool
 	}{
 		{"ordinary", &pbplan.Query{StmtType: pbplan.Query_SELECT}, true},
-		{"temporal base", &pbplan.Query{StmtType: pbplan.Query_SELECT, TemporalIndexNeedsReplan: true, Nodes: []*pbplan.Node{{NodeType: pbplan.Node_TABLE_SCAN, TableDef: &pbplan.TableDef{Name: "events"}}}}, false},
-		{"temporal index", &pbplan.Query{StmtType: pbplan.Query_SELECT, TemporalIndexNeedsReplan: true, Nodes: []*pbplan.Node{{NodeType: pbplan.Node_TABLE_SCAN, TableDef: &pbplan.TableDef{Name: "__mo_index_secondary_events"}}}}, false},
+		{"temporal base", &pbplan.Query{StmtType: pbplan.Query_SELECT, ExecutionDependentAccess: true, Nodes: []*pbplan.Node{{NodeType: pbplan.Node_TABLE_SCAN, TableDef: &pbplan.TableDef{Name: "events"}}}}, false},
+		{"temporal index", &pbplan.Query{StmtType: pbplan.Query_SELECT, ExecutionDependentAccess: true, Nodes: []*pbplan.Node{{NodeType: pbplan.Node_TABLE_SCAN, TableDef: &pbplan.TableDef{Name: "__mo_index_secondary_events"}}}}, false},
 		{"missing query", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -889,7 +889,7 @@ func TestPlanCacheRejectsExecutionDependentReplacement(t *testing.T) {
 	pc.cache("query", []tree.Statement{stmt}, []*pbplan.Plan{old})
 	cached := pc.get("query")
 	snapshot := cached.planSnapshotTS[0]
-	marked := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{StmtType: pbplan.Query_SELECT, TemporalIndexNeedsReplan: true}}}
+	marked := &pbplan.Plan{Plan: &pbplan.Plan_Query{Query: &pbplan.Query{StmtType: pbplan.Query_SELECT, ExecutionDependentAccess: true}}}
 	require.False(t, pc.updatePlanGeneration("query", 0, old, marked, timestamp.Timestamp{PhysicalTime: 42}, nil))
 	require.True(t, cached.invalid)
 	require.Same(t, old, cached.plans[0])

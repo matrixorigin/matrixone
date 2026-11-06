@@ -149,7 +149,7 @@ func TestExplicitCollationConflicts(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err)
 			var sqlErr *moerr.Error
 			require.ErrorAs(t, err, &sqlErr)
@@ -187,7 +187,7 @@ func TestExpressionCollationAssignmentAdmission(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(compiler, stmt, false)
+		return BuildPlan(compiler, stmt, false, nil)
 	}
 	created, err := build("create table collation_assign(id int primary key,t varchar(4),b varbinary(4))")
 	require.NoError(t, err)
@@ -231,7 +231,7 @@ func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(compiler, stmt, false)
+		return BuildPlan(compiler, stmt, false, nil)
 	}
 	created, err := build("create table collation_charset(s3 varchar(4) collate utf8_unicode_ci,s4 varchar(4) collate utf8mb4_unicode_ci,legacy varchar(4))")
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestExpressionCollationDerivedMetadata(t *testing.T) {
 	} {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		built, err := BuildPlan(ctx, stmt, true)
+		built, err := BuildPlan(ctx, stmt, true, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		encoded, err := proto.Marshal(built)
@@ -556,7 +556,7 @@ func TestExpressionCollationWindowTraversal(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
-	built, err := BuildPlan(optimizer.CurrentContext(), stmt, false)
+	built, err := BuildPlan(optimizer.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, countReachableNodeType(built.GetQuery(), pb.Node_WINDOW))
 }

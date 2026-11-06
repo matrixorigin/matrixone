@@ -17,12 +17,13 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -228,7 +229,7 @@ func TestLegacyFloatDefaultSessionWitnesses(t *testing.T) {
 			stmt, err := parsers.ParseOne(creation, dialect.MYSQL, "create table t(a double, g varchar(100) default (concat("+value+","+tc.suffix+")))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(compiler, stmt, false)
+			built, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			source := built.GetDdl().GetCreateTable().TableDef
 			require.Equal(t, !tc.explicit, hasLegacyFloatStringCast(source.Cols[1].Default.Expr))
@@ -308,7 +309,7 @@ func TestHistoricalFloatJSONFoldingAdmission(t *testing.T) {
 		"create table t(g varchar(100) default(json_unquote(json_array(cast('1e20' as double)))))", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	def := built.GetDdl().GetCreateTable().TableDef
 	expr := def.Cols[0].Default.Expr

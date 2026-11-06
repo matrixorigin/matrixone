@@ -105,7 +105,7 @@ func TestFullTextBooleanPublicPlanner(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(cc, stmt, false)
+			p, err := BuildPlan(cc, stmt, false, nil)
 			require.NoError(t, err)
 			require.Zero(t, countReachableFullTextMatches(p.GetQuery()), "public planner must admit preserving composition")
 			left := 0
@@ -668,7 +668,7 @@ func buildBooleanFullTextPublicPlanIn(t *testing.T, cc *fullTextJoinMockCompiler
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(cc, stmt, prepare)
+	p, err := BuildPlan(cc, stmt, prepare, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetQuery())
 	require.Zero(t, countReachableFullTextMatches(p.GetQuery()))

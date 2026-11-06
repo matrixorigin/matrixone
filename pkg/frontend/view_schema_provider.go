@@ -107,6 +107,7 @@ func (p *viewSchemaProvider) OpenViewSchemaBinding(ctx context.Context) (result 
 	if !stable {
 		return nil, plan.ErrViewSchemaChanged
 	}
+	stamp = stamp.BindRead(op, visibility)
 	generation, err := proc.GetExecutionResourceBudget()
 	if err != nil {
 		return nil, err
@@ -183,11 +184,13 @@ func (p *viewSchemaProvider) OpenViewSchemaBinding(ctx context.Context) (result 
 		if stampErr != nil {
 			return stampErr
 		}
-		if current.TransactionID != stamp.TransactionID || current.Revision != stamp.Revision || current.Workspace != stamp.Workspace || !reflect.DeepEqual(current.Snapshot, stamp.Snapshot) {
+		// Preserve the mandatory reader's ordering: compare the raw identity
+		// before asking its workspace for another visibility observation.
+		if !stamp.MatchesRead(current.BindRead(op, stamp.Visibility), client.CatalogSnapshotStructural) {
 			return plan.ErrViewSchemaChanged
 		}
 		currentVisibility, currentStable := workspace.CatalogVisibility()
-		if !currentStable || currentVisibility != visibility {
+		if !currentStable || currentVisibility != stamp.Visibility {
 			return plan.ErrViewSchemaChanged
 		}
 		return nil
@@ -355,14 +358,18 @@ func (c *viewSchemaCompilerContext) ResolveViewSchemaRoot(database, table string
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *viewSchemaCompilerContext) ResolveWithoutTemporaryAlias(string, string, *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+func (c *viewSchemaCompilerContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
 // Resolve keeps every View source lookup in the publisher's catalog domain,
 // including databases other than the publication database. Ordinary Resolve
 // only switches tenants when the database itself is a subscription.
-func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	sub := c.GetQueryingSubscription()
 	if sub == nil {
 		return c.TxnCompilerContext.Resolve(database, table, snapshot)
@@ -384,7 +391,9 @@ func (c *viewSchemaCompilerContext) ResolveById(id uint64, snapshot *plan.Snapsh
 	return c.TxnCompilerContext.ResolveById(id, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
 }
 
-func (c *viewSchemaCompilerContext) ResolveIndexTableByRef(ref *pb.ObjectRef, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+func (c *viewSchemaCompilerContext) ResolveIndexTableByRef(ref *pb.ObjectRef, table string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	sub := c.GetQueryingSubscription()
 	if sub == nil {
 		return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, snapshot)

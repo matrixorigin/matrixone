@@ -42,8 +42,10 @@ type decimalZoneMapCompilerContext struct {
 func (c *decimalZoneMapCompilerContext) Resolve(
 	dbName string,
 	tableName string,
-	_ *plan2.Snapshot,
+	_ *plan2.Snapshot, borrowOutput ...*plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	typ := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}
 	switch tableName {
 	case "decimal_scan64":
@@ -110,7 +112,7 @@ func TestCompileFilterExprDecimalScaleMatchesPublicPlan(t *testing.T) {
 			ctx.SetContext(context.Background())
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "select count(*) from "+test.table+" where amount < 2000", 1)
 			require.NoError(t, err)
-			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var scan *plan.Node
@@ -682,7 +684,7 @@ func TestCompileFilterExprORPrunesOnlyWhenAllArmsExclude(t *testing.T) {
 	selected, err := oldFast(decimalObjectStats(t, typ, "2.0000"))
 	require.NoError(t, err)
 	require.True(t, selected, "unmarked OR retains the existing may-match behavior")
-	expr.TemporalCandidateFilter = true
+	expr.CandidateFilter = true
 	fast, _, _, block, _, compiled, _ := CompileFilterExpr(expr, table, nil)
 	require.True(t, compiled)
 	require.NotNil(t, fast)
@@ -711,7 +713,7 @@ func TestCompileFilterExprORPrunesOnlyWhenAllArmsExclude(t *testing.T) {
 	// the comparison arm proves that the object's sort key cannot match.
 	isNull := foldedFunction("isnull", []*plan.Expr{less.GetF().Args[0]})
 	unknown := foldedFunction("or", []*plan.Expr{less, isNull})
-	unknown.TemporalCandidateFilter = true
+	unknown.CandidateFilter = true
 	fast, _, _, _, _, compiled, _ = CompileFilterExpr(unknown, table, nil)
 	require.True(t, compiled)
 	selected, err = fast(decimalObjectStats(t, typ, "2.0000"))
@@ -726,7 +728,7 @@ func TestCompileFilterExprORSeekSkipsAbsentRange(t *testing.T) {
 	absent := decimalFoldedFilter(t, typ, "between", decimalBound{"-10", 0}, decimalBound{"-5", 0})
 	present := decimalFoldedFilter(t, typ, "between", decimalBound{"2", 0}, decimalBound{"3", 0})
 	filter := foldedFunction("or", []*plan.Expr{absent, present})
-	filter.TemporalCandidateFilter = true
+	filter.CandidateFilter = true
 	_, _, _, _, seek, compiled, _ := CompileFilterExpr(filter, table, nil)
 	require.True(t, compiled)
 	require.NotNil(t, seek)
@@ -775,7 +777,7 @@ func TestFoldedFalseCandidateDoesNotForceEmptyPKFilter(t *testing.T) {
 	defer proc.Free()
 	filter := foldedFunction("and", []*plan.Expr{guard, int64FoldedFilter("=", 2)})
 	for _, marked := range []bool{false, true} {
-		filter.TemporalCandidateFilter = marked
+		filter.CandidateFilter = marked
 		base, err := ConstructBasePKFilter(filter, table, proc.Mp())
 		require.NoError(t, err)
 		require.False(t, base.Empty, "a folded false value alone does not prove an empty scan")
@@ -1569,7 +1571,7 @@ func TestTemporalObjectFastFilterUsesSortedColumnProof(t *testing.T) {
 		// A Pkey descriptor alone is not the reader's sorted-key proof.
 		table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
 		expr := decimalFoldedFilter(t, typ, "between", decimalBound{"10", 0}, decimalBound{"20", 0})
-		expr.TemporalCandidateFilter = true
+		expr.CandidateFilter = true
 		fast, _, _, block, _, compiled, _ := CompileFilterExprs([]*plan.Expr{expr}, table, nil)
 		require.True(t, compiled)
 		_, blockMatches, err := block(0, makeDecimalBlockMeta(t, typ, "15"), nil)
@@ -1600,7 +1602,7 @@ func TestTemporalCandidateCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
 		column := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "key"}}}
 		bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("x")}}}
 		filter := foldedFunction("prefix_eq", []*plan.Expr{column, bound})
-		filter.TemporalCandidateFilter = true
+		filter.CandidateFilter = true
 		fast, _, _, _, _, compiled, _ := CompileFilterExprs([]*plan.Expr{filter}, table, nil)
 		if charset == uint32(types.CharsetUTF8MB4UnicodeCI) {
 			require.False(t, compiled)

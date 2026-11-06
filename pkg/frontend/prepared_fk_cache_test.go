@@ -43,50 +43,50 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 		}
 	}
 
-	require.True(t, shouldCachePrepareCompile(nil))
-	require.True(t, shouldCachePrepareCompile(&plan.Plan{}))
-	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, false)))
-	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, false)))
+	require.True(t, planReuse(false, nil, preparedPhysicalCompile).reusable)
+	require.True(t, planReuse(false, &plan.Plan{}, preparedPhysicalCompile).reusable)
+	require.True(t, planReuse(false, makePlan(plan.Query_UPDATE, false), preparedPhysicalCompile).reusable)
+	require.True(t, planReuse(false, makePlan(plan.Query_DELETE, false), preparedPhysicalCompile).reusable)
 
-	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, true)))
-	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, true)))
-	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_INSERT, true)))
+	require.False(t, planReuse(false, makePlan(plan.Query_UPDATE, true), preparedPhysicalCompile).reusable)
+	require.False(t, planReuse(false, makePlan(plan.Query_DELETE, true), preparedPhysicalCompile).reusable)
+	require.False(t, planReuse(false, makePlan(plan.Query_INSERT, true), preparedPhysicalCompile).reusable)
 
 	require.True(t, checkNodeCanCache(makePlan(plan.Query_INSERT, false)))
 	require.False(t, checkNodeCanCache(makePlan(plan.Query_INSERT, true)))
 
-	require.False(t, shouldRebuildPreparePlan(false, nil))
-	require.False(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, false)))
-	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
-	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
+	require.False(t, !planReuse(false, nil, preparedLogicalPlan).reusable)
+	require.False(t, !planReuse(false, makePlan(plan.Query_INSERT, false), preparedLogicalPlan).reusable)
+	require.True(t, !planReuse(false, makePlan(plan.Query_INSERT, true), preparedLogicalPlan).reusable)
+	require.True(t, !planReuse(true, makePlan(plan.Query_INSERT, false), preparedLogicalPlan).reusable)
 
 	subscriptionMetadataPlan := makePlan(plan.Query_SELECT, false)
 	subscriptionMetadataPlan.GetQuery().Nodes = []*plan.Node{{
 		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}
-	require.True(t, shouldRebuildPreparePlan(false, subscriptionMetadataPlan))
+	require.True(t, !planReuse(false, subscriptionMetadataPlan, preparedLogicalPlan).reusable)
 	require.False(t, checkNodeCanCache(subscriptionMetadataPlan))
 }
 
 func TestTemporalIndexReplansAcrossCacheOwners(t *testing.T) {
-	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT, TemporalIndexNeedsReplan: true}}}
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT, ExecutionDependentAccess: true}}}
 	require.False(t, checkNodeCanCache(p))
-	require.False(t, shouldCachePrepareCompile(p))
-	require.True(t, shouldRebuildPreparePlan(false, p))
-	p.GetQuery().TemporalIndexNeedsReplan = false
+	require.False(t, planReuse(false, p, preparedPhysicalCompile).reusable)
+	require.True(t, !planReuse(false, p, preparedLogicalPlan).reusable)
+	p.GetQuery().ExecutionDependentAccess = false
 	require.True(t, checkNodeCanCache(p))
-	require.True(t, shouldCachePrepareCompile(p))
-	require.False(t, shouldRebuildPreparePlan(false, p))
+	require.True(t, planReuse(false, p, preparedPhysicalCompile).reusable)
+	require.False(t, !planReuse(false, p, preparedLogicalPlan).reusable)
 }
 
-func TestTemporalPlanningIntentUsesStatementSQL(t *testing.T) {
+func TestExecutionIntentUsesStatementSQL(t *testing.T) {
 	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 122)
 	defer prepareStmt.Close()
 	stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select 1", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	raw := "select /*+ SET_VAR(query_max_workers=2) */ 1"
-	root, intent, ok := temporalPlanningIntentForStatement(ses, ses.GetProc(), raw, "", stmt)
+	root, intent, ok := executionIntentForStatement(ses, ses.GetProc(), raw, "", stmt)
 	require.True(t, ok)
 	require.Same(t, stmt.(*tree.Select), root)
 	require.True(t, intent.ParameterFree)
@@ -94,10 +94,10 @@ func TestTemporalPlanningIntentUsesStatementSQL(t *testing.T) {
 	require.Equal(t, 2, intent.Placement.Scheduling.WorkerSet.MaxWorkers)
 	proc := ses.GetProc()
 	require.True(t, intent.MatchesProcess(proc))
-	require.True(t, temporalPlanningIntentMatchesCompile(&intent, ses, proc, raw, "", stmt))
-	require.False(t, temporalPlanningIntentMatchesCompile(&intent, ses, proc, "select 1", "", stmt), "changed scheduling must rebuild")
-	require.False(t, temporalPlanningIntentMatchesCompile(&intent, ses, proc, "/*+ SIDECAR */ select 1", "", stmt), "changed offload must rebuild")
-	require.False(t, temporalPlanningIntentMatchesCompile(nil, ses, proc, raw, "", stmt))
+	require.True(t, executionIntentMatchesCompile(&intent, ses, proc, raw, "", stmt))
+	require.False(t, executionIntentMatchesCompile(&intent, ses, proc, "select 1", "", stmt), "changed scheduling must rebuild")
+	require.False(t, executionIntentMatchesCompile(&intent, ses, proc, "/*+ SIDECAR */ select 1", "", stmt), "changed offload must rebuild")
+	require.False(t, executionIntentMatchesCompile(nil, ses, proc, raw, "", stmt))
 	oldZone, oldTime := proc.GetSessionInfo().TimeZone, proc.Base.UnixTime
 	defer func() { proc.GetSessionInfo().TimeZone, proc.Base.UnixTime = oldZone, oldTime }()
 	proc.GetSessionInfo().TimeZone = time.FixedZone("other", 3600)
@@ -106,23 +106,23 @@ func TestTemporalPlanningIntentUsesStatementSQL(t *testing.T) {
 	proc.Base.UnixTime++
 	require.False(t, intent.MatchesProcess(proc), "clock drift must invalidate the sample")
 	proc.Base.UnixTime = oldTime
-	_, intent, ok = temporalPlanningIntentForStatement(ses, ses.GetProc(), "/*+ SIDECAR */ select 1", "", stmt)
+	_, intent, ok = executionIntentForStatement(ses, ses.GetProc(), "/*+ SIDECAR */ select 1", "", stmt)
 	require.True(t, ok)
 	require.True(t, intent.Placement.Sirius)
-	_, _, ok = temporalPlanningIntentForStatement(ses, ses.GetProc(), "", "", stmt)
+	_, _, ok = executionIntentForStatement(ses, ses.GetProc(), "", "", stmt)
 	require.False(t, ok, "missing raw statement SQL cannot authorize a candidate")
 	parameterized, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select ?", 1)
 	require.NoError(t, err)
 	defer parameterized.Free()
-	_, _, ok = temporalPlanningIntentForStatement(ses, ses.GetProc(), "select ?", "", parameterized)
+	_, _, ok = executionIntentForStatement(ses, ses.GetProc(), "select ?", "", parameterized)
 	require.False(t, ok)
-	root, intent, ok = temporalPlanningIntentForExecution(ses, ses.GetProc(), "select ?", "", parameterized, true)
+	root, intent, ok = executionIntentForExecution(ses, ses.GetProc(), "select ?", "", parameterized, true)
 	require.True(t, ok)
 	require.Same(t, parameterized.(*tree.Select), root)
 	require.False(t, intent.ParameterFree, "placement is not a parameter diagnostic proof")
 }
 
-func TestTemporalPlanningIntentForExplain(t *testing.T) {
+func TestExecutionIntentForExplain(t *testing.T) {
 	ses, prepared, _, execCtx := newPreparedExecuteEnv(t, 125)
 	defer prepared.Close()
 	for _, tc := range []struct {
@@ -137,11 +137,11 @@ func TestTemporalPlanningIntentForExplain(t *testing.T) {
 			stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			root, _, ok := temporalPlanningIntentForStatement(ses, ses.GetProc(), tc.sql, "", stmt)
+			root, _, ok := executionIntentForStatement(ses, ses.GetProc(), tc.sql, "", stmt)
 			require.Equal(t, tc.eligible, ok)
 			if ok {
-				require.Same(t, temporalPlanningRoot(stmt), root)
-				_, _, ok = temporalPlanningIntentForStatement(ses, ses.GetProc(), "", "", stmt)
+				require.Same(t, planningInputRoot(stmt), root)
+				_, _, ok = executionIntentForStatement(ses, ses.GetProc(), "", "", stmt)
 				require.False(t, ok, "missing statement-local SQL cannot grant a scope")
 			}
 		})
@@ -154,7 +154,7 @@ func TestTemporalIndexPrepareRebuildsAtExecution(t *testing.T) {
 	oldPlan := prepareStmt.PreparePlan
 	query := oldPlan.GetDcl().GetPrepare().GetPlan().GetQuery()
 	require.NotNil(t, query)
-	query.TemporalIndexNeedsReplan = true
+	query.ExecutionDependentAccess = true
 	_, rebuilt, stmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.NotNil(t, rebuilt)
@@ -165,17 +165,17 @@ func TestTemporalIndexPrepareRebuildsAtExecution(t *testing.T) {
 func TestPreparedRetrySnapshotsTemporalIntent(t *testing.T) {
 	cw := &TxnComputationWrapper{
 		paramVals: []any{int64(1)},
-		temporalPlanningIntent: &plan2.TemporalPlanningIntent{
-			Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: "cn-a"}},
+		executionIntent: &plan2.ExecutionIntent{
+			Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn-a"}},
 		},
 	}
 	retry := cw.preparedExecutionRetry()
-	require.Nil(t, retry.temporalIntent, "an unvalidated planning snapshot cannot authorize a retry")
-	cw.temporalIntentValidated = true
+	require.Nil(t, retry.executionIntent, "an unvalidated planning snapshot cannot authorize a retry")
+	cw.executionIntentValidated = true
 	retry = cw.preparedExecutionRetry()
-	require.NotNil(t, retry.temporalIntent)
-	cw.temporalPlanningIntent.Placement.CurrentCN.ID = "cn-b"
-	require.Equal(t, "cn-a", retry.temporalIntent.Placement.CurrentCN.ID)
+	require.NotNil(t, retry.executionIntent)
+	cw.executionIntent.Placement.CurrentCN.ID = "cn-b"
+	require.Equal(t, "cn-a", retry.executionIntent.Placement.CurrentCN.ID)
 }
 
 func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
@@ -185,29 +185,29 @@ func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	const sql = "select /*+ SET_VAR(query_max_workers=2) */ 1"
-	_, intent, ok := temporalPlanningIntentForStatement(ses, ses.GetProc(), sql, "", stmt)
+	_, intent, ok := executionIntentForStatement(ses, ses.GetProc(), sql, "", stmt)
 	require.True(t, ok)
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	marked := &plan.Expr{CandidateFilter: true}
 	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
 	safe := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	builds := 0
 	rebuild := func() (*plan2.Plan, error) { builds++; return safe, nil }
-	got, validated, err := validateTemporalPlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), sql, "", stmt, rebuild)
+	got, validated, err := validateCandidatePlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), sql, "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, candidate, got)
 	require.True(t, validated)
 	require.Zero(t, builds)
-	got, validated, err = validateTemporalPlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), "select 1", "", stmt, rebuild)
+	got, validated, err = validateCandidatePlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), "select 1", "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, safe, got)
 	require.False(t, validated)
 	require.Equal(t, 1, builds)
-	got, validated, err = validateTemporalPlanBeforeCompile(safe, nil, ses, ses.GetProc(), "", "", stmt, rebuild)
+	got, validated, err = validateCandidatePlanBeforeCompile(safe, nil, ses, ses.GetProc(), "", "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, safe, got)
 	require.False(t, validated)
 	require.Equal(t, 1, builds, "candidate-free plans keep their existing scheduling path")
-	_, _, err = validateTemporalPlanBeforeCompile(candidate, nil, ses, ses.GetProc(), sql, "", stmt,
+	_, _, err = validateCandidatePlanBeforeCompile(candidate, nil, ses, ses.GetProc(), sql, "", stmt,
 		func() (*plan2.Plan, error) { return candidate, nil })
 	require.Error(t, err, "an unscoped rebuild must not return a candidate")
 }
@@ -217,7 +217,7 @@ func TestTemporalSafeRebuildDropsStaleSnapshot(t *testing.T) {
 	defer prepared.Close()
 	cw.planGenerationReused = true
 	cw.setPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123})
-	rebuilt, err := cw.rebuildUnscopedTemporalPlan(execCtx)
+	rebuilt, err := cw.rebuildWithoutCandidateAccess(execCtx)
 	require.NoError(t, err)
 	require.NotNil(t, rebuilt.GetQuery())
 	require.False(t, cw.planGenerationReused)
@@ -241,13 +241,13 @@ func TestPreparedTemporalDriftRebuildsFromInnerStatement(t *testing.T) {
 		return [][]byte{[]byte("fresh metadata")}, nil
 	}
 	execCtx.prepareColDef = [][]byte{[]byte("stale metadata")}
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	marked := &plan.Expr{CandidateFilter: true}
 	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
-	safe, err := cw.validatePreparedTemporalPlan(execCtx, ses, prepared.PrepareStmt, prepared.Sql, candidate)
+	safe, err := cw.validatePreparedCandidatePlan(execCtx, ses, prepared.PrepareStmt, prepared.Sql, candidate)
 	require.NoError(t, err)
 	require.NotNil(t, safe.GetQuery())
 	require.False(t, cw.planGenerationReused)
-	require.False(t, cw.temporalIntentValidated)
+	require.False(t, cw.executionIntentValidated)
 	require.Equal(t, [][]byte{[]byte("fresh metadata")}, execCtx.prepareColDef, "binary metadata must belong to the replacement plan")
 	if cw.proc.GetTxnOperator() == nil {
 		require.False(t, cw.hasPlanSnapshotTS)
@@ -259,10 +259,10 @@ func TestPreparedTemporalDriftRebuildsFromInnerStatement(t *testing.T) {
 func TestCreateCompileTemporalDriftPreservesRequestState(t *testing.T) {
 	ses, prepared, cw, execCtx := newPreparedExecuteEnv(t, 126)
 	defer prepared.Close()
-	_, intent, ok := temporalPlanningIntentForStatement(ses, cw.proc, prepared.Sql, "", prepared.PrepareStmt)
+	_, intent, ok := executionIntentForStatement(ses, cw.proc, prepared.Sql, "", prepared.PrepareStmt)
 	require.True(t, ok)
 	intent.UnixTime++
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	marked := &plan.Expr{CandidateFilter: true}
 	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
 	top, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -272,7 +272,7 @@ func TestCreateCompileTemporalDriftPreservesRequestState(t *testing.T) {
 	compiled, err := createCompile(execCtx, ses, cw.proc, ses.GetDatabaseName(), false, prepared.Sql, prepared.Sql,
 		nil, prepared.PrepareStmt, candidate, nil, false, nil, false, nil, nil, 0, &intent)
 	require.Nil(t, compiled)
-	require.ErrorIs(t, err, compile.ErrTemporalAccessDrift)
+	require.ErrorIs(t, err, compile.ErrExecutionIntentDrift)
 	require.Same(t, oldRequest, execCtx.reqCtx)
 	require.Same(t, oldTop, cw.proc.GetTopContext())
 	require.Same(t, oldBoard, cw.proc.GetMessageBoard())
@@ -318,5 +318,5 @@ func TestShouldCachePrepareCompileRejectsIcebergScan(t *testing.T) {
 		},
 	}}}}}
 
-	require.False(t, shouldCachePrepareCompile(p))
+	require.False(t, planReuse(false, p, preparedPhysicalCompile).reusable)
 }

@@ -53,7 +53,7 @@ func buildSharedGroupingSetPlanWithContext(t *testing.T, sql string, ctx Compile
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	return built.GetQuery()
 }
@@ -86,7 +86,7 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return built.GetQuery()
 	}

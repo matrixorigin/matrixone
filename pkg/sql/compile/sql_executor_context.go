@@ -594,7 +594,9 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	obj, def, err := c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
 	if obj != nil && ref.NotLockMeta {
 		obj.NotLockMeta = true
@@ -612,11 +614,15 @@ func (c *compilerContext) resolveDelegate() plan.CompilerContext {
 	return nil
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	return c.resolve(dbName, tableName, snapshot, true)
 }
 
-func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	return c.resolve(dbName, tableName, snapshot, false)
 }
 
@@ -830,4 +836,9 @@ func (c *compilerContext) getRelation(
 		return nil, nil, err
 	}
 	return ctx, table, nil
+}
+
+// BorrowedTableStillCurrent declines native borrowing for internal SQL compilation.
+func (*compilerContext) BorrowedTableStillCurrent(*process.Process, *plan.BorrowedTable) bool {
+	return false
 }

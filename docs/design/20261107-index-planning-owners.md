@@ -5,7 +5,11 @@ Status: design-first decision for the replacement of PR #31944 and issue
 leaving #31944 unchanged. Source is `db225c815a0cfb38cde193e49fd1891ee737204a`;
 the imported feature baseline is `eb5f432079e24748cfe3718a279eca12183474ff`,
 on main `aeab8787f2b8acd4a80d47a2f23fd263d6f0ef2d`. The implementation PR will
-link this reviewed design revision. This is an ownership refactor, not an
+link this reviewed design revision. This document replaces the intermediate
+20261106 borrowed-read and temporal-access-consolidation documents; those
+superseded API descriptions are removed. Type inversion and cost semantics
+remain in [temporal index ranges](20261028-temporal-index-ranges.md) and
+[temporal CBO](20261030-temporal-cbo.md). This is an ownership refactor, not an
 expansion of eligible SQL or a claim that a new correctness bug was found.
 
 ## Contract
@@ -45,6 +49,10 @@ is introduced.
 analysis and temporal block observations remain justified specialization.
 `BorrowedTable` is synchronous evidence owned by the ordinary transaction; it
 does not become a relation cache or gain a Close operation.
+Copied index statistics, index-pair/schema witnesses and their fixed budgets
+are exposed as the existing relation's `IndexPlanningRelation` capability.
+They carry no temporal control state. The block-observation request retains
+its temporal operator/precision/zone because those are actual predicate inputs.
 
 ## Read identity
 

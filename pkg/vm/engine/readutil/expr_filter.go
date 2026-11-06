@@ -554,7 +554,7 @@ func compileFilterExprWithProof(
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 	zone *time.Location,
-	temporalCandidate bool,
+	candidateFilter bool,
 ) (
 	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
@@ -568,7 +568,7 @@ func compileFilterExprWithProof(
 	if expr == nil {
 		return
 	}
-	temporalCandidate = temporalCandidate || expr.TemporalCandidateFilter
+	candidateFilter = candidateFilter || expr.CandidateFilter
 	// Zone maps persist the original byte order. A native Unicode collation
 	// compares UCA weights instead, so applying a raw byte zone-map bound can
 	// discard a matching block before the residual SQL comparator runs. Keep
@@ -601,7 +601,7 @@ func compileFilterExprWithProof(
 			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := compileFilterExprWithProof(exprImpl.F.Args[idx], tableDef, fs, zone, temporalCandidate)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExprWithProof(exprImpl.F.Args[idx], tableDef, fs, zone, candidateFilter)
 				if !can {
 					return nil, nil, nil, nil, nil, false, false
 				}
@@ -626,7 +626,7 @@ func compileFilterExprWithProof(
 						return ok, err
 					}
 				}
-				return unknown || !temporalCandidate, nil
+				return unknown || !candidateFilter, nil
 			}
 
 			loadOp = func(ctx context.Context, stats *objectio.ObjectStats, inMeta objectio.ObjectMeta, inBF objectio.BloomFilter) (
@@ -656,7 +656,7 @@ func compileFilterExprWithProof(
 						return ok, err
 					}
 				}
-				return unknown || !temporalCandidate, nil
+				return unknown || !candidateFilter, nil
 			}
 
 			blockFilterOp = func(blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter) (bool, bool, error) {
@@ -664,7 +664,7 @@ func compileFilterExprWithProof(
 				ok := false
 				for idx := range blockOps {
 					if blockOps[idx] == nil {
-						if temporalCandidate {
+						if candidateFilter {
 							can = false
 							ok = true
 						}
@@ -703,7 +703,7 @@ func compileFilterExprWithProof(
 			compiled := 0
 
 			for idx := range exprImpl.F.Args {
-				op1, op2, op3, op4, op5, can, hsh := compileFilterExprWithProof(exprImpl.F.Args[idx], tableDef, fs, zone, temporalCandidate)
+				op1, op2, op3, op4, op5, can, hsh := compileFilterExprWithProof(exprImpl.F.Args[idx], tableDef, fs, zone, candidateFilter)
 				if !can {
 					continue
 				}
@@ -1039,7 +1039,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					if !temporalCandidate {
+					if !candidateFilter {
 						return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 							return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 						})
@@ -1047,7 +1047,7 @@ func compileFilterExprWithProof(
 					pos, known := seekFirstBlockByZoneMapKnown(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 					})
-					if temporalCandidate && known && pos < int(meta.BlockCount()) && index.AnyPrefixLEByValue(
+					if candidateFilter && known && pos < int(meta.BlockCount()) && index.AnyPrefixLEByValue(
 						meta.GetBlockMeta(uint32(pos)).MustGetColumn(uint16(seqNum)).ZoneMap(), vals[1], columnType,
 					).Excludes() {
 						return int(meta.BlockCount())
@@ -1164,7 +1164,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					if !temporalCandidate {
+					if !candidateFilter {
 						return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) index.ZoneMapMatch {
 							return index.AnyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 						})
@@ -1172,7 +1172,7 @@ func compileFilterExprWithProof(
 					pos, known := seekFirstBlockByZoneMapKnown(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 					})
-					if temporalCandidate && known && pos < int(meta.BlockCount()) && index.AnyLEByBound(
+					if candidateFilter && known && pos < int(meta.BlockCount()) && index.AnyLEByBound(
 						meta.GetBlockMeta(uint32(pos)).MustGetColumn(uint16(seqNum)).ZoneMap(), vals[1], upperBound, types.T(colDef.Typ.Id),
 					).Excludes() {
 						return int(meta.BlockCount())

@@ -37,8 +37,10 @@ type subscriberOnlyCompilerContext struct {
 }
 
 func (c *subscriberOnlyCompilerContext) Resolve(
-	dbName string, tableName string, snapshot *Snapshot,
+	dbName string, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	if dbName == c.hiddenDB {
 		return nil, nil, nil
 	}
@@ -86,11 +88,11 @@ func TestBuildCloneTableSubscriptionReplanKeepsAlias(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	first, err := BuildPlan(ctx, stmt, false)
+	first, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	// Planning the same AST again must still resolve via the subscription.
-	second, err := BuildPlan(ctx, stmt, false)
+	second, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	clone := stmt.(*tree.CloneTable)
 	require.Equal(t, "subdb", string(clone.SrcTable.SchemaName))
@@ -143,7 +145,7 @@ func TestBuildCloneTableSubscriptionPlanningErrorKeepsAlias(t *testing.T) {
 
 	// The destination is a system database, so planning fails after the
 	// subscription resolution. The AST must not leak the publisher names.
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "cannot clone data into system database")
 	clone := stmt.(*tree.CloneTable)
 	require.Equal(t, "subdb", string(clone.SrcTable.SchemaName))
@@ -151,7 +153,7 @@ func TestBuildCloneTableSubscriptionPlanningErrorKeepsAlias(t *testing.T) {
 
 	// Re-planning the same AST must fail for the same reason; a hidden
 	// rewrite of the source name would instead report a resolution error.
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "cannot clone data into system database")
 	require.NotContains(t, err.Error(), "does not exist")
 }

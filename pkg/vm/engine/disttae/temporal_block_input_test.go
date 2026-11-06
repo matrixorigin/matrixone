@@ -66,7 +66,7 @@ func TestTemporalInputReconnectPublishesFreshClient(t *testing.T) {
 
 // Pause-free interleavings at the first block walk, after object admission has
 // charged the shared budget. No production hook or scheduler timing is needed.
-type temporalInputWorkContext struct {
+type planningInputWorkContext struct {
 	context.Context
 	budget *int
 	below  int
@@ -76,8 +76,8 @@ type temporalInputWorkContext struct {
 	done   chan struct{}
 }
 
-func (c *temporalInputWorkContext) Done() <-chan struct{} { return c.done }
-func (c *temporalInputWorkContext) Err() error {
+func (c *planningInputWorkContext) Done() <-chan struct{} { return c.done }
+func (c *planningInputWorkContext) Err() error {
 	if !c.fired && *c.budget < c.below {
 		c.fired = true
 		if c.action != nil {
@@ -102,8 +102,8 @@ func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
 	c.subscribed.m = map[uint64]*subEntry{98: {dbID: 10, state: Subscribed}}
 	c.receivedLogTailTime.ready.Store(true)
 	c.receivedLogTailTime.tList = make([]atomic.Value, 1)
-	c.receivedLogTailTime.tList[0].Store(f.read.Stamp.Snapshot.Prev())
-	state, _, ok := c.temporalInputSnapshot(10, 98, f.read)
+	c.receivedLogTailTime.tList[0].Store(f.read.Snapshot.Prev())
+	state, _, ok := c.planningInputSnapshot(10, 98, f.read)
 	require.False(t, ok)
 	require.Nil(t, state)
 	require.Empty(t, e.partitions, "optional costing cannot create a partition")
@@ -111,19 +111,19 @@ func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
 	ps, done := part.MutateState()
 	ps.UpdateDuration(types.TS{}, types.MaxTs())
 	done()
-	state, entry, ok := c.temporalInputSnapshot(10, 98, f.read)
+	state, entry, ok := c.planningInputSnapshot(10, 98, f.read)
 	require.True(t, ok)
 	require.Same(t, part.Snapshot(), state)
 	require.Same(t, c.subscribed.m[98], entry)
 	for _, scenario := range []string{"pending", "waterline", "not ready", "unsubscribed", "wrong database", "historical"} {
 		t.Run(scenario, func(t *testing.T) {
 			c.receivedLogTailTime.ready.Store(true)
-			c.receivedLogTailTime.tList[0].Store(f.read.Stamp.Snapshot.Prev())
+			c.receivedLogTailTime.tList[0].Store(f.read.Snapshot.Prev())
 			c.subscribed.m[98] = &subEntry{dbID: 10, state: Subscribed}
 			read := f.read
 			switch scenario {
 			case "pending":
-				c.subscribed.m[98].pendingTo.Store(&read.Stamp.Snapshot)
+				c.subscribed.m[98].pendingTo.Store(&read.Snapshot)
 			case "waterline":
 				c.receivedLogTailTime.tList[0].Store(timestamp.Timestamp{})
 			case "not ready":
@@ -137,13 +137,13 @@ func TestTemporalInputSnapshotDoesNotAdmitOrWait(t *testing.T) {
 				ps.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
 				release()
 			}
-			_, _, ok := c.temporalInputSnapshot(10, 98, read)
+			_, _, ok := c.planningInputSnapshot(10, 98, read)
 			require.False(t, ok)
 		})
 	}
 }
 
-func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
+func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	f := newTemporalNativeFixture(t)
 	e := f.base.origin.eng.(*Engine)
 	fs, err := fileservice.NewMemoryFS(t.Name(), fileservice.DisabledCacheConfig, nil)
@@ -184,7 +184,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	e.pClient.subscribed.m = map[uint64]*subEntry{98: {dbID: 10, state: Subscribed}}
 	e.pClient.receivedLogTailTime.ready.Store(true)
 	e.pClient.receivedLogTailTime.tList = make([]atomic.Value, 1)
-	e.pClient.receivedLogTailTime.tList[0].Store(f.read.Stamp.Snapshot.Prev())
+	e.pClient.receivedLogTailTime.tList[0].Store(f.read.Snapshot.Prev())
 	part := e.GetOrCreateLatestPart(f.ctx, 7, 10, 98)
 	putObject := func(t testing.TB, entry objectio.ObjectEntry) {
 		t.Helper()
@@ -201,7 +201,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 	f.full.Name2ColIndex = map[string]int32{"id": 0, "d": 1}
 	f.full.Cols[1].Typ.Scale = 6
 	f.stats.TableCnt, f.stats.BlockNumber = 4, 2
-	observation, ok, err := f.base.ReadTemporalCostStats(f.ctx, f.read, f.stats, "d")
+	observation, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
 	require.NoError(t, err)
 	require.True(t, ok)
 	bound := types.DatetimeFromClock(2026, 1, 2, 0, 0, 0, 0).ToTimestamp(time.UTC)
@@ -212,7 +212,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
 			ctx := f.ctx
-			budget := engine.MaxTemporalBindingWork
+			budget := engine.MaxIndexPlanningWork
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
 			switch scenario {
@@ -245,7 +245,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 				request.Stats.Blocks++
 				t.Cleanup(func() { f.stats.BlockNumber = 2 })
 			case "pending":
-				e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Stamp.Snapshot)
+				e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Snapshot)
 			case "transport unavailable":
 				e.pClient.subscriber.swapClient(nil)
 			case "entry replaced":
@@ -261,9 +261,9 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 			wantRows := scenario == "complete" || scenario == "missing overlap" || scenario == "NaN overlap"
 			require.Equal(t, wantRows || scenario == "empty", complete)
 			if wantRows {
-				require.Equal(t, engine.TemporalBlockInput{Rows: 2, Blocks: 1}, input)
+				require.Equal(t, engine.IndexBlockInput{Rows: 2, Blocks: 1}, input)
 				if scenario == "complete" {
-					visibleWork = engine.MaxTemporalBindingWork - budget
+					visibleWork = engine.MaxIndexPlanningWork - budget
 				}
 			} else {
 				require.Zero(t, input)
@@ -274,13 +274,13 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
 			e.pClient.subscribed.m[98].pendingTo.Store(nil)
-			budget := engine.MaxTemporalBindingWork
-			ctx := &temporalInputWorkContext{Context: context.WithoutCancel(f.ctx), budget: &budget, below: budget - 4, done: make(chan struct{})}
+			budget := engine.MaxIndexPlanningWork
+			ctx := &planningInputWorkContext{Context: context.WithoutCancel(f.ctx), budget: &budget, below: budget - 4, done: make(chan struct{})}
 			ctx.stop = scenario == "cancel during scan"
 			ctx.action = func() {
 				switch scenario {
 				case "pending during scan":
-					e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Stamp.Snapshot)
+					e.pClient.subscribed.m[98].pendingTo.Store(&f.read.Snapshot)
 				case "transport during scan":
 					// A reconnect detaches the old client and publishes a fresh one.
 					e.pClient.subscriber.swapClient(nil)
@@ -321,18 +321,18 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 		f.stats.TableCnt, f.stats.BlockNumber = 8, 4
 		request := req
 		request.Stats.Rows, request.Stats.Blocks = 8, 4
-		budget := engine.MaxTemporalBindingWork
+		budget := engine.MaxIndexPlanningWork
 		input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, request, &budget)
 		require.NoError(t, err)
 		require.False(t, complete)
 		require.Zero(t, input)
 		f.stats.TableCnt, f.stats.BlockNumber = 4, 2
 		putObject(t, objectio.ObjectEntry{ObjectStats: missing, CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(2, 0)})
-		budget = engine.MaxTemporalBindingWork
+		budget = engine.MaxIndexPlanningWork
 		input, complete, err = f.base.ObserveTemporalBlockInput(f.ctx, f.read, req, &budget)
 		require.NoError(t, err)
 		require.True(t, complete, "an invisible cache miss cannot affect the visible population")
-		require.Equal(t, engine.TemporalBlockInput{Rows: 2, Blocks: 1}, input)
+		require.Equal(t, engine.IndexBlockInput{Rows: 2, Blocks: 1}, input)
 		budget = visibleWork
 		input, complete, err = f.base.ObserveTemporalBlockInput(f.ctx, f.read, req, &budget)
 		require.NoError(t, err)
@@ -351,7 +351,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 		f.stats.TableCnt, f.stats.BlockNumber = 6, 3
 		request := req
 		request.Stats.Rows, request.Stats.Blocks = 6, 3
-		budget := engine.MaxTemporalBindingWork
+		budget := engine.MaxIndexPlanningWork
 		input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, request, &budget)
 		require.NoError(t, err)
 		require.False(t, complete)
@@ -380,7 +380,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 		request.Stats.Rows, request.Stats.Blocks = 6, 3
 		future := types.DatetimeFromClock(2030, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC)
 		copy(request.Bound[:], types.EncodeTimestamp(&future))
-		budget := engine.MaxTemporalBindingWork
+		budget := engine.MaxIndexPlanningWork
 		input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, request, &budget)
 		require.NoError(t, err)
 		require.False(t, complete)
@@ -427,7 +427,7 @@ func TestTemporalBlockInputUsesRealCachedBlocks(t *testing.T) {
 			e.Lock()
 			e.partitions[[2]uint64{10, 98}] = fresh
 			e.Unlock()
-			budget := engine.MaxTemporalBindingWork
+			budget := engine.MaxIndexPlanningWork
 			input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, req, &budget)
 			require.NoError(t, err)
 			require.False(t, complete)

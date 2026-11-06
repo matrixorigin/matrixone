@@ -49,7 +49,7 @@ func makeTemporalIndexHint(ctx context.Context, atom temporalCandidateAtom, inde
 	if err != nil || hint == nil {
 		return nil, false, err
 	}
-	hint.TemporalCandidateFilter = true
+	hint.CandidateFilter = true
 	return hint, true, nil
 }
 

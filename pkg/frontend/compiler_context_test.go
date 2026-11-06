@@ -83,7 +83,7 @@ func TestDropPlanForgetsOnlyConfirmedMissingTemporaryTable(t *testing.T) {
 					stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "drop "+temporary+"table mo_catalog.stale", 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					_, err = plan2.BuildPlan(tcc, stmt, false)
+					_, err = plan2.BuildPlan(tcc, stmt, false, nil)
 					if failure == "lookup_error" {
 						require.ErrorIs(t, err, dbErr)
 					} else if failure == "database" {
@@ -850,7 +850,9 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 		PubInfo:          ref.PubInfo,
 	}, gotRef)
 	require.Equal(t, "__mo_index_secondary_events", gotDef.Name)
-	borrowRef, borrowDef, borrow, err := tcc.ResolveIndexForPlanning(ref, "__mo_index_secondary_events", nil)
+	resolvedBorrow1 := plan2.TableResolution{Borrow: &plan2.BorrowedTable{Owner: tcc.execCtx}}
+	borrowRef, borrowDef, err := tcc.ResolveIndexTableByRef(ref, "__mo_index_secondary_events", nil, &resolvedBorrow1)
+	borrow := resolvedBorrow1.Borrow
 	require.NoError(t, err)
 	require.Equal(t, gotRef, borrowRef)
 	require.Equal(t, gotDef, borrowDef)

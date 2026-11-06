@@ -2597,12 +2597,12 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 	if len(statementSQL) > 0 {
 		rawSQL = statementSQL[0]
 	}
-	return doExplainStmtWithTemporalIntent(reqCtx, ses, stmt, nil, "", rawSQL)
+	return doExplainStmtWithExecutionInput(reqCtx, ses, stmt, nil, "", rawSQL)
 }
 
 // The caller supplies only statement-local scheduling text whose provenance is
 // known. Without it, EXPLAIN retains the unscoped planning path.
-func doExplainStmtWithTemporalIntent(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, proc *process.Process, schedulingSQL, rawSQL string) error {
+func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, proc *process.Process, schedulingSQL, rawSQL string) error {
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
 	if err != nil {
@@ -2610,18 +2610,18 @@ func doExplainStmtWithTemporalIntent(reqCtx context.Context, ses *Session, stmt 
 	}
 	//get query optimizer and execute Optimize
 	var exPlan *plan.Plan
-	root, intent, eligible := temporalPlanningIntentForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
+	root, intent, eligible := executionIntentForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
 	if eligible {
 		compiler := ses.GetTxnCompileCtx()
-		input := plan2.NewTemporalPlanningInput(root, intent, planningResolver(compiler))
-		exPlan, err = buildPlanWithAuthorizationAndTemporalInput(reqCtx, ses, compiler, stmt.Statement, input)
+		input := plan2.NewPlanningInput(root, intent, planningCompiler(compiler))
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, compiler, stmt.Statement, input)
 		if err == nil {
-			exPlan, _, err = validateTemporalPlanBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
-				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+			exPlan, _, err = validateCandidatePlanBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
+				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
 			})
 		}
 	} else {
-		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
 	}
 	if err != nil {
 		return err
@@ -2827,7 +2827,7 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 		}
 		return writeExplainResult(execCtx.reqCtx, ses.(*Session), stmt, exPlan, es, rawSQL, sqlMode)
 	}
-	return doExplainStmtWithTemporalIntent(execCtx.reqCtx, ses.(*Session), stmt, execCtx.proc, schedulingSQL, rawSQL)
+	return doExplainStmtWithExecutionInput(execCtx.reqCtx, ses.(*Session), stmt, execCtx.proc, schedulingSQL, rawSQL)
 }
 
 func preparedExplainPlan(ctx context.Context, txnCW *TxnComputationWrapper) (*plan.Plan, error) {
@@ -3162,7 +3162,7 @@ func createPrepareStmtInSession(
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(executionProc)
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
-		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt)
+		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt, nil)
 		return err
 	})
 	if err != nil {
@@ -3187,7 +3187,7 @@ func createPrepareStmtInSession(
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
-		shouldCachePrepareCompile(prepareControl.Plan) &&
+		planReuse(false, prepareControl.Plan, preparedPhysicalCompile).reusable &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
@@ -3347,7 +3347,7 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 }
 
 func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st)
+	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st, nil)
 	if err != nil {
 		return err
 	}
@@ -4264,7 +4264,7 @@ func buildPlan(
 	ctx plan2.CompilerContext,
 	stmt tree.Statement,
 ) (*plan2.Plan, error) {
-	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false)
+	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, nil)
 }
 
 func buildPlanWithPrepareMode(
@@ -4273,17 +4273,7 @@ func buildPlanWithPrepareMode(
 	ctx plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
-) (*plan2.Plan, error) {
-	return buildPlanWithPrepareModeAndTemporalInput(reqCtx, ses, ctx, stmt, forcePrepare, nil)
-}
-
-func buildPlanWithPrepareModeAndTemporalInput(
-	reqCtx context.Context,
-	ses FeSession,
-	ctx plan2.CompilerContext,
-	stmt tree.Statement,
-	forcePrepare bool,
-	temporalInput *plan2.TemporalPlanningInput,
+	planningInput *plan2.PlanningInput,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
 		// LOAD planning may inspect an external source before producing a plan.
@@ -4314,7 +4304,7 @@ func buildPlanWithPrepareModeAndTemporalInput(
 		// Handle specific statement types
 		if s, ok := stmt.(*tree.Insert); ok {
 			if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -4342,7 +4332,7 @@ func buildPlanWithPrepareModeAndTemporalInput(
 				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
-				optimized, err := opt.OptimizeWithTemporalInput(stmt, isPrepareStmt, temporalInput)
+				optimized, err := opt.Optimize(stmt, isPrepareStmt, planningInput)
 				if err != nil {
 					return nil, err
 				}
@@ -4353,7 +4343,7 @@ func buildPlanWithPrepareModeAndTemporalInput(
 					},
 				}
 			default:
-				ret, err = plan2.BuildPlanWithTemporalInput(ctx, stmt, isPrepareStmt, temporalInput)
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt, planningInput)
 			}
 		}
 
@@ -4430,16 +4420,12 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 // buildPlanWithAuthorization wraps buildPlan with the plan-level permission
 // check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
 // the common planning boundary shared by this and direct compile paths.
-var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
-	return buildPlanWithAuthorizationAndTemporalInput(reqCtx, ses, ctx, stmt, nil)
-}
-
-func buildPlanWithAuthorizationAndTemporalInput(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningInput) (*plan2.Plan, error) {
+var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.PlanningInput) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
 	// Step 1: Call buildPlan to construct the execution plan
-	plan, err := buildPlanWithPrepareModeAndTemporalInput(reqCtx, ses, ctx, stmt, false, scope)
+	plan, err := buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -4456,7 +4442,7 @@ func buildPlanWithAuthorizationAndTemporalInput(reqCtx context.Context, ses FeSe
 	return plan, nil
 }
 
-func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
+func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot, ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
 	if plan0 == nil {
 		return true, nil
 	}
@@ -7237,7 +7223,7 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 		return false
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
-		if q.Query.GetHasForeignKeyAction() || q.Query.GetTemporalIndexNeedsReplan() {
+		if q.Query.GetHasForeignKeyAction() || !planReuse(false, p, ordinaryPlanGeneration).reusable {
 			return false
 		}
 		for _, node := range q.Query.Nodes {

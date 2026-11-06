@@ -75,7 +75,7 @@ func TestBuildCloneTableSnapshotResolutionErrors(t *testing.T) {
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				snapshotErr:         test.snapshotErr,
 			}
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.EqualError(t, err, test.wantErr)
 
 			if test.wantUserErr {

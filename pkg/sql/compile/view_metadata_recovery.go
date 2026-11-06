@@ -666,15 +666,19 @@ func (c *recoveryCompilerContext) DatabaseExists(
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *recoveryCompilerContext) ResolveWithoutTemporaryAlias(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (c *recoveryCompilerContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
 func (c *recoveryCompilerContext) Resolve(
 	databaseName string,
 	relationName string,
-	snapshot *plan2.Snapshot,
+	snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	for _, dependency := range c.dependencies {
 		bindingDatabase := dependency.BindingDatabaseName
 		if bindingDatabase == "" {

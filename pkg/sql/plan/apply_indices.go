@@ -1237,7 +1237,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	return containsVolatileFunctionImpl(expr, false)
 }
 
-func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bool) bool {
+func containsVolatileFunctionImpl(expr *plan.Expr, allowCandidateAccessIntegerPolicy bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -1251,7 +1251,7 @@ func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bo
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
 		stablePolicy := false
-		if ok && allowTemporalIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
+		if ok && allowCandidateAccessIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
 			unstable, known := function.GetFunctionValueUnstableByID(exprImpl.F.Func.Obj)
 			stablePolicy = known && !unstable && !overload.HasRowScopedDiagnostics() && !overload.IsRealTimeRelated()
 		}
@@ -1259,7 +1259,7 @@ func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bo
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
-			if containsVolatileFunctionImpl(arg, allowTemporalIntegerPolicy) {
+			if containsVolatileFunctionImpl(arg, allowCandidateAccessIntegerPolicy) {
 				return true
 			}
 		}
@@ -1268,7 +1268,7 @@ func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bo
 			return true
 		}
 		for _, item := range exprImpl.List.List {
-			if containsVolatileFunctionImpl(item, allowTemporalIntegerPolicy) {
+			if containsVolatileFunctionImpl(item, allowCandidateAccessIntegerPolicy) {
 				return true
 			}
 		}
@@ -2656,13 +2656,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	// sorted-scan policies, and do not displace an unscorable existing path.
 	// An admitted path must always carry the execution-dependent lifetime.
 	originalSafe := builder.temporalOriginalScan.safe && builder.temporalOriginalScan.scanID == nodeID
-	input := builder.temporalInput
+	input := builder.planningInput
 	fixedZone := false
 	if input != nil {
 		_, fixedZone = types.FixedZoneOffset(input.intent.TimeZone)
 	}
-	if lateBaseStatsFinalized && originalSafe && builder.qry.TemporalIndexNeedsReplan && !builder.isPrepareStatement && !builder.sessionSelectLimitMayStopEarly && input != nil && input.intent.ParameterFree && fixedZone &&
-		input.intent.MatchesProcess(builder.compCtx.GetProcess()) && input.intent.Placement.AllowsFixedTemporalCandidate() &&
+	if lateBaseStatsFinalized && originalSafe && builder.qry.ExecutionDependentAccess && !builder.isPrepareStatement && !builder.sessionSelectLimitMayStopEarly && input != nil && input.intent.ParameterFree && fixedZone &&
+		input.intent.MatchesProcess(builder.compCtx.GetProcess()) && input.intent.Placement.AllowsPinnedLocalAccess() &&
 		!forceIndex && !ignoreStats && !preferSortedScan && best.indexPos == -1 && fallback.indexPos == -1 {
 		access, err := builder.enumerateTemporalIndexCandidates(nodeID, indexes, costCtx, func(candidate regularIndexAccessCandidate) {
 			consider(candidate, false)
@@ -5969,6 +5969,60 @@ func nullPreservingTarget(expr *plan.Expr, tag, position int32) bool {
 			return false
 		}
 		expr = fn.Args[0]
+	}
+	return false
+}
+
+// CandidatePhysicalIndexScan identifies the ordinary physical index scan that
+// carries a necessary storage predicate. It grants no execution authority.
+func CandidatePhysicalIndexScan(node *plan.Node) bool {
+	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.IndexScanInfo.IsIndexScan && NodeHasCandidateFilter(node)
+}
+
+// NodeHasCandidateFilter identifies necessary predicates carrying the owning
+// statement's admitted index-planning proof. It grants no execution authority.
+func NodeHasCandidateFilter(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, list := range [][]*plan.Expr{node.BlockFilterList, node.FilterList} {
+		for _, expr := range list {
+			if expr.GetCandidateFilter() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HasCandidateIndexAccess observes current provenance at its caller's phase.
+// Reentrant resolution and execution drift require fresh observations rather
+// than retaining this result as another independently managed query state.
+func HasCandidateIndexAccess(p *plan.Plan) bool {
+	if p == nil {
+		return false
+	}
+	query := p.GetQuery()
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if NodeHasCandidateFilter(node) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCandidatePhysicalIndexScans additionally requires a physical index scan.
+func HasCandidatePhysicalIndexScans(query *plan.Query) bool {
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if CandidatePhysicalIndexScan(node) {
+			return true
+		}
 	}
 	return false
 }

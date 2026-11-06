@@ -64,8 +64,7 @@ func TestPreparedFieldResolvedStringDomain(t *testing.T) {
 				defer stmt.Free()
 				source := sourceOID.ToType()
 				bindings := []PreparedSourceBinding{{Position: 0, Type: source}}
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings,
-					[]any{ParamValue{Value: "a", SourceType: source, HasSourceType: true}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, []any{ParamValue{Value: "a", SourceType: source, HasSourceType: true}}, nil, nil)
 				require.NoError(t, err)
 				field := findPlanFunctionExpr(bound.Plan, "field")
 				require.NotNil(t, field)
@@ -120,7 +119,7 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			field := findPlanFunctionExpr(bound, "field")
 			require.NotNil(t, field)
@@ -306,7 +305,7 @@ func TestStringDeclarationBoundaries(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			reverse := findPlanFunctionExpr(bound, "reverse")
 			require.NotNil(t, reverse)
@@ -332,7 +331,7 @@ func TestStringCommonValueDeclarationBoundary(t *testing.T) {
 				"select reverse(coalesce("+tc.value+",'')) from nation", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			coalesce := findPlanFunctionExpr(bound, "coalesce")
 			require.NotNil(t, coalesce)
@@ -388,7 +387,7 @@ func TestStringDeclarationConsumers(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			consumer := findPlanFunctionExpr(bound, tc.function)
 			require.NotNil(t, consumer)
@@ -409,7 +408,7 @@ func TestSerializedJoinKeyRetainsPhysicalOwner(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			comparison := findPlanFunctionExpr(bound, "=")
 			require.NotNil(t, comparison)
@@ -592,7 +591,7 @@ func TestPreparedFieldTypeHistory(t *testing.T) {
 				if state != nil {
 					priorType = state.cases[0].result
 				}
-				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
 				require.NoError(t, err)
 				require.NotNil(t, bound.FieldTypes)
 				if state != nil {
@@ -641,7 +640,7 @@ func TestPreparedFieldHistoryRelations(t *testing.T) {
 				if state != nil {
 					priorType = state.cases[0].result
 				}
-				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
 				require.NoError(t, err)
 				if state != nil {
 					require.Same(t, state, bound.FieldTypes, "compatible string/NULL changes cannot reset history")
@@ -710,7 +709,7 @@ func TestPreparedFieldUnrelatedStatementsKeepNoHistory(t *testing.T) {
 				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_text.ToType()}
 				values[i] = ParamValue{Value: "1", SourceType: bindings[i].Type, HasSourceType: true}
 			}
-			bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+			bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
 			require.NoError(t, err)
 			require.Nil(t, bound.FieldTypes)
 		})
@@ -742,7 +741,7 @@ func TestPreparedFieldWrappedTypeHistory(t *testing.T) {
 					}
 					values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}}
 					ctx.SetContext(WithPreparedFieldTypes(context.Background(), state))
-					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
 					require.NoError(t, err)
 					require.NotNil(t, bound.FieldTypes, "the wrapper must retain its parameter dependency")
 					require.Equal(t, want, bound.FieldTypes.cases[0].result.Oid)

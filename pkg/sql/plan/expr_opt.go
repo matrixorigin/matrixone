@@ -1073,7 +1073,7 @@ func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
 	}
 	ret := node.BlockFilterList[:0]
 	for _, filter := range node.BlockFilterList {
-		if (filter.GetTemporalCandidateFilter() && function.ContainsTemporalBound(filter)) ||
+		if (filter.GetCandidateFilter() && function.ContainsTemporalBound(filter)) ||
 			(allowed != nil && exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed)) {
 			// calcScanStats replaces BlockFilterList at the end of the pass and
 			// does not mutate preserved entries. Transfer the already-independent

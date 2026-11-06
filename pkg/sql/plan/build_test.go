@@ -165,7 +165,7 @@ func TestInsertValuesSQLUdfAdmission(t *testing.T) {
 		ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 		stmt, err := mysql.ParseOne(ctx.GetContext(), text, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err, text)
 	}
@@ -365,7 +365,7 @@ func TestBuildPrepareStringSyntaxErrorIsParseError(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt := tree.NewPrepareString("bad_stmt", "SELECT FROM")
 	defer stmt.Free()
-	_, err := buildPrepare(stmt, ctx)
+	_, err := buildPrepare(stmt, ctx, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
 		"expected 1064/42000 for inner syntax error, got: %v", err)
@@ -376,7 +376,7 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		sqlMode:             "PIPES_AS_CONCAT",
 	}
-	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
+	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
@@ -394,7 +394,7 @@ func TestPreparePublicationUsesFrontendExecutionPlan(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt := tree.NewPrepareString("stmt", sql)
 			defer stmt.Free()
-			p, err := buildPrepare(stmt, ctx)
+			p, err := buildPrepare(stmt, ctx, nil)
 			require.NoError(t, err)
 			prepared := p.GetDcl().GetPrepare()
 			require.NotNil(t, prepared.Plan)
@@ -419,7 +419,7 @@ func TestPreparePublicationLikeParameter(t *testing.T) {
 				stmt = tree.NewPrepareString("stmt", "show publications like ?")
 			}
 			defer stmt.Free()
-			p, err := buildPrepare(stmt, ctx)
+			p, err := buildPrepare(stmt, ctx, nil)
 			require.NoError(t, err)
 			prepared := p.GetDcl().GetPrepare()
 			require.Equal(t, []int32{int32(types.T_varchar)}, prepared.ParamTypes)
@@ -437,7 +437,7 @@ func TestPreparePublicationRejectsUnsupportedPattern(t *testing.T) {
 		require.NoError(t, err)
 		defer stmts[0].Free()
 		stmts[0].(*tree.ShowPublications).Like.Right.(*tree.ParamExpr).Offset = 2
-		_, _, err = getPreparePlan(ctx, stmts[0])
+		_, _, err = getPreparePlan(ctx, stmts[0], nil)
 		require.ErrorContains(t, err, "requires one LIKE parameter")
 	})
 	for _, sql := range []string{
@@ -447,7 +447,7 @@ func TestPreparePublicationRejectsUnsupportedPattern(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			stmt := tree.NewPrepareString("stmt", sql)
 			defer stmt.Free()
-			_, err := buildPrepare(stmt, NewMockCompilerContext(true, newPlanTestProcess(t)))
+			_, err := buildPrepare(stmt, NewMockCompilerContext(true, newPlanTestProcess(t)), nil)
 			require.ErrorContains(t, err, "requires a string literal or parameter marker LIKE pattern")
 		})
 	}
@@ -674,7 +674,7 @@ func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	viewDef := p.GetDdl().GetCreateView().GetTableDef().GetViewSql()
 	require.NotNil(t, viewDef)
@@ -699,7 +699,7 @@ func TestPerformRejectsNestedSelectIntoOutfile(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, "PERFORM SELECT INTO OUTFILE")
 		})
 	}
@@ -718,7 +718,7 @@ func TestPerformAllowsNestedSelectWithoutOutfile(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -8434,7 +8434,7 @@ func TestReplaceParentSideFKUnsupportedSources(t *testing.T) {
 	preparedSQL := "REPLACE INTO replace_fk_p VALUES (?, 'x')"
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), preparedSQL, 1)
 	require.NoError(t, err)
-	logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
+	logicPlan, err := BuildPlan(mock.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	assertReplaceParentPlanMarker(t, logicPlan.GetQuery())
 
@@ -9920,7 +9920,7 @@ func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
 			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false, nil)
 			if test.wantErr {
 				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
 			} else {
@@ -10046,7 +10046,7 @@ func TestOnlyFullGroupByEnumColumnValidation(t *testing.T) {
 
 			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false, nil)
 			if test.wantErr {
 				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
 			} else {
@@ -10470,7 +10470,7 @@ func runOneStmt(opt Optimizer, t testing.TB, sql string) (*Plan, error) {
 	// planner tests and retaining every AST until the package test exits can
 	// exhaust the coverage runner's memory budget.
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, false, nil)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
@@ -11111,13 +11111,13 @@ func TestExtensionPlansAreNotSupported(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.Nil(t, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
 			prepared := tree.NewPrepareString("unsupported_extension", sql)
 			defer prepared.Free()
-			p, err = buildPrepare(prepared, ctx)
+			p, err = buildPrepare(prepared, ctx, nil)
 			require.Nil(t, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 		})

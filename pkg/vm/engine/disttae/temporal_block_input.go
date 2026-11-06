@@ -20,14 +20,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-// temporalInputSnapshot only borrows existing state. Unlike ordinary partition
+// planningInputSnapshot only borrows existing state. Unlike ordinary partition
 // admission it cannot create a partition, subscribe, wait, or read checkpoints.
-func (c *PushClient) temporalInputSnapshot(db, table uint64, read engine.TemporalRead) (*logtailreplay.PartitionState, *subEntry, bool) {
+func (c *PushClient) planningInputSnapshot(db, table uint64, read client.CatalogReadStamp) (*logtailreplay.PartitionState, *subEntry, bool) {
 	if c == nil || c.eng == nil || !c.receivedLogTailTime.ready.Load() {
 		return nil, nil, false
 	}
@@ -46,7 +47,7 @@ func (c *PushClient) temporalInputSnapshot(db, table uint64, read engine.Tempora
 	}
 	state := part.Snapshot()
 	waterline := c.receivedLogTailTime.getTimestamp()
-	if !c.receivedLogTailTime.ready.Load() || !read.Stamp.Snapshot.Prev().LessEq(waterline) || !state.CanServe(types.TimestampToTS(read.Stamp.Snapshot)) {
+	if !c.receivedLogTailTime.ready.Load() || !read.Snapshot.Prev().LessEq(waterline) || !state.CanServe(types.TimestampToTS(read.Snapshot)) {
 		return nil, nil, false
 	}
 	return state, entry, true
@@ -63,23 +64,23 @@ func spendTemporalInputWork(ctx context.Context, budget *int, work int) bool {
 // ObserveTemporalBlockInput returns no partial estimate. Every contributing
 // object belongs to the same complete immutable snapshot and cached metadata.
 // The result is a cost observation; it authorizes neither rows nor a new plan.
-func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read engine.TemporalRead, req engine.TemporalBlockInputRequest, budget *int) (result engine.TemporalBlockInput, complete bool, err error) {
+func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read client.CatalogReadStamp, req engine.TemporalBlockInputRequest, budget *int) (result engine.IndexBlockInput, complete bool, err error) {
 	defer func() {
 		if !complete {
-			result = engine.TemporalBlockInput{}
+			result = engine.IndexBlockInput{}
 		}
-		if cause := temporalContextCause(ctx); cause != nil {
-			result, complete, err = engine.TemporalBlockInput{}, false, cause
+		if cause := planningContextCause(ctx); cause != nil {
+			result, complete, err = engine.IndexBlockInput{}, false, cause
 		}
 	}()
 	if !spendTemporalInputWork(ctx, budget, 1) || req.Stats.Rows <= 0 || req.Stats.Rows > 1<<53 || math.Trunc(req.Stats.Rows) != req.Stats.Rows || req.Stats.Blocks <= 0 || req.Op > types.TemporalGreaterEqual {
 		return result, false, nil
 	}
-	t, txn, ok := tbl.temporalRead(ctx, read)
+	t, txn, ok := tbl.planningRead(ctx, read)
 	if !ok {
 		return result, false, nil
 	}
-	current, ok, err := tbl.ReadTemporalCostStats(ctx, read, req.Observed, req.Column)
+	current, ok, err := tbl.ReadIndexCostStats(ctx, read, req.Observed, req.Column)
 	if err != nil || !ok || current != req.Stats {
 		return result, false, err
 	}
@@ -106,17 +107,17 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 	if source == nil {
 		return result, false, nil
 	}
-	state, entry, ok := c.temporalInputSnapshot(t.db.databaseId, t.tableId, read)
+	state, entry, ok := c.planningInputSnapshot(t.db.databaseId, t.tableId, read)
 	if !ok || state.ApproxInMemRows() != 0 || state.ApproxInMemTombstones() != 0 || state.ApproxTombstoneObjectsNum() != 0 ||
 		!spendTemporalInputWork(ctx, budget, state.ApproxDataObjectsNum()) {
 		return result, false, nil
 	}
-	iter, err := state.NewObjectsIter(types.TimestampToTS(read.Stamp.Snapshot), true, false)
+	iter, err := state.NewObjectsIter(types.TimestampToTS(read.Snapshot), true, false)
 	if err != nil {
 		return result, false, nil
 	}
 	defer iter.Close()
-	var total engine.TemporalBlockInput
+	var total engine.IndexBlockInput
 	// The matcher is synchronous and retains no ZM. Reuse copied value buffers
 	// rather than making a potentially escaping array for every visited block.
 	var objectMeta, block objectio.ColumnBlockMeta
@@ -179,9 +180,9 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 	if total.Rows != uint64(req.Stats.Rows) || total.Blocks != uint64(req.Stats.Blocks) || !spendTemporalInputWork(ctx, budget, 1) {
 		return result, false, nil
 	}
-	latest, latestEntry, valid := c.temporalInputSnapshot(t.db.databaseId, t.tableId, read)
+	latest, latestEntry, valid := c.planningInputSnapshot(t.db.databaseId, t.tableId, read)
 	transport := subscriber.client()
-	current, ok, err = tbl.ReadTemporalCostStats(ctx, read, req.Observed, req.Column)
-	complete = err == nil && ok && current == req.Stats && valid && latest == state && latestEntry == entry && source == transport && temporalReadStillCurrent(tbl, ctx, read, t, txn)
+	current, ok, err = tbl.ReadIndexCostStats(ctx, read, req.Observed, req.Column)
+	complete = err == nil && ok && current == req.Stats && valid && latest == state && latestEntry == entry && source == transport && planningReadStillCurrent(tbl, ctx, read, t, txn)
 	return result, complete, err
 }

@@ -14,7 +14,11 @@
 
 package client
 
-import "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+import (
+	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+)
 
 // CatalogReadStamp detects statement-local metadata reuse after a transaction
 // or workspace transition. It does not permit concurrent workspace mutation.
@@ -23,6 +27,68 @@ type CatalogReadStamp struct {
 	Snapshot      timestamp.Timestamp
 	Revision      uint64
 	Workspace     Workspace
+	// Op is the actual caller's operator, which can wrap the raw stamp reader.
+	// Raw operator sampling leaves Op and Visibility unbound.
+	Op         TxnOperator
+	Visibility uint64
+}
+
+// CatalogSnapshotMatch preserves the two existing metadata consumers' distinct
+// snapshot contracts. Structural matching includes the timestamp's metadata.
+type CatalogSnapshotMatch uint8
+
+const (
+	CatalogSnapshotSemantic CatalogSnapshotMatch = iota
+	CatalogSnapshotStructural
+)
+
+// BindRead associates a raw sample with its caller and workspace observation.
+// The caller samples visibility outside the operator's lock. This value owns
+// neither the transaction nor a relation and is valid only within its statement.
+func (stamp CatalogReadStamp) BindRead(op TxnOperator, visibility uint64) CatalogReadStamp {
+	stamp.Op, stamp.Visibility = op, visibility
+	return stamp
+}
+
+// MatchesRead compares bound observations without sampling or acquiring locks.
+// Sampling/error policy stays with the consumer; a stamp is not a concurrency
+// fence or a substitute for statement, tenant, schema or authorization checks.
+func (stamp CatalogReadStamp) MatchesRead(current CatalogReadStamp, snapshot CatalogSnapshotMatch) bool {
+	if stamp.Op == nil || stamp.Op != current.Op || stamp.TransactionID != current.TransactionID ||
+		stamp.Workspace != current.Workspace || stamp.Revision != current.Revision || stamp.Visibility != current.Visibility {
+		return false
+	}
+	switch snapshot {
+	case CatalogSnapshotSemantic:
+		return stamp.Snapshot.Equal(current.Snapshot)
+	case CatalogSnapshotStructural:
+		return reflect.DeepEqual(stamp.Snapshot, current.Snapshot)
+	default:
+		return false
+	}
+}
+
+// TryCatalogReadStamp binds an optional observation to the actual operator.
+// It never waits behind transaction work. Pointer workspace admission preserves
+// the optional native-reader contract; mandatory readers retain their own
+// capture, visibility and error policy and can use BindRead/MatchesRead directly.
+func TryCatalogReadStamp(op TxnOperator) (CatalogReadStamp, bool) {
+	reader, ok := op.(interface {
+		TryCatalogReadStamp() (CatalogReadStamp, bool)
+	})
+	if !ok || op == nil {
+		return CatalogReadStamp{}, false
+	}
+	stamp, ok := reader.TryCatalogReadStamp()
+	if !ok {
+		return CatalogReadStamp{}, false
+	}
+	workspace, ok := stamp.Workspace.(interface{ CatalogVisibility() (uint64, bool) })
+	if !ok || reflect.TypeOf(stamp.Workspace).Kind() != reflect.Pointer {
+		return CatalogReadStamp{}, false
+	}
+	visibility, stable := workspace.CatalogVisibility()
+	return stamp.BindRead(op, visibility), stable
 }
 
 func (tc *txnOperator) CatalogReadStamp() (CatalogReadStamp, error) {

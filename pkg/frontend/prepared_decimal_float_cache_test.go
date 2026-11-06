@@ -68,7 +68,7 @@ func TestPreparedDecimalFloatSingleSlotCache(t *testing.T) {
 			execute := func() (*compile.Compile, *plan.Plan) {
 				t.Helper()
 				cw.discardRuntimeCacheCandidate()
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
 				if owned && stmt != nil {
 					stmt.Free()
 				}

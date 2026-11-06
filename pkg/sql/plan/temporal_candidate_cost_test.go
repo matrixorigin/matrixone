@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,9 +38,9 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
 			switch scenario {
 			case "unmarked lifetime":
-				builder.qry.TemporalIndexNeedsReplan = false
+				builder.qry.ExecutionDependentAccess = false
 			case "missing scope":
-				builder.temporalResolverAllowed = false
+				builder.borrowResolutionAllowed = false
 			case "missing original owner":
 				builder.temporalOriginalScan = temporalOriginalScan{}
 			case "other original scan":
@@ -56,13 +55,13 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				require.False(t, builder.temporalOriginalScan.safe)
 				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
-				builder.temporalInput.intent.ParameterFree = false
+				builder.planningInput.intent.ParameterFree = false
 			case "prepared statement":
 				builder.isPrepareStatement = true
 			case "sirius":
-				builder.temporalInput.intent.Placement.Sirius = true
+				builder.planningInput.intent.Placement.Sirius = true
 			case "clock drift":
-				builder.temporalInput.intent.UnixTime++
+				builder.planningInput.intent.UnixTime++
 			case "session row limit":
 				builder.sessionSelectLimitMayStopEarly = true
 			case "unknown session row limit":
@@ -76,7 +75,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 			if scenario == "eligible" {
 				require.NotZero(t, id, "the common fixture must actually reach and select the late path")
 				require.NotEmpty(t, mapping)
-				require.True(t, builder.qry.Nodes[id].BlockFilterList[0].TemporalCandidateFilter)
+				require.True(t, builder.qry.Nodes[id].BlockFilterList[0].CandidateFilter)
 			} else {
 				require.Zero(t, id)
 				require.Empty(t, mapping)
@@ -90,8 +89,8 @@ func TestTemporalMissingBorrowPreservesCancellation(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "missing", true: "disabled"}[disabled], func(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
-			builder.clearTemporalBorrows()
-			builder.temporalBorrowDisabled = disabled
+			builder.clearScanBorrows()
+			builder.borrowResolutionDisabled = disabled
 			stop := errors.New("planning stopped")
 			ctx, cancel := context.WithCancelCause(builder.GetContext())
 			cancel(stop)
@@ -108,42 +107,20 @@ func TestTemporalMissingBorrowPreservesCancellation(t *testing.T) {
 
 type trackingResolveContext struct {
 	CompilerContext
-	resolves int
+	resolves, borrowRequests int
+	onResolve                func()
 }
 
-func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapshot, outputs ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	output := PrepareTableResolution(outputs...)
 	c.resolves++
+	if output != nil {
+		c.borrowRequests++
+	}
+	if c.onResolve != nil {
+		c.onResolve()
+	}
 	return c.CompilerContext.Resolve(database, name, snapshot)
-}
-
-type changingPlanningResolver struct {
-	compiler CompilerContext
-	answers  []bool
-	checks   int
-	base     int
-	hidden   int
-}
-
-func (r *changingPlanningResolver) IsSameCompiler(CompilerContext) bool {
-	index := min(r.checks, len(r.answers)-1)
-	r.checks++
-	return r.answers[index]
-}
-
-func (r *changingPlanningResolver) ResolveBaseForPlanning(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
-	r.base++
-	ref, def, err := r.compiler.Resolve(database, name, snapshot)
-	return ref, def, nil, err
-}
-
-func (r *changingPlanningResolver) ResolveIndexForPlanning(base *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
-	r.hidden++
-	ref, def, err := r.compiler.ResolveIndexTableByRef(base, name, snapshot)
-	return ref, def, nil, err
-}
-
-func (r *changingPlanningResolver) BorrowStillCurrent(CompilerContext, *process.Process, *BorrowedTable) bool {
-	return false
 }
 
 func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
@@ -153,7 +130,6 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	underlying.tables["base"] = scan.TableDef
 	underlying.objects["base"] = scan.ObjRef
 	compiler := &trackingResolveContext{CompilerContext: underlying}
-	resolver := &changingPlanningResolver{compiler: compiler, answers: []bool{true}}
 	stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where id = ?", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -167,100 +143,92 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	source := types.T_int64.ToType()
-	intent := fixture.temporalInput.intent
+	intent := fixture.planningInput.intent
 	intent.ParameterFree = false
-	bound, err := BuildPreparedExecutionPlanWithTemporalIntent(compiler, stmt,
+	bound, err := BuildPreparedExecutionPlan(compiler, stmt,
 		[]PreparedSourceBinding{{Position: 0, Type: source}},
-		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, resolver)
+		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, compiler)
 	require.NoError(t, err)
 	require.NotNil(t, bound.Plan.GetQuery())
 	require.Equal(t, 1, compiler.resolves, "the table must still be resolved once")
-	require.Zero(t, resolver.base, "a parameterized attempt cannot use a temporal borrow")
-	require.Zero(t, resolver.hidden)
-	require.False(t, bound.Plan.GetQuery().GetTemporalIndexNeedsReplan())
+	require.Zero(t, compiler.borrowRequests, "a parameterized attempt cannot borrow a native relation")
+	require.False(t, bound.Plan.GetQuery().GetExecutionDependentAccess())
 
 	missing, err := mysql.ParseOne(compiler.GetContext(), "select * from missing_table where id = ?", 1)
 	require.NoError(t, err)
 	defer missing.Free()
-	_, err = BuildPreparedExecutionPlanWithTemporalIntent(compiler, missing,
+	_, err = BuildPreparedExecutionPlan(compiler, missing,
 		[]PreparedSourceBinding{{Position: 0, Type: source}},
-		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, resolver)
+		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, compiler)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
 	require.Equal(t, 2, compiler.resolves, "the failed lookup must also use the ordinary resolver once")
-	require.Zero(t, resolver.base)
+	require.Zero(t, compiler.borrowRequests)
 }
 
-func TestTemporalPlanningResolverIdentityChanges(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		answers         []bool
-		processMismatch bool
-	}{
-		{name: "initial rejection stays rejected", answers: []bool{false, true}},
-		{name: "later rejection falls back", answers: []bool{true, false, true}},
-		{name: "process mismatch", answers: []bool{true}, processMismatch: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+func TestPlanningInputCompilerIdentityChanges(t *testing.T) {
+	for _, scenario := range []string{"initial rejection stays rejected", "owner changes during lookup", "process mismatch"} {
+		t.Run(scenario, func(t *testing.T) {
 			fixture, _, _ := temporalCBOTraversalFixture(t)
 			scan := fixture.qry.Nodes[0]
 			underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
-			underlying.tables["base"] = scan.TableDef
-			underlying.objects["base"] = scan.ObjRef
+			underlying.tables["base"], underlying.objects["base"] = scan.TableDef, scan.ObjRef
 			compiler := &trackingResolveContext{CompilerContext: underlying}
-			resolver := &changingPlanningResolver{compiler: compiler, answers: tc.answers}
 			stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where d > now()", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 			root := stmt.(*tree.Select)
-			intent := fixture.temporalInput.intent
-			if tc.processMismatch {
-				intent.UnixTime++
+			intent := fixture.planningInput.intent
+			input := NewPlanningInput(root, intent, compiler)
+			switch scenario {
+			case "initial rejection stays rejected":
+				input.owner = underlying
+				compiler.onResolve = func() { input.owner = compiler }
+			case "owner changes during lookup":
+				compiler.onResolve = func() { input.owner = underlying }
+			case "process mismatch":
+				input.intent.UnixTime++
 			}
-			input := NewTemporalPlanningInput(root, intent, resolver)
-			p, err := BuildPlanWithTemporalInput(compiler, root, false, input)
+			result, err := BuildPlan(compiler, root, false, input)
 			require.NoError(t, err)
-			require.False(t, input.claim(root), "the attempted root must consume its input")
-			require.Equal(t, intent, input.intent)
-			require.Same(t, resolver, input.resolver)
-			require.Equal(t, 1, compiler.resolves, "fallback must use the ordinary resolver once")
-			require.Zero(t, resolver.base)
-			require.Zero(t, resolver.hidden)
-			require.True(t, p.GetQuery().GetTemporalIndexNeedsReplan(), "resolver rejection must not drop the cache-lifetime fact")
-			if tc.processMismatch {
-				require.Zero(t, resolver.checks)
-			} else if !tc.answers[0] {
-				require.Equal(t, 1, resolver.checks, "initial rejection must remain latched")
-				require.True(t, resolver.IsSameCompiler(compiler), "the test resolver would later accept")
-			} else {
-				require.GreaterOrEqual(t, resolver.checks, 2)
+			require.False(t, input.claim(root))
+			require.Equal(t, 1, compiler.resolves)
+			expected := 0
+			if scenario == "owner changes during lookup" {
+				expected = 1
 			}
+			require.Equal(t, expected, compiler.borrowRequests)
+			require.True(t, result.GetQuery().GetExecutionDependentAccess(), "optional borrow admission must not erase the reuse dependency")
 		})
 	}
 }
 
-func TestTemporalPlanningResolverCanRecoverAfterLaterMismatch(t *testing.T) {
+func TestPlanningInputCanRecoverAfterLaterCompilerMismatch(t *testing.T) {
 	fixture, _, _ := temporalCBOTraversalFixture(t)
 	scan := fixture.qry.Nodes[0]
 	underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
-	underlying.tables["base"] = scan.TableDef
-	underlying.objects["base"] = scan.ObjRef
+	underlying.tables["base"], underlying.objects["base"] = scan.TableDef, scan.ObjRef
 	compiler := &trackingResolveContext{CompilerContext: underlying}
-	resolver := &changingPlanningResolver{compiler: compiler, answers: []bool{true, false, true}}
-	stmt, err := mysql.ParseOne(compiler.GetContext(), "select a.d from base a join base b on a.d = b.d", 1)
+	stmt, err := mysql.ParseOne(compiler.GetContext(), "select a.d from base a join base b on a.d=b.d join base c on a.d=c.d", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	root := stmt.(*tree.Select)
-	_, err = BuildPlanWithTemporalInput(compiler, root, false, NewTemporalPlanningInput(root, fixture.temporalInput.intent, resolver))
+	input := NewPlanningInput(root, fixture.planningInput.intent, compiler)
+	compiler.onResolve = func() {
+		if compiler.resolves == 1 {
+			input.owner = underlying
+		} else {
+			input.owner = compiler
+		}
+	}
+	_, err = BuildPlan(compiler, root, false, input)
 	require.NoError(t, err)
-	require.Equal(t, 2, compiler.resolves)
-	require.Equal(t, 1, resolver.base, "the later matching table lookup can use its resolver")
-	require.Zero(t, resolver.hidden)
-	require.GreaterOrEqual(t, resolver.checks, 3)
+	require.Equal(t, 3, compiler.resolves)
+	require.Equal(t, 2, compiler.borrowRequests, "a rejected lookup cannot poison a later matching ordinary lookup")
 }
 
 func TestTemporalCandidateDirectEntryWithoutInput(t *testing.T) {
 	builder, _, index := temporalCBOTraversalFixture(t)
-	builder.temporalInput = nil
+	builder.planningInput = nil
 	_, err := builder.enumerateTemporalIndexCandidates(0, []*plan.IndexDef{index}, nil, func(regularIndexAccessCandidate) {
 		t.Fatal("a missing input cannot yield a temporal candidate")
 	})
@@ -295,20 +263,20 @@ func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
 	stmt := stmts[0].(*tree.Select)
-	intent := TemporalPlanningIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "local:6001", Route: schedule.WorkerRouteLocal}}}
+	intent := ExecutionIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "local:6001", Route: schedule.WorkerRouteLocal}}}
 	wrapper := &trackingResolveContext{CompilerContext: ctx}
 	otherCompiler := &temporalCBOContext{encodedIndexCostTestContext: fixture}
-	p, err := BuildPlanWithTemporalInput(wrapper, stmt, false, NewTemporalPlanningInput(stmt, intent, otherCompiler))
+	p, err := BuildPlan(wrapper, stmt, false, NewPlanningInput(stmt, intent, otherCompiler))
 	require.NoError(t, err)
 	require.Positive(t, wrapper.resolves, "a mismatched resolver must not bypass the compiler wrapper")
 	q := p.GetQuery()
 	require.NotNil(t, q)
-	require.True(t, q.GetTemporalIndexNeedsReplan())
+	require.True(t, q.GetExecutionDependentAccess())
 	found := false
 	for _, node := range q.Nodes {
 		for _, filter := range node.FilterList {
-			found = found || filter.GetTemporalCandidateFilter()
+			found = found || filter.GetCandidateFilter()
 		}
 	}
 	require.False(t, found, "public planning without a native physical observation must retain the safe scan")

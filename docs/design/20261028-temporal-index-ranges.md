@@ -1,8 +1,10 @@
 # Mixed DATETIME/TIMESTAMP candidate-range semantics
 
 Owning issue: #31619 (correctness fixed by #31624); performance integration: #31944.
-The single current access, admission, lifetime and validation contract is
-[temporal CBO design](20261030-temporal-cbo.md). This document defines only the
+The type-specific access and admission contract is
+[temporal CBO design](20261030-temporal-cbo.md); generic read, resolution,
+execution and cache ownership is defined in
+[index planning owners](20261107-index-planning-owners.md). This document defines only the
 scalar semantics and the mathematical necessary-range transformation. It does not
 promise prepared, backfill, equality-prefix, arbitrary OR/IN, named-zone AUTO or
 multi-CN optimization support.
@@ -77,13 +79,13 @@ Known prepared owners and unsupported shapes retain their ordinary safe paths.
 The current AUTO path uses one mixed atom over the leading component of a covering
 index and retains every remapped original SQL predicate in the row filter.
 
-The generated necessary condition is separately marked as `TemporalCandidateFilter`.
+The generated necessary condition is separately marked as `CandidateFilter`.
 Preserve this marker through deep copy, folding and process transport. It identifies
 necessary candidate ranges, including the reader's OR and seek behavior. Unknown,
 malformed or nonconstant folds and unsupported storage filters fail open. Reader
 outputs still run the full original predicate, including physical tails and sentinel
 values. The execution and empty-guard consolidation is specified in
-[Temporal access consolidation](20261106-temporal-access-consolidation.md).
+[Temporal access consolidation](20261107-index-planning-owners.md).
 
 Time, timezone, placement and transaction identity belong to the current execution.
 The cost observation never replaces the runtime expression. A changed execution

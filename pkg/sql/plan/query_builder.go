@@ -13890,8 +13890,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		var obj *ObjectRef
 		var tableDef *TableDef
 		var borrow *BorrowedTable
-		if resolver := builder.temporalPlanningResolver(); resolver != nil {
-			obj, tableDef, borrow, err = resolver.ResolveBaseForPlanning(catalogDatabase, table, snapshot)
+		if resolver := builder.borrowingCompiler(); resolver != nil {
+			var resolved TableResolution
+			obj, tableDef, err = resolver.Resolve(catalogDatabase, table, snapshot, &resolved)
+			borrow = resolved.Borrow
 		} else {
 			obj, tableDef, err = builder.compCtx.Resolve(catalogDatabase, table, snapshot)
 		}
@@ -14204,7 +14206,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
-		builder.rememberTemporalScan(nodeID, obj, fullTableDef, borrow)
+		builder.rememberScanBorrow(nodeID, obj, fullTableDef, borrow)
 
 		node := builder.qry.Nodes[nodeID]
 		if node.TableDef != nil {

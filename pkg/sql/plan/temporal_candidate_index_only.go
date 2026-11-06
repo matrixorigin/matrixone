@@ -116,32 +116,3 @@ func temporalIndexResidualColumnsMapped(expr *plan.Expr, mapping map[[2]int32]*p
 	}
 	return expr.GetLit() != nil || expr.GetT() != nil
 }
-
-// TemporalPhysicalIndexScan identifies the marked covering scan emitted by
-// the physical temporal scorer. It requires local placement for its cost
-// model; the original residuals remain authoritative for SQL evaluation.
-func TemporalPhysicalIndexScan(node *plan.Node) bool {
-	if node == nil || node.NodeType != plan.Node_TABLE_SCAN || !node.IndexScanInfo.IsIndexScan {
-		return false
-	}
-	for _, list := range [][]*plan.Expr{node.FilterList, node.BlockFilterList} {
-		for _, e := range list {
-			if e != nil && e.TemporalCandidateFilter {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func HasTemporalPhysicalIndexScans(query *plan.Query) bool {
-	if query == nil {
-		return false
-	}
-	for _, node := range query.Nodes {
-		if TemporalPhysicalIndexScan(node) {
-			return true
-		}
-	}
-	return false
-}

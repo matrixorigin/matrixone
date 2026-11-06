@@ -327,8 +327,8 @@ message Expr {
 
   int32 aux_id = 16;
   // Keep these flags next to aux_id so they use its alignment padding.
-  // Planner-only proof that this entire filter is an admitted candidate.
-  bool temporal_candidate_filter = 27;
+  // Necessary storage predicate; the complete SQL residual remains authoritative.
+  bool candidate_filter = 27;
   double ndv = 17;
   double selectivity = 18;
   // prepared_numeric is explicit planner metadata, not an executor memo
@@ -1916,9 +1916,9 @@ message Query {
   // Logical targets of exclusive SELECT locks, retained across optimization.
   repeated SelectLockReference select_lock_references = 21;
 
-  // Access-path choice depends on execution-time temporal values or context.
+  // Access-path choice depends on execution-time values or context.
   // Rebuild from the original owner instead of reusing a physical choice.
-  bool temporal_index_needs_replan = 22;
+  bool execution_dependent_access = 22;
 }
 
 message TransationControl {

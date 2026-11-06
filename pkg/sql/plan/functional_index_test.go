@@ -34,7 +34,7 @@ func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 			"create table t(id int primary key,tenant int,name varchar(40),spare int,index ix(tenant,(lower(name)),spare,(upper(name)),(lower(name))),index iy((lower(name)),tenant))", 1)
 		require.NoError(t, err)
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		table := p.GetDdl().GetCreateTable().TableDef
@@ -70,7 +70,7 @@ func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table legacy(id int primary key,user_value int,index ordinary(user_value))", 1)
 	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	// Model catalog metadata written before the functional-index feature.
@@ -100,7 +100,7 @@ func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -118,7 +118,7 @@ func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
 		"create table collision(name varchar(40),"+functionalColumnName("ix")+" int,index ix((lower(name))))", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "backing column already exists")
 }
 
@@ -134,7 +134,7 @@ func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
 	} {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		stmt.Free()
 		require.NoError(t, err)
 		table := p.GetDdl().GetCreateTable().TableDef
@@ -159,7 +159,7 @@ func TestFunctionalIndexDDL(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(ctx, stmt, false)
+		return BuildPlan(ctx, stmt, false, nil)
 	}
 	// #29898: expression UNIQUE indexes must be rejected before index construction.
 	probe, err := build("CREATE TABLE mo_index_probe (id INT PRIMARY KEY, email VARCHAR(254))")
@@ -330,7 +330,7 @@ func TestFunctionalCompositeIndexDDL(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(ctx, stmt, false)
+		return BuildPlan(ctx, stmt, false, nil)
 	}
 	for _, parts := range []string{
 		"(lower(name)), (id+1)", "id, (lower(name))", "(lower(name)), id",
@@ -383,7 +383,7 @@ func TestFunctionalIndexOriginStringQuotesLiterals(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		plan, err := BuildPlan(ctx, stmt, false)
+		plan, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return plan.GetDdl().GetCreateTable().TableDef
 	}

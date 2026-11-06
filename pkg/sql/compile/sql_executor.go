@@ -602,7 +602,7 @@ func (exec *txnExecutor) Exec(
 	compileContext := newCompileContext(exec.ctx)
 	proc.Base.SessionInfo.CompilerContext = compileContext
 	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
-		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
+		pn, err := plan.BuildPlan(ctx, stmts[0], prepared, nil)
 		if err == nil && statementOption.AllowMoColumnsUpdate() {
 			markMoColumnsUpdatePlan(pn)
 		}
@@ -619,7 +619,7 @@ func (exec *txnExecutor) Exec(
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 
 		opt := plan.NewBaseOptimizer(compileContext)
-		optimized, err := opt.Optimize(stmt, prepared)
+		optimized, err := opt.Optimize(stmt, prepared, nil)
 		if err == nil {
 			pn = &plan.Plan{
 				Plan: &plan.Plan_Query{

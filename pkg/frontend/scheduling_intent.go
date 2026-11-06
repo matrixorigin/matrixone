@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -26,32 +25,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// temporalPlanningIntentForStatement freezes the exact statement's scheduling
+// executionIntentForStatement freezes the exact statement's scheduling
 // input. Unsupported wrappers and parameterized queries do not get a scope;
 // neither condition grants permission to change the existing access path.
-func temporalPlanningIntentForStatement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) (*tree.Select, plan2.TemporalPlanningIntent, bool) {
-	return temporalPlanningIntentForExecution(ses, proc, sql, sqlMode, stmt, false)
+func executionIntentForStatement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) (*tree.Select, plan2.ExecutionIntent, bool) {
+	return executionIntentForExecution(ses, proc, sql, sqlMode, stmt, false)
 }
 
 // Parameterized execution receives placement context only. Candidate admission
 // still requires a per-execution diagnostic proof in the planner.
-func temporalPlanningIntentForExecution(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement, allowParameters bool) (*tree.Select, plan2.TemporalPlanningIntent, bool) {
+func executionIntentForExecution(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement, allowParameters bool) (*tree.Select, plan2.ExecutionIntent, bool) {
 	if ses == nil || ses.IsBackgroundSession() || proc == nil || proc.Base == nil || sql == "" {
-		return nil, plan2.TemporalPlanningIntent{}, false
+		return nil, plan2.ExecutionIntent{}, false
 	}
-	root := temporalPlanningRoot(stmt)
+	root := planningInputRoot(stmt)
 	if root == nil {
-		return nil, plan2.TemporalPlanningIntent{}, false
+		return nil, plan2.ExecutionIntent{}, false
 	}
 	parameterFree := tree.ParameterCount(root) == 0
 	if !parameterFree && !allowParameters {
-		return nil, plan2.TemporalPlanningIntent{}, false
+		return nil, plan2.ExecutionIntent{}, false
 	}
-	return root, plan2.TemporalPlanningIntent{
+	return root, plan2.ExecutionIntent{
 		ParameterFree: parameterFree,
 		TimeZone:      proc.GetSessionInfo().TimeZone,
 		UnixTime:      proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{
+		Placement: schedule.LocalAccessIntent{
 			Scheduling: querySchedulingIntentForStatementWithSQLMode(ses, sql, sqlMode),
 			CurrentCN:  schedule.Worker{ID: proc.GetService(), Addr: currentCNPipelineAddress(ses), Route: schedule.WorkerRouteLocal},
 			Sirius:     siriusStatementSelected(sql, stmt),
@@ -59,7 +58,7 @@ func temporalPlanningIntentForExecution(ses FeSession, proc *process.Process, sq
 	}, true
 }
 
-func temporalPlanningRoot(stmt tree.Statement) *tree.Select {
+func planningInputRoot(stmt tree.Statement) *tree.Select {
 	inner := unwrapExecutableExplainStatement(stmt)
 	var root *tree.Select
 	switch s := inner.(type) {
@@ -71,36 +70,36 @@ func temporalPlanningRoot(stmt tree.Statement) *tree.Select {
 	return root
 }
 
-// temporalPlanningIntentMatchesCompile compares the captured planning input
+// executionIntentMatchesCompile compares the captured planning input
 // against what the normal compile path would derive for this exact statement.
 // A mismatch denies the optional path; it must never create a scheduling error.
-func temporalPlanningIntentMatchesCompile(intent *plan2.TemporalPlanningIntent, ses FeSession, proc *process.Process,
+func executionIntentMatchesCompile(intent *plan2.ExecutionIntent, ses FeSession, proc *process.Process,
 	sql, sqlMode string, stmt tree.Statement) bool {
 	if intent == nil || !intent.MatchesProcess(proc) {
 		return false
 	}
-	_, actual, ok := temporalPlanningIntentForExecution(ses, proc, sql, sqlMode, stmt, true)
+	_, actual, ok := executionIntentForExecution(ses, proc, sql, sqlMode, stmt, true)
 	return ok && intent.ParameterFree == actual.ParameterFree && intent.Placement == actual.Placement
 }
 
-// validateTemporalPlanBeforeCompile preserves candidate-free plans and their
+// validateCandidatePlanBeforeCompile preserves candidate-free plans and their
 // existing late scheduling. A candidate requires the captured execution to
 // still match; otherwise the caller rebuilds from the original AST without a
 // temporal scope before authorizing or compiling the replacement plan.
-func validateTemporalPlanBeforeCompile(p *plan2.Plan, intent *plan2.TemporalPlanningIntent, ses FeSession,
+func validateCandidatePlanBeforeCompile(p *plan2.Plan, intent *plan2.ExecutionIntent, ses FeSession,
 	proc *process.Process, sql, sqlMode string, stmt tree.Statement, rebuild func() (*plan2.Plan, error),
 ) (*plan2.Plan, bool, error) {
-	if !compile.HasTemporalIndexCandidates(p) {
+	if !plan2.HasCandidateIndexAccess(p) {
 		return p, false, nil
 	}
-	if temporalPlanningIntentMatchesCompile(intent, ses, proc, sql, sqlMode, stmt) {
+	if executionIntentMatchesCompile(intent, ses, proc, sql, sqlMode, stmt) {
 		return p, true, nil
 	}
 	safe, err := rebuild()
 	if err != nil {
 		return nil, false, err
 	}
-	if compile.HasTemporalIndexCandidates(safe) {
+	if plan2.HasCandidateIndexAccess(safe) {
 		return nil, false, moerr.NewInternalErrorNoCtx("unscoped temporal plan rebuild retained a candidate")
 	}
 	return safe, false, nil

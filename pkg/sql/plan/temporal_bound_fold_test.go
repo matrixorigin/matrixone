@@ -31,14 +31,14 @@ import (
 )
 
 func TestTemporalIndexReplanSurvivesCopyAndWire(t *testing.T) {
-	query := &plan.Query{StmtType: plan.Query_SELECT, TemporalIndexNeedsReplan: true}
+	query := &plan.Query{StmtType: plan.Query_SELECT, ExecutionDependentAccess: true}
 	copied := DeepCopyQuery(query)
-	require.True(t, copied.GetTemporalIndexNeedsReplan())
+	require.True(t, copied.GetExecutionDependentAccess())
 	data, err := proto.Marshal(copied)
 	require.NoError(t, err)
 	var restored plan.Query
 	require.NoError(t, proto.Unmarshal(data, &restored))
-	require.True(t, restored.GetTemporalIndexNeedsReplan())
+	require.True(t, restored.GetExecutionDependentAccess())
 }
 
 func TestTemporalCandidateProvenanceSurvivesFoldAndCopy(t *testing.T) {
@@ -49,9 +49,9 @@ func TestTemporalCandidateProvenanceSurvivesFoldAndCopy(t *testing.T) {
 	column := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
 	filter, err := makeDirectTemporalCandidate(proc.Ctx, column, now, types.TemporalLess, 0)
 	require.NoError(t, err)
-	filter.TemporalCandidateFilter = true
+	filter.CandidateFilter = true
 	filter = DeepCopyExpr(filter)
-	require.True(t, filter.TemporalCandidateFilter)
+	require.True(t, filter.CandidateFilter)
 	var executors []colexec.ExpressionExecutor
 	defer func() {
 		for _, executor := range executors {
@@ -66,12 +66,12 @@ func TestTemporalCandidateProvenanceSurvivesFoldAndCopy(t *testing.T) {
 	}
 	require.NoError(t, EvalFoldExpr(proc, filter, &executors))
 	copy := DeepCopyExpr(filter)
-	require.True(t, copy.TemporalCandidateFilter)
+	require.True(t, copy.CandidateFilter)
 	data, err := proto.Marshal(copy)
 	require.NoError(t, err)
 	var decoded Expr
 	require.NoError(t, proto.Unmarshal(data, &decoded))
-	require.True(t, decoded.TemporalCandidateFilter)
+	require.True(t, decoded.CandidateFilter)
 }
 
 func TestTemporalBoundKeepsClockThroughPlanningFold(t *testing.T) {
@@ -227,9 +227,9 @@ func TestTemporalHintSurvivesStatsFilterRebuild(t *testing.T) {
 	helper := &Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
 		Obj: function.EncodeOverloadID(function.TEMPORAL_DATETIME_BOUND, 0), ObjName: "__mo_temporal_datetime_bound",
 	}}}}
-	helper.TemporalCandidateFilter = true
+	helper.CandidateFilter = true
 	unmarked := DeepCopyExpr(helper)
-	unmarked.TemporalCandidateFilter = false
+	unmarked.CandidateFilter = false
 	other := MakePlan2BoolConstExprWithType(true)
 	node := &plan.Node{TableDef: &plan.TableDef{}, BindingTags: []int32{1}, BlockFilterList: []*Expr{helper, unmarked, other}}
 	require.Equal(t, []*Expr{helper}, existingCompositeBlockFilters(node))

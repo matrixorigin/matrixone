@@ -156,12 +156,7 @@ func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
 }
 
 func buildPreparedBoundQuery(ctx context.Context, ses FeSession, compiler plan2.CompilerContext,
-	stmt tree.Statement, bindings []plan2.PreparedSourceBinding, values []any) (*plan2.PreparedExecutionPlan, error) {
-	return buildPreparedBoundQueryWithTemporalIntent(ctx, ses, compiler, stmt, bindings, values, nil)
-}
-
-func buildPreparedBoundQueryWithTemporalIntent(ctx context.Context, ses FeSession, compiler plan2.CompilerContext,
-	stmt tree.Statement, bindings []plan2.PreparedSourceBinding, values []any, intent *plan2.TemporalPlanningIntent) (*plan2.PreparedExecutionPlan, error) {
+	stmt tree.Statement, bindings []plan2.PreparedSourceBinding, values []any, intent *plan2.ExecutionIntent) (*plan2.PreparedExecutionPlan, error) {
 	previous := compiler.GetContext()
 	planning := ctx
 	if planning == nil {
@@ -184,7 +179,7 @@ func buildPreparedBoundQueryWithTemporalIntent(ctx context.Context, ses FeSessio
 		var selected bool
 		bound, selected, buildErr = buildViewSchemaValidationPreparedPlan(planning, ses, compiler, stmt, bindings, values)
 		if !selected {
-			bound, buildErr = plan2.BuildPreparedExecutionPlanWithTemporalIntent(compiler, stmt, bindings, values, intent, planningResolver(compiler))
+			bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values, intent, planningCompiler(compiler))
 		}
 		if buildErr != nil {
 			return nil, buildErr
@@ -220,9 +215,9 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
 		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	}
-	var intent *plan2.TemporalPlanningIntent
-	if cwft.temporalIntentValidated && cwft.temporalPlanningIntent != nil {
-		copy := *cwft.temporalPlanningIntent
+	var intent *plan2.ExecutionIntent
+	if cwft.executionIntentValidated && cwft.executionIntent != nil {
+		copy := *cwft.executionIntent
 		intent = &copy
 	}
 	return &preparedExecutionRetry{
@@ -233,7 +228,7 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,
 		diagnosticFreeJoin: cwft.preparedJoinDiagnosticFree,
-		temporalIntent:     intent,
+		executionIntent:    intent,
 	}
 }
 

@@ -56,8 +56,8 @@ func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
 	require.True(t, selected.IndexScanInfo.IsIndexScan)
 	require.Len(t, selected.BlockFilterList, 1)
 	require.Len(t, selected.FilterList, 1)
-	require.True(t, selected.BlockFilterList[0].TemporalCandidateFilter)
-	require.False(t, selected.FilterList[0].TemporalCandidateFilter)
+	require.True(t, selected.BlockFilterList[0].CandidateFilter)
+	require.False(t, selected.FilterList[0].CandidateFilter)
 
 	// Encode exactly the index's (timestamp, primary-key) shape, then run the
 	// chosen scan's own block expression and remapped complete row predicate.

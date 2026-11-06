@@ -25,9 +25,9 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
-		"Query":            {"correlation": 19, "temporal_index_needs_replan": 22, "select_lock_references": 21},
+		"Query":            {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21},
 		"Type":             {"numeric_attributes": 14},
-		"Expr":             {"temporal_candidate_filter": 27},
+		"Expr":             {"candidate_filter": 27},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
@@ -85,10 +85,10 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 
 func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
 	// Physical OID 32 is decimal64; numeric attribute mask 3 is normalized ZEROFILL.
-	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, TemporalIndexNeedsReplan: true, Nodes: []*Node{{FilterList: []*Expr{{
-		Typ:                     Type{Id: 32, Width: 10, Scale: 2, NumericAttributes: 3},
-		TemporalCandidateFilter: true,
-		Expr:                    &Expr_Fold{Fold: &FoldVal{IsConst: true, Data: []byte{1}}},
+	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, ExecutionDependentAccess: true, Nodes: []*Node{{FilterList: []*Expr{{
+		Typ:             Type{Id: 32, Width: 10, Scale: 2, NumericAttributes: 3},
+		CandidateFilter: true,
+		Expr:            &Expr_Fold{Fold: &FoldVal{IsConst: true, Data: []byte{1}}},
 	}}}}}
 	encoded, err := original.Marshal()
 	require.NoError(t, err)

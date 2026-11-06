@@ -245,8 +245,10 @@ func (c *recordingSessionCompilerContext) GetQueryingSubscription() *plan.Subscr
 func (c *recordingSessionCompilerContext) Resolve(
 	databaseName string,
 	tableName string,
-	_ *plan.Snapshot,
+	_ *plan.Snapshot, borrowOutput ...*plan.TableResolution,
 ) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	c.resolvedDatabase = databaseName
 	c.resolvedTable = tableName
 	return &plan.ObjectRef{}, c.resolvedTableDef, nil
@@ -610,7 +612,7 @@ func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := plan.BuildPlan(c, stmt, false)
+	p, err := plan.BuildPlan(c, stmt, false, nil)
 	require.NoError(t, err)
 	drop := p.GetDdl().GetDropTable()
 	require.Equal(t, "gone", drop.GetDatabase())
@@ -747,7 +749,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		result, err := plan.BuildPlan(c, stmt, false)
+		result, err := plan.BuildPlan(c, stmt, false, nil)
 		require.NoError(t, err)
 		return result
 	}
@@ -1005,11 +1007,15 @@ type namespaceDelegate struct {
 	snapshot *plan.Snapshot
 }
 
-func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	return &plan.ObjectRef{Obj: 99}, &plan.TableDef{TblId: 99, IsTemporary: true}, nil
 }
 
-func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan.PrepareTableResolution(borrowOutput...)
+
 	require.Equal(d.t, "subscription_db", db)
 	require.Equal(d.t, "source", table)
 	require.Same(d.t, d.snapshot, snapshot)

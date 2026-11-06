@@ -157,7 +157,9 @@ func (c *scanWorkCompilerContext) GetContext() context.Context {
 	return c.CompilerContext.GetContext()
 }
 
-func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *scanWorkCompilerContext) ResolveIndexTableByRef(source *plan.ObjectRef, name string, snapshot *plan.Snapshot, borrowOutput ...*TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	if name != "entries" {
 		return c.CompilerContext.ResolveIndexTableByRef(source, name, snapshot)
 	}

@@ -1424,7 +1424,7 @@ func getRewriteSQLStmtWithSQLMode(ctx CompilerContext, sql, sqlMode string) (tre
 
 func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	queryPlan, err := BuildPlan(ctx, stmt, false)
+	queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}

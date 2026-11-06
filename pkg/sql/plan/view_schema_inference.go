@@ -146,11 +146,15 @@ func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) 
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *viewSchemaCompiler) ResolveWithoutTemporaryAlias(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) ResolveWithoutTemporaryAlias(_ string, _ string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
-func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
@@ -486,7 +490,9 @@ func (c *viewSchemaCompiler) ResolveViewUdf(name string, args []*Expr, database 
 	}
 	return c.CompilerContext.ResolveUdf(name, args)
 }
-func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}

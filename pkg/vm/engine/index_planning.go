@@ -16,46 +16,38 @@ package engine
 
 import (
 	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"time"
 )
 
 const (
-	MaxTemporalNameBytes        = 256
-	MaxTemporalIndexParts       = 16
-	MaxTemporalIndexDefinitions = 64
-	MaxTemporalTableColumns     = 1024
-	MaxTemporalBindingWork      = 65536
+	MaxIndexPlanningNameBytes   = 256
+	MaxIndexPlanningParts       = 16
+	MaxIndexPlanningDefinitions = 64
+	MaxIndexPlanningColumns     = 1024
+	MaxIndexPlanningWork        = 65536
 )
 
-// TemporalRead borrows the current ordinary resolver's transaction domain.
-// It is used synchronously by one root statement, never retained by a plan.
-// A revision detects transitions; it does not permit concurrent workspace use.
-type TemporalRead struct {
-	Op         client.TxnOperator
-	Stamp      client.CatalogReadStamp
-	Visibility uint64
-}
-
-// TemporalStats owns only copied scalar cost estimates, with no authority over
+// IndexCostStats owns only copied scalar cost estimates, with no authority over
 // schema, execution rows, permissions or the lifetime of the observed table.
-type TemporalStats struct {
+type IndexCostStats struct {
 	Rows, Min, Max, NDV float64
 	Nulls               uint64
 	Kind                types.T
 	Blocks              int64
 }
 
-type TemporalPairCheck struct {
+type IndexPairCheck struct {
 	BaseRef, HiddenRef             *plan.ObjectRef
 	BaseFull, BaseScan, HiddenFull *plan.TableDef
 	Index                          *plan.IndexDef
 	Column                         string
 	Hidden                         Relation
-	HiddenRead                     TemporalRead
+	HiddenRead                     client.CatalogReadStamp
 }
 
 // TemporalBlockInputRequest observes the original reader predicate, not the
@@ -63,7 +55,7 @@ type TemporalPairCheck struct {
 type TemporalBlockInputRequest struct {
 	Column    string
 	Observed  *statsinfo.StatsInfo
-	Stats     TemporalStats
+	Stats     IndexCostStats
 	Bound     [8]byte
 	BoundType types.T
 	Scale     int32
@@ -71,14 +63,14 @@ type TemporalBlockInputRequest struct {
 	Zone      *time.Location
 }
 
-type TemporalBlockInput struct {
+type IndexBlockInput struct {
 	Rows, Blocks uint64
 }
 
-// TemporalIndexRelation is optional metadata access on the actual relation
+// IndexPlanningRelation is optional metadata access on the actual relation
 // already returned by ordinary Resolve. It opens no relation or subscription.
-type TemporalIndexRelation interface {
-	ReadTemporalCostStats(context.Context, TemporalRead, *statsinfo.StatsInfo, string) (TemporalStats, bool, error)
-	ObserveTemporalBlockInput(context.Context, TemporalRead, TemporalBlockInputRequest, *int) (TemporalBlockInput, bool, error)
-	VerifyTemporalIndexPair(context.Context, TemporalRead, TemporalPairCheck, *int) (bool, error)
+type IndexPlanningRelation interface {
+	ReadIndexCostStats(context.Context, client.CatalogReadStamp, *statsinfo.StatsInfo, string) (IndexCostStats, bool, error)
+	ObserveTemporalBlockInput(context.Context, client.CatalogReadStamp, TemporalBlockInputRequest, *int) (IndexBlockInput, bool, error)
+	VerifyIndexPair(context.Context, client.CatalogReadStamp, IndexPairCheck, *int) (bool, error)
 }

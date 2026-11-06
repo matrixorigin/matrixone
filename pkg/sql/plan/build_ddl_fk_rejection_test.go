@@ -93,7 +93,7 @@ func TestBuildTruncateRejectsReferencedParentWithTypedError(t *testing.T) {
 	stmt := parseDDLForTest(t, "truncate table constraint_test.replace_fk_p")
 	defer stmt.Free()
 
-	_, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	_, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	requireTruncateIllegalFk(t, err,
 		"Cannot truncate a table referenced in a foreign key constraint (fk_replace_c)")
 }
@@ -107,7 +107,7 @@ func TestBuildDropRejectsReferencedParentWithTypedError(t *testing.T) {
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.ResolveVariableFunc = fkChecks(true)
-	_, err := BuildPlan(ctx, stmt, false)
+	_, err := BuildPlan(ctx, stmt, false, nil)
 	requireFkCannotDropParent(t, err,
 		"Cannot drop table 'replace_fk_p' referenced by a foreign key constraint 'fk_replace_c' on table 'replace_fk_c'.")
 }
@@ -121,7 +121,7 @@ func TestBuildDropReferencedParentAllowedWhenForeignKeyChecksDisabled(t *testing
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.ResolveVariableFunc = fkChecks(false)
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetDdl().GetDropTable())
 }
@@ -139,7 +139,7 @@ func TestBuildTruncateNameSelectionBoundedToFirstNonSelfChild(t *testing.T) {
 		// replace_fk_c (77002) is the first non-self child; the later child
 		// belonging to another parent must never be consulted.
 		ctx.tables["replace_fk_p"].RefChildTbls = []uint64{77002, 77006}
-		_, err := BuildPlan(ctx, stmt, false)
+		_, err := BuildPlan(ctx, stmt, false, nil)
 		requireTruncateIllegalFk(t, err,
 			"Cannot truncate a table referenced in a foreign key constraint (fk_replace_c)")
 	})
@@ -152,7 +152,7 @@ func TestBuildTruncateNameSelectionBoundedToFirstNonSelfChild(t *testing.T) {
 		// First non-self child replace_fk_sc (77006) references another
 		// parent (77005): the lookup stops there and fails closed, unnamed.
 		ctx.tables["replace_fk_p"].RefChildTbls = []uint64{0, 77006, 77002}
-		_, err := BuildPlan(ctx, stmt, false)
+		_, err := BuildPlan(ctx, stmt, false, nil)
 		requireTruncateIllegalFk(t, err,
 			"Cannot truncate a table referenced in a foreign key constraint ()")
 	})

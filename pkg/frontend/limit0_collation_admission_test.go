@@ -46,7 +46,9 @@ func (c *limitZeroFrontendCatalogContext) BuildTableDefByMoColumns(db, table str
 	return buildTableDefFromMoColumns(c.GetContext(), uint64(accountID), db, table, nil)
 }
 
-func (c *limitZeroFrontendCatalogContext) Resolve(db, table string, _ *sqlplan.Snapshot) (*sqlplan.ObjectRef, *sqlplan.TableDef, error) {
+func (c *limitZeroFrontendCatalogContext) Resolve(db, table string, _ *sqlplan.Snapshot, borrowOutput ...*sqlplan.TableResolution) (*sqlplan.ObjectRef, *sqlplan.TableDef, error) {
+	sqlplan.PrepareTableResolution(borrowOutput...)
+
 	c.resolveCalls++
 	return &sqlplan.ObjectRef{
 		DbName:     db,

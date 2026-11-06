@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -27,13 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"sync"
-	"testing"
 )
 
 type temporalNativeFixture struct {
 	ctx              context.Context
-	read             engine.TemporalRead
+	read             client.CatalogReadStamp
 	base, hidden     *txnTableDelegate
 	full, hiddenFull *plan.TableDef
 	stats            *pb.StatsInfo
@@ -57,7 +58,7 @@ func newTemporalNativeFixture(t *testing.T) *temporalNativeFixture {
 	require.True(t, ok)
 	visibility, stable := txn.CatalogVisibility()
 	require.True(t, stable)
-	read := engine.TemporalRead{Op: op, Stamp: stamp, Visibility: visibility}
+	read := (stamp).BindRead(op, visibility)
 	integer := plan.Type{Id: int32(types.T_uint64)}
 	full := &plan.TableDef{TblId: 98, Version: 2, Name: "base", Cols: []*plan.ColDef{{Name: "id", Typ: integer}, {Name: "d", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_datetime)}}}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}, Indexes: []*plan.IndexDef{{IndexName: "idx", IndexTableName: "__mo_index_secondary_hidden", TableExist: true, Parts: []string{"d", catalog.CreateAlias("id")}}}}
 	hiddenFull := &plan.TableDef{TblId: 99, Version: 2, Name: "__mo_index_secondary_hidden", FeatureFlag: features.IndexTable, Cols: []*plan.ColDef{{Name: catalog.IndexTableIndexColName, Typ: plan.Type{Id: int32(types.T_varchar)}, Primary: true}, {Name: catalog.IndexTablePrimaryColName, Seqnum: 1, Typ: integer}}, Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName}}
@@ -75,13 +76,13 @@ func newTemporalNativeFixture(t *testing.T) *temporalNativeFixture {
 	gs.mu.tableDefVersions = map[pb.StatsInfoKey]uint32{key: 2}
 	return &temporalNativeFixture{ctx: ctx, read: read, base: base, hidden: hidden, full: full, hiddenFull: hiddenFull, stats: stats, key: key, gs: gs}
 }
-func (f *temporalNativeFixture) pair() engine.TemporalPairCheck {
-	return engine.TemporalPairCheck{BaseRef: &plan.ObjectRef{Obj: 98, SchemaName: "db", ObjName: "base"}, HiddenRef: &plan.ObjectRef{Obj: 99, SchemaName: "db", ObjName: f.hiddenFull.Name}, BaseFull: f.full, BaseScan: f.full, HiddenFull: f.hiddenFull, Index: f.full.Indexes[0], Column: "d", Hidden: f.hidden, HiddenRead: f.read}
+func (f *temporalNativeFixture) pair() engine.IndexPairCheck {
+	return engine.IndexPairCheck{BaseRef: &plan.ObjectRef{Obj: 98, SchemaName: "db", ObjName: "base"}, HiddenRef: &plan.ObjectRef{Obj: 99, SchemaName: "db", ObjName: f.hiddenFull.Name}, BaseFull: f.full, BaseScan: f.full, HiddenFull: f.hiddenFull, Index: f.full.Indexes[0], Column: "d", Hidden: f.hidden, HiddenRead: f.read}
 }
 func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 	f := newTemporalNativeFixture(t)
 	require.Nil(t, f.gs.engine.pClient.subscriber, "metadata needs no transport/ledger/worker")
-	value, ok, err := f.base.ReadTemporalCostStats(f.ctx, f.read, f.stats, "d")
+	value, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 1000., value.Rows)
@@ -111,7 +112,7 @@ func TestTemporalCBOStatsCopiesOrdinaryValuesWithoutTransport(t *testing.T) {
 			case "closed":
 				f.gs.Close()
 			}
-			_, ok, err := f.base.ReadTemporalCostStats(ctx, f.read, observed, "d")
+			_, ok, err := f.base.ReadIndexCostStats(ctx, f.read, observed, "d")
 			if scenario == "cancelled" {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
@@ -143,7 +144,7 @@ func TestTemporalCBOStatsSnapshotConcurrentPatch(t *testing.T) {
 	}()
 	close(start)
 	for range 128 {
-		value, ok, err := f.base.ReadTemporalCostStats(f.ctx, f.read, f.stats, "d")
+		value, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
 		require.NoError(t, err)
 		if ok {
 			require.Equal(t, 2*value.Min, value.Max)
@@ -156,7 +157,7 @@ func TestTemporalCBONativePairUsesActualRelationsAndLayouts(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			f := newTemporalNativeFixture(t)
 			check := f.pair()
-			budget := engine.MaxTemporalBindingWork
+			budget := engine.MaxIndexPlanningWork
 			switch scenario {
 			case "wrong parent":
 				f.hidden.origin.extraInfo.ParentTableID++
@@ -178,16 +179,16 @@ func TestTemporalCBONativePairUsesActualRelationsAndLayouts(t *testing.T) {
 				copy.Cols[0], copy.Cols[1] = copy.Cols[1], copy.Cols[0]
 				check.HiddenFull = &copy
 			case "read mutation":
-				txn := f.read.Stamp.Workspace.(*Transaction)
+				txn := f.read.Workspace.(*Transaction)
 				txn.beginCatalogMutation()
 				txn.endCatalogMutation()
 			case "snapshot ABA":
-				f.read.Op.SetSnapshotTS(f.read.Stamp.Snapshot.Next())
-				f.read.Op.SetSnapshotTS(f.read.Stamp.Snapshot)
+				f.read.Op.SetSnapshotTS(f.read.Snapshot.Next())
+				f.read.Op.SetSnapshotTS(f.read.Snapshot)
 			case "budget exhausted":
 				budget = 0
 			}
-			ok, err := f.base.VerifyTemporalIndexPair(f.ctx, f.read, check, &budget)
+			ok, err := f.base.VerifyIndexPair(f.ctx, f.read, check, &budget)
 			require.NoError(t, err)
 			require.Equal(t, scenario == "valid", ok)
 		})
@@ -198,7 +199,7 @@ func TestTemporalNativeReadQualification(t *testing.T) {
 	for _, scenario := range []string{"readonly", "prior write", "DDL", "snapshot ABA", "visibility changed", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newTemporalNativeFixture(t)
-			txn := f.read.Stamp.Workspace.(*Transaction)
+			txn := f.read.Workspace.(*Transaction)
 			switch scenario {
 			case "prior write":
 				txn.readOnly.Store(false)
@@ -206,7 +207,7 @@ func TestTemporalNativeReadQualification(t *testing.T) {
 				txn.haveDDL.Store(true)
 			case "snapshot ABA":
 				f.read.Op.SetSnapshotTS(timestamp.Timestamp{PhysicalTime: 4})
-				f.read.Op.SetSnapshotTS(f.read.Stamp.Snapshot)
+				f.read.Op.SetSnapshotTS(f.read.Snapshot)
 			case "visibility changed":
 				txn.beginCatalogMutation()
 				txn.endCatalogMutation()
@@ -215,7 +216,7 @@ func TestTemporalNativeReadQualification(t *testing.T) {
 				cancel()
 				f.ctx = ctx
 			}
-			_, _, valid := f.base.temporalRead(f.ctx, f.read)
+			_, _, valid := f.base.planningRead(f.ctx, f.read)
 			require.Equal(t, scenario == "readonly", valid)
 		})
 	}

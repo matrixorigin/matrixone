@@ -45,7 +45,7 @@ func finiteNonnegative(v float64) bool {
 // estimateTemporalRange uses the ordinary uniform/NDV approximation. The
 // inverse range is correct independently; this estimate can be wrong under
 // skew or different block layouts and must never become an execution filter.
-func estimateTemporalRange(s engine.TemporalStats, c types.TemporalCandidate, kind types.T) (float64, bool) {
+func estimateTemporalRange(s engine.IndexCostStats, c types.TemporalCandidate, kind types.T) (float64, bool) {
 	if s.Kind != kind || (kind != types.T_datetime && kind != types.T_timestamp) ||
 		!finitePositive(s.Rows) || !finitePositive(s.NDV) || float64(s.Nulls) > s.Rows ||
 		math.IsNaN(s.Min) || math.IsNaN(s.Max) || math.IsInf(s.Min, 0) || math.IsInf(s.Max, 0) || s.Min > s.Max ||

@@ -36,7 +36,9 @@ type orLikeStringBindingContext struct {
 	columnType types.T
 }
 
-func (ctx *orLikeStringBindingContext) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (ctx *orLikeStringBindingContext) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	object, definition, err := ctx.MockCompilerContext.Resolve(db, table, snapshot)
 	if err != nil || definition == nil {
 		return object, definition, err
@@ -73,7 +75,7 @@ func TestORLikeSubjectReusePublicBinding(t *testing.T) {
 			statement, err := mysql.ParseOne(proc.Ctx, query, 1)
 			require.NoError(t, err)
 			defer statement.Free()
-			built, err := plan2.BuildPlan(ctx, statement, false)
+			built, err := plan2.BuildPlan(ctx, statement, false, nil)
 			require.NoError(t, err)
 			var candidate *plan.Expr
 			var column *plan.Expr

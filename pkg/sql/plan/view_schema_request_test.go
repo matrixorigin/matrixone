@@ -56,7 +56,7 @@ type viewSchemaTestCompiler struct {
 	defaultDatabase *string
 	rootSQL         string
 	subscription    *SubscriptionMeta
-	resolveCatalog  func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	resolveCatalog  func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error)
 }
 
 func (c *viewSchemaTestCompiler) GetQueryingSubscription() *SubscriptionMeta { return c.subscription }
@@ -89,7 +89,9 @@ func (c *viewSchemaTestCompiler) ResolveSnapshotWithSnapshotName(name string) (*
 	}
 	return c.MockCompilerContext.ResolveSnapshotWithSnapshotName(name)
 }
-func (c *viewSchemaTestCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaTestCompiler) Resolve(database, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	c.lookups.Add(1)
 	if c.resolve != nil {
 		if err := c.resolve(c.GetContext(), database, name, snapshot); err != nil {
@@ -802,7 +804,7 @@ func TestViewSchemaRequestSubscriptionPublisherIsNotCreationDatabase(t *testing.
 						// Match frontend's GetSubscriptionMeta routing: qualified
 						// publisher names select that tenant only when DbName matches
 						// the publication. Otherwise lookup stays subscriber-local.
-						f.compiler.resolveCatalog = func(database, name string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+						f.compiler.resolveCatalog = func(database, name string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
 							if database == "sub" && name == "source_v" {
 								return publishedRef, published, nil
 							}

@@ -120,10 +120,10 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 	builder.collectOriginalTemporalOwner(1)
 	project.ProjectList = project.ProjectList[:1] // a later rewrite removes the unsafe expression
 	require.False(t, builder.temporalOriginalScan.safe)
-	builder.temporalInput.intent.ParameterFree = false
+	builder.planningInput.intent.ParameterFree = false
 	builder.collectOriginalTemporalOwner(1)
 	require.False(t, builder.temporalOriginalScan.safe)
-	builder.temporalInput = nil
+	builder.planningInput = nil
 	builder.collectOriginalTemporalOwner(1)
 	require.False(t, builder.temporalOriginalScan.safe)
 }
@@ -131,7 +131,7 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 func TestTemporalOriginalSingleLeafHasIndependentCostEvidence(t *testing.T) {
 	builder, _, _ := temporalCBOTraversalFixture(t)
 	builder.qry.Steps = nil
-	builder.temporalInput.intent.ParameterFree = true
+	builder.planningInput.intent.ParameterFree = true
 	builder.collectOriginalTemporalOwner(0)
 	require.True(t, builder.temporalOriginalScan.safe)
 	scan := builder.qry.Nodes[0]
@@ -177,7 +177,7 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, _, index := temporalCBOTraversalFixture(t)
 			builder.qry.Steps = nil
-			builder.qry.TemporalIndexNeedsReplan = false
+			builder.qry.ExecutionDependentAccess = false
 			scan := builder.qry.Nodes[0]
 			root := int32(0)
 			compiler := builder.compCtx.(*temporalCBOContext).encodedIndexCostTestContext.MockCompilerContext
@@ -204,14 +204,14 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 			case "prepare statement":
 				builder.isPrepareStatement = true
 			case "no resolver":
-				builder.temporalInput.resolver = nil
-				builder.temporalResolverAllowed = false
+				builder.planningInput.owner = nil
+				builder.borrowResolutionAllowed = false
 			case "parameter-bearing rejected resolver":
-				builder.temporalInput.intent.ParameterFree = false
-				builder.temporalResolverAllowed = false
+				builder.planningInput.intent.ParameterFree = false
+				builder.borrowResolutionAllowed = false
 			}
 			builder.collectOriginalTemporalOwner(root)
-			require.Equal(t, tc.replan, builder.qry.TemporalIndexNeedsReplan)
+			require.Equal(t, tc.replan, builder.qry.ExecutionDependentAccess)
 			require.Equal(t, tc.safe, builder.temporalOriginalScan.safe)
 			state := preparedBindingState(builder.GetContext())
 			require.Equal(t, tc.dependent, state != nil && state.valueDependent)

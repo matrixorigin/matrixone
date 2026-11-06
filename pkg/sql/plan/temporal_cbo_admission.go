@@ -65,7 +65,7 @@ func temporalBaseReaderShapeSafe(ctx context.Context, query *plan.Query, scanID 
 		return false
 	}
 	scan := query.Nodes[scanID]
-	if scan == nil || scan.TableDef == nil || len(scan.TableDef.Cols) > engine.MaxTemporalTableColumns || len(scan.ProjectList) != 0 || len(scan.FilterList) == 0 || len(scan.FilterList) > 64 || len(scan.BlockFilterList) > 64 || scan.ExtraOptions == PreparedBlockFilterDisabledScanOption {
+	if scan == nil || scan.TableDef == nil || len(scan.TableDef.Cols) > engine.MaxIndexPlanningColumns || len(scan.ProjectList) != 0 || len(scan.FilterList) == 0 || len(scan.FilterList) > 64 || len(scan.BlockFilterList) > 64 || scan.ExtraOptions == PreparedBlockFilterDisabledScanOption {
 		return false
 	}
 	// Full ancestor validation precedes any clone or optional scalar evaluation.
@@ -109,19 +109,19 @@ func temporalBaseReaderShapeSafe(ctx context.Context, query *plan.Query, scanID 
 	}
 	forbidden := make(map[string]bool)
 	if pk := scan.TableDef.Pkey; pk != nil {
-		if len(pk.Names) > engine.MaxTemporalIndexParts || len(pk.PkeyColName) > engine.MaxTemporalNameBytes {
+		if len(pk.Names) > engine.MaxIndexPlanningParts || len(pk.PkeyColName) > engine.MaxIndexPlanningNameBytes {
 			return false
 		}
 		forbidden[pk.PkeyColName] = true
 		for _, name := range pk.Names {
-			if len(name) > engine.MaxTemporalNameBytes {
+			if len(name) > engine.MaxIndexPlanningNameBytes {
 				return false
 			}
 			forbidden[name] = true
 		}
 	}
 	if cb := scan.TableDef.ClusterBy; cb != nil {
-		if len(cb.Name) > engine.MaxTemporalNameBytes {
+		if len(cb.Name) > engine.MaxIndexPlanningNameBytes {
 			return false
 		}
 		forbidden[cb.Name] = true

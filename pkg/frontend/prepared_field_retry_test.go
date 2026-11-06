@@ -37,10 +37,12 @@ type fieldRetryTestCompiler struct {
 	*preparedStatsTestCompiler
 	resolveErr error
 	missing    bool
-	resolve    func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error)
+	resolve    func(string, string, *plan.Snapshot, ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error)
 }
 
-func (c *fieldRetryTestCompiler) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *fieldRetryTestCompiler) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	if c.resolve != nil {
 		return c.resolve(db, table, snapshot)
 	}
@@ -77,7 +79,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-			_, initial, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+			_, initial, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
 			if owned && clone != nil {
 				clone.Free()
 			}
@@ -127,7 +129,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			case "database":
 				table.DbId++
 			case "publication":
-				ctx.resolve = func(db, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 					ref, def, err := ctx.preparedStatsTestCompiler.Resolve(db, name, snapshot)
 					ref = proto.Clone(ref).(*plan.ObjectRef)
 					ref.PubInfo = &plan.PubInfo{TenantId: 72}
@@ -144,7 +146,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 				schemas[0].PubInfo.TenantId = 99
 				schemas[0].SubscriptionName = "mutated"
 				require.Equal(t, want, captured)
-				ctx.resolve = func(db, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 					require.Equal(t, plan2.DbNameOfObjRef(want), db)
 					require.Equal(t, want.Snapshot, snapshot, "validation must use the captured snapshot, not mutable handle metadata")
 					return nil, nil, sentinel
@@ -155,7 +157,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 				ctx.resolveErr = sentinel
 			}
 			originalContext := ctx.GetContext()
-			rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry)
+			rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry, retry.executionIntent)
 			require.Equal(t, originalContext, ctx.GetContext(), "retry must restore the compiler context, including on errors")
 			if history != nil {
 				require.Same(t, history, prepared.fieldTypes)
@@ -205,7 +207,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			pu.StorageEngine, ses.txnHandler.storage = storage, storage
 			t.Cleanup(func() { pu.StorageEngine, ses.txnHandler.storage = oldEngine, oldStorage })
 			// The next ordinary EXECUTE, not the retry callback, owns publication.
-			_, next, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+			_, next, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
 			if owned && clone != nil {
 				clone.Free()
 			}
@@ -223,7 +225,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			// Prove why unchanged UINT64 output metadata alone is insufficient.
 			ctx.SetContext(plan2.WithPreparedFieldTypes(ec.reqCtx, nil))
 			defer ctx.SetContext(originalContext)
-			fresh, err := plan2.BuildPreparedExecutionPlan(ctx, prepared.PrepareStmt, retry.bindings, retry.paramVals)
+			fresh, err := plan2.BuildPreparedExecutionPlan(ctx, prepared.PrepareStmt, retry.bindings, retry.paramVals, nil, nil)
 			require.NoError(t, err)
 			require.NotSame(t, history, fresh.FieldTypes)
 			require.Equal(t, plan2.GetResultColumnsFromPlan(initial), plan2.GetResultColumnsFromPlan(fresh.Plan))

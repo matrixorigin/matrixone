@@ -20,32 +20,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTemporalAccessIntentPlacement(t *testing.T) {
-	intent := TemporalAccessIntent{CurrentCN: Worker{ID: "cn-local", Addr: "local:6001", Route: WorkerRouteLocal}}
+func TestLocalAccessIntentPlacement(t *testing.T) {
+	intent := LocalAccessIntent{CurrentCN: Worker{ID: "cn-local", Addr: "local:6001", Route: WorkerRouteLocal}}
 	got := intent
-	require.True(t, got.AllowsFixedTemporalCandidate())
-	require.True(t, got.AllowsNamedTemporalCandidate())
+	require.True(t, got.AllowsPinnedLocalAccess())
+	require.True(t, got.AllowsLocalIndexPlacement())
 	got.Scheduling.CurrentCNPolicy = CurrentCNExcluded
-	require.True(t, got.AllowsFixedTemporalCandidate())
-	require.False(t, got.AllowsNamedTemporalCandidate())
+	require.True(t, got.AllowsPinnedLocalAccess())
+	require.False(t, got.AllowsLocalIndexPlacement())
 	got.Scheduling.CurrentCNPolicy = CurrentCNRequired
 	got.CurrentCN = Worker{}
-	require.False(t, got.AllowsNamedTemporalCandidate())
-	require.False(t, got.AllowsFixedTemporalCandidate())
+	require.False(t, got.AllowsLocalIndexPlacement())
+	require.False(t, got.AllowsPinnedLocalAccess())
 	got = intent
 	got.CurrentCN.Route = WorkerRouteRemote
-	require.False(t, got.AllowsNamedTemporalCandidate())
+	require.False(t, got.AllowsLocalIndexPlacement())
 	got = intent
 	got.Scheduling.Explicit = true
-	require.False(t, got.AllowsNamedTemporalCandidate())
+	require.False(t, got.AllowsLocalIndexPlacement())
 	got = intent
 	got.Scheduling.PoolFallback = PoolFallbackStrict
-	require.False(t, got.AllowsNamedTemporalCandidate())
+	require.False(t, got.AllowsLocalIndexPlacement())
 	got = intent
 	got.Sirius = true
-	require.False(t, got.AllowsFixedTemporalCandidate())
-	require.False(t, got.AllowsNamedTemporalCandidate())
+	require.False(t, got.AllowsPinnedLocalAccess())
+	require.False(t, got.AllowsLocalIndexPlacement())
 	got = intent
 	got.Scheduling.PoolFallback = PoolFallbackPolicy(255)
-	require.False(t, got.AllowsFixedTemporalCandidate())
+	require.False(t, got.AllowsPinnedLocalAccess())
 }

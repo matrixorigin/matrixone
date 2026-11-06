@@ -26,11 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
-	return getPreparePlanWithTemporalInput(ctx, stmt, nil)
-}
-
-func getPreparePlanWithTemporalInput(ctx CompilerContext, stmt tree.Statement, temporalInput *TemporalPlanningInput) (*Plan, *Query, error) {
+func getPreparePlan(ctx CompilerContext, stmt tree.Statement, planningInput *PlanningInput) (*Plan, *Query, error) {
 	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
 		switch source := stmt.(type) {
 		case *tree.Select, *tree.ParenSelect:
@@ -44,12 +40,12 @@ func getPreparePlanWithTemporalInput(ctx CompilerContext, stmt tree.Statement, t
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			p, err := BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true, nil)
 			return p, nil, err
 		}
 	} else if s, ok := stmt.(*tree.Replace); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			p, err := BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true, nil)
 			return p, nil, err
 		}
 	}
@@ -61,7 +57,7 @@ func getPreparePlanWithTemporalInput(ctx CompilerContext, stmt tree.Statement, t
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.OptimizeWithTemporalInput(stmt, true, temporalInput)
+		optimized, err := opt.Optimize(stmt, true, planningInput)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -101,16 +97,12 @@ func getPreparePlanWithTemporalInput(ctx CompilerContext, stmt tree.Statement, t
 		// compile it.
 		return &Plan{}, nil, nil
 	default:
-		p, err := BuildPlan(ctx, stmt, true)
+		p, err := BuildPlan(ctx, stmt, true, nil)
 		return p, nil, err
 	}
 }
 
-func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
-	return buildPrepareWithTemporalInput(stmt, ctx, nil)
-}
-
-func buildPrepareWithTemporalInput(stmt tree.Prepare, ctx CompilerContext, temporalInput *TemporalPlanningInput) (*Plan, error) {
+func buildPrepare(stmt tree.Prepare, ctx CompilerContext, planningInput *PlanningInput) (*Plan, error) {
 	// Views belong to the statement currently being built. Query/DML builders
 	// replace this state, but pure DDL builders do not, so clear the previous
 	// statement's dependencies before planning this PREPARE.
@@ -128,7 +120,7 @@ func buildPrepareWithTemporalInput(stmt tree.Prepare, ctx CompilerContext, tempo
 		stmtName = string(pstmt.Name)
 		preparedStmt = pstmt.Stmt
 		sourceParameterCount = tree.ParameterCount(preparedStmt)
-		preparePlan, transientQuery, err = getPreparePlanWithTemporalInput(ctx, pstmt.Stmt, temporalInput)
+		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt, planningInput)
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +159,7 @@ func buildPrepareWithTemporalInput(stmt tree.Prepare, ctx CompilerContext, tempo
 		stmtName = string(pstmt.Name)
 		preparedStmt = stmts[0]
 		sourceParameterCount = tree.ParameterCount(preparedStmt)
-		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0])
+		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0], nil)
 		if err != nil {
 			return nil, err
 		}

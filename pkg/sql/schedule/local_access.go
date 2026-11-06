@@ -14,26 +14,26 @@
 
 package schedule
 
-// TemporalAccessIntent captures one statement's placement and offload inputs.
+// LocalAccessIntent captures one statement's placement and offload inputs.
 // It is a value snapshot, not authority to bypass the normal scheduler.
-type TemporalAccessIntent struct {
+type LocalAccessIntent struct {
 	Scheduling SchedulingIntent
 	CurrentCN  Worker
 	Sirius     bool
 }
 
-// AllowsFixedTemporalCandidate proves offload compatibility and a known local
+// AllowsPinnedLocalAccess proves offload compatibility and a known local
 // owner. Fixed-offset transport and the ordinary scheduler are separate checks.
-func (intent TemporalAccessIntent) AllowsFixedTemporalCandidate() bool {
+func (intent LocalAccessIntent) AllowsPinnedLocalAccess() bool {
 	return !intent.Sirius && hasWorkerIdentity(intent.CurrentCN) && intent.CurrentCN.Route == WorkerRouteLocal &&
 		ValidateSchedulingIntent(intent.Scheduling) == ""
 }
 
-// AllowsNamedTemporalCandidate uses the scheduler's actual local decision.
+// AllowsLocalIndexPlacement uses the scheduler's actual local decision.
 // A missing current identity is not a sufficient placement proof, even when
 // legacy local scheduling happens to allow it.
-func (intent TemporalAccessIntent) AllowsNamedTemporalCandidate() bool {
-	if !intent.AllowsFixedTemporalCandidate() {
+func (intent LocalAccessIntent) AllowsLocalIndexPlacement() bool {
+	if !intent.AllowsPinnedLocalAccess() {
 		return false
 	}
 	// Local placement does not resolve an explicit pool. Until that pool is

@@ -7128,7 +7128,7 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
 	require.NoError(t, err)
-	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
 	require.Len(t, dependencies, 2)
@@ -7179,7 +7179,9 @@ func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, sn
 	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
 }
 
-func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	if dbName == "mongo_window_auth" && tableName == "events" {
 		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
 	}
@@ -7263,7 +7265,7 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false)
+			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false, nil)
 			require.NoError(t, err)
 
 			ctrl := gomock.NewController(t)

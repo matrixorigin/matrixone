@@ -46,7 +46,9 @@ import (
 
 type dependentMergeContext struct{ plan2.CompilerContext }
 
-func (c dependentMergeContext) Resolve(db, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c dependentMergeContext) Resolve(db, name string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+
 	if name != "gold_orders" && name != "dim_orders" {
 		return c.CompilerContext.Resolve(db, name, snapshot)
 	}
@@ -107,7 +109,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 			stmt, err := mysql.ParseOne(proc.Ctx, "merge into gold_orders t using dim_orders s on t.id=s.id "+clause+" when not matched then insert (id) values (s.id)", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := plan2.BuildPlan(dependentMergeContext{plan2.NewMockCompilerContext(true, proc)}, stmt, false)
+			bound, err := plan2.BuildPlan(dependentMergeContext{plan2.NewMockCompilerContext(true, proc)}, stmt, false, nil)
 			require.NoError(t, err)
 			q := bound.GetQuery()
 			require.NotNil(t, q.Correlation)

@@ -1131,7 +1131,7 @@ func testReaderTemporalResidualAfterOptionalPKFilter(t *testing.T, reverse bool)
 	hint := bind("prefix_between", key,
 		plan2.MakePlan2StringConstExprWithType(string(encode(keyCenter)), true),
 		plan2.MakePlan2StringConstExprWithType(string(encode(values[len(values)-1])), true))
-	hint.TemporalCandidateFilter = true
+	hint.CandidateFilter = true
 	var folds []colexec.ExpressionExecutor
 	defer func() {
 		for _, executor := range folds {

@@ -30,17 +30,16 @@ type cleanupBorrowCompiler struct {
 	borrow *BorrowedTable
 }
 
-func (c *cleanupBorrowCompiler) IsSameCompiler(ctx CompilerContext) bool { return c == ctx }
-func (c *cleanupBorrowCompiler) ResolveBaseForPlanning(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
+func (c *cleanupBorrowCompiler) Resolve(database, name string, snapshot *Snapshot, outputs ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	output := PrepareTableResolution(outputs...)
 	ref, def, err := c.CompilerContext.Resolve(database, name, snapshot)
-	return ref, def, c.borrow, err
+	if err == nil && output != nil {
+		output.Borrow = c.borrow
+	}
+	return ref, def, err
 }
-func (c *cleanupBorrowCompiler) ResolveIndexForPlanning(base *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
-	ref, def, err := c.CompilerContext.ResolveIndexTableByRef(base, name, snapshot)
-	return ref, def, nil, err
-}
-func (c *cleanupBorrowCompiler) BorrowStillCurrent(ctx CompilerContext, proc *process.Process, borrow *BorrowedTable) bool {
-	return c.IsSameCompiler(ctx) && proc != nil && borrow != nil && proc.GetTxnOperator() == borrow.Read.Op
+func (c *cleanupBorrowCompiler) BorrowedTableStillCurrent(proc *process.Process, borrow *BorrowedTable) bool {
+	return proc != nil && borrow != nil && proc.GetTxnOperator() == borrow.Read.Op
 }
 
 func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
@@ -51,21 +50,21 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 			underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
 			underlying.tables["base"] = scan.TableDef
 			underlying.objects["base"] = scan.ObjRef
-			compiler := &cleanupBorrowCompiler{CompilerContext: underlying, borrow: fixture.temporalScanBorrows[0].borrow}
+			compiler := &cleanupBorrowCompiler{CompilerContext: underlying, borrow: fixture.scanBorrows[0].borrow}
 			stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 			root := stmt.(*tree.Select)
-			input := NewTemporalPlanningInput(root, fixture.temporalInput.intent, compiler)
+			input := NewPlanningInput(root, fixture.planningInput.intent, compiler)
 			var builder *QueryBuilder
-			var backing []temporalScanBorrow
+			var backing []scanBorrow
 			marker := errors.New("stop after binding")
 			validate := func(*Query) error {
 				require.NotNil(t, builder)
-				require.Same(t, input, builder.temporalInput)
-				require.True(t, builder.temporalResolverAllowed)
-				require.Len(t, builder.temporalScanBorrows, 1, "the real bind must have retained the borrow")
-				backing = builder.temporalScanBorrows
+				require.Same(t, input, builder.planningInput)
+				require.True(t, builder.borrowResolutionAllowed)
+				require.Len(t, builder.scanBorrows, 1, "the real bind must have retained the borrow")
+				backing = builder.scanBorrows
 				switch outcome {
 				case "error":
 					return marker
@@ -87,14 +86,14 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 				require.NoError(t, run())
 			}
 			require.NotNil(t, builder)
-			require.Nil(t, builder.temporalInput, "the AST and resolver must not survive the attempt")
-			require.False(t, builder.temporalResolverAllowed)
-			require.Equal(t, fixture.temporalInput.intent, input.intent)
-			require.Same(t, compiler, input.resolver)
+			require.Nil(t, builder.planningInput, "the AST and resolver must not survive the attempt")
+			require.False(t, builder.borrowResolutionAllowed)
+			require.Equal(t, fixture.planningInput.intent, input.intent)
+			require.Same(t, compiler, input.owner)
 			require.False(t, input.claim(root), "cleanup must not reset the one-shot claim")
-			require.Nil(t, builder.temporalScanBorrows, "no transaction reference may survive the attempt")
+			require.Nil(t, builder.scanBorrows, "no transaction reference may survive the attempt")
 			require.Len(t, backing, 1)
-			require.Equal(t, temporalScanBorrow{}, backing[0], "the old backing array must not retain the transaction")
+			require.Equal(t, scanBorrow{}, backing[0], "the old backing array must not retain the transaction")
 		})
 	}
 }

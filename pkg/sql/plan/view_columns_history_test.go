@@ -31,10 +31,12 @@ import (
 
 type historicalColumnsContext struct {
 	*MockCompilerContext
-	resolve func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+	resolve func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error)
 }
 
-func (c *historicalColumnsContext) Resolve(db, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *historicalColumnsContext) Resolve(db, table string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	return c.resolve(db, table, snapshot)
 }
 
@@ -164,7 +166,7 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 			}
 			calls := 0
 			ctx := &historicalColumnsContext{MockCompilerContext: mock}
-			ctx.resolve = func(db, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+			ctx.resolve = func(db, table string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
 				calls++
 				require.Equal(t, "information_schema", db)
 				require.Equal(t, "columns", table)

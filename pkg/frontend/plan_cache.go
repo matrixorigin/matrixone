@@ -17,7 +17,6 @@ package frontend
 import (
 	"container/list"
 
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -92,8 +91,8 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 		return
 	}
 	for i := range stmts {
-		needsReplan, valid := temporalPlanReplanState(plans[i])
-		if !valid || needsReplan {
+		decision := planReuse(false, plans[i], ordinaryPlanGeneration)
+		if !decision.valid || !decision.reusable {
 			// can not cache and clean all stmts
 			freeStmts(stmts)
 			return
@@ -257,11 +256,11 @@ func (pc *planCache) updatePlanGeneration(
 		cached.plans[index] != expectedPlan {
 		return false
 	}
-	needsReplan, valid := temporalPlanReplanState(newPlan)
-	if !valid {
+	decision := planReuse(false, newPlan, ordinaryPlanGeneration)
+	if !decision.valid {
 		return false
 	}
-	if needsReplan {
+	if !decision.reusable {
 		cached.invalid = true
 		return false
 	}
@@ -314,18 +313,4 @@ func (pc *planCache) clean() {
 	}
 	pc.lruList = nil
 	pc.cachePool = nil
-}
-
-// A statement-dependent access path must be costed at each execution.
-func temporalPlanReplanState(p *pbplan.Plan) (needsReplan, valid bool) {
-	if p == nil {
-		return false, false
-	}
-	if query, ok := p.Plan.(*pbplan.Plan_Query); ok {
-		if query == nil || query.Query == nil {
-			return false, false
-		}
-		return query.Query.TemporalIndexNeedsReplan, true
-	}
-	return false, true
 }

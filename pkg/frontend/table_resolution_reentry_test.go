@@ -24,6 +24,7 @@ import (
 	mockfrontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -49,22 +50,26 @@ func TestPlanningResolverNestedActualLookupKeepsOwner(t *testing.T) {
 		previous := f.parent.execCtx
 		f.parent.SetExecCtx(&ExecCtx{reqCtx: f.ctx, ses: f.session, proc: f.proc})
 		defer f.parent.SetExecCtx(previous)
-		ref, def, borrow, err := f.parent.ResolveBaseForPlanning(catalog.MO_CATALOG, "inner", nil)
+		var resolvedBorrow1 plan.TableResolution
+		ref, def, err := f.parent.Resolve(catalog.MO_CATALOG, "inner", nil, &resolvedBorrow1)
+		borrow := resolvedBorrow1.Borrow
 		require.NoError(t, err)
 		require.EqualValues(t, 43, ref.Obj)
 		require.EqualValues(t, 43, def.TblId)
 		require.NotNil(t, borrow)
 		require.Same(t, inner, borrow.Relation)
-		require.True(t, f.parent.BorrowStillCurrent(f.parent, f.proc, borrow))
+		require.True(t, f.parent.BorrowedTableStillCurrent(f.proc, borrow))
 		return outer, nil
 	}).Times(1)
-	ref, def, borrow, err := f.parent.ResolveBaseForPlanning(catalog.MO_CATALOG, "outer", nil)
+	var resolvedBorrow2 plan.TableResolution
+	ref, def, err := f.parent.Resolve(catalog.MO_CATALOG, "outer", nil, &resolvedBorrow2)
+	borrow := resolvedBorrow2.Borrow
 	require.NoError(t, err)
 	require.EqualValues(t, 42, ref.Obj)
 	require.EqualValues(t, 42, def.TblId)
 	require.NotNil(t, borrow)
 	require.Same(t, outer, borrow.Relation)
-	require.True(t, f.parent.BorrowStillCurrent(f.parent, f.proc, borrow))
+	require.True(t, f.parent.BorrowedTableStillCurrent(f.proc, borrow))
 }
 
 func TestPlanningResolverCancellationDuringActualLookup(t *testing.T) {
@@ -85,7 +90,9 @@ func TestPlanningResolverCancellationDuringActualLookup(t *testing.T) {
 		return &temporalCaptureRelation{Relation: mock}, nil
 	}).Times(1)
 	mock.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{TblId: 42, Name: "events"}).Times(1)
-	ref, def, borrow, err := f.parent.ResolveBaseForPlanning(catalog.MO_CATALOG, "events", nil)
+	resolvedBorrow3 := plan.TableResolution{Borrow: &plan.BorrowedTable{Owner: f.parent.execCtx}}
+	ref, def, err := f.parent.Resolve(catalog.MO_CATALOG, "events", nil, &resolvedBorrow3)
+	borrow := resolvedBorrow3.Borrow
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, ref)
 	require.Nil(t, def)

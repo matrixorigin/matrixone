@@ -27,7 +27,7 @@ import (
 )
 
 func TestTemporalRangeEstimateControls(t *testing.T) {
-	stats := engine.TemporalStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
+	stats := engine.IndexCostStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
 	for _, tc := range []struct {
 		name string
 		c    types.TemporalCandidate
@@ -63,13 +63,13 @@ func TestTemporalRangeEstimateControls(t *testing.T) {
 }
 
 func TestTemporalRangeEstimateDeclinesUnusableEvidence(t *testing.T) {
-	base := engine.TemporalStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
-	for _, alter := range []func(*engine.TemporalStats){
-		func(s *engine.TemporalStats) { s.Rows = math.Inf(1) },
-		func(s *engine.TemporalStats) { s.NDV = math.NaN() },
-		func(s *engine.TemporalStats) { s.Nulls = 1001 },
-		func(s *engine.TemporalStats) { s.Min = 201 },
-		func(s *engine.TemporalStats) { s.Kind = types.T_datetime },
+	base := engine.IndexCostStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
+	for _, alter := range []func(*engine.IndexCostStats){
+		func(s *engine.IndexCostStats) { s.Rows = math.Inf(1) },
+		func(s *engine.IndexCostStats) { s.NDV = math.NaN() },
+		func(s *engine.IndexCostStats) { s.Nulls = 1001 },
+		func(s *engine.IndexCostStats) { s.Min = 201 },
+		func(s *engine.IndexCostStats) { s.Kind = types.T_datetime },
 	} {
 		s := base
 		alter(&s)

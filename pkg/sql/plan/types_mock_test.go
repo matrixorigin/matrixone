@@ -364,9 +364,15 @@ func (mr *MockCompilerContext2MockRecorder) IsPublishing(dbName interface{}) *go
 }
 
 // Resolve mocks base method.
-func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Resolve", schemaName, tableName, snapshot)
+	args := []interface{}{schemaName, tableName, snapshot}
+	for _, output := range borrowOutput {
+		args = append(args, output)
+	}
+	ret := m.ctrl.Call(m, "Resolve", args...)
 	ret0, _ := ret[0].(*ObjectRef)
 	ret1, _ := ret[1].(*TableDef)
 	ret2, _ := ret[2].(error)
@@ -374,15 +380,22 @@ func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *S
 }
 
 // Resolve indicates an expected call of Resolve.
-func (mr *MockCompilerContext2MockRecorder) Resolve(schemaName, tableName, snapshot interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) Resolve(schemaName, tableName, snapshot interface{}, borrowOutput ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCompilerContext2)(nil).Resolve), schemaName, tableName, snapshot)
+	args := append([]interface{}{schemaName, tableName, snapshot}, borrowOutput...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCompilerContext2)(nil).Resolve), args...)
 }
 
 // ResolveWithoutTemporaryAlias mocks base method.
-func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ResolveWithoutTemporaryAlias", schemaName, tableName, snapshot)
+	args := []interface{}{schemaName, tableName, snapshot}
+	for _, output := range borrowOutput {
+		args = append(args, output)
+	}
+	ret := m.ctrl.Call(m, "ResolveWithoutTemporaryAlias", args...)
 	ret0, _ := ret[0].(*ObjectRef)
 	ret1, _ := ret[1].(*TableDef)
 	ret2, _ := ret[2].(error)
@@ -390,9 +403,10 @@ func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableNam
 }
 
 // ResolveWithoutTemporaryAlias indicates an expected call of ResolveWithoutTemporaryAlias.
-func (mr *MockCompilerContext2MockRecorder) ResolveWithoutTemporaryAlias(schemaName, tableName, snapshot interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) ResolveWithoutTemporaryAlias(schemaName, tableName, snapshot interface{}, borrowOutput ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveWithoutTemporaryAlias", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveWithoutTemporaryAlias), schemaName, tableName, snapshot)
+	args := append([]interface{}{schemaName, tableName, snapshot}, borrowOutput...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveWithoutTemporaryAlias", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveWithoutTemporaryAlias), args...)
 }
 
 // ResolveAccountIds mocks base method.
@@ -427,9 +441,15 @@ func (mr *MockCompilerContext2MockRecorder) ResolveById(tableId, snapshot interf
 }
 
 // ResolveIndexTableByRef mocks base method.
-func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	PrepareTableResolution(borrowOutput...)
+
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ResolveIndexTableByRef", ref, tblName, snapshot)
+	args := []interface{}{ref, tblName, snapshot}
+	for _, output := range borrowOutput {
+		args = append(args, output)
+	}
+	ret := m.ctrl.Call(m, "ResolveIndexTableByRef", args...)
 	ret0, _ := ret[0].(*ObjectRef)
 	ret1, _ := ret[1].(*TableDef)
 	ret2, _ := ret[2].(error)
@@ -437,9 +457,10 @@ func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName st
 }
 
 // ResolveIndexTableByRef indicates an expected call of ResolveIndexTableByRef.
-func (mr *MockCompilerContext2MockRecorder) ResolveIndexTableByRef(ref, tblName, snapshot interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) ResolveIndexTableByRef(ref, tblName, snapshot interface{}, borrowOutput ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveIndexTableByRef", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveIndexTableByRef), ref, tblName, snapshot)
+	args := append([]interface{}{ref, tblName, snapshot}, borrowOutput...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveIndexTableByRef", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveIndexTableByRef), args...)
 }
 
 // ResolveSnapshotWithSnapshotName mocks base method.
@@ -804,4 +825,16 @@ func (m *MockBinder) GetContext() context.Context {
 func (mr *MockBinderMockRecorder) GetContext() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetContext", reflect.TypeOf((*MockBinder)(nil).GetContext))
+}
+
+// BorrowedTableStillCurrent mocks the ordinary read-owner contract.
+func (m *MockCompilerContext2) BorrowedTableStillCurrent(proc *process.Process, borrow *BorrowedTable) bool {
+	m.ctrl.T.Helper()
+	result := m.ctrl.Call(m, "BorrowedTableStillCurrent", proc, borrow)
+	value, _ := result[0].(bool)
+	return value
+}
+func (mr *MockCompilerContext2MockRecorder) BorrowedTableStillCurrent(proc, borrow interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BorrowedTableStillCurrent", reflect.TypeOf((*MockCompilerContext2)(nil).BorrowedTableStillCurrent), proc, borrow)
 }

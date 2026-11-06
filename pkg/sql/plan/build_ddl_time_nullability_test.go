@@ -55,7 +55,7 @@ func TestBuildCreateTimeConversionNullabilityMetadata(t *testing.T) {
 					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					p, err := BuildPlan(ctx, stmt, false)
+					p, err := BuildPlan(ctx, stmt, false, nil)
 					require.NoError(t, err)
 					var cols []*plan.ColDef
 					if view := p.GetDdl().GetCreateView(); view != nil {

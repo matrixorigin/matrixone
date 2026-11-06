@@ -1,0 +1,72 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package compile
+
+import (
+	"context"
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+)
+
+// ErrExecutionIntentDrift is internal control flow: the execution owner must
+// rebuild the original plan without temporal access before retrying compile.
+var ErrExecutionIntentDrift = moerr.NewInternalError(moerr.NoReportContext(), "temporal access intent changed before compilation")
+
+// SetValidatedExecutionIntent binds the frontend's already checked
+// execution snapshot to this compile. The copy cannot follow later wrapper
+// mutations, and Reset clears it before a cached Compile can be reused.
+func (c *Compile) SetValidatedExecutionIntent(intent *plan2.ExecutionIntent) {
+	c.executionIntent = nil
+	if intent != nil {
+		copy := *intent
+		c.executionIntent = &copy
+	}
+}
+
+func (c *Compile) candidateExecutionAllowed(ctx context.Context) bool {
+	intent := c.executionIntent
+	if intent == nil || !intent.MatchesProcess(c.proc) || !intent.Placement.AllowsPinnedLocalAccess() ||
+		intent.Placement.Scheduling != c.querySchedulingIntent || intent.Placement.CurrentCN.ID != c.proc.GetService() ||
+		intent.Placement.CurrentCN.Addr != c.addr || siriusOffloadRequested(ctx) {
+		return false
+	}
+	offset, fixed := types.FixedZoneOffset(c.proc.GetSessionInfo().TimeZone)
+	return fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
+}
+
+func (c *Compile) candidateRetryNeedsRebuild() bool {
+	return c.candidateIndexTopology && (c.executionIntent == nil || !c.executionIntent.MatchesProcess(c.proc))
+}
+
+// Check every marked scan, including a missing/cleared local placement bit.
+func (c *Compile) candidateIndexPlacementAllowed(template *plan.Plan) bool {
+	if !plan2.HasCandidateIndexAccess(template) {
+		return true
+	}
+	intent := c.executionIntent
+	if intent == nil || !intent.Placement.AllowsLocalIndexPlacement() || plan2.GetForceScanOnMultiCN() {
+		return false
+	}
+	for _, node := range template.GetQuery().Nodes {
+		if plan2.NodeHasCandidateFilter(node) && (!plan2.CandidatePhysicalIndexScan(node) || node.Stats == nil || !node.Stats.ForceOneCN) {
+			return false
+		}
+	}
+	return true
+}

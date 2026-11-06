@@ -17,6 +17,9 @@ package readutil
 import (
 	"context"
 	"fmt"
+	"io"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"io"
-	"testing"
 )
 
 // Real writer -> metadata loader -> compiled sorted-key reader. Row kernels
@@ -75,7 +76,7 @@ func BenchmarkTemporalPhysicalReaderWork(b *testing.B) {
 			require.NoError(b, err)
 			table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Primary: true, Typ: types.T_varchar.ToType().PlanType()}, {Name: "id", Seqnum: 1, Typ: types.T_int64.ToType().PlanType()}}, Name2ColIndex: map[string]int32{"key": 0, "id": 1}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "key", Names: []string{"key"}}}
 			expr := MakeFunctionExprForTest("prefix_between", []*plan.Expr{MakeColExprForTest(0, types.T_varchar, "key"), plan2.MakePlan2StringConstExprWithType(string(encode(blocks-1)), true), plan2.MakePlan2StringConstExprWithType(string(encode(blocks)), true)})
-			expr.TemporalCandidateFilter = true
+			expr.CandidateFilter = true
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
 			for _, exe := range exes {

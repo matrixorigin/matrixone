@@ -6,6 +6,9 @@ index bounds and retaining the SQL predicate. PR #31944 adds a cost-based
 performance path for eligible comparisons; it does not replace that fix.
 
 The candidate-range proof is in [temporal index ranges](20261028-temporal-index-ranges.md).
+The final generic owner and API contract is in
+[index planning owners](20261107-index-planning-owners.md); it replaces the
+intermediate borrowed-read and access-consolidation designs.
 
 ## Contract and scope
 

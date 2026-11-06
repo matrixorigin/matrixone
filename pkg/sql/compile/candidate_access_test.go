@@ -35,10 +35,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCompileSetupRejectsInvalidBeforeResources(t *testing.T) {
+	for _, setup := range [][]CompileSetup{{CompileSetup(255)}, {ImmediateSetup, PreflightSetup}} {
+		var caught any
+		func() {
+			defer func() { caught = recover() }()
+			// A nil process would fail if setup validation reached allocation or
+			// the workspace. The constructor must reject its own invalid input first.
+			NewCompile("", "", "", "", "", nil, nil, nil, false, nil, time.Time{}, setup...)
+		}()
+		cause, ok := caught.(error)
+		require.True(t, ok)
+		require.True(t, moerr.IsMoErrCode(cause, moerr.ErrInternal))
+	}
+}
+
 func TestTemporalAccessDriftSentinelIdentity(t *testing.T) {
-	require.ErrorIs(t, ErrTemporalAccessDrift, ErrTemporalAccessDrift)
-	require.ErrorIs(t, fmt.Errorf("compile: %w", ErrTemporalAccessDrift), ErrTemporalAccessDrift)
-	require.NotErrorIs(t, moerr.NewInternalErrorNoCtx("different internal error"), ErrTemporalAccessDrift)
+	require.ErrorIs(t, ErrExecutionIntentDrift, ErrExecutionIntentDrift)
+	require.ErrorIs(t, fmt.Errorf("compile: %w", ErrExecutionIntentDrift), ErrExecutionIntentDrift)
+	require.NotErrorIs(t, moerr.NewInternalErrorNoCtx("different internal error"), ErrExecutionIntentDrift)
 }
 
 func TestTemporalCandidateExecutionFenceAndReuse(t *testing.T) {
@@ -46,45 +61,45 @@ func TestTemporalCandidateExecutionFenceAndReuse(t *testing.T) {
 	defer proc.Free()
 	proc.GetSessionInfo().TimeZone = time.FixedZone("test", 1234)
 	c := &Compile{proc: proc, addr: "local:6001"}
-	intent := &plan2.TemporalPlanningIntent{
+	intent := &plan2.ExecutionIntent{
 		TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}},
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}},
 	}
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	marked := &plan.Expr{CandidateFilter: true}
 	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
 		NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{ForceOneCN: true}, IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true}, BlockFilterList: []*plan.Expr{marked},
 	}}}}}
-	require.False(t, c.temporalExecutionAllowed(context.Background()))
-	c.SetValidatedTemporalAccessIntent(intent)
-	require.True(t, c.temporalExecutionAllowed(context.Background()))
-	require.False(t, c.temporalExecutionAllowed(WithSiriusOffload(context.Background())))
+	require.False(t, c.candidateExecutionAllowed(context.Background()))
+	c.SetValidatedExecutionIntent(intent)
+	require.True(t, c.candidateExecutionAllowed(context.Background()))
+	require.False(t, c.candidateExecutionAllowed(WithSiriusOffload(context.Background())))
 	c.querySchedulingIntent.Explicit = true
-	require.False(t, c.temporalExecutionAllowed(context.Background()))
+	require.False(t, c.candidateExecutionAllowed(context.Background()))
 	c.querySchedulingIntent.Explicit = false
-	c.temporalCandidateTopology = true
-	require.False(t, c.temporalRetryNeedsRebuild())
+	c.candidateIndexTopology = true
+	require.False(t, c.candidateRetryNeedsRebuild())
 	proc.Base.UnixTime++
-	require.False(t, c.temporalExecutionAllowed(context.Background()))
-	require.True(t, c.temporalRetryNeedsRebuild())
-	c.temporalCandidateTopology = false
-	require.False(t, c.temporalRetryNeedsRebuild())
+	require.False(t, c.candidateExecutionAllowed(context.Background()))
+	require.True(t, c.candidateRetryNeedsRebuild())
+	c.candidateIndexTopology = false
+	require.False(t, c.candidateRetryNeedsRebuild())
 	proc.Base.UnixTime--
 	c.pn = template
 	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr)
-	require.Nil(t, c.temporalAccessIntent)
+	require.Nil(t, c.executionIntent)
 	folded := plan2.MakePlan2BoolConstExprWithType(true)
-	folded.TemporalCandidateFilter = true
+	folded.CandidateFilter = true
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{folded}}}}}}
 	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr, "folding must not hide candidate ownership")
 	c.pn = nil
-	c.temporalCandidateTopology = true
+	c.candidateIndexTopology = true
 	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr, "topology remains sticky")
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
 	intent.TimeZone = zone
-	c.SetValidatedTemporalAccessIntent(intent)
-	require.False(t, c.temporalExecutionAllowed(context.Background()))
+	c.SetValidatedExecutionIntent(intent)
+	require.False(t, c.candidateExecutionAllowed(context.Background()))
 }
 
 func TestTemporalCandidateWithoutPhysicalIndexOrIntentFailsPreflight(t *testing.T) {
@@ -93,20 +108,20 @@ func TestTemporalCandidateWithoutPhysicalIndexOrIntentFailsPreflight(t *testing.
 	proc.GetSessionInfo().TimeZone = time.UTC
 	board := message.NewMessageBoard()
 	proc.SetMessageBoard(board)
-	c := NewTemporalCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, nil, time.Time{})
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	c := NewCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, nil, time.Time{}, PreflightSetup)
+	marked := &plan.Expr{CandidateFilter: true}
 	node := &plan.Node{FilterList: []*plan.Expr{marked}}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}}}}
-	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
-	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
-	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrExecutionIntentDrift)
+	c.SetValidatedExecutionIntent(&plan2.ExecutionIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrExecutionIntentDrift)
 	node.NodeType = plan.Node_TABLE_SCAN
 	node.IndexScanInfo.IsIndexScan = true
 	node.Stats = &plan.Stats{ForceOneCN: true}
-	c.SetValidatedTemporalAccessIntent(nil)
-	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
-	c.DiscardTemporalPreflight()
+	c.SetValidatedExecutionIntent(nil)
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrExecutionIntentDrift)
+	c.DiscardPreflight()
 	require.Same(t, board, proc.GetMessageBoard())
 }
 
@@ -128,20 +143,20 @@ func TestTemporalPreflightDiscardPreservesProcess(t *testing.T) {
 	originalSnapshot := timestamp.Timestamp{PhysicalTime: 123}
 	proc.SetPlanSnapshotTS(originalSnapshot)
 	labels := map[string]string{"pool": "original"}
-	c := NewTemporalCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, labels, time.Time{})
+	c := NewCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, labels, time.Time{}, PreflightSetup)
 	require.Same(t, board, proc.GetMessageBoard())
 	c.SetPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 456})
 	actualSnapshot, ok := proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, originalSnapshot, actualSnapshot)
-	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime + 1})
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	c.SetValidatedExecutionIntent(&plan2.ExecutionIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime + 1})
+	marked := &plan.Expr{CandidateFilter: true}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
-	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
-	c.temporalCandidateTopology = true
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrExecutionIntentDrift)
+	c.candidateIndexTopology = true
 	p.GetQuery().Nodes[0].FilterList = nil
-	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift, "a previously published candidate still requires a valid intent")
-	c.DiscardTemporalPreflight()
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrExecutionIntentDrift, "a previously published candidate still requires a valid intent")
+	c.DiscardPreflight()
 	require.Same(t, board, proc.GetMessageBoard())
 	require.Same(t, params, proc.GetPrepareParams())
 	require.Equal(t, map[string]string{"pool": "original"}, labels)
@@ -166,12 +181,12 @@ func TestTemporalPreflightDiscardPreservesDependentOwner(t *testing.T) {
 	require.NoError(t, err)
 	defer child.CloseDependentProcess()
 	board, used := child.GetMessageBoard(), generation.Used()
-	c := NewTemporalCompile("local:6001", "", "select 1", "", "", nil, child, nil, false, nil, time.Time{})
-	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: child.GetSessionInfo().TimeZone, UnixTime: child.Base.UnixTime + 1})
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	c := NewCompile("local:6001", "", "select 1", "", "", nil, child, nil, false, nil, time.Time{}, PreflightSetup)
+	c.SetValidatedExecutionIntent(&plan2.ExecutionIntent{TimeZone: child.GetSessionInfo().TimeZone, UnixTime: child.Base.UnixTime + 1})
+	marked := &plan.Expr{CandidateFilter: true}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
-	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
-	c.DiscardTemporalPreflight()
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrExecutionIntentDrift)
+	c.DiscardPreflight()
 	require.Same(t, board, child.GetMessageBoard())
 	require.Equal(t, used, generation.Used())
 	got, err := child.DependentSlot(1, 0)
@@ -191,10 +206,10 @@ func TestTemporalPreflightWorkspacePanicDoesNotPublishBoard(t *testing.T) {
 	proc.GetSessionInfo().TimeZone = time.UTC
 	board := message.NewMessageBoard()
 	proc.SetMessageBoard(board)
-	c := NewTemporalCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, nil, time.Time{})
-	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	c := NewCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, nil, time.Time{}, PreflightSetup)
+	c.SetValidatedExecutionIntent(&plan2.ExecutionIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
+	marked := &plan.Expr{CandidateFilter: true}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{ForceOneCN: true}, IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true}, FilterList: []*plan.Expr{marked}}}}}}
 	require.Error(t, c.Compile(context.Background(), p, nil))
 	c.Release()
@@ -222,11 +237,11 @@ func TestTemporalRetryDriftUsesSafeBuilderAndPreservesParamsOnFailure(t *testing
 	sequenceRetry.EnsureWatching(process.WatchIdentity{DBName: "db", TblName: "seq", WantRel: 1})
 	deadline := sequenceRetry.AdmitRetry(time.Now().Add(time.Minute))
 	board := proc.GetMessageBoard()
-	intent := &plan2.TemporalPlanningIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}}
-	c.SetValidatedTemporalAccessIntent(intent)
-	c.temporalCandidateTopology = true
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	intent := &plan2.ExecutionIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}}
+	c.SetValidatedExecutionIntent(intent)
+	c.candidateIndexTopology = true
+	marked := &plan.Expr{CandidateFilter: true}
 	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
 	c.pn = candidate
 	regularBuilds, safeBuilds := 0, 0
@@ -236,11 +251,11 @@ func TestTemporalRetryDriftUsesSafeBuilderAndPreservesParamsOnFailure(t *testing
 		return candidate, nil
 	})
 	want := moerr.NewInternalError(context.Background(), "safe rebuild failed")
-	c.SetBuildSafeTemporalPlanFunc(func(context.Context) (*plan.Plan, error) {
+	c.SetBuildFallbackPlanFunc(func(context.Context) (*plan.Plan, error) {
 		safeBuilds++
 		return nil, want
 	})
-	retry, err := c.buildRetryCompile(true)
+	retry, err := c.buildRetryCompile(true, false, nil)
 	require.Nil(t, retry)
 	require.ErrorIs(t, err, want)
 	require.Equal(t, 1, regularBuilds)
@@ -252,7 +267,7 @@ func TestTemporalRetryDriftUsesSafeBuilderAndPreservesParamsOnFailure(t *testing
 	require.True(t, deadline.Equal(gotDeadline), "retry must not reset the sticky admission window")
 	require.Same(t, board, proc.GetMessageBoard())
 	require.Equal(t, map[string]string{"pool": "original"}, labels)
-	retry, err = c.buildRetryCompile(false)
+	retry, err = c.buildRetryCompile(false, false, nil)
 	require.Nil(t, retry)
 	require.ErrorIs(t, err, want)
 	require.Equal(t, 1, regularBuilds, "already stale retry must use the authorized safe builder directly")
@@ -278,11 +293,11 @@ func TestTemporalRetryBuildPanicPreservesCallerResources(t *testing.T) {
 	c := NewCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, labels, time.Time{})
 	defer c.Release()
 	board := proc.GetMessageBoard()
-	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
+	c.SetValidatedExecutionIntent(&plan2.ExecutionIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
 	want := &struct{ reason string }{"plan build failed"}
 	c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { panic(want) })
-	require.PanicsWithValue(t, want, func() { _, _ = c.buildRetryCompile(true) })
+	require.PanicsWithValue(t, want, func() { _, _ = c.buildRetryCompile(true, false, nil) })
 	require.Same(t, params, proc.GetPrepareParams())
 	require.Same(t, board, proc.GetMessageBoard())
 	require.Equal(t, map[string]string{"pool": "original"}, labels)
@@ -297,10 +312,10 @@ func TestTemporalRetryPublishesSafeGeneration(t *testing.T) {
 	require.NotNil(t, sequenceRetry)
 	sequenceRetry.EnsureWatching(process.WatchIdentity{DBName: "db", TblName: "seq", WantRel: 1})
 	deadline := sequenceRetry.AdmitRetry(time.Now().Add(time.Minute))
-	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
-	c.temporalCandidateTopology = true
-	marked := &plan.Expr{TemporalCandidateFilter: true}
+	c.SetValidatedExecutionIntent(&plan2.ExecutionIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
+	c.candidateIndexTopology = true
+	marked := &plan.Expr{CandidateFilter: true}
 	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
 	c.pn = candidate
 	c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) {
@@ -308,8 +323,8 @@ func TestTemporalRetryPublishesSafeGeneration(t *testing.T) {
 		return candidate, nil
 	})
 	safe := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE}}}
-	c.SetBuildSafeTemporalPlanFunc(func(context.Context) (*plan.Plan, error) { return safe, nil })
-	retry, err := c.buildRetryCompile(true)
+	c.SetBuildFallbackPlanFunc(func(context.Context) (*plan.Plan, error) { return safe, nil })
+	retry, err := c.buildRetryCompile(true, false, nil)
 	require.NoError(t, err)
 	defer releaseRetryCompile(retry)
 	require.Same(t, safe, c.pn)
@@ -317,8 +332,8 @@ func TestTemporalRetryPublishesSafeGeneration(t *testing.T) {
 	gotDeadline, hasDeadline := retry.proc.GetSequenceRetryState().RetryDeadline()
 	require.True(t, hasDeadline)
 	require.True(t, deadline.Equal(gotDeadline), "the safe generation retains the statement retry budget")
-	require.False(t, c.temporalCandidateTopology)
-	require.False(t, c.temporalRetryNeedsRebuild(), "the safe generation must not force further temporal rebuilds")
+	require.False(t, c.candidateIndexTopology)
+	require.False(t, c.candidateRetryNeedsRebuild(), "the safe generation must not force further temporal rebuilds")
 }
 
 func TestTemporalIndexPlacementChecksEveryScan(t *testing.T) {
@@ -326,30 +341,30 @@ func TestTemporalIndexPlacementChecksEveryScan(t *testing.T) {
 	defer proc.Free()
 	proc.GetSessionInfo().TimeZone = time.UTC
 	c := &Compile{proc: proc, addr: "local:6001", ncpu: 4}
-	intent := &plan2.TemporalPlanningIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}}
-	c.SetValidatedTemporalAccessIntent(intent)
+	intent := &plan2.ExecutionIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}}
+	c.SetValidatedExecutionIntent(intent)
 	makeScan := func() *plan.Node {
-		return &plan.Node{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{ForceOneCN: true}, IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true}, FilterList: []*plan.Expr{{TemporalCandidateFilter: true}}}
+		return &plan.Node{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{ForceOneCN: true}, IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true}, FilterList: []*plan.Expr{{CandidateFilter: true}}}
 	}
 	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{makeScan(), makeScan()}, MaxDop: 1}}}
 	oldForce := plan2.GetForceScanOnMultiCN()
 	t.Cleanup(func() { plan2.SetForceScanOnMultiCN(oldForce) })
 	plan2.SetForceScanOnMultiCN(false)
-	require.True(t, c.temporalIndexPlacementAllowed(template), "local placement is independent of the cost model fanout")
+	require.True(t, c.candidateIndexPlacementAllowed(template), "local placement is independent of the cost model fanout")
 	template.GetQuery().Nodes[1].Stats.ForceOneCN = false
-	require.False(t, c.temporalIndexPlacementAllowed(template), "every marked scan must retain local placement")
+	require.False(t, c.candidateIndexPlacementAllowed(template), "every marked scan must retain local placement")
 	template.GetQuery().Nodes[1].Stats.ForceOneCN = true
 	template.GetQuery().Nodes[1].IndexScanInfo.IsIndexScan = false
-	require.False(t, c.temporalIndexPlacementAllowed(template), "every marked node must be a physical index scan")
+	require.False(t, c.candidateIndexPlacementAllowed(template), "every marked node must be a physical index scan")
 	template.GetQuery().Nodes[1].IndexScanInfo.IsIndexScan = true
 	c.ncpu = 5
-	require.True(t, c.temporalIndexPlacementAllowed(template), "ordinary estimated cost is not an execution permission")
+	require.True(t, c.candidateIndexPlacementAllowed(template), "ordinary estimated cost is not an execution permission")
 	c.ncpu = 4
-	c.temporalAccessIntent = nil
-	require.False(t, c.temporalIndexPlacementAllowed(template))
-	c.SetValidatedTemporalAccessIntent(intent)
+	c.executionIntent = nil
+	require.False(t, c.candidateIndexPlacementAllowed(template))
+	c.SetValidatedExecutionIntent(intent)
 	plan2.SetForceScanOnMultiCN(true)
-	require.False(t, c.temporalIndexPlacementAllowed(template))
+	require.False(t, c.candidateIndexPlacementAllowed(template))
 	plan2.SetForceScanOnMultiCN(false)
-	require.True(t, c.temporalIndexPlacementAllowed(template))
+	require.True(t, c.candidateIndexPlacementAllowed(template))
 }

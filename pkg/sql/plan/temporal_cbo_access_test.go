@@ -39,22 +39,22 @@ type temporalCBOTestTxn struct{ client.TxnOperator }
 type temporalCBOTestWorkspace struct{ client.Workspace }
 type temporalCBORelationFixture struct {
 	engine.Relation
-	observation     engine.TemporalStats
+	observation     engine.IndexCostStats
 	unknown, verify bool
 	onRead          func()
 	onVerify        func(*int)
 	verified        int
-	input           *engine.TemporalBlockInput
+	input           *engine.IndexBlockInput
 	observed        int
 }
 
-func (s *temporalCBORelationFixture) ReadTemporalCostStats(context.Context, engine.TemporalRead, *statsinfo.StatsInfo, string) (engine.TemporalStats, bool, error) {
+func (s *temporalCBORelationFixture) ReadIndexCostStats(context.Context, client.CatalogReadStamp, *statsinfo.StatsInfo, string) (engine.IndexCostStats, bool, error) {
 	if s.onRead != nil {
 		s.onRead()
 	}
 	return s.observation, !s.unknown, nil
 }
-func (s *temporalCBORelationFixture) VerifyTemporalIndexPair(_ context.Context, _ engine.TemporalRead, _ engine.TemporalPairCheck, budget *int) (bool, error) {
+func (s *temporalCBORelationFixture) VerifyIndexPair(_ context.Context, _ client.CatalogReadStamp, _ engine.IndexPairCheck, budget *int) (bool, error) {
 	s.verified++
 	if s.onVerify != nil {
 		s.onVerify(budget)
@@ -62,10 +62,10 @@ func (s *temporalCBORelationFixture) VerifyTemporalIndexPair(_ context.Context, 
 	return s.verify, nil
 }
 
-func (s *temporalCBORelationFixture) ObserveTemporalBlockInput(_ context.Context, _ engine.TemporalRead, _ engine.TemporalBlockInputRequest, _ *int) (engine.TemporalBlockInput, bool, error) {
+func (s *temporalCBORelationFixture) ObserveTemporalBlockInput(_ context.Context, _ client.CatalogReadStamp, _ engine.TemporalBlockInputRequest, _ *int) (engine.IndexBlockInput, bool, error) {
 	s.observed++
 	if s.input == nil || s.unknown {
-		return engine.TemporalBlockInput{}, false, nil
+		return engine.IndexBlockInput{}, false, nil
 	}
 	return *s.input, true, nil
 }
@@ -77,7 +77,7 @@ func TestTemporalCBOObservationRequiresUsableIndex(t *testing.T) {
 			scan := builder.qry.Nodes[0]
 			scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
 			source.observation.Blocks = 512
-			source.input = &engine.TemporalBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
+			source.input = &engine.IndexBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
 			switch scenario {
 			case "not covering":
 				index.Parts = []string{"id"}
@@ -105,30 +105,29 @@ type temporalCBOContext struct {
 	hidden         engine.Relation
 	onResolve      func()
 	mismatchHidden bool
-	read           engine.TemporalRead
+	read           client.CatalogReadStamp
 }
 
-func (c *temporalCBOContext) IsSameCompiler(ctx CompilerContext) bool { return ctx == c }
-func (c *temporalCBOContext) BorrowStillCurrent(ctx CompilerContext, proc *process.Process, borrow *BorrowedTable) bool {
-	return c.IsSameCompiler(ctx) && proc != nil && borrow != nil && borrow.Relation != nil && proc.GetTxnOperator() == borrow.Read.Op
+func (c *temporalCBOContext) BorrowedTableStillCurrent(proc *process.Process, borrow *BorrowedTable) bool {
+	return proc != nil && borrow != nil && borrow.Relation != nil && proc.GetTxnOperator() == borrow.Read.Op
 }
-func (c *temporalCBOContext) ResolveBaseForPlanning(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
-	ref, full, err := c.Resolve(database, name, snapshot)
-	return ref, full, nil, err
-}
-func (c *temporalCBOContext) ResolveIndexForPlanning(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
+func (c *temporalCBOContext) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot, outputs ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	output := PrepareTableResolution(outputs...)
 	if c.onResolve != nil {
 		c.onResolve()
 	}
 	ref, full, err := c.MockCompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
 	if err != nil || ref == nil || full == nil {
-		return ref, full, nil, err
+		return ref, full, err
 	}
 	if c.mismatchHidden {
 		ref = DeepCopyObjectRef(ref)
 		ref.Obj++
 	}
-	return ref, full, &BorrowedTable{Relation: c.hidden, Read: c.read}, nil
+	if output != nil {
+		output.Borrow = &BorrowedTable{Relation: c.hidden, Read: c.read}
+	}
+	return ref, full, nil
 }
 
 func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelationFixture, *pb.IndexDef) {
@@ -167,20 +166,20 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	cache := NewStatsCache()
 	cache.Set(base.TblId, stats)
 	builder.compCtx = &encodedIndexCostTestContext{MockCompilerContext: mock, statsCache: cache}
-	intent := TemporalPlanningIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "cn:6001", Route: schedule.WorkerRouteLocal}}}
-	source := &temporalCBORelationFixture{verify: true, observation: engine.TemporalStats{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
-	read := engine.TemporalRead{Op: proc.GetTxnOperator(), Stamp: client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}}
+	intent := ExecutionIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "cn:6001", Route: schedule.WorkerRouteLocal}}}
+	source := &temporalCBORelationFixture{verify: true, observation: engine.IndexCostStats{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
+	read := (client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}).BindRead(proc.GetTxnOperator(), 0)
 	compiler := &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), hidden: &temporalCBORelationFixture{}, read: read}
 	builder.compCtx = compiler
-	builder.temporalInput = &TemporalPlanningInput{intent: intent, resolver: compiler}
-	builder.temporalResolverAllowed = true
-	builder.rememberTemporalScan(0, ref, base, &BorrowedTable{Relation: source, Read: read})
+	builder.planningInput = &PlanningInput{intent: intent, owner: compiler}
+	builder.borrowResolutionAllowed = true
+	builder.rememberScanBorrow(0, ref, base, &BorrowedTable{Relation: source, Read: read})
 	steps := builder.qry.Steps
 	builder.qry.Steps = nil
 	builder.collectOriginalTemporalOwner(0)
 	builder.qry.Steps = steps
 	require.True(t, builder.temporalOriginalScan.safe)
-	require.True(t, builder.qry.GetTemporalIndexNeedsReplan())
+	require.True(t, builder.qry.GetExecutionDependentAccess())
 	return builder, source, index
 }
 
@@ -218,7 +217,7 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 				builder.nextBindTag = math.MaxInt32
 			case "incomplete enumeration":
 				bad := DeepCopyTableDef(builder.qry.Nodes[0].TableDef, true).Indexes[0]
-				bad.IndexName = strings.Repeat("x", engine.MaxTemporalNameBytes+1)
+				bad.IndexName = strings.Repeat("x", engine.MaxIndexPlanningNameBytes+1)
 				builder.qry.Nodes[0].TableDef.Indexes = append(builder.qry.Nodes[0].TableDef.Indexes, bad)
 			case "different hidden definition":
 				builder.compCtx.(*temporalCBOContext).mismatchHidden = true
@@ -268,7 +267,7 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 			require.True(t, node.IndexScanInfo.IsIndexScan)
 			require.True(t, node.Stats.ForceOneCN)
 			require.Len(t, node.FilterList, 1, "verified storage pruning preserves the complete SQL residual")
-			require.False(t, node.FilterList[0].TemporalCandidateFilter)
+			require.False(t, node.FilterList[0].CandidateFilter)
 			require.Len(t, node.BlockFilterList, 1)
 			require.NotEmpty(t, mapping)
 			require.Equal(t, 1, source.verified)
@@ -310,7 +309,7 @@ func TestTemporalCBORejectsUnmatchedReaderBeforeStats(t *testing.T) {
 			case "scale":
 				filter.GetF().Args[0].Typ.Scale++
 			case "marker":
-				filter.TemporalCandidateFilter = true
+				filter.CandidateFilter = true
 			case "provenance":
 				filter.GetF().Args[1].GetLit().Src = &pb.Expr{Expr: &pb.Expr_P{P: &pb.ParamRef{}}}
 			}
@@ -359,7 +358,7 @@ func TestTemporalCBOBaseRequiresFinalReaderPruning(t *testing.T) {
 			originalSelectivity := scan.FilterList[0].Selectivity
 			refs := map[[2]int32]int{{scan.BindingTags[0], 0}: 1}
 			source.observation.Blocks = 512
-			source.input = &engine.TemporalBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
+			source.input = &engine.IndexBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
 			if scenario != "empty" {
 				scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
 				scan.BlockFilterList[0].Selectivity = 0.5
@@ -419,7 +418,7 @@ func TestTemporalCBOBaseCostRespectsLocalReaders(t *testing.T) {
 		scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
 		builder.qry.MaxDop = maxDOP
 		source.observation.Blocks = 512
-		source.input = &engine.TemporalBlockInput{Rows: objectio.BlockMaxRows, Blocks: blocks}
+		source.input = &engine.IndexBlockInput{Rows: objectio.BlockMaxRows, Blocks: blocks}
 		cost := builder.newEncodedRegularIndexCostContext(scan, map[[2]int32]int{{scan.BindingTags[0], 0}: 1})
 		var work float64
 		_, err := builder.enumerateTemporalIndexCandidates(0, []*pb.IndexDef{index}, cost, func(candidate regularIndexAccessCandidate) {
@@ -456,12 +455,12 @@ func TestTemporalCBOFinalReaderChangesActualSelection(t *testing.T) {
 			originalStats := *scan.Stats
 			source.observation.NDV = 100
 			source.observation.Blocks = 512
-			source.input = &engine.TemporalBlockInput{Rows: objectio.BlockMaxRows, Blocks: 1}
+			source.input = &engine.IndexBlockInput{Rows: objectio.BlockMaxRows, Blocks: 1}
 			if scenario != "empty reader" {
 				scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
 			}
 			if scenario == "scattered" {
-				source.input = &engine.TemporalBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
+				source.input = &engine.IndexBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
 			}
 			if scenario == "unknown layout" {
 				source.input = nil

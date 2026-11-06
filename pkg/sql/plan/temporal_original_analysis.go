@@ -224,7 +224,7 @@ func originalTemporalPathExcludesIndex(ctx context.Context, scan *plan.Node, pro
 	if !proof.single {
 		return ctx.Err() == nil
 	}
-	if scan.TableDef == nil || len(scan.TableDef.Indexes) > engine.MaxTemporalIndexDefinitions {
+	if scan.TableDef == nil || len(scan.TableDef.Indexes) > engine.MaxIndexPlanningDefinitions {
 		return false
 	}
 	budget := proof.remaining
@@ -235,7 +235,7 @@ func originalTemporalPathExcludesIndex(ctx context.Context, scan *plan.Node, pro
 		if !catalog.IsRegularIndexAlgo(index.IndexAlgo) {
 			continue
 		}
-		if !index.TableExist || len(index.Parts) == 0 || len(index.Parts[0]) == 0 || len(index.Parts[0]) > engine.MaxTemporalNameBytes || !spendTemporalCostWork(ctx, &budget, len(index.Parts[0])) {
+		if !index.TableExist || len(index.Parts) == 0 || len(index.Parts[0]) == 0 || len(index.Parts[0]) > engine.MaxIndexPlanningNameBytes || !spendTemporalCostWork(ctx, &budget, len(index.Parts[0])) {
 			return false
 		}
 		pos, exists := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
@@ -259,7 +259,7 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 	if builder.qry == nil {
 		return
 	}
-	input := builder.temporalInput
+	input := builder.planningInput
 	lifetime := builder.compCtx != nil && !builder.isPrepareStatement && (input == nil || input.intent.ParameterFree)
 	capture := input != nil && input.intent.ParameterFree && len(builder.qry.Steps) == 0
 	if !lifetime && !capture {
@@ -295,7 +295,7 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 	if lifetime && potentialTemporalPath(&owner, path) {
 		state := preparedBindingState(ctx)
 		if state != nil || !originalTemporalPathExcludesIndex(ctx, owner.Nodes[path.ids[path.len-1]], originalProof()) {
-			builder.qry.TemporalIndexNeedsReplan = true
+			builder.qry.ExecutionDependentAccess = true
 			if state != nil {
 				state.valueDependent = true
 			}

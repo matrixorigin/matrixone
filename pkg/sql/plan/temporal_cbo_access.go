@@ -34,15 +34,15 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 	if proc == nil {
 		return temporalIndexAccess{}, context.Cause(ctx)
 	}
-	resolver := builder.temporalPlanningResolver()
-	if resolver == nil || len(indexes) > engine.MaxTemporalIndexDefinitions || !cost.valid {
+	resolver := builder.borrowingCompiler()
+	if resolver == nil || len(indexes) > engine.MaxIndexPlanningDefinitions || !cost.valid {
 		return temporalIndexAccess{}, context.Cause(ctx)
 	}
-	input := builder.temporalInput
-	if !input.intent.Placement.AllowsNamedTemporalCandidate() || GetForceScanOnMultiCN() {
+	input := builder.planningInput
+	if !input.intent.Placement.AllowsLocalIndexPlacement() || GetForceScanOnMultiCN() {
 		return temporalIndexAccess{}, nil
 	}
-	budget := engine.MaxTemporalBindingWork
+	budget := engine.MaxIndexPlanningWork
 	if !temporalBaseReaderShapeSafe(ctx, builder.qry, scanID, &budget) || builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
 		return temporalIndexAccess{}, context.Cause(ctx)
 	}
@@ -58,11 +58,11 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 	if column == nil {
 		return temporalIndexAccess{}, nil
 	}
-	full, borrow, ok := builder.temporalScanBorrow(scanID)
-	if !ok || !resolver.BorrowStillCurrent(builder.compCtx, proc, borrow) {
+	full, borrow, ok := builder.scanBorrow(scanID)
+	if !ok || !resolver.BorrowedTableStillCurrent(proc, borrow) {
 		return temporalIndexAccess{}, nil
 	}
-	provider, supported := borrow.Relation.(engine.TemporalIndexRelation)
+	provider, supported := borrow.Relation.(engine.IndexPlanningRelation)
 	read := borrow.Read
 	if !supported || read.Op != proc.GetTxnOperator() {
 		return temporalIndexAccess{}, nil
@@ -71,7 +71,7 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 	if stats == nil || stats.GetStats() == nil {
 		return temporalIndexAccess{}, nil
 	}
-	observation, ok, err := provider.ReadTemporalCostStats(ctx, read, stats.GetStats(), column.Name)
+	observation, ok, err := provider.ReadIndexCostStats(ctx, read, stats.GetStats(), column.Name)
 	if err != nil || !ok || observation.Rows != cost.statsTableCnt || observation.Rows != scan.Stats.TableCnt {
 		return temporalIndexAccess{}, err
 	}
@@ -130,11 +130,11 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 		if !spendTemporalCostWork(ctx, &budget, len(full.Cols)+len(index.Parts)+len(builder.qry.Nodes)) {
 			return temporalIndexAccess{}, context.Cause(ctx)
 		}
-		if len(index.Parts) > engine.MaxTemporalIndexParts || len(index.IndexTableName) > engine.MaxTemporalNameBytes || len(index.IndexName) > engine.MaxTemporalNameBytes {
+		if len(index.Parts) > engine.MaxIndexPlanningParts || len(index.IndexTableName) > engine.MaxIndexPlanningNameBytes || len(index.IndexName) > engine.MaxIndexPlanningNameBytes {
 			return temporalIndexAccess{}, nil
 		}
 		for _, part := range index.Parts {
-			if len(part) > engine.MaxTemporalNameBytes {
+			if len(part) > engine.MaxIndexPlanningNameBytes {
 				return temporalIndexAccess{}, nil
 			}
 		}
@@ -210,7 +210,7 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 // temporalIndexAccess borrows one planning attempt's verified metadata. The
 // ordinary selector owns candidate ranking; only its winner resolves a hidden table.
 type temporalIndexAccess struct {
-	provider engine.TemporalIndexRelation
+	provider engine.IndexPlanningRelation
 	full     *plan.TableDef
 	borrow   *BorrowedTable
 	column   string
@@ -227,23 +227,25 @@ func (builder *QueryBuilder) applyTemporalIndexCandidate(scanID int32, index *pl
 	if access.budget <= 0 {
 		return scanID, false, context.Cause(ctx)
 	}
-	resolver := builder.temporalPlanningResolver()
-	if resolver == nil || !resolver.BorrowStillCurrent(builder.compCtx, proc, access.borrow) || !builder.temporalInput.intent.MatchesProcess(proc) || context.Cause(ctx) != nil {
+	resolver := builder.borrowingCompiler()
+	if resolver == nil || !resolver.BorrowedTableStillCurrent(proc, access.borrow) || !builder.planningInput.intent.MatchesProcess(proc) || context.Cause(ctx) != nil {
 		return scanID, false, context.Cause(ctx)
 	}
 	scan := builder.qry.Nodes[scanID]
-	ref, table, hiddenBorrow, err := resolver.ResolveIndexForPlanning(scan.ObjRef, index.IndexTableName, scan.ScanSnapshot)
+	var hidden TableResolution
+	ref, table, err := resolver.ResolveIndexTableByRef(scan.ObjRef, index.IndexTableName, scan.ScanSnapshot, &hidden)
+	hiddenBorrow := hidden.Borrow
 	if err != nil {
 		return scanID, false, err
 	}
-	if ref == nil || table == nil || ref.Obj <= 0 || uint64(ref.Obj) != table.TblId || ref.PubInfo != nil ||
+	if builder.borrowingCompiler() != resolver || ref == nil || table == nil || ref.Obj <= 0 || uint64(ref.Obj) != table.TblId || ref.PubInfo != nil ||
 		ref.SubscriptionName != "" || IsSnapshotValid(ref.Snapshot) || table.IsTemporary || hiddenBorrow == nil ||
-		!resolver.BorrowStillCurrent(builder.compCtx, proc, hiddenBorrow) {
+		!resolver.BorrowedTableStillCurrent(proc, hiddenBorrow) {
 		return scanID, false, nil
 	}
 	resolved := &temporalResolvedIndex{ref: ref, table: table, verify: func() (bool, error) {
-		valid, cause := access.provider.VerifyTemporalIndexPair(ctx, access.borrow.Read, engine.TemporalPairCheck{BaseRef: scan.ObjRef, HiddenRef: ref, BaseFull: access.full, BaseScan: scan.TableDef, HiddenFull: table, Index: index, Column: access.column, Hidden: hiddenBorrow.Relation, HiddenRead: hiddenBorrow.Read}, &access.budget)
-		return valid && access.borrow.Read.Op == proc.GetTxnOperator() && access.budget > 0 && resolver.BorrowStillCurrent(builder.compCtx, proc, access.borrow) && resolver.BorrowStillCurrent(builder.compCtx, proc, hiddenBorrow) && builder.temporalInput.intent.MatchesProcess(proc) && context.Cause(ctx) == nil, cause
+		valid, cause := access.provider.VerifyIndexPair(ctx, access.borrow.Read, engine.IndexPairCheck{BaseRef: scan.ObjRef, HiddenRef: ref, BaseFull: access.full, BaseScan: scan.TableDef, HiddenFull: table, Index: index, Column: access.column, Hidden: hiddenBorrow.Relation, HiddenRead: hiddenBorrow.Read}, &access.budget)
+		return valid && builder.borrowingCompiler() == resolver && access.borrow.Read.Op == proc.GetTxnOperator() && access.budget > 0 && resolver.BorrowedTableStillCurrent(proc, access.borrow) && resolver.BorrowedTableStillCurrent(proc, hiddenBorrow) && builder.planningInput.intent.MatchesProcess(proc) && context.Cause(ctx) == nil, cause
 	}}
 	return builder.applyTemporalIndexOnlyScanResolved(scanID, index, remap, cost, resolved)
 }

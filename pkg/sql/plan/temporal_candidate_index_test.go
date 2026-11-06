@@ -83,14 +83,14 @@ func TestTemporalIndexLifetimeFromPublicPlanning(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, statements, 1)
 			defer statements[0].Free()
-			p, err := BuildPlan(ctx, statements[0], false)
+			p, err := BuildPlan(ctx, statements[0], false, nil)
 			require.NoError(t, err)
 			q := p.GetQuery()
 			if prepared := p.GetDcl().GetPrepare(); prepared != nil {
 				q = prepared.Plan.GetQuery()
 			}
 			require.NotNil(t, q)
-			require.Equal(t, tc.want, q.GetTemporalIndexNeedsReplan())
+			require.Equal(t, tc.want, q.GetExecutionDependentAccess())
 			if tc.wantNodeCacheable {
 				for _, node := range q.Nodes {
 					require.False(t, node.GetNotCacheable())
@@ -121,12 +121,12 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	scan.TableDef.Indexes = []*plan.IndexDef{index}
 	potential := func(ctx context.Context) bool {
 		owner := *query
-		owner.TemporalIndexNeedsReplan = false
+		owner.ExecutionDependentAccess = false
 		mock := NewMockCompilerContext(true, proc)
 		mock.SetContext(ctx)
 		builder := &QueryBuilder{qry: &owner, compCtx: mock}
 		builder.collectOriginalTemporalOwner(1)
-		return owner.TemporalIndexNeedsReplan
+		return owner.ExecutionDependentAccess
 	}
 	proofFor := func(ctx context.Context) originalTemporalProof {
 		path, ok := traceTemporalCandidatePath(query)
@@ -142,12 +142,12 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	mock.SetContext(bindingCtx)
 	builder := &QueryBuilder{qry: query, compCtx: mock}
 	builder.collectOriginalTemporalOwner(1)
-	require.True(t, query.GetTemporalIndexNeedsReplan())
+	require.True(t, query.GetExecutionDependentAccess())
 	require.True(t, preparedBindingState(bindingCtx).valueDependent)
-	query.TemporalIndexNeedsReplan = false
+	query.ExecutionDependentAccess = false
 	builder.isPrepareStatement = true
 	builder.collectOriginalTemporalOwner(1)
-	require.False(t, query.GetTemporalIndexNeedsReplan(), "known prepared provenance cannot enter temporal access")
+	require.False(t, query.GetExecutionDependentAccess(), "known prepared provenance cannot enter temporal access")
 	builder.isPrepareStatement = false
 	unresolved := DeepCopyExpr(predicate)
 	unresolved.GetF().Args[1] = &plan.Expr{Typ: Type{Id: int32(types.T_any)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
@@ -176,30 +176,30 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	require.False(t, excludes(proc.Ctx))
 	require.True(t, potential(proc.Ctx), "a leading key with an eligible typed literal must be replanned")
 	builder.compCtx.SetContext(proc.Ctx)
-	query.TemporalIndexNeedsReplan = false
+	query.ExecutionDependentAccess = false
 	builder.collectOriginalTemporalOwner(1)
-	require.True(t, query.GetTemporalIndexNeedsReplan())
+	require.True(t, query.GetExecutionDependentAccess())
 	builder.compCtx.SetContext(bindingCtx)
 	scan.FilterList[0] = predicate
 	index.Parts = []string{"id", "d"}
 	require.False(t, potential(proc.Ctx), "a suffix-only temporal column cannot select this access")
 	require.True(t, potential(bindingCtx), "prepared source provenance remains conservative")
-	query.TemporalIndexNeedsReplan = false
+	query.ExecutionDependentAccess = false
 	preparedBindingState(bindingCtx).valueDependent = false
 	builder.collectOriginalTemporalOwner(1)
-	require.True(t, query.GetTemporalIndexNeedsReplan())
+	require.True(t, query.GetExecutionDependentAccess())
 	require.True(t, preparedBindingState(bindingCtx).valueDependent)
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true}, index}
 	require.True(t, potential(proc.Ctx), "incomplete index metadata cannot prove absence")
 	cancelled, cancel := context.WithCancel(proc.Ctx)
 	cancel()
 	require.True(t, potential(cancelled), "cancellation keeps the conservative lifetime")
-	scan.TableDef.Indexes = make([]*plan.IndexDef, engine.MaxTemporalIndexDefinitions+1)
+	scan.TableDef.Indexes = make([]*plan.IndexDef, engine.MaxIndexPlanningDefinitions+1)
 	for i := range scan.TableDef.Indexes {
 		scan.TableDef.Indexes[i] = index
 	}
 	require.True(t, potential(proc.Ctx), "an index count over the proof budget remains conservative")
-	longName := strings.Repeat("x", engine.MaxTemporalNameBytes+1)
+	longName := strings.Repeat("x", engine.MaxIndexPlanningNameBytes+1)
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true, Parts: []string{longName, "d"}}}
 	require.True(t, potential(proc.Ctx), "an oversized key name remains conservative")
 	scan.FilterList = []*plan.Expr{predicate, DeepCopyExpr(predicate)}
@@ -231,8 +231,8 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	hint, ok, err := makeHint(true)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.True(t, hint.TemporalCandidateFilter)
-	require.False(t, predicate.TemporalCandidateFilter)
+	require.True(t, hint.CandidateFilter)
+	require.False(t, predicate.CandidateFilter)
 	_, ok, err = makeHint(false)
 	require.NoError(t, err)
 	require.False(t, ok)

@@ -19,8 +19,102 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
+
+type catalogReadTestWorkspace struct {
+	Workspace
+	op          *txnOperator
+	visibility  uint64
+	stable      bool
+	outsideLock bool
+}
+
+func (workspace *catalogReadTestWorkspace) CatalogVisibility() (uint64, bool) {
+	workspace.outsideLock = workspace.op.mu.TryLock()
+	if workspace.outsideLock {
+		workspace.op.mu.Unlock()
+	}
+	return workspace.visibility, workspace.stable
+}
+
+type catalogReadCaller struct {
+	TxnOperator
+	sample func() (CatalogReadStamp, bool)
+}
+
+func (caller *catalogReadCaller) TryCatalogReadStamp() (CatalogReadStamp, bool) {
+	return caller.sample()
+}
+
+func TestCatalogReadStampMatchesBoundDomains(t *testing.T) {
+	op := &catalogReadCaller{}
+	workspace := &struct{ Workspace }{}
+	stamp := (CatalogReadStamp{
+		TransactionID: "txn", Snapshot: timestamp.Timestamp{PhysicalTime: 10, LogicalTime: 2},
+		Revision: 3, Workspace: workspace,
+	}).BindRead(op, 4)
+	require.True(t, stamp.MatchesRead(stamp, CatalogSnapshotSemantic))
+	require.True(t, stamp.MatchesRead(stamp, CatalogSnapshotStructural))
+	for name, change := range map[string]func(*CatalogReadStamp){
+		"operator":    func(s *CatalogReadStamp) { s.Op = &catalogReadCaller{} },
+		"transaction": func(s *CatalogReadStamp) { s.TransactionID = "other" },
+		"workspace":   func(s *CatalogReadStamp) { s.Workspace = &struct{ Workspace }{} },
+		"revision":    func(s *CatalogReadStamp) { s.Revision++ },
+		"visibility":  func(s *CatalogReadStamp) { s.Visibility++ },
+		"physical":    func(s *CatalogReadStamp) { s.Snapshot.PhysicalTime++ },
+		"logical":     func(s *CatalogReadStamp) { s.Snapshot.LogicalTime++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := stamp
+			change(&current)
+			require.False(t, stamp.MatchesRead(current, CatalogSnapshotSemantic))
+			require.False(t, stamp.MatchesRead(current, CatalogSnapshotStructural))
+		})
+	}
+	raw := stamp
+	raw.Op = nil
+	require.False(t, raw.MatchesRead(raw, CatalogSnapshotSemantic), "unbound samples have no caller identity")
+	require.False(t, stamp.MatchesRead(stamp, CatalogSnapshotMatch(255)))
+}
+
+func TestCatalogReadStampPreservesSnapshotPolicies(t *testing.T) {
+	stamp := (CatalogReadStamp{Snapshot: timestamp.Timestamp{PhysicalTime: 10, LogicalTime: 2}}).BindRead(&catalogReadCaller{}, 0)
+	current := stamp
+	current.Snapshot.NodeID = 7
+	require.True(t, stamp.MatchesRead(current, CatalogSnapshotSemantic))
+	require.False(t, stamp.MatchesRead(current, CatalogSnapshotStructural))
+}
+
+func TestTryCatalogReadStampBindsActualCallerOutsideLock(t *testing.T) {
+	_, ok := TryCatalogReadStamp(nil)
+	require.False(t, ok)
+	runOperatorTests(t, func(_ context.Context, op *txnOperator, _ *testTxnSender) {
+		before, err := op.CatalogReadStamp()
+		require.NoError(t, err)
+		defer op.AddWorkspace(before.Workspace)
+		workspace := &catalogReadTestWorkspace{op: op, visibility: 9, stable: true}
+		op.AddWorkspace(workspace)
+		caller := &catalogReadCaller{TxnOperator: op, sample: op.TryCatalogReadStamp}
+		stamp, accepted := TryCatalogReadStamp(caller)
+		require.True(t, accepted)
+		require.Same(t, caller, stamp.Op)
+		require.Same(t, workspace, stamp.Workspace)
+		require.Equal(t, uint64(9), stamp.Visibility)
+		require.True(t, workspace.outsideLock)
+		underlying, accepted := TryCatalogReadStamp(op)
+		require.True(t, accepted)
+		require.False(t, stamp.MatchesRead(underlying, CatalogSnapshotSemantic), "a wrapper is part of read identity")
+		op.mu.Lock()
+		_, accepted = TryCatalogReadStamp(caller)
+		op.mu.Unlock()
+		require.False(t, accepted, "optional capture cannot wait behind transaction work")
+		workspace.stable = false
+		_, accepted = TryCatalogReadStamp(caller)
+		require.False(t, accepted)
+	})
+}
 
 func TestCatalogReadStampRejectsClosedAndDetectsABA(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, op *txnOperator, _ *testTxnSender) {
