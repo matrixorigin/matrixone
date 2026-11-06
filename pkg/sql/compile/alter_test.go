@@ -533,6 +533,20 @@ func TestReconcileParentRefChildTableID(t *testing.T) {
 	})
 }
 
+func setTestAutoIncrementService(t *testing.T, sid string, service incrservice.AutoIncrementService) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime(sid)
+	previous, exists := rt.GetGlobalVariables(moruntime.AutoIncrementService)
+	incrservice.SetAutoIncrementServiceByID(sid, service)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.AutoIncrementService, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, service)
+		}
+	})
+}
+
 func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)
@@ -544,7 +558,7 @@ func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), txnOp).Return(cleanupErr)
 	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), txnOp).Return(nil)
-	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+	setTestAutoIncrementService(t, proc.GetService(), autoSvc)
 
 	cleanup := newAlterCopyAutoIncrementCleanup(&Compile{proc: proc})
 	cleanup.track(11)
@@ -617,7 +631,7 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, "renamed_id", uint64(500), c.proc.GetTxnOperator()),
 		autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), copyDef.TblId, c.proc.GetTxnOperator()).Return(nil),
 	)
-	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+	setTestAutoIncrementService(t, c.proc.GetService(), autoSvc)
 
 	cleanup := newAlterCopyAutoIncrementCleanup(c)
 	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
@@ -673,7 +687,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		copyRel := mock_frontend.NewMockRelation(ctrl)
 		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
-		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+		setTestAutoIncrementService(t, c.proc.GetService(), autoSvc)
 
 		require.NoError(t, c.reconcileAlterCopyAutoIncrement(
 			"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
@@ -701,7 +715,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
-		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+		setTestAutoIncrementService(t, c.proc.GetService(), autoSvc)
 
 		err := c.reconcileAlterCopyAutoIncrement(
 			"test", srcDef, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
@@ -741,7 +755,7 @@ func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
 			return nil
 		},
 	)
-	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+	setTestAutoIncrementService(t, c.proc.GetService(), autoSvc)
 
 	err := c.reconcileAlterCopyAutoIncrement(
 		"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),

@@ -178,6 +178,33 @@ func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T)
 	})
 }
 
+func TestNormalizePrepareParamRefsPreservesGaps(t *testing.T) {
+	for _, positions := range [][]int32{{2}, {1, 3}, {1}, {}} {
+		t.Run(fmt.Sprint(positions), func(t *testing.T) {
+			refs := make([]*plan.ParamRef, 0, len(positions))
+			var projection []*plan.Expr
+			for _, pos := range positions {
+				ref := &plan.ParamRef{Pos: pos}
+				refs = append(refs, ref)
+				for range 2 {
+					projection = append(projection, &plan.Expr{
+						Typ:  plan.Type{Id: int32(types.T_int32)},
+						Expr: &plan.Expr_P{P: ref},
+					})
+				}
+			}
+			queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+				Steps: []int32{0},
+				Nodes: []*plan.Node{{ProjectList: projection}},
+			}}}
+			require.NoError(t, NormalizePrepareParamRefs(context.Background(), queryPlan))
+			for i, ref := range refs {
+				require.Equal(t, positions[i]-1, ref.Pos)
+			}
+		})
+	}
+}
+
 func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
 	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{

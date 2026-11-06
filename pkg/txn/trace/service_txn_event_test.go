@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -91,5 +92,5 @@ func Test_doAddTxnError(t *testing.T) {
 		executor: exec,
 		logger:   logger,
 	}
-	serv.doAddTxnError("return err")
+	serv.doAddTxnError(context.Background(), "return err")
 }
