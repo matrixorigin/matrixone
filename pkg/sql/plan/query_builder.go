@@ -338,22 +338,34 @@ func isNonNullLiteralFallback(expr *plan.Expr) bool {
 	if lit := expr.GetLit(); lit != nil {
 		return !lit.Isnull
 	}
+	return castPreservesNonNull(expr) && isNonNullLiteralFallback(expr.GetF().Args[0])
+}
+
+// Only the audited conversions below preserve non-NULL input as a value or
+// error. This is a nullness proof, not a precision or value-equivalence proof.
+func castPreservesNonNull(expr *plan.Expr) bool {
 	cast := expr.GetF()
 	if cast == nil || cast.Func.ObjName != "cast" || len(cast.Args) != 2 {
 		return false
 	}
 	fid, overload := function.DecodeOverloadID(cast.Func.Obj)
-	if fid != function.CAST || overload != 0 || !isNonNullLiteralFallback(cast.Args[0]) {
+	if fid != function.CAST || overload != 0 {
 		return false
 	}
 	from, to := types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id)
 	if from.IsInteger() && to.IsInteger() {
 		return from.IsSignedInt() == to.IsSignedInt() && from.TypeLen() <= to.TypeLen()
 	}
-	// Numeric conversion to ordinary DOUBLE returns a value or an error, not
-	// NULL. Exclude fixed-width FLOAT(M,D) and domain-sensitive conversions.
-	return to == types.T_float64 && expr.Typ.Width == 0 &&
-		(from.IsInteger() || from == types.T_float32 || from == types.T_float64)
+	if from.IsInteger() && to.IsDecimal() {
+		return true
+	}
+	if to == types.T_float64 && expr.Typ.Width == 0 {
+		return from.IsInteger() || from.IsDecimal() || from == types.T_float32 || from == types.T_float64
+	}
+	// The binder represents decimal syntax such as 0.0 as a string-to-decimal
+	// cast. strToDecimal and strToStr return a value or error for non-NULL input.
+	return (from == types.T_char || from == types.T_varchar || from == types.T_text) &&
+		(to.IsDecimal() || to == types.T_char || to == types.T_varchar || to == types.T_text)
 }
 
 func isIfNullCase(fn *plan.Function) bool {
@@ -364,21 +376,17 @@ func isIfNullCase(fn *plan.Function) bool {
 	if condition == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
 		return false
 	}
-	// CASE type reconciliation may widen an integer ELSE source. Do not
-	// recognize casts that could themselves produce NULL or lose information.
+	// Reconciliation can wrap the ELSE source in a cast that preserves non-NULL input.
+	// Stop at the original source, including any casts already inside it.
 	otherwise := fn.Args[2]
-	for cast := otherwise.GetF(); cast != nil && cast.Func.ObjName == "cast" && len(cast.Args) > 0; cast = otherwise.GetF() {
-		_, overload := function.DecodeOverloadID(cast.Func.Obj)
-		from, to := types.T(cast.Args[0].Typ.Id), types.T(otherwise.Typ.Id)
-		if overload != 0 || !from.IsInteger() || !to.IsInteger() ||
-			from.IsSignedInt() != to.IsSignedInt() || from.TypeLen() > to.TypeLen() {
+	for !exprStructuralEqual(condition.Args[0], otherwise) {
+		if !castPreservesNonNull(otherwise) {
 			return false
 		}
-		otherwise = cast.Args[0]
+		otherwise = otherwise.GetF().Args[0]
 	}
 	// Two evaluations of a volatile source need not produce the same value.
-	return exprStructuralEqual(condition.Args[0], otherwise) &&
-		checkExprForVolatileFunc(context.Background(), condition.Args[0]) == nil
+	return checkExprForVolatileFunc(context.Background(), condition.Args[0]) == nil
 }
 
 // Refresh references recursively after remapping: a function's bind-time

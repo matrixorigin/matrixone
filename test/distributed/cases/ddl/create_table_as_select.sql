@@ -1577,4 +1577,18 @@ insert into converted_fallback values(0,0,0,null,0,0);
 insert into converted_fallback values(0,0,0,0,null,0);
 insert into converted_fallback values(0,0,0,0,0,null);
 select count(*) from converted_fallback;
+-- Decimal syntax and IFNULL source coercions share the non-NULL cast contract.
+alter table r add column s varchar(8) not null default 'x';
+update r set s='a' where id=1;
+update r set s='b' where id=3;
+create table domain_fallback as select ifnull(1/r.v,0.0) as if_decimal,coalesce(1/r.v,0.0) as co_decimal,ifnull(1/r.v,cast(0 as decimal(38,1))) as if_decimal128,coalesce(1/r.v,cast(0 as decimal(38,1))) as co_decimal128,ifnull(r.v,0e0) as if_numeric,ifnull(r.s,'ok') as if_string from l left join r on l.id=r.id;
+select * from domain_fallback order by if_numeric,if_string;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='domain_fallback' and column_name in ('if_decimal','co_decimal','if_decimal128','co_decimal128','if_numeric','if_string') order by ordinal_position;
+insert into domain_fallback values(null,0,0,0,0,'x');
+insert into domain_fallback values(0,null,0,0,0,'x');
+insert into domain_fallback values(0,0,null,0,0,'x');
+insert into domain_fallback values(0,0,0,null,0,'x');
+insert into domain_fallback values(0,0,0,0,null,'x');
+insert into domain_fallback values(0,0,0,0,0,null);
+select count(*) from domain_fallback;
 drop database ctas_output_nullability;

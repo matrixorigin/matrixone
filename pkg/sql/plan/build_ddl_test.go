@@ -631,6 +631,38 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCastPreservesNonNull(t *testing.T) {
+	for _, test := range []struct {
+		from types.T
+		to   types.T
+		want bool
+	}{
+		{types.T_decimal64, types.T_float64, true},
+		{types.T_decimal128, types.T_float64, true},
+		{types.T_decimal256, types.T_float64, true},
+		{types.T_int64, types.T_decimal64, true},
+		{types.T_uint64, types.T_decimal128, true},
+		{types.T_int64, types.T_decimal256, true},
+		{types.T_varchar, types.T_decimal64, true},
+		{types.T_char, types.T_decimal128, true},
+		{types.T_text, types.T_decimal256, true},
+		{types.T_char, types.T_varchar, true},
+		{types.T_varchar, types.T_varchar, true},
+		{types.T_text, types.T_varchar, true},
+		{types.T_varchar, types.T_text, true},
+		{types.T_varchar, types.T_float64, false},
+		{types.T_varchar, types.T_date, false},
+		{types.T_json, types.T_varchar, false},
+	} {
+		expr := &plan.Expr{Typ: plan.Type{Id: int32(test.to)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(test.from)}}, {Typ: plan.Type{Id: int32(test.to)}}},
+		}}}
+		require.Equal(t, test.want, castPreservesNonNull(expr), "%v to %v", test.from, test.to)
+		require.False(t, isNonNullLiteralFallback(expr), "conversion proof alone must not turn a nonliteral into a constant proof")
+	}
+}
+
 func TestNonNullLiteralFallback(t *testing.T) {
 	literal := func(typ types.T, null bool) *plan.Expr {
 		lit := &plan.Literal{Isnull: null, Value: &plan.Literal_I64Val{I64Val: 0}}
@@ -736,6 +768,13 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
 		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
 		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull decimal fallback", "select ifnull(1/r.r_regionkey,0.0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce decimal fallback", "select coalesce(1/r.r_regionkey,0.0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull decimal128 fallback", "select ifnull(1/r.r_regionkey,cast(0 as decimal(38,1))) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce decimal128 fallback", "select coalesce(1/r.r_regionkey,cast(0 as decimal(38,1))) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull converted integer source", "select ifnull(r.r_regionkey,0e0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull explicitly converted source", "select ifnull(cast(r.r_name as varchar(20)),'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull converted string source", "select ifnull(r.r_name,'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"ifnull converted integer fallback", "select ifnull(1/r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"coalesce converted integer fallback", "select coalesce(1/r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"ifnull explicit double fallback", "select ifnull(1/r.r_regionkey,cast(0 as double)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
