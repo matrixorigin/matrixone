@@ -304,3 +304,49 @@ func correlatedHavingErrFor(t *testing.T, sql string) error {
 	_, err := runOneStmt(newCorrelatedSpecialTypeMock(t), t, sql)
 	return err
 }
+
+// TestLooseGroupByHavingCorrelatedKeyRejected pins the relaxed-nothing
+// sql_mode contract for #31568. Without ONLY_FULL_GROUP_BY a free HAVING
+// column is folded into any_value; a correlated outer reference must never
+// enter that aggregate list. Before the bind-time rejection the wrapped
+// ENUM/SET correlation either leaked a raw correlated expression into the
+// executed plan or died in column remapping, and it now fails binding with
+// the same NYI an outer INT key gets in this mode.
+func TestLooseGroupByHavingCorrelatedKeyRejected(t *testing.T) {
+	correlated := []string{
+		// Inner block groups its own key, HAVING references the outer key.
+		"select l.id from enum_l l where exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+		"select l.id from enum_l l where not exists(select r.k from enum_r r group by r.k having r.k=l.k)",
+		"select l.id from enum_l l where l.k in (select r.k from enum_r r group by r.k having r.k=l.k)",
+		"select l.id from set_l l where exists(select r.k from set_r r group by r.k having r.k=l.k)",
+		"select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k)",
+		// Outer block groups its primary key; the inner HAVING still carries
+		// the correlation.
+		"select l.id from enump_l l group by l.id having exists(select r.k from enump_r r group by r.k having r.k=l.k)",
+		"select l.id from setp_l l group by l.id having exists(select r.k from setp_r r group by r.k having r.k=l.k)",
+		// INT keys get the identical verdict in this mode: correlated keys
+		// are rejected while the mode is relaxed, independent of type.
+		"select l.id from int_l l where exists(select r.id from int_r r group by r.id having r.id=l.id)",
+		"select l.id from intp_l l group by l.id having exists(select r.k from intp_r r group by r.k having r.k=l.k)",
+	}
+	for _, sql := range correlated {
+		t.Run(sql, func(t *testing.T) {
+			mock := newCorrelatedSpecialTypeMock(t)
+			mock.ctxt.SetSqlModeOverride("")
+			_, err := runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "correlated columns in aggregate function")
+		})
+	}
+
+	// A free LOCAL ENUM key without any correlation keeps folding into
+	// any_value and must keep planning: the rejection is scoped to the
+	// correlation carried inside the display wrapper.
+	t.Run("loose local free enum key still plans", func(t *testing.T) {
+		mock := newCorrelatedSpecialTypeMock(t)
+		mock.ctxt.SetSqlModeOverride("")
+		p, err := runOneStmt(mock, t,
+			"select r.k from enum_r r group by r.id having r.k='b'")
+		require.NoError(t, err)
+		require.NotNil(t, p)
+	})
+}

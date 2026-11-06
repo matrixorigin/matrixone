@@ -7,6 +7,13 @@ drop database if exists issue_31568_enum_set_corr;
 create database issue_31568_enum_set_corr;
 use issue_31568_enum_set_corr;
 
+-- These queries assert ONLY_FULL_GROUP_BY-compliant plans (MySQL's default
+-- mode, the mode the #31568 fix targets). mo-tester reuses one connection
+-- across the whole group, and dtype/enum.sql leaves a loose sql_mode behind,
+-- so pin the mode explicitly and restore the inherited value afterwards.
+set @issue_31568_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = default;
+
 create table enum_l(id int primary key,k enum('a','b'));
 create table enum_r(id int primary key,k enum('b','a'));
 insert into enum_l values(1,'a'),(2,'b'),(3,null);
@@ -67,5 +74,8 @@ select l.id from set_l l group by l.id having exists(select r.k from set_r r gro
 -- after all the above, source data is intact and the connection is healthy.
 select 1, count(*) from enum_l;
 select 1, count(*) from enum_r;
+
+set session sql_mode = @issue_31568_saved_sql_mode;
+select @@sql_mode = @issue_31568_saved_sql_mode as restored;
 
 drop database if exists issue_31568_enum_set_corr;

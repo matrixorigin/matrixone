@@ -1,6 +1,8 @@
 drop database if exists issue_31568_enum_set_corr;
 create database issue_31568_enum_set_corr;
 use issue_31568_enum_set_corr;
+set @issue_31568_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = default;
 create table enum_l(id int primary key,k enum('a','b'));
 create table enum_r(id int primary key,k enum('b','a'));
 insert into enum_l values(1,'a'),(2,'b'),(3,null);
@@ -99,4 +101,8 @@ select 1, count(*) from enum_l;
 select 1, count(*) from enum_r;
 ➤ 1[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
 1  ¦  2
+set session sql_mode = @issue_31568_saved_sql_mode;
+select @@sql_mode = @issue_31568_saved_sql_mode as restored;
+➤ restored[-6,8,0]  𝄀
+1
 drop database if exists issue_31568_enum_set_corr;

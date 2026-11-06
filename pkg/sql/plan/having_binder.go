@@ -257,6 +257,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
+		if displayWrappedCorrColRef(expr) != nil {
+			// ENUM/SET keys bind to a display wrapper whose final argument is
+			// the only column link (#31568). Wrapping such a reference in
+			// any_value would leak a correlated expression into the aggregate
+			// list and break plan remapping downstream, so reject it here with
+			// the same error a bare correlated column gets in this mode.
+			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
+		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
