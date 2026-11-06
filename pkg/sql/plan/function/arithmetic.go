@@ -280,7 +280,7 @@ func integerDivUnsignedMixedTypes(left, right types.Type) (types.Type, types.Typ
 	}
 
 	switch {
-	case right.Oid.IsSignedInt():
+	case right.Oid.IsSignedInt() || right.Oid == types.T_year:
 		return types.T_uint64.ToType(), types.T_int64.ToType(), true
 	case right.Oid.IsDecimal():
 		target := types.T_decimal256.ToType()
@@ -299,7 +299,8 @@ func integerDivUnsignedMixedTypes(left, right types.Type) (types.Type, types.Typ
 // (INT64, INT64) like other exact signed pairs instead of falling through to
 // the rule-2 FLOAT64 corridor that rounds BIGINT dividends before division
 // (#31902). Unsigned-mixed combinations still belong to
-// integerDivUnsignedMixedTypes / fixedTypeCastRule2 and are unchanged.
+// integerDivUnsignedMixedTypes and fixedTypeCastRule2; unsigned x YEAR pairs
+// join the mixed/exact families here, away from the FLOAT64 corridor.
 func integerDivExactTypes(left, right types.Type) (types.Type, types.Type, bool) {
 	leftSigned := left.Oid.IsSignedInt() || left.Oid == types.T_year
 	rightSigned := right.Oid.IsSignedInt() || right.Oid == types.T_year
@@ -308,7 +309,7 @@ func integerDivExactTypes(left, right types.Type) (types.Type, types.Type, bool)
 		return types.T_uint64.ToType(), types.T_uint64.ToType(), true
 	case leftSigned && rightSigned:
 		return types.T_int64.ToType(), types.T_int64.ToType(), true
-	case left.Oid.IsSignedInt() && right.Oid.IsUnsignedInt():
+	case leftSigned && right.Oid.IsUnsignedInt():
 		return types.T_decimal256.ToType(), types.T_decimal256.ToType(), true
 	default:
 		return types.Type{}, types.Type{}, false

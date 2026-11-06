@@ -152,3 +152,32 @@ func Test_IntegerDivFn_YearBoundary(t *testing.T) {
 	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
 }
+
+// TestYearIntegerDivUnsignedMixed pins the mixed unsigned/YEAR integer DIV
+// pairs for #31902: unsigned x YEAR keeps the unsigned domain via
+// integerDivUnsignedMixedTypes ((UINT64, INT64)) and YEAR x unsigned binds
+// the lossless DECIMAL256 targets of integerDivExactTypes like other
+// signed x unsigned pairs, instead of falling through to fixedTypeCastRule2.
+func TestYearIntegerDivUnsignedMixed(t *testing.T) {
+	year := types.T_year.ToType()
+	u64 := types.T_uint64.ToType()
+	u32 := types.T_uint32.ToType()
+
+	result := legacyIntegerDivCheck([]types.Type{u64, year})
+	require.Equal(t, succeedWithCast, result.status, "T_uint64 div T_year")
+	require.Len(t, result.finalType, 2, "T_uint64 div T_year")
+	require.Equal(t, types.T_uint64, result.finalType[0].Oid, "T_uint64 div T_year")
+	require.Equal(t, types.T_int64, result.finalType[1].Oid, "T_uint64 div T_year")
+
+	result = legacyIntegerDivCheck([]types.Type{year, u64})
+	require.Equal(t, succeedWithCast, result.status, "T_year div T_uint64")
+	require.Len(t, result.finalType, 2, "T_year div T_uint64")
+	require.Equal(t, types.T_decimal256, result.finalType[0].Oid, "T_year div T_uint64")
+	require.Equal(t, types.T_decimal256, result.finalType[1].Oid, "T_year div T_uint64")
+
+	result = legacyIntegerDivCheck([]types.Type{year, u32})
+	require.Equal(t, succeedWithCast, result.status, "T_year div T_uint32")
+	require.Len(t, result.finalType, 2, "T_year div T_uint32")
+	require.Equal(t, types.T_decimal256, result.finalType[0].Oid, "T_year div T_uint32")
+	require.Equal(t, types.T_decimal256, result.finalType[1].Oid, "T_year div T_uint32")
+}
