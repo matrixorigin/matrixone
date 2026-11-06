@@ -31,7 +31,9 @@ For every admitted query:
 AUTO admission is limited to a parameter-free, single-filter SELECT with a
 fixed-offset time zone, a positively proved literal or `CURRENT_TIMESTAMP`
 bound, local scheduling, and a covering regular index whose leading part is
-the temporal column. Prepared AUTO, named-zone AUTO, LIMIT/OFFSET, aggregates,
+the temporal column. Prepared templates and bound prepared executions use their
+existing reusable-plan ownership and carry no candidate execution input or
+candidate-specific rebuild path. Prepared AUTO, named-zone AUTO, LIMIT/OFFSET, aggregates,
 joins, FORCE INDEX, and non-covering backfill remain on existing paths. This is
 best-effort optimization: no query is promised an index scan. In particular,
 the FORCE INDEX and LIMIT query from #31619 does not use this AUTO path.
