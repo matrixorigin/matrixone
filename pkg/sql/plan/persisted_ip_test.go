@@ -1215,6 +1215,226 @@ func mustBindPersistedFollowupExpr(t *testing.T, ctx context.Context, name strin
 	return expr
 }
 
+func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
+	jsonValue := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar), Width: 512},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
+			Args: make([]*planpb.Expr, 7),
+		}},
+	}
+	jsonArgs := make([]*planpb.Expr, 7)
+	jsonArgs[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}
+	jsonValueInput := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"},
+		Args: jsonArgs,
+	}}}
+	requiredInput, err := RequiredPersistedExpressionProtocolVersion(jsonValueInput)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, requiredInput, "JSON-typed input retains the existing opaque-text contract")
+	jsonInput := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CONCAT, 0), ObjName: "concat"},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}}},
+		}},
+	}
+	mediumInt := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32), Width: 24},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST_ASSIGN, 0), ObjName: "cast_assign"},
+			Args: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: planpb.Type{Id: int32(types.T_int32), Width: 24}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+			},
+		}},
+	}
+	calendar := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 2), ObjName: "week"},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
+	}}}
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	collated := mustBindPersistedFollowupExpr(t, context.Background(), "least", []*planpb.Expr{
+		{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+	})
+	owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{jsonValue, jsonInput, mediumInt, calendar, collated}}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONInputContracts)
+	require.True(t, features.JSONOpaqueTextContracts)
+	require.True(t, features.MediumIntAssignmentBounds)
+	require.True(t, features.DateNumericResultContracts)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	required, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, required)
+	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput, jsonValue}
+	required, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, required, "feature order must not lower the cumulative floor")
+	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput}
+	required, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, required, "CONCAT(JSON) keeps the landed opaque-text floor without JSON_VALUE")
+	owner.Nodes[0].ProjectList = []*planpb.Expr{calendar, mediumInt, jsonInput}
+	required, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, required, "CONCAT(JSON) keeps the landed opaque-text floor without JSON_VALUE")
+
+	// Main's mixed JSON/numeric contract must survive without JSON_VALUE,
+	// and combining either expression order must keep the higher floor.
+	numeric := mustBindPersistedFollowupExpr(t, context.Background(), "=", []*planpb.Expr{
+		{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+	})
+	for _, expressions := range [][]*planpb.Expr{{jsonValue, numeric}, {numeric, jsonValue}} {
+		required, err = RequiredPersistedExpressionProtocolVersion(expressions)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion128, required)
+	}
+	required, err = RequiredPersistedExpressionProtocolVersion(numeric)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion128, required)
+
+	floatConversion := &planpb.Expr{Typ: types.T_float64.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0)},
+		Args: []*planpb.Expr{{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+	}}}
+	for _, expressions := range [][]*planpb.Expr{{jsonValue, floatConversion}, {floatConversion, jsonValue}} {
+		required, err = RequiredPersistedExpressionProtocolVersion(expressions)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion132, required)
+	}
+	required, err = RequiredPersistedExpressionProtocolVersion(floatConversion)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion132, required)
+}
+
+func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	jsonExpr := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 512},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
+				Args: make([]*planpb.Expr, 7),
+			}},
+		}
+	}
+	jsonExprWithJSONInput := jsonExpr()
+	jsonExprWithJSONInput.GetF().Args[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}
+
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	collated := mustBindPersistedFollowupExpr(t, proc.Ctx, "greatest", []*planpb.Expr{
+		{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+	})
+	owners := []struct {
+		name  string
+		owner any
+	}{
+		{"default", &planpb.TableDef{Cols: []*planpb.ColDef{{
+			Default: &planpb.Default{Expr: jsonExpr()},
+		}}}},
+		{"generated", &planpb.TableDef{Cols: []*planpb.ColDef{{
+			GeneratedCol: &planpb.GeneratedCol{Expr: jsonExpr()},
+		}}}},
+		{"on-update", &planpb.TableDef{Cols: []*planpb.ColDef{{
+			OnUpdate: &planpb.OnUpdate{Expr: jsonExpr()},
+		}}}},
+		{"check", &planpb.TableDef{Checks: []*planpb.CheckDef{{Check: jsonExpr()}}}},
+		// IndexDef stores column identities; the generated index table carries
+		// the persisted expression that the compiler admits separately.
+		{"index-table", &planpb.TableDef{
+			Indexes: []*planpb.IndexDef{{IndexName: "idx_json_value", Parts: []string{"v"}}},
+			Cols:    []*planpb.ColDef{{GeneratedCol: &planpb.GeneratedCol{Expr: jsonExpr()}}},
+		}},
+		// A view's durable expression lives in its optimized query plan, not in
+		// the SQL text held by ViewDef; exercise the same owner passed by view
+		// regeneration and binding paths.
+		{"view-plan", &planpb.Query{Nodes: []*planpb.Node{{
+			ProjectList: []*planpb.Expr{jsonExpr()},
+		}}}},
+		{"view-greatest-and-json", &planpb.Query{Nodes: []*planpb.Node{{
+			ProjectList: []*planpb.Expr{collated, jsonExpr()},
+		}}}},
+		{"view-calendar-and-json", &planpb.Query{Nodes: []*planpb.Node{{
+			ProjectList: []*planpb.Expr{jsonExpr(), {Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.DAYOFYEAR, 0), ObjName: "dayofyear"},
+				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}},
+			}}}},
+		}}}},
+		{"view-index-algo-exprs-only", &planpb.Query{Nodes: []*planpb.Node{{
+			NodeType: planpb.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &planpb.IndexSearchScan{
+				AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{jsonExpr()},
+			},
+		}}}},
+		{"view-json-typed-input", &planpb.Query{Nodes: []*planpb.Node{{
+			ProjectList: []*planpb.Expr{jsonExprWithJSONInput},
+		}}}},
+	}
+
+	for _, tc := range owners {
+		t.Run(tc.name, func(t *testing.T) {
+			var floor int64
+			switch tc.name {
+			case "view-greatest-and-json":
+				floor = defines.MORPCVersion117
+			case "view-calendar-and-json":
+				floor = defines.MORPCVersion112
+			case "view-json-typed-input":
+				floor = defines.MORPCVersion129
+			}
+			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
+			require.NoError(t, err)
+			require.Equal(t, floor, required)
+			for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion134} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
+				checkAdmissionResult(t, version, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), floor)
+				checkAdmissionResult(t, version, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.owner), floor)
+			}
+			if floor > 0 {
+				// A sufficient read floor does not authorize a lower write floor.
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor-1)
+				require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
+				require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.owner), fmt.Sprintf("protocol version %d", floor))
+			}
+		})
+	}
+
+}
+
 func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {
 	t.Helper()
 	if version < required {
@@ -1222,6 +1442,99 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 	} else {
 		require.NoError(t, err)
 	}
+}
+
+// Exercise parser/binder/DDL owners rather than supplying prebuilt expressions.
+// Publication and restart remain separate service-level acceptance obligations.
+func TestJSONValuePersistedSQLAdmission(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	keys := []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor}
+	for _, key := range keys {
+		old, had := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if had {
+				rt.SetGlobalVariables(key, old)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	// The SQL grammar only accepts datetime names for ON UPDATE. Keep the
+	// internal owner-walk test, but do not claim JSON_VALUE authoring is public.
+	unsupported, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table jv_on_update (v bigint on update json_value('1', '$' returning signed))`, 1)
+	if unsupported != nil {
+		defer unsupported.Free()
+	}
+	require.Error(t, err)
+
+	statements := []string{
+		`create table jv_default (v bigint default (json_value('1', '$' returning signed)))`,
+		`create table jv_default_column (doc json, v bigint default (json_value(doc, '$' returning signed)))`,
+		`create table jv_generated (doc json, v bigint generated always as (json_value(doc, '$' returning signed)) stored)`,
+		`create table jv_generated_constant (id int, v bigint generated always as (json_value('1', '$' returning signed)) stored)`,
+		`create table jv_check (doc json, check (json_value(doc, '$' returning signed) > 0))`,
+		`create table jv_index (doc json, v bigint generated always as (json_value(doc, '$' returning signed)) stored, key v_idx(v))`,
+		`create view jv_view as select json_value('1', '$' returning signed) as v`,
+		`create view jv_calendar_json as select week(cast('2024-12-31' as date), 3) as w, dayofyear(cast('2024-12-31' as date)) as d, json_value('1', '$' returning signed) as v`,
+		`create view jv_fold as select 1 as v where 1 between json_value('1', '$' returning signed) and 2`,
+		`create view jv_mixed_group as select json_value('1', '$' null on error) as v, count(*) as n group by json_value('1', '$')`,
+		`create view jv_mixed_having as select count(*) as n group by json_value('1', '$') having json_value('1', '$' null on error) is not null`,
+	}
+	for _, version := range []int64{defines.MORPCVersion129, defines.MORPCVersion134} {
+		t.Run(fmt.Sprintf("same-binary protocol %d", version), func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
+			for _, sql := range statements {
+				t.Run(sql, func(t *testing.T) {
+					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+					require.NoError(t, err)
+					defer stmt.Free()
+					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+					require.NoError(t, err)
+					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
+						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
+						require.NoError(t, err)
+						require.Equal(t, defines.MORPCVersion129, required)
+						require.Len(t, table.GetIndexTables(), 1)
+						required, err = RequiredPersistedExpressionProtocolVersion(table.GetIndexTables()[0])
+						require.NoError(t, err)
+						require.Zero(t, required)
+					}
+					if view := built.GetDdl().GetCreateView(); view != nil && strings.Contains(sql, "jv_view as") {
+						var data ViewData
+						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
+						require.Nil(t, data.RequiredProtocolVersion, "JSON_VALUE alone adds no durable feature floor")
+					}
+				})
+			}
+		})
+	}
+	// The independent calendar contract remains a real SQL authoring floor,
+	// even in a view which also contains JSON_VALUE.
+	const calendarSQL = `create view jv_calendar_json as select week(cast('2024-12-31' as date), 3) as w, dayofyear(cast('2024-12-31' as date)) as d, json_value('1', '$' returning signed) as v`
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, calendarSQL, 1)
+		require.NoError(t, err)
+		built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: calendarSQL}, stmt, false)
+		stmt.Free()
+		if version < defines.MORPCVersion112 {
+			require.ErrorContains(t, err, "protocol version 112")
+		} else {
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.NotNil(t, data.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion112), *data.RequiredProtocolVersion)
+		}
+	}
+
 }
 
 func TestPersistedDependentProgramRequiresV119(t *testing.T) {
@@ -1255,7 +1568,7 @@ func TestPersistedDependentProgramRequiresV119(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion113, statisticalVersion)
 	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: statistical}})
-	// Upstream owns 117 independently; dependent programs compose above it.
+	// Upstream owns each independent capability; dependent programs compose above them.
 	textType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
 	textType.CollationVersion = 1
 	col := &planpb.Expr{Typ: textType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}

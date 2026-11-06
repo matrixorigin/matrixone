@@ -600,6 +600,61 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
+func TestJSONValueDoesNotMaskIndexSearchExpressionFeatures(t *testing.T) {
+	text := func(value string) *Expr {
+		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
+	}
+	nullResult := func() *Expr {
+		return &Expr{Typ: Type{Id: planInt64TypeID}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}}
+	}
+	errorPolicy := func() *Expr {
+		return &Expr{Typ: Type{Id: planInt64TypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}
+	}
+	jsonValueContract := &Expr{Typ: Type{Id: planInt64TypeID}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
+		Args: []*Expr{text(`{"a":1}`), text("$.a"), nullResult(), errorPolicy(), nullResult(), errorPolicy(), nullResult()},
+	}}}
+	legacy := &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(462) << 32, ObjName: "json_value"},
+		Args: []*Expr{text(`{"a":1}`), text("$.a")},
+	}}}
+
+	// Only algo_exprs contain expressions, so a projection cannot hide a
+	// traversal failure for the independently versioned JSON input contract.
+	jsonInput := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(16) << 32, ObjName: "concat"},
+		Args: []*Expr{{Typ: Type{Id: planJSONTypeID}}},
+	}}}
+	for _, tc := range []struct {
+		name          string
+		exprs         []*Expr
+		wantJSONInput bool
+	}{
+		{"contract", []*Expr{jsonValueContract}, false},
+		{"legacy", []*Expr{legacy}, false},
+		{"landed JSON input", []*Expr{jsonInput}, true},
+		{"contract and landed JSON input", []*Expr{jsonValueContract, jsonInput}, true},
+		{"landed JSON input and contract", []*Expr{jsonInput, jsonValueContract}, true},
+	} {
+		t.Run(tc.name+" algo_exprs only", func(t *testing.T) {
+			scan := &IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: tc.exprs}
+			node := &Node{NodeType: Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan}
+			query := &Query{Nodes: []*Node{node}, Steps: []int32{0}}
+			owner := &Plan{Plan: &Plan_Query{Query: query}}
+			encoded, err := owner.Marshal()
+			require.NoError(t, err)
+			decoded := &Plan{}
+			require.NoError(t, decoded.Unmarshal(encoded))
+			for _, value := range []any{scan, node, query, owner, decoded} {
+				features, err := RequiredRemoteExpressionFeatures(value)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantJSONInput, features.JSONInputContracts)
+				require.Equal(t, tc.wantJSONInput, features.Any())
+			}
+		})
+	}
+}
+
 func TestRequiredRemoteExpressionFeaturesFollowupResultContracts(t *testing.T) {
 	expression := func(functionID, overloadID, resultType int32) *Expr {
 		return &Expr{
