@@ -628,7 +628,11 @@ func buildBooleanFullTextPublicPlan(t *testing.T, sql string, ft2, prepare bool,
 
 func buildBooleanFullTextPublicPlanWithContext(t *testing.T, sql string, ft2, prepare bool, vectorAlgo ...string) (*planpb.Query, *fullTextJoinMockCompilerContext) {
 	t.Helper()
-	cc := newFullTextJoinMockCompilerContext(t)
+	return buildBooleanFullTextPublicPlanIn(t, newFullTextJoinMockCompilerContext(t), sql, ft2, prepare, vectorAlgo...)
+}
+
+func buildBooleanFullTextPublicPlanIn(t *testing.T, cc *fullTextJoinMockCompilerContext, sql string, ft2, prepare bool, vectorAlgo ...string) (*planpb.Query, *fullTextJoinMockCompilerContext) {
+	t.Helper()
 	builder := NewQueryBuilder(planpb.Query_SELECT, cc, false, true)
 	def := makeFullTextJoinTestTableDef("ft", true)
 	scan := makeFullTextJoinTestScan(def, 0, nil)

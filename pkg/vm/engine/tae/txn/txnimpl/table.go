@@ -713,8 +713,22 @@ func (tbl *txnTable) recurTransferDelete(
 	//prepare for recursively transfer the deletes to the next target block.
 	if page2, ok = memo[*blockID]; !ok {
 		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
+		// A missing page means the next hop of the transfer mapping has
+		// been TTL'ed: the delete cannot reach the live row through this
+		// chain. Convert the internal EOB table-miss sentinel into the same
+		// retryable r-w conflict reported by the first hop and by the
+		// file-backed path, instead of leaking an OK-class signal through
+		// commit (#32218).
 		if err != nil {
-			return err
+			logutil.Error(
+				"RECUR-TRANSFER-ERR-TO-RW",
+				zap.Error(err),
+				zap.String("id", newID.String()),
+				zap.String("txn", tbl.store.txn.String()),
+				zap.Int("depth", depth),
+				zap.String("phase", phase),
+			)
+			return moerr.NewTxnRWConflictNoCtx()
 		}
 		memo[*blockID] = page2
 	}
