@@ -44,8 +44,6 @@ import (
 
 func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
 
 		cn0, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -70,6 +68,10 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 				t.Errorf("issue 28079 account cleanup: %v", err)
 			}
 		})
+
+		// Initial cleanup owns independent budgets; start the workload afterward.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+		defer cancel()
 
 		var snapshotTableID uint64
 		require.NoError(t, db0.QueryRowContext(ctx,
@@ -339,8 +341,6 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 
 func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
 		cn0, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		cn1, err := cluster.GetCNService(1)
@@ -359,6 +359,10 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 				t.Errorf("issue 28079 refresh account cleanup: %v", err)
 			}
 		})
+
+		// Initial cleanup owns independent budgets; start the workload afterward.
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
 
 		service, ok := cn1.RawService().(cnservice.Service)
 		require.True(t, ok)

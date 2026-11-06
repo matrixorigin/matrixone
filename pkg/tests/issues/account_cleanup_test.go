@@ -66,13 +66,13 @@ func TestIssueAccountCleanupIndependentBudgets(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 		for _, account := range []string{"first-account", "second-account"} {
 			mock.ExpectExec("drop account if exists " + sqlquote.Ident(account)).
-				WillDelayFor(35 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+				WillDelayFor(100 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery(issueAccountAbsentSQL).WithArgs(account).
-				WillDelayFor(5 * time.Second).WillReturnRows(sqlmock.NewRows([]string{"remaining"}).AddRow(0))
+				WillDelayFor(100 * time.Second).WillReturnRows(sqlmock.NewRows([]string{"remaining"}).AddRow(0))
 		}
 		started := time.Now()
 		require.NoError(t, cleanupIssueAccounts(db, "first-account", "second-account"))
-		require.Equal(t, 80*time.Second, time.Since(started), "must exceed the old shared 45-second cleanup budget")
+		require.Equal(t, 400*time.Second, time.Since(started), "valid cleanup can exceed either caller's workload budget")
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
