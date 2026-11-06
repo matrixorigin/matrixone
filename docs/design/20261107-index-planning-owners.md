@@ -105,6 +105,14 @@ same lexical defer. Nested SELECT, EXPLAIN, prepared FIELD/rebind and retries
 must not claim an earlier root or inherit its records. No plan stores a native
 relation, transaction operator, statement owner or callback.
 
+Collapse the default-argument-only planning/prepared/frontend forwarding APIs
+into their canonical implementations. Migrate call sites, function values and
+builder callbacks to the final signatures, including explicit absent inputs
+where needed. Preserve argument evaluation order and evaluate each existing
+argument once. Remove the old callback adapter as well; callbacks implement the
+new input contract directly. Real authorization/namespace/protocol entry points
+retain their policy and invoke the one canonical implementation.
+
 ## Candidate, execution and reuse
 
 Candidate provenance is a generic property of a necessary storage predicate.
