@@ -263,7 +263,7 @@ func (db *crossingFakeDB) mutations() []string {
 func newCrossingService(t *testing.T, db *crossingFakeDB) *service {
 	t.Helper()
 	s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, db,
-		func(s *service) { s.initUpgrade() })
+		initFrozenV407Upgrade)
 	t.Cleanup(s.stopper.Stop)
 	return s
 }

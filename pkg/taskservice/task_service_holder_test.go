@@ -16,7 +16,11 @@ package taskservice
 
 import (
 	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -28,9 +32,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestTaskHolderCanCreateTaskService(t *testing.T) {
@@ -1082,21 +1091,15 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.AddSQLTask(ctx, newTestSQLTask("task-1", 1))
 	require.ErrorIs(t, err, ErrNotReady)
-	_, err = s.UpdateSQLTask(ctx, []SQLTask{newTestSQLTask("task-2", 1)})
-	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.DeleteSQLTask(ctx)
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.QuerySQLTask(ctx)
 	require.ErrorIs(t, err, ErrNotReady)
-	_, err = s.AddSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
-	require.ErrorIs(t, err, ErrNotReady)
-	_, err = s.UpdateSQLTaskRun(ctx, []SQLTaskRun{newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
-	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.QuerySQLTaskRun(ctx)
 	require.ErrorIs(t, err, ErrNotReady)
-	_, err = s.AcquireSQLTaskRun(ctx, newTestSQLTask("task-1", 1), newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	_, err = s.AcquireSQLTaskRun(ctx, newTestSQLTask("task-1", 1), newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning), testSQLTaskAdmission(nil, 0))
 	require.ErrorIs(t, err, ErrNotReady)
-	_, err = s.CompleteSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess))
+	_, err = publishSQLTaskReceipt(ctx, s, &sqlTaskReceipt{run: newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.TriggerSQLTask(ctx, newTestSQLTask("task-1", 1), newTestAsyncTask("task-1:1"))
 	require.ErrorIs(t, err, ErrNotReady)
@@ -1108,6 +1111,105 @@ func TestMySQLBasedTaskStorageFactoryCreate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, store)
 	require.NoError(t, store.Close())
+}
+
+func TestSQLTaskAdmissionRefreshesOnlyForStorageFailure(t *testing.T) {
+	ctx := context.Background()
+	base := NewMemTaskStorage()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	sqlTask := newTestSQLTask("held-task", 1)
+	mustAddTestSQLTask(t, base, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, base, 1)[0]
+	run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	run.StartedAt = time.Now()
+	_, err := base.AcquireSQLTaskRun(ctx, sqlTask, run, testSQLTaskAdmission(nil, 0))
+	require.NoError(t, err)
+	unavailable := errors.New("storage unavailable")
+	internal := moerr.NewInternalErrorNoCtx("distinct storage error")
+	joined := errors.Join(ErrSQLTaskOverlap, unavailable)
+	invalid := moerr.NewInvalidInputNoCtx("invalid admission")
+	joinedInvalid := errors.Join(invalid, unavailable)
+
+	for _, tc := range []struct {
+		name        string
+		store       TaskStorage
+		task        SQLTask
+		wantErr     error
+		wantRefresh bool
+	}{
+		{"overlap", base, sqlTask, ErrSQLTaskOverlap, false},
+		{"missing", base, SQLTask{TaskID: sqlTask.TaskID + 1}, ErrSQLTaskNotFound, false},
+		{"invalid input", &sqlTaskErrorStore{TaskStorage: base, acquireErr: invalid}, sqlTask, invalid, false},
+		{"operation failure", &sqlTaskErrorStore{TaskStorage: base, acquireErr: unavailable}, sqlTask, unavailable, true},
+		{"distinct internal error", &sqlTaskErrorStore{TaskStorage: base, acquireErr: internal}, sqlTask, internal, true},
+		{"joined storage failure", &sqlTaskErrorStore{TaskStorage: base, acquireErr: joined}, sqlTask, joined, true},
+		{"joined invalid input and storage failure", &sqlTaskErrorStore{TaskStorage: base, acquireErr: joinedInvalid}, sqlTask, joinedInvalid, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			holder := &refreshableTaskStorage{refreshC: make(chan string, 1)}
+			holder.mu.store = tc.store
+			holder.mu.lastAddress = "current"
+			candidate := run
+			candidate.TaskID, candidate.AccountID, candidate.TaskName = tc.task.TaskID, tc.task.AccountID, tc.task.TaskName
+			_, err := holder.AcquireSQLTaskRun(ctx, tc.task, candidate, testSQLTaskAdmission(nil, 0))
+			require.ErrorIs(t, err, tc.wantErr)
+			select {
+			case addr := <-holder.refreshC:
+				require.True(t, tc.wantRefresh, "expected task admission result must not refresh storage")
+				require.Equal(t, "current", addr)
+			default:
+				require.False(t, tc.wantRefresh, "storage failures must still request refresh")
+			}
+		})
+	}
+}
+
+func TestSQLTaskCreationRefreshesOnlyForStorageFailure(t *testing.T) {
+	ctx := context.Background()
+	base := NewMemTaskStorage()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	unavailable := errors.New("storage unavailable")
+	joined := errors.Join(ErrSQLTaskAccountMissing, unavailable)
+	for _, tc := range []struct {
+		name        string
+		store       TaskStorage
+		wantErr     error
+		wantRefresh bool
+	}{
+		{"account missing", &sqlTaskErrorStore{TaskStorage: base, addErr: ErrSQLTaskAccountMissing}, ErrSQLTaskAccountMissing, false},
+		{"sentinel from ping", &trackedTaskStorage{TaskStorage: base, pingErr: ErrSQLTaskAccountMissing}, ErrSQLTaskAccountMissing, true},
+		{"operation failure", &sqlTaskErrorStore{TaskStorage: base, addErr: unavailable}, unavailable, true},
+		{"joined storage failure", &sqlTaskErrorStore{TaskStorage: base, addErr: joined}, joined, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			holder := &refreshableTaskStorage{refreshC: make(chan string, 1)}
+			holder.mu.store = tc.store
+			holder.mu.lastAddress = "current"
+			_, err := holder.AddSQLTask(ctx, newTestSQLTask("task", 1))
+			require.ErrorIs(t, err, tc.wantErr)
+			select {
+			case addr := <-holder.refreshC:
+				require.True(t, tc.wantRefresh, "expected task creation result must not refresh storage")
+				require.Equal(t, "current", addr)
+			default:
+				require.False(t, tc.wantRefresh, "storage failures must still request refresh")
+			}
+		})
+	}
+}
+
+type sqlTaskErrorStore struct {
+	TaskStorage
+	addErr     error
+	acquireErr error
+}
+
+func (s *sqlTaskErrorStore) AddSQLTask(context.Context, ...SQLTask) (int, error) {
+	return 0, s.addErr
+}
+
+func (s *sqlTaskErrorStore) AcquireSQLTaskRun(context.Context, SQLTask, SQLTaskRun, *SQLTaskRunAdmission) (uint64, error) {
+	return 0, s.acquireErr
 }
 
 type testStorageFactory struct {
@@ -1302,4 +1404,122 @@ func TestRefreshTaskStorageValidationDoesNotDoubleRoundTrip(t *testing.T) {
 	require.Equal(t, int64(1), store.validateCount.Load())
 	require.Zero(t, store.pingCount.Load(),
 		"validation is already a database round trip and must not be preceded by ping")
+}
+
+func TestSQLTaskMetadataHolderDoesNotWaitForRefresh(t *testing.T) {
+	s := &refreshableTaskStorage{refreshC: make(chan string, 1)}
+	s.mu.store = NewMemTaskStorage()
+	s.mu.lastAddress = "old-address"
+	called := false
+	s.mu.Lock()
+	err := s.withSQLTaskMetadataStore(context.Background(), func(TaskStorage) error {
+		called = true
+		return nil
+	})
+	s.mu.Unlock()
+	require.ErrorIs(t, err, ErrNotReady)
+	require.False(t, called)
+
+	problem := errors.New("metadata unavailable")
+	for i := 0; i < 2; i++ {
+		err = s.withSQLTaskMetadataStore(context.Background(), func(TaskStorage) error { return problem })
+		require.ErrorIs(t, err, problem)
+	}
+	require.Equal(t, "old-address", <-s.refreshC)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.withSQLTaskMetadataStore(ctx, func(TaskStorage) error {
+		t.Fatal("canceled metadata operation called storage")
+		return nil
+	}), context.Canceled)
+}
+
+type sqlTaskNetworkError struct{}
+
+func (sqlTaskNetworkError) Error() string   { return "network failure" }
+func (sqlTaskNetworkError) Timeout() bool   { return false }
+func (sqlTaskNetworkError) Temporary() bool { return false }
+
+func TestSQLTaskFetchDoesNotRefreshForBadDataOrDeadline(t *testing.T) {
+	s := &refreshableTaskStorage{refreshC: make(chan string, 1)}
+	s.mu.store, s.mu.lastAddress = NewMemTaskStorage(), "old-address"
+	s.mu.Lock()
+	_, err := querySQLTaskAsync(context.Background(), s)
+	s.mu.Unlock()
+	require.ErrorIs(t, err, ErrNotReady)
+
+	var value any
+	decodeErr := json.Unmarshal([]byte("{"), &value)
+	require.Error(t, decodeErr)
+	for _, problem := range []error{decodeErr, context.DeadlineExceeded} {
+		err = s.withSQLTaskFetchStore(context.Background(), func(TaskStorage) error { return problem })
+		require.ErrorIs(t, err, problem)
+		require.Empty(t, s.refreshC)
+	}
+	for _, problem := range []error{
+		&net.OpError{Op: "dial", Err: errors.New("connection refused")},
+		errors.Join(context.DeadlineExceeded, driver.ErrBadConn),
+		errors.Join(context.DeadlineExceeded, io.EOF),
+		errors.Join(context.DeadlineExceeded, &net.OpError{Op: "dial", Err: errors.New("connection refused")}),
+		errors.Join(context.DeadlineExceeded, sqlTaskNetworkError{}),
+	} {
+		err = s.withSQLTaskFetchStore(context.Background(), func(TaskStorage) error { return problem })
+		require.ErrorIs(t, err, problem)
+		require.Equal(t, "old-address", <-s.refreshC)
+	}
+}
+
+func TestSQLTaskFetchRecoversAfterInitialStorageOutage(t *testing.T) {
+	store := NewMemTaskStorage()
+	mustAddTestAsyncTask(t, store, 1, task.AsyncTask{
+		Status: task.TaskStatus_Running, TaskRunner: "cn1",
+		Metadata: task.TaskMetadata{ID: "ready", Executor: task.TaskCode_TestOnly},
+	})
+	var calls atomic.Int32
+	holder := newRefreshableTaskStorage(runtime.DefaultRuntime(), func(context.Context, bool) (string, error) {
+		if calls.Add(1) <= 2 {
+			return "", errors.New("address unavailable")
+		}
+		return "ready", nil
+	}, NewFixedTaskStorageFactory(store))
+	service := NewTaskService(runtime.DefaultRuntime(), holder)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	runner := NewTaskRunner("cn1", service, nil, WithRunnerFetchLimit(1), WithRunnerFetchTimeout(time.Second)).(*taskRunner)
+	require.Eventually(t, func() bool {
+		values, err := runner.doFetch()
+		return err == nil && len(values) == 1 && values[0].Metadata.ID == "ready"
+	}, 3*time.Second, 5*time.Millisecond, "periodic fetch must reconnect without another task-store operation")
+	require.GreaterOrEqual(t, calls.Load(), int32(3))
+}
+
+func TestTaskStorageRefreshFailureLogsAreBounded(t *testing.T) {
+	core, logs := observer.New(zapcore.ErrorLevel)
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "refresh-log-test", zap.New(core))
+	var calls atomic.Int32
+	s := &refreshableTaskStorage{rt: rt, addressFactory: func(context.Context, bool) (string, error) {
+		calls.Add(1)
+		return "", errors.New("injected address failure")
+	}}
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.refresh(context.Background(), "")
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(100), calls.Load())
+	require.LessOrEqual(t, logs.FilterMessage(taskStorageRefreshFailed.Message).Len(), 3)
+}
+
+func TestTaskStorageFactoryTypedNilIsUnavailable(t *testing.T) {
+	var nilStore *memTaskStorage
+	holder := newRefreshableTaskStorage(runtime.DefaultRuntime(), func(context.Context, bool) (string, error) {
+		return "address", nil
+	}, NewFixedTaskStorageFactory(nilStore))
+	t.Cleanup(func() { require.NoError(t, holder.Close()) })
+	_, err := holder.AcquireSQLTaskRun(context.Background(), SQLTask{}, SQLTaskRun{}, nil)
+	require.ErrorIs(t, err, ErrNotReady)
 }
