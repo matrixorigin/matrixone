@@ -46,14 +46,15 @@ is introduced.
 | Necessary predicate provenance | `Expr.TemporalCandidateFilter` throughout copying, pruning and compile | A generic `Expr.CandidateFilter` fact consumed by existing filter/index compilation. Preserve residuals, OR unknown behavior, bounded seek and physical-index placement checks. |
 | Execution values affect access selection | `Query.TemporalIndexNeedsReplan` and scattered frontend decisions | Publish `Query.ExecutionDependentAccess`; the existing frontend cache owner derives a single reuse policy for ordinary generations, prepared logical plans and physical compiles. Delete the temporal policy helper and duplicated case-specific cache decisions. |
 
-`TemporalCandidate`, comparison operators, bound evaluation, typed cost/range
-analysis and temporal block observations remain justified specialization.
+`TemporalCandidate`, bound evaluation and typed range inversion remain necessary
+type semantics. Comparison classification, cost observation, metadata walks and
+scan construction belong to the existing comparison/index/reader owners.
 `BorrowedTable` is synchronous evidence owned by the ordinary transaction; it
 does not become a relation cache or gain a Close operation.
 Copied index statistics, index-pair/schema witnesses and their fixed budgets
 are exposed as the existing relation's `IndexPlanningRelation` capability.
-They carry no temporal control state. The block-observation request retains
-its temporal operator/precision/zone because those are actual predicate inputs.
+They carry no temporal control state. The block-observation request uses the shared comparison operator and typed scalar
+bound. Precision and zone are comparison inputs, not a temporal control path.
 
 ## Function-owned evaluation boundaries
 
@@ -308,3 +309,74 @@ paired measurements using the same original implementation integrated with
 this main revision as the immediate pre-refactor baseline, and the final
 combined binary. Reuse typed math, reader and client evidence only where their
 semantic inputs are unchanged. Original PR #31944 stays untouched.
+
+## Complete comparison and physical-cost integration
+
+Design gate: gpt-6.1-terra/max approved this continuation against
+`545426c9d680e0d52ac65da258e4d1da4469769b`, base
+`647eaf9dd36d4b8521114e5dedb9d99d4c148c68`, session
+`01a1b2f1-23e5-7033-a552-beaa87385b9b`. This section supersedes earlier
+allowances for separate temporal cost/block pipelines. PR #32341 implements
+this design; #31944 remains unchanged.
+
+The common comparison owner classifies an oriented column/bound/operator as
+raw, losslessly normalized, inverse necessary range or unsupported. Exact
+serialization and equality-pinning callers accept only their existing exact
+cases. A shared `types.ComparisonOp` replaces `TemporalOp` without aliases and
+preserves internal endpoint numeric values. The type inverse supplies bounded
+logical arms to the same direct/serialized physical-leaf lowering used by
+ordinary single-component equality and ranges. Full residuals, prefix/NULL
+rules, selectivity and collation remain owned by ordinary index construction.
+
+QueryBuilder captures the bounded original scan proof before folding for both
+safe literal and mixed comparisons. Conservative execution-dependency discovery
+remains independent of current optional input and selected BASE/INDEX. The
+regular-index loop collects necessary descriptors alongside ordinary matching,
+then observes them only if ordinary matching owns neither a winner nor a
+fallback. FORCE, small-table, sorted-scan and spatial policies stay unchanged.
+There is one scorer and one covering-scan constructor/publication owner.
+
+The copied-statistics range-union estimate and cached block observation have a
+second real consumer: an already eligible ordinary signed/unsigned integer
+comparison with one source-free, exactly representable literal. One matching
+final block filter, safe original/current shape, local execution intent and
+current borrowed read are required. The scored covering winner is rechecked
+against complete observed BASE work using the common block-granular estimate;
+its existing filter/output estimate is never reduced. An incomplete observation
+preserves the ordinary choice. This is a controlled physical-cost expansion,
+not expanded SQL or index admission.
+
+Ordinary tag allocation and hidden relation resolution happen at their existing
+error checkpoint, before optional costing can choose BASE. Reuse that resolved
+metadata and revalidate after reentry; never add a lookup or suppress resolver
+errors. Necessary ranges retain private tag/map/residual construction, both
+real relation-pair checks, fixed-zone/local placement and final cancellation
+checks before any publication. Remove the separate resolved-index callback.
+
+`IndexBlockInputRequest` carries column, observed stats, copied scalar bytes,
+scalar type, comparison scale/operator and zone. `ObserveIndexBlockInput` uses
+the ordinary scalar zone-map comparator also used by reader execution. Mixed
+conversion is private to that comparator. Preserve decimal bound scales,
+unknown propagation, native ordinary BETWEEN, sorted seek and bloom restrictions.
+The disttae index-planning owner performs the cache-only bounded walk with all
+existing Try locks, iterator cleanup, zero-partial-output and final identity,
+subscription, transport, stats and cancellation checks. The new optional
+ordinary observation suppresses non-cancellation observation errors; the
+existing necessary-range path keeps its existing resource-error contract.
+
+Delete the nine superseded temporal original-analysis, candidate-admission,
+candidate-expression/index/index-only, and CBO access/admission/cost/scalar
+production files after their responsibilities move. No aliases, adapters,
+callback owner, parallel publication route, evaluator, cache or worker remains.
+The 4,096-unit original proof and 65,536-unit work budgets stay bounded.
+Scan-free literal-only SELECT roots decline before scheduling-intent construction
+and ParameterCount formatting; uncertain roots retain complete checking.
+
+Validation adds actual integer BASE/INDEX/incomplete-observation controls,
+ordinary and mixed real cached blocks, shared comparator operator/decimal/unknown
+and reader seek/bloom controls. Retain all original provenance, diagnostic,
+prepared, authorization, snapshot, cancellation, contention and no-partial-result
+oracles. Run affected normal/race/public SQL/static checks. The mandatory
+unmodified-main/final matched mixed campaign includes scan-free SELECT and
+ordinary reader hot paths. Historical feature-baseline measurements remain
+separate evidence and cannot close that performance gate.

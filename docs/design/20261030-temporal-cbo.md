@@ -150,3 +150,15 @@ layouts, transitions, same-domain and prepared controls. A/A p50 noise above
 use INDEX, scan less and beat main; meaningful regressions in dense, ordered or
 unaffected paths require diagnosis and correction rather than a broad
 no-regression claim.
+
+
+The final integration in [index planning owners](20261107-index-planning-owners.md)
+shares comparison classification, physical leaf lowering, range-union costing,
+covering construction and cached block observation with ordinary comparisons.
+One controlled costing extension observes an already eligible integer covering
+winner after its ordinary hidden-resolution error checkpoint and may retain BASE
+when complete evidence shows lower work. Incomplete evidence preserves the
+ordinary choice. Necessary-range type semantics and full SQL residuals remain.
+Performance acceptance also includes this integer control, ordinary reader hot
+paths and scan-free SELECT. Feature-baseline comparisons alone do not satisfy
+the unmodified-main acceptance above.
