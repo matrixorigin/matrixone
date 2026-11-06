@@ -1,5 +1,25 @@
 # M0 restricted metadata-only ADD prototype
 
+## Incremental base integration, 2026-11-06
+
+This revision merges frozen main `a86c130cc09c5859e1651d49746a35bc79c2c07a`
+into published candidate `b875a35deeb7314fdfae127032d2d5a644a63759`.
+The single textual conflict uses main's `AbandonAndRetainableNames` before
+writer close, while preserving panic/error propagation, exact persisted-object
+identities, batch cleanup and asynchronous orphan ownership. AR-1 authority,
+strict layouts, ordinary default behavior and supported SQL are unchanged.
+
+Affected local checks passed: 15 default cleanup/admission units, three M0 units,
+five visibility/cancellation/recovery-handshake units, two default SQL controls,
+nine M0 SQL roots and three real SQL race roots. Both modes passed affected
+compile/vet, incremental lint and molint; formatting and PR-relative diff checks
+passed. Unchanged native inputs and the verified local native hash were reused.
+The older integration section and its counts retain their original identities.
+
+Current-head CI, external BVT, Linux qualification, independent acceptance and
+QA remain separate pending gates. No new performance result is claimed.
+
+
 ## Base integration checkpoint, 2026-11-05
 
 This revision merges frozen main `d2dab994dd87445b5f5d44a06293bd5e09a1eee9`

@@ -2609,7 +2609,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		// the physical objects to its asynchronous cleanup owner
 		// instead of dropping the last reference to persisted files
 		// (issue #25590 round-19 review).
-		persisted = s3Writer.PersistedNames()
+		persisted = s3Writer.AbandonAndRetainableNames()
 		panicValue := recover()
 		closeErr := func() (closeErr error) {
 			defer func() {

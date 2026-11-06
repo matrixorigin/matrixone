@@ -96,12 +96,11 @@ func recordAndDrainPending(st *process.SequenceRetryState, id process.WatchIdent
 	return st.ConsumePendings()
 }
 
-// requireArbAdmission runs the two-value arbitration verdict: the error
-// lane carries only the caller's own cancellation (v21 precedence, F2).
+// requireArbAdmission is for cases that do not select a terminal error.
 func requireArbAdmission(t *testing.T, c *Compile, retryState *process.SequenceRetryState, items []process.SequencePendingItem, err error) bool {
 	t.Helper()
 	admitted, arbErr := c.arbitrateSequenceRetryAdmission(retryState, items, err)
-	require.NoError(t, arbErr, "arbitration surfaces the caller's own cancellation only")
+	require.NoError(t, arbErr)
 	return admitted
 }
 
@@ -419,6 +418,19 @@ func TestCompileRunCarriesSequenceRetryStateAcrossRetryRebuilds(t *testing.T) {
 		identityOK:   true,
 	}
 	c.SetResultSink(sink)
+	// This select needs no internal SQL executor. Make prober construction
+	// fail explicitly so the original-pending fallback is deterministic.
+	rt := runtime.ServiceRuntime(proc.GetService())
+	oldExecutor, hadExecutor := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	unavailableExecutor := struct{}{}
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, unavailableExecutor)
+	t.Cleanup(func() {
+		if hadExecutor {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, oldExecutor)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, unavailableExecutor)
+		}
+	})
 	_, runErr := c.Run(0)
 
 	// The sticky window elapsed: the expiry decision terminated, the final
@@ -663,7 +675,8 @@ func TestSequenceRetryArbitrationCallerCancellationWins(t *testing.T) {
 	})
 	proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, newStubEngine())
 	callerCtx, cancel := context.WithCancel(proc.Ctx)
-	proc.Ctx = callerCtx
+	proc.ReplaceTopCtx(callerCtx)
+	proc.ResetQueryContext()
 
 	// Live but elapsed window with a contended watch entry: the expiry
 	// decision runs at the seam.

@@ -643,10 +643,6 @@ func LoadCheckpointEntriesFromKey(
 			createAt, deletedAt types.TS,
 			rowID types.Rowid,
 		) error {
-			commitAt := createAt
-			if !deletedAt.IsEmpty() {
-				commitAt = deletedAt
-			}
 			isAblk := objectStats.GetAppendable()
 			if objectStats.Extent().End() == 0 {
 				// tn obj is in the batch too
@@ -663,10 +659,13 @@ func LoadCheckpointEntriesFromKey(
 				CrateTS:  createAt,
 				DropTS:   deletedAt,
 			}
-			if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-				(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
-				bo.NeedCopy = true
-			}
+			// Deleting an immutable object changes its visibility, not its file.
+			// Reuse older files from the backup chain even when a later checkpoint
+			// records their deletion; GC may already have removed the source.
+			// Appendable objects can be persisted after creation, so retain the
+			// flush/drop timestamp check for them.
+			bo.NeedCopy = baseTS.IsEmpty() || createAt.GE(baseTS) ||
+				(isAblk && !deletedAt.IsEmpty() && deletedAt.GE(baseTS))
 			locations = append(locations, bo)
 			if !deletedAt.IsEmpty() {
 				if softDeletes != nil {
