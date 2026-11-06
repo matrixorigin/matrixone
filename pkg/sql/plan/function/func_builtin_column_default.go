@@ -45,10 +45,16 @@ const defaultGeneratedExtra = "DEFAULT_GENERATED"
 
 // isTransparentCastName mirrors the binder-generated value-cast family. A
 // user-written CAST always carries its "cast(" spelling in OriginString, so
-// classification rule (c) marks it before any peel runs.
+// classification rule (c) marks it before any peel runs. The enum/set
+// value-to-index wrappers are the same planner-owned conversion machinery
+// (funcCastForEnumType/funcCastForSetType): the string-input and
+// integer-input spellings wrap only literal defaults, so ENUM/SET literal
+// defaults stay literal-classified like MySQL.
 func isTransparentCastName(name string) bool {
 	switch name {
-	case "cast", "cast_assign", "cast_strict", "cast_ignore", "cast_value_to_index":
+	case "cast", "cast_assign", "cast_strict", "cast_ignore",
+		"cast_value_to_index", "cast_index_value_to_index",
+		"cast_set_value_to_index", "cast_set_index_value_to_index":
 		return true
 	}
 	return false

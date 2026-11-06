@@ -312,6 +312,24 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefaultTypedAndExtra(t *testing.T) {
 		{"float raw", "1.50", cdLitExpr(cdType(types.T_float32, 0, -1), &plan.Literal{Value: &plan.Literal_Fval{Fval: 1.5}}), "1.50", false, ""},
 		{"date", "'2024-01-01'", cdLitExpr(cdType(types.T_date, 0, 0), &plan.Literal{Value: &plan.Literal_Dateval{Dateval: 738885}}), "2024-01-01", false, ""},
 		{"enum", "'b'", cdFn("cast_value_to_index", cdType(types.T_enum, 0, 0), cdLitStrText("a,b"), cdLitStrText("b")), "b", false, ""},
+		// ENUM/SET literal defaults persist beneath the planner's sibling
+		// value-to-index wrappers: the integer-input enum spelling
+		// (cast_index_value_to_index) and both SET spellings are the same
+		// conversion machinery and classify as literals like MySQL.
+		{"enum numeric", "1",
+			cdFn("cast_index_value_to_index", cdType(types.T_enum, 0, 0), cdLitStrText("T,E"),
+				cdFn("cast", cdType(types.T_int64, 0, 0), cdLitI64(1), cdCarrier(cdType(types.T_int64, 0, 0)))),
+			"1", false, ""},
+		{"set string", "''",
+			cdFn("cast_set_value_to_index", plan.Type{Id: int32(types.T_uint64), Enumvalues: ","}, cdLitStrText(","), cdLitStrText("")),
+			"", false, ""},
+		{"set numeric", "3",
+			cdFn("cast_set_index_value_to_index", plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}, cdLitStrText("a,b"),
+				cdFn("cast", cdType(types.T_int64, 0, 0), cdLitI64(3), cdCarrier(cdType(types.T_int64, 0, 0)))),
+			"3", false, ""},
+		{"enum wrapper col ref", "a",
+			cdFn("cast_index_value_to_index", cdType(types.T_enum, 0, 0), cdLitStrText("T,E"), cdColRef(cdType(types.T_int64, 0, 0))),
+			"a", false, cdDefaultGenerated},
 		{"varchar", "'x'", cdLitStrW("x", 10), "x", false, ""},
 		{"null", "null", cdLitExpr(cdType(types.T_int32, 32, -1), &plan.Literal{Isnull: true}), "", true, ""},
 		{"no default", "", nil, "", true, ""},
