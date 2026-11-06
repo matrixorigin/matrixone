@@ -1975,7 +1975,7 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	// These values shape bound defaults, constant-folded expressions, LOAD validation, planned index scan options,
 	// or the join/aggregate/sort spill thresholds baked into Node.SpillMem at plan-build time.
 	// Compare converted values so equivalent SET spellings retain warm plans.
-	planDependencyVariable := name == "sql_mode" || name == "optimizer_hints" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
+	planDependencyVariable := name == "sql_mode" || name == "optimizer_hints" || name == "lc_time_names" || name == "time_zone" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
 		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown" ||
 		name == "join_spill_mem" || name == "agg_spill_mem" || name == "sort_spill_mem"
 	var oldPlanDependency interface{}

@@ -73,6 +73,7 @@ type MemPKFilter struct {
 	disjuncts []MemPKFilter
 	isVec     bool
 	isValid   bool
+	empty     bool
 	TS        types.TS
 
 	exact struct {
@@ -176,6 +177,11 @@ func NewMemPKFilter(
 	// The membership filter selects a separate key column for IVF/fulltext and
 	// remains useful even when the SQL predicate cannot produce a PK fast path.
 	filter.setFilterHint(tableDef, filterHint)
+	if basePKFilter.Valid && basePKFilter.Empty {
+		filter.SetFullData(function.IN, true)
+		filter.empty = true
+		return filter, nil
+	}
 	if tablePrimaryKeyUsesUnicodeCollation(tableDef) {
 		// The in-memory primary-key iterator also compares packed original bytes;
 		// do not publish a raw probe for a UCA text key. The independent
@@ -486,6 +492,7 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.isVec = isVec
 	f.isValid = true
 	f.lookup = nil
+	f.empty = false
 	f.prefixes = nil
 	f.disjuncts = nil
 
@@ -713,7 +720,7 @@ func (f *MemPKFilter) MayMatchKeyRange(lo, hi []byte) bool {
 	case function.IN:
 		// f.packed is sorted ascending (SetFullData); any set key inside [lo, hi].
 		if len(f.packed) == 0 {
-			return true
+			return !f.empty
 		}
 		idx := sort.Search(len(f.packed), func(i int) bool {
 			return bytes.Compare(f.packed[i], lo) >= 0

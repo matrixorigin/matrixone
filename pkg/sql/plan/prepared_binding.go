@@ -1228,6 +1228,37 @@ func preparedUnderlyingSelect(stmt tree.Statement) bool {
 // The caller installs the current Process parameter vector before invoking it.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
+	return BuildPreparedExecutionPlanWithTemporalIntent(ctx, stmt, bindings, values, nil, nil)
+}
+
+// BuildPreparedExecutionPlanWithTemporalIntent creates a fresh one-shot input
+// for each optimizer attempt, including the FIELD metadata rebind.
+func BuildPreparedExecutionPlanWithTemporalIntent(ctx CompilerContext, stmt tree.Statement,
+	bindings []PreparedSourceBinding, values []any, intent *TemporalPlanningIntent, resolver BorrowingTableResolver) (*PreparedExecutionPlan, error) {
+	var root *tree.Select
+	inner := stmt
+	for inner != nil {
+		switch wrapped := inner.(type) {
+		case *tree.ExplainStmt:
+			inner = wrapped.Statement
+		case *tree.ExplainAnalyze:
+			inner = wrapped.Statement
+		case *tree.ExplainPhyPlan:
+			inner = wrapped.Statement
+		case *tree.Select:
+			root, inner = wrapped, nil
+		case *tree.ParenSelect:
+			root, inner = wrapped.Select, nil
+		default:
+			inner = nil
+		}
+	}
+	newInput := func() *TemporalPlanningInput {
+		if intent == nil || intent.ParameterFree && tree.ParameterCount(stmt) != 0 {
+			return nil
+		}
+		return NewTemporalPlanningInput(root, *intent, resolver)
+	}
 	previous := ctx.GetContext()
 	if tree.ParameterCount(stmt) != len(bindings) {
 		return nil, moerr.NewWrongArguments(previous, "EXECUTE")
@@ -1241,7 +1272,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
-	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)
+	query, err := NewPrepareOptimizer(ctx).OptimizeWithTemporalInput(stmt, false, newInput())
 	if err != nil {
 		return nil, err
 	}
@@ -1252,7 +1283,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		preparedBindingState(planning).fieldTypes = fieldTypes
 		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 		ctx.SetContext(planning)
-		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false)
+		query, err = NewPrepareOptimizer(ctx).OptimizeWithTemporalInput(stmt, false, newInput())
 		if err != nil {
 			return nil, err
 		}
@@ -1263,7 +1294,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, TemporalTypes: state.temporalTypes, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
+	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

@@ -17,9 +17,94 @@ package frontend
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// temporalPlanningIntentForStatement freezes the exact statement's scheduling
+// input. Unsupported wrappers and parameterized queries do not get a scope;
+// neither condition grants permission to change the existing access path.
+func temporalPlanningIntentForStatement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) (*tree.Select, plan2.TemporalPlanningIntent, bool) {
+	return temporalPlanningIntentForExecution(ses, proc, sql, sqlMode, stmt, false)
+}
+
+// Parameterized execution receives placement context only. Candidate admission
+// still requires a per-execution diagnostic proof in the planner.
+func temporalPlanningIntentForExecution(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement, allowParameters bool) (*tree.Select, plan2.TemporalPlanningIntent, bool) {
+	if ses == nil || ses.IsBackgroundSession() || proc == nil || proc.Base == nil || sql == "" {
+		return nil, plan2.TemporalPlanningIntent{}, false
+	}
+	root := temporalPlanningRoot(stmt)
+	if root == nil {
+		return nil, plan2.TemporalPlanningIntent{}, false
+	}
+	parameterFree := tree.ParameterCount(root) == 0
+	if !parameterFree && !allowParameters {
+		return nil, plan2.TemporalPlanningIntent{}, false
+	}
+	return root, plan2.TemporalPlanningIntent{
+		ParameterFree: parameterFree,
+		TimeZone:      proc.GetSessionInfo().TimeZone,
+		UnixTime:      proc.Base.UnixTime,
+		Placement: schedule.TemporalAccessIntent{
+			Scheduling: querySchedulingIntentForStatementWithSQLMode(ses, sql, sqlMode),
+			CurrentCN:  schedule.Worker{ID: proc.GetService(), Addr: currentCNPipelineAddress(ses), Route: schedule.WorkerRouteLocal},
+			Sirius:     siriusStatementSelected(sql, stmt),
+		},
+	}, true
+}
+
+func temporalPlanningRoot(stmt tree.Statement) *tree.Select {
+	inner := unwrapExecutableExplainStatement(stmt)
+	var root *tree.Select
+	switch s := inner.(type) {
+	case *tree.Select:
+		root = s
+	case *tree.ParenSelect:
+		root = s.Select
+	}
+	return root
+}
+
+// temporalPlanningIntentMatchesCompile compares the captured planning input
+// against what the normal compile path would derive for this exact statement.
+// A mismatch denies the optional path; it must never create a scheduling error.
+func temporalPlanningIntentMatchesCompile(intent *plan2.TemporalPlanningIntent, ses FeSession, proc *process.Process,
+	sql, sqlMode string, stmt tree.Statement) bool {
+	if intent == nil || !intent.MatchesProcess(proc) {
+		return false
+	}
+	_, actual, ok := temporalPlanningIntentForExecution(ses, proc, sql, sqlMode, stmt, true)
+	return ok && intent.ParameterFree == actual.ParameterFree && intent.Placement == actual.Placement
+}
+
+// validateTemporalPlanBeforeCompile preserves candidate-free plans and their
+// existing late scheduling. A candidate requires the captured execution to
+// still match; otherwise the caller rebuilds from the original AST without a
+// temporal scope before authorizing or compiling the replacement plan.
+func validateTemporalPlanBeforeCompile(p *plan2.Plan, intent *plan2.TemporalPlanningIntent, ses FeSession,
+	proc *process.Process, sql, sqlMode string, stmt tree.Statement, rebuild func() (*plan2.Plan, error),
+) (*plan2.Plan, bool, error) {
+	if !compile.HasTemporalIndexCandidates(p) {
+		return p, false, nil
+	}
+	if temporalPlanningIntentMatchesCompile(intent, ses, proc, sql, sqlMode, stmt) {
+		return p, true, nil
+	}
+	safe, err := rebuild()
+	if err != nil {
+		return nil, false, err
+	}
+	if compile.HasTemporalIndexCandidates(safe) {
+		return nil, false, moerr.NewInternalErrorNoCtx("unscoped temporal plan rebuild retained a candidate")
+	}
+	return safe, false, nil
+}
 
 // querySchedulingIntentForStatement applies the statement-scoped scheduling
 // SET_VAR overrides without mutating session state. The first override for a

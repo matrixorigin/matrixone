@@ -824,11 +824,11 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 			require.Equal(t, uint32(42), accountID)
 			return database, nil
 		},
-	).Times(1)
+	).Times(2)
 	database.EXPECT().Relation(gomock.Any(), "__mo_index_secondary_events", gomock.Nil()).
-		Return(relation, nil)
-	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99))
-	relation.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{Name: "__mo_index_secondary_events"})
+		Return(relation, nil).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99)).Times(2)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{Name: "__mo_index_secondary_events"}).Times(2)
 
 	ses, _ := newObservedProtocolSession()
 	ses.txnHandler = InitTxnHandler("", storage, ctx, txnOp)
@@ -850,6 +850,11 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 		PubInfo:          ref.PubInfo,
 	}, gotRef)
 	require.Equal(t, "__mo_index_secondary_events", gotDef.Name)
+	borrowRef, borrowDef, borrow, err := tcc.ResolveIndexForPlanning(ref, "__mo_index_secondary_events", nil)
+	require.NoError(t, err)
+	require.Equal(t, gotRef, borrowRef)
+	require.Equal(t, gotDef, borrowDef)
+	require.Nil(t, borrow, "publisher resolution must not supply a local native borrow")
 }
 
 func TestGetConfig(t *testing.T) {

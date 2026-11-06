@@ -52,7 +52,11 @@ func (opt *BaseOptimizer) CurrentContext() CompilerContext {
 }
 
 func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool) (*Query, error) {
-	pn, err := BuildPlan(opt.ctx, stmt, isPrepareStmt)
+	return opt.OptimizeWithTemporalInput(stmt, isPrepareStmt, nil)
+}
+
+func (opt *BaseOptimizer) OptimizeWithTemporalInput(stmt tree.Statement, isPrepareStmt bool, input *TemporalPlanningInput) (*Query, error) {
+	pn, err := BuildPlanWithTemporalInput(opt.ctx, stmt, isPrepareStmt, input)
 	if err != nil {
 		return nil, err
 	}

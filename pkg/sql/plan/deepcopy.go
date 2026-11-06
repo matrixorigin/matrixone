@@ -888,6 +888,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	}
 	newQry := &plan.Query{
 		IntegerPrecision:         cloneIntegerPrecisionGraph(qry.IntegerPrecision),
+		TemporalIndexNeedsReplan: qry.TemporalIndexNeedsReplan,
 		StmtType:                 qry.StmtType,
 		Steps:                    slices.Clone(qry.Steps),
 		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
@@ -1222,10 +1223,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:             *DeepCopyType(&expr.Typ),
-		Ndv:             expr.Ndv,
-		Selectivity:     expr.Selectivity,
-		PreparedNumeric: copyPreparedNumericMetadata(expr.PreparedNumeric),
+		Typ:                     *DeepCopyType(&expr.Typ),
+		Ndv:                     expr.Ndv,
+		Selectivity:             expr.Selectivity,
+		PreparedNumeric:         copyPreparedNumericMetadata(expr.PreparedNumeric),
+		TemporalCandidateFilter: expr.TemporalCandidateFilter,
 	}
 	// Positive AuxId values belong to later execution/zonemap numbering and
 	// intentionally remain reset across a semantic deep copy.  Prepared numeric

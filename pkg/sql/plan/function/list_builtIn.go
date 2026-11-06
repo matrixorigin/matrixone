@@ -15426,6 +15426,31 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	{
+		functionId: TEMPORAL_DATETIME_BOUND,
+		class:      plan.Function_INTERNAL | plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, args: []types.T{types.T_timestamp, types.T_int32, types.T_int32, types.T_int32},
+			executionStable: true, realTimeRelated: true,
+			retType: func([]types.Type) types.Type { return types.T_datetime.ToType() },
+			newOp:   func() executeLogicOfOverload { return temporalDatetimeBound },
+		}},
+	},
+	{
+		functionId: TEMPORAL_TIMESTAMP_BOUND,
+		class:      plan.Function_INTERNAL | plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, args: []types.T{types.T_datetime, types.T_int32, types.T_int32, types.T_int32},
+			executionStable: true, realTimeRelated: true,
+			retType: func([]types.Type) types.Type { return types.T_timestamp.ToType() },
+			newOp:   func() executeLogicOfOverload { return temporalTimestampBound },
+		}},
+	},
+
 	// function `internal_datetime_scale`
 	{
 		functionId: INTERNAL_DATETIME_SCALE,

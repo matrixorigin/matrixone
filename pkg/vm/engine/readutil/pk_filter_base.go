@@ -42,6 +42,7 @@ const (
 
 type BasePKFilter struct {
 	Valid bool
+	Empty bool // Valid and proven to match no rows.
 	Op    int
 	LB    []byte
 	UB    []byte
@@ -325,6 +326,9 @@ func constructBaseSortKeyFilter(
 				if err != nil {
 					return BasePKFilter{}, err
 				}
+				if ff.Valid && ff.Empty {
+					return ff, nil
+				}
 				if ff.Valid {
 					filters = append(filters, ff)
 				}
@@ -378,6 +382,9 @@ func constructBaseSortKeyFilter(
 					hasUnsupported = true
 					continue
 				}
+				if ff.Empty {
+					continue
+				}
 
 				filters1 = append(filters1, toDisjuncts(ff)...)
 				filters2 = append(filters2, ff)
@@ -388,7 +395,7 @@ func constructBaseSortKeyFilter(
 			}
 
 			if len(filters1) == 0 {
-				return BasePKFilter{}, nil
+				return BasePKFilter{Valid: true, Empty: true}, nil
 			}
 
 			if len(filters1) == 1 {
