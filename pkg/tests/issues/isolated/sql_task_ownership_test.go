@@ -17,10 +17,13 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pbtask "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -256,6 +259,32 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "select status from mo_task.sql_task_run where run_id=?", scheduledRunID).Scan(&forceStatus))
 	require.Equal(t, "UNKNOWN", forceStatus)
 
+	// A concurrent cron trigger can change the observed generation while
+	// SUSPEND is in flight. Retry only the explicit, safe CAS-conflict response.
+	suspendTask := func(name string) {
+		t.Helper()
+		suspendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		for {
+			_, err := db.ExecContext(suspendCtx, "alter task "+name+" suspend")
+			if err == nil {
+				return
+			}
+			var sqlErr *mysql.MySQLError
+			if !errors.As(err, &sqlErr) || sqlErr.Number != moerr.ErrInvalidState ||
+				sqlErr.Message != "invalid state sql task changed or was removed during alter; retry the operation" {
+				t.Fatalf("suspend task %s: %v", name, err)
+			}
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-suspendCtx.Done():
+				timer.Stop()
+				t.Fatalf("suspend task %s: %v; last conflict: %v", name, suspendCtx.Err(), err)
+			case <-timer.C:
+			}
+		}
+	}
+
 	require.NoError(t, gate.QueryRowContext(ctx, "select get_lock('scheduled_success_gate', 0)").Scan(&locked))
 	require.Equal(t, 1, locked)
 	defer func() {
@@ -263,7 +292,7 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 		defer cleanupCancel()
 		_, _ = gate.ExecContext(cleanupCtx, "select release_lock('scheduled_success_gate')")
 	}()
-	execSQLRequire(t, ctx, db, "create task scheduled_success schedule '*/1 * * * * *' timezone 'UTC' as begin select get_lock('scheduled_success_gate', 30); end")
+	execSQLRequire(t, ctx, db, "create task scheduled_success schedule '*/1 * * * * *' timezone 'UTC' as begin select get_lock('scheduled_success_gate', 120); end")
 	var successRunID uint64
 	require.Eventually(t, func() bool {
 		return db.QueryRowContext(ctx, "select run_id from mo_task.sql_task_run where task_name='scheduled_success' and status='RUNNING' order by run_id limit 1").Scan(&successRunID) == nil
@@ -274,8 +303,9 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.True(t, successIdentity.scheduled.Valid)
 	require.True(t, successIdentity.start.Valid)
 	require.NotEmpty(t, successIdentity.runner)
-	_, err = gate.ExecContext(ctx, "select release_lock('scheduled_success_gate')")
-	require.NoError(t, err)
+	suspendTask("scheduled_success")
+	require.NoError(t, gate.QueryRowContext(ctx, "select release_lock('scheduled_success_gate')").Scan(&locked))
+	require.Equal(t, 1, locked)
 	require.Eventually(t, func() bool {
 		var status string
 		return db.QueryRowContext(ctx, "select status from mo_task.sql_task_run where run_id=?", successRunID).Scan(&status) == nil && status == "SUCCESS"
@@ -347,28 +377,55 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	execSQLRequire(t, ctx, db, "insert into scheduled_counter values (0)")
 	execSQLRequire(t, ctx, db, "create table scheduled_sink(v int primary key)")
 	execSQLRequire(t, ctx, db, "insert into scheduled_sink values (0)")
+	require.NoError(t, gate.QueryRowContext(ctx, "select get_lock('scheduled_retry_gate', 0)").Scan(&locked))
+	require.Equal(t, 1, locked)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
+		defer cleanupCancel()
+		_, _ = gate.ExecContext(cleanupCtx, "select release_lock('scheduled_retry_gate')")
+	}()
 	execSQLRequire(t, ctx, db, `create task scheduled_retry schedule '*/1 * * * * *' timezone 'UTC' retry 1 as begin
+		select get_lock('scheduled_retry_gate', 120);
 		update scheduled_counter set n=n+1;
 		insert into scheduled_sink select case when n=1 then 0 else n end from scheduled_counter;
 	end`)
+	var firstRunID uint64
 	require.Eventually(t, func() bool {
-		var n int
-		err := db.QueryRowContext(ctx, "select count(*) from mo_task.sql_task_run where task_name='scheduled_retry' and status='SUCCESS'").Scan(&n)
-		return err == nil && n > 0
-	}, 30*time.Second, 50*time.Millisecond, "the scheduled retry must complete")
-	execSQLRequire(t, ctx, db, "alter task scheduled_retry suspend")
-	result, err := db.QueryContext(ctx, "select status, attempt_number from mo_task.sql_task_run where task_name='scheduled_retry' order by run_id limit 2")
-	require.NoError(t, err)
-	defer result.Close()
+		return db.QueryRowContext(ctx, "select run_id from mo_task.sql_task_run where task_name='scheduled_retry' and status='RUNNING' and attempt_number=1").Scan(&firstRunID) == nil
+	}, 30*time.Second, 50*time.Millisecond, "the scheduled firing must start")
+	suspendTask("scheduled_retry")
 	var status string
 	var attempt int
+	require.NoError(t, db.QueryRowContext(ctx, "select status, attempt_number from mo_task.sql_task_run where run_id=?", firstRunID).Scan(&status, &attempt))
+	require.Equal(t, "RUNNING", status)
+	require.Equal(t, 1, attempt)
+	require.NoError(t, db.QueryRowContext(ctx, "select n from scheduled_counter").Scan(&counter))
+	require.Zero(t, counter, "the first firing must remain behind the gate")
+	require.NoError(t, gate.QueryRowContext(ctx, "select release_lock('scheduled_retry_gate')").Scan(&locked))
+	require.Equal(t, 1, locked)
+	require.Eventually(t, func() bool {
+		var n int
+		err := db.QueryRowContext(ctx, "select count(*) from mo_task.sql_task_run where task_name='scheduled_retry' and status='SUCCESS' and attempt_number=2").Scan(&n)
+		return err == nil && n == 1
+	}, 30*time.Second, 50*time.Millisecond, "the scheduled retry must complete")
+	result, err := db.QueryContext(ctx, "select run_id, status, attempt_number from mo_task.sql_task_run where task_name='scheduled_retry' order by attempt_number")
+	require.NoError(t, err)
+	defer result.Close()
+	var runID uint64
 	require.True(t, result.Next())
-	require.NoError(t, result.Scan(&status, &attempt))
+	require.NoError(t, result.Scan(&runID, &status, &attempt))
+	require.Equal(t, firstRunID, runID)
 	require.Equal(t, "FAILED", status)
 	require.Equal(t, 1, attempt)
 	require.True(t, result.Next())
-	require.NoError(t, result.Scan(&status, &attempt))
+	require.NoError(t, result.Scan(&runID, &status, &attempt))
+	require.NotEqual(t, firstRunID, runID)
 	require.Equal(t, "SUCCESS", status)
 	require.Equal(t, 2, attempt)
+	require.False(t, result.Next(), "only the captured firing and its retry should execute")
 	require.NoError(t, result.Err())
+	require.NoError(t, db.QueryRowContext(ctx, "select n from scheduled_counter").Scan(&counter))
+	require.Equal(t, 2, counter)
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from scheduled_sink where v=2").Scan(&rows))
+	require.Equal(t, 1, rows)
 }
