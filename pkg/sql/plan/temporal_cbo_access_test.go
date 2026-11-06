@@ -166,7 +166,7 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	cache := NewStatsCache()
 	cache.Set(base.TblId, stats)
 	builder.compCtx = &encodedIndexCostTestContext{MockCompilerContext: mock, statsCache: cache}
-	intent := ExecutionIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "cn:6001", Route: schedule.WorkerRouteLocal}}}
+	intent := ExecutionIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "cn:6001", Route: schedule.WorkerRouteLocal}}}
 	source := &temporalCBORelationFixture{verify: true, observation: engine.IndexCostStats{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
 	read := (client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}).BindRead(proc.GetTxnOperator(), 0)
 	compiler := &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), hidden: &temporalCBORelationFixture{}, read: read}

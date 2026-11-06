@@ -106,7 +106,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	defer builder.finishPlanningInput()
 	if planningInput.claim(stmt) && planningInput.intent.MatchesProcess(ctx.GetProcess()) {
 		builder.planningInput = planningInput
-		builder.borrowResolutionAllowed = planningInput.intent.ParameterFree && samePlanningCompiler(planningInput.owner, ctx)
+		builder.borrowResolutionAllowed = samePlanningCompiler(planningInput.owner, ctx)
 	}
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget

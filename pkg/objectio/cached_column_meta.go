@@ -42,7 +42,7 @@ func TryCachedColumnMeta(ctx context.Context, location Location, seq uint16, max
 	if ctx == nil || len(location) != LocationLen || location.IsEmpty() || maxBlocks <= 0 || context.Cause(ctx) != nil {
 		return CachedColumnMeta{}, false
 	}
-	raw, ok := metaCache.Get(ctx, encodeCacheKey(*location.ShortName(), cacheKeyTypeMeta))
+	raw, ok := metaCache.TryGet(ctx, encodeCacheKey(*location.ShortName(), cacheKeyTypeMeta))
 	if !ok || len(raw) < IOEntryHeaderSize+metaHeaderLen {
 		return CachedColumnMeta{}, false
 	}

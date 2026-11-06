@@ -83,6 +83,23 @@ func TestCachedColumnMetaBoundsAndCopies(t *testing.T) {
 	_, ok = TryCachedColumnMeta(cancelled, location, 0, 2)
 	require.False(t, ok)
 
+	t.Run("contended shard", func(t *testing.T) {
+		entered, release := make(chan struct{}), make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			_, _, _, err := metaCache.GetWithAdmission(ctx, key, func([]byte, int64) (func(), error) {
+				close(entered)
+				<-release
+				return nil, nil
+			})
+			done <- err
+		}()
+		t.Cleanup(func() { close(release); require.NoError(t, <-done) })
+		<-entered
+		_, ok := TryCachedColumnMeta(ctx, location, 0, 2)
+		require.False(t, ok, "optional metadata read cannot wait behind cache admission")
+	})
+
 	// Eviction does not invalidate an already borrowed immutable view.
 	var wg sync.WaitGroup
 	wg.Add(1)

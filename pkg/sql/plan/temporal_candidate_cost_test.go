@@ -55,7 +55,8 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				require.False(t, builder.temporalOriginalScan.safe)
 				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
-				builder.planningInput.intent.ParameterFree = false
+				compiler := builder.compCtx.(*temporalCBOContext).encodedIndexCostTestContext.MockCompilerContext
+				compiler.SetContext(withPreparedSourceBindings(builder.GetContext(), nil, nil))
 			case "prepared statement":
 				builder.isPrepareStatement = true
 			case "sirius":
@@ -130,7 +131,7 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	underlying.tables["base"] = scan.TableDef
 	underlying.objects["base"] = scan.ObjRef
 	compiler := &trackingResolveContext{CompilerContext: underlying}
-	stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where id = ?", 1)
+	stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where d > now() and id = ?", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
@@ -143,23 +144,23 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	source := types.T_int64.ToType()
-	intent := fixture.planningInput.intent
-	intent.ParameterFree = false
 	bound, err := BuildPreparedExecutionPlan(compiler, stmt,
 		[]PreparedSourceBinding{{Position: 0, Type: source}},
-		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, compiler)
+		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}})
 	require.NoError(t, err)
 	require.NotNil(t, bound.Plan.GetQuery())
 	require.Equal(t, 1, compiler.resolves, "the table must still be resolved once")
 	require.Zero(t, compiler.borrowRequests, "a parameterized attempt cannot borrow a native relation")
 	require.False(t, bound.Plan.GetQuery().GetExecutionDependentAccess())
+	require.False(t, HasCandidateIndexAccess(bound.Plan))
+	require.False(t, bound.ValueDependent, "an unsupported temporal access must preserve prepared reuse")
 
 	missing, err := mysql.ParseOne(compiler.GetContext(), "select * from missing_table where id = ?", 1)
 	require.NoError(t, err)
 	defer missing.Free()
 	_, err = BuildPreparedExecutionPlan(compiler, missing,
 		[]PreparedSourceBinding{{Position: 0, Type: source}},
-		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, compiler)
+		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}})
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
 	require.Equal(t, 2, compiler.resolves, "the failed lookup must also use the ordinary resolver once")
 	require.Zero(t, compiler.borrowRequests)
@@ -263,7 +264,7 @@ func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
 	stmt := stmts[0].(*tree.Select)
-	intent := ExecutionIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
+	intent := ExecutionIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
 		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "local:6001", Route: schedule.WorkerRouteLocal}}}
 	wrapper := &trackingResolveContext{CompilerContext: ctx}
 	otherCompiler := &temporalCBOContext{encodedIndexCostTestContext: fixture}

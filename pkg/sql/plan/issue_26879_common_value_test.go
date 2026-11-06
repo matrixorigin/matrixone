@@ -61,7 +61,7 @@ func TestPreparedCommonValueAggregatesPeerDomains(t *testing.T) {
 						values[i] = ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
 							HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
 					}
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 					if len(value) > 46 {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "all fixed scales must constrain the marker: %v", err)
 						continue
@@ -117,7 +117,7 @@ func TestPreparedCommonValueRootStringBoundary(t *testing.T) {
 									values[i] = ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
 										HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
 								}
-								bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values, nil, nil)
+								bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 								numeric := binary || root == "0xx"
 								if numeric && len(spelling) == 77 {
 									require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
@@ -202,7 +202,7 @@ func TestPreparedCommonValueJointMarkerDomains(t *testing.T) {
 								values[i] = ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
 									HasSourceType: true, EnableNumericPrefix: true, IsBinaryProtocol: binary}
 							}
-							bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values, nil, nil)
+							bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 							if len(integral) == 77 {
 								require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 								return
@@ -286,7 +286,7 @@ func TestIssue26879PreparedExecutionCommonValue(t *testing.T) {
 							stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 							require.NoError(t, err)
 							defer stmt.Free()
-							bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values, nil, nil)
+							bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 							require.NoError(t, err)
 							if tc.name == "marker-derived peer" {
 								require.True(t, bound.ValueDependent, "runtime-derived DECIMAL must not enter the type-only cache")

@@ -34,7 +34,6 @@ func TestPlanReuseSeparatesExistingOwners(t *testing.T) {
 		{name: "nonquery", plan: &plan.Plan{}, generation: planReuseDecision{true, true}, logical: true, physical: true},
 		{name: "empty query", plan: query(nil), logical: true, physical: true},
 		{name: "ordinary", plan: query(&plan.Query{}), generation: planReuseDecision{true, true}, logical: true, physical: true},
-		{name: "execution access choice", plan: query(&plan.Query{ExecutionDependentAccess: true}), generation: planReuseDecision{valid: true}},
 		{name: "FK action", plan: query(&plan.Query{HasForeignKeyAction: true}), generation: planReuseDecision{true, true}},
 		{name: "view UDF metadata", plan: query(&plan.Query{ViewMetadataDependsOnUdf: true}), generation: planReuseDecision{true, true}, physical: true},
 		{name: "node flag is not a template rebuild policy", plan: query(&plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_VALUE_SCAN, NotCacheable: true}}}), generation: planReuseDecision{true, true}, logical: true, physical: true},

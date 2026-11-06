@@ -25,16 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// executionIntentForStatement freezes the exact statement's scheduling
-// input. Unsupported wrappers and parameterized queries do not get a scope;
-// neither condition grants permission to change the existing access path.
-func executionIntentForStatement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) (*tree.Select, plan2.ExecutionIntent, bool) {
-	return executionIntentForExecution(ses, proc, sql, sqlMode, stmt, false)
-}
-
-// Parameterized execution receives placement context only. Candidate admission
-// still requires a per-execution diagnostic proof in the planner.
-func executionIntentForExecution(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement, allowParameters bool) (*tree.Select, plan2.ExecutionIntent, bool) {
+// planningInputForStatement captures the exact statement's execution only when
+// the planning owner admits its root. Prepared execution does not use this path.
+func planningInputForStatement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) (*plan2.PlanningInput, plan2.ExecutionIntent, bool) {
 	if ses == nil || ses.IsBackgroundSession() || proc == nil || proc.Base == nil || sql == "" {
 		return nil, plan2.ExecutionIntent{}, false
 	}
@@ -42,20 +35,24 @@ func executionIntentForExecution(ses FeSession, proc *process.Process, sql, sqlM
 	if root == nil {
 		return nil, plan2.ExecutionIntent{}, false
 	}
-	parameterFree := tree.ParameterCount(root) == 0
-	if !parameterFree && !allowParameters {
+	intent := plan2.ExecutionIntent{
+		TimeZone:  proc.GetSessionInfo().TimeZone,
+		UnixTime:  proc.Base.UnixTime,
+		Placement: statementPlacement(ses, proc, sql, sqlMode, stmt),
+	}
+	input := plan2.NewPlanningInput(root, intent, planningCompiler(ses.GetTxnCompileCtx()))
+	if input == nil {
 		return nil, plan2.ExecutionIntent{}, false
 	}
-	return root, plan2.ExecutionIntent{
-		ParameterFree: parameterFree,
-		TimeZone:      proc.GetSessionInfo().TimeZone,
-		UnixTime:      proc.Base.UnixTime,
-		Placement: schedule.LocalAccessIntent{
-			Scheduling: querySchedulingIntentForStatementWithSQLMode(ses, sql, sqlMode),
-			CurrentCN:  schedule.Worker{ID: proc.GetService(), Addr: currentCNPipelineAddress(ses), Route: schedule.WorkerRouteLocal},
-			Sirius:     siriusStatementSelected(sql, stmt),
-		},
-	}, true
+	return input, intent, true
+}
+
+func statementPlacement(ses FeSession, proc *process.Process, sql, sqlMode string, stmt tree.Statement) schedule.LocalAccessIntent {
+	return schedule.LocalAccessIntent{
+		Scheduling: querySchedulingIntentForStatementWithSQLMode(ses, sql, sqlMode),
+		CurrentCN:  schedule.Worker{ID: proc.GetService(), Addr: currentCNPipelineAddress(ses), Route: schedule.WorkerRouteLocal},
+		Sirius:     siriusStatementSelected(sql, stmt),
+	}
 }
 
 func planningInputRoot(stmt tree.Statement) *tree.Select {
@@ -75,11 +72,11 @@ func planningInputRoot(stmt tree.Statement) *tree.Select {
 // A mismatch denies the optional path; it must never create a scheduling error.
 func executionIntentMatchesCompile(intent *plan2.ExecutionIntent, ses FeSession, proc *process.Process,
 	sql, sqlMode string, stmt tree.Statement) bool {
-	if intent == nil || !intent.MatchesProcess(proc) {
+	if intent == nil || !intent.MatchesProcess(proc) || ses == nil || ses.IsBackgroundSession() || sql == "" {
 		return false
 	}
-	_, actual, ok := executionIntentForExecution(ses, proc, sql, sqlMode, stmt, true)
-	return ok && intent.ParameterFree == actual.ParameterFree && intent.Placement == actual.Placement
+	root := planningInputRoot(stmt)
+	return root != nil && tree.ParameterCount(root) == 0 && intent.Placement == statementPlacement(ses, proc, sql, sqlMode, stmt)
 }
 
 // validateCandidatePlanBeforeCompile preserves candidate-free plans and their

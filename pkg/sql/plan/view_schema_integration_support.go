@@ -48,7 +48,7 @@ func (r *ViewSchemaRequest) BuildPreparedForIntegrationTest(stmt tree.Statement,
 			defer proc.SetPrepareParams(nil)
 		}
 		var buildErr error
-		bound, buildErr = BuildPreparedExecutionPlan(compiler, stmt, bindings, values, nil, nil)
+		bound, buildErr = BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
 		if buildErr != nil {
 			return nil, buildErr
 		}

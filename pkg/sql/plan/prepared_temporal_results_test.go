@@ -133,7 +133,7 @@ func TestPreparedTemporalResultContracts(t *testing.T) {
 					assertTemporalResultType(t, column.Typ, tc.result, tc.fsp)
 				} else {
 					proc.SetPrepareParams(params)
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source}}, []any{value}, nil, nil)
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source}}, []any{value})
 					require.NoError(t, err)
 					query = bound.Plan.GetQuery()
 				}
@@ -287,7 +287,7 @@ func TestPreparedCalendarSelectHistory(t *testing.T) {
 				values[i] = ParamValue{Value: v, SourceType: types.T_varchar.ToType(), HasSourceType: true}
 			}
 			ctx.GetProcess().SetPrepareParams(params)
-			bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values, nil, nil)
+			bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 			require.NoError(t, err)
 			require.True(t, bound.ValueDependent, "DATE and unknown strings must also bypass type-only caching")
 			q := bound.Plan.GetQuery()
@@ -475,7 +475,7 @@ func TestPreparedCalendarNullCountDoesNotReport(t *testing.T) {
 				previous := errutil.GetReportErrorFunc()
 				errutil.SetErrorReporter(func(context.Context, error, int) { reports.Add(1) })
 				defer errutil.SetErrorReporter(previous)
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values, nil, nil)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 				require.NoError(t, err)
 				query := bound.Plan.GetQuery()
 				expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]

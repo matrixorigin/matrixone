@@ -69,7 +69,7 @@ func planReuse(schemaChanged bool, p *plan.Plan, layer planReuseLayer) planReuse
 			}
 		}
 		query := p.GetQuery()
-		if query != nil && (query.GetHasForeignKeyAction() || query.GetExecutionDependentAccess() ||
+		if query != nil && (query.GetHasForeignKeyAction() ||
 			query.GetViewMetadataDependsOnUdf() || plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
 			plan2.PreparedPlanDependsOnIndexCoverage(p)) {
 			return deny
@@ -87,9 +87,6 @@ func planReuse(schemaChanged bool, p *plan.Plan, layer planReuseLayer) planReuse
 		query := p.GetQuery()
 		if query == nil {
 			return allow
-		}
-		if query.GetExecutionDependentAccess() {
-			return deny
 		}
 		for _, node := range query.GetNodes() {
 			// The external snapshot is fixed during compilation and is not

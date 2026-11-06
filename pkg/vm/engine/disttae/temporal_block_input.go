@@ -33,13 +33,17 @@ func (c *PushClient) planningInputSnapshot(db, table uint64, read client.Catalog
 		return nil, nil, false
 	}
 	s := &c.subscribed
-	s.rw.RLock()
+	if !s.rw.TryRLock() {
+		return nil, nil, false
+	}
 	defer s.rw.RUnlock()
 	entry := s.m[table]
 	if entry == nil || entry.dbID != db || entry.state != Subscribed || entry.pendingTo.Load() != nil {
 		return nil, nil, false
 	}
-	c.eng.RLock()
+	if !c.eng.TryRLock() {
+		return nil, nil, false
+	}
 	part := c.eng.partitions[[2]uint64{db, table}]
 	c.eng.RUnlock()
 	if part == nil {
@@ -103,7 +107,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 	}
 	// Each production reconnect publishes a newly constructed client. Holding
 	// this pointer until validation prevents address reuse across a swap.
-	source := subscriber.client()
+	source := subscriber.tryClient()
 	if source == nil {
 		return result, false, nil
 	}
@@ -181,7 +185,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 		return result, false, nil
 	}
 	latest, latestEntry, valid := c.planningInputSnapshot(t.db.databaseId, t.tableId, read)
-	transport := subscriber.client()
+	transport := subscriber.tryClient()
 	current, ok, err = tbl.ReadIndexCostStats(ctx, read, req.Observed, req.Column)
 	complete = err == nil && ok && current == req.Stats && valid && latest == state && latestEntry == entry && source == transport && planningReadStillCurrent(tbl, ctx, read, t, txn)
 	return result, complete, err

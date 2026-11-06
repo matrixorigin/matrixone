@@ -221,34 +221,31 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	project.FilterList = nil
 	scan.FilterList = []*plan.Expr{predicate}
 	indexTable := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Typ: Type{Id: int32(types.T_varchar)}}}}
-	makeHint := func(paramFree bool) (*plan.Expr, bool, error) {
-		atom, ok, err := temporalIndexOperands(proc.Ctx, query, 0, paramFree, index, 0)
+	makeHint := func() (*plan.Expr, bool, error) {
+		atom, ok, err := temporalIndexOperands(proc.Ctx, query, 0, index, 0)
 		if err != nil || !ok {
 			return nil, false, err
 		}
 		return makeTemporalIndexHint(proc.Ctx, atom, index, indexTable, 2)
 	}
-	hint, ok, err := makeHint(true)
+	hint, ok, err := makeHint()
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.True(t, hint.CandidateFilter)
 	require.False(t, predicate.CandidateFilter)
-	_, ok, err = makeHint(false)
-	require.NoError(t, err)
-	require.False(t, ok)
 	index.Unique = true
-	_, ok, err = makeHint(true)
+	_, ok, err = makeHint()
 	require.NoError(t, err)
 	require.False(t, ok, "nullable suffix prevents proving unique-index completeness")
 	index.Unique = false
 	suffix := scan.TableDef.Cols[1]
 	scan.TableDef.Cols[1] = nil
-	_, ok, err = makeHint(true)
+	_, ok, err = makeHint()
 	require.NoError(t, err)
 	require.False(t, ok, "incomplete index metadata must decline the hint")
 	scan.TableDef.Cols[1] = suffix
 	project.NodeType = plan.Node_JOIN
-	_, ok, err = makeHint(true)
+	_, ok, err = makeHint()
 	require.NoError(t, err)
 	require.False(t, ok)
 }

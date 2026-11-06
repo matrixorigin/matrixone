@@ -55,7 +55,7 @@ func makeTemporalIndexHint(ctx context.Context, atom temporalCandidateAtom, inde
 
 // temporalIndexOperands rechecks the current path and index at publication.
 // Catalog resolution may reenter planning, so an earlier proof is not enough.
-func temporalIndexOperands(ctx context.Context, query *plan.Query, scanID int32, paramFree bool, index *plan.IndexDef,
+func temporalIndexOperands(ctx context.Context, query *plan.Query, scanID int32, index *plan.IndexDef,
 	filterPos int,
 ) (temporalCandidateAtom, bool, error) {
 	if ctx == nil {
@@ -64,7 +64,7 @@ func temporalIndexOperands(ctx context.Context, query *plan.Query, scanID int32,
 	if err := ctx.Err(); err != nil {
 		return temporalCandidateAtom{}, false, err
 	}
-	if !paramFree || !temporalCandidateSimplePathSafe(query, scanID) {
+	if !temporalCandidateSimplePathSafe(query, scanID) {
 		return temporalCandidateAtom{}, false, nil
 	}
 	scan := query.Nodes[scanID]

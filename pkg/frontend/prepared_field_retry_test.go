@@ -79,7 +79,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-			_, initial, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
+			_, initial, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 			if owned && clone != nil {
 				clone.Free()
 			}
@@ -157,7 +157,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 				ctx.resolveErr = sentinel
 			}
 			originalContext := ctx.GetContext()
-			rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry, retry.executionIntent)
+			rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry, nil)
 			require.Equal(t, originalContext, ctx.GetContext(), "retry must restore the compiler context, including on errors")
 			if history != nil {
 				require.Same(t, history, prepared.fieldTypes)
@@ -207,7 +207,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			pu.StorageEngine, ses.txnHandler.storage = storage, storage
 			t.Cleanup(func() { pu.StorageEngine, ses.txnHandler.storage = oldEngine, oldStorage })
 			// The next ordinary EXECUTE, not the retry callback, owns publication.
-			_, next, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx, true)
+			_, next, clone, _, owned, err := initExecuteStmtParamWithResolverInSession(ec, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 			if owned && clone != nil {
 				clone.Free()
 			}
@@ -225,7 +225,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			// Prove why unchanged UINT64 output metadata alone is insufficient.
 			ctx.SetContext(plan2.WithPreparedFieldTypes(ec.reqCtx, nil))
 			defer ctx.SetContext(originalContext)
-			fresh, err := plan2.BuildPreparedExecutionPlan(ctx, prepared.PrepareStmt, retry.bindings, retry.paramVals, nil, nil)
+			fresh, err := plan2.BuildPreparedExecutionPlan(ctx, prepared.PrepareStmt, retry.bindings, retry.paramVals)
 			require.NoError(t, err)
 			require.NotSame(t, history, fresh.FieldTypes)
 			require.Equal(t, plan2.GetResultColumnsFromPlan(initial), plan2.GetResultColumnsFromPlan(fresh.Plan))
