@@ -4313,7 +4313,11 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		want  string
 	}{
 		{"x", typWithLen, "short type encoding"},
-		{string(encoded), 255, "the second argument must be in [0, 6]"},
+		{string(encoded), 255, "the second argument must be in [0, 7]"},
+		// Every default-decoding mode surfaces the payload decode error.
+		{"x", defaultExpr, "unexpected EOF"},
+		{"x", defExprInShowColumns, "unexpected EOF"},
+		{"x", generatedDefaultExtra, "unexpected EOF"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
@@ -4326,6 +4330,19 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
+
+	// A NULL mode argument is rejected before any payload decoding.
+	t.Run("null mode", func(t *testing.T) {
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0}, []bool{true}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
+		t.Cleanup(testCase.Free)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil),
+			"the second argument must be in [0, 7], but got NULL")
+		require.Zero(t, testCase.result.GetResultVector().Length())
+	})
 }
 
 func TestEmptyDomainVisibleMetadata(t *testing.T) {
