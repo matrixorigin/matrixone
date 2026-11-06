@@ -84,6 +84,7 @@ func TestODKUDirectNoopMatchesNormalActions(t *testing.T) {
 	}{
 		{"insert then repeats and changes", [][9]int64{{1, 10, 5, 1}, {1, 10, 5, 2}, {1, 10, 6, 3}, {1, 10, 6, 4}, {1, 10, 5, 5}}, 5, false},
 		{"snapshot changes then reverts", [][9]int64{{99, 10, 5, 1, 0, 7, 7, 10, 5}, {99, 10, 5, 2, 0, 7, 7, 10, 5}, {99, 10, 6, 3, 0, 7, 7, 10, 5}, {99, 10, 6, 4, 0, 7, 7, 10, 5}, {99, 10, 5, 5, 0, 7, 7, 10, 5}}, 4, false},
+		{"insert then snapshot no-op and change", [][9]int64{{1, 10, 5, 1}, {99, 20, 5, 2, 0, 7, 7, 20, 5}, {99, 20, 5, 3, 0, 7, 7, 20, 5}, {99, 20, 6, 4, 0, 7, 7, 20, 5}}, 3, false},
 		{"multiple owners across batches", [][9]int64{{1, 10, 5, 1}, {2, 20, 8, 2}, {1, 10, 5, 3}, {2, 20, 8, 4}, {1, 10, 6, 5}, {2, 20, 8, 6}}, 4, false},
 		{"nullable nonzero owner", [][9]int64{{1, 10, 5, 1}, {2, 20, 7, 2}, {2, 20, 7, 3}, {2, 20, 7, 4}}, 2, true},
 	} {
@@ -140,9 +141,8 @@ func TestODKUDirectNoopMatchesNormalActions(t *testing.T) {
 						inserts = 2
 					}
 					require.Equal(t, len(tc.rows)-inserts, counter.calls, "every duplicate RHS runs exactly once, including failed probes")
-					// Retained rows include metadata even when change->revert emits no physical row.
-					require.NoError(t, arg.ctr.actionRows.images.MarshalBinaryWithGroupingTo(&encoded))
-					require.NoError(t, arg.ctr.actionRows.origins.MarshalBinaryWithGroupingTo(&encoded))
+					// Unchanged snapshot rows need not be retained. Compare writer
+					// output, logical counts and exact-once RHS evaluation instead.
 					if !fast && attempt == 0 {
 						reference = append([]byte(nil), encoded.Bytes()...)
 					} else {
@@ -201,7 +201,7 @@ func TestODKUDirectNoopEligibilityRejectsUnknownShapes(t *testing.T) {
 
 // Stage a registered owner through the same production phases, stopping before
 // the second action so its terminal publication can be controlled precisely.
-func stageDirectNoop(t *testing.T, configure ...func(*plan.OdkuActionCtx, *batch.Batch, *process.Process)) (*PreInsertUnique, *process.Process, *mpool.AllocationAccount) {
+func stageDirectNoop(t *testing.T, fresh bool, configure ...func(*plan.OdkuActionCtx, *batch.Batch, *process.Process)) (*PreInsertUnique, *process.Process, *mpool.AllocationAccount) {
 	t.Helper()
 	arg, proc, _, account := odkuActionFixture(t, 16<<20)
 	c := arg.PreInsertCtx.OdkuActions
@@ -219,65 +219,89 @@ func stageDirectNoop(t *testing.T, configure ...func(*plan.OdkuActionCtx, *batch
 	}
 	require.NoError(t, arg.initODKUActionRows(proc, a.incoming, a.keys, a.old, c.RowIdColumn, odkuMutableColumns(c)))
 	require.NoError(t, arg.prepareODKUTarget(proc))
-	require.NoError(t, arg.applyODKUAction(proc))
-	a.sourceRow = 1
-	a.targetReady = false
-	require.NoError(t, arg.prepareODKUTarget(proc))
+	if !fresh {
+		// Construct an existing owner through the ordinary action path;
+		// the direct proof can leave an unchanged snapshot unregistered.
+		ordinal := a.noopOrdinal
+		a.noopOrdinal = -1
+		require.NoError(t, arg.applyODKUAction(proc))
+		a.noopOrdinal = ordinal
+		a.sourceRow = 1
+		a.targetReady = false
+		require.NoError(t, arg.prepareODKUTarget(proc))
+	}
 	return arg, proc, account
 }
 
 func TestODKUDirectNoopPublicationFailureAndCancellation(t *testing.T) {
-	for _, terminal := range []string{"RHS", "native check", "cancel", "ordinal allocation"} {
-		t.Run(terminal, func(t *testing.T) {
-			arg, proc, account := stageDirectNoop(t)
-			a, c := arg.ctr.actions, arg.PreInsertCtx.OdkuActions
-			cause := moerr.NewInternalErrorNoCtx("stop no-op action")
-			var filler []byte
-			defer func() {
-				if filler != nil {
-					proc.Mp().Free(filler)
+	for _, fresh := range []bool{false, true} {
+		for _, terminal := range []string{"RHS", "native check", "cancel", "publication allocation"} {
+			t.Run(fmt.Sprintf("fresh=%t/%s", fresh, terminal), func(t *testing.T) {
+				arg, proc, account := stageDirectNoop(t, fresh)
+				a, c := arg.ctr.actions, arg.PreInsertCtx.OdkuActions
+				cause := moerr.NewInternalErrorNoCtx("stop no-op action")
+				var filler []byte
+				defer func() {
+					if filler != nil {
+						proc.Mp().Free(filler)
+					}
+				}()
+				switch terminal {
+				case "RHS":
+					a.assignments[0] = &countedNoopColumn{ExpressionExecutor: a.assignments[0], failAt: 1, err: cause}
+				case "native check":
+					checks, err := odkueval.CompileChecks([]*plan.Expr{noopNotNull(t, proc, 2, c.OldColumns[2].Typ)}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_Rowid.ToType()}, []types.Type{}, proc, account)
+					require.NoError(t, err)
+					a.updateChecks = checks
+					image := arg.ctr.actionRows.images
+					if fresh {
+						image = a.proposed
+					}
+					require.NoError(t, image.Vecs[2].PreExtendNulls(1, proc.Mp()))
+					require.NoError(t, a.incoming.Vecs[2].PreExtendNulls(1, proc.Mp()))
+					image.Vecs[2].GetNulls().Add(0)
+					a.incoming.Vecs[2].GetNulls().Add(0)
+				case "cancel":
+					ctx, cancel := context.WithCancelCause(proc.Ctx)
+					defer cancel(nil)
+					proc.Ctx = ctx
+					cancel(cause)
+				case "publication allocation":
+					var err error
+					filler, err = proc.Mp().AllocAccounted(int(account.Snapshot().Limit-account.Snapshot().Used), account, mpool.AllocationOwnerMin, preInsertUniqueAllocationSiteRetainedData)
+					require.NoError(t, err)
 				}
-			}()
-			switch terminal {
-			case "RHS":
-				a.assignments[0] = &countedNoopColumn{ExpressionExecutor: a.assignments[0], failAt: 1, err: cause}
-			case "native check":
-				checks, err := odkueval.CompileChecks([]*plan.Expr{noopNotNull(t, proc, 2, c.OldColumns[2].Typ)}, []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_Rowid.ToType()}, []types.Type{}, proc, account)
-				require.NoError(t, err)
-				a.updateChecks = checks
-				require.NoError(t, arg.ctr.actionRows.images.Vecs[2].PreExtendNulls(1, proc.Mp()))
-				require.NoError(t, a.incoming.Vecs[2].PreExtendNulls(1, proc.Mp()))
-				arg.ctr.actionRows.images.Vecs[2].GetNulls().Add(0)
-				a.incoming.Vecs[2].GetNulls().Add(0)
-			case "cancel":
-				ctx, cancel := context.WithCancelCause(proc.Ctx)
-				defer cancel(nil)
-				proc.Ctx = ctx
-				cancel(cause)
-			case "ordinal allocation":
-				var err error
-				filler, err = proc.Mp().AllocAccounted(int(account.Snapshot().Limit-account.Snapshot().Used), account, mpool.AllocationOwnerMin, preInsertUniqueAllocationSiteRetainedData)
-				require.NoError(t, err)
-			}
-			done, err := arg.tryDirectNoop(proc, a.target)
-			require.True(t, done)
-			if terminal == "native check" {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
-				require.ErrorContains(t, err, "native 100% message")
-			} else if terminal == "ordinal allocation" {
-				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-			} else {
-				require.Same(t, cause, err)
-			}
-			require.Equal(t, int64(1), arg.ctr.lastOrdinal)
-			require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](arg.ctr.actionRows.images.Vecs[3], 0))
-			require.Zero(t, a.logicalAffected)
-		})
+				done, err := arg.tryDirectNoop(proc, a.target)
+				require.True(t, done)
+				if fresh && terminal == "publication allocation" {
+					require.NoError(t, err, "an unchanged snapshot needs no retained allocation")
+					require.Equal(t, int64(1), arg.ctr.lastOrdinal)
+					require.Zero(t, arg.ctr.actionRows.images.RowCount())
+					require.Zero(t, a.logicalAffected)
+					return
+				} else if terminal == "native check" {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+					require.ErrorContains(t, err, "native 100% message")
+				} else if terminal == "publication allocation" {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				} else {
+					require.Same(t, cause, err)
+				}
+				if fresh {
+					require.Zero(t, arg.ctr.lastOrdinal)
+					require.Zero(t, arg.ctr.actionRows.images.RowCount())
+				} else {
+					require.Equal(t, int64(1), arg.ctr.lastOrdinal)
+					require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](arg.ctr.actionRows.images.Vecs[3], 0))
+				}
+				require.Zero(t, a.logicalAffected)
+			})
+		}
 	}
 }
 
 func TestODKUDirectNoopInputCheckPrecedesRHS(t *testing.T) {
-	arg, proc, _ := stageDirectNoop(t)
+	arg, proc, _ := stageDirectNoop(t, false)
 	a, c := arg.ctr.actions, arg.PreInsertCtx.OdkuActions
 	require.Equal(t, int32(3), a.noopOrdinal)
 	// A generic explicit-input CHECK fails, although the update itself is a
@@ -304,7 +328,7 @@ func TestODKUDirectNoopInputCheckPrecedesRHS(t *testing.T) {
 func TestODKUDirectNoopProbeDeclinesBeforeRHS(t *testing.T) {
 	for _, unsupported := range []bool{false, true} {
 		t.Run(fmt.Sprint(unsupported), func(t *testing.T) {
-			arg, proc, _ := stageDirectNoop(t, func(c *plan.OdkuActionCtx, b *batch.Batch, p *process.Process) {
+			arg, proc, _ := stageDirectNoop(t, false, func(c *plan.OdkuActionCtx, b *batch.Batch, p *process.Process) {
 				if !unsupported {
 					vector.SetFixedAtNoTypeCheck(b.Vecs[2], 1, int64(6))
 					return
@@ -339,7 +363,7 @@ func TestODKUDirectNoopProbeDeclinesBeforeRHS(t *testing.T) {
 func TestODKUDirectNoopRepeatedAssignmentProbe(t *testing.T) {
 	for _, different := range []bool{false, true} {
 		t.Run(fmt.Sprint(different), func(t *testing.T) {
-			arg, proc, _ := stageDirectNoop(t, func(c *plan.OdkuActionCtx, b *batch.Batch, _ *process.Process) {
+			arg, proc, _ := stageDirectNoop(t, false, func(c *plan.OdkuActionCtx, b *batch.Batch, _ *process.Process) {
 				c.UpdateExprs = append(c.UpdateExprs, proto.Clone(c.UpdateExprs[0]).(*plan.Expr))
 				if different {
 					c.UpdateExprs[1].GetCol().ColPos = 0

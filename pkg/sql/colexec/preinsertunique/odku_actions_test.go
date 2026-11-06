@@ -288,7 +288,7 @@ func (odkuTestPriorView) Validate(context.Context) error { return nil }
 func (odkuTestPriorView) Close() error                   { return nil }
 
 func TestODKUActionsValidatePriorRowsAtBoundary(t *testing.T) {
-	for _, shape := range []string{"short layout", "nil vector", "short vector", "wrong type", "row count", "valid", "extra column", "unique short layout", "unique nil vector", "unique short vector", "unique wrong type"} {
+	for _, shape := range []string{"short layout", "nil vector", "short vector", "wrong type", "row count", "null rowid", "null pk", "valid", "extra column", "unique short layout", "unique nil vector", "unique short vector", "unique wrong type"} {
 		t.Run(shape, func(t *testing.T) {
 			a, proc, child, account := odkuActionFixture(t, 16<<20)
 			c := a.PreInsertCtx.OdkuActions
@@ -351,6 +351,10 @@ func TestODKUActionsValidatePriorRowsAtBoundary(t *testing.T) {
 						require.NoError(t, vector.AppendFixed(b.Vecs[2], int32(7), false, proc.Mp()))
 					case "row count":
 						b.SetRowCount(0)
+					case "null rowid":
+						b.Vecs[3].GetNulls().Add(0)
+					case "null pk":
+						b.Vecs[0].GetNulls().Add(0)
 					case "extra column":
 						b.Vecs = append(b.Vecs, vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp()))
 					}
@@ -644,29 +648,58 @@ func TestODKUAutomaticAssignmentFollowsEffectiveChange(t *testing.T) {
 	}
 }
 
-func TestODKUFixedOutputSkipsUnchangedOwners(t *testing.T) {
-	a, proc, child, _ := odkuActionFixture(t, 16<<20)
-	input := odkuActionInput(t, proc, [][9]int64{
-		{3, 30, 1, 1, 3, 3, 3, 30, 7},
-		{4, 40, 0, 2, 4, 4, 4, 40, 11},
-		{5, 50, 2, 3, 5, 5, 5, 50, 15},
-	})
-	for row := range 3 {
-		vector.SetFixedAtNoTypeCheck(input.Vecs[9], row, types.Rowid{0: byte(row + 3)})
+func TestODKUOutputSkipsUnchangedOwners(t *testing.T) {
+	for _, wide := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wide=%v", wide), func(t *testing.T) {
+			a, proc, child, _ := odkuActionFixture(t, 16<<20)
+			input := odkuActionInput(t, proc, [][9]int64{
+				{3, 30, 1, 1, 3, 3, 3, 30, 7},
+				{4, 40, 0, 2, 4, 4, 4, 40, 11},
+				{5, 50, 2, 3, 5, 5, 5, 50, 15},
+			})
+			for row := range 3 {
+				vector.SetFixedAtNoTypeCheck(input.Vecs[9], row, types.Rowid{0: byte(row + 3)})
+			}
+			if wide {
+				// A single row crosses the byte quota. The unchanged next owner
+				// must still be skipped when final output resumes on another Call.
+				v := vector.NewVec(types.New(types.T_varchar, 0, 0))
+				input.Vecs = append(input.Vecs, v)
+				for range 3 {
+					require.NoError(t, vector.AppendBytes(v, []byte(strings.Repeat("x", 1<<20)), false, proc.Mp()))
+				}
+				c := a.PreInsertCtx.OdkuActions
+				c.SourceColumns = append(c.SourceColumns, &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 10}}})
+			}
+			child.WithBatchs([]*batch.Batch{input})
+			var count uint64
+			a.PublishAffectedRows = func(rows uint64) error { count = rows; return nil }
+			require.NoError(t, a.Prepare(proc))
+			var ids, values []int64
+			var batches []int
+			for {
+				out, err := a.Call(proc)
+				require.NoError(t, err)
+				if out.Batch == nil {
+					break
+				}
+				batches = append(batches, out.Batch.RowCount())
+				ids = append(ids, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[0])...)
+				values = append(values, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[2])...)
+				if wide {
+					require.Equal(t, input.Vecs[10].GetBytesAt(0), out.Batch.Vecs[4].GetBytesAt(0))
+				}
+			}
+			require.Equal(t, []int64{3, 5}, ids, "the unchanged middle owner never reaches physical writers")
+			require.Equal(t, []int64{8, 17}, values)
+			if wide {
+				require.Equal(t, []int{1, 1}, batches)
+			} else {
+				require.Equal(t, []int{2}, batches)
+			}
+			require.Equal(t, uint64(4), count)
+		})
 	}
-	child.WithBatchs([]*batch.Batch{input})
-	var count uint64
-	a.PublishAffectedRows = func(rows uint64) error { count = rows; return nil }
-	require.NoError(t, a.Prepare(proc))
-	out, err := a.Call(proc)
-	require.NoError(t, err)
-	require.NotNil(t, out.Batch)
-	require.Equal(t, []int64{3, 5}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[0]), "the unchanged middle owner never reaches physical writers")
-	require.Equal(t, []int64{8, 17}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[2]))
-	out, err = a.Call(proc)
-	require.NoError(t, err)
-	require.Nil(t, out.Batch)
-	require.Equal(t, uint64(4), count)
 }
 
 func TestODKUEmptyChangePhaseRetainsAutomaticAndGeneratedImage(t *testing.T) {
