@@ -1,0 +1,269 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package fileservice
+
+import (
+	"context"
+	"io"
+	"os"
+	"sync"
+	"time"
+
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+)
+
+// objectDownload is a whole-object file being written to the disk cache. Readers of the
+// object read the bytes already written from its temp file instead of fetching them again.
+type objectDownload struct {
+	tempPath, diskPath string
+	started            time.Time
+
+	mu       sync.Mutex
+	written  int64
+	ended    bool // no more bytes will be written
+	complete bool // every byte of the object was written
+	changed  chan struct{}
+}
+
+func newObjectDownload(diskPath, tempPath string) *objectDownload {
+	return &objectDownload{diskPath: diskPath, tempPath: tempPath, started: time.Now(), changed: make(chan struct{})}
+}
+
+func (o *objectDownload) isComplete() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.complete
+}
+
+func (o *objectDownload) notifyLocked() {
+	close(o.changed)
+	o.changed = make(chan struct{})
+}
+
+func (o *objectDownload) advance(n int64) {
+	o.mu.Lock()
+	o.written += n
+	o.notifyLocked()
+	o.mu.Unlock()
+}
+
+func (o *objectDownload) end(complete bool) {
+	o.mu.Lock()
+	if !o.ended {
+		o.ended, o.complete = true, complete
+		o.notifyLocked()
+		if complete {
+			downloadRates.observe(o.written, time.Since(o.started))
+		}
+	}
+	o.mu.Unlock()
+}
+
+// estimate returns the bytes written and the time the download needs to write the bytes
+// before end, at its rate so far, or at the recent downloads' rate before it wrote enough
+// to measure its own.
+func (o *objectDownload) estimate(end int64) (int64, time.Duration) {
+	o.mu.Lock()
+	written := o.written
+	o.mu.Unlock()
+	if written >= end {
+		return written, 0
+	}
+	rate := downloadRates.rate()
+	if elapsed := time.Since(o.started); written >= downloadRateMinBytes && elapsed > 0 {
+		rate = float64(written) / elapsed.Seconds()
+	}
+	return written, time.Duration(float64(end-written) / rate * float64(time.Second))
+}
+
+// waitFor waits until the bytes before end are written, or until the whole object is when
+// end is negative. It returns the bytes written, and false when they will never cover end.
+func (o *objectDownload) waitFor(ctx context.Context, end int64, timeout time.Duration) (int64, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		o.mu.Lock()
+		written, ended, complete, changed := o.written, o.ended, o.complete, o.changed
+		o.mu.Unlock()
+		if end >= 0 && written >= end || end < 0 && complete {
+			return written, true
+		}
+		if ended {
+			return written, false
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return written, false
+		case <-timer.C:
+			return written, false
+		}
+	}
+}
+
+// open opens the file being written, or the published file once it is renamed, and
+// returns false when neither exists. Objects never change, so both hold the same bytes.
+func (o *objectDownload) open() (*os.File, bool) {
+	if f, err := os.Open(o.tempPath); err == nil {
+		return f, true
+	}
+	f, err := os.Open(o.diskPath)
+	return f, err == nil
+}
+
+type downloadProgressWriter struct {
+	w        io.Writer
+	download *objectDownload
+}
+
+func (p downloadProgressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	if n > 0 {
+		p.download.advance(int64(n))
+	}
+	return n, err
+}
+
+type diskCacheDownloads struct {
+	mu sync.Mutex
+	m  map[string]*objectDownload
+}
+
+func (d *DiskCache) startDownload(diskPath, tempPath string) *objectDownload {
+	o := newObjectDownload(diskPath, tempPath)
+	d.downloads.mu.Lock()
+	if d.downloads.m == nil {
+		d.downloads.m = make(map[string]*objectDownload)
+	}
+	d.downloads.m[diskPath] = o
+	d.downloads.mu.Unlock()
+	return o
+}
+
+func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
+	o.end(false)
+	d.downloads.mu.Lock()
+	if d.downloads.m[diskPath] == o {
+		delete(d.downloads.m, diskPath)
+	}
+	d.downloads.mu.Unlock()
+}
+
+func (d *DiskCache) download(diskPath string) *objectDownload {
+	d.downloads.mu.Lock()
+	defer d.downloads.mu.Unlock()
+	return d.downloads.m[diskPath]
+}
+
+// readFromDownload fills entry from the download of the object at diskPath when its bytes
+// are written, or will be no more than the max extra wait later than a range read could
+// fetch them. It reports whether
+// a download covers the object, and whether it filled entry.
+func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry) (downloading, filled bool, err error) {
+	o := d.download(diskPath)
+	if o == nil {
+		return false, false, nil
+	}
+	end := entry.Offset + entry.Size
+	_, wait := o.estimate(end)
+	if wait == 0 {
+		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
+	} else {
+		budget := rangeReadCosts.cost(entry.Size) + d.downloadMaxExtraWait
+		if wait > budget {
+			metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
+			return true, false, nil
+		}
+		if _, ok := o.waitFor(ctx, end, budget); !ok {
+			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
+			return true, false, nil
+		}
+		metric.FSDiskCacheDownloadReadWaitedCounter.Inc()
+	}
+	f, ok := o.open()
+	if !ok {
+		return false, false, nil
+	}
+	defer f.Close()
+	if _, err := f.Seek(entry.Offset, io.SeekStart); err != nil {
+		return true, false, err
+	}
+	if err := entry.ReadFromOSFile(ctx, f, d.cacheDataAllocator); err != nil {
+		return true, false, err
+	}
+	return true, true, nil
+}
+
+const (
+	// downloadRateMinBytes is written before a download's own rate is used.
+	downloadRateMinBytes = 1 << 20
+	// rangeReadSmall is the largest range read whose time counts as latency.
+	rangeReadSmall = 256 << 10
+	costWeight     = 0.1
+)
+
+// downloadRateModel averages the rate of completed whole-object downloads.
+type downloadRateModel struct {
+	mu        sync.Mutex
+	bytesPerS float64
+}
+
+var downloadRates = &downloadRateModel{bytesPerS: 100 << 20}
+
+func (m *downloadRateModel) observe(n int64, d time.Duration) {
+	if n < downloadRateMinBytes || d <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.bytesPerS = (1-costWeight)*m.bytesPerS + costWeight*float64(n)/d.Seconds()
+	m.mu.Unlock()
+}
+
+func (m *downloadRateModel) rate() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.bytesPerS
+}
+
+// rangeReadCostModel estimates the time of a range read as a latency plus its size over a
+// bandwidth, averaged from the range reads observed.
+type rangeReadCostModel struct {
+	mu        sync.Mutex
+	latency   float64 // seconds
+	bytesPerS float64
+}
+
+var rangeReadCosts = &rangeReadCostModel{latency: 0.02, bytesPerS: 100 << 20}
+
+func (m *rangeReadCostModel) observe(n int64, d time.Duration) {
+	if n <= 0 || d <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n <= rangeReadSmall {
+		m.latency = (1-costWeight)*m.latency + costWeight*d.Seconds()
+		return
+	}
+	if transfer := d.Seconds() - m.latency; transfer > 0 {
+		m.bytesPerS = (1-costWeight)*m.bytesPerS + costWeight*float64(n)/transfer
+	}
+}
+
+func (m *rangeReadCostModel) cost(n int64) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return time.Duration((m.latency + float64(n)/m.bytesPerS) * float64(time.Second))
+}

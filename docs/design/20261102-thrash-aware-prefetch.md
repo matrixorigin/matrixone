@@ -101,20 +101,32 @@ The signal is per table because tables in one cache need different answers. One 
 for the whole cache switched the entries search to range reads too: warm p95 225 ms against
 60 ms per table, at 1 GB memory and 4 GB disk.
 
-### A whole-object fill returns its reader's ranges first (decision)
+### An object being downloaded is fetched once (decision)
 
-A read that fills the disk cache with a whole object returns as soon as the ranges it
-asked for have streamed past, and the rest of the object keeps downloading in the
-background. Before, the read waited for the whole object, seconds for a large object,
-and its query with it.
+While the disk cache downloads a whole object, every read of that object takes the bytes
+the download has written instead of fetching them from object storage, including the
+read that started the download. A read returns as soon as its own bytes are written;
+the rest of the object keeps downloading in the background. Before, the read that
+started the download waited for the whole object, and other reads waited up to 200 ms
+for the whole object and then read their ranges from object storage anyway.
 
-- A download that fails after the reader returned does not fail the read; it caches
-  nothing.
-- Until the reader returns, cancelling its query cancels the download.
-- The downloads that continue after their reader returned are bounded; past the bound a
-  reader waits for its download as before.
-- The disk cache's synchronous update mode keeps the old behavior: the read returns once
-  the object is cached.
+- A read of bytes not yet written waits for them only if the download will write them
+  no more than `disk-download-max-extra-wait` (default 50 ms) later than a range read
+  could fetch them; otherwise it reads its range at once. The time to the bytes comes
+  from the download's rate, and the time of a range read from the latency and bandwidth
+  of the range reads observed. A wait that runs over is abandoned for a range read.
+- Larger values make fewer object storage requests and slower reads, 0 the fastest
+  reads. With local object storage, where a range read takes about 1 ms, values from
+  20 ms to 300 ms changed under 2% of the reads of downloading objects; on remote object
+  storage a range read costs 10 ms or more and the margin decides more reads.
+- A download that fails after a read got its bytes does not fail the read; it caches
+  nothing. Until the read that started a download returns, cancelling it cancels the
+  download. The downloads that continue after their reader returned are bounded; past
+  the bound a reader waits for its download.
+- Ranges read while their object is being downloaded are not cached separately; the
+  download caches the whole object.
+- The disk cache's synchronous update mode keeps the old behavior for the read that
+  starts a download: it returns once the object is cached.
 
 ## Rejected alternatives
 
@@ -183,6 +195,13 @@ Alternating TPC-H SF10 rounds with 100 filtered queries at 1 GB memory and 4 GB 
 filtered queries after a TPC-H round took 7.8–8.6 s per 100 (p95 about 575 ms), against
 8.2–17.8 s (p95 353–835 ms) before. Early return alone cut the p95 of the first filtered
 round from 898 ms to 455 ms.
+
+Reading downloading objects from their download, same alternating workload at 1 GB memory
+and 4 GB disk, medians of 4 runs: 5,054–4,135 object storage requests in the TPC-H rounds
+for a max extra wait of 50–200 ms, against 4,508 when other reads waited up to 200 ms for
+the whole object; filtered queries after a TPC-H round 5.7–6.8 s per 100 (p95 174–229 ms)
+against 9.5 s (p95 641 ms). Always waiting for the download made 3,373 requests in all but
+had the slowest first filtered round (p95 1,146 ms); never waiting made 11,193.
 
 ## Invariants
 

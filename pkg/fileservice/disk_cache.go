@@ -61,7 +61,9 @@ type DiskCache struct {
 	directoryMu sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
-	diskFullEviction atomic.Bool
+	diskFullEviction     atomic.Bool
+	downloads            diskCacheDownloads
+	downloadMaxExtraWait time.Duration
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -137,7 +139,8 @@ func newDiskCacheWithMetricScope(
 	name string,
 	metricScope string,
 ) (ret *DiskCache, err error) {
-	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope, diskCacheOptions{})
+	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope,
+		diskCacheOptions{downloadMaxExtraWait: DefaultDiskDownloadMaxExtraWait})
 }
 
 type diskCacheOptions struct {
@@ -145,6 +148,9 @@ type diskCacheOptions struct {
 	// (IndexFileCache), never evicted while held, and whose
 	// capacity does not follow GlobalDiskCacheSizeHint.
 	dirEntries bool
+	// downloadMaxExtraWait is how much later than a range read a read may get its bytes
+	// by waiting for the download of their object.
+	downloadMaxExtraWait time.Duration
 }
 
 func newDiskCache(
@@ -186,9 +192,10 @@ func newDiskCache(
 		perfCounterSets:    perfCounterSets,
 		fileSync:           func(file *os.File) error { return file.Sync() },
 
-		capacityFunc: capacityFunc,
-		dirEntries:   opts.dirEntries,
-		preloads:     newPreloadUsage(),
+		capacityFunc:         capacityFunc,
+		dirEntries:           opts.dirEntries,
+		downloadMaxExtraWait: opts.downloadMaxExtraWait,
+		preloads:             newPreloadUsage(),
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
@@ -530,6 +537,21 @@ func (d *DiskCache) Read(
 		if !openedOK {
 			// try full file
 			diskPath = d.pathForFile(path.File)
+			downloading, filled, err := d.readFromDownload(ctx, diskPath, entry)
+			if err != nil {
+				return err
+			}
+			if filled {
+				entry.done = true
+				entry.fromCache = d
+				numHit++
+				return nil
+			}
+			if downloading {
+				// A range read gets these bytes sooner than the download.
+				vector.downloadDeclined = true
+				return nil
+			}
 			if f, newlyOpened, ok := openPath(diskPath); ok {
 				if newlyOpened {
 					numOpenFull++
@@ -624,6 +646,10 @@ func (d *DiskCache) Update(
 	if err != nil {
 		return err
 	}
+	if d.download(d.pathForFile(path.File)) != nil {
+		// The download caches the whole object.
+		return nil
+	}
 
 	// callback
 	var onWritten []OnDiskCacheWrittenFunc
@@ -686,7 +712,7 @@ func (d *DiskCache) writeEntry(
 ) (bool, error) {
 	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, false, claimPublication)
+	}, false, claimPublication, false)
 	if writeErr != nil {
 		return false, d.observeWriteResult(diskPath, writeErr)
 	}
@@ -704,7 +730,7 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
-	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil)
+	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, false)
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
@@ -799,6 +825,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 	claimPublication func() bool,
+	trackDownload bool,
 ) (written bool, err error) {
 	defer func() {
 		d.evictForDiskFull(ctx, err)
@@ -869,6 +896,17 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 			d.mergeWriteCleanupError(diskPath, &err, cleanupDiskCacheTempFile(f))
 		}
 	}()
+	var download *objectDownload
+	var dst io.Writer = f
+	if trackDownload {
+		download = d.startDownload(diskPath, f.Name())
+		dst = downloadProgressWriter{w: f, download: download}
+		endUpdate := doneUpdate
+		doneUpdate = func() error {
+			d.finishDownload(diskPath, download)
+			return endUpdate()
+		}
+	}
 
 	from, err := openReader(ctx)
 	if err != nil {
@@ -891,12 +929,19 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
-	_, err = io.CopyBuffer(f, source, buf)
+	n, err := io.CopyBuffer(dst, source, buf)
+	if download != nil {
+		download.end(err == nil)
+	}
 	if err != nil {
 		if source.err != nil {
 			return false, &diskCacheSourceError{err: source.err}
 		}
 		return false, err
+	}
+
+	if download != nil {
+		d.noteWholeFile(n)
 	}
 
 	if asyncFinalize {
@@ -1378,13 +1423,8 @@ func (d *DiskCache) setFile(
 	}
 	diskPath := d.pathForFile(path.File)
 	d.wholeFills.Add(1)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil)
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, true)
 	d.wholeFills.Add(-1)
-	if written && writeErr == nil {
-		if stat, err := os.Stat(diskPath); err == nil {
-			d.noteWholeFile(fileSize(stat))
-		}
-	}
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
 	}
