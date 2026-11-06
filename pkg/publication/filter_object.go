@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -681,6 +682,8 @@ func rewriteNonAppendableTombstoneWithSinker(
 		mp,
 		localFS,
 		ioutil.WithTailSizeCap(0), // Force all data to be written to object
+		// This fixed-name owner returns one object and cannot rotate by bytes.
+		ioutil.WithBufferBytes(math.MaxInt64),
 	)
 	defer sinker.Close()
 

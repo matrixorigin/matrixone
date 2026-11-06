@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -351,33 +350,94 @@ func TestMetadataMemoryGrowthPreservesFramesOnCancel(t *testing.T) {
 	lease.Release()
 }
 
-func TestLegacyMetadataRetainsBudgetAcrossFrames(t *testing.T) {
+func TestLegacyDeleteMetadataStreamsAcrossWindows(t *testing.T) {
 	proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, DeleteCols: []int{0, 1}}}, false)
-	credits := &admissionThrottler{capacity: 1}
-	w.memController.throttler = credits
-	source := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_text.ToType()})
+	owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(256<<10), rscthrottler.WithMemorySampleForTesting(1<<30, 0))
+	w.memController.throttler = owner
+	w.deleteBlockMap = make([]map[types.Blockid]*deleteBlockData, 1)
+	source := batch.NewWithSchema(false, DeleteBatchAttrs, []types.Type{types.T_Rowid.ToType(), types.T_varchar.ToType()})
 	t.Cleanup(func() { source.Clean(proc.Mp()) })
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(strings.Repeat("x", 2048)), false, proc.Mp()))
-	source.SetRowCount(1)
-	var capacity *rscthrottler.WorkingSetCapacityError
-	require.ErrorAs(t, w.appendMetadata(proc, actionDelete, 0, 1, objectio.PhysicalAddr_Attr, source), &capacity)
-	require.Zero(t, w.metadataPool().AllocatedBytes(), "deny backing before allocation")
-	credits.capacity = 1 << 20
-	require.NoError(t, w.appendMetadata(proc, actionDelete, 0, 1, objectio.PhysicalAddr_Attr, source))
-	require.Positive(t, credits.reserved)
-	require.GreaterOrEqual(t, credits.reserved, 4*w.metadataPool().AllocatedBytes(), "legacy metadata retains its existing D owner")
-	before := w.metadataPool().AllocatedBytes()
-	credits.capacity = credits.reserved
-	source.CleanOnlyData()
-	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(strings.Repeat("x", 8192)), false, proc.Mp()))
-	source.SetRowCount(1)
-	require.ErrorAs(t, w.appendMetadata(proc, actionDelete, 0, 2, objectio.PhysicalAddr_Attr, source), &capacity)
-	require.Equal(t, before, w.metadataPool().AllocatedBytes(), "denied growth preserves prior frames")
-	credits.capacity = 1 << 20
+	var block types.Blockid
+	copy(block[:], colexec.TxnWorkspaceSegment[:])
+	key := strings.Repeat("x", 4096)
+	for i := range 128 {
+		source.CleanOnlyData()
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], types.NewRowid(&block, uint32(i)), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte(key), false, proc.Mp()))
+		source.SetRowCount(1)
+		bats, err := w.prepareDeleteBatches(proc, 0, []*batch.Batch{source}, false)
+		require.NoError(t, err)
+		require.Empty(t, bats)
+	}
+	for i := range 128 {
+		require.NoError(t, w.readMetadataFrame(proc))
+		require.NotNil(t, w.outputBat)
+		func() {
+			decoded := batch.NewOffHeapEmpty()
+			defer decoded.Clean(proc.Mp())
+			require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(w.outputBat.Vecs[4].GetBytesAt(0), proc.Mp()))
+			require.Equal(t, []types.Rowid{types.NewRowid(&block, uint32(i))}, vector.MustFixedColNoTypeCheck[types.Rowid](decoded.Vecs[0]))
+			require.Equal(t, key, string(decoded.Vecs[1].GetBytesAt(0)))
+		}()
+	}
 	require.NoError(t, w.readMetadataFrame(proc))
-	require.Equal(t, []uint64{1}, vector.MustFixedColNoTypeCheck[uint64](w.outputBat.Vecs[2]))
-	require.NoError(t, w.readMetadataFrame(proc))
-	require.Nil(t, w.outputBat, "denied frame was never published")
-	require.Zero(t, credits.reserved)
-	require.False(t, credits.invalidRelease)
+	require.Nil(t, w.outputBat)
+	require.NoError(t, w.reset(proc))
+	require.Zero(t, w.metadataPool().AllocatedBytes())
+	require.Equal(t, int64(256<<10), owner.Available())
+}
+
+type observedWaitThrottler struct {
+	rscthrottler.RSCThrottler
+	rscthrottler.ContextThrottler
+	entered chan struct{}
+}
+
+func (m *observedWaitThrottler) AcquireContext(ctx context.Context, size int64) error {
+	close(m.entered)
+	return rscthrottler.AcquireContext(ctx, m.RSCThrottler, size)
+}
+
+func TestLegacyMetadataWaitsForIndependentRelease(t *testing.T) {
+	proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, InsertCols: []int{0}}}, false)
+	ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
+	t.Cleanup(cancel)
+	proc.Ctx = ctx
+	owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(1<<20), rscthrottler.WithMemorySampleForTesting(1<<30, 0))
+	m := &observedWaitThrottler{RSCThrottler: owner, ContextThrottler: owner.(rscthrottler.ContextThrottler), entered: make(chan struct{})}
+	w.memController.throttler = m
+	source := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_int64.ToType()})
+	t.Cleanup(func() { source.Clean(proc.Mp()) })
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, proc.Mp()))
+	source.SetRowCount(1)
+	require.NoError(t, w.appendMetadata(proc, actionInsert, 0, 1, "", source))
+	held := int64(1<<20 - 4096)
+	_, ok := owner.Acquire(held)
+	require.True(t, ok)
+	t.Cleanup(func() { owner.Release(held) })
+	done := make(chan struct{})
+	var result error
+	go func() {
+		defer close(done)
+		result = w.acquireMemory(proc, process.NewTempAnalyzer(), 8192, nil)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-m.entered:
+	case <-done:
+		require.NoError(t, result, "another writer can release the missing capacity")
+		t.Fatal("expected the cancellable wait path")
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	owner.Release(held)
+	held = 0
+	select {
+	case <-done:
+		require.NoError(t, result)
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	require.NoError(t, w.free(proc))
+	require.Equal(t, int64(1<<20), owner.Available())
 }

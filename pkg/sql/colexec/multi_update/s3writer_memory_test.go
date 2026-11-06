@@ -19,7 +19,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -125,7 +124,7 @@ type writeErrorFS struct {
 func (fs *writeErrorFS) Write(context.Context, fileservice.IOVector) error { return fs.err }
 
 func TestS3WriterMemoryPressure(t *testing.T) {
-	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth", "retained output capacity error"} {
+	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth", "wait after flush"} {
 		t.Run(mode, func(t *testing.T) {
 			_, ctrl, proc := prepareTestCtx(t, true)
 			t.Cleanup(proc.Free)
@@ -157,13 +156,9 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 			w.flushThreshold = 64 << 20
 			waiting := mode == "wait for capacity"
 			if !waiting {
-				// Include the existing protocol envelope in this tiny-data fixture.
-				output, err := colexec.InsertMetadataFrameLimit(int64(w.flushThreshold), len(w.updateCtxs))
-				require.NoError(t, err)
-				require.NoError(t, w.reserveMetadata(proc, output, 0))
 				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
 				require.Positive(t, m.reserved)
-				require.Equal(t, w.retainedBytes()+w.metadataGranted, m.reserved, "data and output keep distinct owners")
+				require.Equal(t, w.retainedBytes(), m.reserved)
 			}
 			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
 			if !waiting {
@@ -178,9 +173,9 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				m.capacity = 0
 				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
 			}
-			if mode == "retained output capacity error" {
+			if mode == "wait after flush" {
 				m.capacity = 0
-				m.beforeWait = func(*admissionThrottler) { t.Fatal("retained output must not enqueue behind its own release") }
+				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
 			}
 			if mode == "cancel before growth" {
 				ctx, cancel := context.WithCancel(proc.Ctx)
@@ -193,13 +188,12 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), writeErr)
 				require.Equal(t, beforeAcquires+1, m.acquires)
 				require.Equal(t, beforeReleased, m.released, "failed flush retains its private vector owner")
-			} else if mode == "retained output capacity error" {
-				var capacity *rscthrottler.WorkingSetCapacityError
-				require.ErrorAs(t, w.append(proc, tc.op.OpAnalyzer, bat), &capacity)
-				require.NotNil(t, w.metadata[actionInsert])
-				require.Equal(t, w.metadataGranted, m.reserved)
 			} else {
 				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				if mode == "wait after flush" {
+					require.NotNil(t, w.metadataSpool, "earlier output must not prevent waiting for an independent release")
+					require.Equal(t, [2]*batch.Batch{}, w.metadata)
+				}
 				if waiting {
 					require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
 				}
@@ -207,7 +201,7 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 					require.NotSame(t, first[i], sinker)
 				}
 				if !waiting {
-					require.NotNil(t, w.metadata[actionInsert], "first flush metadata stays owned while Build continues")
+					require.NotNil(t, w.metadataSpool, "first flush stays available for replay while Build continues")
 				}
 				rows := map[uint64]uint64{}
 				for {

@@ -398,6 +398,7 @@ type Sinker struct {
 		persisted           []objectio.ObjectStats
 		inMemorySize        int
 		memorySizeThreshold int
+		mergeRuns           uint8 // Saturates at two; global sort/dedup needs one run per Sync.
 	}
 	result struct {
 		persisted []objectio.ObjectStats
@@ -834,18 +835,21 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	// merge sort
 	if sinker.schema.sortKeyIdx != -1 {
+		sinker.staged.mergeRuns = min(2, sinker.staged.mergeRuns+1)
 		if sinker.config.dedupAll {
 			fSinker := sinker.getStageFileSinker()
 			if fs, ok := fSinker.(*FSinkerImpl); ok && workspace != nil {
 				fs.workspaceBytes = workspace.Capacity()
 			}
-			err := sinker.trySpillMergeSortAccumulate(ctx, fSinker)
+			pending, err := sinker.trySpillMergeSortAccumulate(ctx, fSinker)
 			if err != nil {
 				sinker.resetFileSinker()
 				return err
 			}
 			atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
-			err = sinker.syncFileSinker(ctx, fSinker)
+			if pending {
+				err = sinker.syncFileSinker(ctx, fSinker)
+			}
 			sinker.resetFileSinker()
 			return err
 		}
@@ -863,13 +867,15 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 		if fs, ok := fSinker.(*FSinkerImpl); ok && workspace != nil {
 			fs.workspaceBytes = workspace.Capacity()
 		}
-		err := sinker.trySpillMergeSortStreaming(ctx, fSinker)
+		pending, err := sinker.trySpillMergeSortStreaming(ctx, fSinker)
 		if err != nil {
 			sinker.resetFileSinker()
 			return err
 		}
 		atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
-		err = sinker.syncFileSinker(ctx, fSinker)
+		if pending {
+			err = sinker.syncFileSinker(ctx, fSinker)
+		}
 		sinker.resetFileSinker()
 		return err
 	}
@@ -957,16 +963,35 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 	return nil
 }
 
-// trySpillMergeSortStreaming streams full row blocks with one reusable buffer.
-// Byte targets bound source windows/runs; admitted writers reserve the complete
-// materialized run before merging, including rounded vector growth. Cutting
-// output by capacity would publish invalid partial intermediate blocks.
+func (sinker *Sinker) mergeByteLimit() int64 {
+	if sinker.workspace != nil {
+		// The complete materialized run already owns W.
+		return math.MaxInt64
+	}
+	return sinker.config.bufferBytes
+}
+
+// A byte-limited partial block must end its object, never become an
+// intermediate block whose row count readers infer as BlockMaxRows.
+func (sinker *Sinker) sinkSortedBatch(ctx context.Context, fSinker FileSinker, data *batch.Batch) (bool, error) {
+	start := time.Now()
+	err := fSinker.Sink(ctx, data)
+	atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(start)))
+	if err != nil {
+		return false, err
+	}
+	if data.RowCount() < objectio.BlockMaxRows {
+		return false, sinker.syncFileSinker(ctx, fSinker)
+	}
+	return true, nil
+}
+
+// trySpillMergeSortStreaming reuses one byte-bounded merge buffer.
 func (sinker *Sinker) trySpillMergeSortStreaming(
 	ctx context.Context, fSinker FileSinker,
-) error {
+) (pending bool, err error) {
 	mp := sinker.mp
 	var buffer *batch.Batch
-	var err error
 	if sinker.workspace != nil {
 		mp = sinker.ioMP
 		buffer = batch.NewWithSchema(sinker.config.offHeap, sinker.schema.attrs, sinker.schema.attrTypes)
@@ -975,15 +1000,15 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	} else {
 		buffer, err = sinker.fetchBuffer()
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
-		sinkStart := time.Now()
-		if err := fSinker.Sink(ctx, data); err != nil {
+		var err error
+		pending, err = sinker.sinkSortedBatch(ctx, fSinker, data)
+		if err != nil {
 			return data, err
 		}
-		atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 		data.CleanOnlyData()
 		return data, nil
 	}
@@ -994,19 +1019,19 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 		streamSinker,
 		mp,
 		sinker.putBackOneInMemory,
-		math.MaxInt64,
+		sinker.mergeByteLimit(),
 	)
 	if sinker.workspace == nil {
 		sinker.putBackBuffer(buffer)
 	}
-	return err
+	return pending, err
 }
 
 // trySpillMergeSortAccumulate merge-sorts staged data, accumulates all sorted
 // blocks, runs dedup, then writes to the file sinker.
 func (sinker *Sinker) trySpillMergeSortAccumulate(
 	ctx context.Context, fSinker FileSinker,
-) error {
+) (pending bool, err error) {
 	mp := sinker.mp
 	getBuffer := sinker.fetchBuffer
 	returnBuffer := sinker.putBackBuffer
@@ -1041,7 +1066,7 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 
 	buffer, err := getBuffer()
 	if err != nil {
-		return err
+		return false, err
 	}
 	buffer, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
@@ -1050,11 +1075,11 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		innersinker,
 		mp,
 		sinker.putBackOneInMemory,
-		math.MaxInt64,
+		sinker.mergeByteLimit(),
 	)
 	returnBuffer(buffer)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// dedup
@@ -1062,17 +1087,19 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		sinker.schema.sortKeyIdx,
 		sorted,
 	); err != nil {
-		return err
+		return false, err
 	}
 
-	sinkStart := time.Now()
 	for _, bat := range sorted {
-		if err := fSinker.Sink(ctx, bat); err != nil {
-			return err
+		if bat.IsEmpty() {
+			continue
+		}
+		pending, err = sinker.sinkSortedBatch(ctx, fSinker, bat)
+		if err != nil {
+			return false, err
 		}
 	}
-	atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
-	return nil
+	return pending, nil
 }
 
 // trySpillMergeSortPipeline merge-sorts staged data and submits sorted blocks
@@ -1119,7 +1146,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 	streamSubmit := func(data *batch.Batch) (*batch.Batch, error) {
 		pending = append(pending, data)
 		pendingSize += data.Size()
-		if pendingSize >= submitThreshold {
+		if pendingSize >= submitThreshold || data.RowCount() < objectio.BlockMaxRows {
 			if err := submitPending(); err != nil {
 				return nil, err
 			}
@@ -1138,7 +1165,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 		streamSubmit,
 		sinker.mp,
 		sinker.putBackOneInMemory,
-		math.MaxInt64,
+		sinker.mergeByteLimit(),
 	)
 	if buffer != nil {
 		sinker.putBackBuffer(buffer)
@@ -1348,6 +1375,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 
 	defer func() {
 		sinker.staged.persisted = sinker.staged.persisted[:0]
+		sinker.staged.mergeRuns = 0
 	}()
 
 	spillCount := atomic.LoadInt64(&sinker.timing.spillCount)
@@ -1370,8 +1398,10 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 	}
 
 	// if there is only one file, it is sorted an deduped
-	if len(sinker.staged.persisted) == 1 {
-		sinker.result.persisted = append(sinker.result.persisted, sinker.staged.persisted[0])
+	if len(sinker.staged.persisted) == 1 || sinker.staged.mergeRuns == 1 {
+		// Byte boundaries may split one globally sorted/deduped run into
+		// several objects without changing that run's order or contents.
+		sinker.result.persisted = append(sinker.result.persisted, sinker.staged.persisted...)
 		return nil
 	}
 
@@ -1507,6 +1537,7 @@ func (sinker *Sinker) Reset() {
 
 	sinker.cleanupInMemoryStaged()
 	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.staged.mergeRuns = 0
 
 	for i := range sinker.result.tail {
 		if sinker.result.tail[i] != nil {
