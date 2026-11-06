@@ -330,6 +330,9 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+	// optimizerHints is the session value used to build this prepared plan.
+	// EXECUTE rebuilds when it changes without dropping the statement handle.
+	optimizerHints string
 }
 
 /*
@@ -1497,8 +1500,15 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
+	oldOptimizerHints := ""
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+	} else if name == "optimizer_hints" {
+		old, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		oldOptimizerHints, _ = old.(string)
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1550,6 +1560,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeCaches(oldMatrixOneNative, val)
+	}
+	if err == nil && name == "optimizer_hints" && oldOptimizerHints != val.(string) {
+		ses.cleanCache()
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

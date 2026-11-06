@@ -797,8 +797,13 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
-		return val, nil
+	// Procedure locals belong to ordinary variable lookup, not the system
+	// variable namespace. A same-named local must not shadow system values
+	// used while planning a statement inside a procedure.
+	if !isSystemVar {
+		if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
+			return val, nil
+		}
 	}
 
 	if isSystemVar {
