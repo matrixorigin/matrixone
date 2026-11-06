@@ -59,38 +59,41 @@ func sessionMayAccessIndexRelation(ses FeSession) bool {
 	return tenant != nil && tenant.GetUser() != "" && verifyAccountCanExecMoCtrl(tenant)
 }
 
-func checkResolvedIndexRelation(execCtx *ExecCtx, requested, physical, kind string, flags uint64) error {
-	if !catalog.RequiresPrivilegedRelationAccess(requested, kind, flags) && !catalog.RequiresPrivilegedRelationAccess(physical, kind, flags) {
-		return nil
-	}
+// mayAccessIndexRelation evaluates the caller policy without constructing a
+// denial, so callers can use it to choose whether catalog probes are needed.
+func mayAccessIndexRelation(execCtx *ExecCtx) bool {
 	if execCtx == nil {
-		return moerr.NewInternalErrorNoCtx("do not have privilege to execute the statement")
+		return false
 	}
 	// Background implementation SQL is explicitly server-owned, even when
 	// it was requested by a user statement. Same-statement expression SQL
 	// retains the user's policy and must never take this exemption.
 	if execCtx.input != nil && execCtx.input.isInternal() && !execCtx.input.sameStatementAuthorization &&
 		(execCtx.ses == nil || execCtx.ses.IsBackgroundSession() || !execCtx.ses.GetFromRealUser()) {
-		return nil
+		return true
 	}
 	if caller := hiddenIndexCaller(execCtx.reqCtx); caller != nil {
-		if sessionMayAccessIndexRelation(caller) {
-			return nil
-		}
-		return moerr.NewInternalError(execCtx.reqCtx, "do not have privilege to execute the statement")
+		return sessionMayAccessIndexRelation(caller)
 	}
 	ses := execCtx.ses
 	if ses != nil && !ses.IsBackgroundSession() && ses.GetFromRealUser() {
-		if sessionMayAccessIndexRelation(ses) {
-			return nil
-		}
-		return moerr.NewInternalError(execCtx.reqCtx, "do not have privilege to execute the statement")
+		return sessionMayAccessIndexRelation(ses)
 	}
 	if ses != nil && ses.GetIsInternal() {
+		return true
+	}
+	return sessionMayAccessIndexRelation(ses)
+}
+
+func checkResolvedIndexRelation(execCtx *ExecCtx, requested, physical, kind string, flags uint64) error {
+	if !catalog.RequiresPrivilegedRelationAccess(requested, kind, flags) && !catalog.RequiresPrivilegedRelationAccess(physical, kind, flags) {
 		return nil
 	}
-	if sessionMayAccessIndexRelation(ses) {
+	if mayAccessIndexRelation(execCtx) {
 		return nil
+	}
+	if execCtx == nil {
+		return moerr.NewInternalErrorNoCtx("do not have privilege to execute the statement")
 	}
 	return moerr.NewInternalError(execCtx.reqCtx, "do not have privilege to execute the statement")
 }
@@ -142,7 +145,7 @@ func checkFrontendIndexTargetInExec(execCtx *ExecCtx, stmt tree.Statement) error
 func checkFrontendIndexTargetWithCatalog(execCtx *ExecCtx, stmt tree.Statement) error {
 	// Privileged callers and explicit server-owned SQL may access index
 	// relations; they do not need additional metadata probes.
-	if checkResolvedIndexRelation(execCtx, catalog.IndexTableNamePrefix, "", "", 0) == nil {
+	if mayAccessIndexRelation(execCtx) {
 		return nil
 	}
 	return checkFrontendIndexTargetWithResolver(execCtx, stmt, func(target explicitIndexTarget) error {
@@ -266,7 +269,7 @@ func checkCloneDestinationAtAccount(execCtx *ExecCtx, ses *Session, table *tree.
 	if err := checkResolvedIndexRelation(&admission, name, name, "", 0); err != nil {
 		return err
 	}
-	if checkResolvedIndexRelation(&admission, catalog.IndexTableNamePrefix, "", "", 0) == nil {
+	if mayAccessIndexRelation(&admission) {
 		return nil
 	}
 	handler := ses.GetTxnHandler()

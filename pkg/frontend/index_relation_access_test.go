@@ -18,12 +18,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,9 +36,109 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type indexPrivilegeProbeReportKey struct{}
+
+func TestIndexPrivilegeProbeReportsOnlyRealDenials(t *testing.T) {
+	ctx := context.WithValue(context.Background(), indexPrivilegeProbeReportKey{}, true)
+	var denials atomic.Int32
+	previousReporter := errutil.GetReportErrorFunc()
+	errutil.SetErrorReporter(func(reportCtx context.Context, err error, depth int) {
+		if reportCtx != nil && reportCtx.Value(indexPrivilegeProbeReportKey{}) == true &&
+			strings.Contains(err.Error(), "do not have privilege to execute the statement") {
+			denials.Add(1)
+		}
+		previousReporter(reportCtx, err, depth)
+	})
+	t.Cleanup(func() { errutil.SetErrorReporter(previousReporter) })
+
+	ses := &Session{}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"})
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: &UserInput{}}
+	table := func(name string) *tree.TableName {
+		return tree.NewTableName(tree.Identifier(name), tree.ObjectNamePrefix{}, nil)
+	}
+
+	t.Run("ordinary statement", func(t *testing.T) {
+		denials.Store(0)
+		require.NoError(t, checkFrontendIndexTargetWithCatalog(execCtx, &tree.Select{}))
+		require.Zero(t, denials.Load())
+	})
+	t.Run("ordinary clone without transaction", func(t *testing.T) {
+		denials.Store(0)
+		err := checkCloneDestinationAtAccount(execCtx, ses, table("ordinary"), 0, 0)
+		require.ErrorContains(t, err, "missing transaction for clone destination admission")
+		require.Zero(t, denials.Load())
+	})
+	t.Run("protected clone remains denied first", func(t *testing.T) {
+		denials.Store(0)
+		err := checkCloneDestinationAtAccount(execCtx, ses, table(catalog.IndexTableNamePrefix+"protected"), 0, 0)
+		require.ErrorContains(t, err, "do not have privilege")
+		require.EqualValues(t, 1, denials.Load())
+	})
+}
+
+func TestIndexRelationPrivilegePrecedence(t *testing.T) {
+	ctx := context.Background()
+	newSession := func(tenant *TenantInfo, real, internal bool) *Session {
+		ses := &Session{isInternal: internal}
+		ses.SetFromRealUser(real)
+		ses.SetTenantInfo(tenant)
+		return ses
+	}
+	ordinary := newSession(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"}, true, false)
+	privileged := newSession(&TenantInfo{Tenant: "sys", User: "root", DefaultRole: "moadmin"}, true, false)
+	internalReal := newSession(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"}, true, true)
+	internalSession := newSession(nil, false, true)
+	privilegedBackground := newSession(&TenantInfo{Tenant: "sys", User: "root", DefaultRole: "moadmin"}, false, false)
+	missingUser := newSession(&TenantInfo{Tenant: "sys", DefaultRole: "moadmin"}, true, false)
+	background := &backSession{}
+	serverInput := &UserInput{isInternalInput: true}
+	sameStatement := &UserInput{isInternalInput: true, sameStatementAuthorization: true}
+	withCaller := func(ses *Session) context.Context { return context.WithValue(ctx, hiddenIndexCallerKey{}, ses) }
+
+	cases := []struct {
+		name    string
+		execCtx *ExecCtx
+		allowed bool
+	}{
+		{"missing execution context", nil, false},
+		{"missing session and request context", &ExecCtx{}, false},
+		{"missing tenant", &ExecCtx{reqCtx: ctx, ses: newSession(nil, true, false)}, false},
+		{"missing user", &ExecCtx{reqCtx: ctx, ses: missingUser}, false},
+		{"ordinary foreground", &ExecCtx{reqCtx: ctx, ses: ordinary}, false},
+		{"privileged foreground", &ExecCtx{reqCtx: ctx, ses: privileged}, true},
+		{"privileged foreground without request context", &ExecCtx{ses: privileged}, true},
+		{"real user marked internal", &ExecCtx{reqCtx: ctx, ses: internalReal}, false},
+		{"server-labeled foreground user", &ExecCtx{reqCtx: ctx, ses: ordinary, input: serverInput}, false},
+		{"non-user internal session", &ExecCtx{reqCtx: ctx, ses: internalSession}, true},
+		{"non-user privileged session", &ExecCtx{reqCtx: ctx, ses: privilegedBackground}, true},
+		{"server-owned without session", &ExecCtx{reqCtx: ctx, input: serverInput}, true},
+		{"server-owned background with caller", &ExecCtx{reqCtx: withCaller(ordinary), ses: background, input: serverInput}, true},
+		{"same-statement ordinary caller", &ExecCtx{reqCtx: withCaller(ordinary), ses: background, input: sameStatement}, false},
+		{"same-statement privileged caller", &ExecCtx{reqCtx: withCaller(privileged), ses: background, input: sameStatement}, true},
+		{"adopted caller precedes internal session", &ExecCtx{reqCtx: withCaller(ordinary), ses: internalSession}, false},
+		{"adopted missing identity precedes internal session", &ExecCtx{reqCtx: withCaller(missingUser), ses: internalSession}, false},
+	}
+	index := catalog.IndexTableNamePrefix + "protected"
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkResolvedIndexRelation(tc.execCtx, index, index, "", 0)
+			if tc.allowed {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, "do not have privilege to execute the statement")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		})
+	}
+	require.NoError(t, checkResolvedIndexRelation(nil, "ordinary", "ordinary", catalog.SystemOrdinaryRel, 0))
+}
 
 func TestIndexRelationAccessCallerAndInternalScope(t *testing.T) {
 	ctx := context.Background()
