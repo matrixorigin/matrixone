@@ -62,6 +62,10 @@ type DiskCache struct {
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
 	diskFullEviction atomic.Bool
+	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
+	// the largest whole-object file written.
+	wholeFills   atomic.Int64
+	wholeFileMax atomic.Int64
 	// statFilesystem overrides statDiskCacheFilesystem in tests.
 	statFilesystem func(path string) (diskCacheFilesystemStat, bool)
 
@@ -1373,7 +1377,14 @@ func (d *DiskCache) setFile(
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
+	d.wholeFills.Add(1)
 	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil)
+	d.wholeFills.Add(-1)
+	if written && writeErr == nil {
+		if stat, err := os.Stat(diskPath); err == nil {
+			d.noteWholeFile(fileSize(stat))
+		}
+	}
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
 	}

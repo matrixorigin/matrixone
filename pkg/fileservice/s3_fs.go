@@ -488,7 +488,7 @@ func (s *S3FS) WholeObjectPreloadSkipped(filePath string, group uint64) bool {
 	if err != nil {
 		return false
 	}
-	return s.diskCache.preloads.narrowRead(s.diskCache.pathForFile(path.File), group)
+	return s.diskCache.preloads.narrowRead(s.diskCache.pathForFile(path.File), group, s.diskCache.wholeObjectFits)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
@@ -1476,15 +1476,47 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
-	err = s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
-		reader, err := getReader(ctx, ptrTo[int64](0), nil)
-		if err != nil {
-			return nil, err
+	// The fill outlives ctx once the reader returned early; until then ctx cancels it.
+	fillCtx, cancelFill := context.WithCancel(context.WithoutCancel(ctx))
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- s.diskCache.setFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			reader, err := getReader(fillCtx, ptrTo[int64](0), nil)
+			if err != nil {
+				return nil, err
+			}
+			stream.reader = reader
+			stream.opened = true
+			return stream, nil
+		}, s.asyncUpdate)
+	}()
+	ready := stream.ready
+	if !s.asyncUpdate {
+		ready = nil
+	}
+	select {
+	case <-ready:
+		select {
+		case backgroundFills <- struct{}{}:
+			go func() {
+				<-setDone
+				cancelFill()
+				<-backgroundFills
+			}()
+			LogEvent(ctx, str_disk_cache_setfile_end)
+			metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
+			return true, stream.fillVector(ctx, s, file)
+		case err = <-setDone:
+		case <-ctx.Done():
+			cancelFill()
+			err = <-setDone
 		}
-		stream.reader = reader
-		stream.opened = true
-		return stream, nil
-	}, s.asyncUpdate)
+	case err = <-setDone:
+	case <-ctx.Done():
+		cancelFill()
+		err = <-setDone
+	}
+	cancelFill()
 	LogEvent(ctx, str_disk_cache_setfile_end)
 	metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	if err != nil {
@@ -1507,6 +1539,9 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	return true, stream.fillVector(ctx, s, file)
 }
 
+// backgroundFills bounds the whole-object fills that continue after their reader returned.
+var backgroundFills = make(chan struct{}, 8)
+
 type fullObjectDiskCacheReader struct {
 	reader   io.ReadCloser
 	vector   *IOVector
@@ -1515,6 +1550,9 @@ type fullObjectDiskCacheReader struct {
 	opened   bool
 	eof      bool
 	err      error
+	// ready is closed once every capture is complete; captures are not written after.
+	ready    chan struct{}
+	captured bool
 }
 
 type fullObjectEntryCapture struct {
@@ -1527,6 +1565,7 @@ type fullObjectEntryCapture struct {
 func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 	ret := &fullObjectDiskCacheReader{
 		vector: vector,
+		ready:  make(chan struct{}),
 	}
 	for i := range vector.Entries {
 		entry := &vector.Entries[i]
@@ -1545,8 +1584,14 @@ func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 func (r *fullObjectDiskCacheReader) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)
 	if n > 0 {
-		r.capture(p[:n])
+		if !r.captured {
+			r.capture(p[:n])
+		}
 		r.offset += int64(n)
+		if !r.captured && r.complete() {
+			r.captured = true
+			close(r.ready)
+		}
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		r.err = err
@@ -1555,6 +1600,18 @@ func (r *fullObjectDiskCacheReader) Read(p []byte) (int, error) {
 		r.eof = true
 	}
 	return n, err
+}
+
+// complete reports whether every capture holds its whole range. A capture to the end
+// of the object completes only at EOF, so it never completes here.
+func (r *fullObjectDiskCacheReader) complete() bool {
+	for i := range r.captures {
+		c := &r.captures[i]
+		if c.size < 0 || int64(c.data.Len()) < c.size {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *fullObjectDiskCacheReader) Close() error {
