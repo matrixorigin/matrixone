@@ -363,7 +363,7 @@ func TestIssue31161ColumnDefaultMetadata(t *testing.T) {
 		// inserted values on both surfaces with empty EXTRA; the controls
 		// (uint64-fitting, quoted, plain-folded) publish the same text.
 		requireMeta(dbName, "i", map[string]colMeta{
-			"id":    {defValid: false, extra: ""},
+			"id":     {defValid: false, extra: ""},
 			"u64max": {def: "18446744073709551615.0000", defValid: true, extra: ""},
 			"u64p1":  {def: "18446744073709551616.0000", defValid: true, extra: ""},
 			"u64p1q": {def: "18446744073709551616.0000", defValid: true, extra: ""},
@@ -409,7 +409,7 @@ func TestIssue31161ColumnDefaultMetadata(t *testing.T) {
 		})
 		exec("create table " + dbName + ".i_like like " + dbName + ".i")
 		requireMeta(dbName, "i_like", map[string]colMeta{
-			"id":    {defValid: false, extra: ""},
+			"id":     {defValid: false, extra: ""},
 			"u64max": {def: "18446744073709551615.0000", defValid: true, extra: ""},
 			"u64p1":  {def: "18446744073709551616.0000", defValid: true, extra: ""},
 			"u64p1q": {def: "18446744073709551616.0000", defValid: true, extra: ""},
@@ -454,7 +454,7 @@ func TestIssue31161ColumnDefaultMetadata(t *testing.T) {
 		requireValue("select d from "+dbName+".a where id = 1", "1.2000")
 		requireValue("select b+0 from "+dbName+".a where id = 1", "51")
 		requireMeta(dbName, "i", map[string]colMeta{
-			"id":    {defValid: false, extra: ""},
+			"id":     {defValid: false, extra: ""},
 			"u64max": {def: "18446744073709551615.0000", defValid: true, extra: ""},
 			"u64p1":  {def: "18446744073709551616.0000", defValid: true, extra: ""},
 			"u64p1q": {def: "18446744073709551616.0000", defValid: true, extra: ""},

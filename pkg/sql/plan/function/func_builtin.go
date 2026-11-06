@@ -496,9 +496,9 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
-	defExprInShowColumns       = 4 //default expr in the show columns.
-	generatedExprOrigin  uint8 = 5 // generated column expression origin string
-	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	defExprInShowColumns        = 4 //default expr in the show columns.
+	generatedExprOrigin   uint8 = 5 // generated column expression origin string
+	generatedExprExtra    uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
 	generatedDefaultExtra uint8 = 7 // expression default Extra: "DEFAULT_GENERATED" or ""
 )
 

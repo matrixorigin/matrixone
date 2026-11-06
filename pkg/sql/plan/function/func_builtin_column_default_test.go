@@ -259,7 +259,7 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefaultTypedAndExtra(t *testing.T) {
 	dec256u404 := cdAttrType(types.T_decimal256, 40, 4, 1)
 
 	// Folded / internal literal shapes (probe 2.1 rows).
-	litDec64S4 := cdLitDec64(10, 4, 12000)        // decimal(10,4) default 1.2 / '1.2' / 1.2e0 / +1.2
+	litDec64S4 := cdLitDec64(10, 4, 12000) // decimal(10,4) default 1.2 / '1.2' / 1.2e0 / +1.2
 	castLit12 := cdFn("cast", cdType(types.T_decimal64, 2, 1), cdLitStrText("1.2"), cdCarrier(cdType(types.T_decimal64, 2, 1)))
 	castLit16 := cdFn("cast", cdType(types.T_decimal64, 2, 1), cdLitStrText("1.6"), cdCarrier(cdType(types.T_decimal64, 2, 1)))
 	lit19 := cdLitStrText("1.4999999999999999999") // varchar(21)

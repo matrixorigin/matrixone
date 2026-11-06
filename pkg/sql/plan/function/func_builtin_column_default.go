@@ -189,7 +189,7 @@ func isSignedNumericLiteralText(s string) bool {
 
 // originHasCallSyntax implements classification rule (c): an identifier
 // immediately followed by '(' outside quoted spans. Single-quoted spans
-// handle '' doubling and backslash escapes (the origin formatter's
+// handle doubled single quotes and backslash escapes (the origin formatter's
 // WithSingleQuoteString form); double-quoted and backtick spans are skipped
 // defensively, so string literals that merely spell a call stay literals.
 func originHasCallSyntax(origin string) bool {
