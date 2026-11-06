@@ -10607,7 +10607,7 @@ func (m *SchemaExtra) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *M0EvolutionColumn) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
