@@ -119,13 +119,17 @@ one NULL differs. Unequal bytes and every other type use the typed executor,
 including FLOAT, JSON, arrays and temporal types. This is a sufficient equality
 shortcut, not a second SQL comparator; differential tests use actual `<=>`.
 
-A static no-op shortcut additionally requires an already registered immutable
-owner, no prior view, FK/deferred output or automatic/generated phase, exact
+A static no-op shortcut additionally requires immutable keys, no prior view,
+FK/deferred output or automatic/generated phase, exact
 incoming-column assignment plans/executors covering every comparison column,
 native NOT NULL checks with valid mappings, and exactly the mapped table fields
 plus source ordinal. Unknown/different operands fall back before any RHS runs.
 On success every verified RHS still runs once in AST order, native checks run,
-cancellation is checked, and the ordinal uses the normal accounted copy path.
+cancellation is checked, and an existing owner's ordinal uses the normal
+accounted copy path. A newly resolved, unchanged original stays in the frozen
+snapshot instead of acquiring a retained image and RowID entry. Later actions
+can resolve it again: keys cannot move and physical writes wait until EOF.
+Original validation and insert-claim conflict checks still precede the RHS.
 Both paths share count/ordinal finalization and preserve image bytes and locks.
 
 ## Logical results and final writes

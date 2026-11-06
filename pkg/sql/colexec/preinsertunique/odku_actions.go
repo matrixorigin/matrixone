@@ -308,7 +308,7 @@ func (preInsertUnique *PreInsertUnique) evalODKUKeys(proc *process.Process) erro
 		return nil
 	}
 	for i, exec := range a.keyExecs {
-		v, err := exec.Eval(proc, []*batch.Batch{a.image, a.incoming}, nil)
+		v, err := exec.Eval(proc, a.updateInputs[:], nil)
 		if err != nil {
 			return err
 		}
@@ -650,27 +650,24 @@ func (preInsertUnique *PreInsertUnique) odkuOutputVector(column int) *vector.Vec
 func (preInsertUnique *PreInsertUnique) finalODKUOutputCount() int {
 	a, c, rows, out := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions, preInsertUnique.ctr.actionRows, preInsertUnique.ctr.buf
 	count := min(rows.images.RowCount()-a.finalRow, colexec.DefaultBatchSize-out.RowCount())
-	if c.PhysicalChangedColumn == 0 {
-		for n := 0; n < count; n++ {
-			if !preInsertUnique.physicalODKUChange(a.finalRow + n) {
-				count = n
-				break
-			}
-		}
-	}
 	remaining, fixed := max(0, (1<<20)-out.Size()), 0
 	hasVarlen := false
 	for _, v := range out.Vecs {
 		fixed += v.GetType().TypeSize()
 		hasVarlen = hasVarlen || v.GetType().IsVarlen()
 	}
-	if !hasVarlen {
-		if fixed > 0 {
-			count = min(count, max(1, (remaining+fixed-1)/fixed))
-		}
-		return count
+	if !hasVarlen && fixed > 0 {
+		count = min(count, max(1, (remaining+fixed-1)/fixed))
 	}
 	for n := 0; n < count; n++ {
+		// Check only the byte-bounded prefix. Scanning all remaining owners
+		// first would repeatedly compare wide rows deferred to later batches.
+		if c.PhysicalChangedColumn == 0 && !preInsertUnique.physicalODKUChange(a.finalRow+n) {
+			return n
+		}
+		if !hasVarlen {
+			continue
+		}
 		remaining = max(0, remaining-fixed)
 		for col, v := range out.Vecs {
 			if !v.GetType().IsVarlen() || col == int(c.ActionFinalColumn) {
@@ -727,16 +724,8 @@ func (preInsertUnique *PreInsertUnique) appendODKUOutput(proc *process.Process, 
 			}
 		}
 		src := preInsertUnique.odkuOutputVector(i)
-		if dst.GetType().IsFixedLen() {
-			if err := dst.UnionBatch(src, int64(owner), count, nil, proc.Mp()); err != nil {
-				return err
-			}
-		} else {
-			for row := owner; row < owner+count; row++ {
-				if err := dst.UnionOne(src, int64(row), proc.Mp()); err != nil {
-					return err
-				}
-			}
+		if err := dst.UnionBatch(src, int64(owner), count, nil, proc.Mp()); err != nil {
+			return err
 		}
 	}
 	if err := context.Cause(proc.Ctx); err != nil {

@@ -227,6 +227,23 @@ func TestODKUSystematicSQL(t *testing.T) {
 			affected(t, 4, "insert into action_revert(id,v) values(1,1),(1,0) on duplicate key update v=values(v)")
 			require.Equal(t, []string{"1|0|" + rows(t, "select year(now())")[0]}, rows(t, "select id,v,year(ts) from action_revert"))
 		})
+		t.Run("snapshot no-op followed by insert update and failure", func(t *testing.T) {
+			exec(t, "create table noop_snapshot(id int primary key,u int unique,payload varchar(1024) not null)")
+			exec(t, "insert into noop_snapshot values(1,10,repeat('x',512))")
+			statement := "insert into noop_snapshot values(99,10,repeat('x',512)),(2,20,'new'),(1,999,'changed'),(99,10,'changed') on duplicate key update payload=values(payload)"
+			exec(t, "begin")
+			t.Cleanup(func() { _, _ = conn.ExecContext(ctx, "rollback") })
+			affected(t, 3, statement)
+			require.Equal(t, []string{"1|10|changed", "2|20|new"}, rows(t, "select * from noop_snapshot order by id"))
+			require.Equal(t, []string{"1|changed"}, rows(t, "select id,payload from noop_snapshot force index(u) where u=10"))
+			require.Empty(t, rows(t, "select id from noop_snapshot force index(u) where u=999"))
+			exec(t, "rollback")
+			_, err := conn.ExecContext(ctx, "insert into noop_snapshot values(99,10,repeat('x',512)),(2,20,'new'),(1,999,NULL) on duplicate key update payload=values(payload)")
+			require.Error(t, err)
+			require.Equal(t, []string{"1|10|512"}, rows(t, "select id,u,length(payload) from noop_snapshot"))
+			affected(t, 3, statement)
+			require.Equal(t, []string{"1|10|changed", "2|20|new"}, rows(t, "select * from noop_snapshot order by id"))
+		})
 		t.Run("no-op retains JSON representation for the next action", func(t *testing.T) {
 			exec(t, "create table action_json(id int primary key,j json,seen varchar(32))")
 			exec(t, `insert into action_json values(1,'{"n":1.0}','none')`)
