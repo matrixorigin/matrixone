@@ -199,3 +199,36 @@ func TestDiskDownloadMaxExtraWaitConfig(t *testing.T) {
 	caches = newTestFileServiceCaches(t, config(&toml.Duration{Duration: 7 * time.Millisecond}))
 	require.Equal(t, 7*time.Millisecond, caches.disk.downloadMaxExtraWait)
 }
+
+// A read whose bytes are most of what the download still writes before them waits for
+// the download even without a margin, instead of fetching those bytes again.
+func TestDiskCacheReadWaitsWhenItWouldDuplicateTheDownload(t *testing.T) {
+	rangeReadsCost(t, time.Nanosecond)
+	rate0 := downloadRates.rate()
+	downloadRates.mu.Lock()
+	downloadRates.bytesPerS = 1
+	downloadRates.mu.Unlock()
+	t.Cleanup(func() { downloadRates.mu.Lock(); downloadRates.bytesPerS = rate0; downloadRates.mu.Unlock() })
+	cache, pw, filled := downloading(t)
+	cache.downloadMaxExtraWait = 0
+	_, err := pw.Write([]byte("hello"))
+	require.NoError(t, err)
+	download := cache.download(cache.pathForFile("obj"))
+	require.Eventually(t, func() bool { written, _ := download.estimate(5); return written == 5 },
+		diskCacheLifecycleTestTimeout, time.Millisecond)
+
+	pending := readRange(context.Background(), cache, 5, 20)
+	select {
+	case <-pending:
+		t.Fatal("a read most of the download's next bytes did not wait for them")
+	case <-time.After(20 * time.Millisecond):
+	}
+	_, err = pw.Write([]byte("0123456789abcdefghij"))
+	require.NoError(t, err)
+	vec := waitVector(t, pending)
+	require.True(t, vec.Entries[0].done)
+	require.Equal(t, []byte("0123456789abcdefghij"), vec.Entries[0].Data)
+	require.False(t, vec.downloadDeclined)
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+}

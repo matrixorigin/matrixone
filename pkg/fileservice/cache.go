@@ -216,7 +216,7 @@ func checkIndexFileDiskPath(diskPath, indexPath string) error {
 }
 
 // DefaultDiskDownloadMaxExtraWait is the default DiskDownloadMaxExtraWait.
-const DefaultDiskDownloadMaxExtraWait = 50 * time.Millisecond
+const DefaultDiskDownloadMaxExtraWait = 200 * time.Millisecond
 
 func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
 	if c.DiskDownloadMaxExtraWait == nil {

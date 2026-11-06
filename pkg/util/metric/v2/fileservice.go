@@ -394,6 +394,16 @@ var (
 	FSDiskCacheDownloadReadTimedOutCounter = FSDiskCacheDownloadReadCounter.WithLabelValues("timed-out")
 	FSDiskCacheDownloadReadDeclinedCounter = FSDiskCacheDownloadReadCounter.WithLabelValues("declined")
 
+	// FSDiskCacheDownloadDeclinedBytesCounter counts the bytes that reads of objects being
+	// downloaded fetch again from object storage instead of waiting for the download.
+	FSDiskCacheDownloadDeclinedBytesCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_download_declined_bytes_total",
+			Help:      "Total bytes read from object storage by reads that did not wait for the download of their object",
+		})
+
 	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
 	// dropped when the bounded asynchronous queue cannot admit more work.
 	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(

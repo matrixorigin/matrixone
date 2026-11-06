@@ -201,7 +201,7 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 
 // readFromDownload fills entry from the download of the object at diskPath when its bytes
 // are written, or will be no more than the max extra wait later than a range read could
-// fetch them. It reports whether
+// fetch them, or are more than an eighth of what the download writes before them. It reports whether
 // a download covers the object, and whether it filled entry.
 func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry) (downloading, filled bool, err error) {
 	o := d.download(diskPath)
@@ -209,14 +209,20 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		return false, false, nil
 	}
 	end := entry.Offset + entry.Size
-	_, wait := o.estimate(end)
+	written, wait := o.estimate(end)
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
 		budget := rangeReadCosts.cost(entry.Size) + d.downloadMaxExtraWait
 		if wait > budget {
-			metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
-			return true, false, nil
+			// A range read fetches these bytes again; it pays only when they are a small
+			// part of what the download still writes before them.
+			if entry.Size*downloadDuplicateRatio <= end-written {
+				metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
+				metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
+				return true, false, nil
+			}
+			budget += wait
 		}
 		if _, ok := o.waitFor(ctx, end, budget); !ok {
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
@@ -236,6 +242,9 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 }
 
 const (
+	// downloadDuplicateRatio is how many times its own size a read must be behind a
+	// download before it reads its bytes again rather than wait for them.
+	downloadDuplicateRatio = 8
 	// downloadRateMinBytes is written before a download's own rate is used.
 	downloadRateMinBytes = 1 << 20
 	// rangeReadSmall is the largest range read whose time counts as latency.

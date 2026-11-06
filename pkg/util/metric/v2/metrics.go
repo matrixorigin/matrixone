@@ -151,6 +151,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSDiskCacheErrorCounter)
 	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
 	registry.MustRegister(FSDiskCacheDownloadReadCounter)
+	registry.MustRegister(FSDiskCacheDownloadDeclinedBytesCounter)
 	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
