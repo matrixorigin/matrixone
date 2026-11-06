@@ -53,9 +53,12 @@ func ClassifyRetryableError(err error) (retryable, classified bool) {
 		1044, 1045, 1064, 1142, 1143, 1227, moerr.ErrNotSupported:
 		return false, true
 	case moerr.ErrDeadLockDetected, moerr.ErrLockTableBindChanged,
-		moerr.ErrTxnNeedRetry, moerr.ErrTxnNeedRetryWithDefChanged:
-		// These MO transaction errors can also arrive as MySQL wire numbers.
-		// Recovery must replay the complete transaction, not one statement.
+		moerr.ErrTxnNeedRetry, moerr.ErrTxnNeedRetryWithDefChanged,
+		moerr.ErrRPCTimeout, moerr.ErrServiceUnavailable, moerr.ErrConnectionReset,
+		moerr.ErrBackendClosed, moerr.ErrNoAvailableBackend, moerr.ErrBackendCannotConnect,
+		moerr.ErrTNShardNotFound, moerr.ErrRpcError:
+		// Preserve MO transient errors across native and MySQL transports.
+		// Inside a transaction, recovery must replay the whole transaction.
 		return true, true
 	}
 	status := morpc.GetStatusCategory(err)

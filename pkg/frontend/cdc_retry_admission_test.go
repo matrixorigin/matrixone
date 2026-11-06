@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -59,6 +60,14 @@ func TestCDCRetryAdmissionPersistsTypedErrors(t *testing.T) {
 		{"upstream deadlock", &gomysql.MySQLError{Number: 20701}, true},
 		{"MySQL deadlock", &mysql.MySQLError{Number: 1213}, true},
 		{"bind changed", &mysql.MySQLError{Number: 20702}, true},
+		{"native RPC timeout", moerr.NewRPCTimeout(t.Context()), true},
+		{"wrapped native RPC timeout", fmt.Errorf("setup: %w", moerr.NewRPCTimeout(t.Context())), true},
+		{"production RPC timeout", &mysql.MySQLError{Number: moerr.ErrRPCTimeout, Message: "opaque"}, true},
+		{"wrapped production RPC timeout", fmt.Errorf("setup: %w", &mysql.MySQLError{Number: moerr.ErrRPCTimeout, Message: "opaque"}), true},
+		{"upstream RPC timeout", &gomysql.MySQLError{Number: moerr.ErrRPCTimeout, Message: "opaque"}, true},
+		{"wrapped upstream RPC timeout", fmt.Errorf("setup: %w", &gomysql.MySQLError{Number: moerr.ErrRPCTimeout, Message: "opaque"}), true},
+		{"backend unavailable", &mysql.MySQLError{Number: moerr.ErrBackendClosed, Message: "opaque"}, true},
+		{"client closed", &mysql.MySQLError{Number: moerr.ErrClientClosed}, false},
 		{"syntax", &mysql.MySQLError{Number: 1064}, false},
 		{"permission", &mysql.MySQLError{Number: 1045}, false},
 	} {
@@ -106,6 +115,10 @@ func TestCDCRetryAdmissionPersistsTypedErrors(t *testing.T) {
 				meta := cdc.ParseErrorMetadata(row[5])
 				require.NotNil(t, meta)
 				wantRetry := tc.retry && attempt <= cdc.MaxRetryCount
+				require.Equal(t, wantRetry, meta.IsRetryable, "persist R until the retry budget is exhausted")
+				if tc.retry && attempt > cdc.MaxRetryCount {
+					require.Contains(t, meta.Message, "max retry exceeded")
+				}
 				require.Equal(t, wantRetry, cdc.ShouldRetry(meta))
 				blocked, err := GetTableErrMsg(t.Context(), 1, diagnostics, exec.spec.TaskId, info)
 				require.NoError(t, err)
