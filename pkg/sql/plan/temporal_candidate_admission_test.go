@@ -154,10 +154,9 @@ func TestTemporalOriginalSingleLeafHasIndependentCostEvidence(t *testing.T) {
 
 func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		replan    bool
-		safe      bool
-		dependent bool
+		name   string
+		replan bool
+		safe   bool
 	}{
 		{name: "suffix", safe: true},
 		{name: "prepared suffix"},
@@ -206,7 +205,7 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 			require.Equal(t, tc.replan, builder.qry.ExecutionDependentAccess)
 			require.Equal(t, tc.safe, builder.temporalOriginalScan.safe)
 			state := preparedBindingState(builder.GetContext())
-			require.Equal(t, tc.dependent, state != nil && state.valueDependent)
+			require.False(t, state != nil && state.valueDependent)
 		})
 	}
 }

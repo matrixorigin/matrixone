@@ -65,8 +65,8 @@ func TestTemporalInputReconnectPublishesFreshClient(t *testing.T) {
 	require.Nil(t, subscriber.client())
 }
 
-// Pause-free interleavings at the first block walk, after object admission has
-// charged the shared budget. No production hook or scheduler timing is needed.
+// Controlled interleavings in the block walk, after object admission charges
+// the shared budget. No production hook or scheduler timing is needed.
 type planningInputWorkContext struct {
 	context.Context
 	budget *int
