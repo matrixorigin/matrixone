@@ -15,12 +15,14 @@
 package function
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -476,6 +478,424 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefaultTypedAndExtra(t *testing.T) {
 				succeed, info := tcc.RunAndFree()
 				require.True(t, succeed, input.info, info, "mode %d", mode.mode)
 			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Branch coverage for the typed literal conversion helpers (issue #31161,
+// design 20261105-column-default-metadata-publication.md section 4.3). Every
+// literal carrier kind converts the way the executor's assignment cast does;
+// unconvertible or mismatched shapes report ok=false so the metadata
+// surfaces keep the origin text. Expected strings are the executor-typed
+// values pinned by the planner probe in design section 2.1.
+// ---------------------------------------------------------------------------
+
+func cdLitI8(v int32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_int8, 0, 0), &plan.Literal{Value: &plan.Literal_I8Val{I8Val: v}})
+}
+
+func cdLitI16(v int32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_int16, 0, 0), &plan.Literal{Value: &plan.Literal_I16Val{I16Val: v}})
+}
+
+func cdLitI32(v int32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_int32, 0, 0), &plan.Literal{Value: &plan.Literal_I32Val{I32Val: v}})
+}
+
+func cdLitU8(v uint32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_uint8, 0, 0), &plan.Literal{Value: &plan.Literal_U8Val{U8Val: v}})
+}
+
+func cdLitU16(v uint32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_uint16, 0, 0), &plan.Literal{Value: &plan.Literal_U16Val{U16Val: v}})
+}
+
+func cdLitU32(v uint32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_uint32, 0, 0), &plan.Literal{Value: &plan.Literal_U32Val{U32Val: v}})
+}
+
+func cdLitU64(v uint64) *plan.Expr {
+	return cdLitExpr(cdType(types.T_uint64, 0, 0), &plan.Literal{Value: &plan.Literal_U64Val{U64Val: v}})
+}
+
+func cdLitF32(v float32) *plan.Expr {
+	return cdLitExpr(cdType(types.T_float32, 0, -1), &plan.Literal{Value: &plan.Literal_Fval{Fval: v}})
+}
+
+// cdLitDec64As builds a decimal64 carrier literal stamped with a mismatched
+// declared type, pinning the id-mismatch rejection of the widening paths.
+func cdLitDec64As(id types.T, w, s int32, a int64) *plan.Expr {
+	return cdLitExpr(cdType(id, w, s),
+		&plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: a}}})
+}
+
+func cdLitDec128As(id types.T, w, s int32, a, b int64) *plan.Expr {
+	return cdLitExpr(cdType(id, w, s),
+		&plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: a, B: b}}})
+}
+
+func cdVecDec256(t *testing.T, proc *process.Process, w, s int32, values ...types.Decimal256) *plan.Expr {
+	vecTyp := types.T_decimal256.ToType()
+	vecTyp.Width, vecTyp.Scale = w, s
+	vec := vector.NewVec(vecTyp)
+	for _, v := range values {
+		require.NoError(t, vector.AppendFixed(vec, v, false, proc.Mp()))
+	}
+	vecBytes, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(proc.Mp())
+	return &plan.Expr{Typ: cdType(types.T_decimal256, w, s),
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: int32(len(values)), Data: vecBytes}}}
+}
+
+func TestConvertLiteralToDecimal64Branches(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		inner *plan.Expr
+		w, s  int32
+		want  string
+		ok    bool
+	}{
+		{"f32", cdLitF32(1.5), 10, 4, "1.5000", true},
+		{"i8", cdLitI8(-8), 10, 4, "-8.0000", true},
+		{"i16", cdLitI16(1600), 10, 2, "1600.00", true},
+		{"i32", cdLitI32(-32), 10, 0, "-32", true},
+		{"i64", cdLitI64(64), 10, 1, "64.0", true},
+		{"u8", cdLitU8(8), 10, 4, "8.0000", true},
+		{"u16", cdLitU16(1600), 10, 2, "1600.00", true},
+		{"u32", cdLitU32(32), 10, 0, "32", true},
+		{"u64", cdLitU64(64), 10, 1, "64.0", true},
+		// A uint64 magnitude beyond int64 wraps negative inside Decimal64,
+		// so the renderer rejects it like the assignment cast (#30367).
+		{"u64 beyond int64", cdLitU64(math.MaxInt64 + 1), 18, 0, "", false},
+		{"i64 width overflow", cdLitI64(12345), 4, 0, "", false},
+		{"u64 width overflow", cdLitU64(12345), 4, 0, "", false},
+		{"i64 scale overflow", cdLitI64(1), 18, 25, "", false},
+		{"u64 scale overflow", cdLitU64(1), 18, 25, "", false},
+		{"bool width overflow", cdLitBool(true), 1, 1, "", false},
+		{"bool scale overflow", cdLitBool(true), 18, 25, "", false},
+		{"dec64 carrier id mismatch", cdLitDec64As(types.T_decimal128, 20, 6, 12), 18, 1, "", false},
+		{"dec64 carrier scale overflow", cdLitDec64(10, 0, 12000), 18, 25, "", false},
+		{"dec64 carrier width overflow", cdLitDec64(10, 0, 12345), 4, 0, "", false},
+		{"vec rejected", &plan.Expr{Typ: cdType(types.T_decimal64, 10, 4),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: []byte("x")}}}, 10, 4, "", false},
+		{"col ref rejected", cdColRef(cdType(types.T_decimal64, 10, 4)), 10, 4, "", false},
+		{"date rejected", cdLitExpr(cdType(types.T_date, 0, 0),
+			&plan.Literal{Value: &plan.Literal_Dateval{Dateval: 738885}}), 10, 4, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, ok := convertLiteralToDecimal64(tc.inner, tc.w, tc.s)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.Equal(t, tc.want, v.Format(tc.s))
+			}
+		})
+	}
+}
+
+func TestConvertLiteralToDecimal128Branches(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		inner *plan.Expr
+		w, s  int32
+		want  string
+		ok    bool
+	}{
+		// An IsBin payload decodes as the big-endian base-256 coefficient,
+		// so b'00110011' (0x33) renders 51 at the declared scale.
+		{"bin", cdLitStrBin("\x33", plan.StringLiteralForm_STRING_LITERAL_BIT), 20, 6, "0.000051", true},
+		{"f64", cdLitF64(1.5), 20, 6, "1.500000", true},
+		{"f32", cdLitF32(2.5), 20, 6, "2.500000", true},
+		{"bool false", cdLitBool(false), 20, 6, "0.000000", true},
+		{"bool true", cdLitBool(true), 20, 6, "1.000000", true},
+		{"bool width overflow", cdLitBool(true), 1, 1, "", false},
+		{"bool scale overflow", cdLitBool(true), 38, 39, "", false},
+		{"i8", cdLitI8(-8), 20, 6, "-8.000000", true},
+		{"i16", cdLitI16(1600), 20, 2, "1600.00", true},
+		{"i32", cdLitI32(-32), 20, 0, "-32", true},
+		{"i64", cdLitI64(64), 20, 1, "64.0", true},
+		{"i64 negative", cdLitI64(-64), 20, 1, "-64.0", true},
+		{"i64 width overflow", cdLitI64(12345), 4, 0, "", false},
+		{"i64 scale overflow", cdLitI64(1), 38, 39, "", false},
+		{"u8", cdLitU8(8), 20, 6, "8.000000", true},
+		{"u16", cdLitU16(1600), 20, 2, "1600.00", true},
+		{"u32", cdLitU32(32), 20, 0, "32", true},
+		{"u64", cdLitU64(64), 20, 1, "64.0", true},
+		{"u64 max", cdLitU64(math.MaxUint64), 20, 0, "18446744073709551615", true},
+		{"u64 width overflow", cdLitU64(12345), 4, 0, "", false},
+		{"u64 scale overflow", cdLitU64(1), 38, 39, "", false},
+		{"dec128 carrier id mismatch", cdLitDec128As(types.T_decimal64, 10, 1, 12, 0), 20, 6, "", false},
+		{"dec128 carrier scale overflow", cdLitDec128(38, 0, 1, 0), 38, 39, "", false},
+		{"dec128 carrier width overflow", cdLitDec128(20, 0, 12345, 0), 4, 0, "", false},
+		{"dec64 carrier id mismatch", cdLitDec64As(types.T_decimal128, 20, 6, 12), 20, 6, "", false},
+		{"dec64 carrier scale overflow", cdLitDec64(18, 1, 12), 38, 39, "", false},
+		{"dec64 carrier width overflow", cdLitDec64(18, 1, 123456), 4, 1, "", false},
+		{"vec rejected", &plan.Expr{Typ: cdType(types.T_decimal128, 20, 6),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: []byte("x")}}}, 20, 6, "", false},
+		{"col ref rejected", cdColRef(cdType(types.T_decimal128, 20, 6)), 20, 6, "", false},
+		{"date rejected", cdLitExpr(cdType(types.T_date, 0, 0),
+			&plan.Literal{Value: &plan.Literal_Dateval{Dateval: 738885}}), 20, 6, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, ok := convertLiteralToDecimal128(tc.inner, tc.w, tc.s)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.Equal(t, tc.want, v.Format(tc.s))
+			}
+		})
+	}
+}
+
+func TestConvertLiteralToDecimal256Branches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// A decimal128 const vector never reaches the decimal256 vec decode
+	// (type mismatch), and a corrupt payload fails the binary decode.
+	dec128VecTyp := types.T_decimal128.ToType()
+	dec128VecTyp.Width, dec128VecTyp.Scale = 38, 0
+	dec128Vec := vector.NewVec(dec128VecTyp)
+	require.NoError(t, vector.AppendFixed(dec128Vec, types.Decimal128{B0_63: 1}, false, proc.Mp()))
+	dec128VecBytes, err := dec128Vec.MarshalBinary()
+	require.NoError(t, err)
+	dec128Vec.Free(proc.Mp())
+	nullVec := func() *plan.Expr {
+		vecTyp := types.T_decimal256.ToType()
+		vecTyp.Width, vecTyp.Scale = 40, 4
+		vec := vector.NewVec(vecTyp)
+		require.NoError(t, vector.AppendFixed(vec, types.Decimal256{}, true, proc.Mp()))
+		vecBytes, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		vec.Free(proc.Mp())
+		return &plan.Expr{Typ: cdType(types.T_decimal256, 40, 4),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: vecBytes}}}
+	}()
+
+	for _, tc := range []struct {
+		name  string
+		inner *plan.Expr
+		w, s  int32
+		want  string
+		ok    bool
+	}{
+		{"f32", cdLitF32(1.5), 40, 4, "1.5000", true},
+		{"bool false", cdLitBool(false), 40, 4, "0.0000", true},
+		{"bool true", cdLitBool(true), 40, 4, "1.0000", true},
+		{"bool width overflow", cdLitBool(true), 1, 1, "", false},
+		{"bool scale overflow", cdLitBool(true), 76, 78, "", false},
+		{"i8", cdLitI8(-8), 40, 4, "-8.0000", true},
+		{"i16", cdLitI16(1600), 40, 2, "1600.00", true},
+		{"i32", cdLitI32(-32), 40, 0, "-32", true},
+		{"i64", cdLitI64(64), 40, 1, "64.0", true},
+		{"i64 negative", cdLitI64(-64), 40, 1, "-64.0", true},
+		{"i64 width overflow", cdLitI64(12345), 4, 0, "", false},
+		{"i64 scale overflow", cdLitI64(1), 76, 78, "", false},
+		{"u8", cdLitU8(8), 40, 4, "8.0000", true},
+		{"u16", cdLitU16(1600), 40, 2, "1600.00", true},
+		{"u32", cdLitU32(32), 40, 0, "32", true},
+		{"u64", cdLitU64(64), 40, 1, "64.0", true},
+		{"u64 max", cdLitU64(math.MaxUint64), 40, 4, "18446744073709551615.0000", true},
+		{"u64 width overflow", cdLitU64(12345), 4, 0, "", false},
+		{"u64 scale overflow", cdLitU64(1), 76, 78, "", false},
+		{"dec64 carrier id mismatch", cdLitDec64As(types.T_decimal128, 20, 6, 12), 40, 4, "", false},
+		{"dec64 carrier scale overflow", cdLitDec64(18, 1, 12), 76, 78, "", false},
+		{"dec64 carrier width overflow", cdLitDec64(18, 1, 123456), 4, 1, "", false},
+		{"dec128 carrier id mismatch", cdLitDec128As(types.T_decimal64, 10, 1, 12, 0), 40, 4, "", false},
+		{"dec128 carrier scale overflow", cdLitDec128(38, 0, 1, 0), 76, 78, "", false},
+		{"dec128 carrier width overflow", cdLitDec128(38, 0, 12345, 0), 4, 0, "", false},
+		{"vec corrupt payload", &plan.Expr{Typ: cdType(types.T_decimal256, 40, 4),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: []byte("short-garbage")}}}, 40, 4, "", false},
+		{"vec wrong type", &plan.Expr{Typ: cdType(types.T_decimal256, 40, 4),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: dec128VecBytes}}}, 40, 4, "", false},
+		{"vec null entry", nullVec, 40, 4, "", false},
+		{"vec two entries", cdVecDec256(t, proc, 40, 4,
+			types.Decimal256{B0_63: 12000}, types.Decimal256{B0_63: 12000}), 40, 4, "", false},
+		{"vec scale overflow", cdVecDec256(t, proc, 40, 1, types.Decimal256{B0_63: 12}), 76, 78, "", false},
+		{"vec width overflow", cdVecDec256(t, proc, 40, 0, types.Decimal256{B0_63: 12345}), 4, 0, "", false},
+		{"col ref rejected", cdColRef(cdType(types.T_decimal256, 40, 4)), 40, 4, "", false},
+		{"null rejected", cdLitExpr(cdType(types.T_decimal256, 40, 4), &plan.Literal{Isnull: true}), 40, 4, "", false},
+		{"date rejected", cdLitExpr(cdType(types.T_date, 0, 0),
+			&plan.Literal{Value: &plan.Literal_Dateval{Dateval: 738885}}), 40, 4, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, ok := convertLiteralToDecimal256(tc.inner, tc.w, tc.s)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.Equal(t, tc.want, v.Format(tc.s))
+			}
+		})
+	}
+}
+
+func TestRenderBitDefaultLiteralBranches(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		inner *plan.Expr
+		want  string
+		ok    bool
+	}{
+		{"u8", cdLitU8(5), "b'101'", true},
+		{"u16", cdLitU16(5), "b'101'", true},
+		{"u32", cdLitU32(5), "b'101'", true},
+		{"i64", cdLitI64(5), "b'101'", true},
+		{"i64 negative", cdLitI64(-1), "", false},
+		{"i32", cdLitI32(5), "b'101'", true},
+		{"i32 negative", cdLitI32(-1), "", false},
+		{"string rejected", cdLitStrText("x"), "", false},
+		{"null rejected", cdLitExpr(cdType(types.T_bit, 8, -1), &plan.Literal{Isnull: true}), "", false},
+		{"col ref rejected", cdColRef(cdType(types.T_bit, 8, -1)), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := renderBitDefaultLiteral(tc.inner)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestRenderTypedLiteralDefaultFallbacks(t *testing.T) {
+	minus := func(inner *plan.Expr) *plan.Expr {
+		return cdFn("unary_minus", inner.Typ, inner)
+	}
+	dec128Cast := cdFn("cast", cdType(types.T_decimal128, 20, 6),
+		cdLitStrText("12.34"), cdCarrier(cdType(types.T_decimal128, 20, 6)))
+	dec256Cast := cdFn("cast", cdType(types.T_decimal256, 40, 4),
+		cdLitStrText("1.2"), cdCarrier(cdType(types.T_decimal256, 40, 4)))
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want string
+		ok   bool
+	}{
+		// A canonical sign chain flips the rendered typed value.
+		{"dec64 unary minus", minus(cdLitDec64(10, 4, 12000)), "-1.2000", true},
+		{"dec64 double minus", minus(minus(cdLitDec64(10, 4, 12000))), "1.2000", true},
+		{"dec128 unary minus", minus(dec128Cast), "-12.340000", true},
+		{"dec256 unary minus", minus(dec256Cast), "-1.2000", true},
+		// Defensive fallbacks keep the origin text (ok=false): a transparent
+		// chain into a nil leaf, and a decimal256-only const vector under a
+		// decimal64 destination.
+		{"nil leaf", cdFn("cast", cdType(types.T_decimal64, 10, 4), (*plan.Expr)(nil)), "", false},
+		{"dec64 vec", &plan.Expr{Typ: cdType(types.T_decimal64, 10, 4),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: []byte("x")}}}, "", false},
+		{"dec128 vec", &plan.Expr{Typ: cdType(types.T_decimal128, 20, 6),
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: []byte("x")}}}, "", false},
+		{"dec256 unconvertible", cdFn("cast", cdType(types.T_decimal256, 40, 4),
+			cdLitExpr(cdType(types.T_date, 0, 0), &plan.Literal{Value: &plan.Literal_Dateval{Dateval: 738885}}),
+			cdCarrier(cdType(types.T_decimal256, 40, 4))), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := renderTypedLiteralDefault(&plan.Default{OriginString: "1.2", Expr: tc.expr})
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestPeelTransparentDefaultStops(t *testing.T) {
+	// A non-transparent function stops the peel unchanged; a transparent
+	// chain into a nil leaf yields nil.
+	absNode := cdFn("abs", cdType(types.T_decimal64, 2, 1), cdLitStrText("1.2"))
+	inner, sign := peelTransparentDefault(absNode)
+	require.Same(t, absNode, inner)
+	require.Equal(t, 1, sign)
+	inner, sign = peelTransparentDefault(cdFn("cast", cdType(types.T_decimal64, 10, 4), (*plan.Expr)(nil)))
+	require.Nil(t, inner)
+	require.Equal(t, 1, sign)
+}
+
+func TestMatchAdmissionCompositionGuards(t *testing.T) {
+	dec64u104 := cdAttrType(types.T_decimal64, 10, 4, 1)
+	src := cdLitStrText("1.2")
+	admission := func(name string, args ...*plan.Expr) *plan.Expr {
+		return cdFn(name, src.Typ, args...)
+	}
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		ok   bool
+	}{
+		// A bare attributed literal has no function node to match.
+		{"attributed literal root", cdLitExpr(dec64u104,
+			&plan.Literal{Value: &plan.Literal_Sval{Sval: "1.2"}}), false},
+		// A two-argument non-cast outer node never starts the composition.
+		{"non cast outer", cdFn("abs", dec64u104, src, cdCarrier(dec64u104)), false},
+		// A cast whose inner node is a literal or another function is not
+		// the admission composition; the name probe reports false.
+		{"inner literal", cdFn("cast", dec64u104, src, cdCarrier(dec64u104)), false},
+		{"inner non admission fn", cdFn("cast", dec64u104,
+			cdFn("abs", src.Typ, src), cdCarrier(dec64u104)), false},
+		// The strict/ignore admission spellings are the same planner
+		// machinery and match.
+		{"strict admission", cdFn("cast_assign", dec64u104,
+			admission("unsigned_decimal_admission_strict", src, cdCarrier(dec64u104)),
+			cdCarrier(dec64u104)), true},
+		{"ignore admission", cdFn("cast_assign", dec64u104,
+			admission("unsigned_decimal_admission_ignore", src, cdCarrier(dec64u104)),
+			cdCarrier(dec64u104)), true},
+		// Four-argument and one-argument admissions are stray shapes.
+		{"four arg admission", cdFn("cast_assign", dec64u104,
+			admission("unsigned_decimal_admission", src, cdCarrier(dec64u104), src, src),
+			cdCarrier(dec64u104)), false},
+		// An attributed carrier must mirror the outer type exactly.
+		{"carrier width mismatch", cdFn("cast_assign", dec64u104,
+			admission("unsigned_decimal_admission", src, cdCarrier(cdAttrType(types.T_decimal64, 12, 4, 1))),
+			cdCarrier(dec64u104)), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := matchAdmissionComposition(tc.expr)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.Same(t, src, got)
+			}
+		})
+	}
+}
+
+func TestIsSignedNumericLiteralTextEdges(t *testing.T) {
+	for _, tc := range []struct {
+		s    string
+		want bool
+	}{
+		{"+1.2", true},
+		{"-12.34", true},
+		{"+1.2e0", true},
+		{"-1.2E-5", true},
+		{"+1.2e+5", true},
+		{"+.5", true},
+		{"+1.", true},
+		{"+", false},
+		{"1.2", false},
+		{"+e5", false},
+		{"+.", false},
+		{"+1.2e", false},
+		{"+1.2e+", false},
+		{"+ab", false},
+		{"+1x", false},
+	} {
+		t.Run(tc.s, func(t *testing.T) {
+			require.Equal(t, tc.want, isSignedNumericLiteralText(tc.s))
+		})
+	}
+}
+
+func TestOriginHasCallSyntaxQuotedSpans(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		origin string
+		want   bool
+	}{
+		// Call syntax inside double-quoted or backtick spans is a string or
+		// an identifier, not a call; unterminated spans scan to the end.
+		{"double quoted call", `"a()"`, false},
+		{"backtick quoted call", "`a()`", false},
+		{"unterminated double quote", `"a()`, false},
+		{"unterminated backtick", "`a()", false},
+		{"call after quoted span", `"q" || f()`, true},
+		{"plain call", "uuid()", true},
+		{"space before paren", "x ()", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, originHasCallSyntax(tc.origin))
 		})
 	}
 }
