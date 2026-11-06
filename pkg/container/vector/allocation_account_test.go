@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,61 @@ func newAccountedTestVector(
 	vec := NewOffHeapVecWithType(typ)
 	require.NoError(t, vec.SetAllocationAccount(selection))
 	return vec
+}
+
+func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
+	const limit = int64(1 << 20)
+	state := newTestVectorAllocationAccount(t, 2<<20, 16)
+	mp, err := mpool.NewMPool("grouped-append-rollback", limit, mpool.NoFixed)
+	require.NoError(t, err)
+	srcMP := mpool.MustNewZero()
+	dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	src := NewVec(types.T_varchar.ToType())
+	replacement := NewVec(types.T_varchar.ToType())
+	var ballast [][]byte
+	t.Cleanup(func() {
+		dst.Free(mp)
+		src.Free(srcMP)
+		replacement.Free(srcMP)
+		for _, b := range ballast {
+			mp.Free(b)
+		}
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, srcMP.CurrNB())
+		mpool.DeleteMPool(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+	})
+
+	require.NoError(t, AppendBytes(dst, []byte("kept"), false, mp))
+	require.NoError(t, dst.PreExtend(2, mp))
+	require.NoError(t, dst.PreExtendGrouping(2, mp))
+	dst.GetGrouping().Set(0)
+	require.NoError(t, AppendBytes(src, bytes.Repeat([]byte("x"), 32<<10), false, srcMP))
+	src.GetGrouping().Set(0)
+	require.NoError(t, AppendBytes(replacement, []byte("new"), false, srcMP))
+	checkpoint := dst.MakeAppendCheckpoint()
+
+	for limit-mp.CurrNB() >= 32<<10 {
+		b, allocErr := mp.Alloc(4096, true)
+		require.NoError(t, allocErr)
+		ballast = append(ballast, b)
+	}
+	err = dst.UnionBatch(src, 0, 1, nil, mp)
+	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
+	require.Equal(t, 1, dst.Length())
+	require.True(t, dst.GetGrouping().Contains(1), "failure must occur after grouping publication")
+	dst.RollbackAppend(checkpoint, 1)
+	for _, b := range ballast {
+		mp.Free(b)
+	}
+	ballast = nil
+
+	require.NoError(t, dst.UnionBatch(replacement, 0, 1, nil, mp))
+	require.Equal(t, []string{"kept", "new"}, InefficientMustStrCol(dst))
+	require.False(t, dst.IsNull(0))
+	require.False(t, dst.IsNull(1))
+	require.True(t, dst.GetGrouping().Contains(0))
+	require.False(t, dst.GetGrouping().Contains(1))
 }
 
 func TestVectorAllocationAccountConfiguration(t *testing.T) {
@@ -464,7 +520,7 @@ func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 	}
 	before := state.account.Snapshot()
 
-	vec.Shrink([]int64{0, 2, 64, 65, 129}, false)
+	require.NoError(t, vec.Shrink([]int64{0, 2, 64, 65, 129}, false, mp))
 	require.Equal(t, []int64{0, 2, 64, 65, 129}, MustFixedColWithTypeCheck[int64](vec))
 	for _, row := range []uint64{0, 1, 2, 4} {
 		require.True(t, vec.IsNull(row))
@@ -509,7 +565,7 @@ func TestVectorAllocationAccountDupPreservesSparseBitmapRowDomain(t *testing.T) 
 		sels[i] = int64(i + 1)
 	}
 	require.NotPanics(t, func() {
-		dup.Shrink(sels, false)
+		require.NoError(t, dup.Shrink(sels, false, mp))
 	})
 	require.Equal(t, 129, dup.Length())
 	require.Zero(t, dup.GetNulls().Count())
@@ -1773,9 +1829,9 @@ func TestAccountedBinaryStringInplaceSortHasPreflightedBitmaps(t *testing.T) {
 
 			require.NotPanics(t, func() {
 				if compact {
-					vec.InplaceSortAndCompact()
+					require.NoError(t, vec.InplaceSortAndCompact(mp))
 				} else {
-					vec.InplaceSort()
+					require.NoError(t, vec.InplaceSort(mp))
 				}
 			})
 
@@ -2760,7 +2816,7 @@ func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
 		sels[i] = int64(i % 2)
 	}
 	require.NoError(t, vec.Shuffle(sels, mp))
-	require.NotPanics(t, vec.InplaceSort)
+	require.NoError(t, vec.InplaceSort(mp))
 	for i := range 65 {
 		value := string(vec.GetBytesAt(i))
 		if i < 32 {
@@ -2921,4 +2977,90 @@ func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
 	v.Free(mp)
 	require.Equal(t, 1, releases)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedSortExpandsSparseNullAndGrouping(t *testing.T) {
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(t, 1<<20, 32)
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+		finalizeTestVectorAllocationAccount(t, state)
+		mpool.DeleteMPool(mp)
+	}()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	defer vec.Free(mp)
+	values := make([]int64, 65)
+	for i := range values {
+		values[i] = int64(len(values) - i)
+	}
+	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	require.NoError(t, vec.ensureNullCapacity(1, mp))
+	require.NoError(t, vec.ensureGroupingCapacity(2, mp))
+	vec.GetNulls().Add(0)
+	vec.GetGrouping().Add(1)
+	require.NoError(t, vec.InplaceSort(mp))
+	require.True(t, vec.IsNull(0))
+	require.Equal(t, int64(65), GetFixedAtNoTypeCheck[int64](vec, 0))
+	require.True(t, vec.GetGrouping().Contains(64))
+	require.Equal(t, int64(64), GetFixedAtNoTypeCheck[int64](vec, 64))
+}
+
+func TestBorrowedSortMetadataAdmissionFailurePreservesRows(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		for _, metadata := range []string{"null", "grouping"} {
+			t.Run(fmt.Sprintf("compact=%t/%s", compact, metadata), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+				controller := &readonlyWriteController{}
+				state := readonlyWriteAccount(t, controller)
+				vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+				t.Cleanup(func() { vec.Free(mp) })
+				// Sparse metadata predates a larger borrowed row domain. Sorting
+				// must admit its expansion before moving any value or row flag.
+				vec.SetLength(2)
+				switch metadata {
+				case "null":
+					require.NoError(t, vec.ensureNullCapacity(1, mp))
+					vec.GetNulls().Add(0)
+				case "grouping":
+					require.NoError(t, vec.ensureGroupingCapacity(2, mp))
+					vec.GetGrouping().Add(1)
+				}
+				values := make([]types.Varlena, 65)
+				for i := range values {
+					var err error
+					values[i], _, err = types.BuildVarlena([]byte(fmt.Sprintf("%02d", len(values)-i)), nil, nil)
+					require.NoError(t, err)
+				}
+				data := types.EncodeSlice(values)
+				before := bytes.Clone(data)
+				lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
+				require.NoError(t, err)
+				t.Cleanup(lease.Release)
+				require.NoError(t, vec.InstallBorrowedData(data, lease))
+				vec.SetLength(len(values))
+				nullCount, groupCount := vec.GetNulls().Count(), vec.GetGrouping().Count()
+				domain := vec.GetRuntimeStringDomainAt(0)
+				controller.failAt = controller.calls + 2 // COW succeeds; metadata expansion fails.
+				mutate := vec.InplaceSort
+				if compact {
+					mutate = vec.InplaceSortAndCompact
+				}
+				require.ErrorIs(t, mutate(mp), mpool.ErrAllocationAccountCapacity)
+				require.True(t, controller.rejected)
+				require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
+				require.Equal(t, before, vec.GetData())
+				require.Equal(t, len(values), vec.Length())
+				require.Equal(t, nullCount, vec.GetNulls().Count())
+				require.Equal(t, groupCount, vec.GetGrouping().Count())
+				require.Equal(t, metadata == "null", vec.IsNull(0))
+				require.Equal(t, metadata == "grouping", vec.GetGrouping().Contains(1))
+				require.Equal(t, domain, vec.GetRuntimeStringDomainAt(0))
+				require.False(t, vec.GetSorted())
+				require.NoError(t, mutate(mp))
+				require.True(t, vec.GetSorted())
+				require.Equal(t, before, data)
+			})
+		}
+	}
 }

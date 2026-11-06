@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -348,7 +350,7 @@ func TestClassicLimitPropagatesMembershipFilterToStreamingSQL(t *testing.T) {
 	require.NoError(t, err)
 
 	r := classicReader(t, mp, fulltext.ALGO_TFIDF, 0, searchplugin.Request{
-		QueryPayload: []byte("pattern"), ResultLimit: 2, HasMembershipFilter: true, MembershipFilter: data,
+		QueryPayload: []byte("pattern"), ResultLimit: 2, HasMembershipFilter: true, MembershipFilter: testutil.RuntimeKeyPayload(t, data),
 	})
 	require.Equal(t, []int{2}, readCounts(t, r, mp, docScoreBatch()))
 	require.NotEmpty(t, stub.streamingFilter)

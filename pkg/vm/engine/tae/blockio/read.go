@@ -560,7 +560,7 @@ func CopyBlockData(
 	); err != nil {
 		return
 	}
-	outputBat.Shrink(deletes, true)
+	err = outputBat.Shrink(deletes, true, mp)
 	return
 }
 
@@ -647,7 +647,9 @@ func BlockDataReadBackup(
 		rows := tombstones.ToI64Array(nil)
 		if len(rows) > 0 {
 			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
-			loaded.Shrink(rows, true)
+			if err = loaded.Shrink(rows, true, common.DebugAllocator); err != nil {
+				return
+			}
 		}
 		return
 	}
@@ -671,7 +673,9 @@ func BlockDataReadBackup(
 		visibleRows = append(visibleRows, int64(row))
 	}
 	if len(visibleRows) != len(commitTSs) {
-		loaded.Shrink(visibleRows, false)
+		if err = loaded.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+			return
+		}
 		logutil.Info("[BlockDataReadBackup]",
 			zap.String("ts", ts.ToString()),
 			zap.String("location", location.String()),
@@ -1115,7 +1119,9 @@ func blockDataReadWithFilter(
 			defer func() { vector.PutSels(deleted) }()
 			deleted = deleteMask.ToI64Array(&deleted)
 			for _, pos := range earlyColumns {
-				outputBat.Vecs[pos].Shrink(deleted, true)
+				if err := outputBat.Vecs[pos].Shrink(deleted, true, mp); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1232,7 +1238,9 @@ func blockDataReadWithFilter(
 				outputBat.Vecs[pos].CleanOnlyData()
 				continue
 			}
-			outputBat.Vecs[pos].Shrink(winnerPositions, false)
+			if err := outputBat.Vecs[pos].Shrink(winnerPositions, false, mp); err != nil {
+				return err
+			}
 		}
 		outputBat.SetRowCount(len(topRows))
 		materializeRows = topRows
@@ -1410,7 +1418,9 @@ func blockDataReadWithSelectedFilterTopK(
 			outputBat.Vecs[pos].CleanOnlyData()
 			continue
 		}
-		outputBat.Vecs[pos].Shrink(winnerPositions, false)
+		if err := outputBat.Vecs[pos].Shrink(winnerPositions, false, mp); err != nil {
+			return err
+		}
 	}
 	outputBat.SetRowCount(len(topRows))
 	outputBat.Vecs[topColPos].CleanOnlyData()
@@ -1581,7 +1591,9 @@ func BlockDataReadInner(
 			defer vector.PutSels(arr)
 			deletedRows = deleteMask.ToI64Array(&arr)
 			for i := range columns {
-				outputBat.Vecs[i].Shrink(deletedRows, true)
+				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -1768,7 +1780,9 @@ func BlockDataReadInner(
 			loadedColumnPos++
 		}
 		if len(deletedRows) > 0 {
-			outputBat.Vecs[outputColPos].Shrink(deletedRows, true)
+			if err = outputBat.Vecs[outputColPos].Shrink(deletedRows, true, mp); err != nil {
+				return
+			}
 		}
 	}
 	return

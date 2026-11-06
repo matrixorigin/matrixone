@@ -143,20 +143,40 @@ func arenaNextPow2(n int) int {
 
 // CompressBuf returns a scratch buffer for LZ4 compression, growing as needed.
 // The buffer is retained across arena Reset() calls.  We round up to the next
-// power of 2 so that minor size variations don't trigger repeated allocations.
+// power of 2 unless that capacity exceeds mpool's single-allocation limit.
 func (a *WriteArena) CompressBuf(minSize int) []byte {
+	buf, err := a.compressBufChecked(minSize)
+	if err != nil {
+		panic(err)
+	}
+	return buf
+}
+
+func (a *WriteArena) compressBufChecked(minSize int) ([]byte, error) {
+	if minSize < 0 {
+		return nil, moerr.NewInternalErrorNoCtx("negative compression buffer size")
+	}
 	if len(a.compressBuf) < minSize {
 		if a.compressBuf != nil {
 			arenaMPool.Free(a.compressBuf)
 			a.compressBuf = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
 		}
 		var err error
-		a.compressBuf, err = arenaMPool.Alloc(arenaNextPow2(minSize), true)
+		a.compressBuf, err = arenaMPool.Alloc(arenaCompressBufSize(minSize), true)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
-	return a.compressBuf[:minSize]
+	return a.compressBuf[:minSize], nil
+}
+
+func arenaCompressBufSize(minSize int) int {
+	size := arenaNextPow2(minSize)
+	limit := mpool.MaxAllocationSize()
+	if size <= 0 || (int64(minSize) <= limit && int64(size) > limit) {
+		return minSize
+	}
+	return size
 }
 
 // FreeBuffers releases the off-heap allocations and serialization scratch.
@@ -790,10 +810,16 @@ func (w *objectWriterV1) GetDataStats() ObjectStats {
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
 	dataLen := len(buf)
+	if dataLen > math.MaxInt-dataLen/255-16 || uint64(dataLen) > math.MaxUint32 {
+		return nil, extent, moerr.NewInternalErrorNoCtx("compressed column exceeds supported size")
+	}
 	compressBlockBound := lz4.CompressBlockBound(dataLen)
 	var compressBuf []byte
 	if w.arena != nil {
-		compressBuf = w.arena.CompressBuf(compressBlockBound)
+		compressBuf, err = w.arena.compressBufChecked(compressBlockBound)
+		if err != nil {
+			return nil, extent, err
+		}
 	} else {
 		if len(w.compressBuf) < compressBlockBound {
 			w.compressBuf = make([]byte, compressBlockBound)
@@ -856,7 +882,24 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		if err != nil {
 			return 0, err
 		}
+		if plan.Size() > math.MaxInt-IOEntryHeaderSize {
+			return 0, moerr.NewInternalErrorNoCtx("serialized column exceeds supported size")
+		}
 		needed := plan.Size() + IOEntryHeaderSize
+		// A single row cannot use the chunk encoder. Reject a scratch
+		// allocation that mpool cannot satisfy before growing the full buffer.
+		if vec.Length() == 1 {
+			if needed > math.MaxInt-needed/255-16 {
+				return 0, moerr.NewInternalErrorNoCtx("compressed column exceeds supported size")
+			}
+			if w.arena != nil && int64(lz4.CompressBlockBound(needed)) > mpool.MaxAllocationSize() {
+				_, err := arenaMPool.Alloc(lz4.CompressBlockBound(needed), true)
+				return 0, err
+			}
+		}
+		if uint64(needed) > math.MaxUint32 {
+			return 0, moerr.NewInternalErrorNoCtx("serialized column exceeds supported size")
+		}
 		if w.arena != nil && needed > w.arena.serialPeak {
 			w.arena.serialPeak = needed
 		}

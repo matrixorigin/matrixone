@@ -1,0 +1,172 @@
+-- Transaction deletes must be applied before clone assigns new rowids.
+drop database if exists clone_transaction_visibility;
+create database clone_transaction_visibility;
+use clone_transaction_visibility;
+create table t(id int primary key, k int, u int, body text, key ix(k), unique key ux(u));
+insert into t values (1,10,100,'a'),(2,20,200,'b'),(3,20,300,'c'),(4,NULL,NULL,'d');
+-- Duplicate and NULL index keys before deletion
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+begin;
+delete from t where id=2;
+alter table t modify body longtext;
+commit;
+-- DELETE and clone
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+begin;
+update t set k=11,u=101 where id=1;
+-- Updated source keys before ALTER
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+alter table t modify body text;
+-- Keys after first ALTER
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+
+alter table t modify body longtext;
+commit;
+-- UPDATE and repeated clone
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+begin;
+delete from t where id=3;
+alter table t modify k bigint;
+commit;
+-- rebuilt ix and cloned ux
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+begin;
+delete from t where id=1;
+alter table t modify body text;
+rollback;
+show create table t;
+-- rollback restores rows and indexes
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+-- A new connection observes the committed target.
+-- @session:id=1{
+use clone_transaction_visibility;
+-- Read the committed indexes from a new connection
+select id,k,u,hex(serial_full(k,id)) as ix_key from t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+-- @session}
+create table control_t(id int primary key,k int,u int,body text,key ix(k),unique key ux(u));
+insert into control_t values (1,10,100,'a'),(2,20,200,'b'),(3,30,300,'c');
+begin;
+delete from control_t where id=2;
+commit;
+alter table control_t modify body longtext;
+-- Committed DELETE before ALTER control
+select id,k,u,hex(serial_full(k,id)) as ix_key from control_t ignore index(ix,ux) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='control_t') limit 1);
+set @ux = (select distinct index_table_name from mo_catalog.mo_indexes where name='ux' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='control_t') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) as ix_key from `',@ix,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+set @q = concat('select __mo_index_pri_col,__mo_index_idx_col as ux_key from `',@ux,'` order by 1,2');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+-- Direct clone reads the transaction-visible source.
+begin;
+delete from t where id=1;
+create table direct_clone clone t;
+select id,k,u from direct_clone order by id;
+rollback;
+select count(*) as direct_clone_after_rollback from mo_catalog.mo_tables where reldatabase=database() and relname='direct_clone';
+-- Synthetic missing entry: a clone preserves it and rebuilding the affected index restores it.
+create table synthetic(id int primary key,k int not null,body text,key ix_synthetic(k));
+insert into synthetic values (1,10,'a'),(2,20,'b');
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix_synthetic' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='synthetic') limit 1);
+set @q = concat('delete from `',@ix,'` where __mo_index_pri_col=1');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+alter table synthetic modify body longtext;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix_synthetic' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='synthetic') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) from `',@ix,'` order by 1');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+alter table synthetic modify k bigint;
+select id,k,hex(serial_full(k,id)) from synthetic ignore index(ix_synthetic) order by id;
+set @ix = (select distinct index_table_name from mo_catalog.mo_indexes where name='ix_synthetic' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='synthetic') limit 1);
+set @q = concat('select __mo_index_pri_col,hex(__mo_index_idx_col) from `',@ix,'` order by 1');
+prepare q from @q;
+execute q;
+deallocate prepare q;
+drop database clone_transaction_visibility;

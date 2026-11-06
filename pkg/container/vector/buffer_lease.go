@@ -239,6 +239,24 @@ func NewBorrowedFixedVectorWithAllocation(
 	return vec, nil
 }
 
+// PrepareDataForInplaceMutation makes the data backing writable without
+// changing values, row metadata, or the independently owned varlen area.
+// A failed allocation leaves the existing backing and lease unchanged.
+func (v *Vector) PrepareDataForInplaceMutation(mp *mpool.MPool) error {
+	if !v.cantFreeData || len(v.data) == 0 {
+		return nil
+	}
+	data, err := v.allocData(mp, len(v.data))
+	if err != nil {
+		return err
+	}
+	copy(data, v.data)
+	v.releaseBorrowedData()
+	v.data = data
+	v.cantFreeData = false
+	return nil
+}
+
 func (v *Vector) releaseBorrowedData() {
 	if v == nil || v.dataLease == nil {
 		return

@@ -2627,28 +2627,34 @@ func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam,
 
 func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
 	param := &tree.ExternParam{}
+	// Both file-backed and inline loads reconstruct the reader-visible param
+	// from the serialized source param planned into TableDef.Createsql, so the
+	// two scan types honor identical parsed options.
+	if err := json.Unmarshal([]byte(createsql), param); err != nil {
+		return nil, err
+	}
 	if externScan.LoadType == tree.INLINE {
+		// The serialized source param excludes the inline payload to keep it
+		// in ExternScan.Data once; restore the authoritative copy.
 		param.ScanType = int(externScan.LoadType)
 		param.Data = externScan.Data
-		param.Format = externScan.Format
-		param.Tail = new(tree.TailParameter)
-		param.Tail.IgnoredLines = externScan.IgnoredLines
-		param.Tail.Fields = &tree.Fields{
-			Terminated: &tree.Terminated{
-				Value: externScan.Terminated,
-			},
-			EnclosedBy: &tree.EnclosedBy{
-				Value: externScan.EnclosedBy[0],
-			},
-			EscapedBy: &tree.EscapedBy{
-				Value: externScan.EscapedBy[0],
-			},
+		// The flat proto keeps the established inline escape byte: both
+		// planners encode byte 0 (escape processing disabled) when ESCAPED
+		// BY is omitted or empty, and the explicit byte otherwise, while the
+		// serialized source param leaves the field nil for the omitted case,
+		// where the reader would enable its default backslash escape and
+		// change accepted data. Restore the escape byte so inline loads stay
+		// byte-compatible with the established behavior.
+		if param.Tail == nil {
+			param.Tail = new(tree.TailParameter)
 		}
-		param.JsonData = externScan.JsonType
-	} else {
-		if err := json.Unmarshal([]byte(createsql), param); err != nil {
-			return nil, err
+		if param.Tail.Fields == nil {
+			param.Tail.Fields = &tree.Fields{}
 		}
+		if param.Tail.Fields.EscapedBy == nil {
+			param.Tail.Fields.EscapedBy = &tree.EscapedBy{}
+		}
+		param.Tail.Fields.EscapedBy.Value = externScan.EscapedBy[0]
 	}
 	param.ExternType = externScan.Type
 	param.FileService = c.proc.Base.FileService
@@ -8620,7 +8626,7 @@ func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
 func isCanonicalVectorHLLAddType(typ types.T) bool {
 	switch typ {
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false
@@ -10134,8 +10140,9 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
-	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
+	rs.Proc = c.proc.NewNoContextChildProc(0)
 	if len(ss) > 0 {
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 		rs.Proc.Base.LoadTag = ss[0].Proc.Base.LoadTag
 	}
 
@@ -10152,7 +10159,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		if sameExecutionNode(rs.NodeInfo, ss[i].NodeInfo) {
 			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
+		rs.Proc.Reg.MergeReceivers[j] = process.NewPipelineEdge(mergeReceiverChannelBufferSize(ss[i]), nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])

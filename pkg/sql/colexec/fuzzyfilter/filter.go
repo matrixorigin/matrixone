@@ -443,7 +443,13 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	// exact duplicate representations and marks supported payload types sorted
 	// for pruning.
 	ctr.pass2RuntimeFilter.GetNulls().Reset()
-	ctr.pass2RuntimeFilter.InplaceSort()
+	if err := ctr.pass2RuntimeFilter.InplaceSort(proc.Mp()); err != nil {
+		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+			return nil
+		}
+		fuzzyFilter.abandonRuntimeFilter(proc)
+		return err
+	}
 	data, release, err := runtimefilter.MarshalExactFilterVector(
 		ctr.pass2RuntimeFilter,
 		proc.Mp(),

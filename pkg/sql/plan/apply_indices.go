@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -1822,7 +1824,11 @@ func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 // storage metadata are proven to share the logical SQL ordering. Scalar float
 // encoding has an identity order over NaN payloads, while SQL makes all NaNs
 // peers and keeps them last in both directions, so encoded ordering cannot
-// replace the logical sort or drive early truncation.
+// replace the logical sort or drive early truncation. Case-insensitive
+// collations compare folded collation weights, while serialized hidden keys
+// and block zonemaps keep raw bytes: 'b' sorts before 'C' under
+// utf8mb4_general_ci although byte 0x62 > 0x43, so the physical order cannot
+// replace the logical sort or drive byte-threshold pruning there either.
 func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 	for _, expr := range orderExprs {
 		if expr == nil {
@@ -1830,6 +1836,9 @@ func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 		}
 		switch types.T(expr.Typ.Id) {
 		case types.T_float32, types.T_float64:
+			return false
+		}
+		if types.IsCaseInsensitiveCollation(uint8(expr.Typ.Charset)) {
 			return false
 		}
 	}
@@ -2662,8 +2671,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return retID
 	}
 
-	//no index applied
-	return nodeID
+	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx)
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
@@ -3338,6 +3346,9 @@ const (
 	regularIndexPredicateRowWork = 1.0
 	regularIndexJoinFixedWork    = 64.0
 	regularIndexUnknownRangeSel  = 0.1
+	// Byte-equivalent CPU cost for one packed-key encoding/allocation. The
+	// descriptor and payload bytes are charged separately per local reader.
+	regularIndexKeyEncodingWork = 64.0
 )
 
 type encodedIndexFilterFact struct {
@@ -4048,6 +4059,104 @@ func regularIndexBackfillInputRows(scanRows, selectedRows float64) float64 {
 	return min(scanRows, max(selectedRows, math.Ceil(selectedRows)*float64(objectio.BlockMaxRows)))
 }
 
+// backfillReaders estimates local reader construction, not a cluster-wide
+// reader count. BuildReaders constructs each reader's packed PK filter, so
+// parallel scan width cannot make this preparation a single per-query cost.
+func (ctx *encodedRegularIndexCostContext) backfillReaders() float64 {
+	cpus := max(1, system.GoMaxProcs())
+	if ctx.builder.qry != nil && ctx.builder.qry.MaxDop > 0 && ctx.builder.qry.MaxDop < int64(cpus) {
+		cpus = int(ctx.builder.qry.MaxDop)
+	}
+	if cpus > math.MaxInt32 {
+		cpus = math.MaxInt32
+	}
+	readers := calcDOP(int32(cpus), ctx.node.Stats, ctx.builder.isPrepareStatement)
+	if blocks := ctx.node.Stats.BlockNum; blocks > 0 {
+		readers = min(readers, blocks)
+	}
+	return float64(max(1, readers))
+}
+
+func regularIndexInSearchComparisons(keys float64) float64 {
+	if keys <= 0 {
+		return 0
+	}
+	if keys <= 4 {
+		return keys
+	}
+	return math.Ceil(math.Log2(keys + 1))
+}
+
+// Building the in-memory filter creates a packed payload plus two []byte
+// descriptor slices per reader. Width and reader count are cost estimates.
+func regularIndexBackfillPrepareWork(keys, packedWidth, readers float64) float64 {
+	const sliceBytes = 3 * (strconv.IntSize / 8)
+	return keys * ((2*float64(sliceBytes)+packedWidth)*readers + regularIndexKeyEncodingWork)
+}
+
+// shouldSkipJoinIndexBackfill prices the rows returned by a lookup, not just
+// the build keys. A small build can match most of a non-unique probe index and
+// overflow the backfill filter, leaving a full scan behind an extra dependency.
+func (ctx *encodedRegularIndexCostContext) shouldSkipJoinIndexBackfill(idxDef *IndexDef, buildRows float64) bool {
+	if !ctx.valid || ctx.force || IsDefaultStats(ctx.node.Stats) || !finitePositive(buildRows) {
+		return false
+	}
+	// Removing index pruning exposes scan residuals to more rows. Preserve
+	// the established path unless evaluating every residual is provably safe.
+	if !regularIndexFiltersHaveStableEvaluation(ctx.node) {
+		return false
+	}
+	matches := min(ctx.node.Stats.TableCnt, buildRows)
+	if !idxDef.Unique {
+		wrapper := ctx.builder.getStatsInfoByTableID(ctx.node.TableDef.TblId)
+		if wrapper == nil || wrapper.GetStats() == nil || !finitePositive(wrapper.GetStats().TableCnt) {
+			return false
+		}
+		stats := wrapper.GetStats()
+		keyNDV := 1.0
+		// The final part of a non-unique index is the appended PK, not a
+		// lookup key. Do not multiply component NDVs: they can be correlated.
+		for _, part := range idxDef.Parts[:len(idxDef.Parts)-1] {
+			ndv := stats.NdvMap[catalog.ResolveAlias(part)]
+			if !finitePositive(ndv) || ndv > stats.TableCnt {
+				return false // Unknown statistics retain the established fallback.
+			}
+			keyNDV = max(keyNDV, ndv)
+		}
+		// Build rows bound distinct lookup keys, including when the build has
+		// duplicates. Its input selectivity does not describe the probe domain.
+		matches = min(ctx.node.Stats.TableCnt, buildRows*(ctx.node.Stats.TableCnt/keyNDV))
+	}
+	if ctx.backfillCapacityExceeded(matches) {
+		return true
+	}
+	if ctx.node.Stats.TableCnt < 50000 {
+		return false
+	}
+	pkPos, ok := ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.PkeyColName]
+	if !ok || pkPos < 0 || int(pkPos) >= len(ctx.columnWidths) {
+		return false
+	}
+	encodedWidth := 0.0
+	for _, part := range idxDef.Parts {
+		colPos, ok := ctx.node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok || colPos < 0 || int(colPos) >= len(ctx.columnWidths) {
+			return false
+		}
+		if len(idxDef.Parts) == 1 {
+			encodedWidth += ctx.columnWidths[colPos]
+		} else {
+			encodedWidth += ctx.serialWidths[colPos]
+		}
+	}
+	// Compare an optimistic lookup: index keys plus PKs, per-reader filter
+	// preparation, and only matching base rows. Do not assume scattered PKs
+	// or charge a second full scan; selective lookups must remain eligible.
+	work := matches*(encodedWidth+ctx.columnWidths[pkPos]+ctx.baseWidth) +
+		regularIndexBackfillPrepareWork(matches, ctx.serialWidths[pkPos], ctx.backfillReaders())
+	return finitePositive(work) && work >= ctx.baseWork
+}
+
 func (ctx *encodedRegularIndexCostContext) score(
 	idxDef *IndexDef,
 	leadingPos []int32,
@@ -4288,10 +4397,12 @@ func (ctx *encodedRegularIndexCostContext) score(
 
 	pkIdx, hasPK := ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.PkeyColName]
 	pkWidth := 0.0
+	packedPKWidth := 0.0
 	if hasPK && pkIdx >= 0 && int(pkIdx) < len(ctx.columnWidths) {
 		pkWidth = ctx.columnWidths[pkIdx]
+		packedPKWidth = ctx.serialWidths[pkIdx]
 	}
-	if shape == encodedRegularIndexCostBackfill && !finitePositive(pkWidth) {
+	if shape == encodedRegularIndexCostBackfill && (!finitePositive(pkWidth) || !finitePositive(packedPKWidth)) {
 		ctx.resetScratch()
 		return 0, false, false
 	}
@@ -4314,7 +4425,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if shape == encodedRegularIndexCostBackfill {
 		hiddenOutputWidth = pkWidth
 	}
-	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, float64, bool) {
+	calculateWork := func(candidateRows, hiddenRows, outputRows float64, optimistic bool) (float64, float64, bool) {
 		hiddenScanInput := candidateRows * hiddenInputWidth
 		prefixScanInput := hiddenScanInput
 		if prefixAccess && ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2 {
@@ -4362,23 +4473,39 @@ func (ctx *encodedRegularIndexCostContext) score(
 				}
 			}
 
-			// The hidden output already accounts for transferring each physical PK.
-			// Charge the targeted base lookup once more as a per-key operation.
-			pkBackfill := hiddenRows * regularIndexPredicateRowWork
 			rankingBaseInput = hiddenRows * ctx.baseWidth
 			prefixBaseInput = rankingBaseInput
-			if prefixAccess {
-				lookupRows := regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
-				probeRows := lookupRows
+			// Preserve the relative ranking of index candidates. Build and
+			// physical probe estimates below are admission-only costs.
+			commonWork += hiddenRows * regularIndexPredicateRowWork
+			admissionExtra := 0.0
+			if !optimistic {
+				lookupRows := hiddenRows
+				probeRows := hiddenRows
 				if hiddenRows > 0 && (!sortedPK || ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2) {
 					probeRows = ctx.baseRows
 				}
-				prefixBaseInput = max(rankingBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				if prefixAccess {
+					// Retain the established conservative prefix admission guard.
+					lookupRows = regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
+					if sortedPK && (ctx.builder.optimizerHints == nil || ctx.builder.optimizerHints.blockFilter != 2) {
+						probeRows = lookupRows
+					}
+					prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				}
+				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.backfillReaders())
+				// Replace, rather than duplicate, the ranking's per-key proxy.
+				admissionExtra = candidateBuild - hiddenRows*regularIndexPredicateRowWork
+				if !sortedPK {
+					admissionExtra += probeRows * regularIndexInSearchComparisons(hiddenRows) * regularIndexPredicateRowWork
+				}
 			}
 			baseChildPredicates := hiddenRows * float64(len(ctx.node.FilterList)) * regularIndexPredicateRowWork
 			joinFixed := regularIndexJoinFixedWork + ctx.outputWidth + float64(ctx.outputCols)*regularIndexPredicateRowWork
 			joinRows := outputRows * (ctx.outputWidth + regularIndexPredicateRowWork)
-			commonWork += pkBackfill + baseChildPredicates + joinFixed + joinRows
+			commonWork += baseChildPredicates + joinFixed + joinRows
+			prefixBaseInput += admissionExtra
 		}
 
 		rankingWork := hiddenScanInput + commonWork + rankingBaseInput
@@ -4394,7 +4521,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if hasCorrelatedPrefix {
 		outputCostRows = max(outputCostRows, hiddenRows)
 	}
-	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows)
+	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows, false)
 	baseComparisonWork := ctx.baseWork
 	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
 		// Compare uncertainty intervals instead of the ranking point estimate. An
@@ -4410,11 +4537,12 @@ func (ctx *encodedRegularIndexCostContext) score(
 			// in the uncertainty lower bound.
 			lowerOutputRows = lowerHiddenRows
 		}
-		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows)
+		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows, true)
 		baseComparisonWork = ctx.baseUpperWork
 	}
 	overBudget := shape == encodedRegularIndexCostBackfill && boundedLeading && ctx.backfillCapacityExceeded(budgetRows)
-	shouldReject = !ctx.force && (overBudget || (prefixAccess || len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000) && validWork && rejectionWork >= baseComparisonWork)
+	compareCost := prefixAccess || ctx.node.Stats.TableCnt >= 50000 && (shape == encodedRegularIndexCostBackfill || len(idxDef.Parts) >= 2)
+	shouldReject = !ctx.force && (overBudget || compareCost && validWork && rejectionWork >= baseComparisonWork)
 	ctx.resetScratch()
 	if !validWork {
 		return 0, false, false
@@ -4654,6 +4782,25 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	scanSnapshot *Snapshot,
 	match *regularIndexOnlyMatch,
 ) int32 {
+	indexNode := builder.buildRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+	if indexNode == nil {
+		return -1
+	}
+	builder.addNameByColRef(indexNode.BindingTags[0], indexNode.TableDef)
+	id := builder.appendNode(indexNode, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(id, node.NodeId)
+	forceScanNodeStatsTP(id, builder)
+	return id
+}
+
+// 先构造、后发布，使多分支访问在任一分支失败时仍保留完整原计划。
+func (builder *QueryBuilder) buildRegularIndexOnlyScan(
+	idxDef *IndexDef,
+	node *plan.Node,
+	idxColMap map[[2]int32]*plan.Expr,
+	scanSnapshot *Snapshot,
+	match *regularIndexOnlyMatch,
+) *plan.Node {
 	leadingPos := match.filterIdx
 	numParts := len(idxDef.Parts)
 	missFilterIdx := make([]int, 0, len(node.FilterList))
@@ -4675,6 +4822,9 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	if e != nil {
 		panic(e)
 	}
+	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 {
+		panic(moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata"))
+	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	var newLeadingFilter *plan.Expr
 	var err error
@@ -4684,9 +4834,8 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		newLeadingFilter, err = builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, match.leadingEqual, idxTag, idxTableDef)
 	}
 	if err != nil {
-		return -1
+		return nil
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
 
 	if numParts == 1 {
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
@@ -4735,7 +4884,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		IndexTableName: idxDef.IndexTableName,
 	}
 
-	idxTableNodeID := builder.appendNode(&plan.Node{
+	return &plan.Node{
 		NodeType:      plan.Node_TABLE_SCAN,
 		TableDef:      idxTableDef,
 		IndexScanInfo: idxScanInfo,
@@ -4746,11 +4895,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		Offset:        node.Offset,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
-	}, builder.ctxByNode[node.NodeId])
-	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
-
-	forceScanNodeStatsTP(idxTableNodeID, builder)
-	return idxTableNodeID
+	}
 }
 
 func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
@@ -5285,6 +5430,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
+	var costCtx *encodedRegularIndexCostContext
 	for _, idxDef := range indexes {
 		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
@@ -5318,6 +5464,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		if len(condIdx) < numKeyParts {
 			continue
+		}
+		if !forceJoinIndex {
+			if costCtx == nil {
+				costCtx = builder.newEncodedRegularIndexCostContext(leftChild, colRefCnt)
+			}
+			if costCtx.shouldSkipJoinIndexBackfill(idxDef, rightChild.Stats.Outcnt) {
+				continue
+			}
 		}
 
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
