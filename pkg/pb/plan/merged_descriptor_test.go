@@ -27,8 +27,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	want := map[string]map[string]int32{
 		"Query":            {"correlation": 19, "temporal_index_needs_replan": 22, "select_lock_references": 21},
 		"Type":             {"numeric_attributes": 14},
-		"Expr":             {"temporal_candidate_guard": 26, "temporal_candidate_filter": 27},
-		"FoldVal":          {"temporal_candidate_guard": 4},
+		"Expr":             {"temporal_candidate_filter": 27},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
@@ -37,6 +36,11 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {
+		if message.GetName() == "Expr" || message.GetName() == "FoldVal" {
+			for _, field := range message.GetField() {
+				require.NotEqual(t, "temporal_candidate_guard", field.GetName())
+			}
+		}
 		fields, ok := want[message.GetName()]
 		if !ok {
 			continue
