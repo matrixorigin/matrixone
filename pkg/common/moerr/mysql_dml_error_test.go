@@ -41,3 +41,26 @@ func TestMySQLDMLCompatibilityErrors(t *testing.T) {
 	require.Equal(t, "42000", fieldSpecifiedTwice.SqlState())
 	require.Equal(t, "Column 'ItemID' specified twice", fieldSpecifiedTwice.Error())
 }
+
+func TestMySQLDefaultAndDigestErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err     *Error
+		code    uint16
+		message string
+	}{
+		{NewDigestParse(t.Context()), ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN, "Could not parse argument to digest function."},
+		{NewNoDefaultForColumn(t.Context(), "a"), ER_NO_DEFAULT_FOR_FIELD, "Field 'a' doesn't have a default value"},
+		{NewDefaultExpression(t.Context()), ER_DEFAULT_AS_VAL_GENERATED, "DEFAULT function cannot be used with default value expressions"},
+	} {
+		require.Equal(t, tc.code, tc.err.MySQLCode())
+		require.Equal(t, "HY000", tc.err.SqlState())
+		require.Equal(t, tc.message, tc.err.Error())
+		data, err := tc.err.MarshalBinary()
+		require.NoError(t, err)
+		var decoded Error
+		require.NoError(t, decoded.UnmarshalBinary(data))
+		require.Equal(t, tc.err.ErrorCode(), decoded.ErrorCode())
+		require.Equal(t, tc.code, decoded.MySQLCode())
+		require.Equal(t, tc.message, decoded.Error())
+	}
+}

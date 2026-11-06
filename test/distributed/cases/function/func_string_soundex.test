@@ -109,7 +109,11 @@ DEALLOCATE PREPARE soundex_prepared_28912;
 # Explicit binary and direct binary inputs keep byte-oriented Soundex.
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
 
-# SOUNDS LIKE (#23010; SOUNDS LIKE subitem of #24496).
+# SOUNDS LIKE uses phonetic equality, not LIKE patterns.
+SELECT 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case;
+SELECT NOT 'Hello' SOUNDS LIKE 'Hallo' AS negated, 'Hello' SOUNDS LIKE 'Hallo' = 1 AS comparison, 'Hello' SOUNDS LIKE 'Hallo' AND FALSE AS conjunction;
+SELECT CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE CAST('' AS VARBINARY(2)) AS binary_codes;
+SELECT 1 sounds;
 SELECT 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS comment_like, 'Hello' SOUNDS /*!50000 LIKE */ 'Hallo' AS version_like, 'Hello' /*! SOUNDS */ LIKE 'Hallo' AS comment_sounds;
 # Independent known results, ordinary NULL equality, and full Soundex codes.
 SELECT 'Hello' SOUNDS LIKE 'Hallo' AS matched, 'Robert' SOUNDS LIKE 'Rubin' AS different, 'BDFJLMPR' SOUNDS LIKE 'BDFJLMPRB' AS full_code;

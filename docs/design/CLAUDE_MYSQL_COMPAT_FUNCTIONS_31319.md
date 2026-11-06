@@ -1,0 +1,162 @@
+# MySQL 兼容函数与运算符补齐设计
+
+版本：v29，2026-11-05。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+
+## 范围、不变量与设计门槛
+
+本功能扩展 SQL 公开契约，涉及 parser、AST、planner、函数求值及错误映射，设计门槛适用。目标是完整闭合四项能力，不以自定义指纹替代 MySQL 摘要，不改变裸 DEFAULT 的写入契约。默认不扩展分区、存储过程、UDF 或 warning 兼容性。
+
+- `a SOUNDS LIKE b` 等价于 `SOUNDEX(a) = SOUNDEX(b)`，各操作数仅求值一次，参数顺序、NULL、二进制/字符域保持不变。
+- 对支持解析的 MySQL 8.4 SQL、相同 SQL mode 和默认摘要预算 1024 字节，两个摘要函数的文本与哈希必须与独立 MySQL 8.4 oracle 相同；不能哈希格式化文本或 MO 的 token 编号。
+- `DEFAULT(col)` 读取所引用列的默认值元数据，而非当前行值或赋值目标列默认值；必须保留列来源与无来源表达式的区别，适用的 MySQL 错误不能被 NULL/零值掩盖。
+
+## SOUNDS LIKE
+
+parser 将其降低为既有两个 SOUNDEX 调用的等值比较。SOUNDS 是非保留关键字；采用上游 #31373 已合并的 scanner 上下文识别：下个真实 token 不是 LIKE 时恢复 ID，从而保留 MO 已支持的隐式别名。前瞻快照继承 SQL mode、可执行注释状态及解析工作/取消预算，并用已有递归防护标记避免连续 SOUNDS 触发递归。删除本分支重复的 lexer 前瞻；普通 LIKE、显式别名和限定列名不受影响。
+
+该方案优于新增 ComparisonOp 或独立执行函数：既有 AST、格式化、参数遍历、binder、执行器和持久化 view 消费者均可复用，不新增函数 ID 或 plan 字段。语法生成器必须无新增冲突，生成物必须可重复生成。
+
+## STATEMENT_DIGEST / STATEMENT_DIGEST_TEXT
+
+### 列属性覆盖与语法/语义阶段
+
+- 对原生可覆盖属性按类别保留最后一项后才 itemize/contextualize，保留幸存项的原始相对顺序。常量默认值、表达式默认值、NULL 与 NOT NULL 分属不同类别；COLLATE 与可累加约束不去重。tree.MySQLEffectiveColumnAttributes 是摘要列校验与共享查询上下文 walker 的唯一选择规则；不修改原AST、不改变普通MO绑定属性策略。
+- 语法不能因覆盖而失效：DEFAULT 必须仍是signed literal/括号表达式/native NOW族，原生函数专用语法错误仍立即拒绝。已覆盖的表达式不再被工厂arity、typed literal、变量/子查询或默认值函数语义检查；未覆盖表达式仍正常检查。与默认值相邻的尾部COLLATE属独立列属性，不随DEFAULT覆盖消失。
+- AUTO_INCREMENT只允许原生整数类型（含BOOL/BOOLEAN别名，不含YEAR/BIT/FLOAT/DOUBLE/DECIMAL），合法的裸DEFAULT NULL不因NOT NULL/PRIMARY KEY被拒绝；括号表达式默认值即使(NULL)仍不允许。
+- 固定binary字符集的二进制字符串/LOB/JSON/空间类型只能配COLLATE binary；national类型仍隐式utf8mb3，显式charset按原生collation家族匹配。此处检查家族兼容，不新增配置或完整collation registry存在性模拟。
+- DDL collate_name允许原生BINARY token，表达式COLLATE要求名字token（引号允许）。复用parse-local invalidExpressions候选保存未分类CollateExpr，列声明识别并移除合法尾部候选；其余候选在作用域itemization前作为语法错误拒绝，因此未引用CTE或被覆盖表达式也不能藏起非法表达式COLLATE binary。无新map/池字段。
+- 普通MO serial(...)保留原语法；digest无限定SERIAL函数入口拒绝，quoted名称保持generic身份。摘要的schema.name(...)按原生qualified generic语法构建不可执行表达式，不应用builtin工厂；普通MO既有不支持的qualified函数仍拒绝，不查询UDF/存储过程目录。
+
+### 列字符集与大对象默认值的解析准入
+
+- MySQL 列字符集是字符类型尾部的语法，不是任意位置的列属性：只允许 CHAR/VARCHAR、TEXT 家族、ENUM/SET，位于全部列属性之前且仅一次；不允许 DEFAULT 前缀或等号。复用列定义已有属性有序切片校验位置/类型，grammar 保留前缀/等号事实并仅在 digest 拒绝；表/库级 DEFAULT CHARSET、CAST/CONVERT 及普通 MO 列属性仍归原有所有者。
+- NATIONAL CHAR 保留 NCHAR 的隐式字符集身份，不能降为普通 CHAR 后错误接受显式字符集。CHAR VARYING 的原生保留 token 在 digest 中适配并归现有字符类型 grammar，普通 MO 的 UNUSED 准入不变；national varying 仍不允许显式字符集。
+- 在已有列定义 contextualization 复用解析时 SQL-mode flags 检查 TEXT/BLOB/JSON 以及空间类型的裸默认值；不读取目录，不求值表达式，不对 ALTER COLUMN SET DEFAULT 猜测旧列类型。NULL 与括号表达式默认值保留；非严格模式允许空字符串（包括空 HEX/BIT/引入符字面量，原生伴随 warning），严格模式拒绝；空间类型即使非严格也不能有裸空字符串。数字零和 NUL 字节不是空字符串。不新增 warning 模拟。
+- 常量默认值与括号表达式是原生两个属性类别，各类别最后一个覆盖先前值；非 NULL 常量与表达式类别不得并存。原生 add_field_to_list 先清除常量 NULL 后检查类别冲突，因此 NULL 与表达式并存仍可准入；NOT NULL 的显式常量 NULL 约束不能被随后表达式隐藏。仅在已有有界属性循环中保存局部事实，无新 AST/池化状态、目录探测、worker、cache 或额外树遍历。
+
+### 契约与编码
+
+参考 MySQL 8.4 文档及本机 MySQL 8.4.11 的独立返回值。`SELECT 1` 的规范化文本是 `SELECT ?`，摘要是 `d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae`；直接 SHA256 文本会得到不同值，明确禁止。
+
+共享核心位于 MySQL parser 包，函数包仅负责输入转换、向量选择/NULL、会话模式以及结果包装：
+
+1. 使用现有 MySQL parser 校验单条语句，不执行 SQL，不解析表/catalog，不创建背景会话。空输入、多语句、裸参数占位符和语法错误拒绝；NULL 参数返回 NULL。此无目录边界也意味着不复制 MySQL 的系统变量注册表：未知系统变量的服务器相关存在性错误不作为纯语法兼容保证。
+2. 使用现有 scanner 获取词法单元，翻译为冻结的 MySQL 8.4 token 兼容编号。token 用小端 uint16 编码；标识符附加小端字节长度与原始标识符字节。兼容编号和关键字/原生函数别名是互操作数据，不使用 MO goyacc 编号。
+3. 归约数值/字符串字面量、合法 NULL 字面量、单值/多值列表、IN 列表以及数值的一元符号；保留结构、标识符、运算符、BOOL 常量和语法位置中的 NULL。NULL 的字面量角色由语法动作在本次可选摘要解析状态中标记，不用正则猜测 `IS NULL` 或 DDL 的 `NOT NULL`。
+4. 普通注释不参与摘要；可执行注释继续按 scanner 规则处理；可识别 optimizer hints 按 MySQL hint token 域处理，不当普通注释静默删除。
+5. 采用 MySQL 默认的 1024 字节 token 存储预算；新 token/完整标识符无法容纳时停止采集，不能截断单个编码项。即使摘要前缀已满，完整输入仍须通过语法校验。
+6. TEXT 从同一规范化 token 流生成，采用 MySQL 的标识符引号、空格及列表占位符；DIGEST 对该编码字节流作 SHA256，返回 64 位小写十六进制。两个输出共享一个规范，不维护相互漂移的两个算法。默认 utf8mb4 输入中，单个已保留 identifier 超过 64 **字节**时 TEXT 写 `...`（不额外补其后的空格），不是截为64字符；HASH仍编码完整名称及长度。该展示界限与1024字节保留预算、不同名称语法位置的字符上限相互独立。64字节检查先于utf8mb3显示转换：不能转换的四字节字符使整个名称不显示（不是逐字符替换），原始编码与HASH不变；空名称也不显示。SQL quoted identifier 的AST上下文化则使用系统字符集的`?`替代结果，故不同四字节CTE名称可能在声明/引用时相同；此转换不改独立归一化扫描所持的原始字节。
+
+兼容数据生成工具从固定 MySQL 8.4.11 输入提取公开 token 数值、关键字拼写/保留身份及 `my_unicase_default` 的696个小写映射对，输入 SHA256 和来源可追溯；不把 MySQL GPL 源码或实现复制进仓库。实现使用独立的 Go token 模型与现有 MO 解析器。独立 oracle 固定在测试 fixture 中，不依赖在线 MySQL 才能跑 UT。
+
+### 备选、生命周期与预算
+
+- 拒绝 SHA256(AST 文本)：可直接用 `SELECT 1` 证伪。
+- 拒绝引入完整第二个 SQL 引擎、调用外部 MySQL 或无限缓存：增加依赖、权限边界、网络和状态所有者，不符合标量函数契约。
+- 选择现有 parser/scanner 加兼容编码层：语法和转义已有所有者，兼容编码有单独独立 oracle。
+
+每次调用拥有 scanner、语法树、可选 NULL 位置集及摘要缓冲；立即注册释放。数据不进入全局可变缓存，失败/取消路径同样释放。解析资源通过现有 ParseLimits 和调用者 context 限制；输入/工作/词法状态必须有界，最终实现记录具体预算，不能因摘要只保留 1024 字节就跳过后半段错误。向量常量每批只处理一次，NULL 和 selection mask 不解析；列向量逐行处理，不保留跨行状态。SQL mode 在执行期解析，因此函数不能错误地在 prepare 时常量折叠。
+
+## DEFAULT(col)
+
+### 所有者与数据流
+
+`DEFAULT(col)` 与裸 DEFAULT 含义不同。选择独立的列默认值 AST 表达式，以免已有 INSERT/UPDATE/生成列处理把它误当作目标列的裸 DEFAULT。它只接受列引用（可限定名），不接受一般表达式。
+
+binder 在正常命名空间中解析列，复用已有 `OutputColumnProvenance` / `SourceColumnMetadata` 传递的 planner-local 来源快照。透明投影、派生表、CTE 和 view 复用同一来源；语义表达式、聚合/集合边界按独立 MySQL oracle 决定是否采用输出类型默认值，不能随意追到任意底层列。只在确实缺少所需元数据时扩展现有本地快照，不新增 catalog/proto/持久格式。
+
+VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定义提供默认值命名空间；SELECT/WHERE/UPDATE 的普通列作用域复用原有鉴权和歧义/未知列错误。不得运行绕过会话权限的目录 SQL。
+
+### 已有独立事实与必需边界
+
+- 显式字面量默认值读取其值及类型；可空且无默认值返回 NULL。
+- 无默认值的 NOT NULL 列和生成列按 MySQL 1364 拒绝；自增列返回类型零值而非分配序号。
+- 表达式默认值按 MySQL 3773 拒绝，不能复用 INSERT 中执行表达式的行为。
+- 动态时间默认值必须按 MySQL DEFAULT 函数的列元数据结果处理，不运行 CURRENT_TIMESTAMP。
+- 原始报告中的 `(SELECT 1 AS col)` 结果为 0，不是 1。
+- `UPDATE t SET b=DEFAULT(a)` 读取 a 的默认值，不是 b 的默认值。
+- 表别名、限定名、外层相关列、无来源派生列、外连接、view、UNION/CTE、参数计划复用等分别由最小 oracle 与 UT/BVT 验证，不能只验证物理表成功路径。
+
+不在运行期创建新的状态或资源。默认值表达式来自不可变元数据快照，返回前复制；不污染共享表定义，不破坏普通写入默认值或 prepared plan 的 schema 校验。
+
+## 兼容、交付与验证
+
+- 所有新函数 ID 追加，既有 ID 不重排。无 wire/catalog 格式变更，不新增 MORPCVersion、capability gate 或迁移步骤；MO 使用全停机升级。
+- 不新增权限、跨租户或外部网络路径；SQL 文本只解析，错误不应暴露输入中其他行的敏感数据。
+- parser 生成物与 token 兼容表由各自生成器维护，不手改状态表；兼容表升级必须同时更新来源版本与独立 oracle。merge后的生成文件mtime可能更新而仍含冲突，必须强制运行生成目标并检查实际编译、零conflict/错误/冲突标记及重复cmp，不能只相信make up-to-date。
+- MO函数注册ID与MySQL摘要token编号是不同域。保留上游VECTOR_MATMUL/VECBLOCK_JSON/VECBLOCK_BINARY/UNZIP_FILE的629/630/631/632；本未发布功能的STATEMENT_DIGEST/STATEMENT_DIGEST_TEXT使用633/634，FUNCTION_END_NUMBER为635，所有消费者按符号引用，固定注册ID测试同步验证。不得挪动上游已分配编号来解决分支碰撞。
+- UT：parser/typed AST、兼容 token/hash/text、非法输入/预算/取消、NULL/selection/常量与列向量、DEFAULT 来源/错误和真实 binder 消费者。
+- BVT：用本任务服务和隔离 mo-tester workspace，独立运行新增/扩展 case；生成结果后逐项对照 MySQL，正常比较两次并验证资源清理。SQL 注释不写 issue 号。
+- 证据顺序：聚焦回归 → 所有者包/直接消费者 → 增量 gofmt/vet/lint → 服务构建/BVT。只有可达并发/持久化/分布式风险才增加 race/重启/多 CN 证据。大输入成本用专门 benchmark 或最小预算边界，不把普通 BVT 变成负载测试。
+- 最终自审必须读取完整变更地图，关闭全部语义与证据阻塞项，确认修改代码覆盖率至少 75%。TODO、原始参考源码、临时工具、日志和证明叙述不提交；本设计及维护性回归 fixture 可以交付。
+
+## 设计决策记录
+
+- 相同 UNION 分支的 DISTINCT 折叠属于优化，不是 SQL 类型默认值边界的删除。折叠前捕获 provenance，保留 UNION 的三态时间可空性、纯 NULL 与整数精度；内部 grouping-set 的共享输入 UNION 保留原投影的整数精度身份，物化字段不套用户 UNION 的默认值策略。
+- HAVING 的 DEFAULT 虽不依赖行值，仍受 HAVING 可见列约束：已声明的源分组列优先于同名 SELECT 别名，其次匹配输出别名和直接投影列；不因表达式或聚合引用了底层列就授予可见性。分组列可见性使用 GroupBinder 在降低前保存的 query-local 源列声明索引（关系 tag/列位置），只移除 AST 中括号/一元加号，不将 CAST、负号或算术视为透明；GROUP BY ordinal/alias 先由原分组解析器选定投影再记录。该索引不改变行值/函数依赖，只供 DEFAULT 元数据可见性使用；物理分组键改写不会删除 SQL 声明身份，子查询不继承，窗口校验克隆独立复制。它不使用仅表示小计分支函数依赖的 active grouping 位图，因此 ROLLUP/CUBE 的非活跃声明列仍能读取元数据。复用 HavingBinder 所有的名称/列身份索引，不创建伪造行引用或聚合；聚合参数及外层相关列仍使用各自原有作用域。
+- 系统变量的 scoped name 按词法引号域编码：反引号和 ANSI_QUOTES 双引号为标识符，普通单/双引号字符串为占位符；无 scope 的字符串语法拒绝，不把它伪装成注册表存在性校验。
+- 普通列的裸 CURRENT_TIMESTAMP/NOW/LOCALTIME/LOCALTIMESTAMP 默认值和 ON UPDATE 只用于 TIMESTAMP/DATETIME，显式/省略小数秒精度须与列声明相等且处于 0..6；其他函数、裸算术与表达式须使用 MySQL 的括号默认值语法，不能按裸时间默认值处理。括号表达式默认值仍允许其他目标类型和不同精度。digest-only lexer 允许 ON UPDATE NOW(fsp)，不扩展普通 MO 执行语法。
+- DEFAULT 的单个尾部 COLLATE 属于列属性，即使表达式 parser 把它附着在 literal、带符号数值或原生时间默认值的 AST 上，也须按原默认值语法域校验；重复尾部 COLLATE 拒绝。其对 NULL/default 与 AUTO_INCREMENT 的属性顺序校验不能丢失。显式列 COLLATE 的唯一性跨 AttributeCollate、DEFAULT 尾部和带符号 literal 的 CollateExpr 统一记录；括号表达式内的 COLLATE 不计作列属性。
+- 列定义中的 DEFAULT/生成列表达式拒绝用户/系统变量、赋值及子查询；字符串或列标识符中的 @ 不算变量。复用 formatter 收集列定义 itemization 上下文的语法事实，避免调用未完成的 VarExpr/Subquery.Accept；快照与 AST 同寿命，不缓存，不执行表达式。窗口函数的实参与外侧表达式仍属该上下文，窗口 specification 的 PARTITION/ORDER/frame 属于后续查询阶段，不在这里拒绝变量、子查询或函数；只关闭列观察者，不关闭参数/CASE 等其他观察者。普通格式化输出不变。
+- 内建函数限制按 MySQL value-generator 预校验分为 DEFAULT/生成列共同禁止与仅生成列禁止两组，而非四个时间函数名或运行期非确定性黑名单。覆盖当前日期/时间别名、UTC、UNIX_TIMESTAMP、会话身份/状态、锁、UUID/RAND 和摘要函数等已支持语法；MATCH 也属于共同禁止项。UNIX_TIMESTAMP 带参数仍禁止用于生成列；SYSDATE、RANDOM_BYTES 在摘要解析阶段允许，不能按执行期策略误拒绝。不引入任意 UDF/目录函数注册表。
+- ALTER COLUMN SET DEFAULT 与列定义不是相同上下文：它严格采用 literal、单个符号 numeric literal 或括号表达式语法，裸算术/位运算/NOT/函数/尾部 COLLATE 均拒绝；括号体在 MySQL 摘要解析阶段仍允许变量/子查询，不能套用列定义禁令。子查询自带括号不算外层表达式分组，使用 parser 保留的 ParenSelect 层级区别，且所属 Select 查询层必须整体为透明 wrapper：不能携带 ORDER BY/LIMIT、WITH、锁、导出/INTO 或其他查询选项；不能只看 Select 子节点的括号。不扫描 SQL 文本猜测。裸或仅被多层括号/透明 unary + 包裹的 DATE/TIME/TIMESTAMP 时间 literal 在 SET DEFAULT 中仍拒绝；CAST/函数/运算表达式、SELECT 与列定义的合法时间 literal 不套此禁令。保留正负对照，不执行 ALTER 或推断现有列类型。
+- NAME_CONST 属于列定义 DEFAULT/生成列共同禁止项；普通 SELECT、ALTER SET DEFAULT 括号体及延迟窗口 specification 仍按各自解析域准入。
+- CURRENT_ROLE 在 digest-only lexer 中未调用时为 identifier，调用时沿用零参数函数语法（空白/注释不改变该身份），因此生成列 AS(CURRENT_ROLE) 与 AS(CURRENT_ROLE()) 必须区分；不改变普通 MO 执行 parser。
+- 为保留查询层的真实分组，支持 WITH + parenthesized query 及 parenthesized query 后直接锁子句；INTO 约束须在真实包装上下文检查变量和 OUTFILE 的原始位置，不能只依赖复制后的 IntoVars/Ep/DeprecatedInto。FROM 前的 SELECT-clause INTO 保留，FROM 后的 suffix 在 WITH/ORDER/LIMIT/锁包装以及集合末项括号中拒绝；没有包装选项的裸顶层括号查询不误套该规则。变量、导出、原始位置和 deprecated 提示在同一次后序收集中返回：每个查询节点只访问一次，不能在每层 UNION 再扫描右子树。deprecated 仅表示提示，不是非法位置；合法 UNION INTO 仍准入。语法逐层归约本身仍可导致嵌套输入的二次总工作，不宣称整个 parser 线性，但不能叠加为三次方；使用分档 parser/digest benchmark 验证时间与分配。
+- 同一查询块的重复锁不能静默丢掉外层策略。lexer 记录锁子句数，多个锁时在最终 parser 边界按完整 WITH 作用域验证；括号链共享查询块，集合查询末项继续继承外层锁，前项与真正派生/CTE/标量查询各自独立；EXPLAIN（含 ANALYZE）按 MySQL 不应用锁上下文化。仅直接基表目标重复时拒绝，常量、未加引号且非限定/别名形式的虚拟 DUAL、derived/CTE 引用没有直接目标时保留 MySQL 准入。引号身份从 lexer token 经 CStr 到 TableName 保留，digest 的 QUOTE_ID→ID 适配不能抹去该事实。SELECT 与 UPDATE/DELETE 的真实查询各自拥有调用局部作用域帧，同一 query-expression 的括号/集合操作数共享该帧，后继 WITH 替换本层绑定并对后续操作数和 body 之后的 ORDER BY 生效；真正内层查询另建帧，不修改父作用域。CTE 名称唯一性属于声明语法：摘要不经过 binder，因此每个完整 WITH 列表在 digest grammar 构造时保留原始名称，使用 MySQL identifier case table 做一次线性唯一性检查，不能先用Go现代Unicode lower合并 `ẞ/ß` 等合法不同名称；声明校验与引用期锁作用域必须使用同一名称key；独立对照使用 `lower_case_table_names=2`，不新增其他配置的名称策略兼容承诺。普通解析仍传原来的 strings.ToLower 策略，不扩大为新的运行期collation引擎；普通 SQL 保留既有 binder 的重复名称错误与拒绝前零权限/目录探测契约。零/单元素无额外 map；无锁、EXPLAIN、未引用的内层定义仍不能含同层重名，真正嵌套/后继 WITH 不共享唯一性集合。CTE 定义中的锁只有被引用时才在其定义作用域及可见前缀内校验，未引用定义不做锁上下文化；递归引用与重复引用通过本次调用内的定义访问标记终止，不指数展开。括号和集合末项链迭代、尾部表达式按 body 后的生效顺序访问；不克隆累计环境、不持久化状态、不查目录。
+- digest 模式在实际 subquery 产生式调用已有 INTO/EXPORT 查询上下文遍历，拒绝子查询内部导出/assignment，覆盖 ALTER DEFAULT、列定义和延迟窗口 specification；合法顶层 export 仍仅作为 SQL 数据归一化。该检查不依赖关闭的列观察者，不执行 IO，也不改变普通 MO SET 的已有导出诊断路径。
+- 摘要的裸 DUAL 是 MySQL 保留 token，只能作为完整 FROM 子句，不是可带别名/索引提示/括号/连接的普通表因子，也不能作为裸别名或列名。digest-only token 与专用 grammar 产生式闭合全部语法位置；引号标识符、点号限定名保留真实标识符语义：任意单词仅在紧邻点号且点后紧邻未加引号 identifier 字符时跳过 keyword 查找（含数字、BMP 字符、下划线和美元符号），不能因点后是 `*`、引号、空白或注释就降为 identifier；从前一个点号进入的限定组件则已经是 identifier，故 db.dual.* 与 dual.* 不同。该判定由共同 scanner 在 keyword/BEGIN/function 前瞻之前所有，不再是 DUAL 的词名特判；固定 token-local 的 qualifiedIdentifier 事实供摘要编码使用。实际保留词不能因 MO 更宽松的名称语法，在空白/注释之后重新成为点号前缀或后缀；保留身份从对应版本 grammar 生成。非保留 SOUNDS 仍与真正限定的 `sounds.a` 采用不同 token 编码；IGNORE_SPACE 的函数名按真实调用前瞻处理，不把未调用的 `sum.a`/`sum.*` 误当保留函数。SQL和hint的关键字查找只按ASCII名字，不用Unicode uppercase把 `ıf` 变成 IF。原始token只移除scanner认可的ASCII空白，不能用TrimSpace删除属于identifier字节的NBSP等Unicode字符，再把名称变成关键字。数字开头组件由 digest scanner 的单 token pending-dot 状态避免误分为小数，ScanAfterDot 仅在直接相邻时接收数字 identifier，普通数字 literal 不变；quoted 前缀不启用此状态。状态逐 token 消费且在 setSql/PutScanner 的共同 reset 清除。普通 MO 执行 parser 的原有标识符语法不变。新增的限定身份、前一保留词事实也在共同reset清除，注释不能错误清掉前一保留词身份。
+- 表/数据库名称的上下文化校验独立于展示：物理名称最多64字符，拒绝真实空名称及ASCII空白结尾，不能将64字节显示预算当作字符限制。lexer只记录可能非法的名称，完整语句边界再与锁检查共享作用域遍历；除CREATE/ALTER VIEW需检查其查询内的字符串别名外，没有候选且不足两个锁时不增加AST遍历。CTE仅在被引用时按定义作用域展开一次；未引用定义、普通表达式的长列引用/别名、无FROM的内部空表节点不误拒绝。EXPLAIN只关闭锁检查，仍校验被itemize的名称；DELETE多表目标是别名，只校验其显式数据库；inline REFERENCES忽略名称而真正FOREIGN KEY校验；SHOW COLUMNS/INDEX的末尾FROM数据库覆盖原限定。覆盖SELECT、CTE、EXPLAIN、DML与已支持DDL入口，不做目录查询，不改变普通执行parser的名称准入。未知系统变量等服务器注册表边界依旧不在纯解析保证内。
+- 非保留限定组件需要桥接MO与MySQL的identifier grammar：如`END`在空白/注释后的点号组件可进入MO的ID语法，但保留keyword编码，不能误标为词法上的qualifiedIdentifier。紧邻组件、保留词和普通CASE END控制分别保留。前瞻复用同一lexer并带已有follower递归保护，必须识别可执行注释中的真实下个token，不能把`/*! +t */ .a`当普通注释跳过后误将CASE的END变为名称；预算仍由共享control计费。保留词事实通过固定MySQL grammar的ident_keyword闭包生成；本次从旧标签提取改为grammar提取没有改变既有token编号、function或reserved数据，实际缺陷位于语法桥接而非END元数据。
+- 列定义、view列名和SHOW数据库各自拥有不同校验边界：CREATE/ALTER ADD/MODIFY/CHANGE的新列定义只接受未限定的名称，最多64字符，但空名/空白结尾属于更晚的执行校验；CHANGE旧名、DROP/RENAME目标不套新列定义限制。CREATE/ALTER VIEW显式列列表拒绝空名/ASCII空白结尾/超过64字符；其查询内的SELECT显式别名（包括字符串别名和嵌套查询）在itemization时采用同样限制，未引用CTE仍不提前展开，CTE/derived自身列列表不是view列列表。复用现有作用域遍历及CStr的引用身份区分缺省别名与显式空别名，不改普通执行parser的准入。字符串别名中的NUL按MySQL列名C字符串前缀校验，不能套SQL quoted identifier的NUL拒绝，也不能把NUL后的字节计入该列名限制。与这个itemization检查不同，所有SELECT字符串别名先按TEXT_STRING_validated进行无损utf8mb4→系统utf8mb3验证，四字节字符（包括NUL之后的字符）会失败，未引用CTE也不能跳过语法阶段验证；普通字符串值与quoted identifier仍采用各自语义。别名不接受字符集/国家字符串引导符。digest中scanner/lexer折叠_utf8mb4/N字符串时保留独立DIGEST_INTRODUCED_STRING token，仅由literal接收；不能再折叠为普通STRING、再逐个文本消费者猜测来源。该token和普通STRING均在独立编码扫描按同一原生字面量规则编码，且字面量内容不参与保留词查找。折叠_utf8mb4 HEX保留DIGEST_INTRODUCED_HEX，表达式/MATCH维持原文本lowering与字节编码，json_text_literal只接收真正STRING/N/charset STRING，不能因HEX已解码成相同文本而准许其进入JSON_VALUE路径。普通执行parser不发出该token，原准入保持不变。
+- SHOW TABLES（不含OPEN）、TABLE STATUS、TRIGGERS、EVENTS及COLUMNS/INDEX的显式FROM数据库检查名称；SHOW OPEN TABLES及SHOW CREATE DATABASE不在相同解析阶段检查。语法语义值保留“省略/显式空数据库”的区别，不能只用空字符串代表二者。SQL quoted名称中的NUL在digest词法域拒绝，不污染普通SQL或hint的独立词法域。
+- SHOW TABLE STATUS/TRIGGERS/EVENTS共享数据库子句语法归约：FROM/IN和数据库名必须同时出现或同时省略，随后才进行既有数据库名称校验。存在性分别来自两个可选产生式，不能用空字符串值判断；该配对约束仅用于digest，普通执行parser的准入保持不变。
+- 固定MySQL保留词事实同样约束裸名称：MO的not_keyword/non_reserved_keyword归约不能让INTEGER等原生保留词成为普通标识符。真正紧邻点号的词法限定名、quoted名称、原生类型和函数产生式不套裸名称禁令；AS后的MO宽松别名适配也不得绕过检查。DUAL仍由自己的完整FROM语法消费。DEC/FLOAT4/FLOAT8/MIDDLEINT/VARCHARACTER通过共享MySQL token身份选择已有类型grammar所有者，不能把digest展示拼写（它本身也可能是别名）当作MO token名。FLOAT4/FLOAT8即使已有MO低精度专用token，在digest中仍分别走MySQL的FLOAT_TYPE/DOUBLE；普通执行保留原专用token及低精度语义，不能让两种方言互相覆盖。VARCHAR/VARBINARY声明保留必需长度；FLOAT(p)仅允许0..53的二进制精度；FLOAT/DOUBLE/REAL(M,D)采用M≤255、D≤30、M≥D及非零M的十进制展示约束；REAL_AS_FLOAT也不放宽REAL声明限制。所有浮点类型产生式共享digest-only检查，普通执行parser保留原有限制/诊断。DOUBLE/REAL不接受单精度参数（DOUBLE PRECISION相同），DECIMAL/NUMERIC的显式零精度不与缺省宽度哨兵混淆。整数声明显示宽度最多255，按length_opt保存的原始数值验证，不能使用把显式0映射后的默认宽度；BOOL不带长度和数值修饰，BIT不带数值修饰，YEAR只带省略/4的长度。numericModifiers事实区分显式SIGNED与无修饰（两者Unsigned值均为false），在column_type组合SIGNED/UNSIGNED/ZEROFILL并由CAST拒绝；独立SIGNED/UNSIGNED CAST目标与合法DDL修饰保持可用。YEAR字段修饰和CREATE USER省略鉴权仅在digest允许，普通parser仍拒绝原本不支持的形式。CREATE USER的普通authentication检查归每个create_user_spec归约所有，不能推迟到整条CREATE USER后才拒绝，必须保留首个不完整用户的原错误位置。额外语法事实位于本次yacc语义栈，非池化scanner或持久AST状态；布尔事实集中排列，避免额外语义栈padding。
+- 表别名必须使用identifier，不能沿用SELECT字符串别名规则。共享table_alias产生式也供ENGINE=消费，后者允许STRING；因此table_alias只在yacc临时stringTableAlias事实中保存来源，由真正别名消费者as_opt_id拒绝STRING，不能全局拒绝共享归约。普通MO parser保留原准入。ANSI_QUOTES改变双引号的词法角色，不改变单引号。
+- UTF8字符集引导的HEX字符串必须校验解码后的内容：相邻_utf8mb4由既有scanner解码路径验证；跨注释或_utf8/utf8mb3由literal产生式按引导符验证。后者还拒绝四字节字符；_binary/latin1与无引导HEX保留不同的字节域。折叠的引导字符串不进入ENGINE、COMMENT、认证文本等STRING-only产生式；SELECT/INSERT/UPDATE/DEFAULT/SET中的表达式字面量仍由literal接收。该来源身份在可执行注释内由scanner保留，不依赖父scanner的原文前缀猜测。无目录查询、无新全局状态；普通parser不增加这些检查。
+- DDL列定义的CHAR/CHARACTER/NCHAR长度不超过255字符、BINARY宽度不超过255字节；BIT显式长度为1..64，省略不等于显式0。原length_opt/length的展示宽度可能把0映射为默认值，因此yacc语义栈保留原始typeLength（空产生式-1）供BIT检查，不在持久AST或池状态加字段。DECIMAL/NUMERIC/DEC的小数位上限30在共同decimal_length_opt归约检查，精度65及M≥D规则继续沿用。
+- CAST/CONVERT支持POINT、LINESTRING、POLYGON、MULTIPOINT、MULTILINESTRING、MULTIPOLYGON、GEOMETRYCOLLECTION七种空间目标（含GEOMCOLLECTION原生同token别名），泛型GEOMETRY不属于CAST目标；CONVERT的空间产生式仅digest开放，普通parser准入不变。MO专属GEOGRAPHY/32声明不能利用归一化的GEOMETRY FamilyString冒充原生MySQL类型，spatial_type在构造前核对固定MySQL词表。MO未收录的GEOMCOLLECTION别名保留ID词法角色，只在类型产生式按固定原生token身份桥接到规范GEOMETRYCOLLECTION类型，不全局改变其函数/名称语法或准许任意ID类型；非法ID类型仍使用普通syntax error，避免将digest内部空间类型诊断泄漏到普通CAST消费者。CAST/CONVERT重用类型构造但不重用DDL准入：浮点目标只允许无参数或FLOAT单参数形式，不接受(M,D)；NUMERIC、BIT、VARCHAR等不是MySQL CAST目标，YEAR也不带长度。CHAR/BINARY在CAST中不套DDL的255限制。共同digestCastTypeValid在mo_cast_type改写无长度CHAR之前验证，CONVERT的decimal_type入口同样消费；其TIME/DATETIME独立产生式也检查0..6精度，TIME使用原始typeLength而非把显式0映射后的DisplayWith作为判据。有符号目标仍由独立产生式构造。CHARACTER只在digest词法适配并保留CHARACTER SET角色；NCHAR与NATIONAL CHAR由类型产生式所有，不能全局折叠成CHAR使SELECT NCHAR(1)/NATIONAL CHAR(1)误成为函数。digest-only NATIONAL token也可按非保留词作为普通名字，但不进入ID泛型函数产生式；类型上下文后接CHAR时采用显式shift优先级，生成零冲突。独立编码扫描不改原生token身份。
+- SHOW LIKE模式只接受一个普通STRING token，不接受数字、NULL、函数、子查询、括号表达式、字符集引导或后缀运算。Lexer复用现有语法深度/记录器，在根SHOW且顶层WHERE之前派发DIGEST_SHOW_LIKE，专用产生式只消费STRING；WHERE表达式内（含子查询）的LIKE仍是正常比较运算。根SHOW/WHERE布尔量在setScanner与分号边界重置，原普通LIKE/ILIKE解析准入不变，digest不接受SHOW ILIKE。SHOW根节点的LIKE/WHERE至多一个；CHARSET/TRIGGERS/EVENTS等支持单一过滤，ENGINES/PLUGINS/PRIVILEGES/PROFILES不接受过滤，MO专有CONFIG不属于MySQL语法。共同纯检查只检查根SHOW AST字段，不统计过滤子查询的WHERE或LIKE表达式。LOCAL在SHOW STATUS/VARIABLES中是SESSION同义词，仅digest加入该准入。
+- MATCH AGAINST的文本参数与ENGINE/COMMENT的STRING-only域不同。text_literal统一STRING、折叠引导字符串及非折叠charset STRING/HEX的AST构造，由literal与search_pattern共享；普通parser的AGAINST仅保留原P_char准入。digest不套执行侧空查询串禁令，但保留原非空列语法；不执行检索或查目录。
+- INTERVAL value unit不是独立表达式。digest-only DIGEST_INTERVAL进入原生语法：bit_expr加/减interval、前置interval加完整expression、DATE_ADD/DATE_SUB/ADDDATE/SUBDATE的interval参数、window frame及独立INTERVAL(...)函数。ADDDATE/SUBDATE的native普通参数形式同样固定两参数，INTERVAL参数形式由前参列表恰好1个保证总两参；quoted、未启用IGNORE_SPACE的空白、跨注释等generic-call角色不套native名字的参数禁令。不能从MO已降低的FuncExpr父节点猜合法性，也不能用同名函数代替语法身份。普通INTERVAL token保留MO原准入；新增token仅由Lexer派发，独立编码scanner不改变native token。完整表达式引入的比较/LIKE ESCAPE/简单表达式后缀歧义按原生优先级显式归约；复用现有优先级而非扩展goyacc packed等级或放宽冲突门禁，保留PIPES_AS_CONCAT正控。
+- native特殊函数的参数形状由原生grammar所有，在未引用CTE中也不能跳过：CURDATE/USER/DATABASE等固定零参，SUBSTRING/SUBSTR/MID固定二或三参，INSERT四参、IF三参、COALESCE非空等，普通MO宽松产生式仅在digest附加该约束。NOW及datetime_scale要求原生NUM（非负32位整数字面量），不是任意expression，也不把运行时FSP 0..6限制搬到摘要；NOW(7)仍可digest。LOG/空间构造器/WEIGHT_STRING的非保留原生名字在MO的ID调用域校验，quoted调用保持generic身份；空间type token仅在调用位置适配ID，不改变CAST/DDL类型所有者。JSON_VALUE采用digest-only非保留token及simple_expr/json_text_literal路径grammar，拒绝二元运算第一参（括号包裹则合法）、非文本路径和HEX路径，quoted/qualified名字仍属generic；未新增RETURNING/ON EMPTY等既有未支持grammar。独立编码scanner不消费这些parser适配token。
+- native聚合的参数列表/量词是grammar限制，不是factory数量检查。COUNT非DISTINCT只允许一个expression（tuple是单个expression），DISTINCT/DISTINCTROW接受非空多参；COUNT(*)与COUNT(ALL *)由独立star量词产生式消费，不能接受DISTINCT *。BIT_AND/OR/XOR、STD/STDDEV族、VARIANCE/VAR_POP/SAMP、JSON_ARRAYAGG/OBJECTAGG不接受DISTINCT；GROUP_CONCAT只接受省略/DISTINCT、不接受ALL；GROUPING不接受量词或OVER。这些错误即使在unused CTE也拒绝，不能改成后置FuncExpr全局名字校验。
+- 量词复用已有FuncType的DEFAULT/ALL/DISTINCT区别，无新AST/池字段。原生in_sum_expr允许AVG/MIN/MAX/SUM的DISTINCT ALL及JSON_OBJECTAGG第二参数的ALL，通过独立窄产生式保持合法正控；新增形式仅digest开放，普通MO原准入/拒绝保持。不能把执行阶段对窗口DISTINCT的支持限制搬进digest，COUNT(DISTINCT 1,2) OVER()仍可解析/摘要。
+- digest的函数名空白/注释规则复用固定原生SYM_FN事实（含JSON_ARRAYAGG/OBJECTAGG），不依赖不同覆盖范围的普通MO函数名registry。IGNORE_SPACE只跨空白、不跨注释，quoted/限定名字不冒充native聚合；DISTINCTROW按共享原生token身份适配DISTINCT，原始编码拼写不变，普通MO词法不变。
+- 窗口参数采用原生grammar而非对降低AST做表达式白名单猜测：NTILE参数和LEAD/LAG offset是stable_integer（0..UINT64_MAX的无符号整数字面量、参数标记、用户变量或SP局部ident），不能接受运算/括号/符号/NULL/浮点/system变量；NTH_VALUE第二参数是simple_expr，括号可包裹完整expression，不能直接接二元运算。LEAD/LAG首参和default、FIRST/LAST_VALUE仍接完整expression。六个digest-only token把原生窗口生产式与普通MO宽松expression语法隔离；integral_literal仅复用原数值构造，无新AST/池化状态。
+- stable_integer裸ident表示SP局部变量而非行列。在当前无SP上下文的digest，调用节点登记到已有invalidExpressions集合，在reference-time itemization才拒绝；unused CTE及shadow保持合法，NTH_VALUE的simple_expr列名不套该规则。原始参数标记仍由既有独立编码扫描的非prepared输入门禁拒绝，不因unused CTE绕过。不能把NTILE正数/范围/运行时可用性限制搬进parser，0和UINT64_MAX可digest。
+- IGNORE/RESPECT NULLS、NTH_VALUE FROM FIRST/LAST在专用digest窗口grammar接收，普通MO原准入及错误位置保持。执行不支持某选项不等于其不可生成digest；这些语义值不持久化，原始token仍由独立scanner编码，quoted/generic名字不会得到native窗口参数权限。
+- generic native function factory的参数数目/奇偶不是grammar限制。digest_functions_gen.py从SHA固定的MySQL8.4.11 item_create.cc提取286个release公共factory的Min/Max/奇偶，按边界分组产生纯switch事实表；内部系统视图factory与NDEBUG调试函数不纳入，不引入运行时目录/函数签名依赖。函数名仅ASCII折叠，与原生逐字节toupper相同，不能把MAKE_SET等Unicode近似名当作MAKE_SET；未知/quoted非注册名不套MO执行函数签名。坏参数节点只加入本次parse候选集合，由既有引用式作用域在itemization拒绝；ABS()/CONCAT()/CURRENT_ROLE(1)在未引用CTE中仍合法，引用、derived、view、EXPLAIN不可跳过。quoted原生注册名仍走factory，quoted特殊grammar名不冒充native production。
+- DATE/TIME/TIMESTAMP typed literal在itemization检查原生日期/时间字段及类型身份；运行时DATE()/TIME()/TIMESTAMP()/CAST不套该规则。私有digestTemporalMode捕获NO_ZERO_DATE、NO_ZERO_IN_DATE、ALLOW_INVALID_DATES/TRADITIONAL，不扩展持久SQLModeFlags。解析支持原生紧凑/分隔格式、两位年、模糊零日期、闰年（原生year=0非闰）、TIME扩展小时/日期段及原生unsigned累加再检查语义、秒后必须有小数点的fraction、微秒与纳秒舍入溢出、固定offset范围；conversion警告导致失败而非把结果当有效。沿用budget，按字节预付额外检查工作。
+- 无效时间literal与无效factory参数共享本次解析的invalidExpressions指针集合，不维护第二套作用域或扫描：复用既有引用式CTE/名称/锁作用域遍历，在被itemize时通过表达式回调拒绝。未引用CTE内的无效literal不提前失败，引用、derived、view和EXPLAIN不能跳过；没有候选不增加walk。回调仅本次语法数据，无全局cache/目录查询/执行副作用；错误仍归原parser清理所有者，普通parser回调为nil。
+- 生成 parser 必须零冲突且可复现。
+- 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
+- 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。
+- DDL专用附加AST检查只遍历DEFAULT/生成属性；SELECT表达式候选复用已有作用域walk，无候选不新增walk。函数名查表最多一次ASCII折叠，固定switch无可变全局cache；候选集合仅保存本次parse的坏FuncExpr，数量受65536 token约束，与时间literal共用同一集合/失败清理所有者。无会话、目录IO、新goroutine或持久AST状态，不声称语法检查零成本或全局性能提升。
+- 列级 REFERENCES 的准入依赖 AST 所在 DDL 上下文：CREATE/ADD 可接受，MODIFY/CHANGE 拒绝；表级 FOREIGN KEY 不套此限制，不解析引用表或执行建表校验。
+- CREATE 和 ALTER ADD/MODIFY/CHANGE 共用列属性上下文化规则；生成列拒绝 DEFAULT（包括裸 NULL）、AUTO_INCREMENT、ON UPDATE、COLUMN_FORMAT 和 STORAGE；COMMENT、NULL/NOT NULL、索引/字符属性及普通列上的属性通过独立控制组保留，不按建表执行期的键约束误拒绝其他合法摘要。
+- 可执行注释在digestMode中按普通SQL字符串规则扫描，不沿用MO普通解析对注释内单引号的特殊跳过/拼接规则。上游普通执行lexer以80030比较完整数字串；digest以MySQL8.4.11的80411为目标，五位版本号为默认，第六位为数字且随后为空白时消费六位，不足五位的数字留作SQL。二者分别保留其版本准入契约，工作预算仍由原scanner所有。
+- hint尺寸后缀区分大小写：大写K/M/G后没有ASCII名称/数字延续时结束数值（`1K名`是数值加名称），小写或ASCII延续仍是名称。小数点后没有数字或紧接名称时丢弃非法前缀，不产生虚假数值token；词法错误后继续恢复扫描，不能丢掉后续有效项。所有text/hash控制组来自独立MySQL oracle。
+
+- 一元 `+` 的列默认值引用须在投影 AST 边界保留，包括嵌套括号、派生表物化、HAVING/ORDER BY 别名。MO 的数值降低可能改变行值类型，因此使用既有 provenance 中单独的 `ColumnDefaultSource`，只供 DEFAULT 命名空间读取，不伪造通用透明来源或扩大 CTAS 默认值继承；它复用不可变来源快照，无新的持久状态。负号、显式 CAST 和算术表达式仍不是来源列。
+- 字符集引入符必须来自非限定 ID token，不能由普通字符串内容或限定标识符触发；国别字符串只认紧邻的单引号。数字前缀标识符保留原始大小写，已完成的 SQL 指数数值与后续别名分开；这些兼容分支只在 digestMode 生效。
+- hint 数字域独立于 SQL：`1e2`、`1abc` 是名称，`16K` 是尺寸数值。第一项有效 token 到来时才写 hint 开始标记，避免空白、被跳过的点或首项词法错误产生虚假的空 hint；满额前缀仍不可变。
+- CREATE TABLE 只模拟列属性上下文化，不执行表定义校验：内联 PRIMARY KEY 按属性顺序设置非空，表级 PRIMARY KEY 不在此阶段应用；AUTO_INCREMENT 拒绝非裸 NULL 的显式默认值。有效控制组与拒绝样本均来自独立 MySQL 返回值，不能按最终建表合法性扩大拒绝范围。
+
+- 兼容基准为 MySQL 8.4 逐字节一致的摘要，不使用近似或自定义哈希。
+- 已评审：共用规范化流、现有 parser/scanner、正常列命名空间及已有来源快照，优于新引擎/远程查询/重复状态。
+- 实现过程中发现的语义差异必须先补充 oracle 与本设计；不会以关闭测试、放宽断言或隐藏已知差异通过验收。
+- 实际服务对照发现：显式 DATE/TIME CAST 的派生列默认值为 NULL，但 DATE/TIME 类型字面量和 CURRENT_DATE/CURRENT_TIME 的默认值为零时间；不能粗暴把全部时间类型判成 NULL。来源信息应在投影 AST 尚未被常量折叠/恒等 CAST 消除时捕获，并通过既有 provenance 传递。
+- 实际服务对照发现：多赋值 UPDATE 会创建顺序行映像的临时 Binding，若只维护值类型而没有原始列来源，DEFAULT(a) 会误报无默认值。物理表和顺序 UPDATE 的 Binding 共用同一个来源初始化入口；当前行值可以变化，原始默认值元数据不随赋值变化。
+- ENUM/SET UPDATE 不在没有列作用域的临时 DefaultBinder 中预先绑定 RHS；删除重复 AST 转换，统一由既有 normalizeUpdateAssignment 在真实 RHS 绑定完成后转换。
+- DEFAULT 的输出字段声明与“透明行值来源”不同：CTAS 需要保留 ENUM/SET 定义，并为非空输出构造类型默认值（整数 0、字符串空串、ENUM 首成员、SET 空集）；但合并派生表达式 DEFAULT(DEFAULT 的别名) 仍须拒绝。通过既有输出 provenance 的结果类型及 CTASDefaultPolicy 表达，不伪造 SourceColumn。物化 ENUM 临时字段的 DEFAULT 为索引零/空串，不能误用 CTAS 的首成员默认值。
+- Prepare 的内部重新规划可能重复 binder。DEFAULT 的 strict 判定须随解析 AST 捕获，复用既有 prepared schedulingSQLMode 的克隆解析快照，而非每次重绑读取实时会话；DIGEST 仍明确读取执行期模式。无需新增前端 prepare 状态或 wire 字段。
+- 时间字面量与同名转换函数必须在 AST 中保留区别，并在 view 格式化/重新解析后仍然保留；临时输出字段使用三态可空性来源（继承、可空、非空），不能从已折叠的值倒推声明属性。
+- ROLLUP/CUBE 内部 UNION 的物化输出使用普通临时字段默认值，不得引入只属于用户 SQL UNION 的 strict 时间错误。仍按全部分支的真实 nullability 区分日期常量（零日期）、CAST（NULL）和实际分组列的小计 NULL。
+- UNION 临时字段与普通无 FROM 派生字段还需保留来源种类：strict 模式下非空 DATE/DATETIME/TIMESTAMP 的 UNION 输出没有隐式默认值，报 1364；TIME/数值、可空转换结果不受影响。MySQL 将这条规则固定在 PREPARE/bind 时，后续仅切换 strict 模式不会改写已准备的默认值；不为此改变 prepare 的 SQL-mode 缓存协议。
+- 独立 oracle 确认 HAVING 的 SELECT 别名优先于同名的未分组物理列；已声明的同名源分组列优先于别名。ORDER BY 表达式中的列优先于别名；相关作用域允许在内层同名表无该列时继续解析外层。元数据解析必须分别保持这些命名空间规则。
+- hint有独立词法域：`?`是标点而非参数，复合运算符按单字符编码，`--`/`#`不开始行注释，字符串前的N/字符集/X保留为名称。unquoted名称允许重复`$`和有效utf8mb4；quoted名称采用双写引号转义，反斜线不是转义，无双写引号时转换到系统utf8mb3再存储，四字节字符变成`?`；发生双写引号时，MySQL的compaction从原始client字节重建，覆盖先前转换结果，因此存储的是去除重复引号后的原始utf8mb4字节，显示仍可能整项失败。通过消耗的原始长度与去转义长度判断该分支，不额外扫描/分配或按QB_NAME特判。unquoted名称同样保留原始HASH字节、显示时整项转换失败。ASCII空格、tab、CR/LF、VT/FF都是hint空白，Unicode空白仍是名称字节。`@`只在左括号后或紧邻名称后引出query-block名称；IdentifierAt身份在扫描名称时决定，非法后续名称不改已经保留的前缀。复用scanner前进/预算/引号原语，但不进入SQL identifier、function、BEGIN或限定名分派，不增加池化scanner状态。
+- 摘要达到 1024 字节后进入不可变状态：追加和归约均不得修改已保存前缀；仍扫描后缀以拒绝参数占位符。长前缀后接字符集引入符或 hint 的独立 oracle 反例已加入 fixture。
+- 摘要返回类型为可空 VARCHAR(64)/LONGTEXT，字符域复用 MO 已支持的显式 utf8mb4_general_ci 标识（与既有文本函数一致）；本任务不新增 MySQL utf8mb4_0900_ai_ci 的排序引擎。文本及 hash 的内容兼容不依赖这一现有元数据边界。
+- 所有有预算的 scanner 工作均由公开 ParseWithSQLMode 边界所有，包含可选摘要归一化扫描。内部私有 context 请求携带语法事实/有界输出，公开签名不变，无通用 callback。只在已批准的解析入口捕获本 control 的 parseAbort；StatementDigest/私有 wrapper 不再独立 recover，其他 panic 原样传播。两遍共用 control 身份但重置 token/work 计数，预算独立；AST 成功才移交调用方，否则由解析入口唯一释放，两个 scanner 均立即注册归还。注释-only EmptyStmt 的既有摘要行为保留。
+- 摘要解析的资源预算固定为每个参数最多 1 MiB 输入、65536 个 parser token 和 8 MiB scanner 工作量（语法校验和编码扫描各有独立同额预算）；尊重更紧的上层 ParseLimits。错误统一使用 MySQL 3677 的不披露输入版本，取消原因和资源超限原样传播。

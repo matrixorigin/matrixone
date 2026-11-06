@@ -969,12 +969,17 @@ const (
 	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
 	UNZIP_FILE = 632
 
+	STATEMENT_DIGEST      = 633
+	STATEMENT_DIGEST_TEXT = 634
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 633
+	FUNCTION_END_NUMBER = 635
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"statement_digest":             STATEMENT_DIGEST,
+	"statement_digest_text":        STATEMENT_DIGEST_TEXT,
 	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 

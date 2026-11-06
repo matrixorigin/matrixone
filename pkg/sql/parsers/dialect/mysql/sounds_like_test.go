@@ -30,6 +30,13 @@ func TestSoundsLikeSyntaxAndPrecedence(t *testing.T) {
 		want  string
 	}{
 		{`select 'Hello' SoUnDs LiKe 'Hallo' as matched`, `select soundex('Hello') = soundex('Hallo') as matched`},
+		{"select 'Hello' SoUnDs\nLiKe 'Hallo'", `select soundex('Hello') = soundex('Hallo')`},
+		{`/*! select 'Hello' sounds */ like 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
+		{`select sounds like 'H%' from t`, `select sounds like 'H%' from t`},
+		{`select a + 1 sounds like b + 2 from t`, `select soundex(a + 1) = soundex(b + 2) from t`},
+		{`select a sounds like b = 1 from t`, `select soundex(a) = soundex(b) = 1 from t`},
+		{`select (a = b) sounds like (c or d) from t`, `select soundex((a = b)) = soundex((c or d)) from t`},
+		{`select null sounds like ''`, `select soundex(null) = soundex('')`},
 		{`select 'Hello' sounds /* predicate */ like 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
 		{`select 'Hello' sounds /*! like */ 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
 		{`select 'Hello' sounds /*!50000 like */ 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
@@ -80,6 +87,9 @@ func TestSoundsLikeComparisonNesting(t *testing.T) {
 func TestSoundsLikeIdentifierAndErrors(t *testing.T) {
 	for _, input := range []string{
 		"select sounds from sounds",
+		"select 1 sounds, 2",
+		"select sounds(1)",
+		"select sounds sounds like sounds from sounds",
 		"select sounds as sounds from sounds",
 		"select 'hello' sounds from sounds",
 		"select 'hello' sounds /* alias */ from sounds",
@@ -95,6 +105,7 @@ func TestSoundsLikeIdentifierAndErrors(t *testing.T) {
 	}
 	for _, input := range []string{
 		"select 'hello' sounds like",
+		"select 'hello' sounds 'hallo'",
 		"select 'hello' not sounds like 'halo'",
 		"select 'hello' sounds like 'halo' escape 'x'",
 		"select 'hello' sounds like 'halo' sounds like 'hallo'",
@@ -111,6 +122,9 @@ func TestSoundsLikeParameterOrder(t *testing.T) {
 	exprs := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs
 	cmp := exprs[0].Expr.(*tree.ComparisonExpr)
 	left := cmp.Left.(*tree.FuncExpr)
+	require.Len(t, left.Exprs, 1)
+	require.Len(t, cmp.Right.(*tree.FuncExpr).Exprs, 1)
+	require.Equal(t, 4, tree.ParameterCount(stmt))
 	right := cmp.Right.(*tree.FuncExpr).Exprs[0].(*tree.FuncExpr)
 	for i, expr := range []tree.Expr{left.Exprs[0], right.Exprs[0], right.Exprs[1], exprs[1].Expr} {
 		require.Equal(t, i+1, expr.(*tree.ParamExpr).Offset)

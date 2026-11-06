@@ -1,97 +1,97 @@
 SELECT SOUNDEX('Hello') AS result1;
-result1
+➤ result1[12,5,0]  𝄀
 H400
 SELECT SOUNDEX('World') AS basic_string;
-basic_string
+➤ basic_string[12,5,0]  𝄀
 W643
 SELECT SOUNDEX('Test') AS test_string;
-test_string
+➤ test_string[12,4,0]  𝄀
 T230
 SELECT SOUNDEX('AEIOU') AS vowels_only;
-vowels_only
+➤ vowels_only[12,5,0]  𝄀
 A000
 SELECT SOUNDEX('Hello123') AS with_numbers;
-with_numbers
+➤ with_numbers[12,8,0]  𝄀
 H400
 SELECT SOUNDEX('Test!@#') AS with_special_chars;
-with_special_chars
+➤ with_special_chars[12,7,0]  𝄀
 T230
 SELECT SOUNDEX('') AS empty_string;
-empty_string
+➤ empty_string[-1,536870911,0]  𝄀
 
 SELECT SOUNDEX('A') AS single_char;
-single_char
+➤ single_char[12,4,0]  𝄀
 A000
 SELECT SOUNDEX('AB') AS two_chars;
-two_chars
+➤ two_chars[12,4,0]  𝄀
 A100
 SELECT SOUNDEX('ABC') AS three_chars;
-three_chars
+➤ three_chars[12,4,0]  𝄀
 A120
 SELECT SOUNDEX(NULL) AS null_input;
-null_input
+➤ null_input[12,65535,0]  𝄀
 null
 CREATE TABLE t1(str VARCHAR(50));
 INSERT INTO t1 VALUES ('Hello'), ('World'), ('Test'), ('AEIOU');
 SELECT str, SOUNDEX(str) AS soundex_code FROM t1;
-str    soundex_code
-Hello    H400
-World    W643
-Test    T230
-AEIOU    A000
+➤ str[12,50,0]  ¦  soundex_code[12,50,0]  𝄀
+Hello  ¦  H400  𝄀
+World  ¦  W643  𝄀
+Test  ¦  T230  𝄀
+AEIOU  ¦  A000
 DROP TABLE t1;
 CREATE TABLE t1(str VARCHAR(50));
 INSERT INTO t1 VALUES ('Hello'), ('World'), ('Test');
 SELECT * FROM t1 WHERE SOUNDEX(str) = SOUNDEX('Hello');
-str
+➤ str[12,50,0]  𝄀
 Hello
 DROP TABLE t1;
 SELECT SOUNDEX('Smith') AS smith, SOUNDEX('Smythe') AS smythe;
-smith    smythe
-S530    S530
+➤ smith[12,5,0]  ¦  smythe[12,6,0]  𝄀
+S530  ¦  S530
 SELECT SOUNDEX('Robert') AS robert, SOUNDEX('Rupert') AS rupert;
-robert    rupert
-R163    R163
+➤ robert[12,6,0]  ¦  rupert[12,6,0]  𝄀
+R163  ¦  R163
 SELECT HEX(SOUNDEX('Ashcraft')) AS ashcraft, HEX(SOUNDEX('Pfister')) AS pfister, HEX(SOUNDEX('Tymczak')) AS tymczak, HEX(SOUNDEX('Quadratically')) AS quadratically, HEX(SOUNDEX('BDFJLMPR')) AS long_code, HEX(SOUNDEX('BDFJLMPRB')) AS capacity_plus_one;
-ashcraft    pfister    tymczak    quadratically    long_code    capacity_plus_one
-4132363133    50323336    54353230    513336333234    4233313234353136    423331323435313631
+➤ ashcraft[12,64,0]  ¦  pfister[12,56,0]  ¦  tymczak[12,56,0]  ¦  quadratically[12,104,0]  ¦  long_code[12,64,0]  ¦  capacity_plus_one[12,72,0]  𝄀
+4132363133  ¦  50323336  ¦  54353230  ¦  513336333234  ¦  4233313234353136  ¦  423331323435313631
 SELECT LENGTH(SOUNDEX(CONCAT(REPEAT('BEB', 4096), REPEAT('BC', 64)))) AS late_growth_len, SOUNDEX(CONCAT(REPEAT('BEB', 4096), REPEAT('BC', 64))) = CONCAT('B2', REPEAT('12', 63)) AS late_growth_exact;
-late_growth_len    late_growth_exact
-128    1
+➤ late_growth_len[-5,64,0]  ¦  late_growth_exact[-6,8,0]  𝄀
+128  ¦  1
 SELECT HEX(SOUNDEX('BEB')) AS vowel, HEX(SOUNDEX('BHB')) AS h, HEX(SOUNDEX('BWB')) AS w, HEX(SOUNDEX('B-B')) AS punctuation;
-vowel    h    w    punctuation
-42303030    42303030    42303030    42303030
+➤ vowel[12,32,0]  ¦  h[12,32,0]  ¦  w[12,32,0]  ¦  punctuation[12,32,0]  𝄀
+42303030  ¦  42303030  ¦  42303030  ¦  42303030
 SELECT HEX(SOUNDEX('')) = '' AS empty_string, HEX(SOUNDEX('123!')) = '' AS digits_only, HEX(SOUNDEX('123!ABC')) = HEX('A120') AS leading_non_alpha;
-empty_string    digits_only    leading_non_alpha
-1    1    1
+➤ empty_string[-6,8,0]  ¦  digits_only[-6,8,0]  ¦  leading_non_alpha[-6,8,0]  𝄀
+1  ¦  1  ¦  1
 SELECT SOUNDEX('pfister') = SOUNDEX('Pfister') AS case_insensitive;
-case_insensitive
+➤ case_insensitive[-6,8,0]  𝄀
 1
 DROP TABLE IF EXISTS t_soundex_regression;
 CREATE TABLE t_soundex_regression(id INT PRIMARY KEY, v VARCHAR(50));
 INSERT INTO t_soundex_regression VALUES (1, 'Ashcraft'), (2, 'Pfister'), (3, 'Tymczak'), (4, 'Quadratically'), (5, '123!'), (6, NULL), (7, 'BEB'), (8, 'pfister');
 SELECT id, HEX(SOUNDEX(v)) AS code_hex, LENGTH(SOUNDEX(v)) AS code_len FROM t_soundex_regression ORDER BY id;
-id    code_hex    code_len
-1    4132363133    5
-2    50323336    4
-3    54353230    4
-4    513336333234    6
-5        0
-6    null    null
-7    42303030    4
-8    50323336    4
+➤ id[4,32,0]  ¦  code_hex[12,400,0]  ¦  code_len[-5,64,0]  𝄀
+1  ¦  4132363133  ¦  5  𝄀
+2  ¦  50323336  ¦  4  𝄀
+3  ¦  54353230  ¦  4  𝄀
+4  ¦  513336333234  ¦  6  𝄀
+5  ¦    ¦  0  𝄀
+6  ¦  null  ¦  null  𝄀
+7  ¦  42303030  ¦  4  𝄀
+8  ¦  50323336  ¦  4
 DROP TABLE t_soundex_regression;
 DROP TABLE IF EXISTS t_soundex_char;
 CREATE TABLE t_soundex_char(v CHAR(8));
 INSERT INTO t_soundex_char VALUES ('Pfister');
 SELECT HEX(SOUNDEX(v)) AS code_hex FROM t_soundex_char;
-code_hex
+➤ code_hex[12,64,0]  𝄀
 50323336
 DROP TABLE t_soundex_char;
 PREPARE soundex_stmt FROM 'SELECT HEX(SOUNDEX(CAST(? AS VARCHAR(32)))) AS code_hex';
 SET @soundex_input='Pfister';
 EXECUTE soundex_stmt USING @soundex_input;
-code_hex
+➤ code_hex[12,256,0]  𝄀
 50323336
 DEALLOCATE PREPARE soundex_stmt;
 SET @soundex_input=NULL;
@@ -99,18 +99,18 @@ DROP TABLE IF EXISTS t_soundex_long;
 CREATE TABLE t_soundex_long(v MEDIUMTEXT);
 INSERT INTO t_soundex_long VALUES (REPEAT('BC', 32769));
 SELECT LENGTH(SOUNDEX(v)) AS code_len, HEX(LEFT(SOUNDEX(v), 16)) = HEX('B212121212121212') AS prefix_ok, HEX(RIGHT(SOUNDEX(v), 16)) = HEX('1212121212121212') AS suffix_ok FROM t_soundex_long;
-code_len    prefix_ok    suffix_ok
-65538    1    1
+➤ code_len[-5,64,0]  ¦  prefix_ok[-6,8,0]  ¦  suffix_ok[-6,8,0]  𝄀
+65538  ¦  1  ¦  1
 DROP TABLE IF EXISTS t_soundex_ctas_65535;
 CREATE TABLE t_soundex_ctas_65535 AS SELECT SOUNDEX(CAST(CONCAT(REPEAT('BC', 32767), 'B') AS VARCHAR(65535))) AS code FROM t_soundex_long LIMIT 1;
 SELECT LENGTH(code) AS code_len FROM t_soundex_ctas_65535;
-code_len
+➤ code_len[-5,64,0]  𝄀
 65535
 DROP TABLE t_soundex_ctas_65535;
 DROP TABLE IF EXISTS t_soundex_ctas_65536;
 CREATE TABLE t_soundex_ctas_65536 AS SELECT SOUNDEX(CAST(REPEAT('BC', 32768) AS MEDIUMTEXT)) AS code FROM t_soundex_long LIMIT 1;
 SELECT LENGTH(code) AS code_len FROM t_soundex_ctas_65536;
-code_len
+➤ code_len[-5,64,0]  𝄀
 65536
 DROP TABLE t_soundex_ctas_65536;
 DROP TABLE t_soundex_long;
@@ -124,11 +124,11 @@ INSERT INTO soundex_binary_domain VALUES
 SELECT id, COALESCE(NULLIF(HEX(SOUNDEX(b)), ''), '<empty>') AS code_hex,
 SOUNDEX(b) IS NULL AS is_null
 FROM soundex_binary_domain ORDER BY id;
-id    code_hex    is_null
-1    4132363133    0
-2    41313030    0
-3    <empty>    0
-4    <empty>    1
+➤ id[4,32,0]  ¦  code_hex[12,128,0]  ¦  is_null[-6,8,0]  𝄀
+1  ¦  4132363133  ¦  0  𝄀
+2  ¦  41313030  ¦  0  𝄀
+3  ¦  <empty>  ¦  0  𝄀
+4  ¦  <empty>  ¦  1
 CREATE VIEW soundex_binary_view AS SELECT SOUNDEX(b) AS s FROM soundex_binary_domain;
 CREATE TABLE soundex_binary_ctas AS SELECT SOUNDEX(b) AS s FROM soundex_binary_domain;
 SELECT table_name, column_name, data_type, character_maximum_length,
@@ -137,136 +137,148 @@ FROM information_schema.columns
 WHERE table_schema = DATABASE()
 AND table_name IN ('soundex_binary_view', 'soundex_binary_ctas')
 ORDER BY table_name;
-table_name    column_name    data_type    character_maximum_length    character_set_name    collation_name
-soundex_binary_ctas    s    varbinary    64    null    null
-soundex_binary_view    s    varbinary    64    null    null
+➤ table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+soundex_binary_ctas  ¦  s  ¦  varbinary  ¦  64  ¦  null  ¦  null  𝄀
+soundex_binary_view  ¦  s  ¦  varbinary  ¦  64  ¦  null  ¦  null
 DROP TABLE soundex_binary_ctas;
 DROP VIEW soundex_binary_view;
 DROP TABLE soundex_binary_domain;
 PREPARE soundex_prepared_28912 FROM 'SELECT HEX(SOUNDEX(?)) AS code_hex, SOUNDEX(?) IS NULL AS is_null';
 SET @soundex_prepared_28912 = CAST(UNHEX('C3A9') AS VARBINARY(2));
 EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
-code_hex    is_null
-C3A9303030    0
+➤ code_hex[-1,16383,0]  ¦  is_null[-6,8,0]  𝄀
+C3A9303030  ¦  0
 SET @soundex_prepared_28912 = 'Pfister';
 EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
-code_hex    is_null
-50323336    0
+➤ code_hex[-1,16383,0]  ¦  is_null[-6,8,0]  𝄀
+50323336  ¦  0
 SET @soundex_prepared_28912 = CAST(UNHEX('C3A9') AS VARBINARY(2));
 EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
-code_hex    is_null
-C3A9303030    0
+➤ code_hex[-1,16383,0]  ¦  is_null[-6,8,0]  𝄀
+C3A9303030  ¦  0
 SET @soundex_prepared_28912 = NULL;
 EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
-code_hex    is_null
-null    1
+➤ code_hex[-1,16383,0]  ¦  is_null[-6,8,0]  𝄀
+null  ¦  1
 DEALLOCATE PREPARE soundex_prepared_28912;
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
-direct_binary_hex
+➤ direct_binary_hex[12,8,0]  𝄀
 <empty>
+SELECT 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case;
+➤ not_a_pattern[-6,8,0]  ¦  mixed_case[-6,8,0]  𝄀
+0  ¦  1
+SELECT NOT 'Hello' SOUNDS LIKE 'Hallo' AS negated, 'Hello' SOUNDS LIKE 'Hallo' = 1 AS comparison, 'Hello' SOUNDS LIKE 'Hallo' AND FALSE AS conjunction;
+➤ negated[-6,8,0]  ¦  comparison[-6,8,0]  ¦  conjunction[-6,8,0]  𝄀
+0  ¦  1  ¦  0
+SELECT CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE CAST('' AS VARBINARY(2)) AS binary_codes;
+➤ binary_codes[-6,8,0]  𝄀
+1
+SELECT 1 sounds;
+➤ sounds[-5,64,0]  𝄀
+1
 SELECT 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS comment_like, 'Hello' SOUNDS /*!50000 LIKE */ 'Hallo' AS version_like, 'Hello' /*! SOUNDS */ LIKE 'Hallo' AS comment_sounds;
-comment_like    version_like    comment_sounds
-1    1    1
+➤ comment_like[-6,8,0]  ¦  version_like[-6,8,0]  ¦  comment_sounds[-6,8,0]  𝄀
+1  ¦  1  ¦  1
 SELECT 'Hello' SOUNDS LIKE 'Hallo' AS matched, 'Robert' SOUNDS LIKE 'Rubin' AS different, 'BDFJLMPR' SOUNDS LIKE 'BDFJLMPRB' AS full_code;
-matched    different    full_code
-1    0    0
+➤ matched[-6,8,0]  ¦  different[-6,8,0]  ¦  full_code[-6,8,0]  𝄀
+1  ¦  0  ¦  0
 SELECT NULL SOUNDS LIKE 'Robert' AS left_null, 'Robert' SOUNDS LIKE NULL AS right_null, NULL SOUNDS LIKE NULL AS both_null;
-left_null    right_null    both_null
-null    null    null
+➤ left_null[-6,8,0]  ¦  right_null[-6,8,0]  ¦  both_null[-6,8,0]  𝄀
+null  ¦  null  ¦  null
 SELECT '' SOUNDS LIKE '123!' AS empty_code, 123 SOUNDS LIKE 456 AS numeric_inputs, CAST('Robert' AS CHAR(16)) SOUNDS LIKE CAST('Rupert' AS TEXT) AS string_types;
-empty_code    numeric_inputs    string_types
-1    1    1
+➤ empty_code[-6,8,0]  ¦  numeric_inputs[-6,8,0]  ¦  string_types[-6,8,0]  𝄀
+1  ¦  1  ¦  1
 SELECT CAST('Robert' AS VARBINARY(16)) SOUNDS LIKE CAST('Rupert' AS VARBINARY(16)) AS binary_inputs, CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE 'é' AS binary_text;
-binary_inputs    binary_text
-1    0
+➤ binary_inputs[-6,8,0]  ¦  binary_text[-6,8,0]  𝄀
+1  ¦  0
 SELECT CONCAT('Ro', 'bert') SOUNDS /* phrase */ LIKE LOWER('RUPERT') AS expressions, 1 + 2 SOUNDS LIKE 3 * 4 AS arithmetic, 'Robert' SOUNDS LIKE 'Rupert' = 'Smith' SOUNDS LIKE 'Smythe' AS comparisons;
-expressions    arithmetic    comparisons
-1    1    1
+➤ expressions[-6,8,0]  ¦  arithmetic[-6,8,0]  ¦  comparisons[-6,8,0]  𝄀
+1  ¦  1  ¦  1
 SET @sounds_like_saved_mode = @@sql_mode;
 SET sql_mode = '';
 SELECT NOT 0 SOUNDS LIKE 'a' AS default_not;
-default_not
+➤ default_not[-6,8,0]  𝄀
 1
 SET sql_mode = 'HIGH_NOT_PRECEDENCE';
 SELECT NOT 0 SOUNDS LIKE 'a' AS high_not;
-high_not
+➤ high_not[-6,8,0]  𝄀
 0
 SET sql_mode = @sounds_like_saved_mode;
 DROP TABLE IF EXISTS sounds_like_inputs;
 CREATE TABLE sounds_like_inputs(id INT PRIMARY KEY, sounds VARCHAR(32), other VARCHAR(32));
 INSERT INTO sounds_like_inputs VALUES (1, 'Robert', 'Rupert'), (2, 'Robert', 'Rubin'), (3, NULL, 'Robert'), (4, '', '123!');
 SELECT id, sounds SOUNDS LIKE other AS matched, (sounds SOUNDS LIKE other) <=> (SOUNDEX(sounds) = SOUNDEX(other)) AS equivalent FROM sounds_like_inputs ORDER BY id;
-id    matched    equivalent
-1    1    1
-2    0    1
-3    null    1
-4    1    1
+➤ id[4,32,0]  ¦  matched[-6,8,0]  ¦  equivalent[-6,8,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  null  ¦  1  𝄀
+4  ¦  1  ¦  1
 SELECT id FROM sounds_like_inputs WHERE sounds SOUNDS LIKE other ORDER BY id;
-id
-1
+➤ id[4,32,0]  𝄀
+1  𝄀
 4
 SELECT id, CASE WHEN sounds SOUNDS LIKE other THEN 'same' ELSE 'different' END AS category FROM sounds_like_inputs ORDER BY id;
-id    category
-1    same
-2    different
-3    different
-4    same
+➤ id[4,32,0]  ¦  category[12,9,0]  𝄀
+1  ¦  same  𝄀
+2  ¦  different  𝄀
+3  ¦  different  𝄀
+4  ¦  same
 SELECT sounds FROM sounds_like_inputs WHERE sounds LIKE 'Ro%' ORDER BY id;
-sounds
-Robert
+➤ sounds[12,32,0]  𝄀
+Robert  𝄀
 Robert
 SELECT 'alias' sounds FROM sounds_like_inputs WHERE id = 1;
-sounds
+➤ sounds[12,5,0]  𝄀
 alias
 PREPARE sounds_like_stmt FROM 'SELECT ? SOUNDS LIKE ? AS matched, ? AS marker';
 SET @sounds_like_left = 'Robert', @sounds_like_right = 'Rupert', @sounds_like_marker = 7;
 EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
-matched    marker
-1    7
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+1  ¦  7
 SET @sounds_like_right = 'Rubin';
 EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
-matched    marker
-0    7
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+0  ¦  7
 SET @sounds_like_left = CAST(UNHEX('C3A9') AS VARBINARY(2)), @sounds_like_right = 'é';
 EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
-matched    marker
-1    7
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+1  ¦  7
 SET @sounds_like_left = NULL;
 EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
-matched    marker
-null    7
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+null  ¦  7
 SET @sounds_like_left = 'Robert', @sounds_like_right = 'Rupert';
 EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
-matched    marker
-1    7
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+1  ¦  7
 DEALLOCATE PREPARE sounds_like_stmt;
 CREATE VIEW sounds_like_view AS SELECT id, sounds SOUNDS LIKE other AS matched FROM sounds_like_inputs;
 SELECT id, matched FROM sounds_like_view ORDER BY id;
-id    matched
-1    1
-2    0
-3    null
-4    1
+➤ id[4,32,0]  ¦  matched[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  null  𝄀
+4  ¦  1
 SELECT VIEW_DEFINITION LIKE '%soundex%' AND VIEW_DEFINITION NOT LIKE '%sounds like%' AS lowered FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'sounds_like_view';
-lowered
+➤ lowered[-6,8,0]  𝄀
 1
 SET @sounds_like_replay_sql = (SELECT CONCAT('CREATE VIEW sounds_like_replayed AS ', VIEW_DEFINITION) FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'sounds_like_view');
 PREPARE sounds_like_replay FROM @sounds_like_replay_sql;
 EXECUTE sounds_like_replay;
 DEALLOCATE PREPARE sounds_like_replay;
 SELECT id, matched FROM sounds_like_replayed ORDER BY id;
-id    matched
-1    1
-2    0
-3    null
-4    1
+➤ id[4,32,0]  ¦  matched[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  null  𝄀
+4  ¦  1
 CREATE TABLE sounds_like_ctas AS SELECT id, sounds SOUNDS LIKE other AS matched FROM sounds_like_inputs;
 SELECT id, matched FROM sounds_like_ctas ORDER BY id;
-id    matched
-1    1
-2    0
-3    null
-4    1
+➤ id[4,32,0]  ¦  matched[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  null  𝄀
+4  ¦  1
 DROP TABLE sounds_like_ctas;
 DROP VIEW sounds_like_replayed;
 DROP VIEW sounds_like_view;

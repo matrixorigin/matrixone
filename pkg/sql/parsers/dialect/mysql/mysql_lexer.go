@@ -16,11 +16,13 @@ package mysql
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -190,17 +192,30 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
+func parseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string, digest *statementDigestSyntax) ([]tree.Statement, error) {
+	// Keep the public parser signature stable. This private, per-invocation
+	// request lets the same approved owner bound both digest scanner passes.
+	return ParseWithSQLMode(context.WithValue(ctx, statementDigestSyntaxKey{}, digest), sql, lower, sqlMode)
+}
+
 func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	// Until a successful return transfers the AST, this is its only cleanup
+	// owner, including syntax/normalization failures and foreign panics.
+	defer func() {
+		if statements == nil {
+			for _, statement := range lexer.stmts {
+				statement.Free()
+			}
+		}
+	}()
+	digest, _ := ctx.Value(statementDigestSyntaxKey{}).(*statementDigestSyntax)
+	lexer.digest = digest
+	lexer.scanner.digestMode = digest != nil
+	var control *parseControl
 	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
-		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
-		}
-		if len(sql) > limits.Input {
-			return nil, ErrParseLimit
-		}
-		control := &parseControl{ctx: ctx, limits: limits}
+		control = &parseControl{ctx: ctx, limits: limits}
 		lexer.scanner.parseControl = control
 		defer func() {
 			if failure := recover(); failure != nil {
@@ -208,37 +223,52 @@ func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode stri
 				if !own || abort.control != control {
 					panic(failure)
 				}
-				for _, statement := range lexer.stmts {
-					statement.Free()
-				}
 				statements, err = nil, abort.err
 			}
 		}()
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if len(sql) > limits.Input {
+			return nil, ErrParseLimit
+		}
 	}
 
 	if yyParse(lexer) != 0 {
-		for _, s := range lexer.stmts {
-			s.Free()
-		}
 		return nil, lexer.scanner.LastError
 	}
-	if err := validateSelectIntoStatements(lexer); err != nil {
-		for _, s := range lexer.stmts {
-			s.Free()
+	if len(lexer.stmts) == 0 {
+		// Keep the existing empty/comment-only statement shape. Digest still
+		// rejects empty/whitespace input, but comments alone have an empty digest.
+		lexer.stmts = []tree.Statement{&tree.EmptyStmt{}}
+	}
+	if digest != nil && digest.normalized != nil {
+		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0], lexer.sqlMode, digest) {
+			return nil, moerr.NewDigestParse(ctx)
 		}
+		// Reserved BINARY in expression COLLATE is a syntax error even in an
+		// unused CTE. Column-default trailing collations were classified above.
+		for expr := range digest.invalidExpressions {
+			if _, collated := expr.(*tree.CollateExpr); collated {
+				return nil, moerr.NewDigestParse(ctx)
+			}
+		}
+	}
+	if err := validateSelectIntoStatements(lexer); err != nil {
 		return nil, err
 	}
-	if len(lexer.stmts) == 0 {
-		/**
-		For CORNER CASE like:
-
-		mysql> -- MySQL dump 10.13  Distrib 8.1.0, for macos11.7 (arm64)
-
-		the input will be stripped to empty string, and the parser will return 0 stmts.
-		but, the mysql server responds ok to the client.
-		so, we return an EmptyStmt that does nothing beside responding ok.
-		*/
-		return []tree.Statement{&tree.EmptyStmt{}}, nil
+	if digest != nil && digest.normalized != nil {
+		if control != nil {
+			// Syntax and normalization have independent, equally tight budgets.
+			control.work, control.tokens = 0, 0
+		}
+		*digest.normalized = statementDigest{tokens: make([]digestToken, 0, 64)}
+		scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, lexer.sqlMode)
+		defer PutScanner(scanner)
+		scanner.digestMode, scanner.parseControl = true, control
+		if err := digest.normalized.scan(scanner, digest, false); err != nil {
+			return nil, err
+		}
 	}
 	return lexer.stmts, nil
 }
@@ -272,6 +302,7 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 }
 
 type Lexer struct {
+	digest                *statementDigestSyntax
 	scanner               *Scanner
 	stmts                 []tree.Statement
 	paramIndex            int
@@ -287,7 +318,10 @@ type Lexer struct {
 	sqlMode               SQLModeFlags
 	parseFirst            bool
 	stopLexing            bool
+	digestShow            bool
+	digestShowWhere       bool
 	statementEnd          int
+	selectLockClauses     int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -332,7 +366,10 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.sqlMode = sqlMode
 	l.parseFirst = false
 	l.stopLexing = false
+	l.digestShow = false
+	l.digestShowWhere = false
 	l.statementEnd = 0
+	l.selectLockClauses = 0
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -349,6 +386,11 @@ func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
 	// that distinction before applying the function-name rule.
 	if l.previousToken == int('.') {
 		return false
+	}
+	if l.digest != nil {
+		keywordID := keywords[strings.ToLower(name)]
+		return !l.scanner.qualifiedIdentifier && (l.scanner.digestFunctionCallAhead() ||
+			l.lastToken == int('(') && l.previousToken == keywordID)
 	}
 	if l.HasSQLMode(SQLModeIgnoreSpace) {
 		return true
@@ -382,6 +424,135 @@ func rejectSQLModeReservedFunctionName(yylex yyLexer, name string) bool {
 	return true
 }
 
+// Guard keyword-to-name reductions and MO-only lexer adaptations. Quoted and
+// lexically qualified tokens bypass this guard; type/function productions keep
+// their own grammar. Ordinary execution parsing retains its existing policy.
+func rejectDigestReservedKeyword(yylex yyLexer, name string) bool {
+	lexer := yylex.(*Lexer)
+	if lexer.digest == nil || !digestSymbols[digestKeywordUpper(name)].reserved {
+		return false
+	}
+	lexer.Error("reserved keyword cannot be used as an identifier")
+	return true
+}
+
+// TEXT_STRING_validated rejects lossy conversion to MySQL's system charset.
+// This is a grammar-time check, including unused CTEs and bytes after NUL;
+// quoted identifiers and ordinary string expressions have different contracts.
+func digestStringAliasValid(yylex yyLexer, alias string) bool {
+	if yylex.(*Lexer).digest == nil || digestSystemCharsetValid(alias) {
+		return true
+	}
+	yylex.Error("Invalid string alias.")
+	return false
+}
+
+// Digest admission shares one floating-type rule. Ordinary parsing retains its
+// existing limits/diagnostics below the grammar guards. FLOAT(p) is binary
+// precision; FLOAT/DOUBLE/REAL(M,D) use display width and decimal scale instead.
+func digestFloatTypeValid(yylex yyLexer, size tree.LengthScaleOpt, single, allowSingle bool) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	valid := size.DisplayWith <= 255 && size.Scale <= 30 &&
+		(size.Scale == tree.NotDefineDec || size.DisplayWith > 0 && size.Scale <= size.DisplayWith)
+	if single {
+		valid = allowSingle && size.DisplayWith <= 53
+	}
+	if !valid {
+		yylex.Error("Invalid floating-point precision/scale.")
+	}
+	return valid
+}
+
+// The scanner folds adjacent utf8mb4 hex strings; grammar retains introducers
+// separated by comments and other charsets. Both paths must validate decoded
+// content, not the ASCII spelling of its hex digits.
+func digestCharsetLiteralValid(yylex yyLexer, charset, value string, hexadecimal bool) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	charset = strings.ToLower(charset)
+	if charset != "_utf8mb4" && charset != "_utf8mb3" && charset != "_utf8" {
+		return true
+	}
+	if hexadecimal {
+		decoded, err := hex.DecodeString(value[2:])
+		if err != nil {
+			yylex.Error("Invalid character string")
+			return false
+		}
+		value = string(decoded)
+	}
+	valid := utf8.ValidString(value)
+	if charset != "_utf8mb4" {
+		valid = digestSystemCharsetValid(value)
+	}
+	if !valid {
+		yylex.Error("Invalid character string")
+	}
+	return valid
+}
+
+// Validate the raw parameter, before display-width sentinel normalization.
+// BOOL and YEAR are not unrestricted integer display-width declarations.
+func digestIntegerTypeValid(yylex yyLexer, typ *tree.T, width int32) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	valid := width <= 255
+	switch digestKeywordUpper(typ.InternalType.FamilyString) {
+	case "BIT":
+		valid = width < 0 || width >= 1 && width <= 64
+	case "BOOL", "BOOLEAN":
+		valid = width < 0
+	case "YEAR":
+		valid = width < 0 || width == 4
+	}
+	if !valid {
+		yylex.Error("Invalid integer type display width")
+	}
+	return valid
+}
+
+// CAST and DDL share type construction, not admissible target syntax. Inspect
+// the grammar-owned type before mo_cast_type rewrites CHAR into VARCHAR.
+func digestCastTypeValid(yylex yyLexer, typ *tree.T, modifiers bool) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	t := typ.InternalType
+	valid := false
+	switch digestKeywordUpper(t.FamilyString) {
+	case "CHAR", "CHARACTER", "NCHAR", "BINARY", "DATE", "JSON",
+		"POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
+		valid = true
+	case "DECIMAL", "DEC":
+		valid = t.Scale <= 30
+	case "FLOAT", "FLOAT4", "DOUBLE", "DOUBLE PRECISION", "FLOAT8", "REAL":
+		valid = t.Scale == tree.NotDefineDec
+	case "DATETIME", "TIME":
+		valid = t.Scale <= 6
+	case "YEAR":
+		valid = t.DisplayWith == 0
+	}
+	if modifiers {
+		valid = false
+	}
+	if !valid {
+		yylex.Error("Invalid CAST target type or parameters")
+	}
+	return valid
+}
+
+func digestShowDatabaseValid(yylex yyLexer, name string, explicit bool) bool {
+	if yylex.(*Lexer).digest == nil || !explicit || tree.ValidMySQLTableName(name) {
+		return true
+	}
+	yylex.Error("Invalid database name.")
+	return false
+}
+
 func (l *Lexer) GetParamIndex() int {
 	l.paramIndex = l.paramIndex + 1
 	return l.paramIndex
@@ -398,6 +569,111 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ, str = l.scanner.ScanAfterDot()
 	} else {
 		typ, str = l.scanner.Scan()
+	}
+	// Preserve identifier identity even when digest-only grammar adaptation
+	// below turns QUOTE_ID into ID. This is token-local, never scanner state.
+	lval.quotedIdentifier = typ == QUOTE_ID
+	if l.digest != nil && (typ == ID || typ == QUOTE_ID) && !tree.ValidMySQLTableName(str) {
+		l.digest.checkTableNames = true
+	}
+	// Digest input is parsed, never bound/executed. Admit MySQL's explicit
+	// ROW constructor and quoted user-variable names without changing ordinary
+	// SQL execution syntax. The independent digest scanner keeps their tokens.
+	if l.digest != nil {
+		if typ == INTERVAL {
+			typ = DIGEST_INTERVAL
+		}
+		switch typ {
+		case SERIAL:
+			if l.lastToken == int('.') {
+				typ = ID
+			}
+		case NTILE:
+			typ = DIGEST_NTILE
+		case LEAD:
+			typ = DIGEST_LEAD
+		case LAG:
+			typ = DIGEST_LAG
+		case NTH_VALUE:
+			typ = DIGEST_NTH_VALUE
+		case FIRST_VALUE:
+			typ = DIGEST_FIRST_VALUE
+		case LAST_VALUE:
+			typ = DIGEST_LAST_VALUE
+		case GEOMETRYCOLLECTION, LINESTRING, MULTILINESTRING, MULTIPOINT, MULTIPOLYGON, POLYGON:
+			// These nonreserved native constructor names are type tokens in MO.
+			// Adapt only the call role; retain the existing CAST/DDL type owner.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next == '(' {
+				typ = ID
+			}
+		}
+		// A SHOW filter accepts a text token, not an arbitrary expression.
+		// WHERE and nested queries retain ordinary LIKE expression syntax.
+		if typ == LIKE && l.digestShow && !l.digestShowWhere && l.syntaxDepth == 0 {
+			typ = DIGEST_SHOW_LIKE
+		}
+		if typ == CHARACTER {
+			// CHARACTER is also the charset clause keyword. Only its type
+			// synonym role adapts to CHAR; CHARACTER SET must remain intact.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next != SET {
+				typ = CHAR
+			}
+		} else if typ == ID && !l.scanner.qualifiedIdentifier && strings.EqualFold(str, "national") {
+			typ = DIGEST_NATIONAL
+		} else if typ == UNUSED && strings.EqualFold(str, "varying") {
+			typ = DIGEST_VARYING
+		}
+		if typ == ROW && l.lastToken != CURRENT {
+			// CURRENT ROW is a window-frame bound, not a ROW constructor.
+			if !digestRowConstructorValid(l.scanner) {
+				typ = LEX_ERROR
+			} else {
+				typ = ID
+			}
+		} else if typ == CURRENT_ROLE {
+			// MySQL resolves CURRENT_ROLE through the generic native factory;
+			// its arity is checked only when the containing scope is itemized.
+			typ = ID
+		} else if typ == ID && !l.scanner.qualifiedIdentifier && digestKeywordUpper(str) == "JSON_VALUE" {
+			typ = DIGEST_JSON_VALUE
+		} else if typ == NOW && l.previousToken == ON && l.lastToken == UPDATE {
+			// MySQL also admits NOW(fsp) for an ON UPDATE timestamp attribute.
+			// Keep this digest-only; bare NOW is not the CURRENT_TIMESTAMP form.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next == '(' {
+				typ = CURRENT_TIMESTAMP
+			} else {
+				typ = LEX_ERROR
+			}
+		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
+			// National strings are one literal, not an identifier plus alias.
+			typ, str = l.scanner.Scan()
+			if typ == STRING {
+				typ = DIGEST_INTRODUCED_STRING
+			}
+		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
+			typ = DIGEST_DUAL
+		} else if typ == ID && !l.scanner.qualifiedIdentifier && rejectDigestReservedKeyword(l, str) {
+			typ = LEX_ERROR
+		} else if typ == QUOTE_ID {
+			if strings.IndexByte(str, 0) >= 0 {
+				typ = LEX_ERROR
+			} else {
+				typ, str = ID, digestSystemIdentifier(str)
+			}
+		} else if typ == ID && l.lastToken != '.' && digestCharsetIntroducer(str) {
+			typ = UNDERSCORE_BINARY
+		} else if typ == ASSIGNMENT && l.lastToken == AT_ID {
+			typ = '='
+		} else if typ == '@' {
+			if next, value := l.scanner.Scan(); next == STRING || next == QUOTE_ID {
+				typ, str = AT_ID, value
+			} else {
+				typ = LEX_ERROR
+			}
+		}
 	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
@@ -448,11 +724,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		return l.toFloat(lval, str)
 	}
 
-	// Allow reserved keywords as aliases after AS.
-	// MySQL treats most keywords as identifiers in alias context, e.g.:
-	//   SELECT NOW() AS current_time, COUNT(*) AS rows FROM t
+	// Preserve MO's permissive ordinary AS aliases, but digest parsing must
+	// retain MySQL's reserved-word restrictions (including ROWS/CURRENT_TIME).
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
-		typ = ID
+		if rejectDigestReservedKeyword(l, str) {
+			typ = LEX_ERROR
+		} else {
+			typ = ID
+		}
 	}
 	// CONFIG is a MatrixOne contextual keyword used by SHOW CONFIG and ALTER
 	// ACCOUNT CONFIG. MySQL otherwise treats it as a non-reserved identifier.
@@ -597,7 +876,18 @@ func hasAsofLeftFactorAlias(expr tree.TableExpr) bool {
 }
 
 func (l *Lexer) recordSyntaxToken(token int) {
+	if l.digest != nil {
+		if l.syntaxLastToken == 0 || l.syntaxLastToken == int(';') {
+			l.digestShow = token == SHOW
+			l.digestShowWhere = false
+		}
+		if token == WHERE && l.syntaxDepth == 0 {
+			l.digestShowWhere = true
+		}
+	}
 	if token == int(';') {
+		l.digestShow = false
+		l.digestShowWhere = false
 		l.syntaxLastToken = token
 		l.syntaxDepth = 0
 		l.syntaxInFrom = l.syntaxInFrom[:0]
@@ -799,6 +1089,31 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 		if errMsg := tree.ValidateSelectIntoStatementRoot(stmt); errMsg != "" {
 			lexer.Error(errMsg)
 			return lexer.scanner.LastError
+		}
+		// WITH/CTE scope is complete only at this boundary. Avoid a query-tree
+		// walk on the ordinary zero/single-lock path.
+		checkNames := lexer.digest != nil && lexer.digest.checkTableNames
+		if lexer.digest != nil {
+			switch stmt.(type) {
+			case *tree.CreateView, *tree.AlterView:
+				// View aliases can be STRING tokens, and their stricter name
+				// policy applies even in nested referenced query expressions.
+				checkNames = true
+			}
+		}
+		var checkExpr func(tree.Expr) string
+		if lexer.digest != nil && len(lexer.digest.invalidExpressions) != 0 {
+			checkExpr = lexer.digest.checkExpression
+		}
+		if lexer.selectLockClauses > 1 || checkNames || checkExpr != nil {
+			nameKey := strings.ToLower
+			if lexer.digest != nil {
+				nameKey = digestIdentifierKey
+			}
+			if errMsg := tree.ValidateSelectContext(stmt, nameKey, lexer.selectLockClauses > 1, checkNames, checkExpr); errMsg != "" {
+				lexer.Error(errMsg)
+				return lexer.scanner.LastError
+			}
 		}
 	}
 	return nil

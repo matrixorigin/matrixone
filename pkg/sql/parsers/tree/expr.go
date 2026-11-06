@@ -827,6 +827,9 @@ type Subquery struct {
 }
 
 func (node *Subquery) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.VariableOrSubquery = true
+	}
 	if node.Exists {
 		ctx.WriteString("exists ")
 	}
@@ -960,13 +963,16 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	// IsGeneric is true when the parser recognized a whitespace-sensitive
-	// MySQL function through the generic identifier-function rule rather than
-	// its native built-in rule. That distinction matters when IGNORE_SPACE is
-	// disabled.
+	// IsGeneric records a native keyword function parsed through the generic
+	// identifier-function rule. Execution parsing records whitespace-sensitive
+	// names; digest parsing also records native temporal keywords so quoted
+	// names cannot stand in for built-in column defaults.
 	IsGeneric bool
-	Type      FuncType
-	Exprs     Exprs
+	// IsTemporalLiteral distinguishes DATE/TIME/TIMESTAMP literals from the
+	// conversion functions: only the literals have non-nullable MySQL fields.
+	IsTemporalLiteral bool
+	Type              FuncType
+	Exprs             Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -981,6 +987,9 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.Functions = append(ctx.expressionSyntax.Functions, node)
+	}
 	if ctx.viewDefinition {
 		if value, ok := viewNameConstValue(node); ok {
 			// NAME_CONST returns its literal value. Keep the view export
@@ -996,6 +1005,12 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
+	}
+	if node.IsTemporalLiteral {
+		ctx.WriteString(funcName)
+		ctx.WriteByte(' ')
+		node.Exprs[0].Format(ctx)
+		return
 	}
 	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
 		ctx.sawDateTimeFormat = true
@@ -1087,7 +1102,16 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 
 	if node.WindowSpec != nil {
 		ctx.WriteString(" ")
-		node.WindowSpec.Format(ctx)
+		if ctx.expressionSyntax != nil {
+			// MySQL defers window specification itemization to query resolution,
+			// outside the column DEFAULT/generated-expression validation context.
+			// Preserve all other observers (e.g. parameter and CASE collection).
+			windowCtx := *ctx
+			windowCtx.expressionSyntax = nil
+			node.WindowSpec.Format(&windowCtx)
+		} else {
+			node.WindowSpec.Format(ctx)
+		}
 	}
 }
 
@@ -1850,6 +1874,40 @@ func NewIntervalExpr(t IntervalType) *IntervalExpr {
 	}
 }
 
+// DefaultColExpr reads a named column's metadata, unlike the bare DEFAULT
+// assignment marker. Keep the AST nodes distinct for every DML consumer.
+type DefaultColExpr struct {
+	exprImpl
+	Column *UnresolvedName
+	// StrictMode belongs to the statement's parse/prepare snapshot, not to a
+	// later EXECUTE that internally rebuilds the same prepared statement.
+	StrictMode bool
+}
+
+func (node *DefaultColExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("default(")
+	node.Column.Format(ctx)
+	ctx.WriteByte(')')
+}
+
+func (node *DefaultColExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*DefaultColExpr)
+	column, ok := node.Column.Accept(v)
+	if !ok {
+		return node, false
+	}
+	name, ok := column.(*UnresolvedName)
+	if !ok {
+		return node, false
+	}
+	node.Column = name
+	return v.Exit(node)
+}
+
 // the DEFAULT expression.
 type DefaultVal struct {
 	exprImpl
@@ -1922,6 +1980,9 @@ type VarExpr struct {
 
 // incomplete
 func (node *VarExpr) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.VariableOrSubquery = true
+	}
 	if node.Name != "" {
 		ctx.WriteByte('@')
 		if node.System {
@@ -2253,6 +2314,9 @@ func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern Expr, mode FullT
 }
 
 func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
+	if ctx.expressionSyntax != nil {
+		ctx.expressionSyntax.FullTextMatch = true
+	}
 	ctx.WriteString("MATCH (")
 	for i, k := range node.KeyParts {
 		if i > 0 {

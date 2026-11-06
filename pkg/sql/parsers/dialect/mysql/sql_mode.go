@@ -47,6 +47,7 @@ var parserSQLModeTokens = []string{
 	sqlModeRealAsFloat,
 	sqlModeHighNotPrecedence,
 	sqlModeIgnoreSpace,
+	"STRICT_TRANS_TABLES",
 }
 
 var sqlModeSensitiveFunctionNames = map[string]struct{}{
@@ -104,6 +105,9 @@ const (
 	// SQLModeIgnoreSpace allows whitespace between a whitespace-sensitive
 	// built-in function name and its opening parenthesis.
 	SQLModeIgnoreSpace
+	// DEFAULT(col) temporary-field semantics are captured with the parsed
+	// statement, including clones rebuilt under a prepared lexical snapshot.
+	SQLModeStrict
 )
 
 type SQLModeFlags uint8
@@ -126,6 +130,8 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 			flags |= SQLModeFlags(SQLModeHighNotPrecedence)
 		case sqlModeIgnoreSpace:
 			flags |= SQLModeFlags(SQLModeIgnoreSpace)
+		case "STRICT_TRANS_TABLES", "STRICT_ALL_TABLES", "TRADITIONAL":
+			flags |= SQLModeFlags(SQLModeStrict)
 		}
 	}
 	return flags

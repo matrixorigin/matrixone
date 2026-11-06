@@ -18,6 +18,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// initSourceColumnProvenance gives physical scans and sequential UPDATE row
+// images the same immutable column metadata. Values may change; defaults do not.
+func (b *Binding) initSourceColumnProvenance(columns []*plan.ColDef, snapshots []SourceColumnMetadata) {
+	b.outputColumnProvenance = make([]OutputColumnProvenance, len(columns))
+	for i, col := range columns {
+		var metadata SourceColumnMetadata
+		if snapshots == nil {
+			metadata = snapshotSourceColumnMetadata(col)
+		} else {
+			metadata = snapshots[i]
+		}
+		b.outputColumnProvenance[i] = OutputColumnProvenance{
+			State: ProvenanceSingleSource, CTASDefaultPolicy: CTASDefaultInheritSource,
+			Source: &SourceColumn{RelPos: b.tag, ColPos: int32(i), TableID: b.tableID,
+				Metadata: metadata},
+		}
+	}
+}
+
 func (b *Binding) FindColumn(col string) int32 {
 	if id, ok := b.colIdByName[col]; ok {
 		return id

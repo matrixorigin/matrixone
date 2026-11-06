@@ -189,6 +189,13 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
         HasFrame: hasFrame,
     }
 }
+func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
+    return &tree.FuncExpr{
+        Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(name)),
+        FuncName: tree.NewCStr(name, 1),
+        Exprs: tree.Exprs{value, tree.NewTimeUnitExpr(strings.ToLower(unit))},
+    }
+}
 %}
 
 %struct {
@@ -196,6 +203,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     str string
     item interface{}
     pos int
+    quotedIdentifier bool
+    singleTypePrecision bool
+    stringTableAlias bool
+    numericModifiers bool
+    typeLength int32
 }
 
 %union {
@@ -526,7 +538,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %left <str> BETWEEN CASE WHEN THEN ELSE END ELSEIF
 %nonassoc LOWER_THAN_EQ
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
-%left <str> '|'
+// ESCAPE shifts before completing LIKE, but below simple-expression suffixes.
+%left <str> '|' ESCAPE
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
 %left <str> '+' '-'
@@ -536,7 +549,6 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // HIGH_NOT shares the unary precedence used by the `!` production. The lexer
 // emits it only when HIGH_NOT_PRECEDENCE is active.
 %right <str> '~' UNARY HIGH_NOT
-%nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
 %left TYPECAST
 %nonassoc LOWER_THAN_SIGNED
@@ -546,7 +558,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %nonassoc LOWER_THAN_INT
 %left INT INTEGER
 %right <str> BINARY UNDERSCORE_BINARY
-%right <str> INTERVAL
+%right <str> INTERVAL DIGEST_INTERVAL
 %nonassoc <str> '.' ','
 
 %token <str> OUT INOUT
@@ -559,7 +571,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
-%token <str> CHAR
+// NATIONAL is a name unless CHAR follows in a type context.
+%nonassoc LOWER_THAN_NATIONAL_CHAR
+%nonassoc <str> CHAR
 %nonassoc <str> VARCHAR
 %token <str> BOOL CHARACTER
 %nonassoc <str> VARBINARY
@@ -578,7 +592,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Create Table
 %token <str> CREATE ALTER DROP RENAME REMOVE ANALYZE PHYPLAN ADD RETURNS
 %token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
-%token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
+%token <str> SHOW DESCRIBE EXPLAIN DATE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
 %token <str> CHECKSUM COMPRESSION DATA DIRECTORY DELAY_KEY_WRITE ENCRYPTION ENGINE
@@ -661,6 +675,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> REPLACE CONVERT
 %token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
+%token <str> DIGEST_JSON_VALUE
+%token <str> DIGEST_NTILE DIGEST_LEAD DIGEST_LAG DIGEST_NTH_VALUE DIGEST_FIRST_VALUE DIGEST_LAST_VALUE
 
 // Time unit
 %token <str> SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND
@@ -750,6 +766,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
+// DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
+// their existing grammar. Its only unqualified form is the entire FROM clause.
+%token <str> DIGEST_DUAL DIGEST_NATIONAL DIGEST_VARYING DIGEST_INTRODUCED_STRING DIGEST_INTRODUCED_HEX DIGEST_SHOW_LIKE
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -867,7 +886,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
 %type <joinCond> join_condition join_condition_opt
-%type <selectLockInfo> select_lock_opt
+%type <selectLockInfo> select_lock_opt select_lock
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
 %type <analyzeTableEntry> analyze_table_entry
@@ -897,6 +916,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <tableNames> table_name_list alter_publication_table_opt
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
+%type <str> char_type_name
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
 %type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
@@ -949,7 +969,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
 %type <str> inner_join straight_join outer_join natural_join apply_type dedup_join asof_join
-%type <funcType> func_type_opt
+%type <funcType> func_type_opt sum_func_type_opt count_star_type_opt
+%type <expr> aggregate_value_expr
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
@@ -959,7 +980,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 %type <unresolvedName> column_name column_name_unresolved normal_ident
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
-%type <str> charset_keyword db_name db_name_opt
+%type <str> charset_keyword db_name db_name_opt show_database_clause_opt
+%type <boolVal> from_or_in_opt
 %type <str> backup_type_opt backup_timestamp_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -975,9 +997,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
-%type <expr> literal num_literal
+%type <expr> literal num_literal integral_literal digest_stable_integer
 %type <expr> predicate
-%type <expr> bit_expr interval_expr
+%type <expr> bit_expr interval_expr ordinary_interval_expr digest_interval_expr text_literal json_text_literal
 %type <expr> simple_expr else_opt
 %type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
@@ -1002,8 +1024,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <role> role_spec
 %type <cstr> role_name
 %type <usernameRecord> user_name
-%type <user> user_spec drop_user_spec user_spec_with_identified
-%type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
+%type <user> user_spec drop_user_spec user_spec_with_identified create_user_spec
+%type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user create_user_spec_list
 //%type <tlsOptions> require_clause_opt require_clause require_list
 //%type <tlsOption> require_elem
 //%type <resourceOptions> conn_option_list conn_options
@@ -5546,18 +5568,32 @@ using_roles_opt:
     }
 
 show_table_status_stmt:
-    SHOW TABLE STATUS from_or_in_opt db_name_opt like_opt where_expression_opt
+    SHOW TABLE STATUS show_database_clause_opt like_opt where_expression_opt
     {
-        $$ = &tree.ShowTableStatus{DbName: $5, Like: $6, Where: $7}
+        $$ = &tree.ShowTableStatus{DbName: $4, Like: $5, Where: $6}
+    }
+
+// Preserve ordinary admission; digest requires both clause keyword and name.
+show_database_clause_opt:
+    from_or_in_opt db_name_opt
+    {
+        if yylex.(*Lexer).digest != nil && $1 != $<boolVal>2 {
+            yylex.Error("SHOW database clause requires both FROM/IN and a database name"); goto ret1
+        }
+        if !digestShowDatabaseValid(yylex, $2, $<boolVal>2) { goto ret1 }
+        $$ = $2
     }
 
 from_or_in_opt:
-    {}
+    { $$ = false }
 |    from_or_in
+    { $$ = true }
 
+// boolVal distinguishes an omitted database from an explicitly quoted empty one.
 db_name_opt:
-    {}
+    { $$ = ""; $<boolVal>$ = false }
 |    db_name
+    { $$ = $1; $<boolVal>$ = true }
 
 show_function_status_stmt:
     SHOW FUNCTION STATUS like_opt where_expression_opt
@@ -5645,13 +5681,13 @@ show_target:
     {
         $$ = &tree.ShowTarget{Type: tree.ShowEngines}
     }
-|    TRIGGERS from_or_in_opt db_name_opt
+|    TRIGGERS show_database_clause_opt
     {
-        $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
+        $$ = &tree.ShowTarget{DbName: $2, Type: tree.ShowTriggers}
     }
-|    EVENTS from_or_in_opt db_name_opt
+|    EVENTS show_database_clause_opt
     {
-        $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowEvents}
+        $$ = &tree.ShowTarget{DbName: $2, Type: tree.ShowEvents}
     }
 |    PLUGINS
     {
@@ -5669,6 +5705,7 @@ show_target:
 show_index_stmt:
     SHOW extended_opt index_kwd table_column_name database_name_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $5, $<boolVal>5) { goto ret1 }
         $$ = &tree.ShowIndex{
             TableName: $4,
             DbName: $5,
@@ -5736,6 +5773,11 @@ global_scope:
     {
         $$ = false
     }
+|   LOCAL
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = false
+    }
 
 show_warnings_stmt:
     SHOW WARNINGS limit_opt
@@ -5775,6 +5817,7 @@ show_sequences_stmt:
 show_tables_stmt:
     SHOW full_opt TABLES database_name_opt like_opt where_expression_opt table_snapshot_opt
     {
+        if !digestShowDatabaseValid(yylex, $4, $<boolVal>4) { goto ret1 }
         $$ = &tree.ShowTables{
             Open: false,
             Full: $2,
@@ -5812,6 +5855,7 @@ show_databases_stmt:
 show_columns_stmt:
     SHOW full_opt fields_or_columns table_column_name database_name_opt like_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $5, $<boolVal>5) { goto ret1 }
         $$ = &tree.ShowColumns{
             Ext: false,
             Full: $2,
@@ -5824,6 +5868,7 @@ show_columns_stmt:
     }
 |   SHOW EXTENDED full_opt fields_or_columns table_column_name database_name_opt like_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $6, $<boolVal>6) { goto ret1 }
         $$ = &tree.ShowColumns{
             Ext: true,
             Full: $3,
@@ -5883,22 +5928,30 @@ like_opt:
     {
         $$ = nil
     }
+|   DIGEST_SHOW_LIKE STRING
+    {
+        $$ = tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal($2, $2, false, tree.P_char))
+    }
 |   LIKE simple_expr
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("SHOW LIKE requires a text string"); goto ret1 }
         $$ = tree.NewComparisonExpr(tree.LIKE, nil, $2)
     }
 |   ILIKE simple_expr
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("SHOW does not support ILIKE"); goto ret1 }
         $$ = tree.NewComparisonExpr(tree.ILIKE, nil, $2)
     }
 
 database_name_opt:
     {
         $$ = ""
+        $<boolVal>$ = false
     }
 |   from_or_in ident
     {
         $$ = $2.Compare()
+        $<boolVal>$ = true
     }
 
 table_column_name:
@@ -7225,6 +7278,32 @@ select_no_parens:
             return 1
         }
     }
+|   select_with_parens select_lock
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, SelectLockInfo: $2, Ep: tree.SelectIntoExport($1), IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens select_lock_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, With: $1, Ep: tree.SelectIntoExport($2), IntoVars: intoVars, DeprecatedInto: deprecatedInto, SelectLockInfo: $3}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
 |   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
@@ -7502,6 +7581,15 @@ fill_mode:
 with_clause:
     WITH cte_list
     {
+        // Ordinary SQL retains binder-owned duplicate-name diagnostics. Digest
+        // has no binder, so declaration syntax must be checked here, even in
+        // unused definitions and EXPLAIN where lock itemization is skipped.
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateCTENames($2, digestIdentifierKey); err != "" {
+                yylex.Error(err)
+                goto ret1
+            }
+        }
         $$ = &tree.With{
             IsRecursive: false,
             CTEs: $2,
@@ -7509,6 +7597,12 @@ with_clause:
     }
 |    WITH RECURSIVE cte_list
     {
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateCTENames($3, digestIdentifierKey); err != "" {
+                yylex.Error(err)
+                goto ret1
+            }
+        }
         $$ = &tree.With{
             IsRecursive: true,
             CTEs: $3,
@@ -7535,8 +7629,12 @@ common_table_expr:
             yylex.Error("empty common table expression body")
             goto ret1
         }
+        name := $1.Compare()
+        if yylex.(*Lexer).digest != nil {
+            name = $1.Origin()
+        }
         $$ = &tree.CTE{
-            Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
+            Name: &tree.AliasClause{Alias: tree.Identifier(name), Cols: $2},
             Stmt: $5,
         }
     }
@@ -7704,8 +7802,15 @@ select_lock_opt:
     {
         $$ = nil
     }
-|   FOR UPDATE
+|   select_lock
     {
+        $$ = $1
+    }
+
+select_lock:
+    FOR UPDATE
+    {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
         }
@@ -7715,6 +7820,7 @@ select_lock_opt:
     }
 |   FOR SHARE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
         }
@@ -7726,6 +7832,7 @@ select_lock_opt:
     }
 |   LOCK IN SHARE MODE
     {
+        yylex.(*Lexer).selectLockClauses++
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
         }
@@ -8214,6 +8321,11 @@ from_clause:
         $$ = &tree.From{
             Tables: tree.TableExprs{$2},
         }
+    }
+|   FROM DIGEST_DUAL
+    {
+        tn := tree.NewTableName(tree.Identifier($2), tree.ObjectNamePrefix{}, nil)
+        $$ = &tree.From{Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}}}
     }
 
 table_references:
@@ -8730,21 +8842,27 @@ as_opt_id:
     }
 |   table_alias
     {
+        if yylex.(*Lexer).digest != nil && $<stringTableAlias>1 { yylex.Error("Table aliases require identifiers"); goto ret1 }
         $$ = $1
     }
 |   AS table_alias
     {
+        if yylex.(*Lexer).digest != nil && $<stringTableAlias>2 { yylex.Error("Table aliases require identifiers"); goto ret1 }
         $$ = $2
     }
 
+// This value is also used by ENGINE=, where a STRING is legal. Only the
+// actual alias consumer as_opt_id rejects its STRING form in digest mode.
 table_alias:
     ident
     {
 	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $<stringTableAlias>$ = false
     }
 |   STRING
     {
 	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
+        $<stringTableAlias>$ = true
     }
 
 as_name_opt:
@@ -8762,11 +8880,15 @@ as_name_opt:
     }
 |   STRING
     {
+        if !digestStringAliasValid(yylex, $1) { goto ret1 }
         $$ = tree.NewCStr($1, 1)
+        $$.Quoted = yylex.(*Lexer).digest != nil
     }
 |   AS STRING
     {
+        if !digestStringAliasValid(yylex, $2) { goto ret1 }
         $$ = tree.NewCStr($2, 1)
+        $$.Quoted = yylex.(*Lexer).digest != nil
     }
 
 stmt_name:
@@ -9376,7 +9498,7 @@ account_comment_opt:
     }
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
+    CREATE USER not_exists_opt create_user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         var IfNotExists = $3
         var Users = $4
@@ -9873,6 +9995,23 @@ user_comment_or_attribute_opt:
 //    {
 //        $$ = &tree.TlsOptionSan{San: $2}
 //    }
+// Check each ordinary CREATE USER at its own reduction, before consuming
+// subsequent users/options. Digest keeps MySQL's optional authentication.
+create_user_spec:
+    user_spec
+    {
+        if yylex.(*Lexer).digest == nil && $1.AuthOption == nil {
+            yylex.Error("syntax error"); goto ret1
+        }
+        $$ = $1
+    }
+
+create_user_spec_list:
+    create_user_spec
+    { $$ = []*tree.User{$1} }
+|   create_user_spec_list ',' create_user_spec
+    { $$ = append($1, $3) }
+
 user_spec_list_of_create_user:
     user_spec_with_identified
     {
@@ -12271,7 +12410,15 @@ charset_name:
 
 collate_name:
     name_string
+    {
+        $$ = $1
+        $<quotedIdentifier>$ = true
+    }
 |   BINARY
+    {
+        $$ = $1
+        $<quotedIdentifier>$ = false
+    }
 
 table_name_list:
     table_name
@@ -12293,6 +12440,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $2)
         $$.IcebergRef = $3
+        $$.IsQuoted = $1.Quoted
     }
 |   ident '.' ident table_snapshot_opt iceberg_ref_opt
     {
@@ -12301,6 +12449,7 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier(dbName), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier(tblName), prefix, $4)
         $$.IcebergRef = $5
+        $$.IsQuoted = $3.Quoted
     }
 
 iceberg_ref_opt:
@@ -12774,18 +12923,20 @@ ident:
     ID
     {
 		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+        $$.Quoted = $<quotedIdentifier>1
     }
 |	QUOTE_ID
 	{
     	$$ = tree.NewCStr($1, 1)
+        $$.Quoted = true
     }
 |   not_keyword
 	{
-		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+		if rejectDigestReservedKeyword(yylex, $1) || rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |   non_reserved_keyword
 	{
-		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+		if rejectDigestReservedKeyword(yylex, $1) || rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 
 db_name_ident:
@@ -12943,12 +13094,18 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   charset_keyword equal_opt charset_name
+|   charset_keyword charset_name
     {
+		$$ = tree.NewAttributeCharset($2)
+    }
+|   charset_keyword '=' charset_name
+    {
+        if yylex.(*Lexer).digest != nil { yylex.Error("Column charset does not accept equals"); goto ret1 }
 		$$ = tree.NewAttributeCharset($3)
     }
 |   DEFAULT CHARACTER SET equal_opt charset_name
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("Column charset does not accept DEFAULT prefix"); goto ret1 }
 		$$ = tree.NewAttributeCharset($5)
     }
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
@@ -13172,6 +13329,12 @@ column_format:
 subquery:
     select_with_parens %prec SUBQUERY_AS_EXPR
     {
+        if yylex.(*Lexer).digest != nil {
+            if err := tree.ValidateSelectIntoInSubquery($1); err != "" {
+                yylex.Error(err)
+                return 1
+            }
+        }
         $$ = &tree.Subquery{Select: $1, Exists: false}
     }
 
@@ -13248,7 +13411,12 @@ bit_expr:
             Exprs: tree.Exprs{inner},
         }
     }
-|   simple_expr %prec LOWER_THAN_COLLATE
+|   bit_expr '+' digest_interval_expr %prec '+'
+    { $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3) }
+|   bit_expr '-' digest_interval_expr %prec '-'
+    { $$ = tree.NewBinaryExpr(tree.MINUS, $1, $3) }
+// Finish binary operands below concatenation/COLLATE/TYPECAST suffixes.
+|   simple_expr %prec '^'
     {
         $$ = $1
     }
@@ -13261,6 +13429,10 @@ simple_expr:
 |   variable
     {
         $$ = $1
+    }
+|   DEFAULT '(' column_name ')'
+    {
+        $$ = &tree.DefaultColExpr{Column: $3, StrictMode: yylex.(*Lexer).sqlMode.Has(SQLModeStrict)}
     }
 |   literal
     {
@@ -13394,10 +13566,10 @@ simple_expr:
             return 1
         }
     }
-|   interval_expr
-    {
-        $$ = $1
-    }
+|   ordinary_interval_expr
+    { $$ = $1 }
+|   digest_interval_expr '+' expression %prec DIGEST_INTERVAL
+    { $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3) }
 |   subquery
     {
         $$ = $1
@@ -13419,7 +13591,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CAST '(' expression AS CHAR length_option_opt charset_keyword charset_name ')'
+|   CAST '(' expression AS char_type_name length_option_opt charset_keyword charset_name ')'
     {
         $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $8))
     }
@@ -13476,20 +13648,29 @@ simple_expr:
 |   simple_expr COLLATE collate_name
     {
         $$ = &tree.CollateExpr{Expr: $1, Collation: $3}
+        if syntax := yylex.(*Lexer).digest; syntax != nil && !$<quotedIdentifier>3 {
+            // A trailing column COLLATE is contextualized separately; an
+            // expression COLLATE requires a name token, not reserved BINARY.
+            syntax.rejectExpression($$)
+        }
     }
 |   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {
-	val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
-	if err != nil {
-		yylex.Error(err.Error())
-		goto ret1
-	}
-	$$ = val
+        if yylex.(*Lexer).digest != nil {
+            $$ = &tree.FullTextMatchExpr{KeyParts: $3, Pattern: $7, Mode: $8}
+        } else {
+            val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
+            if err != nil { yylex.Error(err.Error()); goto ret1 }
+            $$ = val
+        }
     }
 search_pattern:
-    STRING
+    text_literal
     {
-        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+        if yylex.(*Lexer).digest == nil && $1.(*tree.NumVal).ValType != tree.P_char {
+            yylex.Error("syntax error"); goto ret1
+        }
+        $$ = $1
     }
 |   VALUE_ARG
     {
@@ -13501,7 +13682,27 @@ search_pattern:
     }
 
 function_call_window:
-	RANK '(' ')' window_spec
+    DIGEST_NTILE '(' digest_stable_integer ')' window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $5, 0) }
+|   DIGEST_LEAD '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   DIGEST_LEAD '(' expression ',' digest_stable_integer ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5}, $8, 1) }
+|   DIGEST_LEAD '(' expression ',' digest_stable_integer ',' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5, $7}, $10, 1) }
+|   DIGEST_LAG '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   DIGEST_LAG '(' expression ',' digest_stable_integer ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5}, $8, 1) }
+|   DIGEST_LAG '(' expression ',' digest_stable_integer ',' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5, $7}, $10, 1) }
+|   DIGEST_NTH_VALUE '(' expression ',' simple_expr ')' digest_nth_from_opt digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5}, $9, -1) }
+|   DIGEST_FIRST_VALUE '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   DIGEST_LAST_VALUE '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   RANK '(' ')' window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -13920,6 +14121,7 @@ mo_cast_type:
     column_type
 {
    t := $$
+   if !digestCastTypeValid(yylex, t, $<numericModifiers>1) { goto ret1 }
    str := strings.ToLower(t.InternalType.FamilyString)
    if str == "binary" {
         t.InternalType.Scale = -1
@@ -13964,6 +14166,16 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+    {
+        if !digestCastTypeValid(yylex, $1, false) { goto ret1 }
+        $$ = $1
+    }
+|   spatial_type
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        if !digestCastTypeValid(yylex, $1, false) { goto ret1 }
+        $$ = $1
+    }
 |   JSON
     {
         locale := ""
@@ -13990,7 +14202,7 @@ mysql_cast_type:
             },
         }
     }
-|   CHAR length_option_opt
+|   char_type_name length_option_opt
     {
         locale := ""
         oid := uint32(defines.MYSQL_TYPE_STRING)
@@ -14009,7 +14221,7 @@ mysql_cast_type:
             },
         }
     }
-|   CHAR length_option_opt charset_keyword charset_name
+|   char_type_name length_option_opt charset_keyword charset_name
     {
         $$ = makeCharsetCastCharType($2, $4)
     }
@@ -14038,9 +14250,11 @@ mysql_cast_type:
                 Oid:    uint32(defines.MYSQL_TYPE_YEAR),
             },
         }
+        if yylex.(*Lexer).digest != nil && $<typeLength>2 >= 0 { yylex.Error("CAST YEAR does not take a length"); goto ret1 }
     }
 |   DATETIME timestamp_option_opt
     {
+        if yylex.(*Lexer).digest != nil && $2 > 6 { yylex.Error("Invalid CAST datetime precision"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -14056,6 +14270,7 @@ mysql_cast_type:
     }
 |   TIME length_opt
     {
+        if yylex.(*Lexer).digest != nil && $<typeLength>2 > 6 { yylex.Error("Invalid CAST time precision"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -14289,6 +14504,7 @@ window_definition:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
 	    {
+            if !digestAggregateArgs(yylex, $1, $3, len($4), $9 != nil) { goto ret1 }
 	        functionName := $1
 	        arguments := $4
 	        separator := tree.Expr(tree.NewNumVal($6, $6, false, tree.P_char))
@@ -14376,7 +14592,7 @@ function_call_aggregate:
 		OrderBy:$5,
 	    }
       }
-|   AVG '(' func_type_opt expression  ')' window_spec_opt
+|   AVG '(' sum_func_type_opt expression  ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14483,6 +14699,7 @@ function_call_aggregate:
     }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14494,6 +14711,7 @@ function_call_aggregate:
     }
 |   BIT_OR '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14505,6 +14723,7 @@ function_call_aggregate:
     }
 |   BIT_XOR '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14516,6 +14735,7 @@ function_call_aggregate:
     }
 |   COUNT '(' func_type_opt expression_list ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, len($4), $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14525,7 +14745,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   COUNT '(' '*' ')' window_spec_opt
+|   COUNT '(' count_star_type_opt '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         es := tree.NewNumVal("*", "*", false, tree.P_star)
@@ -14533,10 +14753,11 @@ function_call_aggregate:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{es},
-            WindowSpec: $5,
+            Type: $3,
+            WindowSpec: $6,
         }
     }
-|   MAX '(' func_type_opt expression ')' window_spec_opt
+|   MAX '(' sum_func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14547,7 +14768,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   MIN '(' func_type_opt expression ')' window_spec_opt
+|   MIN '(' sum_func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14558,7 +14779,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   SUM '(' func_type_opt expression ')' window_spec_opt
+|   SUM '(' sum_func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14571,6 +14792,7 @@ function_call_aggregate:
     }
 |   std_dev_pop '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14582,6 +14804,7 @@ function_call_aggregate:
     }
 |   STDDEV_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14593,6 +14816,7 @@ function_call_aggregate:
     }
 |   VAR_POP '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14604,6 +14828,7 @@ function_call_aggregate:
     }
 |   VAR_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14659,6 +14884,7 @@ function_call_aggregate:
     }
 |   GROUPING '(' func_type_opt expression_list ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, len($4), $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14670,6 +14896,7 @@ function_call_aggregate:
     }
 |   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
 	    functionName := $1
 	    if strings.EqualFold(functionName, "array_agg") {
 	        // MatrixOne has no general SQL ARRAY value. ARRAY_AGG deliberately
@@ -14685,8 +14912,9 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   JSON_OBJECTAGG '(' func_type_opt expression ',' expression ')' window_spec_opt
+|   JSON_OBJECTAGG '(' func_type_opt expression ',' aggregate_value_expr ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 2, $8 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14705,16 +14933,31 @@ std_dev_pop:
 function_call_generic:
     ID '(' expression_list_opt ')'
     {
+        if !digestNativeIdentifierArgs(yylex, $1, $3, $<quotedIdentifier>1) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1) ||
+                (yylex.(*Lexer).digest != nil && isDigestTemporalFunctionName($1)),
             Exprs: $3,
+        }
+        digestRegisterFunction(yylex, $$)
+    }
+|   ident '.' ident '(' expression_list_opt ')'
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        name := tree.NewUnresolvedName($1, $3)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1.Origin()+"."+$3.Origin(), 1),
+            IsGeneric: true,
+            Exprs: $5,
         }
     }
 |   SERIAL '(' expression_list_opt ')'
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("SERIAL is not a native function name"); goto ret1 }
         // `serial` is a keyword (SERIAL column-alias type, see column_def) but
         // the serial(...)/serial_extract(serial(...))/composite-index consumers
         // use it as an ordinary generic function. Keep the generic-call shape
@@ -14740,8 +14983,26 @@ function_call_generic:
             Exprs: exprs,
         }
     }
+|   DIGEST_INTERVAL '(' bit_expr ',' expression_list ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1), Exprs: append(tree.Exprs{$3}, $5...)}
+    }
+|   func_not_keyword '(' expression_list ',' digest_interval_expr ')'
+    {
+        if len($3) != 1 { yylex.Error("Date arithmetic requires two arguments"); goto ret1 }
+        switch strings.ToUpper($1) {
+        case "DATE_ADD", "DATE_SUB", "ADDDATE", "SUBDATE":
+        default: yylex.Error("Function does not consume an INTERVAL operand"); goto ret1
+        }
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1), Exprs: append($3, $5)}
+    }
 |   substr_option '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14789,6 +15050,10 @@ function_call_generic:
     }
 |   func_not_keyword '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
+        if yylex.(*Lexer).digest != nil && (strings.EqualFold($1, "DATE_ADD") || strings.EqualFold($1, "DATE_SUB")) {
+            yylex.Error("DATE_ADD/DATE_SUB require INTERVAL"); goto ret1
+        }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14798,6 +15063,7 @@ function_call_generic:
     }
 |   VARIANCE '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -15016,12 +15282,14 @@ function_call_nonkeyword:
 function_call_keyword:
     name_confict '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
+        digestRegisterFunction(yylex, $$)
     }
 |   name_braces braces_opt
     {
@@ -15077,28 +15345,19 @@ function_call_keyword:
             Exprs: tree.Exprs{charExpr, charset},
         }
     }
+|   DIGEST_JSON_VALUE '(' simple_expr ',' json_text_literal ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1), Exprs: tree.Exprs{$3, $5}}
+    }
 |   DATE STRING
-    {
-        val := tree.NewNumVal($2, $2, false, tree.P_char)
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{val},
-        }
-    }
+    { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   TIME STRING
-    {
-        val := tree.NewNumVal($2, $2, false, tree.P_char)
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{val},
-        }
-    }
+    { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   INSERT '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -15127,15 +15386,7 @@ function_call_keyword:
         }
     }
 |   TIMESTAMP STRING
-    {
-        val := tree.NewNumVal($2, $2, false, tree.P_char)
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{val},
-        }
-    }
+    { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   BITMAP_BIT_POSITION '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -15187,6 +15438,9 @@ datetime_scale:
         }
         str := fmt.Sprintf("%v", $2)
         $$ = tree.NewNumVal(ival, str, false, tree.P_int64)
+        if yylex.(*Lexer).digest != nil && !digestDatetimePrecision($$) {
+            yylex.Error("Invalid datetime precision syntax"); goto ret1
+        }
     }
 
 name_datetime_scale:
@@ -15243,16 +15497,45 @@ name_confict:
 |   UUID
 
 interval_expr:
+    ordinary_interval_expr
+    { $$ = $1 }
+|   digest_interval_expr
+    { $$ = $1 }
+
+ordinary_interval_expr:
     INTERVAL expression time_unit
+    { $$ = makeIntervalExpr($1, $2, $3) }
+
+digest_interval_expr:
+    DIGEST_INTERVAL expression time_unit
+    { $$ = makeIntervalExpr($1, $2, $3) }
+
+// MySQL DISTINCT in_sum_expr permits DISTINCT ALL for AVG/MIN/MAX/SUM,
+// but not COUNT(DISTINCT expr_list) or GROUP_CONCAT(opt_distinct expr_list).
+sum_func_type_opt:
+    func_type_opt
+    { $$ = $1 }
+|   DISTINCT ALL
     {
-        name := tree.NewUnresolvedColName($1)
-        str := strings.ToLower($3)
-        arg2 := tree.NewTimeUnitExpr(str)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{$2, arg2},
-        }
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = tree.FUNC_TYPE_DISTINCT
+    }
+
+count_star_type_opt:
+    { $$ = tree.FUNC_TYPE_DEFAULT }
+|   ALL
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = tree.FUNC_TYPE_ALL
+    }
+
+aggregate_value_expr:
+    expression
+    { $$ = $1 }
+|   ALL expression
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = $2
     }
 
 func_type_opt:
@@ -15321,7 +15604,7 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
-|   boolean_primary
+|   boolean_primary %prec NOT
     {
         $$ = $1
     }
@@ -15477,10 +15760,11 @@ predicate:
 |   bit_expr %prec LOWER_THAN_COMMA
 
 like_escape_opt:
+    %prec LIKE
     {
         $$ = nil
     }
-|   ESCAPE simple_expr
+|   ESCAPE simple_expr %prec LIKE
     {
         $$ = $2
     }
@@ -15562,7 +15846,18 @@ keys:
         $$ = tree.NewAttributeKey()
     }
 
-num_literal:
+// Native window offsets are stable_integer, not arbitrary expressions.
+digest_stable_integer:
+    integral_literal
+    { $$ = $1 }
+|   VALUE_ARG
+    { $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()) }
+|   ident
+    { $$ = tree.NewUnresolvedName($1) }
+|   user_variable
+    { $$ = $1 }
+
+integral_literal:
     INTEGRAL
     {
         str := $<str>1
@@ -15576,6 +15871,10 @@ num_literal:
             goto ret1
         }
     }
+
+num_literal:
+    integral_literal
+    { $$ = $1 }
 |   FLOAT
     {
         fval := $1.(float64)
@@ -15586,29 +15885,39 @@ num_literal:
         $$ = tree.NewNumVal($1, $1, false, tree.P_decimal)
     }
 
-literal:
+text_literal:
+    json_text_literal
+    { $$ = $1 }
+|   DIGEST_INTRODUCED_HEX
+    {
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+    }
+|   UNDERSCORE_BINARY HEXNUM
+    {
+        if !digestCharsetLiteralValid(yylex, $1, $2, true) { goto ret1 }
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
+    }
+
+json_text_literal:
     STRING
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
-|   INTEGRAL
+|   DIGEST_INTRODUCED_STRING
     {
-        str := $<str>1
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumVal(v, str, false, tree.P_int64)
-        default:
-            yylex.Error("parse integral fail")
-            goto ret1
-        }
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
-|   FLOAT
+|   UNDERSCORE_BINARY STRING
     {
-        fval := $1.(float64)
-        $$ = tree.NewNumVal(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+        if !digestCharsetLiteralValid(yylex, $1, $2, false) { goto ret1 }
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
+
+literal:
+    text_literal
+    { $$ = $1 }
+|   num_literal
+    { $$ = $1 }
 |   TRUE
     {
         $$ = tree.NewNumVal(true, "true", false, tree.P_bool)
@@ -15619,20 +15928,16 @@ literal:
     }
 |   NULL
     {
+        if digest := yylex.(*Lexer).digest; digest != nil {
+            digest.nulls[$<pos>1] = struct{}{}
+        }
         $$ = tree.NewNumVal("null", "null", false, tree.P_null)
     }
 |   HEXNUM
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_hexnum)
     }
-|   UNDERSCORE_BINARY HEXNUM
-    {
-        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
-    }
-|   DECIMAL_VALUE
-    {
-        $$ = tree.NewNumVal($1, $1, false, tree.P_decimal)
-    }
+
 |   BIT_LITERAL
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_bit)
@@ -15641,23 +15946,32 @@ literal:
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
-|   UNDERSCORE_BINARY STRING
-    {
-        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
-    }
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
     {
+        $<numericModifiers>$ = $<numericModifiers>2 || $3
+        if $<numericModifiers>$ {
+            if yylex.(*Lexer).digest != nil && ($1.InternalType.Family == tree.BitFamily || $1.InternalType.Family == tree.BoolFamily) {
+                yylex.Error("This type does not accept numeric modifiers"); goto ret1
+            }
+            if yylex.(*Lexer).digest == nil && $1.InternalType.Oid == uint32(defines.MYSQL_TYPE_YEAR) {
+                yylex.Error("syntax error"); goto ret1
+            }
+        }
         $$ = $1
         $$.InternalType.Unsigned = $2
         $$.InternalType.Zerofill = $3
     }
 |   char_type
+    { $$ = $1; $<numericModifiers>$ = false }
 |   time_type
+    { $$ = $1; $<numericModifiers>$ = false }
 |   spatial_type
+    { $$ = $1; $<numericModifiers>$ = false }
 |   ARRAY '(' column_type ')'
     {
+        $<numericModifiers>$ = false
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -15673,6 +15987,7 @@ column_type:
 numeric_type:
     int_type length_opt
     {
+        if !digestIntegerTypeValid(yylex, $1, $<typeLength>2) { goto ret1 }
         $$ = $1
         $$.InternalType.DisplayWith = $2
     }
@@ -15682,7 +15997,15 @@ numeric_type:
     }
 
 int_type:
-    BIT
+    YEAR
+    {
+        locale := ""
+        $$ = &tree.T{InternalType: tree.InternalType{
+            Family: tree.IntFamily, FamilyString: $1, Width: 16,
+            Locale: &locale, Oid: uint32(defines.MYSQL_TYPE_YEAR),
+        }}
+    }
+|   BIT
     {
         locale := ""
         $$ = &tree.T{
@@ -15865,6 +16188,7 @@ int_type:
 decimal_type:
     DOUBLE float_length_opt
     {
+        if !digestFloatTypeValid(yylex, $2, $<singleTypePrecision>2, false) { goto ret1 }
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
@@ -15893,6 +16217,7 @@ decimal_type:
 |   DOUBLE PRECISION float_length_opt
     {
         // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        if !digestFloatTypeValid(yylex, $3, $<singleTypePrecision>3, false) { goto ret1 }
         locale := ""
         if $3.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
@@ -15920,6 +16245,7 @@ decimal_type:
     }
 |   FLOAT_TYPE float_length_opt
     {
+        if !digestFloatTypeValid(yylex, $2, $<singleTypePrecision>2, true) { goto ret1 }
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
@@ -16058,6 +16384,7 @@ decimal_type:
     }
 |   REAL float_length_opt
     {
+        if !digestFloatTypeValid(yylex, $2, $<singleTypePrecision>2, false) { goto ret1 }
         locale := ""
         width := int32(64)
         oid := uint32(defines.MYSQL_TYPE_DOUBLE)
@@ -16151,23 +16478,22 @@ time_type:
             }
         }
     }
-|   YEAR length_opt
+
+char_type_name:
+    CHAR
+|   NCHAR
     {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.IntFamily,
-                FamilyString: $1,
-                DisplayWith: $2,
-                Width:  16,
-                Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_YEAR),
-            },
-        }
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = $1
+    }
+|   DIGEST_NATIONAL CHAR
+    {
+        // Keep the implicit national charset identity for column contextualization.
+        $$ = "NCHAR"
     }
 
 char_type:
-    CHAR length_option_opt
+    char_type_name length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -16180,8 +16506,20 @@ char_type:
             },
         }
     }
+|   char_type_name DIGEST_VARYING length_option_opt
+    {
+        if $3 < 0 { yylex.Error("Varying character type requires a length"); goto ret1 }
+        name := "VARCHAR"
+        if digestKeywordUpper($1) == "NCHAR" { name = "NVARCHAR" }
+        locale := ""
+        $$ = &tree.T{InternalType: tree.InternalType{
+            Family: tree.StringFamily, FamilyString: name, Locale: &locale,
+            Oid: uint32(defines.MYSQL_TYPE_VARCHAR), DisplayWith: $3,
+        }}
+    }
 |   VARCHAR length_option_opt
     {
+        if yylex.(*Lexer).digest != nil && $2 < 0 { yylex.Error("VARCHAR requires a length"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -16208,6 +16546,7 @@ char_type:
     }
 |   VARBINARY length_option_opt
     {
+        if yylex.(*Lexer).digest != nil && $2 < 0 { yylex.Error("VARBINARY requires a length"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -16620,11 +16959,24 @@ declare_stmt:
 spatial_type:
     spatial_type_name
     {
+        if yylex.(*Lexer).digest != nil {
+            if _, ok := digestSymbols[digestKeywordUpper($1)]; !ok { yylex.Error("Invalid MySQL spatial type"); goto ret1 }
+        }
         $$ = tree.NewSpatialType($1)
     }
 
 spatial_type_name:
-    GEOMETRY
+    ID
+    {
+        // A native alias missing from MO's keyword table stays an ID in
+        // function/name positions. Bridge it only in the type grammar.
+        if yylex.(*Lexer).digest == nil ||
+            digestSymbols[digestKeywordUpper($1)].id != digestSymbols["GEOMETRYCOLLECTION"].id {
+            yylex.Error("syntax error"); goto ret1
+        }
+        $$ = "GEOMETRYCOLLECTION"
+    }
+|   GEOMETRY
 |   POINT
 |   LINESTRING
 |   POLYGON
@@ -16660,8 +17012,13 @@ length_opt:
     /* EMPTY */
     {
         $$ = 0
+        $<typeLength>$ = -1
     }
 |    length
+    {
+        $$ = $1
+        $<typeLength>$ = $<typeLength>1
+    }
 
 timestamp_option_opt:
     /* EMPTY */
@@ -16692,6 +17049,7 @@ length:
         value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.GetDisplayWith(value)
+        $<typeLength>$ = value
     }
 
 float_length_opt:
@@ -16701,6 +17059,7 @@ float_length_opt:
             DisplayWith: tree.NotDefineDisplayWidth,
             Scale: tree.NotDefineDec,
         }
+        $<singleTypePrecision>$ = false
     }
 |   '(' INTEGRAL ')'
     {
@@ -16710,6 +17069,7 @@ float_length_opt:
             DisplayWith: tree.GetDisplayWith(value),
             Scale: tree.NotDefineDec,
         }
+        $<singleTypePrecision>$ = true
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
@@ -16721,6 +17081,7 @@ float_length_opt:
             DisplayWith: tree.GetDisplayWith(width),
             Scale: scale,
         }
+        $<singleTypePrecision>$ = false
     }
 
 decimal_length_opt:
@@ -16735,8 +17096,10 @@ decimal_length_opt:
     {
         value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
+        width := tree.GetDisplayWith(value)
+        if yylex.(*Lexer).digest != nil && value == 0 { width = 0 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(value),
+            DisplayWith: width,
             Scale: 0,
         }
     }
@@ -16750,25 +17113,32 @@ decimal_length_opt:
             DisplayWith: tree.GetDisplayWith(width),
             Scale: scale,
         }
+        if yylex.(*Lexer).digest != nil {
+            if scale > 30 { yylex.Error("DECIMAL scale exceeds 30"); goto ret1 }
+            if width == 0 && scale == 0 { $$.DisplayWith = 0 }
+        }
     }
 
 unsigned_opt:
     %prec LOWER_THAN_SIGNED
     {
         $$ = false
+        $<numericModifiers>$ = false
     }
 |   UNSIGNED
     {
         $$ = true
+        $<numericModifiers>$ = true
     }
 |   SIGNED
     {
         $$ = false
+        $<numericModifiers>$ = true
     }
 
 zero_fill_opt:
     %prec LOWER_THAN_ZEROFILL
-    {}
+    { $$ = false }
 |   ZEROFILL
     {
         $$ = true
@@ -16981,7 +17351,8 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    DIGEST_NATIONAL %prec LOWER_THAN_NATIONAL_CHAR
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY
@@ -17471,7 +17842,8 @@ func_not_keyword:
 |   TRANSLATE
 
 not_keyword:
-    ADDDATE
+    DIGEST_JSON_VALUE
+|   ADDDATE
 |   BIT_AND
 |   BIT_OR
 |   BIT_XOR
@@ -17532,6 +17904,18 @@ not_keyword:
 |   EWM_STD
 |   EWM_COV
 |   EWM_CORR
+
+digest_null_treatment_opt:
+    value_window_null_treatment_opt
+    {}
+|   IGNORE NULLS
+    {}
+
+digest_nth_from_opt:
+    nth_value_from_first_opt
+    {}
+|   FROM LAST
+    {}
 
 value_window_null_treatment_opt:
     {

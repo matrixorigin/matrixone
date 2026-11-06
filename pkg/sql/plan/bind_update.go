@@ -261,8 +261,13 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 	for pos := 0; pos < columnCount; pos++ {
 		selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[pos]))
 	}
+	// One immutable snapshot per column, shared by all assignment row images.
+	// Deep-copying defaults again for every RHS multiplies schema work by the
+	// assignment count, even when the statement never calls DEFAULT.
+	sourceMetadata := make([]SourceColumnMetadata, columnCount)
 	for pos, col := range tableDef.Cols {
 		oldColName2Idx[alias+"."+col.Name] = int32(columnCount + pos)
+		sourceMetadata[pos] = snapshotSourceColumnMetadata(col)
 	}
 
 	currentProjectList := selectNode.ProjectList
@@ -302,7 +307,7 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 			currentProjectList = currentNode.ProjectList
 		}
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
-			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, stageLegacy,
+			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, sourceMetadata, stageLegacy,
 		)
 		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
 			target := tableDef.Cols[columnIndex].Typ
@@ -390,6 +395,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	tableDef *plan.TableDef,
 	alias string,
 	currentProjectList []*plan.Expr,
+	sourceMetadata []SourceColumnMetadata,
 	staged bool,
 ) (*BindContext, *ProjectionBinder) {
 	ctx := NewBindContext(builder, parent)
@@ -411,6 +417,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = alias + "." + col.Name
 	}
 	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
+	binding.initSourceColumnProvenance(tableDef.Cols, sourceMetadata)
 	binding.virtualTimestampTable = tableDef
 	binding.virtualTimestampStaged = staged
 	ctx.bindings = append(ctx.bindings, binding)
@@ -596,13 +603,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
-					if isEnumOrSetPlanType(&colDef.Typ) {
-						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
-						if err != nil {
-							return 0, err
-						}
-					}
-
 					if colDef.Typ.AutoIncr {
 						if constExpr, ok := updateExpr.(*tree.NumVal); ok {
 							if constExpr.ValType == tree.P_null {
