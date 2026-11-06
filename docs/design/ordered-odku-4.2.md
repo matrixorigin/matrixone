@@ -105,6 +105,9 @@ For each strictly increasing source ordinal:
    physical no-op filtering. Suspended output retains its target and cannot
    repeat RHS evaluation, ordinals or counts.
 
+Ordinals add no SQL ordering guarantee to unordered INSERT SELECT. A singleton
+shortcut requires statically proven singleton input.
+
 Compile typed executors once. A stable borrowed two-batch RHS frame observes
 image changes synchronously; executors neither mutate nor retain the frame.
 Free executors before their inputs and clear the frame on Reset/Free.
@@ -283,6 +286,8 @@ three warmups and seven measurements per workload; choose sufficient samples
 to cover warm-engine behavior and prefer interleaved/ABBA process order. Include
 INSERT, conflict and no-op, narrow and 512-byte data, representative 8192-row
 batches and hot keys. Keep reset/setup/verification outside timed SQL execution.
+The common-correct gate includes all ten maintained cases in
+`BenchmarkOrderedODKU`; the generated-key case is reported separately.
 
 Both target and candidate same-version process-median spread must be <=2.5%
 for singleton workloads and <=5% for batches. Point-median regression must be
