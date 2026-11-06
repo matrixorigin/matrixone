@@ -72,15 +72,6 @@ func TestTemporalCandidatePermissionRequiresProvenanceAndCopy(t *testing.T) {
 	defer proc.Free()
 	templatePlan := &plan.Plan{Plan: &plan.Plan_Query{Query: template}}
 	proc.GetSessionInfo().TimeZone = time.FixedZone("test", 1234)
-	fixed := prepareFixedZoneTemporalExecutionPlan(templatePlan, proc, true)
-	require.NotSame(t, templatePlan, fixed)
-	require.True(t, getPermission(fixed.GetQuery().Nodes[0].BlockFilterList[0]))
-	require.False(t, getPermission(templatePlan.GetQuery().Nodes[0].BlockFilterList[0]))
-	rowOnly := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{plan2.DeepCopyExpr(markedRow)}}}}}}
-	rowExecution := prepareFixedZoneTemporalExecutionPlan(rowOnly, proc, true)
-	require.NotSame(t, rowOnly, rowExecution)
-	require.True(t, getPermission(rowExecution.GetQuery().Nodes[0].FilterList[0]))
-	require.False(t, getPermission(rowOnly.GetQuery().Nodes[0].FilterList[0]))
 	c := &Compile{proc: proc, addr: "local:6001"}
 	intent := &plan2.TemporalPlanningIntent{
 		TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
@@ -90,7 +81,15 @@ func TestTemporalCandidatePermissionRequiresProvenanceAndCopy(t *testing.T) {
 	}
 	require.False(t, getPermission(c.prepareTemporalExecutionPlan(context.Background(), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
 	c.SetValidatedTemporalAccessIntent(intent)
-	require.True(t, getPermission(c.prepareTemporalExecutionPlan(context.Background(), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
+	fixed := c.prepareTemporalExecutionPlan(context.Background(), templatePlan)
+	require.NotSame(t, templatePlan, fixed)
+	require.True(t, getPermission(fixed.GetQuery().Nodes[0].BlockFilterList[0]))
+	require.False(t, getPermission(templatePlan.GetQuery().Nodes[0].BlockFilterList[0]))
+	rowOnly := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{plan2.DeepCopyExpr(markedRow)}}}}}}
+	rowExecution := c.prepareTemporalExecutionPlan(context.Background(), rowOnly)
+	require.NotSame(t, rowOnly, rowExecution)
+	require.True(t, getPermission(rowExecution.GetQuery().Nodes[0].FilterList[0]))
+	require.False(t, getPermission(rowOnly.GetQuery().Nodes[0].FilterList[0]))
 	require.False(t, getPermission(c.prepareTemporalExecutionPlan(WithSiriusOffload(context.Background()), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
 	c.querySchedulingIntent.Explicit = true
 	require.False(t, getPermission(c.prepareTemporalExecutionPlan(context.Background(), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
@@ -116,7 +115,9 @@ func TestTemporalCandidatePermissionRequiresProvenanceAndCopy(t *testing.T) {
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
-	named := prepareFixedZoneTemporalExecutionPlan(templatePlan, proc, true)
+	intent.TimeZone = zone
+	c.SetValidatedTemporalAccessIntent(intent)
+	named := c.prepareTemporalExecutionPlan(context.Background(), templatePlan)
 	require.False(t, getPermission(named.GetQuery().Nodes[0].BlockFilterList[0]))
 }
 
@@ -148,6 +149,9 @@ func TestTemporalPreflightDiscardPreservesProcess(t *testing.T) {
 	marked := &plan.Expr{TemporalCandidateFilter: true}
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
 	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
+	c.temporalCandidateTopology = true
+	p.GetQuery().Nodes[0].FilterList = nil
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift, "a previously published candidate still requires a valid intent")
 	c.DiscardTemporalPreflight()
 	require.Same(t, board, proc.GetMessageBoard())
 	require.Same(t, params, proc.GetPrepareParams())

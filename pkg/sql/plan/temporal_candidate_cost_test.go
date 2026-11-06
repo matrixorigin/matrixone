@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -121,6 +122,40 @@ func (r *changingPlanningResolver) ResolveIndexForPlanning(base *ObjectRef, name
 
 func (r *changingPlanningResolver) BorrowStillCurrent(CompilerContext, *process.Process, *BorrowedTable) bool {
 	return false
+}
+
+func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
+	fixture, _, _ := temporalCBOTraversalFixture(t)
+	scan := fixture.qry.Nodes[0]
+	underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+	underlying.tables["base"] = scan.TableDef
+	underlying.objects["base"] = scan.ObjRef
+	compiler := &trackingResolveContext{CompilerContext: underlying}
+	resolver := &changingPlanningResolver{compiler: compiler, answers: []bool{true}}
+	stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where id = ?", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	proc := compiler.GetProcess()
+	params := vector.NewVec(types.T_varchar.ToType())
+	defer func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	}()
+	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	source := types.T_int64.ToType()
+	intent := fixture.temporalInput.intent
+	intent.ParameterFree = false
+	bound, err := BuildPreparedExecutionPlanWithTemporalIntent(compiler, stmt,
+		[]PreparedSourceBinding{{Position: 0, Type: source}},
+		[]any{ParamValue{Value: int64(7), SourceType: source, HasSourceType: true}}, &intent, resolver)
+	require.NoError(t, err)
+	require.NotNil(t, bound.Plan.GetQuery())
+	require.Equal(t, 1, compiler.resolves, "the table must still be resolved once")
+	require.Zero(t, resolver.base, "a parameterized attempt cannot use a temporal borrow")
+	require.Zero(t, resolver.hidden)
+	require.False(t, bound.Plan.GetQuery().GetTemporalIndexNeedsReplan())
 }
 
 func TestTemporalPlanningResolverIdentityChanges(t *testing.T) {

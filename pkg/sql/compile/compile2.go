@@ -153,7 +153,8 @@ func (c *Compile) Compile(
 		return ErrTemporalAccessDrift
 	}
 
-	if c.temporalPreflightPending && (c.temporalCandidateTopology || HasTemporalIndexCandidates(queryPlan)) && c.temporalAccessIntent != nil &&
+	hasTemporalCandidates := HasTemporalIndexCandidates(queryPlan)
+	if c.temporalPreflightPending && (c.temporalCandidateTopology || hasTemporalCandidates) && c.temporalAccessIntent != nil &&
 		!c.temporalExecutionAllowed(execTopContext) {
 		return ErrTemporalAccessDrift
 	}
@@ -171,8 +172,8 @@ func (c *Compile) Compile(
 	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
 		return err
 	}
-	c.temporalCandidateTopology = c.temporalCandidateTopology || HasTemporalIndexCandidates(queryPlan)
-	if c.temporalCandidateTopology {
+	c.temporalCandidateTopology = c.temporalCandidateTopology || hasTemporalCandidates
+	if hasTemporalCandidates {
 		queryPlan = c.prepareTemporalExecutionPlan(execTopContext, queryPlan)
 	}
 

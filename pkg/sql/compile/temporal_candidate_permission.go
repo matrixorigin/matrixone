@@ -23,30 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // ErrTemporalAccessDrift is internal control flow: the execution owner must
 // rebuild the original plan without temporal access before retrying compile.
 var ErrTemporalAccessDrift = moerr.NewInternalError(moerr.NoReportContext(), "temporal access intent changed before compilation")
-
-// prepareFixedZoneTemporalExecutionPlan makes an execution-owned copy whenever
-// an admitted candidate is present. Fixed offsets have an explicit process
-// wire representation; named or unclassified zones remain full range until
-// their coordinator-local topology has separately been proved.
-func prepareFixedZoneTemporalExecutionPlan(template *plan.Plan, proc *process.Process, authorized bool) *plan.Plan {
-	if !HasTemporalIndexCandidates(template) {
-		return template
-	}
-	execution := plan2.DeepCopyPlan(template)
-	allow := false
-	if authorized && proc != nil && proc.Base != nil {
-		offset, fixed := types.FixedZoneOffset(proc.GetSessionInfo().TimeZone)
-		allow = fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
-	}
-	setTemporalCandidateNarrowing(execution.GetQuery(), allow)
-	return execution
-}
 
 // SetValidatedTemporalAccessIntent binds the frontend's already checked
 // execution snapshot to this compile. The copy cannot follow later wrapper
@@ -59,11 +40,12 @@ func (c *Compile) SetValidatedTemporalAccessIntent(intent *plan2.TemporalPlannin
 	}
 }
 
+// prepareTemporalExecutionPlan is called only when the current plan contains a
+// candidate. Never grant permission by modifying the reusable template.
 func (c *Compile) prepareTemporalExecutionPlan(ctx context.Context, template *plan.Plan) *plan.Plan {
-	if !HasTemporalIndexCandidates(template) {
-		return template
-	}
-	return prepareFixedZoneTemporalExecutionPlan(template, c.proc, c.temporalExecutionAllowed(ctx))
+	execution := plan2.DeepCopyPlan(template)
+	setTemporalCandidateNarrowing(execution.GetQuery(), c.temporalExecutionAllowed(ctx))
+	return execution
 }
 
 func (c *Compile) temporalExecutionAllowed(ctx context.Context) bool {
