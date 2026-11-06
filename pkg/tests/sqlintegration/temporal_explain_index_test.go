@@ -40,7 +40,12 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
-		exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+		execWith := func(tb testing.TB, q string) {
+			tb.Helper()
+			_, err := conn.ExecContext(ctx, q)
+			require.NoError(tb, err, q)
+		}
+		exec := func(q string) { execWith(t, q) }
 		const schema = "temporal_explain_parity"
 		exec("create database " + schema)
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
@@ -77,29 +82,92 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		plain, analyzed := explain("explain ", query), explain("explain analyze ", query)
 		require.Contains(t, analyzed, "Index Table Scan on events.idx_d", analyzed)
 		require.Contains(t, plain, "Index Table Scan on events.idx_d", plain)
-		ids := func(query string) map[int64]string {
-			t.Helper()
+		idsWith := func(tb testing.TB, query string) map[int64]string {
+			tb.Helper()
 			rows, err := conn.QueryContext(ctx, query)
-			require.NoError(t, err)
+			require.NoError(tb, err)
 			defer rows.Close()
 			columns, err := rows.Columns()
-			require.NoError(t, err)
+			require.NoError(tb, err)
 			got := make(map[int64]string)
 			for rows.Next() {
 				var id int64
 				var d string
 				if len(columns) == 1 {
-					require.NoError(t, rows.Scan(&id))
+					require.NoError(tb, rows.Scan(&id))
 				} else {
-					require.NoError(t, rows.Scan(&id, &d))
+					require.NoError(tb, rows.Scan(&id, &d))
 				}
 				_, duplicate := got[id]
-				require.False(t, duplicate, "an index scan must not duplicate a row")
+				require.False(tb, duplicate, "an index scan must not duplicate a row")
 				got[id] = d
 			}
-			require.NoError(t, rows.Err())
+			require.NoError(tb, rows.Err())
 			return got
 		}
+		ids := func(query string) map[int64]string { return idsWith(t, query) }
+		// TIMESTAMP literals are folded in the session zone. A cached ordinary
+		// or prepared plan must be rebound after that zone changes.
+		exec("create table temporal_cache_events(id int primary key, d datetime(6), key idx_id_d(id,d))")
+		exec("insert into temporal_cache_events values (1,'2025-12-31 23:30:00'), (2,'2026-01-01 01:00:00')")
+		const cachedTemporal = "select id from temporal_cache_events where d < cast('2026-01-01 00:00:00' as timestamp(6))"
+		t.Run("ordinary plan cache and time zone", func(t *testing.T) {
+			for _, zone := range []string{"+00:00", "+08:00", "+00:00"} {
+				execWith(t, "set time_zone='"+zone+"'")
+				for range 2 {
+					require.Equal(t, map[int64]string{1: ""}, idsWith(t, cachedTemporal), zone)
+				}
+			}
+		})
+		exec("set time_zone='+00:00'")
+		_, err = conn.ExecContext(ctx, "set time_zone='not/a/zone'")
+		require.Error(t, err)
+		require.Equal(t, map[int64]string{1: ""}, ids(cachedTemporal))
+		exec("set @temporal_cache_lower=0")
+		for _, tc := range []struct{ name, statement, prepare, execute string }{
+			{"without parameters", "temporal_cache_stmt", "prepare temporal_cache_stmt from 'select id from temporal_cache_events where d < cast(''2026-01-01 00:00:00'' as timestamp(6))'", "execute temporal_cache_stmt"},
+			{"with parameters", "temporal_cache_param", "prepare temporal_cache_param from 'select id from temporal_cache_events where d < cast(''2026-01-01 00:00:00'' as timestamp(6)) and id > ?'", "execute temporal_cache_param using @temporal_cache_lower"},
+		} {
+			t.Run("prepared plan and time zone/"+tc.name, func(t *testing.T) {
+				execWith(t, "set time_zone='+00:00'")
+				execWith(t, tc.prepare)
+				defer execWith(t, "deallocate prepare "+tc.statement)
+				for _, zone := range []string{"+00:00", "+08:00", "+00:00"} {
+					execWith(t, "set time_zone='"+zone+"'")
+					for range 2 {
+						require.Equal(t, map[int64]string{1: ""}, idsWith(t, tc.execute), zone)
+					}
+				}
+				_, setErr := conn.ExecContext(ctx, "set time_zone='not/a/zone'")
+				require.Error(t, setErr)
+				require.Equal(t, map[int64]string{1: ""}, idsWith(t, tc.execute))
+			})
+		}
+		// A different session can change the index definition without clearing
+		// this session's cache. Schema versions must invalidate its old plan.
+		require.Equal(t, map[int64]string{1: ""}, ids(cachedTemporal))
+		require.Equal(t, map[int64]string{1: ""}, ids(cachedTemporal))
+		version := func() uint32 {
+			t.Helper()
+			var v uint32
+			require.NoError(t, conn.QueryRowContext(ctx, "select rel_version from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='temporal_cache_events'").Scan(&v))
+			return v
+		}
+		ddlConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer ddlConn.Close()
+		_, err = ddlConn.ExecContext(ctx, "use "+schema)
+		require.NoError(t, err)
+		beforeVersion := version()
+		_, err = ddlConn.ExecContext(ctx, "create index idx_temporal_d on temporal_cache_events(d)")
+		require.NoError(t, err)
+		indexVersion := version()
+		require.Greater(t, indexVersion, beforeVersion)
+		require.Equal(t, map[int64]string{1: ""}, ids(cachedTemporal))
+		_, err = ddlConn.ExecContext(ctx, "drop index idx_temporal_d on temporal_cache_events")
+		require.NoError(t, err)
+		require.Greater(t, version(), indexVersion)
+		require.Equal(t, map[int64]string{1: ""}, ids(cachedTemporal))
 		expected := ids("select id,d from events ignore index(idx_d) where d > now(6)")
 		require.Len(t, expected, 100)
 		for id := range expected {

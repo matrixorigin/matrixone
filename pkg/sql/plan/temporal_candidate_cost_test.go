@@ -31,10 +31,12 @@ import (
 )
 
 func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
-	for _, scenario := range []string{"eligible", "missing scope", "missing original owner", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
+	for _, scenario := range []string{"eligible", "unmarked lifetime", "missing scope", "missing original owner", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
 			switch scenario {
+			case "unmarked lifetime":
+				builder.qry.TemporalIndexNeedsReplan = false
 			case "missing scope":
 				builder.temporalPlanningScope = nil
 			case "missing original owner":

@@ -2654,10 +2654,11 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	// A temporal path competes only where the original owner and the current
 	// rewritten path are both proved safe. Preserve FORCE, small-table and
 	// sorted-scan policies, and do not displace an unscorable existing path.
+	// An admitted path must always carry the execution-dependent lifetime.
 	originalSafe := builder.temporalOriginalSafeScans[nodeID]
 	intent := builder.temporalPlanningIntent
 	_, fixedZone := types.FixedZoneOffset(intent.TimeZone)
-	if lateBaseStatsFinalized && originalSafe && !builder.isPrepareStatement && !builder.sessionSelectLimitMayStopEarly && builder.hasTemporalPlanningIntent && intent.ParameterFree && fixedZone &&
+	if lateBaseStatsFinalized && originalSafe && builder.qry.TemporalIndexNeedsReplan && !builder.isPrepareStatement && !builder.sessionSelectLimitMayStopEarly && builder.hasTemporalPlanningIntent && intent.ParameterFree && fixedZone &&
 		intent.MatchesProcess(builder.compCtx.GetProcess()) && intent.Placement.AllowsFixedTemporalCandidate() &&
 		!forceIndex && !ignoreStats && !preferSortedScan && best.indexPos == -1 && fallback.indexPos == -1 {
 		access, err := builder.enumerateTemporalIndexCandidates(nodeID, indexes, costCtx, func(candidate regularIndexAccessCandidate) {

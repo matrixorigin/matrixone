@@ -15,17 +15,20 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // potentialTemporalIndexAccess detects a possible execution-dependent choice
 // before admission and costing. This is a cache-lifetime fact, never permission
 // to create an index candidate. Unknown parameter provenance stays conservative;
-// known prepared owners cannot enter this optional access path.
-func potentialTemporalIndexAccess(query *plan.Query) bool {
+// parameterized owners cannot enter this optional access path.
+func potentialTemporalIndexAccess(ctx context.Context, query *plan.Query) bool {
 	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) != 1 || len(query.Params) != 0 || len(query.Nodes) > 64 {
 		return false
 	}
@@ -103,10 +106,56 @@ func potentialTemporalIndexAccess(query *plan.Query) bool {
 					return nil
 				})
 				if found {
-					return true
+					// A prepared rebind can materialize source values. Preserve
+					// their existing value-dependent lifetime conservatively.
+					if ctx != nil && preparedBindingState(ctx) != nil {
+						return true
+					}
+					return !temporalOriginalOwnerExcludesIndex(ctx, query)
 				}
 			}
 		}
+	}
+	return false
+}
+
+// temporalOriginalOwnerExcludesIndex proves that a bound owner cannot reach
+// temporal index admission. Incomplete evidence leaves the lifetime marked.
+func temporalOriginalOwnerExcludesIndex(ctx context.Context, query *plan.Query) bool {
+	for id, scan := range query.Nodes {
+		if scan == nil || scan.NodeType != plan.Node_TABLE_SCAN || !temporalCandidateSimplePathShape(query, int32(id)) {
+			continue
+		}
+		budget := 4096
+		if ctx == nil || !temporalOriginalOwnerFits(ctx, query, int32(id), &budget) {
+			return false
+		}
+		atom, ok := temporalOriginalSingleMixedLeaf(query, int32(id))
+		if !ok {
+			return ctx.Err() == nil
+		}
+		if scan.TableDef == nil || len(scan.TableDef.Indexes) > engine.MaxTemporalIndexDefinitions {
+			return false
+		}
+		for _, index := range scan.TableDef.Indexes {
+			if index == nil || !spendTemporalCostWork(ctx, &budget, 1) {
+				return false
+			}
+			if !catalog.IsRegularIndexAlgo(index.IndexAlgo) {
+				continue
+			}
+			if !index.TableExist || len(index.Parts) == 0 || len(index.Parts[0]) == 0 || len(index.Parts[0]) > engine.MaxTemporalNameBytes || !spendTemporalCostWork(ctx, &budget, len(index.Parts[0])) {
+				return false
+			}
+			pos, exists := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
+			if !exists || pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil {
+				return false
+			}
+			if pos == atom.column.GetCol().ColPos {
+				return false
+			}
+		}
+		return ctx.Err() == nil
 	}
 	return false
 }
@@ -117,8 +166,9 @@ func (builder *QueryBuilder) markTemporalAccessLifetime(rootID int32) {
 	if builder == nil || builder.compCtx == nil || builder.qry == nil {
 		return
 	}
-	// Prepared statements never enter this optional access path. Rebinding
-	// cannot change that original owner fact, even if values become literals.
+	// Initial PREPARE and executions with original parameters cannot enter
+	// this path, even if rebinding materializes parameter values as literals.
+	// A parameter-free prepared rebind may still need a fresh cost decision.
 	if builder.isPrepareStatement || builder.hasTemporalPlanningIntent && !builder.temporalPlanningIntent.ParameterFree {
 		return
 	}
@@ -128,7 +178,7 @@ func (builder *QueryBuilder) markTemporalAccessLifetime(rootID int32) {
 	if len(owner.Steps) == 0 || owner.Steps[len(owner.Steps)-1] != rootID {
 		owner.Steps = append(owner.Steps, rootID)
 	}
-	if !potentialTemporalIndexAccess(&owner) {
+	if !potentialTemporalIndexAccess(builder.GetContext(), &owner) {
 		return
 	}
 	builder.qry.TemporalIndexNeedsReplan = true

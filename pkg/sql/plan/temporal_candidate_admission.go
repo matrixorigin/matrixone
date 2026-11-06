@@ -41,7 +41,11 @@ func (builder *QueryBuilder) captureTemporalOriginalOwner(rootID int32) {
 			if builder.temporalOriginalSafeScans == nil {
 				builder.temporalOriginalSafeScans = make(map[int32]bool)
 			}
-			builder.temporalOriginalSafeScans[int32(id)] = temporalOriginalOwnerFits(ctx, &owner, int32(id), &budget) && temporalOriginalSingleMixedLeaf(&owner, int32(id))
+			if temporalOriginalOwnerFits(ctx, &owner, int32(id), &budget) {
+				_, builder.temporalOriginalSafeScans[int32(id)] = temporalOriginalSingleMixedLeaf(&owner, int32(id))
+			} else {
+				builder.temporalOriginalSafeScans[int32(id)] = false
+			}
 		}
 	}
 }
@@ -319,30 +323,30 @@ func temporalOriginalOwnerFits(ctx context.Context, q *plan.Query, scan int32, b
 
 // Called only after the bounded full original-owner diagnostics proof.
 // A true value grants cost evidence; false or absent declines the candidate.
-func temporalOriginalSingleMixedLeaf(q *plan.Query, scan int32) bool {
+func temporalOriginalSingleMixedLeaf(q *plan.Query, scan int32) (temporalCandidateAtom, bool) {
 	var predicate *plan.Expr
 	for id, steps := q.Steps[0], 0; steps < 64; steps++ {
 		n := q.Nodes[id]
 		for _, e := range n.FilterList {
 			if predicate != nil {
-				return false
+				return temporalCandidateAtom{}, false
 			}
 			predicate = e
 		}
 		if id == scan {
 			atom, ok := temporalCandidateAtomForExpr(predicate)
 			if !ok {
-				return false
+				return temporalCandidateAtom{}, false
 			}
 			ref := atom.column.GetCol()
 			table := n.TableDef
 			if len(n.BindingTags) != 1 || ref.RelPos != n.BindingTags[0] || table == nil || ref.ColPos < 0 || int(ref.ColPos) >= len(table.Cols) || table.Cols[ref.ColPos] == nil {
-				return false
+				return temporalCandidateAtom{}, false
 			}
 			col := table.Cols[ref.ColPos]
-			return col.Typ.Id == atom.column.Typ.Id && col.Typ.Scale == atom.column.Typ.Scale
+			return atom, col.Typ.Id == atom.column.Typ.Id && col.Typ.Scale == atom.column.Typ.Scale
 		}
 		id = n.Children[0]
 	}
-	return false
+	return temporalCandidateAtom{}, false
 }
