@@ -1533,7 +1533,6 @@ type shardingLocalReader struct {
 	//relation data to distribute to remote CN which holds shard's partition state.
 	remoteRelData         engine.RelData
 	remoteTombApplyPolicy engine.TombstoneApplyPolicy
-	requireSameCommit     bool
 }
 
 // TODO::
@@ -1584,7 +1583,6 @@ func (r *shardingLocalReader) Read(
 				shardservice.ReadBuildReader,
 				func(request *shardservice.ReadRequest) {
 					param := &request.Param
-					request.RequireSameCommit = r.requireSameCommit
 					param.ReaderBuildParam.RelData = relData
 					param.ReaderBuildParam.Expr = expr
 					param.ReaderBuildParam.TombstoneApplyPolicy = int32(r.remoteTombApplyPolicy)

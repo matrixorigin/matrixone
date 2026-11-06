@@ -61,6 +61,7 @@ type statementKeyView struct {
 	hashAllocation     *hashtable.AllocationAccountSelection
 	iteratorAllocation *hashmap.IteratorAllocation
 	vectorAllocation   *vector.AllocationAccountSelection
+	registered         bool
 	closed             bool
 }
 
@@ -107,6 +108,10 @@ func (tbl *txnTableDelegate) NewStatementKeyView(
 			_ = v.Close()
 		}
 	}()
+	if err := txn.engine.registerStatementView(); err != nil {
+		return nil, err
+	}
+	v.registered = true
 	var err error
 	v.hashAllocation, err = hashtable.NewAllocationAccountSelection(account, mpool.AllocationOwnerMin, 16, 17)
 	if err != nil {
@@ -865,7 +870,7 @@ func (v *statementKeyView) newReader(ctx context.Context, t *statementKeyTable, 
 		if err != nil {
 			return nil, nil, err
 		}
-		result = &shardingLocalReader{lrd: reader, tblDelegate: t.relation, remoteRelData: remoteRanges, remoteTombApplyPolicy: engine.Policy_CheckCommittedOnly, requireSameCommit: expr != nil}
+		result = &shardingLocalReader{lrd: reader, tblDelegate: t.relation, remoteRelData: remoteRanges, remoteTombApplyPolicy: engine.Policy_CheckCommittedOnly}
 	}
 	if err = v.validateSnapshot(ctx); err != nil {
 		return nil, reservations, err
@@ -887,7 +892,6 @@ func (v *statementKeyView) loadCommittedRanges(ctx context.Context, t *statement
 		request.Param.RangesParam.PreAllocSize = 2
 		if expr != nil {
 			request.Param.RangesParam.Exprs = []*plan.Expr{expr}
-			request.RequireSameCommit = true
 		}
 	}, func(response []byte) error {
 		borrowed, decodeErr := readutil.UnmarshalRelationData(response)
@@ -971,21 +975,13 @@ func (v *statementKeyView) Close() (err error) {
 	if v == nil {
 		return nil
 	}
-	alreadyCanceled := context.Cause(v.ctx) != nil
 	v.cancel(context.Canceled)
 	v.Lock()
 	if v.closed {
 		v.Unlock()
 		return nil
 	}
-	defer func() {
-		v.Unlock()
-		if !alreadyCanceled {
-			if gcErr := v.txn.engine.drainStatementObjects(false); gcErr != nil {
-				logutil.Warn("statement object cleanup remains engine-owned", zap.Error(gcErr))
-			}
-		}
-	}()
+	defer v.Unlock()
 	v.closed = true
 
 	for _, t := range v.tables {
@@ -1007,7 +1003,8 @@ func (v *statementKeyView) Close() (err error) {
 		_, captured := pins.views[v]
 		pins.Unlock()
 		if captured {
-			v.releasePins()
+			head, tail := v.releasePins()
+			v.finishRegistration(head, tail)
 			return nil
 		}
 	}
@@ -1016,7 +1013,15 @@ func (v *statementKeyView) Close() (err error) {
 		r.Release()
 	}
 	v.reservations = nil
+	v.finishRegistration(nil, nil)
 	return nil
+}
+
+func (v *statementKeyView) finishRegistration(head, tail *statementObjectPin) {
+	if v.registered {
+		v.registered = false
+		v.txn.engine.releaseStatementView(head, tail)
+	}
 }
 
 func (v *statementKeyView) clearCapture() {

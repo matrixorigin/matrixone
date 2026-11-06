@@ -40,9 +40,9 @@ func hasVersionedPrepareParamMetadata(param pb.ReadParam) bool {
 func (s *service) validateRemoteReadCompatibility(
 	ctx context.Context,
 	shard pb.TableShard,
-	req ReadRequest,
+	param pb.ReadParam,
 ) error {
-	if !req.RequireSameCommit && !hasVersionedPrepareParamMetadata(req.Param) {
+	if !hasVersionedPrepareParamMetadata(param) {
 		return nil
 	}
 
@@ -55,8 +55,7 @@ func (s *service) validateRemoteReadCompatibility(
 		clusterservice.NewServiceIDSelector(target),
 		func(cn metadata.CNService) bool {
 			found = true
-			compatible = cn.CommitID == version.CommitID &&
-				(!req.RequireSameCommit || (version.CommitID != "" && version.CommitID != "unknown"))
+			compatible = cn.CommitID == version.CommitID
 			return false
 		},
 	)
@@ -66,14 +65,10 @@ func (s *service) validateRemoteReadCompatibility(
 	if found && compatible {
 		return nil
 	}
-	feature := "prepared-parameter metadata"
-	if req.RequireSameCommit {
-		feature = "statement-key candidate filters"
-	}
 	return moerr.NewInternalErrorf(
 		ctx,
-		"cannot send %s to shard replica %s with an incompatible or unknown commit",
-		feature, target,
+		"cannot send prepared-parameter metadata to shard replica %s with an incompatible or unknown commit",
+		target,
 	)
 }
 
@@ -149,7 +144,7 @@ func (s *service) Read(
 			if opts.adjust != nil {
 				opts.adjust(shard)
 			}
-			if e := s.validateRemoteReadCompatibility(ctx, *shard, req); e != nil {
+			if e := s.validateRemoteReadCompatibility(ctx, *shard, req.Param); e != nil {
 				return false, e
 			}
 		}

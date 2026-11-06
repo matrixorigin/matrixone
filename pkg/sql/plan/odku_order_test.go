@@ -251,4 +251,10 @@ func TestODKUPhaseOrderPreservesExplicitAndGeneratedDependencies(t *testing.T) {
 	require.Equal(t, 3, prefix)
 	require.Equal(t, []int32{0, 2}, columns)
 	require.Equal(t, []*plan.Expr{exprs[0], exprs[1], exprs[3], exprs[2], exprs[4], exprs[5], exprs[6]}, values)
+	ordered, _, prefix, columns = orderODKUUpdatePhases(table,
+		[]string{"automatic", "dependent", "chain", "physical"},
+		[]*plan.Expr{exprs[2], exprs[4], exprs[5], exprs[6]}, 0, 1, map[string]bool{"automatic": true})
+	require.Equal(t, []string{"automatic", "dependent", "chain", "physical"}, ordered)
+	require.Zero(t, prefix, "generated DEFAULT can leave no explicit pre-change work")
+	require.Empty(t, columns)
 }

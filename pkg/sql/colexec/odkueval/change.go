@@ -15,6 +15,7 @@
 package odkueval
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,6 +31,9 @@ import (
 // CompileUpdateChanges uses the same typed SQL equality as the former planner
 // no-op guard. Physical key identity and final storage equality are separate.
 func CompileUpdateChanges(columns []int32, imageTypes []types.Type, proc *process.Process, account *mpool.AllocationAccount) ([]colexec.ExpressionExecutor, error) {
+	if len(columns) == 0 {
+		return nil, nil
+	}
 	exprs := make([]*plan.Expr, len(columns))
 	for i, column := range columns {
 		if column < 0 || int(column) >= len(imageTypes) {
@@ -54,8 +58,14 @@ func CompileUpdateChanges(columns []int32, imageTypes []types.Type, proc *proces
 
 // UpdateChanged compares the candidate with the immediately preceding image.
 // Both inputs remain borrowed; no expression is re-evaluated here.
-func UpdateChanged(execs []colexec.ExpressionExecutor, before, after *batch.Batch, proc *process.Process) (bool, error) {
-	for _, exec := range execs {
+func UpdateChanged(execs []colexec.ExpressionExecutor, columns []int32, before, after *batch.Batch, proc *process.Process) (bool, error) {
+	for i, exec := range execs {
+		if equal, known := identicalUpdateValue(before.Vecs[columns[i]], after.Vecs[columns[i]]); known {
+			if !equal {
+				return true, nil
+			}
+			continue
+		}
 		v, err := exec.Eval(proc, []*batch.Batch{before, after}, nil)
 		if err != nil {
 			return false, err
@@ -65,4 +75,37 @@ func UpdateChanged(execs []colexec.ExpressionExecutor, before, after *batch.Batc
 		}
 	}
 	return false, nil
+}
+
+// This is only a sufficient equality proof for the exact primitive/string
+// operators in nullSafeEqualFn. Other types and unequal bytes retain the SQL
+// executor, including its floating scale, JSON/array and error semantics.
+func identicalUpdateValue(left, right *vector.Vector) (equal, known bool) {
+	if left.Length() != 1 || right.Length() != 1 || left.GetType().Oid != right.GetType().Oid {
+		return false, false
+	}
+	switch left.GetType().Oid {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_enum,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
+		// These SQL operators ignore Width/Scale. Raw access still requires
+		// both canonical physical sizes, including for integer metadata.
+		size := left.GetType().Oid.FixedLength()
+		if size < 0 {
+			size = -size
+		}
+		if left.GetType().TypeSize() != size || right.GetType().TypeSize() != size {
+			return false, false
+		}
+		ln, rn := left.IsNull(0), right.IsNull(0)
+		if ln || rn {
+			return ln == rn, true
+		}
+		if bytes.Equal(left.GetRawBytesAt(0), right.GetRawBytesAt(0)) {
+			return true, true
+		}
+	}
+	return false, false
 }

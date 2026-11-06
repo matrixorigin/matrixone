@@ -46,7 +46,7 @@ func ValidateODKUContext(ctx *plan.PreInsertUkCtx) error {
 		uint64(c.InsertCheckConstraintCount) > uint64(len(c.InsertChecks)) {
 		return moerr.NewInternalErrorNoCtx("invalid ODKU action layout")
 	}
-	if c.ChangeCheckAssignmentCount == 0 || len(c.ChangeCheckColumns) == 0 || uint64(c.ChangeCheckAssignmentCount)+uint64(c.AutoUpdateAssignmentCount) > uint64(len(c.UpdateExprs)) {
+	if uint64(c.ChangeCheckAssignmentCount)+uint64(c.AutoUpdateAssignmentCount) > uint64(len(c.UpdateExprs)) {
 		return moerr.NewInternalErrorNoCtx("invalid ODKU update phases")
 	}
 	for _, column := range c.ChangeCheckColumns {

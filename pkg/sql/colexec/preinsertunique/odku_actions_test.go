@@ -392,9 +392,8 @@ func TestODKUActionsInvalidMetadata(t *testing.T) {
 		"wrong rowid":               func(c *plan.OdkuActionCtx) { c.OldColumns[3].Typ.Id = int32(types.T_int64) },
 		"assignment image":          func(c *plan.OdkuActionCtx) { c.UpdateColumns[0] = 4 },
 		"check prefix":              func(c *plan.OdkuActionCtx) { c.InsertCheckConstraintCount = 1 },
-		"missing update phase":      func(c *plan.OdkuActionCtx) { c.ChangeCheckAssignmentCount = 0 },
+		"update phase overflow":     func(c *plan.OdkuActionCtx) { c.ChangeCheckAssignmentCount = ^uint32(0) },
 		"automatic phase overflow":  func(c *plan.OdkuActionCtx) { c.AutoUpdateAssignmentCount = 2 },
-		"missing change columns":    func(c *plan.OdkuActionCtx) { c.ChangeCheckColumns = nil },
 		"invalid change column":     func(c *plan.OdkuActionCtx) { c.ChangeCheckColumns[0] = 9 },
 		"physical flag layout":      func(c *plan.OdkuActionCtx) { c.PhysicalChangedColumn = 99 },
 		"unmaterialized key":        func(c *plan.OdkuActionCtx) { c.Constraints[0].InputKey.GetCol().RelPos = 1 },
@@ -597,6 +596,52 @@ func TestODKUAutomaticAssignmentFollowsEffectiveChange(t *testing.T) {
 			require.Equal(t, 1, publications)
 		})
 	}
+}
+
+func TestODKUFixedOutputSkipsUnchangedOwners(t *testing.T) {
+	a, proc, child, _ := odkuActionFixture(t, 16<<20)
+	input := odkuActionInput(t, proc, [][9]int64{
+		{3, 30, 1, 1, 3, 3, 3, 30, 7},
+		{4, 40, 0, 2, 4, 4, 4, 40, 11},
+		{5, 50, 2, 3, 5, 5, 5, 50, 15},
+	})
+	for row := range 3 {
+		vector.SetFixedAtNoTypeCheck(input.Vecs[9], row, types.Rowid{0: byte(row + 3)})
+	}
+	child.WithBatchs([]*batch.Batch{input})
+	var count uint64
+	a.PublishAffectedRows = func(rows uint64) error { count = rows; return nil }
+	require.NoError(t, a.Prepare(proc))
+	out, err := a.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, out.Batch)
+	require.Equal(t, []int64{3, 5}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[0]), "the unchanged middle owner never reaches physical writers")
+	require.Equal(t, []int64{8, 17}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[2]))
+	out, err = a.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, out.Batch)
+	require.Equal(t, uint64(4), count)
+}
+
+func TestODKUEmptyChangePhaseRetainsAutomaticAndGeneratedImage(t *testing.T) {
+	a, proc, child, _ := odkuActionFixture(t, 16<<20)
+	c := a.PreInsertCtx.OdkuActions
+	c.Constraints = c.Constraints[:1]
+	c.ChangeCheckAssignmentCount, c.AutoUpdateAssignmentCount = 0, 1
+	c.ChangeCheckColumns = nil
+	c.UpdateColumns = []int32{1, 2}
+	c.UpdateExprs = []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 99}}}},
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+	}
+	child.WithBatchs([]*batch.Batch{odkuActionInput(t, proc, [][9]int64{{3, 30, 999, 1, 3, 3, 3, 30, 30}})})
+	require.NoError(t, a.Prepare(proc))
+	out, err := a.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, out.Batch)
+	require.Zero(t, a.ctr.actions.logicalAffected)
+	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](a.ctr.actionRows.images.Vecs[1], 0))
+	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](a.ctr.actionRows.images.Vecs[2], 0))
 }
 
 func TestODKUScratchPreservesSelectedMetadata(t *testing.T) {

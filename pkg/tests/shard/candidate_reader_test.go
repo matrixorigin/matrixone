@@ -36,7 +36,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -47,9 +46,6 @@ import (
 // regular data table so this exercises RPC plus the registered engine handlers,
 // without implying that combined partitioned relations support statement views.
 func TestCandidateReaderThroughRemoteEngineHandlers(t *testing.T) {
-	savedCommit := version.CommitID
-	version.CommitID = "candidate-reader-integration"
-	t.Cleanup(func() { version.CommitID = savedCommit })
 	require.NoError(t, runShardClusterTestWithReuse(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -71,14 +67,14 @@ func TestCandidateReaderThroughRemoteEngineHandlers(t *testing.T) {
 						continue
 					}
 					// Allocation can precede this CN's metadata-cache refresh.
-					// Wait for the same readiness required by the sender gate.
-					compatible := false
+					// Wait until the remote RPC endpoint is published.
+					available := false
 					err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(readyCtx, clusterInfo,
 						clusterservice.NewServiceIDSelector(replica.CN), func(info metadata.CNService) bool {
-							compatible = info.CommitID == version.CommitID
+							available = info.QueryAddress != ""
 							return false
 						})
-					if err == nil && compatible {
+					if err == nil && available {
 						remote = shard.ShardID
 						return true
 					}
@@ -157,7 +153,7 @@ func TestCandidateReaderThroughRemoteEngineHandlers(t *testing.T) {
 			require.NoError(t, err)
 			param := pbshard.ReadParam{Process: info, TxnTable: pbshard.TxnTable{DatabaseID: relation.GetDBID(ctx), DatabaseName: db, TableName: "candidate_data"}}
 			read := func(readCtx context.Context, method int, param pbshard.ReadParam, apply func([]byte) error) error {
-				return service.Read(readCtx, shardservice.ReadRequest{TableID: carrier, Method: method, Param: param, RequireSameCommit: true, Apply: apply},
+				return service.Read(readCtx, shardservice.ReadRequest{TableID: carrier, Method: method, Param: param, Apply: apply},
 					shardservice.DefaultOptions.Shard(remote).ReadAt(tx.Txn().SnapshotTS()))
 			}
 			param.RangesParam.Exprs = []*plan.Expr{filter}
