@@ -216,6 +216,160 @@ class PreflightTest(unittest.TestCase):
                 finally:
                     fake.unlink()
 
+    def test_cancellation_at_launch_boundaries(self):
+        self.data.write_text("A\t0\t{}\nC\t0\t{}\nZ\tdone\t{}\n")
+        envfile = self.root / "debug-env"
+        envfile.write_text('''set -T
+_inject() {
+    [[ "$2" == "$TEST_COMMAND "* ]] || return 0
+    if [[ "$TEST_PHASE" == before && "$1" == '"$@" 0<&0' ]]; then
+        injected=1
+        printf 'hit\\n' > "$TEST_HIT"
+        kill "-$TEST_SIGNAL" "$$"
+    elif [[ "$TEST_PHASE" == before && "$1" == 'child=$!' && ${injected:-0} == 1 ]]; then
+        # A broken handler may resume and launch ln despite the signal. Wait
+        # for that incorrect launch to make any publication observable.
+        wait "$!" || :
+    elif [[ "$TEST_PHASE" == after && "$1" == 'child=$!' ]]; then
+        trap - DEBUG
+        printf '%s\\n' "$!" > "$TEST_CHILD"
+        printf 'hit\\n' > "$TEST_HIT"
+        kill "-$TEST_SIGNAL" "$$"
+    fi
+}
+trap '_inject "$BASH_COMMAND" "$*"' DEBUG
+''')
+        self.env["BASH_ENV"] = str(envfile)
+        fake_ln = self.root / "ln"
+        for phase, command in (("before", "ln"), ("after", "ln"), ("after", "mysql")):
+            for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+                with self.subTest(phase=phase, command=command, signal=sig.name):
+                    hit = self.root / f"hit-{phase}-{command}-{sig.name}"
+                    child_file = self.root / f"child-{phase}-{command}-{sig.name}"
+                    started = self.root / f"ln-started-{phase}-{sig.name}"
+                    if phase == "before":
+                        fake_ln.write_text('#!/bin/sh\nprintf "started\\n" > "$TEST_STARTED"\nexec /usr/bin/ln "$@"\n')
+                    else:
+                        fake_ln.write_text('#!/bin/sh\nexec sleep 60\n')
+                    fake_ln.chmod(0o700)
+                    self.env.update({
+                        "TEST_PHASE": phase, "TEST_COMMAND": command,
+                        "TEST_SIGNAL": sig.name.removeprefix("SIG"),
+                        "TEST_HIT": str(hit), "TEST_CHILD": str(child_file),
+                        "TEST_STARTED": str(started),
+                    })
+                    proc = subprocess.Popen(
+                        [str(SCRIPT), str(self.output), "--defaults-extra-file=protected.cnf"],
+                        env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        start_new_session=True,
+                    )
+                    try:
+                        _, stderr = proc.communicate(timeout=5)
+                        self.assertTrue(hit.exists(), stderr.decode())
+                        self.assertEqual(128 + sig, proc.returncode, stderr.decode())
+                        self.assertFalse(self.output.exists())
+                        self.assertFalse(started.exists(), "ln started after cancellation")
+                        self.assertEqual([], list(self.root.glob(".mo-upgrade-decisions.*")))
+                        self.assertEqual([], list(self.root.glob("mo-upgrade-preflight.*")))
+                        if phase == "after":
+                            child_pid = int(child_file.read_text())
+                            with self.assertRaises(ProcessLookupError):
+                                os.kill(child_pid, 0)
+                    finally:
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        if proc.poll() is None:
+                            proc.communicate()
+
+    def test_reentrant_signal_does_not_skip_cleanup(self):
+        envfile = self.root / "reentrant-debug-env"
+        envfile.write_text('''set -T
+_inject() {
+    if [[ "$1" == 'wait "$child"' && "$2" == 143 ]]; then
+        trap - DEBUG
+        printf 'hit\\n' > "$TEST_NESTED"
+        kill -HUP "$$"
+    fi
+}
+trap '_inject "$BASH_COMMAND" "$*"' DEBUG
+''')
+        hit = self.root / "reentrant-hit"
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.env.update({
+            "BASH_ENV": str(envfile), "TEST_NESTED": str(hit),
+            "TEST_MYSQL_BLOCK": "1", "TEST_READY_FD": str(write_fd),
+        })
+        proc = subprocess.Popen(
+            [str(SCRIPT), str(self.output), "--defaults-extra-file=protected.cnf"],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            pass_fds=(write_fd,), start_new_session=True,
+        )
+        os.close(write_fd)
+        try:
+            self.assertTrue(select.select([read_fd], [], [], 5)[0], "mysql did not start")
+            child_pid = int(os.read(read_fd, 100).strip())
+            proc.terminate()
+            _, stderr = proc.communicate(timeout=5)
+            self.assertTrue(hit.exists(), "second signal was not injected")
+            self.assertIn(proc.returncode, (129, 143), stderr.decode())
+            self.assertFalse(self.output.exists())
+            self.assertEqual([], list(self.root.glob(".mo-upgrade-decisions.*")))
+            self.assertEqual([], list(self.root.glob("mo-upgrade-preflight.*")))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if proc.poll() is None:
+                proc.communicate()
+
+    def test_repeated_signal_does_not_interrupt_cleanup(self):
+        mysql = self.root / "mysql"
+        mysql.write_text('''#!/usr/bin/env python3
+import os, signal, sys
+fd = int(os.environ["TEST_READY_FD"])
+signal.signal(signal.SIGTERM, lambda *_: os.write(fd, b"term\\n"))
+signal.signal(signal.SIGUSR1, lambda *_: sys.exit(0))
+os.write(fd, (str(os.getpid()) + "\\n").encode())
+while True:
+    signal.pause()
+''')
+        mysql.chmod(0o700)
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.env["TEST_READY_FD"] = str(write_fd)
+        proc = subprocess.Popen(
+            [str(SCRIPT), str(self.output), "--defaults-extra-file=protected.cnf"],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            pass_fds=(write_fd,), start_new_session=True,
+        )
+        os.close(write_fd)
+        try:
+            self.assertTrue(select.select([read_fd], [], [], 5)[0], "mysql did not start")
+            child_pid = int(os.read(read_fd, 100).strip())
+            proc.terminate()
+            self.assertTrue(select.select([read_fd], [], [], 5)[0], "cleanup did not signal mysql")
+            self.assertEqual(b"term\n", os.read(read_fd, 100))
+            proc.send_signal(signal.SIGHUP)
+            os.kill(child_pid, signal.SIGUSR1)
+            proc.communicate(timeout=5)
+            self.assertEqual(143, proc.returncode)
+            self.assertFalse(self.output.exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if proc.poll() is None:
+                proc.communicate()
+
     def test_cancellation_after_publication_keeps_complete_file(self):
         fake_ln = self.root / "ln"
         fake_ln.write_text('#!/bin/sh\n/usr/bin/ln "$@" || exit\nkill -TERM "$PPID"\n')

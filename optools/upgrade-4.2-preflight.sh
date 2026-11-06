@@ -27,22 +27,44 @@ outdir=$(dirname -- "$output")
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mo-upgrade-preflight.XXXXXXXX")
 outtmp=
 child=
+spawning=0
 cleanup() {
+    trap '' HUP INT TERM
     if [[ -n $child ]]; then
         kill "$child" 2>/dev/null || true
+        # A stopped child must be resumed to receive the termination signal.
+        kill -CONT "$child" 2>/dev/null || true
         wait "$child" 2>/dev/null || true
     fi
     rm -rf -- "$tmpdir"
     if [[ -n $outtmp ]]; then rm -f -- "$outtmp"; fi
 }
+on_signal() {
+    trap '' HUP INT TERM
+    local status=$1 pid job_info job_pattern
+    if ((spawning)); then
+        # run_cmd is serial and owns the only background job. A signal may
+        # arrive after Bash launches it but before child=$! has executed.
+        pid=${!:-}
+        if [[ -n $pid ]]; then
+            job_info=$(jobs -l)
+            job_pattern="^\\[[0-9]+\\][+-]?[[:space:]]+${pid}[[:space:]]+(Running|Stopped)([[:space:]]|$)"
+            if [[ $job_info =~ $job_pattern ]]; then child=$pid; fi
+        fi
+    fi
+    exit "$status"
+}
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'on_signal 129' HUP
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 outtmp=$(mktemp "$outdir/.mo-upgrade-decisions.XXXXXXXX")
 export MO_CATALOG_PREFLIGHT_TMP=$tmpdir
 run_cmd() {
+    spawning=1
     "$@" <&0 &
     child=$!
+    spawning=0
     local status=0
     wait "$child" || status=$?
     child=
