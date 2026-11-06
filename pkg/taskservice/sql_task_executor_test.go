@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,6 +129,81 @@ func TestSQLTaskAdmissionBackoffOnlyForStorageFailure(t *testing.T) {
 			require.Equal(t, name == "storage-timeout", disposition.failed)
 		})
 	}
+}
+
+func TestSQLTaskRunnerRefetchesAfterUnclaimedGuardContention(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	store := NewMemTaskStorage().(*memTaskStorage)
+	service := NewTaskService(runtime.DefaultRuntime(), store)
+	runner := NewTaskRunner("cn1", service, nil, WithRunnerParallelism(1), WithRunnerFetchInterval(5*time.Millisecond))
+	t.Cleanup(func() {
+		require.NoError(t, runner.Stop())
+		require.NoError(t, service.Close())
+	})
+	definition := mustAddSQLTaskForExecutorTest(t, store, func(value *SQLTask) { value.Enabled = false })
+	parent := fmt.Sprintf("sql-task:%d", definition.TaskID)
+	firings := make([]task.AsyncTask, 2)
+	for i := range firings {
+		metadata := BuildSQLTaskMetadata(newSQLTaskContextForTest(definition, SQLTaskTriggerScheduled))
+		metadata.ID = fmt.Sprintf("%s:%d", parent, i+1)
+		firings[i] = task.AsyncTask{Metadata: metadata, ParentTaskID: parent, Status: task.TaskStatus_Created}
+	}
+	firings[0].Status, firings[0].TaskRunner, firings[0].Epoch = task.TaskStatus_Running, "cn1", 1
+	mustAddTestAsyncTask(t, store, 2, firings...)
+
+	owner := service.(*taskService)
+	guard := owner.sqlRecovery.tryGuard(sqlTaskGuardKey{kind: 3, value: "unclaimed"}, 50)
+	require.NotNil(t, guard)
+	t.Cleanup(func() { owner.sqlRecovery.releaseGuard(guard) })
+	var sqlCalls, attempts atomic.Int32
+	executor := NewSQLTaskExecutor(func() ie.InternalExecutor {
+		sqlCalls.Add(1)
+		return &fakeInternalExecutor{}
+	}, service, "cn1").TaskExecutor()
+	type attemptResult struct {
+		disposition sqlTaskRunnerDisposition
+		err         error
+	}
+	first := make(chan attemptResult, 1)
+	runner.RegisterExecutor(task.TaskCode_SQLTask, func(ctx context.Context, value task.Task) error {
+		attempts.Add(1)
+		err := executor(ctx, value)
+		result := attemptResult{*ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition), err}
+		select {
+		case first <- result:
+		default:
+		}
+		return err
+	})
+	require.NoError(t, runner.Start())
+	select {
+	case result := <-first:
+		require.NoError(t, result.err, "nil may mean deferred rather than completed")
+		require.True(t, result.disposition.handled)
+		require.True(t, result.disposition.deferred)
+		require.False(t, result.disposition.failed, "guard contention is not a storage failure")
+	case <-ctx.Done():
+		t.Fatal("runner did not reach the occupied unclaimed guard")
+	}
+	children := mustGetTestAsyncTask(t, store, 2, WithTaskParentTaskIDCond(EQ, parent))
+	for _, child := range children {
+		require.NotEqual(t, task.TaskStatus_Completed, child.Status)
+	}
+	mustGetTestSQLTaskRun(t, store, 0)
+	require.Zero(t, sqlCalls.Load())
+
+	owner.sqlRecovery.releaseGuard(guard)
+	guard = nil
+	require.Eventually(t, func() bool {
+		values, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, parent))
+		return err == nil && len(values) == 1 && values[0].Metadata.ID == firings[0].Metadata.ID &&
+			values[0].Status == task.TaskStatus_Completed && values[0].ExecuteResult != nil &&
+			values[0].ExecuteResult.Code == task.ResultCode_Success
+	}, 5*time.Second, 5*time.Millisecond, "the runner must refetch and clean stale siblings after guard release")
+	require.GreaterOrEqual(t, attempts.Load(), int32(2))
+	mustGetTestSQLTaskRun(t, store, 0)
+	require.Zero(t, sqlCalls.Load())
 }
 
 func TestSQLTaskExecutorRecordsRowsAffected(t *testing.T) {
