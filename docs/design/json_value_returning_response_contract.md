@@ -2,14 +2,11 @@
 
 Issue: #28037
 
-Base-sync note (2026-10-29): verified upstream main
-`3cf38889bca2d183e973e78b1288f8c704727542` retains v133 for typed JSON MIN/MAX
-and v134 for ordered ODKU result summary and session baseline. This candidate
-preserves both and assigns JSON_VALUE provisional v135; v134 is the actual
-predecessor. This allocation is not independently approved or reserved. Open draft PR #31492
-also claims MORPCVersion135 (checked 2026-10-29), so the cumulative allocation
-remains contested pending a coordinated decision. Existing performance,
-shutdown-upgrade, durable recovery, QA and design approval gaps remain open.
+Compatibility note (2026-11-05): this candidate follows MatrixOne's
+[shutdown-upgrade contract](../../.agents/skills/mo-dev/references/upgrade-compatibility.md).
+It introduces no JSON_VALUE-specific MORPC generation or peer gate. Existing
+independent capability gates remain unchanged. Performance, supported-release
+upgrade, recovery and review evidence remain separate acceptance items.
 
 ## Contract
 
@@ -72,103 +69,34 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (candidate revision 13, 2026-10-29)
+### Shutdown-upgrade compatibility (candidate revision 14)
 
-Status: independent maintainer approval pending. This candidate updates revision
-12 after merging fresh main and confirming the landed JSON MIN/MAX and ODKU
-allocations. Shutdown-upgrade acceptance and the previously recorded gaps remain;
-superseded details remain in PR history rather than this contract.
-Approval must identify
-this revision's immutable commit and an independent approver. Author replies,
-thread resolution and approvals of earlier revisions do not approve this one.
+A supported upgrade stops all services, replaces their binaries, and restarts
+against the existing data. Mixed-running-version operation, old-peer rejoin,
+and downgrade are not supported. The seven-argument overload does not change
+RPC framing and therefore adds no feature-specific protocol version or peer,
+placement, sender, receiver, or persisted-expression admission gate. Existing
+function-lookup bounds checking remains in place.
 
-The pre-conflict revision-9 source was a MORPC v124 candidate for JSON_VALUE
-function ID 462, overload 2, based on
-`7c146f4adbf068dd0c06b377157cfb7d7698b1eb` (v123). This isolated conflict
-repair advances the JSON_VALUE gate to provisional v135 against verified target
-main `3cf38889bca2d183e973e78b1288f8c704727542`; revalidate that allocation at
-the authoritative main landing.
-It preserves main's
-functional-index metadata and generated-key maintenance capability at v107 and
-isolated user-variable NULL regexp migration history at v108, plus native Unicode
-collation identities in persisted information_schema.COLUMNS metadata at v109;
-and MEDIUMINT assignment/CAST bounds, catalog and migration semantics at v110,
-plus IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs
-at v111. The actual IndexSearchScan implementation and its independent v111
-placement, transport and receiver gates remain intact, including rejection of
-the older representation without algo_options. Signed INT WEEK/DAYOFYEAR
-result vectors and their independent sender, receiver and persisted-expression
-gates landed at v112 in #30101 and remain intact. Main also owns decimal
-variance/stddev DOUBLE results at v113, native Unicode UNIQUE keys at v114,
-calendar DAY/SECOND intervals at v115, SELECT division diagnostics at v116,
-and collation-aware LEAST/GREATEST at v117. Main additionally owns transactional
-database defaults/table charset alteration at v118, coordinator-owned dependent
-programs at v119, current-session KILL authorization/cleanup at v120, unsigned
-DECIMAL DIV result semantics at v121, and unary TIMESTAMP/dynamic TIME result
-contracts at v122, plus capability-gated nonblocking row-lock admission at
-v123 and fractional TIMESTAMPADD SECOND intervals at v124, LOAD IGNORE
-foreign-key diagnostics at v125, parser-derived VIEWS definitions at v126,
-IndexSearchScan search knobs at v127, mixed JSON/numeric comparisons at v128,
-and selected JSON ELT / opaque text execution at v129. These independent
-capabilities and their gates remain intact, along with v130 incomplete temporal
-strings, v131 exact weighted percentile dispatch and v132 decimal/float
-conversion semantics, v133 typed JSON MIN/MAX and v134 ordered ODKU result
-tracking and captured session baseline. Main through v134 must still reject
-this candidate's seven-argument JSON_VALUE contract; the cumulative latest
-version on this isolated candidate is provisional v135.
-Algorithm-expression-only owners participate in the
-same expression feature walk; an ordinary projection is not required.
-It is not the final landing
-build. The [maintainer landing decision](https://github.com/matrixorigin/matrixone/pull/28275#issuecomment-6054197734)
-ordered #28935, #28947, then this PR against the former v106 base. Its conditional
-v107/v108/v109 assignments are superseded by the actual functional-index landing
-in #29472 and the subsequently landed v108 migration, v109 Unicode, v110
-MEDIUMINT, v111 IndexSearchScan, v112 signed WEEK/DAYOFYEAR and v113-v117
-capabilities listed above.
-The independently proposed CRC candidate in #28935
-is not landed and is not included in this executable. If it lands first, the
-actual cumulative allocation and all corresponding gates must be reconciled
-again; this candidate does not reserve that number. A refreshed
-maintainer decision is required before final landing;
-neither unmerged predecessor capability is implied by this conflict repair.
-The final executable must include the actually preceding landed capabilities
-from verified main. Do not reserve empty numbers or mix independent candidate
-binaries. The source gates, immediate-predecessor
-tests, final design and earlier-capability preservation tests move together
-after cumulative integration. No independent design approval is carried forward.
+The new binary must read supported released data: legacy persisted expressions,
+views, generated values and index metadata keep their original semantics and
+are not automatically recomputed. The source for compatibility validation is a
+pinned supported release and its actual data, including retained snapshots or
+backups; an earlier unpublished main commit is not a release fixture. Existing
+historical upgrade/restart reports remain attributed to their actual binary
+and data identities, not relabelled as final release validation.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 135
-for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
-plan and its NULL-document short circuit. In the new clause-bearing contract,
-a non-NULL invalid path is a hard error even when the document is SQL NULL.
-
-Both current sender and receiver validate overload 2 against v135 before remote
-execution. Those checks do not retrofit an old receiver. The accepted deployment
-scope is a shutdown upgrade: stop all old processes, replace the binaries with
-the final cumulative build, then start and admit the deployment before authoring
-new expressions. Mixed-running-version and old-node-rejoin experiments are
-excluded by the [current acceptance review](https://github.com/matrixorigin/matrixone/pull/28275#pullrequestreview-5453629095).
-This scope does not waive persisted-data readability or durable-floor safety.
-Missing runtime capability state rejects new remote plans. Function lookup also
-bounds-checks overload indices, but a lookup error is not rollout acceptance.
-
-Catalog admission uses one expression feature walk for default, generated,
-on-update, check, index-table and optimized view owners. Reads require the
-committed floor; authoring additionally requires the enabled/admitted/catalog-
-fenced write floor. Checks must run before folding erases the feature and before
-catalog side effects. A view preserves its required version in durable metadata.
-The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
-does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
-assumed to be a durable catalog object.
-
-Do not admit pre-v135 CNs after committing a v135 durable floor. The existing
-floor advances monotonically; deleting views/generated expressions or indexes
-does not by itself lower it. In-place rollback below that floor is unsupported
-unless a separately supported, validated floor-lowering procedure exists.
-This change adds no force-downgrade mechanism. Deployment must keep old binaries
-stopped after the durable floor advances. Removing/rebuilding dependent metadata
-is necessary for any future downgrade procedure, but is not proof that downgrade
-is permitted.
+Other features in the same expression or owner retain their own existing
+admission floors. For example, functional indexes, signed WEEK/DAYOFYEAR,
+collation-aware LEAST/GREATEST, JSON text processing, float conversions,
+JSON MIN/MAX and ODKU keep their independent contracts. Adding JSON_VALUE must
+neither raise nor lower those floors, including for algorithm-expression-only
+owners, folded views and both expression orders. In particular, the existing
+v129 opaque-JSON text contract also applies when JSON_VALUE consumes a
+JSON-typed input; VARCHAR-only inputs do not acquire that floor merely because
+they use the seven-argument overload. SQL ON UPDATE does not accept
+JSON_VALUE; testing the internal owner walker does not imply SQL support.
+Prepared handles are session state, not durable catalog objects.
 
 Strict temporal conversions do not discard components: DATE rejects date-time
 spellings including midnight; TIME rejects date-bearing values while preserving
@@ -186,50 +114,38 @@ legacy two-argument JSON_VALUE must be compared separately on admitted JSON
 columns, with VARCHAR input as the text-parsing control. Removing validation
 requires a separate provenance/immutability proof and reviewer decision.
 
-Required independent decision: approve the final capability allocation, strict
-response semantics, sender/receiver and persisted-owner admission, shutdown
-upgrade and rollback restriction, and retained validation/performance disposition.
+The retained validation cost and independent acceptance of the current
+immutable design revision remain open. Earlier independent reviewers have not
+withdrawn their design-approval requests. Their historical mixed-binary
+requests must be reconciled with the current shutdown-only policy; this
+revision neither claims those requests were withdrawn nor represents them as
+tested. Earlier approvals retain their original scope.
 
 ## Required evidence
 
 - Temporal helper, executor and binder tests plus canonical JSON_VALUE BVT:
   NULL/DEFAULT/ERROR ON ERROR, unused defaults, column inputs, legacy controls,
   generated/indexed values, CREATE/ALTER VIEW and prepared reuse.
-- Real SQL DDL builders at predecessor/new thresholds and read-only versus
-  authoring admission; manually constructed protobuf owner tests are supplemental.
-- Actual pre-feature/final binaries in sequence: create legacy persisted data,
-  shut down the predecessor deployment, upgrade, and read/rebind that data before
-  authoring the new overload. Verify admitted creation, complete storage restart
-  and restore as specified below. Integer thresholds and a CN-only restart do
-  not establish storage recovery or predecessor-data compatibility.
+- Same-binary tests for absence of a JSON_VALUE floor and for independent floors
+  in real SQL DDL, persisted owners, placement, sender, receiver and stream;
+  injected protocol numbers do not model a supported mixed-version cluster.
+- Actual pinned supported release data followed by shutdown upgrade: read and
+  rebind legacy persisted metadata and values, then exercise new expressions.
+  Restart and backup/restore checks cover supported data and independent existing
+  admission state. A CN-only restart is not full storage recovery.
 - Exact-content static checks, related package tests, canonical BVT comparison,
   benchmark measurements and exact-head CI. A skipped upgrade job is NOT_RUN.
-- Independent approval of this revision followed by implementation re-review and
-  deployment QA. None is implied by this document or local test success.
+- Review and deployment QA remain separate; this document and local tests do not
+  establish reviewer acceptance.
 
 ### Persistence acceptance for shutdown upgrade
 
-Let V be the final integrated JSON_VALUE capability under the refreshed landing
-decision and P its actual immediate predecessor. The provisional v108/v109
-fixture is not a substitute for the final P/V pair. Retain the predecessor data
-directory and backup; record both binary SHAs, catalog/floor state, SQL results
-and process shutdown/start evidence. The deployment operator owns the stop/replace/
-start prerequisite; the existing HAKeeper/catalog admission owner owns the
-monotonic durable floor. This feature introduces no separate admission controller.
-
-| Boundary | Required terminal result | Available coverage and remaining gap |
+| Boundary | Required terminal result | Evidence boundary |
 | --- | --- | --- |
-| Predecessor data -> new reader | Legacy views, DEFAULTs, stored generated values and indexes retain results, types and overloads 0/1; JSON/text 512/513-character controls remain unbounded; existing supported stored JSON subtypes remain readable. New inserts and index lookup agree with a table scan. No automatic generated-value rewrite. | Legacy UT/BVT controls exist; actual predecessor-authored data followed by shutdown upgrade remains required. |
-| Read floor -> authoring floor | A committed read floor permits reads while an incomplete authoring fence rejects new DEFAULT/generated/check/index/view metadata, including folded expressions, with no tables/columns/index residue. Rejected ALTER VIEW preserves the published definition. | `TestJSONValuePersistedPublication` covers real SQL with injected floors; final cumulative P/V execution remains required. ON UPDATE JSON_VALUE is rejected syntax, not a supported owner. |
-| Admitted authoring -> storage recovery | Create and use new persisted owners only after V is admitted. Stop and restart CN, TN and the durable admission/catalog services against the same data; verify floor >= V, view rebinding, stored values, fresh DEFAULT/generated writes and indexed reads. | The existing test restarts only its CN; full durable storage/floor recovery remains NOT_RUN. A successful CN rebind is not this oracle. |
-| Backup/restore -> new deployment | Restore new metadata/data into a deployment at least V; verify floor >= V, old and new owners, generated/index contents and fresh writes. Deleting dependent objects must not lower the floor or grant a downgrade. | Backup/restore and floor monotonicity through restore remain NOT_RUN. |
-| Prepared plans -> new session | Re-prepare legacy and clause-bearing SQL after upgrade/restart; verify defaults, response policies and metadata. Session prepared handles are not treated as durable catalog objects. | Existing SQL/binary prepared-reuse tests cover same-binary behavior; final upgraded-session verification remains required. |
-
-Acceptance requires independent approval of the final immutable design revision,
-the actual cumulative build, the above terminal evidence and deployment QA.
-The shutdown scope removes mixed-running-version/rejoin experiments from this
-acceptance set; it does not permit an old binary below the committed floor to
-serve the upgraded data. In-place downgrade below V remains unsupported.
+| Supported release data -> new reader | Legacy views, DEFAULTs, stored generated values and indexes retain results, types and overloads 0/1; 512/513-character controls remain unbounded. Fresh writes and indexed reads agree with scans; existing values are not silently recomputed. | Pin release tag, resolved commit, binaries and data identity. Historical receipts remain historical; final supported-release validation is still required. |
+| New expressions and independent admission | Create/read DEFAULT, generated, check, index and view owners; combined expressions retain unrelated floors and a failed ALTER leaves existing metadata intact. | Same-binary injected-floor and SQL tests validate local behavior; no new JSON_VALUE floor is asserted. |
+| Restart and backup/restore | Restart the deployment against existing data and restore an older supported backup on the new binary; verify old and new owners, index contents and subsequent writes. | A CN-only restart does not prove storage recovery or full deployment restore. Existing independent admission state must remain valid. |
+| Prepared plans -> new session | Re-prepare legacy and clause-bearing SQL after upgrade/restart; verify defaults, response policies and metadata. | Same-binary prepared tests do not prove the upgraded-session outcome. |
 
 ### Performance acceptance
 
@@ -269,20 +185,11 @@ at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
 new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
 generic vector ingestion/unmarshal and cannot answer their regression cost.
 
-The pre-merge v123 candidate passed bounded serial CGo focused tests for the
-MySQL parser, plan protobuf, SQL planner, function lookup and compile packages.
-Those receipts cover that revision's merged grammar and v122 rejection/v123
-admission only; they are historical evidence, not validation of this v135
-main-relative conflict repair. This bounded maintenance candidate does not
-claim full integration, distributed BVT, exact-head CI, deployment QA, or
-shutdown-upgrade evidence.
-Predecessor-data shutdown upgrade, durable floor restart/restore and independent
-design approval remain required and are not claimed complete. A focused
-base/head ingestion/unmarshal and legacy two-argument JSON_VALUE comparison must
-include actual measurements, equivalent inputs, environment and variation, plus
-a retained-cost decision. Preserve structural and canonical JSON safety checks
-while that evidence is pending.
-
-Prior v111 runtime and BVT receipts and v108 JSON_VALUE measurements remain
-bound to their historical source; they do not prove the final cumulative
-executable, final predecessor-data compatibility or durable recovery.
+Earlier local, CI, BVT, benchmark and upgrade receipts remain tied to their
+actual revisions, binaries and environments. They do not validate this candidate
+or establish the final supported-release upgrade, full recovery, deployment QA,
+or acceptance of the legacy lookup cost. A focused base/head ingestion/unmarshal
+and legacy two-argument JSON_VALUE comparison must include actual measurements,
+equivalent inputs, environment and variation, plus a retained-cost decision.
+Structural and canonical JSON safety checks remain required while that evidence
+is pending.

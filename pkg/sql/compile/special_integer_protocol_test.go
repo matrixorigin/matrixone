@@ -140,8 +140,7 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 
-	// Main's MEDIUMINT v110 capability does not imply the new JSON_VALUE
-	// contract. Placement, final send and serialized receive use the maximum.
+	// Adding JSON_VALUE must retain the independent MEDIUMINT v110 floor.
 	args := make([]*planpb.Expr, 7)
 	for i := range args {
 		args[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
@@ -152,62 +151,27 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	op.ProjectList = append(op.ProjectList, jsonValue)
 	qry.Nodes[0].ProjectList = op.ProjectList
 	p.InstructionList[0].ProjectList = op.ProjectList
-	// JSON_VALUE overload 2 provisionally requires v135; main through v134
-	// does not admit this contract.
-	client.version = defines.MORPCVersion122
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 135")
 	data, err = p.Marshal()
 	require.NoError(t, err)
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 135")
-	client.version = defines.MORPCVersion123
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 135")
-	data, err = p.Marshal()
-	require.NoError(t, err)
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 135")
-	client.version = defines.MORPCVersion128
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 135")
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 135")
-	client.version = defines.MORPCVersion129
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 135")
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 135")
-	client.version = defines.MORPCVersion135
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.NoError(t, err)
-	_, err = decodeScope(data, c.proc, true, nil)
-	require.NoError(t, err)
+	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion134} {
+		client.version = version
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		_, sendErr := encodeRemoteScope(scope, c.proc)
+		decoded, receiveErr := decodeScope(data, c.proc, true, nil)
+		if version < defines.MORPCVersion110 {
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			require.ErrorContains(t, sendErr, "version 110")
+			require.ErrorContains(t, receiveErr, "version 110")
+		} else {
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			require.NoError(t, sendErr)
+			require.NoError(t, receiveErr)
+			decoded.release()
+		}
+	}
 	require.Equal(t, client.calls, client.releases)
 }
 

@@ -26,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3654,28 +3653,6 @@ func jsonValueUsesContract(spec *tree.JsonValueSpec) bool {
 	return spec != nil && (spec.Returning != nil || spec.OnEmpty.IsExplicit() || spec.OnError.IsExplicit())
 }
 
-func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process) error {
-	if proc == nil {
-		return nil
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return moerr.NewNotSupported(
-			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 135",
-		)
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion135 {
-		return moerr.NewNotSupported(
-			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 135",
-		)
-	}
-	return nil
-}
-
 func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, error) {
 	if len(astExpr.Exprs) != 2 {
 		return nil, moerr.NewInvalidArg(b.GetContext(), "json_value requires document and path", len(astExpr.Exprs))
@@ -3792,11 +3769,6 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 			args = append(args, defaultExpr)
 		} else {
 			args = append(args, &Expr{Expr: &plan.Expr_Lit{Lit: &Const{Isnull: true}}, Typ: targetPlan})
-		}
-	}
-	if b.builder != nil {
-		if err := requireJSONValueContractProtocol(b.GetContext(), b.builder.compCtx.GetProcess()); err != nil {
-			return nil, err
 		}
 	}
 	argsType := make([]types.Type, len(args))

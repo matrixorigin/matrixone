@@ -293,9 +293,8 @@ func TestProtocol132FloatComposesWithJSON133AndODKU134(t *testing.T) {
 	}
 }
 
-// A cumulative candidate must keep main's independent floors while assigning
-// the new JSON_VALUE overload a floor above both landed capabilities.
-func TestJSONValue135ComposesWithJSONMinMax133AndODKU134(t *testing.T) {
+// JSON_VALUE does not change independent JSON MIN/MAX and ODKU floors.
+func TestJSONValueComposesWithJSONMinMax133AndODKU134(t *testing.T) {
 	args := make([]*plan.Expr, 7)
 	for i := range args {
 		args[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
@@ -307,21 +306,20 @@ func TestJSONValue135ComposesWithJSONMinMax133AndODKU134(t *testing.T) {
 	trackingNode := &plan.Node{PreInsertCtx: &plan.PreInsertCtx{TrackOdkuResult: true}}
 	valueNode := &plan.Node{ProjectList: []*plan.Expr{value}}
 	for _, tc := range []struct {
-		name                string
-		nodes               []*plan.Node
-		floor               int64
-		value, minmax, odku bool
+		name         string
+		nodes        []*plan.Node
+		floor        int64
+		minmax, odku bool
 	}{
-		{"all", []*plan.Node{minNode, trackingNode, valueNode}, defines.MORPCVersion135, true, true, true},
-		{"all reversed", []*plan.Node{valueNode, trackingNode, minNode}, defines.MORPCVersion135, true, true, true},
-		{"main only", []*plan.Node{minNode, trackingNode}, defines.MORPCVersion134, false, true, true},
-		{"minmax only", []*plan.Node{minNode}, defines.MORPCVersion133, false, true, false},
+		{"all", []*plan.Node{minNode, trackingNode, valueNode}, defines.MORPCVersion134, true, true},
+		{"all reversed", []*plan.Node{valueNode, trackingNode, minNode}, defines.MORPCVersion134, true, true},
+		{"main only", []*plan.Node{minNode, trackingNode}, defines.MORPCVersion134, true, true},
+		{"minmax only", []*plan.Node{minNode}, defines.MORPCVersion133, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: tc.nodes}}}
 			features, err := plan.RequiredRemoteExpressionFeatures(owner)
 			require.NoError(t, err)
-			require.Equal(t, tc.value, features.JSONValueContract)
 			require.Equal(t, tc.minmax, features.JSONMinMaxTypedComparison)
 			require.Equal(t, tc.odku, features.ODKUStatementResult)
 			require.Equal(t, tc.floor, remoteExpressionProtocolVersion(features))

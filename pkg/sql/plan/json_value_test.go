@@ -99,7 +99,7 @@ func TestJSONValueBindingContract(t *testing.T) {
 	})
 }
 
-func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
+func TestJSONValueBindingDoesNotRequireFeatureProtocol(t *testing.T) {
 	compilerContext := NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := compilerContext.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -125,26 +125,17 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 		return binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
 	}
 
-	legacy, err := bind(defines.MORPCVersion57, `select json_value('1', '$')`)
-	require.NoError(t, err)
-	require.Len(t, legacy.GetF().Args, 2)
-
-	_, err = bind(defines.MORPCVersion117, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 135")
-	_, err = bind(defines.MORPCVersion123, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 135")
-	_, err = bind(defines.MORPCVersion128, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 135")
-
-	_, err = bind(defines.MORPCVersion129, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 135")
-	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
-		_, err = bind(version, `select json_value('1', '$' returning unsigned)`)
-		require.ErrorContains(t, err, "MORPC protocol version 135")
+	// Injected numbers exercise same-binary planning only; they are not old-CN
+	// compatibility or a supported deployment configuration.
+	for _, version := range []int64{defines.MORPCVersion57, defines.MORPCVersion117, defines.MORPCVersion134} {
+		legacy, err := bind(version, `select json_value('1', '$')`)
+		require.NoError(t, err)
+		require.Len(t, legacy.GetF().Args, 2)
+		contract, err := bind(version, `select json_value('1', '$' returning unsigned)`)
+		require.NoError(t, err)
+		require.Len(t, contract.GetF().Args, 7)
+		require.Equal(t, int32(types.T_uint64), contract.Typ.Id)
 	}
-	contract, err := bind(defines.MORPCVersion135, `select json_value('1', '$' returning unsigned)`)
-	require.NoError(t, err)
-	require.Len(t, contract.GetF().Args, 7)
 
 	for _, sql := range []string{
 		`select week(cast('2024-12-31' as date), 3), dayofyear(cast('2024-12-31' as date)), json_value('1', '$' returning unsigned)`,
@@ -155,21 +146,11 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
-			_, err = BuildPlan(compilerContext, stmt, false)
-			require.ErrorContains(t, err, "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
-			_, err = BuildPlan(compilerContext, stmt, false)
-			require.ErrorContains(t, err, "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-			_, err = BuildPlan(compilerContext, stmt, false)
-			require.ErrorContains(t, err, "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-			_, err = BuildPlan(compilerContext, stmt, false)
-			require.ErrorContains(t, err, "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-			_, err = BuildPlan(compilerContext, stmt, false)
-			require.NoError(t, err)
+			for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion134} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				_, err = BuildPlan(compilerContext, stmt, false)
+				require.NoError(t, err)
+			}
 		})
 	}
 }
@@ -474,7 +455,6 @@ func TestJSONValueIntegerDefaultWhitespaceBinds(t *testing.T) {
 
 func TestJSONValueTargetValidationBoundaries(t *testing.T) {
 	ctx := context.Background()
-	require.NoError(t, requireJSONValueContractProtocol(ctx, nil))
 	require.NoError(t, validateJSONValueTarget(ctx, types.New(types.T_char, 4, 0)))
 	require.NoError(t, validateJSONValueTarget(ctx, types.New(types.T_json, 0, 0)))
 	require.Error(t, validateJSONValueTarget(ctx, types.New(types.T_bool, 0, 0)))

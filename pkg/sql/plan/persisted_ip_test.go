@@ -1223,6 +1223,15 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 			Args: make([]*planpb.Expr, 7),
 		}},
 	}
+	jsonArgs := make([]*planpb.Expr, 7)
+	jsonArgs[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}
+	jsonValueInput := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"},
+		Args: jsonArgs,
+	}}}
+	requiredInput, err := RequiredPersistedExpressionProtocolVersion(jsonValueInput)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, requiredInput, "JSON-typed input retains the existing opaque-text contract")
 	jsonInput := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_varchar)},
 		Expr: &planpb.Expr_F{F: &planpb.Function{
@@ -1253,7 +1262,6 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{jsonValue, jsonInput, mediumInt, calendar, collated}}}}
 	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 	require.NoError(t, err)
-	require.True(t, features.JSONValueContract)
 	require.True(t, features.JSONInputContracts)
 	require.True(t, features.JSONOpaqueTextContracts)
 	require.True(t, features.MediumIntAssignmentBounds)
@@ -1261,11 +1269,11 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	require.True(t, features.LeastGreatestCollationSemantics)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion135, required)
+	require.Equal(t, defines.MORPCVersion129, required)
 	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput, jsonValue}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion135, required, "feature order must not lower the cumulative floor")
+	require.Equal(t, defines.MORPCVersion129, required, "feature order must not lower the cumulative floor")
 	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
@@ -1284,7 +1292,7 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	for _, expressions := range [][]*planpb.Expr{{jsonValue, numeric}, {numeric, jsonValue}} {
 		required, err = RequiredPersistedExpressionProtocolVersion(expressions)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion135, required)
+		require.Equal(t, defines.MORPCVersion128, required)
 	}
 	required, err = RequiredPersistedExpressionProtocolVersion(numeric)
 	require.NoError(t, err)
@@ -1297,7 +1305,7 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	for _, expressions := range [][]*planpb.Expr{{jsonValue, floatConversion}, {floatConversion, jsonValue}} {
 		required, err = RequiredPersistedExpressionProtocolVersion(expressions)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion135, required)
+		require.Equal(t, defines.MORPCVersion132, required)
 	}
 	required, err = RequiredPersistedExpressionProtocolVersion(floatConversion)
 	require.NoError(t, err)
@@ -1338,6 +1346,8 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 			}},
 		}
 	}
+	jsonExprWithJSONInput := jsonExpr()
+	jsonExprWithJSONInput.GetF().Args[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}
 
 	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
 	typ.CollationVersion = 1
@@ -1386,50 +1396,41 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 				AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{jsonExpr()},
 			},
 		}}}},
+		{"view-json-typed-input", &planpb.Query{Nodes: []*planpb.Node{{
+			ProjectList: []*planpb.Expr{jsonExprWithJSONInput},
+		}}}},
 	}
 
 	for _, tc := range owners {
 		t.Run(tc.name, func(t *testing.T) {
+			var floor int64
+			switch tc.name {
+			case "view-greatest-and-json":
+				floor = defines.MORPCVersion117
+			case "view-calendar-and-json":
+				floor = defines.MORPCVersion112
+			case "view-json-typed-input":
+				floor = defines.MORPCVersion129
+			}
 			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion135), required)
-
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion122))
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion123))
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion128))
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion129))
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion134))
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 135")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion135))
-			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
+			require.Equal(t, floor, required)
+			for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion134} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
+				checkAdmissionResult(t, version, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), floor)
+				checkAdmissionResult(t, version, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.owner), floor)
+			}
+			if floor > 0 {
+				// A sufficient read floor does not authorize a lower write floor.
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor-1)
+				require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
+				require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, tc.owner), fmt.Sprintf("protocol version %d", floor))
+			}
 		})
-	}
-
-	for _, tc := range owners {
-		owner := tc.owner
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion135))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion134))
-		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
-		require.ErrorContains(t,
-			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 135")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion135))
-		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 	}
 
 }
@@ -1482,59 +1483,58 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		`create view jv_mixed_group as select json_value('1', '$' null on error) as v, count(*) as n group by json_value('1', '$')`,
 		`create view jv_mixed_having as select count(*) as n group by json_value('1', '$') having json_value('1', '$' null on error) is not null`,
 	}
-	for _, state := range []struct {
-		name                string
-		protocol, authoring int64
-		allowed             bool
-	}{
-		{"old CN", defines.MORPCVersion107, defines.MORPCVersion107, false},
-		{"Unicode predecessor", defines.MORPCVersion109, defines.MORPCVersion109, false},
-		{"MEDIUMINT predecessor", defines.MORPCVersion110, defines.MORPCVersion110, false},
-		{"pre-main-feature baseline", defines.MORPCVersion117, defines.MORPCVersion117, false},
-		{"pre-row-lock predecessor", defines.MORPCVersion122, defines.MORPCVersion122, false},
-		{"main row-lock capability only", defines.MORPCVersion123, defines.MORPCVersion123, false},
-		{"mixed JSON numeric capability only", defines.MORPCVersion128, defines.MORPCVersion128, false},
-		{"JSON_VALUE predecessor", defines.MORPCVersion134, defines.MORPCVersion134, false},
-		{"read only admission", defines.MORPCVersion135, defines.MORPCVersion129, false},
-		{"predecessor authoring floor", defines.MORPCVersion135, defines.MORPCVersion134, false},
-		{"authoring admitted", defines.MORPCVersion135, defines.MORPCVersion135, true},
-	} {
-		t.Run(state.name, func(t *testing.T) {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, state.protocol)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, state.protocol)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, state.authoring)
+	for _, version := range []int64{defines.MORPCVersion129, defines.MORPCVersion134} {
+		t.Run(fmt.Sprintf("same-binary protocol %d", version), func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
 			for _, sql := range statements {
 				t.Run(sql, func(t *testing.T) {
 					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
 					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
-					if !state.allowed {
-						require.ErrorContains(t, err, "protocol version 135")
-						return
-					}
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
 						require.NoError(t, err)
-						require.Equal(t, int64(defines.MORPCVersion135), required)
+						require.Equal(t, defines.MORPCVersion129, required)
 						require.Len(t, table.GetIndexTables(), 1)
-						// The SQL builder's physical index stores materialized
-						// keys, not the generated expression owned by its table.
 						required, err = RequiredPersistedExpressionProtocolVersion(table.GetIndexTables()[0])
 						require.NoError(t, err)
 						require.Zero(t, required)
 					}
-					if view := built.GetDdl().GetCreateView(); view != nil {
+					if view := built.GetDdl().GetCreateView(); view != nil && strings.Contains(sql, "jv_view as") {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
-						require.NotNil(t, data.RequiredProtocolVersion)
-						require.Equal(t, int64(defines.MORPCVersion135), *data.RequiredProtocolVersion)
+						require.Nil(t, data.RequiredProtocolVersion, "JSON_VALUE alone adds no durable feature floor")
 					}
 				})
 			}
 		})
 	}
+	// The independent calendar contract remains a real SQL authoring floor,
+	// even in a view which also contains JSON_VALUE.
+	const calendarSQL = `create view jv_calendar_json as select week(cast('2024-12-31' as date), 3) as w, dayofyear(cast('2024-12-31' as date)) as d, json_value('1', '$' returning signed) as v`
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, calendarSQL, 1)
+		require.NoError(t, err)
+		built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: calendarSQL}, stmt, false)
+		stmt.Free()
+		if version < defines.MORPCVersion112 {
+			require.ErrorContains(t, err, "protocol version 112")
+		} else {
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.NotNil(t, data.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion112), *data.RequiredProtocolVersion)
+		}
+	}
+
 }
 
 func TestPersistedDependentProgramRequiresV119(t *testing.T) {

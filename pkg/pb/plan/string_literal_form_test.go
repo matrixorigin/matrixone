@@ -600,7 +600,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion135JSONValueContract(t *testing.T) {
+func TestJSONValueDoesNotMaskIndexSearchExpressionFeatures(t *testing.T) {
 	text := func(value string) *Expr {
 		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
 	}
@@ -619,32 +619,25 @@ func TestRequiresMORPCVersion135JSONValueContract(t *testing.T) {
 		Args: []*Expr{text(`{"a":1}`), text("$.a")},
 	}}}
 
-	required, err := RequiresMORPCVersion135JSONValueContract(jsonValueContract)
-	require.NoError(t, err)
-	require.True(t, required)
-
-	required, err = RequiresMORPCVersion135JSONValueContract(legacy)
-	require.NoError(t, err)
-	require.False(t, required)
-
-	// The new merged owner can hold the only versioned expression. A normal
-	// projection here would mask a missing traversal of algo_exprs.
+	// Only algo_exprs contain expressions, so a projection cannot hide a
+	// traversal failure for the independently versioned JSON input contract.
 	jsonInput := &Expr{Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(16) << 32, ObjName: "concat"},
 		Args: []*Expr{{Typ: Type{Id: planJSONTypeID}}},
 	}}}
 	for _, tc := range []struct {
 		name          string
-		expr          *Expr
-		want          bool
+		exprs         []*Expr
 		wantJSONInput bool
 	}{
-		{"contract", jsonValueContract, true, false},
-		{"legacy", legacy, false, false},
-		{"landed JSON input", jsonInput, false, true},
+		{"contract", []*Expr{jsonValueContract}, false},
+		{"legacy", []*Expr{legacy}, false},
+		{"landed JSON input", []*Expr{jsonInput}, true},
+		{"contract and landed JSON input", []*Expr{jsonValueContract, jsonInput}, true},
+		{"landed JSON input and contract", []*Expr{jsonInput, jsonValueContract}, true},
 	} {
 		t.Run(tc.name+" algo_exprs only", func(t *testing.T) {
-			scan := &IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*Expr{tc.expr}}
+			scan := &IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: tc.exprs}
 			node := &Node{NodeType: Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan}
 			query := &Query{Nodes: []*Node{node}, Steps: []int32{0}}
 			owner := &Plan{Plan: &Plan_Query{Query: query}}
@@ -653,12 +646,10 @@ func TestRequiresMORPCVersion135JSONValueContract(t *testing.T) {
 			decoded := &Plan{}
 			require.NoError(t, decoded.Unmarshal(encoded))
 			for _, value := range []any{scan, node, query, owner, decoded} {
-				required, err := RequiresMORPCVersion135JSONValueContract(value)
-				require.NoError(t, err)
-				require.Equal(t, tc.want, required)
 				features, err := RequiredRemoteExpressionFeatures(value)
 				require.NoError(t, err)
 				require.Equal(t, tc.wantJSONInput, features.JSONInputContracts)
+				require.Equal(t, tc.wantJSONInput, features.Any())
 			}
 		})
 	}

@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -48,9 +47,8 @@ type expressionVersionClient struct {
 	onSend          func()
 }
 
-func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
+func TestIndependentExpressionProtocolFloors(t *testing.T) {
 	features := planpb.RemoteExpressionFeatures{
-		JSONValueContract:                 true,
 		JSONInputContracts:                true,
 		JSONScalarLiteralContracts:        true,
 		MediumIntAssignmentBounds:         true,
@@ -62,14 +60,12 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 		ViewMetadataFunctions:             true,
 		JSONNumericComparisons:            true,
 	}
-	require.Equal(t, defines.MORPCVersion135, requiredExpressionContractProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(features))
 	features.FloatConversionSemantics = true
 	features.JSONMinMaxTypedComparison = true
 	features.ODKUStatementResult = true
 	features.SessionLastInsertIDBaseline = true
-	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
-	features.JSONValueContract = false
 	require.Equal(t, defines.MORPCVersion134, remoteExpressionProtocolVersion(features))
 	features.ODKUStatementResult = false
 	features.SessionLastInsertIDBaseline = false
@@ -94,150 +90,131 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 
 func TestJSONValueActualStreamProtocolMinimum(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion135
-
+	client.version = defines.MORPCVersion134
 	args := make([]*planpb.Expr, 7)
 	for i := range args {
-		args[i] = &planpb.Expr{
-			Typ:  planpb.Type{Id: int32(types.T_varchar)},
-			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
-		}
+		args[i] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
 	}
-	jsonValue := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_varchar)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{
-				Obj:     function.EncodeOverloadID(function.JSON_VALUE, 2),
-				ObjName: "json_value",
-			},
-			Args: args,
-		}},
-	}
-	makeScope := func(t *testing.T, expressions ...*planpb.Expr) *Scope {
-		t.Helper()
+	jsonValue := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"}, Args: args,
+	}}}
+	jsonArgs := append([]*planpb.Expr(nil), args...)
+	jsonArgs[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	jsonValueInput := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2), ObjName: "json_value"}, Args: jsonArgs,
+	}}}
+	makeScope := func(expressions ...*planpb.Expr) *Scope {
 		root := projection.NewArgument()
 		root.ProjectList = expressions
 		t.Cleanup(root.Release)
-		return &Scope{
-			Magic:    Remote,
-			Proc:     c.proc,
-			NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
-			RootOp:   root,
-		}
+		return &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: root}
 	}
-
-	minimum := int64(0)
-	data, err := encodeRemoteScopeWithProtocol(makeScope(t, jsonValue), c.proc, &minimum)
-	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion135, minimum)
-	require.NotEmpty(t, data)
-
-	for _, tc := range []struct {
-		name    string
-		version int64
-	}{
-		{name: "replacement v129 refuses before pipeline message", version: defines.MORPCVersion129},
-		{name: "temporal v130 refuses before pipeline message", version: defines.MORPCVersion130},
-		{name: "quantile v131 refuses before pipeline message", version: defines.MORPCVersion131},
-		{name: "float v132 refuses before pipeline message", version: defines.MORPCVersion132},
-		{name: "JSON MIN/MAX v133 refuses before pipeline message", version: defines.MORPCVersion133},
-		{name: "ODKU v134 refuses before pipeline message", version: defines.MORPCVersion134},
-		{name: "v135 accepts pipeline message", version: defines.MORPCVersion135},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			stream := &fakeStreamSender{}
-			receiveCh := make(chan morpc.Message, 1)
-			receiveCh <- &pipeline.Message{
-				Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
-				Sid: pipeline.Status_Last, ProtocolVersion: tc.version,
-			}
-			sender := &messageSenderOnClient{
-				ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
-			}
-			err := sender.confirmProtocolOnStream(minimum)
-			require.Len(t, stream.sent, 1)
-			check := stream.sent[0].(*pipeline.Message)
-			require.Equal(t, pipeline.Method_PipelineProtocolCheck, check.GetCmd())
-			require.Equal(t, minimum, check.GetProtocolVersion())
-			if tc.version < minimum {
-				require.ErrorContains(t, err, "requires MORPC protocol version 135")
-				return
-			}
-			require.NoError(t, err)
-			require.NoError(t, sender.sendPipeline(data, nil, true, len(data)+1, "JSON_VALUE protocol minimum test"))
-			require.Len(t, stream.sent, 2)
-			require.Equal(t, pipeline.Method_PipelineMessage, stream.sent[1].(*pipeline.Message).GetCmd())
-		})
-	}
-
 	elt := bindJSONStringConsumerExpr(t, "elt")
 	floatConversion := floatConversionProtocolExpr(function.CAST, types.T_varchar, types.T_float64)
 	for _, tc := range []struct {
-		name        string
-		expressions []*planpb.Expr
-		vector      bool
-		initial     int64
-		want        int64
+		name          string
+		expressions   []*planpb.Expr
+		vector        bool
+		initial, want int64
 	}{
-		{name: "independent v129 consumer", expressions: []*planpb.Expr{elt}, want: defines.MORPCVersion129},
-		{name: "no feature remains unversioned", expressions: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("plain")}},
-		{name: "combined v129 and JSON_VALUE uses maximum", expressions: []*planpb.Expr{elt, jsonValue}, want: defines.MORPCVersion135},
-		{name: "independent float v132 consumer", expressions: []*planpb.Expr{floatConversion}, want: defines.MORPCVersion132},
-		{name: "float then JSON_VALUE uses maximum", expressions: []*planpb.Expr{floatConversion, jsonValue}, want: defines.MORPCVersion135},
-		{name: "JSON_VALUE then float uses maximum", expressions: []*planpb.Expr{jsonValue, floatConversion}, want: defines.MORPCVersion135},
-		{name: "vector v111 and JSON text v129 use maximum", expressions: []*planpb.Expr{elt}, vector: true, want: defines.MORPCVersion129},
-		{name: "vector v111 and JSON_VALUE v135 use maximum", expressions: []*planpb.Expr{jsonValue}, vector: true, want: defines.MORPCVersion135},
-		{name: "stale output is reset to current JSON_VALUE floor", expressions: []*planpb.Expr{jsonValue}, initial: defines.MORPCVersion135 + 1, want: defines.MORPCVersion135},
-		{name: "stale output is reset when no feature is present", expressions: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("plain")}, initial: defines.MORPCVersion135 + 1},
+		{"JSON_VALUE only", []*planpb.Expr{jsonValue}, false, defines.MORPCLatestVersion + 1, 0},
+		{"JSON_VALUE with JSON input retains opaque-text floor", []*planpb.Expr{jsonValueInput}, false, 0, defines.MORPCVersion129},
+		{"plain only", []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("plain")}, false, defines.MORPCLatestVersion + 1, 0},
+		{"JSON text only", []*planpb.Expr{elt}, false, 0, defines.MORPCVersion129},
+		{"JSON text then JSON_VALUE", []*planpb.Expr{elt, jsonValue}, false, 0, defines.MORPCVersion129},
+		{"JSON_VALUE then JSON text", []*planpb.Expr{jsonValue, elt}, false, 0, defines.MORPCVersion129},
+		{"float only", []*planpb.Expr{floatConversion}, false, 0, defines.MORPCVersion132},
+		{"float then JSON_VALUE", []*planpb.Expr{floatConversion, jsonValue}, false, 0, defines.MORPCVersion132},
+		{"JSON_VALUE then float", []*planpb.Expr{jsonValue, floatConversion}, false, 0, defines.MORPCVersion132},
+		{"vector and JSON_VALUE", []*planpb.Expr{jsonValue}, true, 0, defines.MORPCVersion111},
+		{"vector and JSON text", []*planpb.Expr{elt}, true, 0, defines.MORPCVersion129},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			minimum := tc.initial
-			scope := makeScope(t, tc.expressions...)
+			scope := makeScope(tc.expressions...)
 			if tc.vector {
-				scope.DataSource = &Source{node: &planpb.Node{
-					NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
-					IndexSearchScan: &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`)},
-				}}
+				scope.DataSource = &Source{node: &planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`)}}}
 			}
-			_, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
+			minimum := tc.initial
+			data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
 			require.NoError(t, err)
+			require.NotEmpty(t, data)
 			require.Equal(t, tc.want, minimum)
 		})
 	}
+
+	// A zero minimum follows the sender's no-handshake path and sends the
+	// standalone JSON_VALUE pipeline directly.
+	standaloneMinimum := int64(0)
+	standaloneData, err := encodeRemoteScopeWithProtocol(makeScope(jsonValue), c.proc, &standaloneMinimum)
+	require.NoError(t, err)
+	require.Zero(t, standaloneMinimum)
+	standaloneStream := &fakeStreamSender{}
+	standaloneSender := &messageSenderOnClient{ctx: context.Background(), streamSender: standaloneStream}
+	require.NoError(t, standaloneSender.sendPipeline(standaloneData, nil, true, len(standaloneData)+1, "JSON_VALUE without a feature floor"))
+	require.Len(t, standaloneStream.sent, 1)
+	require.Equal(t, pipeline.Method_PipelineMessage, standaloneStream.sent[0].(*pipeline.Message).GetCmd())
+
+	// The actual stream's existing handshake still rejects an insufficient
+	// independent float floor and admits the payload at that floor.
+	minimum := int64(0)
+	data, err := encodeRemoteScopeWithProtocol(makeScope(jsonValue, floatConversion), c.proc, &minimum)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion132, minimum)
+	for _, version := range []int64{defines.MORPCVersion131, defines.MORPCVersion132} {
+		stream := &fakeStreamSender{}
+		receiveCh := make(chan morpc.Message, 1)
+		receiveCh <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: version}
+		sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receiveCh}
+		err := sender.confirmProtocolOnStream(minimum)
+		require.Len(t, stream.sent, 1)
+		if version < minimum {
+			require.ErrorContains(t, err, "version 132")
+		} else {
+			require.NoError(t, err)
+			require.NoError(t, sender.sendPipeline(data, nil, true, len(data)+1, "independent float protocol minimum"))
+			require.Len(t, stream.sent, 2)
+			require.Equal(t, pipeline.Method_PipelineMessage, stream.sent[1].(*pipeline.Message).GetCmd())
+		}
+	}
 }
 
-func TestJSONValueDestinationRequiresItsOwnProtocolFloor(t *testing.T) {
-	for _, mixed := range []bool{false, true} {
-		t.Run(fmt.Sprintf("mediumint=%t", mixed), func(t *testing.T) {
-			c, client := expressionProtocolTestCompile(t)
-			features := planpb.RemoteExpressionFeatures{JSONValueContract: true, MediumIntAssignmentBounds: mixed, DateNumericResultContracts: mixed, LeastGreatestCollationSemantics: mixed}
-			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
-			client.version = defines.MORPCVersion122
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 135")
-			require.Equal(t, 1, client.calls)
-			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion123
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 135")
-			require.Equal(t, 2, client.calls)
-			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion128
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 135")
-			require.Equal(t, 3, client.calls)
-			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion129
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 135")
-			require.Equal(t, 4, client.calls)
-			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion134
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 135")
-			require.Equal(t, 5, client.calls)
-			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion135
-			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
-			require.Equal(t, 6, client.calls)
-			require.Equal(t, client.calls, client.releases)
-		})
-	}
+func TestJSONValueDestinationPreservesIndependentFloor(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	jsonValue := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2)}, Args: make([]*planpb.Expr, 7)}}}
+	calendar := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 2)},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(jsonValue)
+	require.NoError(t, err)
+	require.Zero(t, remoteExpressionProtocolVersion(features))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, nil, features))
+	require.Zero(t, client.calls)
+	jsonArgs := make([]*planpb.Expr, 7)
+	jsonArgs[0] = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_json)}}
+	jsonTyped := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.JSON_VALUE, 2)},
+		Args: jsonArgs,
+	}}}
+	features, err = planpb.RequiredRemoteExpressionFeatures(jsonTyped)
+	require.NoError(t, err)
+	require.True(t, features.JSONOpaqueTextContracts)
+	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	client.version = defines.MORPCVersion128
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 129")
+	client.version = defines.MORPCVersion129
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
+	features, err = planpb.RequiredRemoteExpressionFeatures([]*planpb.Expr{jsonValue, calendar})
+	require.NoError(t, err)
+	require.True(t, features.DateNumericResultContracts)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	client.version = defines.MORPCVersion111
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 112")
+	client.version = defines.MORPCVersion112
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
+	require.Equal(t, client.calls, client.releases)
 }
 
 func TestJSONValueAndDateNumericProtocolPlacement(t *testing.T) {
@@ -264,15 +241,14 @@ func TestJSONValueAndDateNumericProtocolPlacement(t *testing.T) {
 				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 				require.NoError(t, err)
 				require.True(t, features.DateNumericResultContracts)
-				require.Equal(t, combined, features.JSONValueContract)
-				for _, version := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
+				for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion133, defines.MORPCVersion134} {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 					client.version = version
 					c.execType = plan2.ExecTypeAP_MULTICN
 					c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 					require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 					want := plan2.ExecTypeAP_MULTICN
-					if combined && version < defines.MORPCVersion135 {
+					if version < defines.MORPCVersion112 {
 						want = plan2.ExecTypeAP_ONECN
 					}
 					require.Equal(t, want, c.execType)
@@ -310,7 +286,6 @@ func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
 				floor := defines.MORPCVersion117
 				if combined {
 					op.ProjectList = append(op.ProjectList, jsonValue)
-					floor = defines.MORPCVersion135
 				}
 				qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: op.ProjectList}}, Steps: []int32{0}}
 				p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: op.ProjectList}}}
@@ -319,9 +294,8 @@ func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
 				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 				require.NoError(t, err)
 				require.True(t, features.LeastGreatestCollationSemantics)
-				require.Equal(t, combined, features.JSONValueContract)
 				require.Equal(t, floor, remoteExpressionProtocolVersion(features))
-				for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135, defines.MORPCVersion117} {
+				for _, version := range []int64{defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion117} {
 					// Reuse the same plan/scope after capability changes: placement
 					// and final send must not retain the prior successful admission.
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
@@ -333,8 +307,8 @@ func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
 					decoded, receiveErr := decodeScope(data, c.proc, true, nil)
 					if version < floor {
 						require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-						require.ErrorContains(t, sendErr, "version 135")
-						require.ErrorContains(t, receiveErr, "version 135")
+						require.ErrorContains(t, sendErr, "version 117")
+						require.ErrorContains(t, receiveErr, "version 117")
 					} else {
 						require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 						require.NoError(t, sendErr)
@@ -390,7 +364,6 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 			require.NoError(t, validateVectorPartitionDestination(c.proc, p))
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
-			require.False(t, features.JSONValueContract)
 			require.True(t, features.JSONInputContracts)
 			// CONCAT(JSON) renders opaque JSON text as well as consuming JSON input,
 			// so its actual expression floor is max(v101 input, v129 text contract).
@@ -406,76 +379,33 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 
-			// No ProjectList, QueryPayload or candidate-limit expression can
-			// accidentally supply the JSON feature missing from this owner.
+			// JSON_VALUE alone adds no expression floor, including after wire
+			// round-trip. The vector scan still has its independent v111 floor.
 			scan.AlgoExprs = []*planpb.Expr{jsonValue}
 			data, err := p.Marshal()
 			require.NoError(t, err)
 			decoded := &pipeline.Pipeline{}
 			require.NoError(t, decoded.Unmarshal(data))
-			for _, owner := range []*pipeline.Pipeline{p, decoded} {
-				features, err = planpb.RequiredRemoteExpressionFeatures(owner)
-				require.NoError(t, err)
-				require.True(t, features.JSONValueContract)
-				require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
-				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 135")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 135")
-			}
 			qry := &planpb.Query{Nodes: []*planpb.Node{node}, Steps: []int32{0}}
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
-			client.version = defines.MORPCVersion123
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			for _, owner := range []*pipeline.Pipeline{p, decoded} {
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 135")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 135")
+			for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion129, defines.MORPCVersion134} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				client.version = version
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+				for _, owner := range []*pipeline.Pipeline{p, decoded} {
+					features, err = planpb.RequiredRemoteExpressionFeatures(owner)
+					require.NoError(t, err)
+					require.Zero(t, remoteExpressionProtocolVersion(features))
+					require.Equal(t, defines.MORPCVersion111, minimumRemoteVectorProtocol(owner))
+					require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
+					require.NoError(t, validateVectorPartitionDestination(c.proc, owner))
+					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, owner))
+					require.NoError(t, validateRemoteExpressionDestination(c.proc, owner, features))
+				}
 			}
-
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-			client.version = defines.MORPCVersion128
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			for _, owner := range []*pipeline.Pipeline{p, decoded} {
-				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
-				require.NoError(t, validateVectorPartitionDestination(c.proc, owner))
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 135")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 135")
-			}
-
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-			client.version = defines.MORPCVersion129
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			for _, owner := range []*pipeline.Pipeline{p, decoded} {
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 135")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 135")
-			}
-
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-			client.version = defines.MORPCVersion135
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-			for _, owner := range []*pipeline.Pipeline{p, decoded} {
-				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
-				require.NoError(t, validateVectorPartitionDestination(c.proc, owner))
-				require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, owner))
-				require.NoError(t, validateRemoteExpressionDestination(c.proc, owner, features))
-			}
-			// The new JSON floor must not bypass main's independent rejection
+			// JSON_VALUE must not bypass the independent rejection
 			// of the older index-search representation.
 			scan.AlgoOptions = nil
 			require.ErrorContains(t, validateRemoteVectorPartitionProtocol(c.proc, p), "from an older version")
