@@ -287,7 +287,7 @@ func TestODKUActionRowsOriginalRowIDSeparatesSignedZeroPrimaryKeys(t *testing.T)
 	}
 }
 
-func TestODKUActionRowsBoundChurnAndNullKeys(t *testing.T) {
+func TestODKUActionRowsCompactVarlenAndRetainNullKey(t *testing.T) {
 	a, proc, image, keys := newODKUActionRowsFixture(t, 0, 1)
 	payload := strings.Repeat("x", 1024)
 	setODKUActionInput(t, proc, image, keys, 1, 1, payload, "", true)
@@ -299,15 +299,15 @@ func TestODKUActionRowsBoundChurnAndNullKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, -1, slot)
 	rows := a.ctr.actionRows
+	// Exercise the internal row-storage compaction boundary. Mutable-key Call
+	// paths retain distinct groups for locks until Reset; they do not compact
+	// the ownership map to a bound based on the current row count.
 	for i := 0; i < 250; i++ {
 		unique := fmt.Sprintf("%04d-%s", i, payload)
 		setODKUActionInput(t, proc, image, keys, int64(i), int64(i+3), unique, unique, false)
 		slot, _, err = a.publishODKUAction(proc, 0, image, keys, nil)
 		require.NoError(t, err)
 		require.Equal(t, -1, slot)
-		for k := range a.ctr.acceptedKeys {
-			require.LessOrEqual(t, a.ctr.acceptedKeys[k].rows.Length(), 66, "vacated groups must be reclaimed")
-		}
 		require.LessOrEqual(t, len(rows.images.Vecs[1].GetArea()), odkuDeadAreaSlack+3*len(unique))
 		require.LessOrEqual(t, len(rows.keys.Vecs[1].GetArea()), odkuDeadAreaSlack+2*len(unique))
 	}

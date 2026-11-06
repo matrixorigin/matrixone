@@ -152,8 +152,8 @@ func (preInsertUnique *PreInsertUnique) ensureODKUKeyIndex(proc *process.Process
 	return nil
 }
 
-// lookupODKUKeyIndex returns the current logical owner. Vacated groups remain in
-// the hash table until the owner rebuilds it from its live row images.
+// lookupODKUKeyIndex returns the current logical owner. Vacated groups remain
+// until Reset so mutable-key actions can deduplicate transient lock history.
 func (preInsertUnique *PreInsertUnique) lookupODKUKeyIndex(proc *process.Process, key *odkuKeyIndex, row int) (int64, bool, error) {
 	if key.key[0].IsNull(uint64(row)) || key.iterator == nil {
 		return 0, false, nil
@@ -266,47 +266,6 @@ func (preInsertUnique *PreInsertUnique) releaseODKUKey(proc *process.Process, sl
 	}
 	key.dead++
 	return nil
-}
-
-// rebuildODKUKeyIndex discards vacated groups and rebuilds from the action
-// owner's current physical keys. Input vectors must not alias the old index.
-// On an error the enclosing attempt must be discarded and reset.
-func (preInsertUnique *PreInsertUnique) rebuildODKUKeyIndex(proc *process.Process, slot int, keys *vector.Vector, owners []int64) error {
-	key := &preInsertUnique.ctr.acceptedKeys[slot]
-	if keys == nil || keys == key.fixedKeys || keys == key.rows || (owners != nil && keys.Length() != len(owners)) || !odkuKeyTypeEqual(*keys.GetType(), key.keyType) {
-		return moerr.NewInternalError(proc.Ctx, "invalid ODKU key rebuild input")
-	}
-	if err := context.Cause(proc.Ctx); err != nil {
-		return err
-	}
-	current := key.key
-	key.free(proc)
-	key.key[0] = keys
-	defer func() { key.key = current }()
-	if err := preInsertUnique.initODKUKey(proc, slot); err != nil {
-		return err
-	}
-	for row := 0; row < keys.Length(); row++ {
-		if row&1023 == 0 {
-			if err := context.Cause(proc.Ctx); err != nil {
-				return err
-			}
-		}
-		owner := int64(row)
-		if owners != nil {
-			owner = owners[row]
-		}
-		if err := preInsertUnique.claimODKUKey(proc, slot, row, owner); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// shouldRebuild limits retained vacated groups when the action owner checks it
-// after a key move. The fixed slack avoids rebuilding for short statements.
-func (key *odkuKeyIndex) shouldRebuild() bool {
-	return key.rows != nil && key.dead >= 64 && key.dead > uint64(key.rows.Length())-key.dead
 }
 
 func (key *odkuKeyIndex) free(proc *process.Process) {
