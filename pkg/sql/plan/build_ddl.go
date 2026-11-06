@@ -2855,6 +2855,41 @@ func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	return nil
 }
 
+// marshalExternalTableParam publishes the CREATE EXTERNAL TABLE source param
+// into catalog metadata. The serialized payload must never carry a
+// non-reconstructible expression interface: UpdateExpr.Expr (and the load
+// column-list entries) hold tree.Expr values that encoding/json cannot decode
+// back, and InitNullMap keeps row-variable wrapper assignments attached to
+// the statement so LOAD replans can rebind them. Scans and SHOW CREATE
+// re-derive every usable option from the serialized reader options and the
+// NullMap this payload keeps, so the statement keeps its expressions and the
+// property strips them on a copy.
+func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
+	copied := *param
+	if param.Tail != nil {
+		copiedTail := *param.Tail
+		copiedTail.ColumnList = nil
+		if len(copiedTail.Assignments) > 0 {
+			assignments := make(tree.UpdateExprs, len(copiedTail.Assignments))
+			for i, assignment := range copiedTail.Assignments {
+				if assignment == nil {
+					continue
+				}
+				copiedAssignment := *assignment
+				copiedAssignment.Expr = nil
+				assignments[i] = &copiedAssignment
+			}
+			copiedTail.Assignments = assignments
+		}
+		copied.Tail = &copiedTail
+	}
+	payload, err := json.Marshal(&copied)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -3310,7 +3345,7 @@ func buildCreateTable(
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
 			return nil, err
 		}
-		json_byte, err := json.Marshal(stmt.Param)
+		json_byte, err := marshalExternalTableParam(stmt.Param)
 		if err != nil {
 			return nil, err
 		}
@@ -3377,7 +3412,16 @@ func buildCreateTable(
 	if stmt.PartitionOption != nil {
 		// Foreign keys are not yet supported in conjunction with partitioning
 		// see: https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-14.html
-		if len(createTable.TableDef.Fkeys) > 0 {
+		//
+		// Fkeys covers references bound at plan time (including self
+		// references), UnresolvedFkParents covers forward references admitted
+		// under foreign_key_checks=0 while the parent table is still absent,
+		// and FksReferToMe covers deferred references registered by previously
+		// created children that would bind to this table once it exists. No
+		// foreign key may involve a partitioned relation in either direction.
+		if len(createTable.TableDef.Fkeys) > 0 ||
+			len(createTable.UnresolvedFkParents) > 0 ||
+			len(createTable.FksReferToMe) > 0 {
 			return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 		}
 
@@ -8288,6 +8332,21 @@ type FkData struct {
 // but for fk self refer, it is different in not checking fk self refer instantly.
 // because it is not ready. It should be checked after the pk,uk has been ready.
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*FkData, error) {
+	// Foreign keys are not yet supported in conjunction with partitioning.
+	// Partitioning is a dual identity: the authored CREATE records the
+	// logical features.Partitioned flag on this definition before the FK
+	// pass, and a resolved relation fills TableDef.Partition and FeatureFlag
+	// from independent engine state — the engine dispatches the combined
+	// partition relation on that flag (disttae/cache/types.go
+	// IsPartitionTable), not on the pointer. Only the logical Partitioned
+	// bit is structural here; other FeatureFlag bits are not partitioning.
+	// tableDef is the planner-owned final child definition: ALTER routes
+	// pass the resolved relation for the direct and COPY-based paths alike,
+	// and CREATE arrives with the flag authored but partition defs not laid
+	// out yet.
+	if tableDef.Partition != nil || features.IsPartitioned(tableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
+	}
 	refer := def.Refer
 	catalogLayout, err := resolveForeignKeyCatalogLayout(ctx)
 	if err != nil {
@@ -8399,6 +8458,17 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	if parentTableDef.IsTemporary {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
+	}
+
+	// A resolved partitioned parent is the same structurally unsupported
+	// combination as a partitioned child: deferring this to execution would
+	// surface a recovered not-implemented panic instead of a SQL error.
+	// Partitioning is a dual identity (see the entry guard), so the resolved
+	// Partition pointer and the logical features.Partitioned flag both
+	// reject. The check is independent of foreign_key_checks=0; once the
+	// parent is resolved the combination is rejected.
+	if parentTableDef.Partition != nil || features.IsPartitioned(parentTableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 	}
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId
@@ -8735,6 +8805,16 @@ func BindForwardForeignKey(ctx context.Context, constraintName string,
 	fkDefs []*FkReferDef, childTableDef, parentTableDef *plan.TableDef) (*FkData, error) {
 	if len(fkDefs) == 0 || childTableDef == nil || parentTableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "incomplete forward foreign key binding")
+	}
+	// Deferred rebinding must keep the structural boundary of fresh binding:
+	// neither side of a foreign key may be partitioned, including the
+	// execution-time rebinding of previously registered forward references.
+	// Partitioning is a dual identity (see getForeignKeyData): the pointer
+	// or the logical features.Partitioned flag on either side rejects, and
+	// other FeatureFlag bits are not partitioning.
+	if childTableDef.Partition != nil || features.IsPartitioned(childTableDef.FeatureFlag) ||
+		parentTableDef.Partition != nil || features.IsPartitioned(parentTableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx)
 	}
 	fkData := FkData{
 		ParentTableName: parentTableDef.Name,
