@@ -4877,6 +4877,11 @@ func (ses *Session) log(ctx context.Context, level zapcore.Level, msg string, fi
 	}
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
+		var allowed bool
+		fields, allowed = boundSQLTaskErrorLog(ctx, level, fields)
+		if !allowed {
+			return
+		}
 		fields = append(fields, zap.String("session_info", ses.debugStr)) // not use ses.GetDebugStr() because this func may be locked.
 		if ses.tenant != nil {
 			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
@@ -4893,7 +4898,10 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 	}
 	ses.initLogger()
 	if ses.logLevel.Enabled(level) {
-		fields := make([]zap.Field, 0, 5)
+		fields, allowed := boundSQLTaskErrorLog(ctx, level, make([]zap.Field, 0, 5))
+		if !allowed {
+			return
+		}
 		fields = append(fields, zap.String("session_info", ses.debugStr))
 		if ses.tenant != nil {
 			fields = append(fields, zap.String("role", ses.tenant.GetDefaultRole()))
@@ -4902,6 +4910,17 @@ func (ses *Session) logf(ctx context.Context, level zapcore.Level, format string
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(format, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
+}
+
+func boundSQLTaskErrorLog(ctx context.Context, level zapcore.Level, fields []zap.Field) ([]zap.Field, bool) {
+	if level != zapcore.ErrorLevel || ctx == nil || ctx.Value(defines.SQLTaskBackgroundKey{}) != true {
+		return fields, true
+	}
+	decision, ok := logutil.AllowEvent("frontend.sql.task.statement.failed", logutil.DefaultRateLimitConfig)
+	if !ok {
+		return nil, false
+	}
+	return logutil.EventFieldsWithDecision(fields, decision), true
 }
 
 func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {

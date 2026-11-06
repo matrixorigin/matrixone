@@ -34,6 +34,12 @@ type IndexConflict struct{ Message string }
 
 func (e *IndexConflict) Error() string { return e.Message }
 
+// CheckTaskIndex reuses the task catalog's actual index definition check for
+// later versioned upgrades; task indexes do not have mo_indexes rows.
+func CheckTaskIndex(txn executor.TxnExecutor, accountID uint32, table, name string, columns ...string) (bool, error) {
+	return checkCatalogIndex(txn, accountID, catalog.MOTaskDB, table, name, false, columns...)
+}
+
 // checkCatalogIndex validates the relation definition, then verifies that the
 // catalog points at a single existing physical index table. mo_task indexes do
 // not have mo_indexes entries, so only their relation definition is available.

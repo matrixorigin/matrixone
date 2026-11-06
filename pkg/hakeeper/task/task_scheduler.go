@@ -24,9 +24,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+)
+
+var (
+	sqlTaskAllocationFailed = logutil.Event{
+		Name: "task.sql.allocate.failed", Message: "failed to allocate task",
+	}
+	sqlTaskAllocated = logutil.Event{
+		Name: "task.sql.allocate.success", Message: "task allocated",
+	}
+	sqlTaskExpiryFailed = logutil.Event{
+		Name: "task.sql.expiry.failed", Message: "failed to complete expired task",
+	}
 )
 
 const (
@@ -155,11 +169,17 @@ func allocateTask(
 	}
 	candidateCNPool := cnPool.selectCNs(rules...)
 	runner := candidateCNPool.min()
+	logger := runtime.ServiceRuntime(service).Logger()
+	isSQLTask := t.Metadata.Executor == task.TaskCode_SQLTask
 	if runner.uuid == "" {
-		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
-			zap.Uint64("task-id", t.ID),
-			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.Error(moerr.NewInternalErrorNoCtx("no CN available")))
+		err := moerr.NewInternalErrorNoCtx("no CN available")
+		fields := []zap.Field{zap.Uint64("task-id", t.ID), zap.String("task-metadata-id", t.Metadata.ID), zap.Error(err)}
+		if isSQLTask {
+			v2.SQLTaskAllocationFailureCounter.Inc()
+			logger.ErrorEvent(sqlTaskAllocationFailed, fields...)
+		} else {
+			logger.Error(sqlTaskAllocationFailed.Message, fields...)
+		}
 		return
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), taskSchedulerDefaultTimeout, moerr.CauseAllocateTasks)
@@ -167,17 +187,21 @@ func allocateTask(
 
 	if err := ts.Allocate(ctx, t, runner.uuid); err != nil {
 		err = moerr.AttachCause(ctx, err)
-		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
-			zap.Uint64("task-id", t.ID),
-			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.String("task-runner", runner.uuid),
-			zap.Error(err))
+		fields := []zap.Field{zap.Uint64("task-id", t.ID), zap.String("task-metadata-id", t.Metadata.ID), zap.String("task-runner", runner.uuid), zap.Error(err)}
+		if isSQLTask {
+			v2.SQLTaskAllocationFailureCounter.Inc()
+			logger.ErrorEvent(sqlTaskAllocationFailed, fields...)
+		} else {
+			logger.Error(sqlTaskAllocationFailed.Message, fields...)
+		}
 		return
 	}
-	runtime.ServiceRuntime(service).Logger().Info("task allocated",
-		zap.Uint64("task-id", t.ID),
-		zap.String("task-metadata-id", t.Metadata.ID),
-		zap.String("task-runner", runner.uuid))
+	fields := []zap.Field{zap.Uint64("task-id", t.ID), zap.String("task-metadata-id", t.Metadata.ID), zap.String("task-runner", runner.uuid)}
+	if isSQLTask {
+		logger.InfoEvent(sqlTaskAllocated, fields...)
+	} else {
+		logger.Info(sqlTaskAllocated.Message, fields...)
+	}
 	heap.Push(cnPool, runner)
 }
 
@@ -199,11 +223,14 @@ func markCompleted(service string, ts taskservice.TaskService, t task.AsyncTask)
 		Code:  task.ResultCode_Failed,
 		Error: "heartbeat expired",
 	}); err != nil {
-		runtime.ServiceRuntime(service).Logger().Error("failed to complete expired task",
-			zap.Uint64("task-id", t.ID),
-			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.String("task-runner", t.TaskRunner),
-			zap.Error(err))
+		logger := runtime.ServiceRuntime(service).Logger()
+		fields := []zap.Field{zap.Uint64("task-id", t.ID), zap.String("task-metadata-id", t.Metadata.ID), zap.String("task-runner", t.TaskRunner), zap.Error(err)}
+		if t.Metadata.Executor == task.TaskCode_SQLTask {
+			v2.SQLTaskExpiryFailureCounter.Inc()
+			logger.ErrorEvent(sqlTaskExpiryFailed, fields...)
+		} else {
+			logger.Error(sqlTaskExpiryFailed.Message, fields...)
+		}
 	}
 }
 

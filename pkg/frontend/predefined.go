@@ -598,6 +598,7 @@ var (
 			task_runner                 varchar(50),
 			task_epoch                  int,
 			last_heartbeat              bigint,
+			sql_task_run_id             bigint unsigned not null default 0,
 			result_code                 int null,
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
@@ -651,6 +652,7 @@ var (
 				enabled                     tinyint not null default 1,
 				next_fire_time              bigint not null default 0,
 				trigger_count               bigint not null default 0,
+				schedule_generation         bigint not null default 1,
 				creator                     varchar(128) not null default '',
 				creator_user_id             int unsigned not null default 0,
 				creator_role_id             int unsigned not null default 0,
@@ -679,6 +681,7 @@ var (
 				runner_cn                   varchar(128) not null default '',
 				index idx_task_id (task_id),
 				index idx_account_id (account_id),
+				index idx_task_running (account_id, status, task_name),
 				index idx_status (status),
 				index idx_started_at (started_at))`,
 		catalog.MOTaskDB, catalog.MOSQLTaskRun)
