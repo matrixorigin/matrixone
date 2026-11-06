@@ -149,8 +149,12 @@ func TestTemporalPlanningResolverIdentityChanges(t *testing.T) {
 			if tc.processMismatch {
 				intent.UnixTime++
 			}
-			p, err := BuildPlanWithTemporalInput(compiler, root, false, NewTemporalPlanningInput(root, intent, resolver))
+			input := NewTemporalPlanningInput(root, intent, resolver)
+			p, err := BuildPlanWithTemporalInput(compiler, root, false, input)
 			require.NoError(t, err)
+			require.False(t, input.claim(root), "the attempted root must consume its input")
+			require.Equal(t, intent, input.intent)
+			require.Same(t, resolver, input.resolver)
 			require.Equal(t, 1, compiler.resolves, "fallback must use the ordinary resolver once")
 			require.Zero(t, resolver.base)
 			require.Zero(t, resolver.hidden)
@@ -165,6 +169,26 @@ func TestTemporalPlanningResolverIdentityChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTemporalPlanningResolverCanRecoverAfterLaterMismatch(t *testing.T) {
+	fixture, _, _ := temporalCBOTraversalFixture(t)
+	scan := fixture.qry.Nodes[0]
+	underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+	underlying.tables["base"] = scan.TableDef
+	underlying.objects["base"] = scan.ObjRef
+	compiler := &trackingResolveContext{CompilerContext: underlying}
+	resolver := &changingPlanningResolver{compiler: compiler, answers: []bool{true, false, true}}
+	stmt, err := mysql.ParseOne(compiler.GetContext(), "select a.d from base a join base b on a.d = b.d", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	root := stmt.(*tree.Select)
+	_, err = BuildPlanWithTemporalInput(compiler, root, false, NewTemporalPlanningInput(root, fixture.temporalInput.intent, resolver))
+	require.NoError(t, err)
+	require.Equal(t, 2, compiler.resolves)
+	require.Equal(t, 1, resolver.base, "the later matching table lookup can use its resolver")
+	require.Zero(t, resolver.hidden)
+	require.GreaterOrEqual(t, resolver.checks, 3)
 }
 
 func TestTemporalCandidateDirectEntryWithoutInput(t *testing.T) {

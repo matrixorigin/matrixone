@@ -163,6 +163,8 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 		{name: "cancelled", replan: true, safePresent: true},
 		{name: "unproved parameter", replan: true},
 		{name: "prepare statement", safePresent: true, safe: true},
+		{name: "no resolver", replan: true, safePresent: true, safe: true},
+		{name: "parameter-bearing rejected resolver"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, _, index := temporalCBOTraversalFixture(t)
@@ -194,6 +196,12 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 				scan.FilterList[0].GetF().Args[1] = &plan.Expr{Typ: Type{Id: int32(types.T_any)}, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
 			case "prepare statement":
 				builder.isPrepareStatement = true
+			case "no resolver":
+				builder.temporalInput.resolver = nil
+				builder.temporalResolverAllowed = false
+			case "parameter-bearing rejected resolver":
+				builder.temporalInput.intent.ParameterFree = false
+				builder.temporalResolverAllowed = false
 			}
 			builder.collectOriginalTemporalOwner(root)
 			require.Equal(t, tc.replan, builder.qry.TemporalIndexNeedsReplan)
