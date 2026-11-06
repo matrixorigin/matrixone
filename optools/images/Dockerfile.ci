@@ -37,6 +37,7 @@ COPY --from=go-cache /go/pkg/mod /go/pkg/mod
 
 COPY go.mod go.mod
 COPY go.sum go.sum
+COPY third_party/parquet-go/go.mod third_party/parquet-go/go.mod
 RUN module_files="$(sha256sum go.mod go.sum)" && \
     go mod download && \
     if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
