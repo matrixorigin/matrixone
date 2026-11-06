@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -82,6 +83,18 @@ func NewLocalDataSource(
 	source.txnOffset = txnOffset
 	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
+	// Snapshot clones own an empty workspace, never the caller's pending writes.
+	if view := m0read.GetStatementReadView(ctx); view != nil && !table.db.op.IsSnapOp() {
+		bound, ok := view.(*m0StatementReadView)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtx("M0: incompatible statement workspace view")
+		}
+		if err := bound.acquire(table.getTxn(), txnOffset); err != nil {
+			return nil, err
+		}
+		source.statementView = bound
+	}
+
 	source.iteratePhase = engine.InMem
 	if skipReadMem {
 		source.iteratePhase = engine.Persisted
@@ -111,7 +124,8 @@ type LocalDisttaeDataSource struct {
 	cachedBat *batch.Batch
 	sels      []int64
 
-	txnOffset int
+	txnOffset     int
+	statementView *m0StatementReadView
 
 	// runtime config
 	rc struct {
@@ -349,7 +363,20 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+		// An older object can lack the requested column. An absent zone map
+		// supplies no ordering or pruning evidence; its interpretation belongs
+		// to the reader after it has established the column's semantics.
+		if orderByColIDX >= int(objectio.SEQNUM_UPPER) {
+			continue
+		}
+		seq := uint16(orderByColIDX)
+		if seq > blkMeta.GetMaxSeqnum() || seq >= blkMeta.GetMetaColumnCount() {
+			continue
+		}
+		col := blkMeta.ColumnMeta(seq)
+		if col.DataType() != 0 {
+			blockZMS[i] = col.ZoneMap()
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -408,6 +435,15 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 }
 
 func (ls *LocalDisttaeDataSource) Close() {
+	if ls.statementView != nil {
+		ls.statementView.Release()
+		ls.statementView = nil
+	}
+	ls.cachedBat = nil
+	ls.sels = nil
+	ls.workspaceDeletes.entries = nil
+	ls.workspaceDeletes.byBlock = nil
+	ls.workspaceDeletes.pointRows = nil
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
@@ -632,6 +668,19 @@ func checkWorkspaceEntryType(
 	return (entry.typ == DELETE) && (entry.fileName == "")
 }
 
+func (ls *LocalDisttaeDataSource) checkWorkspaceEntry(entry Entry, insert bool) bool {
+	if ls.statementView == nil {
+		return checkWorkspaceEntryType(ls.table, entry, insert)
+	}
+	if entry.accountId != ls.table.accountId || entry.databaseId != ls.table.db.databaseId || entry.tableId != ls.table.tableId || entry.bat == nil {
+		return false
+	}
+	if !insert {
+		return entry.typ == DELETE && entry.fileName == ""
+	}
+	return entry.typ == INSERT && !entry.bat.IsEmpty() && entry.bat.Attrs[0] != catalog.BlockMeta_BlockInfo && len(ls.statementView.selections[entry.bat]) != entry.bat.RowCount()
+}
+
 func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	_ context.Context,
 	seqNums []uint16,
@@ -642,15 +691,20 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	if ls.wsCursor >= ls.txnOffset {
 		return nil
 	}
-	ls.table.getTxn().Lock()
-	ls.rc.WorkspaceLocked = true
-	defer func() {
-		ls.table.getTxn().Unlock()
-		ls.rc.WorkspaceLocked = false
-	}()
+	var writes []Entry
+	if ls.statementView != nil {
+		writes = ls.statementView.writes
+	} else {
+		ls.table.getTxn().Lock()
+		ls.rc.WorkspaceLocked = true
+		defer func() {
+			ls.table.getTxn().Unlock()
+			ls.rc.WorkspaceLocked = false
+		}()
+		writes = ls.table.getTxn().writes
+	}
 
 	rows := 0
-	writes := ls.table.getTxn().writes
 	//maxRows := objectio.BlockMaxRows
 	if len(writes) == 0 {
 		return nil
@@ -714,7 +768,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		entry := writes[ls.wsCursor]
 
-		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
+		if ok := ls.checkWorkspaceEntry(entry, true); !ok {
 			ls.wsCursor++
 			continue
 		}
@@ -748,7 +802,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		//     built on, so index and filter encode the same key domain.
 		//
 		// Both fail closed to the FilterVector plus membership path below.
-		if exactKey, isExact := ls.memPKFilter.ExactPointKey(); isExact &&
+		if exactKey, isExact := ls.memPKFilter.ExactPointKey(); ls.statementView == nil && isExact &&
 			entry.pkRange.inited &&
 			!ls.memPKFilter.HasMemberFilter() &&
 			entry.pkCheckPos == int(pkSeqNums) {
@@ -1094,7 +1148,7 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 
 	var err error
 
-	if ls.category == engine.ShardingRemoteDataSource {
+	if ls.category == engine.ShardingRemoteDataSource || (activeM0Enabled && m0read.IsSingleRemote(ls.ctx)) {
 		if ls.extraTombstones != nil {
 			rowsOffset = ls.extraTombstones.ApplyInMemTombstones(bid, rowsOffset, nil)
 			rowsOffset, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, &ls.snapshotTS, bid, rowsOffset, nil)
@@ -1156,7 +1210,7 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 
 	deletedRows = objectio.GetReusableBitmap()
 
-	if ls.category == engine.ShardingRemoteDataSource {
+	if ls.category == engine.ShardingRemoteDataSource || (activeM0Enabled && m0read.IsSingleRemote(ls.ctx)) {
 		if ls.extraTombstones != nil {
 			ls.extraTombstones.ApplyInMemTombstones(bid, nil, &deletedRows)
 			if _, err = ls.extraTombstones.ApplyPersistedTombstones(
@@ -1205,7 +1259,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	leftRows = offsets
 
 	// may have locked in `filterInMemUnCommittedInserts`
-	if !ls.rc.WorkspaceLocked {
+	if ls.statementView == nil && !ls.rc.WorkspaceLocked {
 		ls.table.getTxn().Lock()
 		defer ls.table.getTxn().Unlock()
 	}
@@ -1346,9 +1400,14 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	}
 
 	entries := ls.workspaceDeletes.entries[:0]
-	writes := ls.table.getTxn().writes[:ls.txnOffset]
+	var writes []Entry
+	if ls.statementView != nil {
+		writes = ls.statementView.writes
+	} else {
+		writes = ls.table.getTxn().writes[:ls.txnOffset]
+	}
 	for idx := range writes {
-		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
+		if ok := ls.checkWorkspaceEntry(writes[idx], false); !ok {
 			continue
 		}
 
@@ -1402,13 +1461,21 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-
 	var tombstones []objectio.ObjectStats
-	s3FlushedDeletes.Range(func(key, value any) bool {
-		tombstones = append(tombstones, key.(objectio.ObjectStats))
-		return true
-	})
+	if ls.statementView != nil {
+		tombstones = ls.statementView.tombstones(ls.table)
+	} else if activeM0ScopedFlushedTombstones != nil {
+		tombstones, err = activeM0ScopedFlushedTombstones(ls.table, ls.txnOffset, ls.rc.WorkspaceLocked)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
+		s3FlushedDeletes.Range(func(key, value any) bool {
+			tombstones = append(tombstones, key.(objectio.ObjectStats))
+			return true
+		})
+	}
 
 	if len(tombstones) == 0 {
 		return
@@ -1459,11 +1526,15 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 
 	leftRows = offsets
 
+	if ls.statementView != nil {
+		readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, ls.statementView.deleted[ls.table.tableId][*bid])
+		return leftRows
+	}
 	rawRowIdDeletes := ls.table.getTxn().deletedBlocks
 	rawRowIdDeletes.RWMutex.RLock()
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
-	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[*bid])
+	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.byTable[ls.table.tableId][*bid])
 
 	return leftRows
 }

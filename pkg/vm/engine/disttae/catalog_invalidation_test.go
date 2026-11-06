@@ -100,6 +100,48 @@ func TestGetCachedTableByKeyRevalidatesAfterCatalogReplayAndGC(t *testing.T) {
 	require.Nil(t, txn.getCachedTableByKey(context.Background(), key, key))
 }
 
+func TestCombinedTableCacheReopensAfterSnapshotChange(t *testing.T) {
+	base := newTxnTableForTest()
+	eng := base.eng.(*Engine)
+	op, txn := newResetTxnForTest(t, eng)
+	require.True(t, op.Txn().IsRCIsolation())
+	db := &txnDatabase{op: op, accountId: 7, databaseId: 10, databaseName: "db"}
+	origin := newTxnTableWithItem(db, cache.TableItem{
+		AccountId: 7, DatabaseId: 10, Name: "t", Id: 42, Version: 1,
+	}, txn.proc, eng)
+	delegate := &txnTableDelegate{origin: origin}
+	key := tableKey{accountId: 7, databaseId: 10, dbName: "db", name: "t"}
+	insertCatalogTableAt(t, eng, txn, 7, 10, 42, 1, "db", "t", types.BuildTS(100, 0))
+
+	// A regular relation can retain its handle when the parent schema is
+	// unchanged; an already-opened combined relation has captured members.
+	origin.lastTS = timestamp.Timestamp{PhysicalTime: op.SnapshotTS().PhysicalTime + 1}
+	txn.tableCache.Store(key, delegate)
+	require.Same(t, delegate, txn.getCachedTableByKey(context.Background(), key, key))
+	delegate.combined.is = true
+	delegate.combined.revision, delegate.combined.cacheable = txn.CatalogVisibility()
+	require.Nil(t, txn.getCachedTableByKey(context.Background(), key, key))
+	_, ok := txn.tableCache.Load(key)
+	require.False(t, ok)
+
+	// An unchanged snapshot retains the already bound member set.
+	origin.lastTS = op.SnapshotTS()
+	txn.tableCache.Store(key, delegate)
+	require.Same(t, delegate, txn.getCachedTableByKey(context.Background(), key, key))
+	txn.beginCatalogMutation()
+	txn.endCatalogMutation()
+	require.Nil(t, txn.getCachedTableByKey(context.Background(), key, key), "same-snapshot workspace changes invalidate members")
+	_, ok = txn.tableCache.Load(key)
+	require.False(t, ok)
+
+	delegate.combined.revision, delegate.combined.cacheable = txn.CatalogVisibility()
+	txn.tableCache.Store(key, delegate)
+	txn.beginCatalogMutation()
+	got := txn.getCachedTableByKey(context.Background(), key, key)
+	txn.endCatalogMutation()
+	require.Nil(t, got, "an active workspace mutation cannot authorize member reuse")
+}
+
 // A new session definition is visible without advancing an existing data
 // snapshot. Neither the name convention nor the catalog marker alone suffices.
 func TestSessionTemporarySchemaCatalogVisibility(t *testing.T) {

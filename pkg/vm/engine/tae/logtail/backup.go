@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -50,6 +51,13 @@ type objData struct {
 	tid        uint64
 	appendable bool
 	dataType   objectio.DataMetaType
+}
+
+// The default backup writer retains the historical ETL behavior. The M0 build
+// supplies a version-aware writer for objects whose source version is nonzero.
+var backupDataWriter = func(_ context.Context, _ fileservice.FileService, dst fileservice.FileService, name objectio.ObjectName, _ *objectio.ObjectStats) (*ioutil.BlockWriter, bool, error) {
+	w, err := ioutil.NewBlockWriter(dst, name.String())
+	return w, false, err
 }
 
 type BackupDeltaLocDataSource struct {
@@ -682,6 +690,30 @@ func ReWriteCheckpointAndBlockFromKey(
 	lastCkpData *CKPReader,
 	version uint32, ts types.TS,
 ) (location, checkpointLocation objectio.Location, files []string, err error) {
+	// Only freshly named outputs for the M0 version-aware data writer are
+	// owned here. Older fixed names can already belong to a different backup.
+	var unpublishedM0 []string
+	defer func() {
+		panicValue := recover()
+		if err == nil && panicValue == nil {
+			return
+		}
+		if len(unpublishedM0) != 0 {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			_, cleanupErr := ioutil.DeleteUnpublishedObjects(cleanupCtx, dstFs, unpublishedM0...)
+			cancel()
+			if cleanupErr != nil {
+				detail := moerr.NewInternalErrorNoCtxf("M0: unpublished backup cleanup failed for %v", unpublishedM0)
+				if panicValue != nil {
+					panic(errors.Join(moerr.ConvertPanicError(ctx, panicValue), detail, cleanupErr))
+				}
+				err = errors.Join(err, detail, cleanupErr)
+			}
+		}
+		if panicValue != nil {
+			panic(panicValue)
+		}
+	}()
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
 		common.OperandField(loc.String()),
 		common.OperandField(ts.ToString()))
@@ -854,7 +886,17 @@ func ReWriteCheckpointAndBlockFromKey(
 			segment := objectName.SegmentId()
 			name := objectio.BuildObjectName(&segment, fileNum)
 			var writer *ioutil.BlockWriter
+			var ownedM0 bool
 			if objectData.dataType == objectio.SchemaTombstone {
+				// When versioned M0 data has been rewritten, later tombstone
+				// outputs belong to the same unpublished backup batch. Give
+				// them unique identities so a failed batch can clean them
+				// without deleting another backup's fixed-name object.
+				if len(unpublishedM0) != 0 {
+					id := objectio.NewObjectid()
+					name = objectio.BuildObjectNameWithObjectID(&id)
+					ownedM0 = true
+				}
 				writer, err = ioutil.NewBlockWriterNew(
 					dstFs,
 					name,
@@ -863,10 +905,13 @@ func ReWriteCheckpointAndBlockFromKey(
 					true,
 				)
 			} else {
-				writer, err = ioutil.NewBlockWriter(dstFs, name.String())
+				writer, ownedM0, err = backupDataWriter(ctx, fs, dstFs, name, objectData.stats)
 			}
 			if err != nil {
 				return err
+			}
+			if ownedM0 {
+				name = writer.GetName()
 			}
 			var isEmpty bool
 			if isEmpty, err = initData(objectData, writer); err != nil {
@@ -901,8 +946,14 @@ func ReWriteCheckpointAndBlockFromKey(
 			if err != nil {
 				return err
 			}
+			if ownedM0 {
+				unpublishedM0 = append(unpublishedM0, name.String())
+			}
 			blocks, extent, err := writer.Sync(ctx)
 			if err != nil {
+				if ownedM0 && moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+					unpublishedM0 = unpublishedM0[:len(unpublishedM0)-1]
+				}
 				return err
 			}
 			files = append(files, name.String())
@@ -1004,7 +1055,13 @@ func ReWriteCheckpointAndBlockFromKey(
 	defer func() {
 		var cleanupErr error
 		if !transferred {
-			cleanupErr = deletePersistedCheckpointObjects(ctx, dataSinker)
+			cleanupCtx := ctx
+			var cancel context.CancelFunc
+			if len(unpublishedM0) != 0 {
+				cleanupCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cancel()
+			}
+			cleanupErr = deletePersistedCheckpointObjects(cleanupCtx, dataSinker)
 		}
 		closeErr := dataSinker.Close()
 		err = errors.Join(err, cleanupErr, closeErr)

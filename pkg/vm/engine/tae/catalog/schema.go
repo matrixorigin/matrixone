@@ -184,6 +184,11 @@ func (s *Schema) Clone() *Schema {
 	if _, err = ns.ReadFromWithVersion(r, IOET_WALTxnCommand_Table_CurrVer); err != nil {
 		panic(err)
 	}
+	// GeneratedCol is not part of the schema codec. Preserve it in the
+	// in-memory MVCC copy without changing the persisted encoding.
+	for i, col := range s.ColDefs {
+		ns.ColDefs[i].GeneratedCol = bytes.Clone(col.GeneratedCol)
+	}
 	return ns
 }
 
@@ -669,6 +674,12 @@ func (s *Schema) ReadFromBatch(
 	checkFn func(currentName string, currentTid uint64) (goNext bool),
 ) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
+	generatedIdx, hasGeneratedExpr := bat.Nameidx[pkgcatalog.SystemColAttr_Generated]
+	markerIdx, hasGeneratedMarker := bat.Nameidx[pkgcatalog.SystemColAttr_HasGenerated]
+	var generatedMarkers []int8
+	if hasGeneratedExpr && hasGeneratedMarker {
+		generatedMarkers = vector.MustFixedColNoTypeCheck[int8](bat.Vecs[markerIdx].GetDownstreamVector())
+	}
 	defer func() {
 		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
 			return i.Idx - j.Idx
@@ -703,6 +714,9 @@ func (s *Schema) ReadFromBatch(
 		def.Comment = bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).GetDownstreamVector().GetStringAt(offset)
 		def.OnUpdate = bat.GetVectorByName((pkgcatalog.SystemColAttr_Update)).GetDownstreamVector().CloneBytesAt(offset)
 		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).GetDownstreamVector().CloneBytesAt(offset)
+		if generatedMarkers != nil && generatedMarkers[offset] == 1 {
+			def.GeneratedCol = bat.Vecs[generatedIdx].GetDownstreamVector().CloneBytesAt(offset)
+		}
 		def.Idx = int(idxes[offset]) - 1
 		def.SeqNum = seqNums[offset]
 		def.EnumValues = bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).GetDownstreamVector().GetStringAt(offset)

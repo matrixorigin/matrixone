@@ -573,7 +573,7 @@ func TestIssue25590RetirementKeepsSurvivingEntriesAcrossDumpAndRollback(t *testi
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.cnObjsSummary = make(map[workspaceObjectKey]Summary)
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// thresholds far above the working set: admissions never dump on their
@@ -706,7 +706,7 @@ func TestIssue25590AdmissionFailureKeepsRollbackBoundaryExact(t *testing.T) {
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.cnObjsSummary = make(map[workspaceObjectKey]Summary)
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	// no dumps during the setup statements
@@ -916,7 +916,7 @@ func issue25590InitDumpableFixture(t *testing.T, txn *Transaction) {
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.cnObjsSummary = make(map[workspaceObjectKey]Summary)
 	txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.writeWorkspaceThreshold = 1 << 40

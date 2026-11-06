@@ -275,6 +275,13 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 	deletedMask := objectio.GetReusableBitmap()
 	defer deletedMask.Release()
+	if activeM0Enabled {
+		// These fixtures use the public ownerless stash directly. The M0
+		// reader must reject it because no relation or write boundary is known.
+		_, err := ls.applyWorkspaceFlushedS3Deletes(tombstoneRowIds[0].BorrowBlockID(), nil, &deletedMask)
+		require.Error(t, err)
+		return
+	}
 	for i := range tombstoneRowIds {
 		bid := tombstoneRowIds[i].BorrowBlockID()
 		left, err := ls.applyWorkspaceFlushedS3Deletes(bid, nil, &deletedMask)
@@ -1158,6 +1165,70 @@ type filteredPrefetchFS struct {
 	calls   atomic.Int32
 	done    chan struct{}
 	evicted bool
+}
+
+func TestOrderedScanRetainsBlockWithMissingColumn(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	t.Cleanup(func() { input.Clean(mp) })
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(7), false, mp))
+	input.SetRowCount(1)
+	writer := ioutil.ConstructWriter(0, []uint16{0}, -1, false, false, fs)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	block := stats.ConstructBlockInfo(0)
+	data := readutil.NewBlockListRelationData(0)
+	data.AppendBlockInfo(&block)
+	secondBlock := stats.ConstructBlockInfo(1)
+	data.AppendBlockInfo(&secondBlock)
+	def := &plan.TableDef{Cols: make([]*plan.ColDef, 129), Name2ColIndex: map[string]int32{"present": 0, "near_missing": 1, "missing": 128}}
+	for i := range def.Cols {
+		def.Cols[i] = &plan.ColDef{Name: fmt.Sprintf("col_%d", i), Seqnum: uint32(i), Typ: plan.Type{Id: int32(types.T_int32)}}
+	}
+	def.Cols[0].Name = "present"
+	def.Cols[1].Name = "near_missing"
+	def.Cols[128].Name = "missing"
+	ls := &LocalDisttaeDataSource{table: &txnTable{tableDef: def}, fs: fs, rangeSlice: data.GetBlockInfoSlice()}
+	orderBy := func(name string, pos int32) {
+		ls.OrderBy = []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: name, ColPos: pos}},
+		}}}
+	}
+	orderBy("present", 0)
+	present, err := ls.getBlockZMs(ctx)
+	require.NoError(t, err)
+	require.Len(t, present, 2)
+	require.True(t, present[0].IsInited())
+	require.True(t, present[1].IsInited())
+	for _, tc := range []struct {
+		name string
+		pos  int32
+	}{{"near_missing", 1}, {"missing", 128}} {
+		t.Run(tc.name, func(t *testing.T) {
+			orderBy(tc.name, tc.pos)
+			missing, err := ls.getBlockZMs(ctx)
+			require.NoError(t, err)
+			require.Len(t, missing, 2)
+			ls.blockZMS = missing
+			ls.filterZM = present[0]
+			for i := range missing {
+				require.False(t, missing[i].IsInited())
+				require.True(t, ls.needReadBlkByZM(i), "unknown statistics must not prune the block")
+			}
+		})
+	}
 }
 
 func (fs *filteredPrefetchFS) WholeObjectPreloadSkipped(string, uint64) bool { return fs.evicted }

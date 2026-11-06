@@ -971,9 +971,20 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	if err != nil {
 		return
 	}
+	binding := m0AddBinding(ctx)
+	if binding != nil {
+		visible := entry.GetVisibleNodeLocked(txn)
+		if visible == nil || visible.BaseNode == nil || visible.BaseNode.Schema == nil {
+			err = moerr.NewInternalErrorNoCtx("M0: TN bound schema is no longer visible")
+			return
+		}
+		if err = binding.Validate(entry.GetDB().ID, entry.ID, txn, visible.BaseNode.Schema); err != nil {
+			return
+		}
+	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
-	if !isNewNode && node.HasDropIntent() {
+	if !isNewNode && (node.HasDropIntent() || binding != nil) {
 		// A delete node may share immutable schemas with the previous MVCC
 		// version. Preserve copy-on-write if the same transaction later
 		// reaches this internal update path.
@@ -981,8 +992,14 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	}
 
 	newSchema = node.BaseNode.Schema
+	if binding != nil {
+		if err = binding.Hydrate(entry.GetDB().ID, entry.ID, txn, newSchema); err != nil {
+			return
+		}
+	}
 	if isNewNode {
-		checks := apipb.CloneExtra(newSchema.Extra).Checks
+		persistentExtra := apipb.CloneExtra(newSchema.Extra)
+		checks := persistentExtra.Checks
 		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
 		var hints []apipb.MergeHint
@@ -1003,10 +1020,14 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			CollationVersion:  newSchema.Extra.CollationVersion,
 			KeyFormat:         newSchema.Extra.KeyFormat,
 			Checks:            checks,
+			M0Evolution:       persistentExtra.M0Evolution,
 		}
 
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
+		return
+	}
+	if err = advanceM0SchemaEvolution(entry, newSchema, req); err != nil {
 		return
 	}
 	if isNewNode {

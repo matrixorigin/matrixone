@@ -80,7 +80,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
 			txn.tnStores = []DNStore{{}}
-			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.cnObjsSummary = make(map[workspaceObjectKey]Summary)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			require.NotNil(t, tbl)
@@ -110,7 +110,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.NoError(t, tbl.Write(ctx, bat))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, tc.want, txn.writes[0].tableName)
-			summary, ok := txn.cnObjsSummary[*stats.ObjectName().ObjectId()]
+			summary, ok := txn.cnObjsSummary[workspaceObjectKey{tableID: tc.tableID, objectID: *stats.ObjectName().ObjectId()}]
 			require.True(t, ok)
 			require.Equal(t, tbl.db.databaseId, summary.databaseId)
 			require.Equal(t, tc.tableID, summary.tableId)
@@ -360,6 +360,7 @@ func TestReusableRelationHandleResetDoesNotMutateSharedTable(t *testing.T) {
 	}
 	combinedPrimary.proc.Store(newProc)
 	newShared.combined.tbl = &combinedTxnTable{primary: combinedPrimary}
+	newShared.combined.revision, newShared.combined.cacheable = newTxn.CatalogVisibility()
 	newTxn.tableCache.Store(genTableKey(0, "t", 10, "db"), newShared)
 	require.ErrorContains(t, newShared.combined.tbl.Reset(newOp), "cannot reset a shared combined relation")
 

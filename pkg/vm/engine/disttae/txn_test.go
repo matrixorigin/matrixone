@@ -1137,7 +1137,7 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	txn.batchSelectList = make(map[*batch.Batch][]int64)
 	txn.tablesInVain = make(map[uint64]int)
 	txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
-	txn.cnObjsSummary = make(map[types.Objectid]Summary)
+	txn.cnObjsSummary = make(map[workspaceObjectKey]Summary)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	txn.appendWorkspaceEntryLocked(Entry{
 		typ:          INSERT,

@@ -111,7 +111,7 @@ func (t *combinedTxnTable) sourceCommitTS(
 	if t.tablesFunc == nil {
 		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts has no partitioned members")
 	}
-	relations, err := t.tablesFunc()
+	relations, err := t.tablesFunc(ctx)
 	if err != nil {
 		return types.TS{}, err
 	}

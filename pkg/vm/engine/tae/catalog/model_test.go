@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"testing"
@@ -481,6 +483,83 @@ func TestCoverage_DefsToSchema_RoundTrip(t *testing.T) {
 	assert.Equal(t, "test", schema2.Comment)
 	assert.Equal(t, "SELECT 1", schema2.View)
 	assert.True(t, schema2.FromPublication)
+}
+
+func TestDefsToSchemaRestoresCatalogVersion(t *testing.T) {
+	schema := NewEmptySchema("versioned_relation")
+	require.NoError(t, schema.AppendPKCol("id", types.T_int32.ToType(), 0))
+	require.NoError(t, schema.Finalize(false))
+	defs, err := SchemaToDefs(schema)
+	require.NoError(t, err)
+	defs = append(defs, &engine.VersionDef{Version: 7})
+
+	rebuilt, err := DefsToSchema("versioned_relation", defs)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), rebuilt.Version)
+
+	rebuilt, err = DefsToSchema("versioned_relation", append(
+		defs,
+		&engine.VersionDef{Version: 7},
+	))
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), rebuilt.Version)
+
+	_, err = DefsToSchema("versioned_relation", append(
+		defs,
+		&engine.VersionDef{Version: 8},
+	))
+	require.ErrorContains(t, err, "conflicting schema versions")
+
+	_, err = DefsToSchema("versioned_relation", append(
+		defs,
+		(*engine.VersionDef)(nil),
+	))
+	require.ErrorContains(t, err, "nil schema version definition")
+}
+
+func TestCreateTableCatalogRowsRestoreSchemaVersion(t *testing.T) {
+	for _, want := range []uint32{0, 2, 4} {
+		t.Run(fmt.Sprint(want), func(t *testing.T) {
+			m := mpool.MustNew("catalog-version-roundtrip")
+			defer mpool.DeleteMPool(m)
+			packer := types.NewPacker()
+			defer packer.Close()
+			tableBat, err := pkgcatalog.GenCreateTableTuple(pkgcatalog.Table{
+				TableId: 10001, TableName: "versioned", DatabaseId: 10000,
+				DatabaseName: "db", Version: want,
+			}, m, packer)
+			require.NoError(t, err)
+			defer tableBat.Clean(m)
+			typ := types.T_int32.ToType()
+			typBytes, err := types.Encode(&typ)
+			require.NoError(t, err)
+			columnBat, err := pkgcatalog.GenCreateColumnTuples([]pkgcatalog.Column{{
+				TableId: 10001, DatabaseId: 10000, TableName: "versioned", DatabaseName: "db",
+				Name: "id", Typ: typBytes, Num: 1, NotNull: 1, ConstraintType: pkgcatalog.SystemColPKConstraint,
+			}}, m, packer)
+			require.NoError(t, err)
+			defer columnBat.Clean(m)
+			tablePB, err := batch.BatchToProtoBatch(tableBat)
+			require.NoError(t, err)
+			columnPB, err := batch.BatchToProtoBatch(columnBat)
+			require.NoError(t, err)
+			decoded, rest, err := pkgcatalog.ParseEntryList([]*api.Entry{
+				{EntryType: api.Entry_Insert, DatabaseId: pkgcatalog.MO_CATALOG_ID, TableId: pkgcatalog.MO_TABLES_ID, Bat: tablePB},
+				{EntryType: api.Entry_Insert, DatabaseId: pkgcatalog.MO_CATALOG_ID, TableId: pkgcatalog.MO_COLUMNS_ID, Bat: columnPB},
+			})
+			require.NoError(t, err)
+			require.Empty(t, rest)
+			req := decoded.(*pkgcatalog.CreateTableReq)
+			defer req.TableBat.Clean(m)
+			for _, columns := range req.ColumnBat {
+				defer columns.Clean(m)
+			}
+			require.Len(t, req.Cmds, 1)
+			schema, err := DefsToSchema(req.Cmds[0].Name, req.Cmds[0].Defs)
+			require.NoError(t, err)
+			require.Equal(t, want, schema.Version)
+		})
+	}
 }
 
 func TestCoverage_SystemSchemas_Init(t *testing.T) {

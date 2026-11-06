@@ -228,6 +228,7 @@ func readOneBlockWithMeta(
 
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+
 			putFillHolder(i, seqnum)
 			continue
 		}

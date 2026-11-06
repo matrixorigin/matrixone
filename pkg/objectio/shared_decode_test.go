@@ -139,7 +139,11 @@ func TestReadOneBlockScopedDecodePosition(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := &scopedDescriptorFS{}
-			v, err := ReadOneBlockWithScopedDecode(t.Context(), &meta, "columns", 0, tc.columns, tc.typs, mp, fs, 0, tc.selected)
+
+			v, err := ReadOneBlockWithScopedDecode(
+				t.Context(), &meta, "columns", 0,
+				tc.columns, tc.typs, mp, fs, 0, tc.selected,
+			)
 			require.NoError(t, err)
 			defer v.Release()
 			require.Len(t, v.Entries, len(tc.columns))

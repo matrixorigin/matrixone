@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1533,9 +1534,62 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := applyAlterTableCharsetDefault(ctx, &effectiveTableDef, stmt.Options); err != nil {
 		return nil, err
 	}
-	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, &effectiveTableDef)
+	var algorithm plan.AlterTable_AlgorithmType
+	m0Selected, err := m0SelectAddColumn(ctx, stmt.Options, &effectiveTableDef)
 	if err != nil {
 		return nil, err
+	}
+	m0Comment := false
+	if activeM0PlanHooks.selectAdd != nil && len(stmt.Options) == 1 {
+		if _, ok := stmt.Options[0].(*tree.TableOptionComment); ok {
+			contract, err := m0read.PlanEvolution(&effectiveTableDef)
+			if err != nil {
+				return nil, err
+			}
+			m0Comment = contract != nil
+		}
+	}
+	if !m0Selected && !m0Comment && activeM0PlanHooks.selectAdd != nil {
+		contract, err := m0read.PlanEvolution(&effectiveTableDef)
+		if err != nil {
+			return nil, err
+		}
+		if contract != nil {
+			// Explicit COPY of an otherwise admissible ADD remains a real
+			// rewrite/new root, never a metadata-only fallback. Validate the
+			// source authority before allowing that existing COPY path.
+			var withoutAlgorithm []tree.AlterTableOption
+			explicitCopy := false
+			for _, option := range stmt.Options {
+				if alg, ok := option.(*tree.AlterOptionAlgorithm); ok {
+					explicitCopy = strings.EqualFold(alg.Type, "copy")
+					continue
+				}
+				withoutAlgorithm = append(withoutAlgorithm, option)
+			}
+			admissibleCopy := false
+			if explicitCopy {
+				if _, err := m0read.ValidatePlanEvolution(&effectiveTableDef, accountId); err != nil {
+					return nil, err
+				}
+				admissibleCopy, err = m0SelectAddColumn(ctx, withoutAlgorithm, &effectiveTableDef)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !admissibleCopy {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "M0 append-domain table only supports metadata-only ADD COLUMN")
+			}
+		}
+	}
+
+	if m0Selected {
+		algorithm = plan.AlterTable_INPLACE
+	} else {
+		algorithm, err = ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, &effectiveTableDef)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := resolveAndValidateLock(ctx.GetContext(), stmt.Options, algorithm); err != nil {

@@ -26,9 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -73,7 +75,7 @@ func newTxnTableWithItem(
 		constraint:    item.Constraint,
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
-		extraInfo:     item.ExtraInfo,
+		extraInfo:     api.CloneExtra(item.ExtraInfo),
 		logicalId:     item.LogicalId,
 		lastTS:        db.op.SnapshotTS(),
 		eng:           eng,
@@ -101,13 +103,26 @@ type txnTableDelegate struct {
 
 	// combined info
 	combined struct {
-		tbl     *combinedTxnTable
-		is      bool
-		tableID uint64
+		tbl       *combinedTxnTable
+		is        bool
+		tableID   uint64
+		revision  uint64
+		cacheable bool
 	}
 
 	isMock  bool
 	isLocal func() (bool, error)
+}
+
+// Combined relations capture a member set. A transaction-local catalog
+// mutation can change that set even when the read snapshot is unchanged.
+func (tbl *txnTableDelegate) combinedCacheCurrent(txn *Transaction) bool {
+	if !tbl.combined.is {
+		return true
+	}
+	revision, stable := txn.CatalogVisibility()
+	return tbl.combined.cacheable && stable && revision == tbl.combined.revision &&
+		tbl.origin.lastTS.Equal(txn.op.SnapshotTS())
 }
 
 func MockTableDelegate(
@@ -297,6 +312,32 @@ func (tbl *txnTableDelegate) Size(
 
 func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.RangesParam) (engine.RelData, error) {
 	if tbl.combined.is {
+		if activeM0Enabled && m0read.NeedsRemoteMemberValidation(ctx) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if tbl.origin == nil || tbl.origin.db == nil || tbl.origin.db.op == nil || tbl.combined.tbl == nil {
+				return nil, moerr.NewInternalErrorNoCtx("M0: remote combined relation has no transaction")
+			}
+			txn, ok := tbl.origin.db.op.GetWorkspace().(*Transaction)
+			if !ok || txn == nil || txn.op == nil || !tbl.combinedCacheCurrent(txn) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return nil, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+			ranges, err := tbl.combined.tbl.Ranges(ctx, rangesParam)
+			if err != nil {
+				return nil, err
+			}
+			if err = ctx.Err(); err != nil {
+				return nil, err
+			}
+			if !tbl.combinedCacheCurrent(txn) {
+				return nil, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+			return ranges, nil
+		}
 		return tbl.combined.tbl.Ranges(ctx, rangesParam)
 	}
 
@@ -311,7 +352,10 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	var blocks objectio.BlockInfoSlice
 	var uncommitted []objectio.ObjectStats
 	if rangesParam.Policy != engine.Policy_CheckCommittedOnly {
-		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommitted, _, err = tbl.origin.collectUnCommittedDataObjs(ctx, rangesParam.TxnOffset)
+		if err != nil {
+			return nil, err
+		}
 	}
 	err = tbl.origin.rangesOnePart(
 		ctx,
@@ -625,7 +669,10 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
 	//}
 
-	_, uncommittedObjNames := tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	_, uncommittedObjNames, err := tbl.origin.collectUnCommittedDataObjs(ctx, txnOffset)
+	if err != nil {
+		return nil, err
+	}
 	uncommittedTombstones, err := tbl.origin.CollectTombstones(
 		ctx,
 		txnOffset,
@@ -1144,7 +1191,7 @@ func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
 	if txn.tableCache != nil {
 		if value, ok := txn.tableCache.Load(tbl.cacheKey); ok {
 			canonical := value.(*txnTableDelegate)
-			if canonical.origin.lastTS.Equal(op.SnapshotTS()) {
+			if canonical.origin.lastTS.Equal(op.SnapshotTS()) && canonical.combinedCacheCurrent(txn) {
 				canonical.origin.proc.Store(txn.proc)
 				tbl.bindCanonical(canonical)
 				return nil
@@ -1255,50 +1302,89 @@ func (tbl *txnTableDelegate) getReadRequest(
 }
 
 func (tbl *txnTableDelegate) getPartitionIndexesTables(
+	ctx context.Context,
 	proc *process.Process,
 ) ([]engine.Relation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// The relation can belong to a snapshot transaction or a published
+	// account that differs from the process's current transaction/account.
+	ctx = defines.AttachAccountId(ctx, tbl.origin.accountId)
+	op := tbl.origin.db.op
 	ps := proc.GetPartitionService()
+	if err := validateM0IndexParent(ctx, tbl.origin, tbl.parent); err != nil {
+		return nil, err
+	}
+	parentID := tbl.parent.GetTableID(ctx)
 	metadata, err := ps.GetPartitionMetadata(
-		proc.Ctx,
-		tbl.parent.GetTableID(proc.Ctx),
-		proc.GetTxnOperator(),
+		ctx,
+		parentID,
+		op,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateM0PartitionMetadata(metadata, parentID); err != nil {
 		return nil, err
 	}
 
 	e := tbl.origin.db.getEng()
 	idx := -1
-	for i, indexID := range tbl.parent.GetExtraInfo().IndexTables {
+	parentExtra := tbl.parent.GetExtraInfo()
+	if parentExtra == nil {
+		return nil, moerr.NewInternalErrorNoCtx("partition index parent metadata is unavailable")
+	}
+	for i, indexID := range parentExtra.IndexTables {
 		if indexID == tbl.origin.tableId {
 			idx = i
 			break
 		}
 	}
 	if idx == -1 {
-		panic("BUG: index table not found in main table")
+		return nil, moerr.NewInternalErrorNoCtx("partition index not found in parent metadata")
 	}
 
 	relations := make([]engine.Relation, 0, len(metadata.Partitions))
 	for _, p := range metadata.Partitions {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		_, _, r, err := e.GetRelationById(
-			proc.Ctx,
-			proc.GetTxnOperator(),
+			ctx,
+			op,
 			p.PartitionID,
 		)
 		if err != nil {
 			return nil, err
 		}
+		if r == nil {
+			return nil, moerr.NewInternalErrorNoCtx("partition index member metadata is incomplete")
+		}
+		if err = validateM0PartitionMember(ctx, metadata, p, tbl.origin.db, r); err != nil {
+			return nil, err
+		}
+		memberExtra := r.GetExtraInfo()
+		if memberExtra == nil || idx >= len(memberExtra.IndexTables) || memberExtra.IndexTables[idx] == 0 {
+			return nil, moerr.NewInternalErrorNoCtx("partition index member metadata is incomplete")
+		}
 
+		indexID := memberExtra.IndexTables[idx]
 		_, _, r, err = e.GetRelationById(
-			proc.Ctx,
-			proc.GetTxnOperator(),
-			r.GetExtraInfo().IndexTables[idx],
+			ctx,
+			op,
+			indexID,
 		)
 		if err != nil {
 			return nil, err
 		}
+		if err = validateM0PartitionMember(ctx, metadata, partition.Partition{PartitionID: indexID, PrimaryTableID: parentID}, tbl.origin.db, r); err != nil {
+			return nil, err
+		}
 		relations = append(relations, r)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return relations, nil
 }

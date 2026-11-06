@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -57,6 +57,10 @@ func LoadPersistedColumnData(
 	tsForAppendable *types.TS,
 	needCopy bool,
 ) ([]containers.Vector, *nulls.Nulls, func(), error) {
+	readLayout, layoutErr := activeM0PersistentReadLayout(ctx, schema, id, location, rt)
+	if layoutErr != nil {
+		return nil, nil, nil, layoutErr
+	}
 	cols := make([]uint16, 0, len(colIdxs))
 	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
@@ -117,14 +121,14 @@ func LoadPersistedColumnData(
 	var vecs []containers.Vector
 	var release func()
 	var err error
-	vecs, release, err = ioutil.LoadColumns2(
+	vecs, release, err = blockio.LoadColumns2(
 		ctx, cols,
 		typs,
 		rt.Fs,
 		location,
 		fileservice.GetFileServicePolicy(ctx),
 		needCopy,
-		rt.VectorPool.Transient)
+		rt.VectorPool.Transient, readLayout)
 	if err != nil {
 		for _, vec := range vectors {
 			if vec != nil {

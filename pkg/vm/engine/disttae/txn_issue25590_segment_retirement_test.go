@@ -126,7 +126,7 @@ func newIssue25590SharedOpWorkspaceForTest(t *testing.T, op client.TxnOperator) 
 		tablesInVain:    make(map[uint64]int),
 		batchSelectList: make(map[*batch.Batch][]int64),
 		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
-		cnObjsSummary:   map[types.Objectid]Summary{},
+		cnObjsSummary:   map[workspaceObjectKey]Summary{},
 		tableCache:      new(sync.Map),
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),

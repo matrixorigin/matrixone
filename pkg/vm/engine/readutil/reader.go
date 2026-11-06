@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"math"
 	"slices"
 	"strings"
@@ -298,6 +299,8 @@ type reader struct {
 	cacheVectors containers.Vectors
 
 	explainVectorTopStats *objectio.IndexReaderTopStats
+	objectReadLayout      m0read.ObjectReadLayout
+	objectLayoutReady     bool
 }
 
 type mergeReader struct {
@@ -1019,6 +1022,37 @@ func (r *reader) read(
 	if r.explainVectorTopStats != nil {
 		r.explainVectorTopStats.BlocksRead++
 	}
+	provenM0 := false
+	var readLayout *m0read.ObjectReadLayout
+	if activeM0StrictReader && r.tableDef != nil {
+		// This reader establishes its own object layout from its bound schema.
+		// Context values never confer missing-column authority.
+		var err error
+		objectName := blkInfo.MetaLocation().Name().String()
+		if r.objectLayoutReady && r.objectReadLayout.ObjectName == objectName {
+			provenM0 = true
+		} else {
+			provenM0, r.objectReadLayout, err = activeM0ReadLayout(
+				ctx, r.tableDef, blkInfo.MetaLocation(), r.fs,
+			)
+			if err != nil {
+				return false, false, err
+			}
+			r.objectLayoutReady = provenM0
+		}
+		if provenM0 {
+			readLayout = &r.objectReadLayout
+		} else {
+			readLayout = &m0read.ObjectReadLayout{ObjectName: objectName}
+			if r.tableDef.DbId == catalog.MO_CATALOG_ID && r.tableDef.TblId == catalog.MO_TABLES_ID && r.tableDef.Name == catalog.MO_TABLES {
+				for _, col := range r.tableDef.Cols {
+					if col.Name == catalog.SystemRelAttr_LogicalID && col.Seqnum == uint32(catalog.MO_TABLES_LOGICAL_ID_IDX) && col.Typ.Id == int32(types.T_uint64) {
+						readLayout.LegacyNullColumns = []uint16{uint16(col.Seqnum)}
+					}
+				}
+			}
+		}
+	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
@@ -1072,6 +1106,7 @@ func (r *reader) read(
 			r.fs,
 			earlyColumns,
 			readerFilter,
+			readLayout,
 		)
 		if err == nil && preFilterRows == 1 {
 			// Preserve the exact-PK hit feedback that eager BlockDataRead records
@@ -1097,6 +1132,7 @@ func (r *reader) read(
 			r.cacheVectors,
 			mp,
 			r.fs,
+			readLayout,
 		)
 	}
 	if err != nil {

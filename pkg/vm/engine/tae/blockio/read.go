@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
 	"slices"
 	"time"
 
@@ -57,6 +58,7 @@ func ReadDataByFilter(
 	fs fileservice.FileService,
 	stats *objectio.IndexReaderTopStats,
 	policy fileservice.Policy,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (sels []int64, err error) {
 	if cachedSearch != nil {
 		cacheVectors.Free(mp)
@@ -94,6 +96,7 @@ func ReadDataByFilter(
 			cacheVectors,
 			mp,
 			fs,
+			readLayouts...,
 		)
 		if readErr != nil {
 			return nil, readErr
@@ -140,6 +143,7 @@ func BlockDataRead(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) error {
 	return blockDataRead(
 		ctx,
@@ -162,6 +166,7 @@ func BlockDataRead(
 		nil,
 		nil,
 		nil,
+		readLayouts...,
 	)
 }
 
@@ -190,6 +195,7 @@ func BlockDataReadWithFilter(
 	fs fileservice.FileService,
 	earlyColumns []int,
 	applyFilter *engine.ReaderFilterRequest,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (preFilterRows int, err error) {
 	if applyFilter == nil || applyFilter.Apply == nil {
 		return 0, moerr.NewInvalidInputNoCtx("nil residual block filter")
@@ -226,6 +232,7 @@ func BlockDataReadWithFilter(
 		earlyColumns,
 		applyFilter,
 		&preFilterRows,
+		readLayouts...,
 	)
 	return preFilterRows, err
 }
@@ -251,6 +258,7 @@ func blockDataRead(
 	earlyColumns []int,
 	applyFilter *engine.ReaderFilterRequest,
 	preFilterRows *int,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
@@ -268,7 +276,7 @@ func blockDataRead(
 	if orderByLimit != nil {
 		topStats = orderByLimit.Stats
 	}
-	if canFuseExactMembershipTopK(
+	fuseExactTopK := canFuseExactMembershipTopK(
 		info,
 		filter,
 		searchFunc,
@@ -277,7 +285,19 @@ func blockDataRead(
 		phyAddrColumnPos,
 		len(columns),
 		applyFilter,
-	) {
+	)
+	if fuseExactTopK {
+		mapping, err := mapM0Columns(ctx, columns, colTypes, fs, info.MetaLocation(),
+			readLayouts...,
+		)
+		if err != nil {
+			return err
+		}
+		// The fused loader materializes only physical columns. Keep the existing
+		// membership/filter and then Engine TopN path for a logical NULL suffix.
+		fuseExactTopK = mapping == nil
+	}
+	if fuseExactTopK {
 		cacheVectors.Free(mp)
 		v2.TxnSelReadFilterTotal.Observe(1.0)
 		filterRows := 0
@@ -322,6 +342,7 @@ func blockDataRead(
 			fs,
 			topStats,
 			policy,
+			readLayouts...,
 		); err != nil {
 			return err
 		}
@@ -355,6 +376,7 @@ func blockDataRead(
 			cacheVectors,
 			mp,
 			fs,
+			readLayouts...,
 		)
 	} else {
 		err = blockDataReadWithFilter(
@@ -375,6 +397,7 @@ func blockDataRead(
 			applyFilter,
 			orderByLimit,
 			preFilterRows,
+			readLayouts...,
 		)
 	}
 	if err != nil {
@@ -542,14 +565,16 @@ func CopyBlockData(
 	outputBat *batch.Batch,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (err error) {
 	var (
 		release      func()
 		cacheVectors = containers.NewVectors(len(seqnums))
 	)
 
-	if release, _, err = ioutil.LoadColumns(
+	if release, _, err = loadColumns(
 		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
+		readLayouts...,
 	); err != nil {
 		return
 	}
@@ -559,6 +584,16 @@ func CopyBlockData(
 		cacheVectors, outputBat, mp,
 	); err != nil {
 		return
+	}
+	for _, vec := range outputBat.Vecs {
+		if vec == nil || vec.Length() != outputBat.RowCount() {
+			return moerr.NewInvalidInputNoCtx("physical block column row counts differ")
+		}
+	}
+	for i, offset := range deletes {
+		if offset < 0 || offset >= int64(outputBat.RowCount()) || (i > 0 && offset <= deletes[i-1]) {
+			return moerr.NewInvalidInputNoCtx("invalid physical block delete offsets")
+		}
 	}
 	err = outputBat.Shrink(deletes, true, mp)
 	return
@@ -773,6 +808,7 @@ func materializeBlockData(
 	outputBat *batch.Batch,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (deleteMask objectio.Bitmap, err error) {
 	if len(columns) != len(colTypes) {
 		return deleteMask, moerr.NewInvalidInputNoCtxf(
@@ -809,16 +845,19 @@ func materializeBlockData(
 		}
 	}
 
-	if selectRows == nil && visibilityTS == nil {
-		_, err = ioutil.LoadColumnsDataIntoReadonly(
-			ctx, idxes, typs, fs, info.MetaLocation(), destinations, mp, policy,
-		)
-	} else {
-		deleteMask, _, err = ioutil.LoadColumnsDataInto(
-			ctx, idxes, typs, fs, info.MetaLocation(), destinations,
-			selectRows, visibilityTS, mp, policy,
-		)
-	}
+	deleteMask, _, err = loadColumnsDataInto(
+		ctx,
+		idxes,
+		typs,
+		fs,
+		info.MetaLocation(),
+		destinations,
+		selectRows,
+		visibilityTS,
+		mp,
+		policy,
+		readLayouts...,
+	)
 	if err != nil {
 		return
 	}
@@ -922,6 +961,7 @@ func materializeBlockColumnsAtPositions(
 	outputBat *batch.Batch,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (objectio.Bitmap, error) {
 	if outputBat == nil {
 		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx("nil output batch for block columns")
@@ -959,6 +999,7 @@ func materializeBlockColumnsAtPositions(
 		selectedOutput,
 		mp,
 		fs,
+		readLayouts...,
 	)
 }
 
@@ -1019,12 +1060,25 @@ func blockDataReadWithFilter(
 	applyFilter *engine.ReaderFilterRequest,
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (err error) {
 	if err = validateLateMaterializationOutput(columns, colTypes, outputBat); err != nil {
 		return err
 	}
 	cacheVectors.Free(mp)
-	if len(storageSelectRows) > 0 &&
+	// The fused physical loader cannot materialize semantic NULL columns.
+	// Fall through to the existing exact-filter/late-materialization path,
+	// which retains its filter and computes TopN after applying it.
+	var semanticMapping *m0ColumnRead
+	if len(storageSelectRows) > 0 && !info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
+		semanticMapping, err = mapM0Columns(ctx, columns, colTypes, fs, info.MetaLocation(),
+			readLayouts...,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if semanticMapping == nil && len(storageSelectRows) > 0 &&
 		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
 		topColPos := int(orderByLimit.ColPos)
 		if topColPos >= 0 && topColPos < len(columns) &&
@@ -1069,6 +1123,7 @@ func blockDataReadWithFilter(
 			outputBat,
 			mp,
 			fs,
+			readLayouts...,
 		)
 		ignoredMask.Release()
 		if readErr != nil {
@@ -1101,6 +1156,7 @@ func blockDataReadWithFilter(
 			outputBat,
 			mp,
 			fs,
+			readLayouts...,
 		); err != nil {
 			tombstones.Release()
 			return err
@@ -1215,7 +1271,7 @@ func blockDataReadWithFilter(
 			)
 		}
 
-		topRows, dists, _, topErr := ioutil.LoadColumnDataByTopN(
+		topRows, dists, _, topErr := loadColumnTopN(
 			ctx,
 			columns[topColPos],
 			colTypes[topColPos],
@@ -1225,6 +1281,7 @@ func blockDataReadWithFilter(
 			orderByLimit,
 			mp,
 			policy,
+			readLayouts...,
 		)
 		if topErr != nil {
 			return topErr
@@ -1263,6 +1320,7 @@ func blockDataReadWithFilter(
 		outputBat,
 		mp,
 		fs,
+		readLayouts...,
 	)
 	ignoredMask.Release()
 	if readErr != nil {
@@ -1500,11 +1558,13 @@ func BlockDataReadInner(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (err error) {
 	// A filter has already applied appendable visibility and tombstones to
 	// selectRows. For the common point/range lookup path, copy only those rows
 	// while the cache entries are pinned. Vector TopN still needs the complete
 	// source Vector and therefore keeps the existing owned-vector path below.
+
 	if selectRows != nil &&
 		(orderByLimit == nil || orderByLimit.OrderedLimit) {
 		cacheVectors.Free(mp)
@@ -1533,6 +1593,7 @@ func BlockDataReadInner(
 			outputBat,
 			mp,
 			fs,
+			readLayouts...,
 		)
 		return err
 	}
@@ -1574,6 +1635,7 @@ func BlockDataReadInner(
 			outputBat,
 			mp,
 			fs,
+			readLayouts...,
 		); err != nil {
 			tombstones.Release()
 			return err
@@ -1628,7 +1690,7 @@ func BlockDataReadInner(
 		}
 
 		var dists []float64
-		selectRows, dists, _, err = ioutil.LoadColumnDataByTopN(
+		selectRows, dists, _, err = loadColumnTopN(
 			ctx,
 			columns[topColPos],
 			colTypes[topColPos],
@@ -1638,6 +1700,7 @@ func BlockDataReadInner(
 			orderByLimit,
 			mp,
 			policy,
+			readLayouts...,
 		)
 		if err != nil {
 			return err
@@ -1655,6 +1718,7 @@ func BlockDataReadInner(
 			outputBat,
 			mp,
 			fs,
+			readLayouts...,
 		)
 	}
 
@@ -1670,6 +1734,7 @@ func BlockDataReadInner(
 		cacheVectors,
 		mp,
 		fs,
+		readLayouts...,
 	); err != nil {
 		return
 	}
@@ -1800,8 +1865,21 @@ func materializeVectorTopNRows(
 	policy fileservice.Policy,
 	outputBat *batch.Batch,
 	mp *mpool.MPool,
-	fs fileservice.FileService,
+	fs fileservice.FileService, readLayouts ...
+
+	// nil selections mean "all rows" to physical loaders, but an empty TopN
+	// result means no winners. Do not accidentally materialize a whole block.
+	*m0read.ObjectReadLayout,
 ) error {
+
+	if len(selectRows) == 0 {
+		for _, v := range outputBat.Vecs {
+			v.CleanOnlyData()
+		}
+		outputBat.SetRowCount(0)
+		return appendVectorTopNDistances(outputBat, len(columns), dists, mp)
+	}
+
 	loadColumns := make([]uint16, 0, len(columns)-1)
 	loadTypes := make([]types.Type, 0, len(columns)-1)
 	destinations := make([]*vector.Vector, 0, len(columns)-1)
@@ -1814,7 +1892,7 @@ func materializeVectorTopNRows(
 		destinations = append(destinations, outputBat.Vecs[pos])
 	}
 	if len(loadColumns) > 0 {
-		if _, _, err := ioutil.LoadColumnsDataInto(
+		if _, _, err := loadColumnsDataInto(
 			ctx,
 			loadColumns,
 			loadTypes,
@@ -1825,6 +1903,7 @@ func materializeVectorTopNRows(
 			nil,
 			mp,
 			policy,
+			readLayouts...,
 		); err != nil {
 			return err
 		}
@@ -1936,6 +2015,7 @@ func readBlockData(
 	cacheVectors containers.Vectors,
 	m *mpool.MPool,
 	fs fileservice.FileService,
+	readLayouts ...*m0read.ObjectReadLayout,
 ) (
 	deleteMask objectio.Bitmap,
 	release func(),
@@ -1955,8 +2035,9 @@ func readBlockData(
 			return
 		}
 
-		release, _, err2 = ioutil.LoadColumns(
+		release, _, err2 = loadColumns(
 			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
+			readLayouts...,
 		)
 		return
 	}

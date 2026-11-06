@@ -45,6 +45,18 @@ func isScanNoCopy(ctx context.Context) bool {
 	return v
 }
 
+func legacyLogicalIDColumns(id *common.ID, readSchema *catalog.Schema) []uint16 {
+	if id == nil || id.DbID != pkgcatalog.MO_CATALOG_ID || id.TableID != pkgcatalog.MO_TABLES_ID || readSchema == nil || readSchema.Name != pkgcatalog.MO_TABLES {
+		return nil
+	}
+	for _, def := range readSchema.ColDefs {
+		if def != nil && def.Name == pkgcatalog.SystemRelAttr_LogicalID && def.SeqNum == uint16(pkgcatalog.MO_TABLES_LOGICAL_ID_IDX) && def.Type.Oid == types.T_uint64 {
+			return []uint16{def.SeqNum}
+		}
+	}
+	return nil
+}
+
 var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {

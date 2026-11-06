@@ -223,6 +223,9 @@ func (c *Compile) Compile(
 	// initialize some attributes for Compile.
 	c.fill = resultWriteBack
 	c.pn = queryPlan
+	if err = c.captureStatementView(queryPlan); err != nil {
+		return err
+	}
 	c.prepareLoadUniqueIndexPromotion(queryPlan)
 
 	// combine top context with some values and replace.
