@@ -4,7 +4,7 @@ Status: design-first decision for the replacement of PR #31944 and issue
 #32318. The user requested a complete transitive refactor in a new PR while
 leaving #31944 unchanged. Source is `db225c815a0cfb38cde193e49fd1891ee737204a`;
 the imported feature baseline is `eb5f432079e24748cfe3718a279eca12183474ff`,
-on main `aeab8787f2b8acd4a80d47a2f23fd263d6f0ef2d`. The implementation PR will
+initially on main `aeab8787f2b8acd4a80d47a2f23fd263d6f0ef2d`. The implementation PR will
 link this reviewed design revision. This document replaces the intermediate
 20261106 borrowed-read and temporal-access-consolidation documents; those
 superseded API descriptions are removed. Type inversion and cost semantics
@@ -243,3 +243,40 @@ closures and reconcile inherited source changes and valid evidence. Record
 design and final self-review honestly; no independent reviewer is implied.
 Deliver a new fork feature branch and PR targeting main. Do not update or close
 #31944, merge a PR, push a default branch, or claim pending CI passed.
+
+## Integration with current physical-index authorization
+
+Before delivery, main advanced to `bfbb2645c03422a4c5d3a77a9e56942710944643`
+(#32032). This changes an actual dependency: ordinary resolution now denies
+explicit physical-index access, generated SHOW and index-maintenance sources
+have authorized resolver routes, and catalog-generation checks have a separate
+raw identity-validation entry. Integrate these owners before publication; the
+previous binary evidence does not certify this new combination.
+
+Ordinary `Resolve` and its real namespace variant must pass through the current
+`resolveUserRelation` admission. Optional borrowed output is cleared before work
+and cannot escape a denied resolution. The metadata-only catalog validator
+keeps its authorization-neutral identity purpose, uses the final callback
+signature directly and declines borrowed output. Root scans route through the
+current generated-source/maintenance authorization owner; its ordinary branch
+may forward the same optional output to `Resolve`, without another lookup,
+adapter or bypass. Generated SHOW sources retain `ParentObjRef`; they do not
+inherit a user scan's borrow. Reentry, post-resolution read and final base/index
+pair checks remain necessary after authorization.
+
+Move main's new temporary-DDL reuse restrictions into the existing `planReuse`
+owner. Preserve its compile retry maintenance specification, literal snapshot,
+trusted caller provenance and publication/cleanup ordering alongside the three
+canonical construction checkpoints. Do not reintroduce removed temporal APIs.
+Reserve main's released function ID 633 for `MO_IS_PHYSICAL_INDEX`; append the
+two unmerged endpoint families at 634/635 and renew the exact registry oracle.
+Regenerate the combined pipeline schema, retaining both main's maintenance
+messages and this feature's fixed-offset zone fields without changing tags.
+
+Validation renews the function/planner/frontend/compile and generated/wire
+closures in normal and race modes, current hidden-index authorization and
+existing temporal/view/two-CN public SQL, plus scoped static analysis. Renew
+paired measurements using the same original implementation integrated with
+this main revision as the immediate pre-refactor baseline, and the final
+combined binary. Reuse typed math, reader and client evidence only where their
+semantic inputs are unchanged. Original PR #31944 stays untouched.
