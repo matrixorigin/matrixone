@@ -119,6 +119,17 @@ ForceOneCN, sticky candidate topology, reset rejection and retry/rebuild fences.
 Clock or zone drift before physical execution follows the existing unscoped
 rebuild path; do not add a new Run state machine or extend context budgets.
 
+The ordinary Compile constructor becomes the only constructor entry. Its final
+setup mode expresses the three existing sequences: immediate publication with
+the ordinary offset boundary; deferred publication and deferred offset after
+preflight; or definition retry, which establishes its offset before allocating
+the new Compile while deferring Process publication. Remove both specialized
+constructors and the retry-forwarding wrapper. Keep sequence-retry state,
+message-board publication, preserved existing offsets, labels, panic cleanup
+and pool/reset ownership at the exact original checkpoints. Invalid internal
+setup modes reject before allocating resources. The mode represents an actual
+remaining construction contract, not a selector for an old implementation.
+
 Cache policy distinguishes three questions: ordinary generation reuse,
 prepared logical-template rebuild and prepared physical-compile reuse. Derive
 the answers at one frontend cache policy owner from existing facts, computing
