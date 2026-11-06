@@ -1,9 +1,10 @@
 # 4.1.6-hotfix：有界 NULL-aware membership 索引
 
-关联 issue：#32263。版本：v3，2026-11-06。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
+关联 issue：#32263。版本：v4，2026-11-06。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
 
 v2 明确独立 pipeline 的取消隔离：builder 取消只禁用共享优化，不取消仍有效的兄弟消费者。
 v3 闭合原生物理分配失败：MPool 在 calloc 返回错误时回滚已准入的 pool/global 配额并返回原错，确保可选索引仍发布终态。
+v4 将索引实现及测试放到实际所有者 `pkg/vm/message`，不再给底层 `common/hashmap` 添加 batch 依赖；CI 必须验证完整测试依赖图及 batch 自包测试。算法、准入、共享状态和 SQL 契约不变。
 
 ## 设计范围与评审结论
 
@@ -40,7 +41,7 @@ v3 闭合原生物理分配失败：MPool 在 calloc 返回错误时回滚已准
 
 ## 数据布局与容量
 
-索引置于 `pkg/common/hashmap`，只供此 membership 路径使用，不新增通用缓存框架。
+索引置于 `pkg/vm/message/membership_index.go`，由持有 RHS 的 JoinMap 管理，只供此 membership 路径使用，不新增通用缓存框架。不能将 batch-aware 的实现放入 `common/hashmap`：batch 自包测试依赖 aggexec，而 aggexec 依赖 hashmap，会形成测试 import cycle。
 
 - 一个 `[]uint64` 槽数组，每槽编码 `(batchIndex << 32) | (rowIndex + 1)`，0 表示空槽；无 Go 指针存入原生内存。
 - 单个 `maphash.Seed`，直接对向量借用的 `[]byte` 求 hash；碰撞时取 RHS 原值做完整 bytes.Equal，不以 hash 值当相等证明。
@@ -103,5 +104,6 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 - SQL：mo-tester 正常比对、NULL 真值表、天然 nullable 输入；另做 #32085 元数据修正后的隔离组合验证。
 - 性能：3,000/6,000 行等值 IN/NOT IN 对照，不在 UT/BVT 中断言耗时。
 - 静态/包级：Go 1.26.4、匹配 native artifacts；变更包测试及消费者、vet/lint；共享状态定向/所属包 race；变更覆盖率 ≥75%。
+- 依赖方向：`go list -deps -test ./...` 必须成功，batch 自包测试及 aggexec 消费者必须通过；不能只测新增 helper 所在包，以免漏掉反向测试依赖。
 
 未完成证据不得标为通过。若实施发现需要 wire/global allocator 变更，停止扩项并重新评审设计。

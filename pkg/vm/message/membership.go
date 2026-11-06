@@ -18,7 +18,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -27,14 +26,14 @@ type membershipState struct {
 	ready chan struct{}
 	col   int
 	typ   types.Type
-	index *hashmap.MembershipIndex
+	index *MembershipIndex
 	err   error
 }
 
 // GetMembershipIndex builds at most once per JoinMap. Callers must hold their
 // existing JoinMap reference throughout build, wait, and probe. No goroutine or
 // second RHS owner is created. A nil index denotes the evaluator fallback.
-func (jm *JoinMap) GetMembershipIndex(ctx context.Context, col int, typ types.Type) (*hashmap.MembershipIndex, error) {
+func (jm *JoinMap) GetMembershipIndex(ctx context.Context, col int, typ types.Type) (*MembershipIndex, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -45,7 +44,7 @@ func (jm *JoinMap) GetMembershipIndex(ctx context.Context, col int, typ types.Ty
 		state.col, state.typ = col, typ
 		state.mu.Unlock()
 
-		index, err := hashmap.NewMembershipIndex(ctx, jm.batches, col, typ, jm.mpool)
+		index, err := NewMembershipIndex(ctx, jm.batches, col, typ, jm.mpool)
 		state.mu.Lock()
 		state.index, state.err = index, err
 		if err == context.Canceled || err == context.DeadlineExceeded {

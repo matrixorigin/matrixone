@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -198,7 +197,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 	mpbat := ctr.mp.GetBatches()
 	count := inbat.RowCount()
 	if ctr.markProbeCol >= 0 && ctr.markProbeCol < len(inbat.Vecs) &&
-		hashmap.MembershipVectorMatches(inbat.Vecs[ctr.markProbeCol], ctr.markType) {
+		message.MembershipVectorMatches(inbat.Vecs[ctr.markProbeCol], ctr.markType) {
 		index, err := ctr.mp.GetMembershipIndex(proc.Ctx, ctr.markBuildCol, ctr.markType)
 		if err != nil {
 			return err

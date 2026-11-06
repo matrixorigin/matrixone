@@ -15,13 +15,13 @@
 package loopjoin
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -55,14 +55,14 @@ func (loopJoin *LoopJoin) prepareMembership() {
 	}
 	typ := types.T(a.Typ.Id).ToType()
 	typ.Width, typ.Scale = a.Typ.Width, a.Typ.Scale
-	if !hashmap.SupportsMembershipType(typ) {
+	if !message.SupportsMembershipType(typ) {
 		return
 	}
 	ctr.markProbeCol, ctr.markBuildCol = int(left.ColPos), int(right.ColPos)
 	ctr.markType = typ
 }
 
-func (ctr *container) probeMembership(ap *LoopJoin, index *hashmap.MembershipIndex, proc *process.Process, result *vm.CallResult) error {
+func (ctr *container) probeMembership(ap *LoopJoin, index *message.MembershipIndex, proc *process.Process, result *vm.CallResult) error {
 	in := ctr.inBat
 	key := in.Vecs[ctr.markProbeCol]
 	start := ctr.probeIdx

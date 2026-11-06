@@ -19,7 +19,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,7 +46,7 @@ func TestMembershipConcurrentConsumers(t *testing.T) {
 	const workers = 16
 	jm := membershipJoinMap(t, mp, workers)
 	base := mp.AllocatedBytes()
-	indexes := make([]*hashmap.MembershipIndex, workers)
+	indexes := make([]*MembershipIndex, workers)
 	errs := make([]error, workers)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -204,7 +203,7 @@ func TestMembershipNativeAllocationFailurePublishes(t *testing.T) {
 			ctx := &membershipBarrierContext{Context: context.Background(), entered: make(chan struct{}), release: make(chan struct{})}
 			var release sync.Once
 			type outcome struct {
-				index *hashmap.MembershipIndex
+				index *MembershipIndex
 				err   error
 			}
 			builder, waiter := make(chan outcome, 1), make(chan outcome, 1)
