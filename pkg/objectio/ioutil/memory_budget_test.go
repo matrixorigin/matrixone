@@ -325,14 +325,20 @@ func TestSinkerPersistedBlockLayout(t *testing.T) {
 		rows, sortKey      int
 		window             int64
 		pipeline, borrowed bool
+		shape              string
+		payloadBytes       int
 	}{
-		{"default", 35, 0, 0, false, false},
-		{"sorted_windows", 35, 0, 512, false, false},
-		{"sorted_pipeline", 35, 0, 512, true, false},
-		{"unsorted_windows", 35, -1, 512, false, false},
-		{"unsorted_pipeline", 35, -1, 512, true, false},
-		{"borrowed_windows", 35, 0, 512, false, true},
-		{"full_block_tail", objectio.BlockMaxRows + 1, 0, 0, false, false},
+		{"default", 35, 0, 0, false, false, "", 0},
+		{"sorted_windows", 35, 0, 512, false, false, "", 0},
+		{"sorted_pipeline", 35, 0, 512, true, false, "", 0},
+		{"dedup_windows", 35, 0, 512, false, false, "", 0},
+		{"unsorted_windows", 35, -1, 512, false, false, "", 0},
+		{"unsorted_pipeline", 35, -1, 512, true, false, "", 0},
+		{"borrowed_windows", 35, 0, 512, false, true, "", 0},
+		{"full_block_tail", objectio.BlockMaxRows + 1, 0, 0, false, false, "", 0},
+		{"constant_default", objectio.BlockMaxRows, 0, 0, false, false, "constant", 16 << 10},
+		{"aliases", 35, 0, 512, false, false, "aliases", 0},
+		{"oversized_row", 1, 0, 512, false, false, "", 1024},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -345,10 +351,27 @@ func TestSinkerPersistedBlockLayout(t *testing.T) {
 			typs := []types.Type{types.T_int32.ToType(), types.T_varchar.ToType()}
 			input := batch.NewWithSchema(false, attrs, typs)
 			t.Cleanup(func() { input.Clean(mp) })
-			suffix := strings.Repeat("x", 192)
+			width := tc.payloadBytes
+			if width == 0 {
+				width = 192
+			}
+			suffix := strings.Repeat("x", width)
 			for id := tc.rows - 1; id >= 0; id-- {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(id), false, mp))
-				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(fmt.Sprintf("%08d", id)+suffix), false, mp))
+				if tc.shape == "" {
+					require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(fmt.Sprintf("%08d", id)+suffix), false, mp))
+				}
+			}
+			if tc.shape != "" {
+				constant, err := vector.NewConstBytes(typs[1], []byte(suffix), tc.rows, mp)
+				require.NoError(t, err)
+				if tc.shape == "constant" {
+					input.Vecs[1].Free(mp)
+					input.Vecs[1] = constant
+				} else {
+					require.NoError(t, input.Vecs[1].UnionBatch(constant, 0, tc.rows, nil, mp))
+					constant.Free(mp)
+				}
 			}
 			input.SetRowCount(tc.rows)
 			opts := []SinkerOption{WithTailSizeCap(0)}
@@ -357,6 +380,9 @@ func TestSinkerPersistedBlockLayout(t *testing.T) {
 			}
 			if tc.pipeline {
 				opts = append(opts, WithPipelineFlush())
+			}
+			if tc.name == "dedup_windows" {
+				opts = append(opts, WithDedupAll())
 			}
 			sink := NewSinker(tc.sortKey, attrs, typs, NewFSinkerImplFactory([]uint16{0, 1}, tc.sortKey, tc.sortKey >= 0, false, 0), mp, fs, opts...)
 			t.Cleanup(func() { require.NoError(t, sink.Close()) })
@@ -393,24 +419,46 @@ func TestSinkerPersistedBlockLayout(t *testing.T) {
 						if uint32(loc.ID())+1 < stat.BlkCnt() {
 							require.Equal(t, objectio.BlockMaxRows, got.RowCount())
 						}
+						if !tc.borrowed && got.RowCount() > 1 {
+							limit := tc.window
+							if limit == 0 {
+								limit = 64 << 20
+							}
+							require.LessOrEqual(t, int64(got.Size()), limit, "materialized blocks keep the byte target")
+						}
 						ids := vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])
 						for row, id := range ids {
 							require.False(t, seen[id])
 							seen[id] = true
 							require.GreaterOrEqual(t, id, int32(0))
 							require.Less(t, id, int32(tc.rows))
-							require.Equal(t, fmt.Sprintf("%08d", id)+suffix, string(got.Vecs[1].GetBytesAt(row)))
+							want := suffix
+							if tc.shape == "" {
+								want = fmt.Sprintf("%08d", id) + suffix
+							}
+							require.Equal(t, want, string(got.Vecs[1].GetBytesAt(row)))
 						}
 					}()
 					return true
 				}, stat)
 			}
 			require.Len(t, seen, tc.rows)
+			if tc.name == "dedup_windows" {
+				sink.Reset()
+				require.NoError(t, sink.Write(ctx, input))
+				require.NoError(t, sink.Sync(ctx))
+				again, _ := sink.GetResult()
+				var rows uint32
+				for _, stat := range again {
+					rows += stat.Rows()
+				}
+				require.EqualValues(t, tc.rows, rows)
+			}
 		})
 	}
 }
 
-func TestSinkerUnsortedPartialSpillErrorOwnsNextBatch(t *testing.T) {
+func TestSinkerPartialSpillErrorOwnsNextBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	input := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_text.ToType()})
@@ -427,6 +475,12 @@ func TestSinkerUnsortedPartialSpillErrorOwnsNextBatch(t *testing.T) {
 	require.NoError(t, sink.Close())
 	require.Equal(t, before, mp.AllocatedBytes(), "both the preceding run and next batch must release exactly once")
 	require.Equal(t, 3, input.RowCount())
+	sorted := NewSinker(0, input.Attrs, []types.Type{types.T_text.ToType()}, mockFactory(nil, failure), mp, nil, WithBufferBytes(40<<10), WithTailSizeCap(0))
+	t.Cleanup(func() { require.NoError(t, sorted.Close()) })
+	require.NoError(t, sorted.Write(context.Background(), input))
+	require.ErrorIs(t, sorted.Sync(context.Background()), failure)
+	require.NoError(t, sorted.Close())
+	require.Equal(t, before, mp.AllocatedBytes(), "a failed byte-boundary Sync releases the merge and remaining sources")
 }
 
 func TestSinkerExpandedMergeRequiresCompleteWorkspace(t *testing.T) {

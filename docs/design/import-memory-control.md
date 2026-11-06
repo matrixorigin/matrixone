@@ -157,17 +157,18 @@ and SinkPool, without a new worker, timer, configuration or workload threshold.
 
 ## Transaction metadata in memory
 
-Keep successful object/block metadata in operator memory until Build completes,
-then emit the existing bounded MergeBlock/MultiUpdate protocol during Eval.
-INSERT retains compact ObjectStats and expands one object at a time. MultiUpdate
-retains its existing five-column metadata batches, with deletes emitted before
-inserts. Object payloads remain in object storage; retaining their descriptions
-does not retain the imported rows.
+Admitted INSERT and insert-only MultiUpdate keep compact object/block metadata
+in operator memory until Build completes, then emit the existing bounded
+MergeBlock/MultiUpdate protocol during Eval. INSERT retains ObjectStats and
+expands one object at a time; insert-only MultiUpdate retains its existing
+five-column output. Object payloads remain in object storage.
 
 In the representative replay, each 39-table round generated about 2,000 objects and
 14,000 blocks including indexes, or approximately 3 MB of encoded metadata
 across the statements. That is an encoding estimate, not a measured simultaneous
-peak. There is no evidence that metadata required file storage for this load.
+peak. It does not describe uncommitted-delete output, which contains raw RowIDs
+and primary keys proportional to the deleted rows. There is no evidence that
+compact metadata required file storage for this load.
 Keeping it in memory avoids temporary-volume dependencies, additional file IO,
 and a second outer serialization/replay lifecycle.
 
@@ -178,14 +179,26 @@ This charges cumulative capacity, preserves the fixed per-frame protocol limit,
 and adds no workload threshold, configuration, queue owner or worker. A denied
 growth returns the existing capacity/cancellation error without waiting behind
 the same statement. Previously retained data remains owned until normal cleanup.
-Legacy MultiUpdate output uses a retained claim on its existing D throttler,
-including uncommitted-delete RowID/key payloads. Forecast backing/encoding growth
-before allocation, preserve the claim until EOF or cleanup, and reject a growth
-that cannot fit instead of waiting behind the statement's own retained output.
+Legacy and delete-capable MultiUpdate preserve the existing per-frame temporary
+storage and delete-before-insert replay. Retire each encoded frame before the
+next window, so raw-key output need not fit in D for the whole statement.
+Temporary-volume capacity retains its existing deployment requirements. These
+writers keep their existing cancellable D acquisition and release notifications;
+there is no new cumulative metadata claim or blanket rejection while output is
+pending. Reset/Free close the unlinked frame file, including partial writes and
+cancelled replay. Pure admitted imports do not open this file.
 
 Eval retires each metadata batch after it is fully consumed. Error, cancellation,
 Reset and Free destroy remaining vectors before releasing the output lease. Verify multiple objects,
 delete-before-insert order, growth denial, unchanged prior output and reuse.
+
+Ordinary sorted writers retain their existing merge-buffer byte target. A
+byte-limited partial block ends its object, keeping every non-final object block
+at BlockMaxRows. The same boundary terminates an ordinary pipeline submission.
+An individually oversized row remains an exception. Admitted writers keep their
+complete materialized-run W reservation and full-block output. The fixed-name
+publication rewrite explicitly retains its single-object merge policy; it cannot
+rotate object names. No storage format or new tuning parameter is introduced.
 
 ## Build, spill and ordinary execution
 

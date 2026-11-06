@@ -17,8 +17,11 @@ package multi_update
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -114,19 +117,22 @@ type s3WriterDelegate struct {
 	// so pre-allocated vector capacity is reused instead of re-allocated.
 	insertFreeLists []*containers.BatchFreeList
 
-	outputBat        *batch.Batch
-	ownedMP          *mpool.MPool
-	outputMP         *mpool.MPool
-	metadata         [2]*batch.Batch
-	metadataRead     int
-	tailFlushed      bool
-	metadataGranted  int64
-	outputLease      *rscthrottler.InputLease
-	outputFrameLimit int64
-	activeWorkspace  *rscthrottler.WorkspaceLease
-	activeMP         *mpool.MPool
-	writeUnit        int64
-	writeCounters    *perfcounter.CounterSet
+	outputBat         *batch.Batch
+	ownedMP           *mpool.MPool
+	outputMP          *mpool.MPool
+	metadata          [2]*batch.Batch
+	metadataRead      int
+	tailFlushed       bool
+	metadataSpool     *os.File
+	metadataWritten   int64
+	metadataSpoolRead int64
+	metadataPass      int
+	outputLease       *rscthrottler.InputLease
+	outputFrameLimit  int64
+	activeWorkspace   *rscthrottler.WorkspaceLease
+	activeMP          *mpool.MPool
+	writeUnit         int64
+	writeCounters     *perfcounter.CounterSet
 
 	batchSize      uint64
 	flushThreshold uint64
@@ -357,10 +363,6 @@ func (writer *s3WriterDelegate) ensureOutputSlot(proc *process.Process) error {
 	return nil
 }
 func (writer *s3WriterDelegate) releaseOutputSlot() {
-	if writer.metadataGranted > 0 {
-		writer.memController.throttler.Release(writer.metadataGranted)
-		writer.metadataGranted = 0
-	}
 	if writer.outputLease != nil {
 		writer.outputLease.Release()
 		writer.outputLease = nil
@@ -368,38 +370,23 @@ func (writer *s3WriterDelegate) releaseOutputSlot() {
 	}
 }
 
-// Imported output uses I. Legacy writers retain a separate claim on their
-// existing D throttler, so raw RowID/key payloads cannot bypass admission.
+// Only admitted insert-only imports retain compact output across windows.
+// Other writers keep the existing bounded frame spool and cancellable D wait.
+func (writer *s3WriterDelegate) memoryMetadata(proc *process.Process) bool {
+	return proc.Base.ImportMemory != nil && InsertOnlyOutput(writer.updateCtxs)
+}
+
 func (writer *s3WriterDelegate) reserveMetadata(proc *process.Process, growth, encoded int64) error {
 	if err := context.Cause(proc.Ctx); err != nil {
 		return err
 	}
-	if writer.outputLease != nil {
-		if encoded > 0 {
-			growth = addMemoryBytes(growth, addMemoryBytes(encoded, int64(writer.buf.Cap())))
-		}
-		return colexec.GrowMetadataOutput(proc.Ctx, writer.outputLease, writer.metadataPool().AllocatedBytes(), growth)
+	if writer.outputLease == nil {
+		return nil
 	}
-	if encoded > int64(writer.buf.Cap()) {
-		growth = addMemoryBytes(growth, addMemoryBytes(encoded, encoded))
+	if encoded > 0 {
+		growth = addMemoryBytes(growth, addMemoryBytes(encoded, int64(writer.buf.Cap())))
 	}
-	retained := addMemoryBytes(writer.metadataPool().AllocatedBytes(), int64(writer.buf.Cap()))
-	capacity, err := colexec.MetadataOutputCapacity(retained, growth)
-	if err != nil || capacity <= writer.metadataGranted {
-		return err
-	}
-	need := capacity - writer.metadataGranted
-	if maximum := rscthrottler.MaxAcquire(writer.memController.throttler); need > maximum {
-		return &rscthrottler.RequestTooLargeError{Requested: need, Maximum: maximum}
-	}
-	if _, ok := writer.memController.throttler.Acquire(need); !ok {
-		if err := context.Cause(proc.Ctx); err != nil {
-			return err
-		}
-		return &rscthrottler.WorkingSetCapacityError{Minimum: need, Available: max(0, writer.memController.throttler.Available())}
-	}
-	writer.metadataGranted = capacity
-	return nil
+	return colexec.GrowMetadataOutput(proc.Ctx, writer.outputLease, writer.metadataPool().AllocatedBytes(), growth)
 }
 
 func (writer *s3WriterDelegate) metadataPool() *mpool.MPool {
@@ -420,7 +407,7 @@ func (writer *s3WriterDelegate) memoryPool(proc *process.Process) *mpool.MPool {
 }
 
 // retainedBytes counts source/writer D capacity and committed-block maps.
-// Output keeps its own I/D claim; IO and delete dedup have separate owners.
+// Admitted compact output uses I; legacy frames, IO and delete dedup have separate owners.
 func (writer *s3WriterDelegate) retainedBytes() int64 {
 	var size int64
 	if writer.ownedMP != nil {
@@ -548,16 +535,6 @@ func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer pr
 	}
 	if proc.Base.ImportMemory != nil {
 		return errBorrowedSpill
-	}
-	if err := context.Cause(proc.Ctx); err != nil {
-		return err
-	}
-	if writer.metadataGranted > 0 {
-		// Retained output cannot drain before EOF; do not wait on its release.
-		if maximum := rscthrottler.MaxAcquire(writer.memController.throttler); size > maximum {
-			return &rscthrottler.RequestTooLargeError{Requested: size, Maximum: maximum}
-		}
-		return &rscthrottler.WorkingSetCapacityError{Minimum: size, Available: max(0, writer.memController.throttler.Available())}
 	}
 	// The coordinator coalesces process sampling and wakes from Release or
 	// reclaim. This path has no per-writer timer or periodic ForceRefresh.
@@ -1434,6 +1411,9 @@ func (writer *s3WriterDelegate) appendMetadata(proc *process.Process, action act
 	if err := context.Cause(proc.Ctx); err != nil {
 		return err
 	}
+	if !writer.memoryMetadata(proc) {
+		return writer.spoolFrame(proc, action, idx, rows, name, src)
+	}
 	if err := writer.ensureOutputSlot(proc); err != nil {
 		return err
 	}
@@ -1457,6 +1437,127 @@ func (writer *s3WriterDelegate) appendMetadata(proc *process.Process, action act
 		return err
 	}
 	return writer.addBatchToOutput(mp, out, action, idx, rows, name, src)
+}
+
+func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionType, idx int, rows uint64, name string, src *batch.Batch) error {
+	if err := writer.ensureOutputSlot(proc); err != nil {
+		return err
+	}
+	// The protocol envelope reserves four copies plus fixed metadata
+	// overhead. Reject an impossible frame before serializing its
+	// borrowed source or growing the output vector.
+	if err := writer.checkMetadataFrameSize(src.MarshalBinarySize() + int64(len(name)) + 4096); err != nil {
+		return err
+	}
+	mp := writer.metadataPool()
+	if writer.outputBat != nil {
+		writer.outputBat.Clean(mp)
+	}
+	writer.outputBat = makeS3OutputBatch()
+	if err := writer.addBatchToOutput(mp, writer.outputBat, action, idx, rows, name, src); err != nil {
+		return err
+	}
+	if writer.metadataSpool == nil {
+		f, err := os.CreateTemp("", "mo-multi-update-*.spool")
+		if err != nil {
+			return err
+		}
+		if err = os.Remove(f.Name()); err != nil {
+			f.Close()
+			return err
+		}
+		writer.metadataSpool = f
+	}
+	start := writer.metadataWritten
+	if _, err := writer.metadataSpool.Seek(start, io.SeekStart); err != nil {
+		return err
+	}
+	var head [9]byte
+	n := writer.outputBat.MarshalBinarySize()
+	if err := writer.checkMetadataFrameSize(n); err != nil {
+		return err
+	}
+	binary.LittleEndian.PutUint64(head[:8], uint64(n))
+	head[8] = byte(action)
+	if _, err := writer.metadataSpool.Write(head[:]); err != nil {
+		return err
+	}
+	if err := writer.outputBat.MarshalBinaryTo(writer.metadataSpool); err != nil {
+		_ = writer.metadataSpool.Truncate(start)
+		return err
+	}
+	writer.metadataWritten += 9 + n
+	writer.outputBat.Clean(mp)
+	writer.outputBat = nil
+	// The serializer's old whole-frame scratch is not retained after a frame.
+	writer.buf = bytes.Buffer{}
+	return nil
+}
+
+func (writer *s3WriterDelegate) readSpooledMetadataFrame(proc *process.Process) error {
+	mp := writer.metadataPool()
+	if writer.outputBat != nil {
+		writer.outputBat.Clean(mp)
+		writer.outputBat = nil
+	}
+	writer.releaseOutputSlot()
+	// Preserve MergeBlock's per-writer delete-before-insert order even when
+	// metadata was spooled by many early flushes. The two passes read only
+	// headers of skipped frames, rather than retaining frame offsets in RAM.
+	for {
+		if writer.metadataSpoolRead == writer.metadataWritten {
+			if writer.metadataPass == 0 {
+				writer.metadataPass = 1
+				writer.metadataSpoolRead = 0
+				continue
+			}
+			return nil
+		}
+		var head [9]byte
+		if _, err := writer.metadataSpool.ReadAt(head[:], writer.metadataSpoolRead); err != nil {
+			return err
+		}
+		n := binary.LittleEndian.Uint64(head[:8])
+		if n > uint64(writer.metadataWritten-writer.metadataSpoolRead-9) {
+			return io.ErrUnexpectedEOF
+		}
+		offset := writer.metadataSpoolRead + 9
+		writer.metadataSpoolRead = offset + int64(n)
+		action := actionType(head[8])
+		if action != actionDelete && action != actionInsert {
+			return moerr.NewInternalErrorNoCtxf("invalid import metadata action %d", action)
+		}
+		if writer.metadataPass == 0 && action != actionDelete || writer.metadataPass == 1 && action != actionInsert {
+			continue
+		}
+		if err := writer.ensureOutputSlot(proc); err != nil {
+			return err
+		}
+		if err := writer.checkMetadataFrameSize(int64(n)); err != nil {
+			return err
+		}
+		writer.outputBat = batch.NewOffHeapEmpty()
+		r := io.NewSectionReader(writer.metadataSpool, offset, int64(n))
+		if err := writer.outputBat.UnmarshalFromReader(r, mp); err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
+func (writer *s3WriterDelegate) closeMetadataSpool() error {
+	var err error
+	if writer.metadataSpool != nil {
+		err = writer.metadataSpool.Close()
+		writer.metadataSpool = nil
+	}
+	writer.metadataWritten = 0
+	writer.metadataSpoolRead = 0
+	writer.metadataPass = 0
+	writer.tailFlushed = false
+	writer.writeUnit = 0
+	writer.writeCounters = nil
+	return err
 }
 
 func (writer *s3WriterDelegate) checkMetadataFrameSize(n int64) error {
@@ -1508,12 +1609,18 @@ func (writer *s3WriterDelegate) collectMetadata(proc *process.Process, final boo
 		writer.insertBlockInfo[i] = nil
 		writer.insertBlockRowCount[i] = 0
 	}
+	if !writer.memoryMetadata(proc) {
+		writer.releaseOutputSlot()
+	}
 	return nil
 }
 
 func (writer *s3WriterDelegate) readMetadataFrame(proc *process.Process) error {
 	if err := context.Cause(proc.Ctx); err != nil {
 		return err
+	}
+	if !writer.memoryMetadata(proc) {
+		return writer.readSpooledMetadataFrame(proc)
 	}
 	writer.buf = bytes.Buffer{}
 	mp := writer.metadataPool()
@@ -1577,7 +1684,7 @@ func (writer *s3WriterDelegate) cleanMetadata() {
 func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	writer.beginMemoryMutation()
 	defer writer.endMemoryMutation()
-	defer func() { err = errors.Join(err, writer.closeDeleteKeys()) }()
+	defer func() { err = errors.Join(err, writer.closeMetadataSpool(), writer.closeDeleteKeys()) }()
 
 	writer.cleanDeleteBatches(writer.memoryPool(proc))
 
@@ -1625,7 +1732,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	writer.beginMemoryMutation()
 	defer writer.endMemoryMutation()
-	defer func() { err = errors.Join(err, writer.closeDeleteKeys()) }()
+	defer func() { err = errors.Join(err, writer.closeMetadataSpool(), writer.closeDeleteKeys()) }()
 	defer writer.releaseMemory()
 
 	writer.cleanDeleteBatches(writer.memoryPool(proc))
