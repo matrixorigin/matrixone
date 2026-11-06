@@ -116,6 +116,24 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual("tab\tline\n雪", records[2]["table_name"])
         self.assertEqual("sys\\name", records[3]["account_name"])
 
+    def test_exports_more_than_one_startup_page(self):
+        values = ["A\t0\t{}", "C\t0\t{}"]
+        for i in range(129):
+            child = str(i)
+            row = snapshot(child)
+            row["snapshot_id"] = f"00000000-0000-4000-8000-{i:012x}"
+            values.append("S\t" + child + "\t" + encoded(row))
+            if i % 2:
+                values.append("E\t" + child + "\t" + encoded(edge(child)))
+        result = self.run_export(values)
+        self.assertEqual(0, result.returncode, result.stderr)
+        records = [json.loads(line) for line in self.output.read_text().splitlines()][1:]
+        self.assertEqual(sorted("__mo_branch_" + str(i) for i in range(129)), [r["name"] for r in records])
+        for record in records:
+            child = record["name"].removeprefix("__mo_branch_")
+            self.assertEqual(edge(child) if int(child) % 2 else None, record["edge"])
+            self.assertIsNone(record["decision"])
+
     def test_failures_never_publish_or_replace(self):
         good = ["A\t0\t{}", "C\t0\t{}", "S\t42\t" + encoded(snapshot("42"))]
         cases = {
