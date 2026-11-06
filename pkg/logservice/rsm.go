@@ -21,6 +21,7 @@ import (
 	"math"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -455,15 +456,15 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) hasEntryTerm(index, requiredTerm uint64) (bool, error) {
 	if s.entryTerm == nil {
-		return false, fmt.Errorf("missing Raft entry term reader for shard %d", s.shardID)
+		return false, moerr.NewInternalErrorNoCtxf("missing Raft entry term reader for shard %d", s.shardID)
 	}
 	actualTerm, err := s.entryTerm(index)
 	if err != nil {
-		return false, fmt.Errorf("cannot read Raft entry term for shard %d index %d: %w",
+		return false, moerr.NewInternalErrorNoCtxf("cannot read Raft entry term for shard %d index %d: %v",
 			s.shardID, index, err)
 	}
 	if actualTerm == 0 {
-		return false, fmt.Errorf("missing Raft entry term for shard %d index %d", s.shardID, index)
+		return false, moerr.NewInternalErrorNoCtxf("missing Raft entry term for shard %d index %d", s.shardID, index)
 	}
 	return requiredTerm != 0 && actualTerm == requiredTerm, nil
 }

@@ -33,7 +33,7 @@ const (
 	recordMaxSize = 10 * 1024 * 1024
 )
 
-var errRequiredLsnConflict = errors.New("required LSN owner or revision changed")
+var errRequiredLsnConflict = moerr.NewInternalErrorNoCtx("required LSN owner or revision changed")
 
 // LogClient is a interface defines the operation of log entries.
 type LogClient interface {
@@ -235,7 +235,7 @@ func (c *logClient) setRequiredLsn(ctx context.Context, lsn uint64) error {
 	if err != nil {
 		// A response can be lost after the proposal commits. Only our owner
 		// and exactly the next revision prove this write was accepted.
-		readCtx, readCancel := context.WithTimeout(ctx, contextTimeout)
+		readCtx, readCancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetRequiredLsn)
 		current, revision, owner, readErr := c.client.GetRequiredLsnState(readCtx)
 		readCancel()
 		if readErr != nil {
