@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,4 +55,44 @@ func TestYearOperatorSymmetry(t *testing.T) {
 	require.NoError(t, err, "YEAR + YEAR")
 	_, err = GetFunctionByName(ctx, "-", []types.Type{year, year})
 	require.NoError(t, err, "YEAR - YEAR")
+}
+
+// Test_PlusFn_Year executes plusFn with T_year operands so the YEAR plus
+// path added for issue #31902 is exercised by unit tests (kernel coverage).
+func Test_PlusFn_Year(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	{
+		tc := tcTemp{
+			info: "select year_col1 + year_col2",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(),
+					[]types.MoYear{2024, 1900, 0}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_year.ToType(),
+					[]types.MoYear{1, 120, 25}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{2025, 2020, 25}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "select year_col1 + year_col2 with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(),
+					[]types.MoYear{2024, 2000}, []bool{false, true}),
+				NewFunctionTestInput(types.T_year.ToType(),
+					[]types.MoYear{1, 5}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{2025, 0}, []bool{false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
 }
