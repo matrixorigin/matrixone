@@ -137,21 +137,33 @@ func TestDiskCacheReadBeyondDownloadedObject(t *testing.T) {
 	require.NoError(t, <-filled)
 }
 
-// A reader of a download that was published since reads the published file.
-func TestObjectDownloadOpensPublishedFile(t *testing.T) {
-	cache, pw, filled := downloading(t)
-	download := cache.download(cache.pathForFile("obj"))
-	_, err := pw.Write([]byte("hello"))
-	require.NoError(t, err)
-	require.NoError(t, pw.Close())
-	require.NoError(t, <-filled)
-
-	f, ok := download.open()
-	require.True(t, ok)
-	defer f.Close()
-	b, err := io.ReadAll(f)
-	require.NoError(t, err)
-	require.Equal(t, []byte("hello"), b)
+// A reader holding the download's file reads the written bytes after the file is
+// published, and after a failed download's file is removed.
+func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		cache, pw, filled := downloading(t)
+		download := cache.download(cache.pathForFile("obj"))
+		_, err := pw.Write([]byte("hello"))
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { written, _ := download.estimate(5); return written == 5 },
+			diskCacheLifecycleTestTimeout, time.Millisecond)
+		f, ok := download.acquire()
+		require.True(t, ok)
+		if fail {
+			require.NoError(t, pw.CloseWithError(errors.New("source failed")))
+			require.Error(t, <-filled)
+		} else {
+			require.NoError(t, pw.Close())
+			require.NoError(t, <-filled)
+		}
+		b := make([]byte, 5)
+		_, err = f.ReadAt(b, 0)
+		require.NoError(t, err, "failed %v", fail)
+		require.Equal(t, []byte("hello"), b)
+		download.release()
+		_, ok = download.acquire()
+		require.False(t, ok, "the file is closed once the last reader is done")
+	}
 }
 
 // A read whose bytes the download writes later than a range read fetches them goes to a

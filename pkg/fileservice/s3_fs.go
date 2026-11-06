@@ -1497,28 +1497,48 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	setDone := make(chan error, 1)
 	go func() {
 		setDone <- s.diskCache.setFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
-			started <- s.diskCache.download(diskPath)
+			// The reader holds the download's file before any byte is fetched, so the
+			// bytes stay readable whatever the download does next.
+			download := s.diskCache.download(diskPath)
+			if download != nil {
+				if _, ok := download.acquire(); !ok {
+					download = nil
+				}
+			}
+			started <- download
 			return getReader(fillCtx, ptrTo[int64](0), nil)
 		}, s.asyncUpdate)
 	}()
+	var setErr error
+	setFinished := false
 	waitSet := func() error {
-		err := <-setDone
+		if !setFinished {
+			setErr, setFinished = <-setDone, true
+		}
 		cancelFill()
-		return err
+		return setErr
 	}
 
 	var download *objectDownload
 	select {
 	case download = <-started:
-	case err = <-setDone:
-		cancelFill()
-		if err != nil {
+	case setErr = <-setDone:
+		setFinished = true
+		// A download that started and already ended still has the bytes it wrote.
+		select {
+		case download = <-started:
+		default:
+		}
+	}
+	if download == nil {
+		if err := waitSet(); err != nil {
 			return true, err
 		}
 		// SetFile may skip an existing file or a busy publication reservation.
 		// The caller must fall back without assuming a cache file is readable.
 		return false, nil
 	}
+	defer download.release()
 
 	captured := read.capture(ctx, download)
 	if err := ctx.Err(); err != nil {
@@ -1617,11 +1637,11 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 }
 
 func (r *fullObjectDiskCacheReader) readRange(download *objectDownload, c *fullObjectEntryCapture, n int64) bool {
-	f, ok := download.open()
+	f, ok := download.acquire()
 	if !ok {
 		return false
 	}
-	defer f.Close()
+	defer download.release()
 	c.data.Reset()
 	_, err := io.Copy(&c.data, io.NewSectionReader(f, c.offset, n))
 	return err == nil

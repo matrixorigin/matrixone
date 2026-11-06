@@ -25,20 +25,61 @@ import (
 )
 
 // objectDownload is a whole-object file being written to the disk cache. Readers of the
-// object read the bytes already written from its temp file instead of fetching them again.
+// object read the bytes already written through the download's own handle on the file,
+// which keeps them readable after the file is published or removed.
 type objectDownload struct {
-	tempPath, diskPath string
-	started            time.Time
+	started time.Time
 
 	mu       sync.Mutex
 	written  int64
 	ended    bool // no more bytes will be written
 	complete bool // every byte of the object was written
 	changed  chan struct{}
+	file     *os.File // closed once the download is retired and no reader holds it
+	readers  int
+	retired  bool
 }
 
-func newObjectDownload(diskPath, tempPath string) *objectDownload {
-	return &objectDownload{diskPath: diskPath, tempPath: tempPath, started: time.Now(), changed: make(chan struct{})}
+func newObjectDownload(tempPath string) *objectDownload {
+	o := &objectDownload{started: time.Now(), changed: make(chan struct{})}
+	if f, err := os.Open(tempPath); err == nil {
+		o.file = f
+	}
+	return o
+}
+
+// acquire returns the download's file for reading, which the reader gives back with
+// release, or false once the file is closed.
+func (o *objectDownload) acquire() (*os.File, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.file == nil {
+		return nil, false
+	}
+	o.readers++
+	return o.file, true
+}
+
+func (o *objectDownload) release() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.readers--
+	o.closeIfUnusedLocked()
+}
+
+// retire closes the file once no reader holds it; no new reader finds the download.
+func (o *objectDownload) retire() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.retired = true
+	o.closeIfUnusedLocked()
+}
+
+func (o *objectDownload) closeIfUnusedLocked() {
+	if o.retired && o.readers == 0 && o.file != nil {
+		_ = o.file.Close()
+		o.file = nil
+	}
 }
 
 func (o *objectDownload) isComplete() bool {
@@ -113,16 +154,6 @@ func (o *objectDownload) waitFor(ctx context.Context, end int64, timeout time.Du
 	}
 }
 
-// open opens the file being written, or the published file once it is renamed, and
-// returns false when neither exists. Objects never change, so both hold the same bytes.
-func (o *objectDownload) open() (*os.File, bool) {
-	if f, err := os.Open(o.tempPath); err == nil {
-		return f, true
-	}
-	f, err := os.Open(o.diskPath)
-	return f, err == nil
-}
-
 type downloadProgressWriter struct {
 	w        io.Writer
 	download *objectDownload
@@ -142,7 +173,7 @@ type diskCacheDownloads struct {
 }
 
 func (d *DiskCache) startDownload(diskPath, tempPath string) *objectDownload {
-	o := newObjectDownload(diskPath, tempPath)
+	o := newObjectDownload(tempPath)
 	d.downloads.mu.Lock()
 	if d.downloads.m == nil {
 		d.downloads.m = make(map[string]*objectDownload)
@@ -159,6 +190,7 @@ func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
 		delete(d.downloads.m, diskPath)
 	}
 	d.downloads.mu.Unlock()
+	o.retire()
 }
 
 func (d *DiskCache) download(diskPath string) *objectDownload {
@@ -192,15 +224,12 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		}
 		metric.FSDiskCacheDownloadReadWaitedCounter.Inc()
 	}
-	f, ok := o.open()
+	f, ok := o.acquire()
 	if !ok {
 		return false, false, nil
 	}
-	defer f.Close()
-	if _, err := f.Seek(entry.Offset, io.SeekStart); err != nil {
-		return true, false, err
-	}
-	if err := entry.ReadFromOSFile(ctx, f, d.cacheDataAllocator); err != nil {
+	defer o.release()
+	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}
 	return true, true, nil
