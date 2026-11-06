@@ -1,0 +1,103 @@
+drop snapshot if exists view_subscription_snapshot;
+drop account if exists view_subscription_reader;
+drop publication if exists view_subscription_pub;
+drop database if exists view_subscription_source;
+drop database if exists view_subscription_remap;
+create account view_subscription_reader admin_name 'admin' identified by '111';
+create database view_subscription_source;
+create table view_subscription_source.src (x varchar(8));
+insert into view_subscription_source.src values ('old');
+create view view_subscription_source.v as select x from view_subscription_source.src;
+create database view_subscription_remap;
+create table view_subscription_remap.src (x varchar(37));
+insert into view_subscription_remap.src values ('remapped-value');
+create view view_subscription_remap.v as select x from view_subscription_remap.src;
+create publication view_subscription_pub database view_subscription_source account view_subscription_reader;
+create database subscribed from sys publication view_subscription_pub;
+select x from subscribed.v;
+➤ x[12,8,0]  𝄀
+old
+create snapshot view_subscription_snapshot for account;
+alter table view_subscription_source.src modify column x varchar(24);
+update view_subscription_source.src set x='new';
+select x from subscribed.v;
+➤ x[12,24,0]  𝄀
+new
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,8,0]  𝄀
+old
+select character_maximum_length from information_schema.columns where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+24
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+8
+alter publication view_subscription_pub account drop view_subscription_reader;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+internal error: the account view_subscription_reader is not allowed to subscribe the publication view_subscription_pub
+select count(*) from information_schema.columns where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+alter publication view_subscription_pub account add view_subscription_reader;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,8,0]  𝄀
+old
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+alter publication view_subscription_pub table src;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+SQL parser error: table "v" does not exist
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='src';
+➤ character_maximum_length[-5,64,0]  𝄀
+8
+drop publication view_subscription_pub;
+create publication view_subscription_pub database view_subscription_source account view_subscription_reader;
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+drop publication view_subscription_pub;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+internal error: there is no publication view_subscription_pub
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+create publication view_subscription_pub database view_subscription_remap account view_subscription_reader;
+select x from subscribed.v;
+➤ x[12,37,0]  𝄀
+remapped-value
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,37,0]  𝄀
+remapped-value
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ character_maximum_length[-5,64,0]  𝄀
+37
+drop database subscribed;
+create database subscribed_late from sys publication view_subscription_pub;
+select count(*) from information_schema.columns where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.columns where table_schema='subscribed_late' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed_late' and table_name='v';
+➤ count(*)[-5,64,0]  𝄀
+0
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+➤ x[12,37,0]  𝄀
+remapped-value
+drop database subscribed_late;
+drop snapshot view_subscription_snapshot;
+drop account view_subscription_reader;
+drop publication view_subscription_pub;
+drop database view_subscription_source;
+drop database view_subscription_remap;

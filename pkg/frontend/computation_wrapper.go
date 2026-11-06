@@ -314,31 +314,8 @@ func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Conte
 
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
-	switch cwft.GetAst().(type) {
-	case *tree.ShowColumns:
-		if len(cols) == 7 {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
-			}
-		} else {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Collation"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Privileges"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
-			}
-		}
+	if _, ok := cwft.GetAst().(*tree.ShowColumns); ok {
+		return showColumnsWireMetadata(ctx, len(cols))
 	}
 	return columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 }
@@ -1565,7 +1542,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		newColDefData, err := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
@@ -1625,7 +1602,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
 			}
-			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+			newColDefData, metadataErr := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 			if metadataErr != nil {
 				return nil, nil, nil, "", false, metadataErr
 			}
@@ -1955,7 +1932,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		colDefData, metadataErr := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if metadataErr != nil {
 			return nil, nil, nil, originSQL, false, metadataErr
 		}

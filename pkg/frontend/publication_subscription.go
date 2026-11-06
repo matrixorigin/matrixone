@@ -3328,6 +3328,20 @@ func checkSubscriptionValid(ctx context.Context, ses FeSession, dbName string, b
 	}
 
 	subInfo := subInfos[0]
+	// The alias was read at data T. Its publication is a current access
+	// boundary, not data: an older SI transaction must not revive membership,
+	// table scope or a withdrawn publication. Reuse the statement's admitted
+	// authorization snapshot and the canonical publication resolver.
+	if owner := upstreamUserSession(ses); owner != nil && authorizationEpochFor(ctx, owner) != nil {
+		authorityCtx := defines.AttachAccountId(ctx, owner.GetTenantInfo().GetTenantID())
+		opts, err := authorizationReadOption(authorityCtx, owner, &BackgroundExecOption{})
+		if err != nil {
+			return nil, err
+		}
+		authority := owner.GetBackgroundExec(authorityCtx, opts)
+		defer authority.Close()
+		bh = authority
+	}
 	return checkSubscriptionValidCommon(ctx, ses, subInfo.SubName, subInfo.PubAccountName, subInfo.PubName, bh)
 }
 

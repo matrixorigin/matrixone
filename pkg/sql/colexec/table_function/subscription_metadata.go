@@ -23,11 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/subscriptionmetadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -196,6 +198,15 @@ func (s *subscriptionMetadataState) start(
 	if err != nil {
 		return err
 	}
+	// Snapshot catalog scans select a namespace, not an authorization principal.
+	// Match their tenant for aliases while retaining proc.Ctx for admission A.
+	if snapshot := tf.ScanSnapshot; snapshot != nil && snapshot.Tenant != nil &&
+		snapshot.Tenant.TenantID != subscriberID {
+		if subscriberID != catalog.System_Account {
+			return moerr.NewInvalidInput(proc.Ctx, "cross-account subscription metadata requires the system account")
+		}
+		subscriberID = snapshot.Tenant.TenantID
+	}
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	s.streamCancel = cancel
 	s.streamCh = make(chan executor.Result, subscriptionResultBufferSize)
@@ -210,9 +221,9 @@ func (s *subscriptionMetadataState) start(
 		subscriberID,
 		proc.GetResolveVariableFunc(),
 	)
-	// Both the subscriber's subscription catalog and the publisher's table
-	// catalog must be read at the function scan's timestamp. Never pair a
-	// current relation ID with historical View binding.
+	// Source relations and the subscriber alias must exist at data T. The
+	// producer separately borrows statement authorization A for publication
+	// eligibility, scope and source routing; old grants cannot authorize T.
 	if ts := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(tf.ScanSnapshot); ts != nil {
 		sqlContext.TxnOperator = proc.GetTxnOperator().CloneSnapshotOp(*ts)
 	}
@@ -463,75 +474,153 @@ func runSubscriptionMetadataProducer(
 	defer close(done)
 	defer close(streamCh)
 
+	admission, err := subscriptionmetadata.AuthorizationSnapshot(ctx)
+	if err != nil {
+		publishSubscriptionMetadataError(ctx, errCh, err)
+		return
+	}
+	value, ok := moruntime.ServiceRuntime(sqlContext.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		publishSubscriptionMetadataError(ctx, errCh, moerr.NewInternalError(ctx, "missing subscription metadata executor"))
+		return
+	}
+	opts := executor.Options{}.WithAccountID(catalog.System_Account).
+		WithDatabase(catalog.MO_CATALOG).WithTxnIsolation(txn.TxnIsolation_SI)
+	if admission != nil {
+		opts = opts.WithAuthorizationSnapshot(admission)
+	}
+	// One independent authorization transaction owns all candidate pages.
+	// ExecTxn commits/rolls it back before the producer signals completion;
+	// cancellation and early LIMIT still terminate through stopStreaming.
+	err = value.(executor.SQLExecutor).ExecTxn(ctx, func(auth executor.TxnExecutor) error {
+		authority := *sqlContext
+		authority.TxnOperator = auth.Txn()
+		return scanSubscriptionMetadata(ctx, &authority, sqlContext, subscriberID, config, streamCh)
+	}, opts)
+	if err != nil {
+		publishSubscriptionMetadataError(ctx, errCh, err)
+	}
+}
+
+func scanSubscriptionMetadata(
+	ctx context.Context,
+	authority, data *sqlexec.SqlContext,
+	subscriberID uint32,
+	config *subscriptionMetadataConfig,
+	streamCh chan executor.Result,
+) error {
 	var lastDatabaseID uint64
 	for {
-		if ctx.Err() != nil {
-			return
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		candidateSQL := buildSubscriptionCandidateQuery(subscriberID, lastDatabaseID)
-		sqlProcess := sqlexec.NewSqlProcessWithContext(sqlContext).
+		aliases, nextDatabaseID, err := readSubscriptionAliases(data, subscriberID, lastDatabaseID)
+		if err != nil {
+			return err
+		}
+		if len(aliases) == 0 {
+			return nil
+		}
+		candidateSQL := buildAuthorizedSubscriptionQuery(subscriberID, aliases)
+		sqlProcess := sqlexec.NewSqlProcessWithContext(authority).
 			WithExecutionIdentity(catalog.System_Account, catalog.MO_CATALOG)
 		result, err := subscriptionMetadataRunSQL(sqlProcess, candidateSQL)
 		if err != nil {
 			result.Close()
-			publishSubscriptionMetadataError(ctx, errCh, err)
-			return
+			return err
 		}
-		candidates, rowCount, nextDatabaseID, decodeErr := func() ([]subscriptionCandidate, int, uint64, error) {
+		candidates, _, _, decodeErr := func() ([]subscriptionCandidate, int, uint64, error) {
 			defer result.Close()
 			return decodeSubscriptionCandidates(result, lastDatabaseID)
 		}()
 		if decodeErr != nil {
-			publishSubscriptionMetadataError(ctx, errCh, decodeErr)
-			return
+			return decodeErr
 		}
-
 		for _, candidate := range candidates {
-			if ctx.Err() != nil {
-				return
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 			candidate.subscriberID = subscriberID
 			if !subscriptionCandidateAuthorized(candidate) {
 				continue
 			}
-			if err := streamSubscriptionCandidate(ctx, sqlContext, candidate, config, streamCh); err != nil {
-				publishSubscriptionMetadataError(ctx, errCh, err)
-				return
+			if err := streamSubscriptionCandidate(ctx, data, candidate, config, streamCh); err != nil {
+				return err
 			}
 		}
-		if rowCount < subscriptionCandidatePageSize {
-			return
-		}
-		if nextDatabaseID <= lastDatabaseID {
-			publishSubscriptionMetadataError(
-				ctx,
-				errCh,
-				moerr.NewInternalErrorNoCtx("subscription candidate pagination did not advance"),
-			)
-			return
+		if len(aliases) < subscriptionCandidatePageSize {
+			return nil
 		}
 		lastDatabaseID = nextDatabaseID
 	}
 }
 
-func buildSubscriptionCandidateQuery(subscriberID uint32, lastDatabaseID uint64) string {
-	return fmt.Sprintf(
-		"SELECT d.dat_id, d.datname, d.owner, s.sub_account_name, "+
-			"CAST(s.pub_account_id AS INT UNSIGNED), s.pub_account_name, "+
-			"p.database_name, p.table_list, p.account_list "+
-			"FROM mo_catalog.mo_database d "+
-			"JOIN mo_catalog.mo_subs s ON s.sub_account_id = d.account_id AND s.sub_name = d.datname "+
-			"JOIN mo_catalog.mo_account a ON a.account_id = s.pub_account_id "+
-			"JOIN mo_catalog.mo_pubs p ON p.account_id = s.pub_account_id AND p.pub_name = s.pub_name "+
-			"WHERE d.account_id = %d AND d.dat_type = %s AND s.status = %d "+
-			"AND a.status <> %s AND d.dat_id > %d ORDER BY d.dat_id LIMIT %d",
-		subscriberID,
-		sqlquote.String(catalog.SystemDBTypeSubscription),
-		pubsub.SubStatusNormal,
-		sqlquote.String("suspend"),
-		lastDatabaseID,
-		subscriptionCandidatePageSize,
-	)
+type subscriptionAlias struct {
+	id                     uint64
+	name                   string
+	owner                  uint32
+	publisher, publication string
+}
+
+// Alias membership is schema at T, not authorization. A dropped alias can
+// still exist in a historical schema; a later-created alias cannot. Never use
+// historical publication status or grants to decide eligibility.
+func readSubscriptionAliases(data *sqlexec.SqlContext, subscriberID uint32, previousID uint64) ([]subscriptionAlias, uint64, error) {
+	result, err := subscriptionMetadataRunSQL(sqlexec.NewSqlProcessWithContext(data).
+		WithExecutionIdentity(catalog.System_Account, catalog.MO_CATALOG), buildSubscriptionAliasQuery(subscriberID, previousID))
+	if err != nil {
+		result.Close()
+		return nil, previousID, err
+	}
+	defer result.Close()
+	aliases := make([]subscriptionAlias, 0, subscriptionCandidatePageSize)
+	lastID := previousID
+	for _, source := range result.Batches {
+		if source == nil || source.RowCount() == 0 {
+			continue
+		}
+		if err := validateSubscriptionMetadataBatch(source, []types.T{types.T_uint64, types.T_varchar, types.T_uint32, types.T_varchar, types.T_varchar}); err != nil {
+			return nil, previousID, err
+		}
+		for row := 0; row < source.RowCount(); row++ {
+			id := vector.GetFixedAtWithTypeCheck[uint64](source.Vecs[0], row)
+			if id <= lastID || len(aliases) == subscriptionCandidatePageSize {
+				return nil, previousID, moerr.NewInternalErrorNoCtx("invalid subscription alias page")
+			}
+			lastID = id
+			aliases = append(aliases, subscriptionAlias{id: id,
+				name:        strings.Clone(source.Vecs[1].GetStringAt(row)),
+				owner:       vector.GetFixedAtWithTypeCheck[uint32](source.Vecs[2], row),
+				publisher:   strings.Clone(source.Vecs[3].GetStringAt(row)),
+				publication: strings.Clone(source.Vecs[4].GetStringAt(row))})
+		}
+	}
+	return aliases, lastID, nil
+}
+
+func buildSubscriptionAliasQuery(subscriberID uint32, lastDatabaseID uint64) string {
+	return fmt.Sprintf("SELECT d.dat_id, d.datname, d.owner, s.pub_account_name, s.pub_name "+
+		"FROM mo_catalog.mo_database d JOIN mo_catalog.mo_subs s "+
+		"ON s.sub_account_id = d.account_id AND s.sub_name = d.datname "+
+		"WHERE d.account_id = %d AND d.dat_type = %s AND d.dat_id > %d ORDER BY d.dat_id LIMIT %d",
+		subscriberID, sqlquote.String(catalog.SystemDBTypeSubscription), lastDatabaseID, subscriptionCandidatePageSize)
+}
+
+// Only alias identity is transported from T. Publication membership, table
+// scope and source routing are resolved at the single current admission A.
+func buildAuthorizedSubscriptionQuery(subscriberID uint32, aliases []subscriptionAlias) string {
+	rows := make([]string, len(aliases))
+	for i, alias := range aliases {
+		rows[i] = fmt.Sprintf("SELECT CAST(%d AS BIGINT UNSIGNED) AS dat_id, %s AS datname, "+
+			"CAST(%d AS INT UNSIGNED) AS owner, %s AS pub_account_name, %s AS pub_name",
+			alias.id, sqlquote.String(alias.name), alias.owner, sqlquote.String(alias.publisher), sqlquote.String(alias.publication))
+	}
+	return fmt.Sprintf("SELECT d.dat_id, d.datname, d.owner, subscriber.account_name, "+
+		"CAST(p.account_id AS INT UNSIGNED), publisher.account_name, p.database_name, p.table_list, p.account_list "+
+		"FROM (%s) d JOIN mo_catalog.mo_account publisher ON publisher.account_name = d.pub_account_name "+
+		"JOIN mo_catalog.mo_pubs p ON p.account_id = publisher.account_id AND p.pub_name = d.pub_name "+
+		"JOIN mo_catalog.mo_account subscriber ON subscriber.account_id = %d "+
+		"WHERE publisher.status <> %s ORDER BY d.dat_id", strings.Join(rows, " UNION ALL "), subscriberID, sqlquote.String("suspend"))
 }
 
 func decodeSubscriptionCandidates(
@@ -584,6 +673,10 @@ func validateSubscriptionCandidateBatch(source *batch.Batch) error {
 		types.T_text,
 		types.T_text,
 	}
+	return validateSubscriptionMetadataBatch(source, expected)
+}
+
+func validateSubscriptionMetadataBatch(source *batch.Batch, expected []types.T) error {
 	if len(source.Vecs) != len(expected) {
 		return moerr.NewInternalErrorNoCtxf(
 			"subscription candidate query returned %d columns, expected %d", len(source.Vecs), len(expected))

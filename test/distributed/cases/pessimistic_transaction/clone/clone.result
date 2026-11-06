@@ -104,7 +104,7 @@ drop table if exists enum01;
 create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
@@ -284,7 +284,7 @@ select count(*) from vector_test;
 ➤ count(*)[-5,64,0]  𝄀
 6
 desc vector_test;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vector  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 use test03_new;
@@ -312,7 +312,7 @@ red  𝄀
 blue  𝄀
 green
 desc enum01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
 use test01;
 drop table src;
@@ -355,7 +355,7 @@ select count(*) from vector_test;
 ➤ count(*)[-5,64,0]  𝄀
 6
 desc vector_test;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vector  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 use test03_new;
@@ -545,7 +545,7 @@ t2  ¦  CREATE TABLE `t2` (
   `nophones` int NOT NULL DEFAULT 0
 )
 desc t1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 token  ¦  varchar(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 count  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
@@ -553,7 +553,7 @@ qty  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 phone  ¦  char(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦  
 desc t2;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 category  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 county  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
@@ -706,7 +706,7 @@ t2  ¦  CREATE TABLE `t2` (
   `nophones` int NOT NULL DEFAULT 0
 )
 desc t1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 token  ¦  varchar(100)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 count  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
@@ -714,7 +714,7 @@ qty  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 phone  ¦  char(1)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 times  ¦  datetime  ¦  NO  ¦    ¦  2000-01-01 00:00:00  ¦    ¦  
 desc t2;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 category  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 county  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
@@ -739,7 +739,7 @@ select * from vtab64;
 3  ¦  [8.5606893, 6.7903588, 821.977768]  ¦  [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]  𝄀
 4  ¦  [0.9260021, 0.26637346, 0.06567037]  ¦  [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
 desc vtab32;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vecf32_3  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 vecf32_5  ¦  VECF32(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -776,7 +776,7 @@ create view v1 as select * from t1;
 create table t2(a int not null, b varchar(20), c char(20));
 create view v2 as select * from t2;
 desc v2;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  char(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -909,7 +909,7 @@ select * from employees;
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -987,7 +987,7 @@ select * from employees;
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -1064,7 +1064,7 @@ select * from employees;
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
 desc src;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 json1  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 json2  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦  
