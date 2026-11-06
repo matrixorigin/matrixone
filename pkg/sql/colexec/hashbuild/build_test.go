@@ -601,10 +601,16 @@ func TestHashBuildFloatRuntimeFilterFallsBackToPass(t *testing.T) {
 	require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
 }
 
-func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
-	t *testing.T,
-) {
-	typ := types.T_int32.ToType()
+func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(t *testing.T) {
+	testHashBuildOptionalCollectionFallback(t, types.T_int32.ToType(), Rows, false)
+}
+
+func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMapWideKey(t *testing.T) {
+	testHashBuildOptionalCollectionFallback(t, types.T_varchar.ToType(), 1, true)
+}
+
+func testHashBuildOptionalCollectionFallback(t *testing.T, typ types.Type, rows int, wide bool) {
+	t.Helper()
 	tc := newTestCase(
 		t,
 		[]bool{false},
@@ -613,6 +619,7 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 	)
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
 		tc.arg.JoinMapTag+500, 100, typ)
+	tc.arg.NeedBatches = wide
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
@@ -622,22 +629,25 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	providerCalls := 0
 	forcedCollectionReject := false
 	aggregate.SetAggregateCapProvider(func() (uint64, error) {
-		providerCalls++
-		// For one retained non-shuffle batch, admission #1 owns the copied
-		// build batch and #2 is build auxiliary memory including the optional
-		// UniqueJoinKeys payload. Reject only #2; the retry without that
-		// payload must still build and publish the required JoinMap.
-		if providerCalls == 2 {
+		// Reject the optional unique-key collection after the mandatory
+		// retained batch has been admitted. The join map must still build.
+		if !forcedCollectionReject && len(tc.arg.ctr.hashmapBuilder.UniqueJoinKeys) != 0 {
 			forcedCollectionReject = true
 			return generation.Used(), nil
 		}
 		return capBytes, nil
 	})
 
-	input := newBatch([]types.Type{typ}, tc.proc, Rows)
+	var input *batch.Batch
+	if wide {
+		input = testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.MakeVarcharVector([]string{strings.Repeat("x", 64<<10)}, nil, tc.proc.Mp()),
+		}, nil)
+	} else {
+		input = newBatch([]types.Type{typ}, tc.proc, int64(rows))
+	}
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(input, nil, tc.proc.Mp())
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 	result, err := vm.Exec(tc.arg, tc.proc)
@@ -678,9 +688,20 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 	joinMap := joinResult.JoinMap()
 	require.NotNil(t, joinMap)
 	require.False(t, joinMap.IsSpilled())
-	require.Equal(t, int64(Rows), joinMap.GetRowCount())
+	require.Equal(t, int64(rows), joinMap.GetRowCount())
 	require.Greater(t, joinMap.GetGroupCount(), uint64(0))
 	require.False(t, joinMap.PushedRuntimeFilterIn())
+	if wide {
+		batches := joinMap.GetBatches()
+		require.Len(t, batches, 1)
+		require.Equal(t, strings.Repeat("x", 64<<10), batches[0].Vecs[0].GetStringAt(0))
+		iterator := joinMap.NewIterator()
+		groups, zs, err := iterator.Find(0, 1, batches[0].Vecs)
+		require.NoError(t, err)
+		require.Equal(t, []uint64{1}, groups)
+		require.Equal(t, []int64{1}, zs)
+		hashmap.IteratorClearOwner(iterator)
+	}
 	joinMap.Free()
 	require.Zero(t, generation.Used())
 

@@ -1855,6 +1855,7 @@ func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *
 
 func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 2
 	testCompile.proc.Base.SessionInfo.Account = "sys"
 	testCompile.proc.Base.SessionInfo.Role = "moadmin"
 	testCompile.addr = "cn1:6001"
