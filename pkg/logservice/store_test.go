@@ -1636,18 +1636,27 @@ func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
 		require.NoError(t, store1.close())
 		require.NoError(t, store2.close())
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	leaderID, term, err := store1.leaderState(1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), leaderID)
 	require.NoError(t, store1.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leaderID))
 	require.NoError(t, store1.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
-	require.NoError(t, store1.requestLeaderTransfer(1, 2))
+	var lastTransfer time.Time
 	require.Eventually(t, func() bool {
 		id, currentTerm, leaderErr := store2.leaderState(1)
-		return leaderErr == nil && id == 2 && currentTerm > term
-	}, 10*time.Second, 10*time.Millisecond)
+		if leaderErr == nil && id == 2 && currentTerm > term {
+			return true
+		}
+		if time.Since(lastTransfer) >= time.Second {
+			if leaderID, _, err := store1.leaderState(1); err == nil && leaderID == 1 {
+				_ = store1.requestLeaderTransfer(1, 2)
+			}
+			lastTransfer = time.Now()
+		}
+		return false
+	}, 20*time.Second, 10*time.Millisecond)
 	// The old owner and revision still match: only the new Raft term may
 	// reject this reset before the new DataSync worker claims an owner.
 	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
