@@ -191,12 +191,7 @@ func startDynamicCNServices(
 	dynamicCNServiceProcesses = make([]*dynamicCNChild, cfg.ServiceCount)
 	dynamicCNMu.Unlock()
 	for i := 0; i < cfg.ServiceCount; i++ {
-		command := []string{
-			os.Args[0],
-			"-cfg", "./mo-data/cn-" + fmt.Sprintf("%d", i) + ".toml",
-			"-max-processor", fmt.Sprintf("%d", cfg.CpuCount),
-			"-debug-http", fmt.Sprintf("127.0.0.1:606%d", i),
-		}
+		command := dynamicCNServiceCommand(i, cfg.CpuCount)
 		dynamicCNMu.Lock()
 		dynamicCNServiceCommands[i] = command
 		dynamicCNMu.Unlock()
@@ -226,6 +221,18 @@ func startDynamicCNServices(
 		return err
 	}
 	return nil
+}
+
+// dynamicCNServiceCommand returns the command line of the i-th dynamic CN
+// child: the launcher re-executed with its generated per-index config file,
+// the configured CPU count, and the dedicated dynamic debug HTTP endpoint.
+func dynamicCNServiceCommand(index, cpuCount int) []string {
+	return []string{
+		os.Args[0],
+		"-cfg", "./mo-data/cn-" + fmt.Sprintf("%d", index) + ".toml",
+		"-max-processor", fmt.Sprintf("%d", cpuCount),
+		"-debug-http", fmt.Sprintf("127.0.0.1:606%d", index),
+	}
 }
 
 func restartDynamicCNByIndex(index int) error {
