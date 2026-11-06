@@ -110,9 +110,10 @@ the rest of the object keeps downloading in the background. Before, the read tha
 started the download waited for the whole object, and other reads waited up to 200 ms
 for the whole object and then read their ranges from object storage anyway.
 
-- A read of bytes not yet written waits for them only if the download will write them
-  no more than `disk-download-max-extra-wait` (default 50 ms) later than a range read
-  could fetch them; otherwise it reads its range at once. The time to the bytes comes
+- A read of bytes not yet written waits for them if the download will write them no
+  more than `disk-download-max-extra-wait` (default 200 ms) later than a range read
+  could fetch them, or if they are more than an eighth of what the download still
+  writes before them; otherwise it reads its range at once. The time to the bytes comes
   from the download's rate, and the time of a range read from the latency and bandwidth
   of the range reads observed. A wait that runs over is abandoned for a range read.
 - Larger values make fewer object storage requests and slower reads, 0 the fastest

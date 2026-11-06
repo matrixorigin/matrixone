@@ -1,6 +1,6 @@
 # File-service cache ownership, eviction and object downloads
 
-Version: v1, 2026-11-06. Scope: [PR #32275](https://github.com/matrixorigin/matrixone/pull/32275), issue [#32274](https://github.com/matrixorigin/matrixone/issues/32274). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) (#32033, #32034, #32040).
+Version: v2, 2026-11-06. Scope: [PR #32275](https://github.com/matrixorigin/matrixone/pull/32275), issue [#32274](https://github.com/matrixorigin/matrixone/issues/32274). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) (#32033, #32034, #32040).
 
 ## Review status
 
@@ -115,12 +115,15 @@ choice of which table switches is unchanged.
   takes the bytes already written instead of fetching them from object storage, and
   returns as soon as its own bytes are written. The rest of the object downloads in
   the background.
-- A read whose bytes are not yet written waits only if the download will write them
-  no more than `disk-download-max-extra-wait` (default 50 ms) later than a range read
-  could fetch them; otherwise it reads its range at once. The time to the bytes comes
-  from the download's own rate; the time of a range read from the latency and
-  bandwidth of the range reads observed. A wait is bounded by the same margin, after
-  which the read falls back to a range read.
+- A read whose bytes are not yet written waits if the download will write them no
+  more than `disk-download-max-extra-wait` (default 200 ms) later than a range read
+  could fetch them. The time to the bytes comes from the download's own rate; the time
+  of a range read from the latency and bandwidth of the range reads observed.
+- A read beyond that margin reads its range at once only when its bytes are at most an
+  eighth of what the download still writes before them; a read larger than that would
+  fetch again most of what the download is about to write, so it waits instead.
+- A wait is bounded by the predicted time plus the margin, after which the read falls
+  back to a range read.
 - A download that fails after a read got its bytes does not fail that read, and caches
   nothing. Until the read that started a download returns, cancelling it cancels the
   download; afterwards the download no longer depends on it.
@@ -157,6 +160,14 @@ choice of which table switches is unchanged.
   (p95 1,146 ms against 854 ms).
 - **Readers never wait.** Fastest filtered rounds but about twice the requests (11,193),
   because on local object storage a range read costs about 1 ms.
+- **A 50 ms margin.** On TPC-H SF10, two cold rounds at 1 GB memory and 4 GB disk: 53.4 s
+  and 4,428 requests against 47.6 s and 2,552 at 200 ms on local object storage, and
+  67.7 s and 3,199 against 49.3 s and 2,193 behind an emulated remote store (25 ms per
+  request, 100 MB/s per stream). Small reads that share one download wait for it faster
+  than each fetches its own range.
+- **The duplication bound alone, with no margin.** 58.3 s and 5,926 requests on the same
+  TPC-H runs: the reads behind a download are mostly small, about 38 KB, so the bound
+  lets them fetch their ranges. It guards wide reads, and the margin decides the rest.
 - **Configure the network speed instead of measuring it.** Object-storage latency
   varies with load from tens to hundreds of milliseconds; a fixed value is wrong in
   both directions. The margin expresses a preference, latency against requests, so it
@@ -167,11 +178,12 @@ choice of which table switches is unchanged.
 - No persisted format changes. The disk cache keeps its file layout; existing files are
   indexed as least recently used on startup.
 - New configuration: `disk-download-max-extra-wait` in `[fileservice.cache]`, default
-  50 ms. Larger values make fewer object-storage requests and slower reads; 0 the
-  fastest reads.
-- New metric `mo_fs_disk_cache_download_read_total{type}` counts reads of downloading
-  objects served from written bytes, after waiting, or by range reads after a
-  timed-out or declined wait.
+  200 ms, the budget the previous fixed wait for a downloading object used. Larger
+  values make fewer object-storage requests and slower reads; 0 the fastest reads.
+- New metrics: `mo_fs_disk_cache_download_read_total{type}` counts reads of
+  downloading objects served from written bytes, after waiting, or by range reads after
+  a timed-out or declined wait; `mo_fs_disk_cache_download_declined_bytes_total` counts
+  the bytes those range reads fetch again.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
 - Fallback: setting the margin to a large value restores waiting for downloads; the
   disk caches' policy and the memory cache's ownership model have no runtime switch.
@@ -199,8 +211,8 @@ choice of which table switches is unchanged.
 
 ## Open questions
 
-- The margin's best value on remote object storage is not measured; local runs from
-  20 ms to 300 ms changed under 2% of the reads of downloading objects. Owner: the PR
-  author, using the new metric on a remote deployment, before changing the default.
+- The margin is measured on local object storage and behind an emulated remote store,
+  not on a real remote deployment. Owner: the PR author, using the new metrics on a
+  remote deployment, before changing the default.
 - A whole-object download does not reuse ranges of the same object already cached,
   which can store those bytes twice until the ranges are evicted. Non-blocking.
