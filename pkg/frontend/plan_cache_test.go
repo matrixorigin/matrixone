@@ -525,6 +525,25 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSessionOptimizerHintsChangeInvalidatesPlans(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", "applyIndices=1"))
+	prepared := &PrepareStmt{}
+	ses.prepareStmts["hinted"] = prepared
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-hint", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", "applyIndices=1"))
+	require.True(t, ses.isCached("cached-hint"))
+	require.Zero(t, stmt.freed)
+	require.False(t, prepared.needsRebuild)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", ""))
+	require.False(t, ses.isCached("cached-hint"))
+	require.Equal(t, 1, stmt.freed)
+	require.True(t, prepared.needsRebuild)
+}
+
 func TestSessionPlanDependenciesInvalidatePreparedAndCachedPlans(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

@@ -995,7 +995,7 @@ func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targe
 		// assignment builders), mirroring the MEDIUMINT protocol gates.
 		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType, "cast_assign", columnName)
 	}
-	if types.T(targetType.Id).IsArrayRelate() {
+	if types.T(targetType.Id).IsArray() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
 	}
