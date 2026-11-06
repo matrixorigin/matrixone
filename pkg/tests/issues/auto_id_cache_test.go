@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,7 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 		var (
 			cnServices = make([]cnservice.Service, 2)
 			conns      = make([]*sql.Conn, 0, len(cnServices))
+			admin      *sql.DB
 		)
 		for i := range cnServices {
 			cn, err := c.GetCNService(i)
@@ -49,6 +51,9 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, err)
 			defer db.Close()
+			if i == 0 {
+				admin = db
+			}
 			conn, err := db.Conn(ctx)
 			require.NoError(t, err)
 			defer conn.Close()
@@ -91,15 +96,20 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 		dbName := testutils.GetDatabaseName(t)
 		exec(conns[0], "create database `"+dbName+"`")
 		defer func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
-			defer stop()
-			cleanupSQL := func(statement string) {
-				_, err := conns[0].ExecContext(cleanup, statement)
+			cleanupSQL := func(exec func(context.Context, string, ...any) (sql.Result, error), statement string) error {
+				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+				defer stop()
+				_, err := exec(cleanup, statement)
 				assert.NoErrorf(t, err, "cleanup SQL: %s", statement)
+				return err
 			}
-			cleanupSQL("rollback")
-			cleanupSQL("drop database `" + dbName + "`")
-			cleanupSQL("drop stage if exists ai_cache_dump_stage")
+			if err := cleanupSQL(conns[0].ExecContext, "rollback"); err != nil {
+				// The transaction outcome is uncertain. Discard its physical
+				// connection before independent DDL uses the pool.
+				_ = conns[0].Raw(func(any) error { return driver.ErrBadConn })
+			}
+			_ = cleanupSQL(admin.ExecContext, "drop database `"+dbName+"`")
+			_ = cleanupSQL(admin.ExecContext, "drop stage if exists ai_cache_dump_stage")
 		}()
 		waitCrossCN(0, 1)
 		for _, conn := range conns {
