@@ -278,7 +278,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 		{upgradeInformationSchemaKeyColumnUsage(), sysview.InformationSchemaKeyColumnUsageDDL},
 		{upgradeInformationSchemaReferentialConstraints(), sysview.InformationSchemaReferentialConstraintsDDL},
 		{upgradeInformationSchemaCheckConstraints(), sysview.InformationSchemaCheckConstraintsDDL},
-		{upgradeInformationSchemaViews(), sysview.InformationSchemaViewsDDL},
+		{versions.InformationSchemaViewsUpgradeEntry(), sysview.InformationSchemaViewsDDL},
 		{upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL), sysview.InformationSchemaPartitionsDDL},
 		{upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL), sysview.InformationSchemaSchemataDDL},
 	}

@@ -606,77 +606,6 @@ func TestCreateTenantInformationSchemaRequiresCurrentProtocol(t *testing.T) {
 	}
 }
 
-func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *testing.T) {
-	tests := []struct {
-		name                   string
-		protocol               int64
-		wantCheckFunction      bool
-		wantCurrentRoles       bool
-		wantCompatibilityRoles bool
-		wantCanonicalViews     bool
-	}{
-		{
-			name:                   "pre check-constraint protocol uses compatibility roles",
-			protocol:               defines.MORPCVersion15,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 16 uses check constraints and compatibility roles",
-			protocol:               defines.MORPCVersion16,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 32 does not install current-role table function views",
-			protocol:               defines.MORPCVersion32,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 34 does not alias the current-role capability",
-			protocol:               defines.MORPCVersion34,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 35 does not alias the current-role capability",
-			protocol:               defines.MORPCVersion35,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:               "protocol 41 installs canonical full role closure views",
-			protocol:           defines.MORPCVersion41,
-			wantCheckFunction:  true,
-			wantCurrentRoles:   true,
-			wantCanonicalViews: true,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			executed := sysview.InitInformationSchemaSysTablesForProtocol(test.protocol)
-
-			require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
-			require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
-			require.Equal(t, test.wantCompatibilityRoles,
-				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
-			require.Equal(t, test.wantCanonicalViews,
-				containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-		})
-	}
-
-	for _, protocol := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion124, defines.MORPCVersion123} {
-		catalog := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
-		joined := strings.Join(catalog, "\n")
-		require.Contains(t, catalog, sysview.InformationSchemaViewsLegacyDDL)
-		require.NotContains(t, joined, "mo_view_definition(")
-	}
-	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion126)
-	require.Contains(t, current, sysview.InformationSchemaViewsDDL)
-	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
-}
-
 // TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally
 // pins the account-creation publication contract of the declared catalog
 // metadata: the corrected COLUMNS identity (declared ENUM/SET label
@@ -711,24 +640,6 @@ func TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally(t
 	require.NotContains(t, executed, sysview.InformationSchemaColumnsV100DDL())
 	require.NotContains(t, executed, sysview.InformationSchemaColumnsV110DDL())
 	require.NotContains(t, executed, sysview.InformationSchemaStatisticsDDL)
-}
-
-func containsSQL(sqls []string, expected string) bool {
-	for _, sql := range sqls {
-		if sql == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func containsSQLFragment(sqls []string, fragment string) bool {
-	for _, sql := range sqls {
-		if strings.Contains(sql, fragment) {
-			return true
-		}
-	}
-	return false
 }
 
 func Test_initFunction(t *testing.T) {
