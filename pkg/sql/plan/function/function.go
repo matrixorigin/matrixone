@@ -263,23 +263,6 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		return true
 	}
 
-	// NULL conditions select another branch; only result branches can make
-	// CASE/IF nullable. CASE without ELSE has an implicit NULL result.
-	switch fid {
-	case CASE:
-		if len(args) < 3 || len(args)%2 == 0 || !args[len(args)-1].Typ.NotNullable {
-			return false
-		}
-		for i := 1; i < len(args)-1; i += 2 {
-			if !args[i].Typ.NotNullable {
-				return false
-			}
-		}
-		return true
-	case IFF:
-		return len(args) == 3 && args[1].Typ.NotNullable && args[2].Typ.NotNullable
-	}
-
 	for _, arg := range args {
 		if !arg.Typ.NotNullable {
 			return false

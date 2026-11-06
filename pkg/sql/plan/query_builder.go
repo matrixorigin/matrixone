@@ -370,8 +370,26 @@ func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 		// Ordinary inference may only weaken the bind-time contract. In
 		// particular, a function argument marked NOT NULL is not proof that
 		// it cannot produce NULL itself (for example, division by zero).
-		expr.Typ.NotNullable = expr.Typ.NotNullable &&
-			function.DeduceNotNullable(impl.F.Func.Obj, impl.F.Args)
+		fid, _ := function.DecodeOverloadID(impl.F.Func.Obj)
+		args := impl.F.Args
+		switch fid {
+		case function.CASE:
+			// Preserve an existing proof when only conditions became nullable.
+			// Never establish a new proof from possibly optimistic branch types.
+			expr.Typ.NotNullable = expr.Typ.NotNullable && len(args) >= 3 && len(args)%2 == 1
+			if len(args) > 0 {
+				expr.Typ.NotNullable = expr.Typ.NotNullable && args[len(args)-1].Typ.NotNullable
+			}
+			for i := 1; i < len(args)-1; i += 2 {
+				expr.Typ.NotNullable = expr.Typ.NotNullable && args[i].Typ.NotNullable
+			}
+		case function.IFF:
+			expr.Typ.NotNullable = expr.Typ.NotNullable && len(args) == 3 &&
+				args[1].Typ.NotNullable && args[2].Typ.NotNullable
+		default:
+			expr.Typ.NotNullable = expr.Typ.NotNullable &&
+				function.DeduceNotNullable(impl.F.Func.Obj, args)
+		}
 		if impl.F.Func.ObjName == "coalesce" {
 			for _, arg := range impl.F.Args {
 				if lit := arg.GetLit(); lit != nil && !lit.Isnull {

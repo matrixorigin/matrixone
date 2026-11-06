@@ -2213,4 +2213,53 @@ select count(*) from case_null_then;
 select count(*) from if_null_else;
 ➤ count(*)[-5,64,0]  𝄀
 3
+create table conditional_src(c int,n int not null,s varchar(8) not null);
+insert into conditional_src values(1,0,'abc'),(null,1,'abc');
+select case when c=1 then 1/n else 7 end as v,count(*) as cnt from conditional_src group by case when c=1 then 1/n else 7 end order by v;
+➤ v[8,54,0]  ¦  cnt[-5,64,0]  𝄀
+null  ¦  1  𝄀
+7.0  ¦  1
+select distinct case when c=1 then 1/n else 7 end as v from conditional_src order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+7.0
+select if(c=1,1/n,7) as v,count(*) as cnt from conditional_src group by if(c=1,1/n,7) order by v;
+➤ v[8,54,0]  ¦  cnt[-5,64,0]  𝄀
+null  ¦  1  𝄀
+7.0  ¦  1
+select distinct if(c=1,1/n,7) as v from conditional_src order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+7.0
+select case when c=1 then regexp_substr(s,'z') else '7' end as v,count(*) as cnt from conditional_src group by case when c=1 then regexp_substr(s,'z') else '7' end order by v;
+➤ v[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+null  ¦  1  𝄀
+7  ¦  1
+select distinct case when c=1 then regexp_substr(s,'z') else '7' end as v from conditional_src order by v;
+➤ v[12,-1,0]  𝄀
+null  𝄀
+7
+select if(c=1,regexp_substr(s,'z'),'7') as v,count(*) as cnt from conditional_src group by if(c=1,regexp_substr(s,'z'),'7') order by v;
+➤ v[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+null  ¦  1  𝄀
+7  ¦  1
+select distinct if(c=1,regexp_substr(s,'z'),'7') as v from conditional_src order by v;
+➤ v[12,-1,0]  𝄀
+null  𝄀
+7
+create table conditional_result as select case when c=1 then 1/n else 7 end as case_div,if(c=1,1/n,7) as if_div,case when c=1 then regexp_substr(s,'z') else '7' end as case_regex,if(c=1,regexp_substr(s,'z'),'7') as if_regex from conditional_src;
+select * from conditional_result order by case_div;
+➤ case_div[8,54,0]  ¦  if_div[8,54,0]  ¦  case_regex[12,-1,0]  ¦  if_regex[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+7.0  ¦  7.0  ¦  7  ¦  7
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='conditional_result' and column_name in ('case_div','if_div','case_regex','if_regex') order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+case_div  ¦  YES  𝄀
+if_div  ¦  YES  𝄀
+case_regex  ¦  YES  𝄀
+if_regex  ¦  YES
+insert into conditional_result values(null,null,null,null);
+select count(*) as all_rows,count(case_div) as case_div_values,count(if_div) as if_div_values,count(case_regex) as case_regex_values,count(if_regex) as if_regex_values from conditional_result;
+➤ all_rows[-5,64,0]  ¦  case_div_values[-5,64,0]  ¦  if_div_values[-5,64,0]  ¦  case_regex_values[-5,64,0]  ¦  if_regex_values[-5,64,0]  𝄀
+3  ¦  1  ¦  1  ¦  1  ¦  1
 drop database ctas_output_nullability;

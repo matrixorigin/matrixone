@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -630,6 +631,32 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestRefreshConditionalNullabilityNeverStrengthens(t *testing.T) {
+	for _, fid := range []int32{function.CASE, function.IFF} {
+		for _, initiallyNonNull := range []bool{false, true} {
+			for _, resultNonNull := range []bool{false, true} {
+				args := []*plan.Expr{
+					{Typ: plan.Type{NotNullable: false}},
+					{Typ: plan.Type{NotNullable: resultNonNull}},
+					{Typ: plan.Type{NotNullable: true}},
+				}
+				expr := &plan.Expr{Typ: plan.Type{NotNullable: initiallyNonNull}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(fid, 0)}, Args: args,
+				}}}
+				refreshExprNullabilityFromInput(expr, nil)
+				require.Equal(t, initiallyNonNull && resultNonNull, expr.Typ.NotNullable)
+			}
+		}
+		for _, args := range [][]*plan.Expr{nil, {{Typ: plan.Type{NotNullable: true}}, {Typ: plan.Type{NotNullable: true}}}} {
+			expr := &plan.Expr{Typ: plan.Type{NotNullable: true}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(fid, 0)}, Args: args,
+			}}}
+			refreshExprNullabilityFromInput(expr, nil)
+			require.False(t, expr.Typ.NotNullable, "missing ELSE or invalid shape cannot preserve a proof")
+		}
+	}
+}
+
 func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -653,6 +680,10 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
 		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
 		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"case untrusted division branch", "select case when n_comment='x' then 1/n_nationkey else 7 end as v from nation", []bool{true}},
+		{"if untrusted division branch", "select if(n_comment='x',1/n_nationkey,7) as v from nation", []bool{true}},
+		{"case untrusted regex branch", "select case when n_comment='x' then regexp_substr(n_name,'z') else '7' end as v from nation", []bool{true}},
+		{"if untrusted regex branch", "select if(n_comment='x',regexp_substr(n_name,'z'),'7') as v from nation", []bool{true}},
 		{"case nullable condition nonnull branches", "select case when r.r_regionkey=1 then 11 else 22 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"if nullable condition nonnull branches", "select if(r.r_regionkey=1,11,22) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"case multiple conditions", "select case when r.r_regionkey=1 then 11 when r.r_regionkey=2 then 22 else 33 end as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
