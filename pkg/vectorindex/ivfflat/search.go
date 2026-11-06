@@ -270,7 +270,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 		return
 	}
 
-	if len(sqlproc.IvfRuntimeFilterData) == 0 {
+	if sqlproc.IvfRuntimeFilterData == nil {
 		if len(sqlproc.RuntimeFilterSpecs) == 0 {
 			return
 		}
@@ -283,36 +283,19 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	sqlproc.ExactPkFilter = ""
 	sqlproc.IvfMembershipFilter = nil
 
-	var vecbytes []byte
-	if len(sqlproc.IvfRuntimeFilterData) > 0 {
-		vecbytes = sqlproc.IvfRuntimeFilterData
-	} else {
-		vecbytes, err = sqlexec.WaitUniqueJoinKeys(sqlproc)
-		if err != nil {
-			return
+	keys := sqlproc.IvfRuntimeFilterData
+	if keys == nil {
+		keys, err = sqlexec.WaitUniqueJoinKeys(sqlproc)
+		if err != nil || keys == nil {
+			return err
 		}
-	}
-
-	if len(vecbytes) == 0 {
-		return
+		defer keys.Release()
 	}
 
 	membershipMustApply := false
 	if len(sqlproc.RuntimeFilterSpecs) > 0 && sqlproc.RuntimeFilterSpecs[0] != nil {
 		membershipMustApply = sqlproc.RuntimeFilterSpecs[0].MustApply
 	}
-
-	// Deserialize the unique join keys.
-	keyvec := new(vector.Vector)
-	err = keyvec.UnmarshalBinary(vecbytes)
-	if err != nil {
-		return
-	}
-	// No keyvec.Free here on purpose: UnmarshalBinary aliases vecbytes (it sets
-	// cantFreeData/cantFreeArea), so keyvec owns no mpool memory — the struct and
-	// the aliased bytes are reclaimed by GC. Calling Free(mp) would be a no-op for
-	// this zero-copy path, and tying its release to a specific mpool would be a
-	// cross-pool free hazard if the deserialization ever became owning.
 
 	// Small PK set: build an exact "pk IN (...)" SQL filter instead of a
 	// pushdown doc_id filter. For very small sets the IN-list is cheaper and
@@ -322,16 +305,13 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	// Bloom filter, whose false positives can change IVF pre-filter Top-K
 	// results. The bounded builder makes this correctness requirement explicit
 	// instead of allowing an unbounded SQL statement.
-	requiresExactNonInteger := membershipMustApply && !docfilter.SupportsBitset(*keyvec.GetType())
-	if (exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold) || requiresExactNonInteger {
-		var exactPk string
-		var buildErr error
+	requiresExactNonInteger := membershipMustApply && !docfilter.SupportsBitset(keys.Type())
+	if (exactPkFilterThreshold > 0 && keys.Rows() <= uint64(exactPkFilterThreshold)) || requiresExactNonInteger {
+		maxBytes := 0
 		if requiresExactNonInteger {
-			exactPk, buildErr = sqlexec.BuildExactPkFilterWithLimit(
-				sqlproc.GetContext(), keyvec, maxExactPkFilterBytes)
-		} else {
-			exactPk, buildErr = sqlexec.BuildExactPkFilter(sqlproc.GetContext(), keyvec)
+			maxBytes = maxExactPkFilterBytes
 		}
+		exactPk, buildErr := sqlexec.BuildExactPkFilterKeys(sqlproc.GetContext(), keys, maxBytes)
 		if buildErr != nil {
 			err = buildErr
 			return
@@ -346,8 +326,8 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	// docfilter picks the structure: an exact set (cbitmap / Sorted64) for
 	// integer PKs — no false positives — or a CBloomFilter otherwise. The
 	// reader's docfilter.New reconstructs it from the tag.
-	payload, err := docfilter.BuildWithMemoryAdmission(
-		keyvec,
+	payload, err := docfilter.BuildKeysWithMemoryAdmission(
+		sqlproc.GetContext(), keys,
 		docfilter.AdmissionForService(sqlproc.Proc.GetService()),
 	)
 	if err != nil {
