@@ -48,6 +48,7 @@ type odkuActions struct {
 	groupCounts                          []uint64
 	priorValidated                       bool
 	staticKeys                           bool
+	noopOrdinal                          int32
 
 	source              *batch.Batch
 	sourceRow, finalRow int
@@ -147,7 +148,7 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 	for i, key := range c.Constraints {
 		keys[i] = key.CurrentKey
 	}
-	a := &odkuActions{eligible: make([]bool, len(c.ForeignKeyChecks)), staticKeys: hasStaticODKUKeys(c)}
+	a := &odkuActions{eligible: make([]bool, len(c.ForeignKeyChecks)), staticKeys: hasStaticODKUKeys(c), noopOrdinal: -1}
 	if c.PriorData != nil && (preInsertUnique.PriorDataView == nil || preInsertUnique.LockKeys == nil) {
 		return moerr.NewInternalError(proc.Ctx, "ODKU prior-data view is not bound to the coordinator")
 	}
@@ -238,6 +239,7 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 		b.SetRowCount(1)
 	}
 	a.updateInputs = [2]*batch.Batch{a.image, a.incoming}
+	a.noopOrdinal = directNoopOrdinal(c, a)
 	return nil
 }
 
@@ -486,6 +488,9 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		if err := odkueval.EvaluateChecks(a.insertChecks[:c.InsertCheckConstraintCount], a.inputImage, a.incoming, proc); err != nil {
 			return err
 		}
+		if done, err := preInsertUnique.tryDirectNoop(proc, owner); done || err != nil {
+			return err
+		}
 		if !freshOriginal {
 			if err := preInsertUnique.copyODKURow(proc, a.current, preInsertUnique.ctr.actionRows.images, int(owner), nil); err != nil {
 				return err
@@ -594,13 +599,18 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		}
 		a.lastFKEligibility.SetRowCount(preInsertUnique.ctr.actionRows.images.RowCount())
 	}
-	preInsertUnique.ctr.lastOrdinal = vector.GetFixedAtNoTypeCheck[int64](a.source.Vecs[c.SourceOrdinal.GetCol().ColPos], a.sourceRow)
 	weight := uint64(0)
 	if insert {
 		weight = 1
 	} else if changed {
 		weight = 2
 	}
+	return preInsertUnique.finishODKUAction(proc, weight)
+}
+
+func (preInsertUnique *PreInsertUnique) finishODKUAction(proc *process.Process, weight uint64) error {
+	a, c := preInsertUnique.ctr.actions, preInsertUnique.PreInsertCtx.OdkuActions
+	preInsertUnique.ctr.lastOrdinal = vector.GetFixedAtNoTypeCheck[int64](a.source.Vecs[c.SourceOrdinal.GetCol().ColPos], a.sourceRow)
 	if a.logicalAffected > math.MaxUint64-weight {
 		return moerr.NewInternalError(proc.Ctx, "ODKU affected row count overflow")
 	}

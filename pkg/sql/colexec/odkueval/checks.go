@@ -189,3 +189,25 @@ func EvaluateUpdate(execs []colexec.ExpressionExecutor, columns []int32, checks 
 	}
 	return EvaluateChecks(checks, image, incoming, proc)
 }
+
+// DirectNotNullChecks reports whether all checks can read the same retained
+// table image through the validated table-to-source column mapping.
+func DirectNotNullChecks(checks []Check, columns []int32) bool {
+	for _, check := range checks {
+		if check.executor != nil || check.nonNullColumn < 0 || int(check.nonNullColumn) >= len(columns) || columns[check.nonNullColumn] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// EvaluateDirectNotNullChecksAt preserves native check order and error text.
+// The caller has validated the checks and projection with DirectNotNullChecks.
+func EvaluateDirectNotNullChecksAt(checks []Check, source *batch.Batch, columns []int32, row int, proc *process.Process) error {
+	for _, check := range checks {
+		if source.Vecs[columns[check.nonNullColumn]].IsNull(uint64(row)) {
+			return moerr.NewConstraintViolation(proc.Ctx, check.message)
+		}
+	}
+	return nil
+}
