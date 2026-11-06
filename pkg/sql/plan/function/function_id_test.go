@@ -948,8 +948,8 @@ func TestEWMAndTemporalFunctionRegistryCoexist(t *testing.T) {
 		implementation, ok := GetFunctionByIdWithoutError(encoded)
 		require.True(t, ok, tc.name)
 		require.Equal(t, tc.window, implementation.IsWin(), tc.name)
-		require.Equal(t, !tc.window, IsTemporalBoundFunction(id), tc.name)
 		expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: encoded, ObjName: tc.name}}}}
+		require.Equal(t, !tc.window, RequiresRuntimeEvaluation(expr), tc.name)
 		wire, err := expr.Marshal()
 		require.NoError(t, err)
 		var decoded planpb.Expr

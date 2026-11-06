@@ -83,7 +83,7 @@ func TestTemporalBoundIsRuntimeConstantOnly(t *testing.T) {
 		Func: &plan.ObjectRef{Obj: EncodeOverloadID(TEMPORAL_DATETIME_BOUND, 0), ObjName: "__mo_temporal_datetime_bound"},
 		Args: []*plan.Expr{bound, intLiteral(0), intLiteral(3), intLiteral(0)},
 	}}}
-	require.True(t, ContainsTemporalBound(helper))
+	require.True(t, ContainsRuntimeBound(helper))
 	require.False(t, IsConstant(helper, true))
 	require.False(t, IsFoldCandidate(helper, true))
 	require.True(t, IsRuntimeConstant(helper))
@@ -91,6 +91,38 @@ func TestTemporalBoundIsRuntimeConstantOnly(t *testing.T) {
 	parent := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{Obj: EncodeOverloadID(SERIAL, 0), ObjName: "serial"}, Args: []*plan.Expr{helper},
 	}}}
-	require.True(t, ContainsTemporalBound(parent))
+	require.True(t, ContainsRuntimeBound(parent))
 	require.False(t, IsFoldCandidate(parent, true))
+}
+
+// A runtime evaluation boundary is independent of value repeatability and of
+// ordinary statement-clock folding. Unknown families do not gain that policy.
+func TestRuntimeEvaluationBoundariesKeepExistingFamilies(t *testing.T) {
+	call := func(id, overload int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: EncodeOverloadID(id, overload)}}}}
+	}
+	// Freeze the admitted families across the complete registry. Another
+	// annotation must not silently change existing expression-folding policy.
+	for id := int32(0); id < FUNCTION_END_NUMBER; id++ {
+		want := id == TEMPORAL_DATETIME_BOUND || id == TEMPORAL_TIMESTAMP_BOUND
+		require.Equal(t, want, RequiresRuntimeEvaluation(call(id, 0)), "family %d", id)
+	}
+	require.False(t, RequiresRuntimeEvaluation(nil))
+	require.False(t, ContainsRuntimeBound(nil))
+	for _, id := range []int32{TEMPORAL_DATETIME_BOUND, TEMPORAL_TIMESTAMP_BOUND} {
+		require.True(t, RequiresRuntimeEvaluation(call(id, 0)))
+		malformed := call(id, math.MaxInt32)
+		require.True(t, RequiresRuntimeEvaluation(malformed), "folding must preserve the function-family boundary")
+		require.False(t, IsRuntimeConstant(malformed), "a boundary is not permission to execute an unknown overload")
+		list := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{call(id, 0)}}}}
+		require.False(t, RequiresRuntimeEvaluation(list))
+		require.True(t, ContainsRuntimeBound(list))
+	}
+	for _, id := range []int32{-1, FUNCTION_END_NUMBER, math.MaxInt32, EWM_MEAN, CURRENT_TIMESTAMP} {
+		require.False(t, RequiresRuntimeEvaluation(call(id, 0)))
+		require.False(t, ContainsRuntimeBound(call(id, 0)))
+	}
+	now := call(CURRENT_TIMESTAMP, 0)
+	require.True(t, IsConstant(now, true), "ordinary clock folding retains its current-execution policy")
+	require.True(t, IsRuntimeConstant(now))
 }

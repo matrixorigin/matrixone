@@ -5931,7 +5931,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 func appendCandidateStorageHints(storage, block []*plan.Expr) []*plan.Expr {
 	cloned := false
 	for _, expr := range block {
-		if expr.GetCandidateFilter() && function.ContainsTemporalBound(expr) {
+		if expr.GetCandidateFilter() && function.ContainsRuntimeBound(expr) {
 			alreadyPresent := false
 			for _, existing := range storage {
 				if existing.GetCandidateFilter() && candidateStorageHintEqual(existing, expr) {

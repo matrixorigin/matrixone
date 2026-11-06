@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -86,15 +87,24 @@ func TestTemporalBoundKeepsClockThroughPlanningFold(t *testing.T) {
 	require.NoError(t, err)
 	serial, err := BindFuncExprImplByPlanExpr(proc.Ctx, "serial", []*Expr{bound})
 	require.NoError(t, err)
-	require.True(t, function.ContainsTemporalBound(serial))
+	require.True(t, function.ContainsRuntimeBound(serial))
 	require.True(t, ExprIsZonemappable(proc.Ctx, serial))
 	for _, prepared := range []bool{false, true} {
-		copy := DeepCopyExpr(serial)
-		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, copy, proc, prepared, true)
-		require.NoError(t, err)
-		require.NotNil(t, folded.GetF())
-		require.NotNil(t, folded.GetF().Args[0].GetF())
-		require.NotNil(t, folded.GetF().Args[0].GetF().Args[0].GetF(), "statement clock was frozen")
+		for _, ruleFolder := range []bool{false, true} {
+			copy := DeepCopyExpr(serial)
+			var folded *Expr
+			if ruleFolder {
+				node := &Node{ProjectList: []*Expr{copy}}
+				rule.NewConstantFold(prepared).Apply(node, nil, proc)
+				folded = node.ProjectList[0]
+			} else {
+				folded, err = ConstantFold(batch.EmptyForConstFoldBatch, copy, proc, prepared, true)
+				require.NoError(t, err)
+			}
+			require.NotNil(t, folded.GetF())
+			require.NotNil(t, folded.GetF().Args[0].GetF())
+			require.NotNil(t, folded.GetF().Args[0].GetF().Args[0].GetF(), "statement clock was frozen")
+		}
 	}
 }
 

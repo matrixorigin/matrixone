@@ -1915,11 +1915,8 @@ func constantFoldWithPreparedExactSource(
 	spatialChecked bool,
 	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
-	if fn := expr.GetF(); fn != nil && fn.Func != nil {
-		fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
-		if function.IsTemporalBoundFunction(fid) {
-			return expr, nil
-		}
+	if function.RequiresRuntimeEvaluation(expr) {
+		return expr, nil
 	}
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
