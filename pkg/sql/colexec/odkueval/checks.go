@@ -176,10 +176,12 @@ func EvaluateChecks(checks []Check, image, incoming *batch.Batch, proc *process.
 // EvaluateUpdate applies assignments in order, so each RHS sees earlier
 // assignments, then checks the resulting image. Expression result vectors are
 // borrowed and remain valid only until their executors are evaluated again.
-// The caller validates the assignment layout when it prepares the plan.
-func EvaluateUpdate(execs []colexec.ExpressionExecutor, columns []int32, checks []Check, image, incoming *batch.Batch, proc *process.Process) error {
+// The caller validates the layout and owns the stable [image, incoming] input
+// frame. Executors borrow it synchronously without retaining or changing it.
+func EvaluateUpdate(execs []colexec.ExpressionExecutor, columns []int32, checks []Check, inputs []*batch.Batch, proc *process.Process) error {
+	image, incoming := inputs[0], inputs[1]
 	for i, e := range execs {
-		v, err := e.Eval(proc, []*batch.Batch{image, incoming}, nil)
+		v, err := e.Eval(proc, inputs, nil)
 		if err != nil {
 			return err
 		}

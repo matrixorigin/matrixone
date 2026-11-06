@@ -160,6 +160,8 @@ func TestODKUSystematicSQL(t *testing.T) {
 				affected(t, 0, statement, 0)
 				want := []string{"1|0|2000|2000", "2|0|" + year + "|" + year}
 				require.Equal(t, want, rows(t, "select id,v,year(ts),g from "+name+" order by id"))
+				affected(t, 0, "insert into "+name+"(id,v,ts) values(1,999,'2000-01-01') on duplicate key update g=default")
+				require.Equal(t, want, rows(t, "select id,v,year(ts),g from "+name+" order by id"))
 				_, err := conn.ExecContext(ctx, statement, 1)
 				constraintError(t, err, 1062, "Duplicate entry")
 				require.Equal(t, want, rows(t, "select id,v,year(ts),g from "+name+" order by id"), "the real collision rolls back the whole action")
@@ -723,6 +725,15 @@ func TestODKUSystematicSQL(t *testing.T) {
 					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
 				}
 			}()
+			waitCommitted := func(t *testing.T, commitCtx context.Context) {
+				t.Helper()
+				client := cn.RawService().(cnservice.Service).GetTxnClient()
+				frontier := client.GetLatestCommitTS()
+				require.False(t, frontier.IsEmpty(), "visibility fence requires a real commit")
+				applied, err := client.WaitLogTailAppliedAt(commitCtx, frontier)
+				require.NoError(t, err, "wait for committed logtail %s", frontier.DebugString())
+				require.True(t, applied.Greater(frontier), "the real timestamp waiter must advance past the commit")
+			}
 			for _, persisted := range []bool{false, true} {
 				for _, conflict := range []string{"original row", "final primary", "final unique"} {
 					t.Run(fmt.Sprintf("%s/persisted=%t", conflict, persisted), func(t *testing.T) {
@@ -800,9 +811,9 @@ func TestODKUSystematicSQL(t *testing.T) {
 						commitErr := first.Commit()
 						_, e = conn.ExecContext(ctx, "rollback")
 						require.NoError(t, e)
-						// SacrificingFreshness permits another session to open an older
-						// SI snapshot. Read on the winner's session: its commit timestamp
-						// is the causal visibility floor, with no sleeps or polling.
+						// SI commit need not wait for CN logtail. Fence on the real
+						// client commit frontier before asserting committed SQL rows.
+						waitCommitted(t, competeCtx)
 						actual := rowsFrom(t, competing, "select a,g,u,v from "+name+" order by u")
 						t.Logf("controlled optimistic commit: error=%v, committed rows=%v", commitErr, actual)
 						require.Error(t, commitErr, "TN must reject the stale RowID or competing final key")
@@ -898,8 +909,7 @@ func TestODKUSystematicSQL(t *testing.T) {
 					}
 					_, err = conn.ExecContext(competeCtx, "rollback")
 					require.NoError(t, err)
-					// Each reader has observed its own commit; use the transaction
-					// that committed last as the causal visibility floor.
+					waitCommitted(t, competeCtx)
 					reader := conn
 					if tc.conflict {
 						reader = competing

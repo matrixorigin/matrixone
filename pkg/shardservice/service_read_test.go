@@ -59,39 +59,19 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 
 	cns[0].CommitID = version.CommitID
 	cluster.UpdateCN(cns[0])
-	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, ReadRequest{Param: binaryParam}))
+	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
 
 	cns[0].CommitID = "older-commit"
 	cluster.UpdateCN(cns[0])
-	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, ReadRequest{Param: binaryParam}))
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
 
 	textParam := binaryParam
 	textParam.Process.PrepareParams.IsBin = []bool{false, false}
-	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, ReadRequest{Param: textParam}))
+	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, textParam))
 
 	unknown := shard.TableShard{Replicas: []shard.ShardReplica{{CN: "unknown"}}}
-	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, ReadRequest{Param: binaryParam}))
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
 
-	// Narrowed candidate filters require a known matching reader even when
-	// the request carries no versioned prepared-parameter metadata.
-	savedCommit := version.CommitID
-	t.Cleanup(func() { version.CommitID = savedCommit })
-	version.CommitID = "candidate-reader-commit"
-	candidate := ReadRequest{RequireSameCommit: true}
-	for _, remote := range []string{"candidate-reader-commit", "older-commit", "", "unknown"} {
-		cns[0].CommitID = remote
-		cluster.UpdateCN(cns[0])
-		err := s.validateRemoteReadCompatibility(t.Context(), target, candidate)
-		if remote == version.CommitID {
-			require.NoError(t, err)
-		} else {
-			require.ErrorContains(t, err, "statement-key candidate filters")
-		}
-	}
-	version.CommitID = ""
-	cns[0].CommitID = ""
-	cluster.UpdateCN(cns[0])
-	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, candidate), "two unknown identities cannot attest matching readers")
 }
 
 func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) {
@@ -360,7 +340,6 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 
 			for _, request := range []ReadRequest{
 				{TableID: table, Param: shard.ReadParam{Process: pipeline.ProcessInfo{PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}}}}},
-				{TableID: table, RequireSameCommit: true},
 			} {
 				adjustCalls := make(map[uint64]int)
 				readCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)

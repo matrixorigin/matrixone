@@ -296,11 +296,7 @@ type Engine struct {
 	gcPool *ants.Pool
 	// Failed deletion of a statement-pinned object remains engine-owned and
 	// quota-charged after its transaction and last reader have closed.
-	statementGC struct {
-		sync.Mutex
-		head   *statementObjectPin
-		active chan struct{}
-	}
+	statementGC statementObjectGC
 
 	// XXX related to cn push model
 	pClient PushClient

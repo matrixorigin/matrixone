@@ -551,6 +551,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if runC.odkuResult != nil {
 		queryResult.AffectRows, err = runC.odkuResult.result()
 		if err != nil {
+			err = joinAllocationLifecycleErrors(err, finishAllocationAttempt())
+			err = abortSinkAttempt(err)
+			finishCurrentAttempt(false)
 			return nil, err
 		}
 	}

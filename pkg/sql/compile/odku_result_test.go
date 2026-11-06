@@ -17,8 +17,10 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,4 +74,30 @@ func TestODKUAttemptResultBindingAndRetry(t *testing.T) {
 	require.NoError(t, c.closeODKUPriorData())
 	scope.NodeInfo.Mcpu = 2
 	require.Error(t, c.bindODKUPriorData(), "the action owner cannot be replicated")
+}
+
+func TestODKUMissingEOFFinalizesAttemptAndAbortsSink(t *testing.T) {
+	c, registry := newRunLifecycleCompile(t)
+	t.Cleanup(c.Release)
+	view := &lifecycleStatementView{}
+	owner := &allocationLifecycleOwnerOperator{MockOperator: colexec.NewMockOperator()}
+	owner.WithEndOfDataCallback(func() {
+		// Inject a missing owner completion at the existing source seam. The
+		// result guard must own the same cleanup as any other terminal error.
+		c.odkuResult = &odkuAttemptResult{}
+		c.odkuViews = []engine.StatementKeyView{view}
+	})
+	scope := newScope(Normal)
+	scope.Proc, scope.RootOp = c.proc.NewNoContextChildProc(0), owner
+	c.scopes = []*Scope{scope}
+	sink := &generationCheckingResultSink{}
+	c.resultSink = sink
+	_, err := c.Run(0)
+	require.ErrorContains(t, err, "ODKU action owner did not reach EOF")
+	require.Equal(t, 1, view.closed)
+	require.Empty(t, c.odkuViews)
+	require.Nil(t, owner.account)
+	require.Nil(t, c.allocationAttempt)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	require.Equal(t, []string{"begin:0", "abort:0"}, sink.events)
 }

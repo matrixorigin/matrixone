@@ -138,7 +138,6 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 				switch req.Method {
 				case shardservice.ReadRanges:
 					ranges++
-					require.True(t, req.RequireSameCommit)
 					require.Len(t, req.Param.RangesParam.Exprs, 1)
 					data := readutil.NewBlockListRelationData(0)
 					for range tc.blocks {
@@ -158,7 +157,6 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 				case shardservice.ReadBuildReader:
 					builds++
 					emitted = false
-					require.True(t, req.RequireSameCommit)
 					require.NotNil(t, req.Param.ReaderBuildParam.Expr)
 					data, err := readutil.UnmarshalRelationData(req.Param.ReaderBuildParam.RelData)
 					require.NoError(t, err)
@@ -322,7 +320,8 @@ func TestStatementKeyViewOwnsPriorWorkspaceUntilClose(t *testing.T) {
 			txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, accountId: 1, databaseId: 7, tableId: 42, databaseName: "db", tableName: "tbl", bat: raw})
 			txn.addBatchSelectionsLocked(raw, []int64{1})
 			var loadFS *loadCleanupFileService
-			var gcFS *loadCleanupFileService
+			var gcEntered chan struct{}
+			var gcAllow chan error
 			var loadName string
 			loadErr := moerr.NewInternalErrorNoCtx("LOAD deletion failed")
 			gcCase := strings.HasPrefix(terminal, "GC ")
@@ -349,9 +348,26 @@ func TestStatementKeyViewOwnsPriorWorkspaceUntilClose(t *testing.T) {
 				if !gcCase {
 					txn.TrackLoadFiles(loadName)
 				}
-				if terminal == "GC delete retry" {
-					gcFS = &loadCleanupFileService{FileService: fs, err: loadErr}
-					txn.engine.fs = gcFS
+				if gcCase && terminal != "GC quota" {
+					gcEntered, gcAllow = make(chan struct{}, 4), make(chan error)
+					cleanup := make(chan struct{})
+					txn.engine.fs = &statementGCFileService{FileService: fs, delete: func(ctx context.Context, names ...string) error {
+						gcEntered <- struct{}{}
+						select {
+						case err := <-gcAllow:
+							if err != nil {
+								return err
+							}
+						case <-cleanup:
+						case <-ctx.Done():
+							return context.Cause(ctx)
+						}
+						return fs.Delete(ctx, names...)
+					}}
+					t.Cleanup(func() {
+						close(cleanup)
+						require.NoError(t, txn.engine.CloseStatementObjects())
+					})
 				}
 				if terminal == "GC quota" {
 					txn.engine.config.memThrottler = rscthrottler.NewMemThrottler("statement-pins-denied", 1, rscthrottler.WithConstLimit(1))
@@ -527,42 +543,20 @@ func TestStatementKeyViewOwnsPriorWorkspaceUntilClose(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(view.Validate(t.Context()), moerr.ErrTxnNeedRetry))
 				require.NoError(t, view.Close())
 				require.True(t, objectExistsInFS(t.Context(), fs, loadName), "another reader still owns the object")
-				require.NoError(t, other.Close(), "cancelled statement close hands cleanup to the engine")
+				require.NoError(t, other.Close(), "cancelled statement close hands cleanup to the engine without waiting for IO")
+				awaitStatementGC(t, gcEntered)
 				require.True(t, objectExistsInFS(t.Context(), fs, loadName))
-				require.NotNil(t, txn.engine.statementGC.head)
 				require.Equal(t, quota-statementObjectPinQuota, txn.engine.config.memThrottler.Available())
-				if gcFS != nil {
-					require.False(t, gcFS.deleteCalled, "a cancelled statement performs no opportunistic engine GC IO")
-					require.Same(t, loadErr, txn.engine.drainStatementObjects(false))
-					require.True(t, objectExistsInFS(t.Context(), fs, loadName))
-					require.NotNil(t, txn.engine.statementGC.head, "failed deletion keeps its retry owner and quota")
+				if terminal == "GC delete retry" {
+					gcAllow <- loadErr
+					awaitStatementGC(t, gcEntered) // Autonomous retry, without a new query or manual drain.
 					require.Equal(t, quota-statementObjectPinQuota, txn.engine.config.memThrottler.Available())
-					// A later live statement can attempt engine cleanup, but a
-					// failed old obligation cannot turn that close into an error.
-					nextTxn, nextTable := newDumpInsertTxnForTest(t)
-					t.Cleanup(func() { cleanTxnWritesForTest(nextTxn) })
-					nextTxn.engine = txn.engine
-					nextOp := nextTxn.op.(*mock_frontend.MockTxnOperator)
-					nextOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
-					nextOp.EXPECT().IsSnapOp().Return(false).AnyTimes()
-					nextTable.eng = txn.engine
-					nextTable.remoteWorkspace = true
-					nextTable.createdInTxn = true
-					nextTable.primaryIdx = 0
-					nextTable.proc.Store(nextTxn.proc)
-					nextTable.tableDef = tbl.tableDef
-					nextDelegate := &txnTableDelegate{origin: nextTable, isLocal: func() (bool, error) { return true, nil }}
-					nextView, e := nextDelegate.NewStatementKeyView(t.Context(), []engine.Relation{nextDelegate}, nextTxn.proc, account, reserve)
-					require.NoError(t, e)
-					require.NoError(t, nextView.Close(), "engine cleanup is diagnostic after ownership transfer")
-					require.NotNil(t, txn.engine.statementGC.head)
 					require.True(t, objectExistsInFS(t.Context(), fs, loadName))
-					require.Equal(t, quota-statementObjectPinQuota, txn.engine.config.memThrottler.Available())
-					gcFS.err = nil
+					require.True(t, moerr.IsMoErrCode(view.Validate(t.Context()), moerr.ErrTxnNeedRetry), "cleanup does not replace the SQL retry error")
 				}
-				require.NoError(t, txn.engine.drainStatementObjects(false), "the surviving engine owner retries outside the cancelled statement")
+				gcAllow <- nil
+				require.NoError(t, txn.engine.CloseStatementObjects())
 				require.Nil(t, txn.statementKeyPins.Load())
-				require.Nil(t, txn.engine.statementGC.head)
 				require.Equal(t, quota, txn.engine.config.memThrottler.Available())
 				require.False(t, objectExistsInFS(t.Context(), fs, loadName))
 				return
@@ -751,47 +745,6 @@ type statementGCFileService struct {
 
 func (f *statementGCFileService) Delete(ctx context.Context, names ...string) error {
 	return f.delete(ctx, names...)
-}
-
-func TestStatementObjectGCPartiallyDeletedChunkRemainsOwned(t *testing.T) {
-	// One more than the production chunk limit is the minimum that proves a
-	// successful chunk is released while a later partially deleted chunk retries.
-	const count = GCBatchOfFileCount + 1
-	quota := int64(count) * statementObjectPinQuota
-	e := &Engine{}
-	e.config.memThrottler = rscthrottler.NewMemThrottler("statement-gc-chunks", 1, rscthrottler.WithConstLimit(quota))
-	_, ok := e.AcquireQuota(quota)
-	require.True(t, ok)
-	files := make(map[string]bool, count)
-	for i := range count {
-		name := fmt.Sprint(i)
-		files[name] = true
-		e.deferStatementObject(&statementObjectPin{name: name})
-	}
-	deleteErr := moerr.NewInternalErrorNoCtx("partial object delete")
-	calls := 0
-	e.fs = &statementGCFileService{delete: func(ctx context.Context, names ...string) error {
-		require.NoError(t, context.Cause(ctx))
-		_, bounded := ctx.Deadline()
-		require.True(t, bounded)
-		calls++
-		for _, name := range names {
-			delete(files, name)
-		}
-		if calls == 2 {
-			return deleteErr // The file is gone; ownership still awaits success.
-		}
-		return nil
-	}}
-	require.Same(t, deleteErr, e.drainStatementObjects(false))
-	require.Empty(t, files)
-	require.NotNil(t, e.statementGC.head)
-	require.Equal(t, quota-statementObjectPinQuota, e.config.memThrottler.Available())
-	require.NoError(t, e.drainStatementObjects(true))
-	require.Equal(t, 3, calls)
-	require.Nil(t, e.statementGC.head)
-	require.Nil(t, e.statementGC.active)
-	require.Equal(t, quota, e.config.memThrottler.Available())
 }
 
 func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {

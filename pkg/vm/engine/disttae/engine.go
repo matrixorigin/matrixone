@@ -209,7 +209,7 @@ func New(
 }
 
 func (e *Engine) Close() error {
-	gcErr := e.drainStatementObjects(true)
+	gcErr := e.CloseStatementObjects()
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
