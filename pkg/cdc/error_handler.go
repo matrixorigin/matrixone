@@ -15,11 +15,62 @@
 package cdc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 )
+
+var cdcBackendRetryClassifier = retry.MultiClassifier{
+	retry.DefaultClassifier{}, retry.MySQLErrorClassifier{},
+}
+
+// ClassifyRetryableError preserves the same typed backend decision at pipeline
+// admission, sink normalization and stream recovery. Unknown errors may still
+// have context-specific runtime handling, but are not retryable at admission.
+func ClassifyRetryableError(err error) (retryable, classified bool) {
+	if err == nil {
+		return false, true
+	}
+	if errors.Is(err, context.Canceled) {
+		return false, true
+	}
+	var code uint16
+	var native *moerr.Error
+	if errors.As(err, &native) {
+		code = native.ErrorCode()
+	} else {
+		code, _ = retry.MySQLErrorCode(err)
+	}
+	switch code {
+	case moerr.ErrClientClosed, moerr.ErrStreamClosed,
+		1044, 1045, 1064, 1142, 1143, 1227, moerr.ErrNotSupported:
+		return false, true
+	case moerr.ErrDeadLockDetected, moerr.ErrLockTableBindChanged,
+		moerr.ErrTxnNeedRetry, moerr.ErrTxnNeedRetryWithDefChanged,
+		moerr.ErrRPCTimeout, moerr.ErrServiceUnavailable, moerr.ErrConnectionReset,
+		moerr.ErrBackendClosed, moerr.ErrNoAvailableBackend, moerr.ErrBackendCannotConnect,
+		moerr.ErrTNShardNotFound, moerr.ErrRpcError:
+		// Preserve MO transient errors across native and MySQL transports.
+		// Inside a transaction, recovery must replay the whole transaction.
+		return true, true
+	}
+	status := morpc.GetStatusCategory(err)
+	if status == morpc.StatusCancelled {
+		return false, true
+	}
+	if status == morpc.StatusTransient || status == morpc.StatusUnavailable ||
+		cdcBackendRetryClassifier.IsRetryable(err) {
+		return true, true
+	}
+	return false, false
+}
 
 // Error handling constants
 const (

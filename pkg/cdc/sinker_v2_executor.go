@@ -271,7 +271,7 @@ func (e *Executor) RollbackTx(ctx context.Context) error {
 //
 // Parameters:
 // - sqlBuf: SQL statement with 5-byte header (for mysql driver reuse)
-// - needRetry: Whether to retry on failure
+// - needRetry: Whether standalone SQL may retry; active transactions execute once
 // - ar: ActiveRoutine for cancellation support
 func (e *Executor) ExecSQL(
 	ctx context.Context,
@@ -301,25 +301,50 @@ func (e *Executor) ExecSQL(
 
 		var err error
 		if e.tx != nil {
-			_, err = e.tx.Exec(v2FakeSql, reuseQueryArg)
+			_, err = e.tx.ExecContext(ctx, v2FakeSql, reuseQueryArg)
 		} else {
-			_, err = e.conn.Exec(v2FakeSql, reuseQueryArg)
+			_, err = e.conn.ExecContext(ctx, v2FakeSql, reuseQueryArg)
 		}
 
 		if err != nil {
+			v2.CdcMysqlSinkErrorCounter.Inc()
 			e.logFailedSQL(err, sqlBuf)
 		}
 		return err
 	}
 
 	start := time.Now()
-	if !needRetry {
+	// A deadlock can abort the whole server transaction without invalidating
+	// sql.Tx. Let the stream roll back and replay the unacknowledged range;
+	// retrying only the failed statement can commit incomplete data.
+	if !needRetry || e.tx != nil {
+		if needRetry {
+			if err := checkExecutorStop(ctx, ar); err != nil {
+				return err
+			}
+		}
 		err := execFunc()
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 		return err
 	}
 
 	return e.execWithRetry(ctx, ar, execFunc)
+}
+
+func checkExecutorStop(ctx context.Context, ar *ActiveRoutine) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ar != nil {
+		select {
+		case <-ar.Pause:
+			return moerr.NewInternalError(ctx, "task paused")
+		case <-ar.Cancel:
+			return moerr.NewInternalError(ctx, "task cancelled")
+		default:
+		}
+	}
+	return nil
 }
 
 func (e *Executor) execWithRetry(
@@ -355,20 +380,8 @@ func (e *Executor) execWithRetry(
 	err := policy.Do(ctx, func() error {
 		attempt++
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if ar != nil {
-			select {
-			case <-ar.Pause:
-				return moerr.NewInternalError(ctx, "task paused")
-			case <-ar.Cancel:
-				return moerr.NewInternalError(ctx, "task cancelled")
-			default:
-			}
+		if err := checkExecutorStop(ctx, ar); err != nil {
+			return err
 		}
 
 		if e.retryDuration > 0 && attempt > 1 && time.Since(start) >= e.retryDuration {
@@ -395,7 +408,6 @@ func (e *Executor) execWithRetry(
 			zap.Error(err),
 			zap.String("reason", reason),
 		)
-		v2.CdcMysqlSinkErrorCounter.Inc()
 		v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, reason, "failed").Inc()
 
 		if e.circuitBreaker != nil {
