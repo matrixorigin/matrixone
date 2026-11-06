@@ -51,7 +51,7 @@ run_cmd() {
 
 # The snapshot and edge reads form one statement: 4.2 advances its snapshot
 # between statements even inside a transaction. Writers must still be drained.
-run_cmd mysql "$@" --quick --raw --batch --skip-column-names > "$tmpdir/raw" <<'SQL'
+run_cmd mysql "$@" --quick --raw --batch --skip-column-names --default-character-set=utf8mb4 --skip-force > "$tmpdir/raw" <<'SQL'
 select 'A', cast(current_account_id() as varchar(32)), '{}';
 select 'C', cast(count(*) as varchar(32)), '{}' from mo_catalog.mo_cdc_task;
 select case when s.kind='user' then 'S' else 'X' end, substring(s.sname,13), json_object(
@@ -71,6 +71,7 @@ select 'E', cast(b.table_id as varchar(32)), json_object(
   'clone_ts',cast(b.clone_ts as varchar(32)), 'creator',cast(b.creator as varchar(32)),
   'level',b.level, 'table_deleted',b.table_deleted)
 from mo_catalog.mo_branch_metadata b;
+select 'Z', 'done', '{}';
 SQL
 
 # A successful MySQL result has a complete final line, even for an empty set.
@@ -84,6 +85,8 @@ fi
 run_cmd awk -F '\t' '
         BEGIN { OFS="\t" }
         NF != 3 { print "malformed preflight row" > "/dev/stderr"; exit 1 }
+        ended { print "rows after preflight completion" > "/dev/stderr"; exit 1 }
+        $1 == "Z" { if (++ends != 1 || $2 != "done") exit 1; ended=1; next }
         $1 == "A" { if (++accounts != 1 || $2 != "0") exit 1; next }
         $1 == "C" { if (++counts != 1 || $2 !~ /^[0-9]+$/) exit 1; print $2 > (ENVIRON["MO_CATALOG_PREFLIGHT_TMP"] "/cdc-count"); next }
         $1 == "S" || $1 == "E" {
@@ -93,7 +96,7 @@ run_cmd awk -F '\t' '
             next
         }
         { print "unexpected snapshot kind or preflight tag" > "/dev/stderr"; exit 1 }
-        END { if (accounts != 1 || counts != 1) exit 1 }
+        END { if (accounts != 1 || counts != 1 || ends != 1) exit 1 }
     ' "$tmpdir/raw"
 for input in snapshots edges; do
     run_cmd sort -S 16M --parallel=1 -T "$tmpdir" -t $'\t' -k1,1 "$tmpdir/$input" > "$tmpdir/$input.sorted"

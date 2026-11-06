@@ -70,6 +70,12 @@ class PreflightTest(unittest.TestCase):
             '  eval "printf \'%s\\n\' $$ >&${TEST_READY_FD}"\n'
             '  exec sleep 60\n'
             'fi\n'
+            'if [ "${TEST_MYSQL_FORCE_FAILURE:-0}" = 1 ]; then\n'
+            '  printf "A\\t0\\t{}\\nC\\t0\\t{}\\n"\n'
+            '  for last do :; done\n'
+            '  if [ "$last" = --skip-force ]; then exit 1; fi\n'
+            '  printf "Z\\tdone\\t{}\\n"\nexit 0\n'
+            'fi\n'
             'cat "$TEST_MYSQL_DATA"\nexit "${TEST_MYSQL_EXIT:-0}"\n'
         )
         mysql.chmod(0o700)
@@ -78,8 +84,9 @@ class PreflightTest(unittest.TestCase):
         self.env["TMPDIR"] = str(self.root)
         self.env["TEST_MYSQL_DATA"] = str(self.data)
 
-    def run_export(self, lines, exit_code=0, newline=True):
-        self.data.write_text("\n".join(lines) + ("\n" if newline else ""))
+    def run_export(self, lines, exit_code=0, newline=True, terminal=True):
+        rows = [*lines, "Z\tdone\t{}"] if terminal else lines
+        self.data.write_text("\n".join(rows) + ("\n" if newline else ""))
         self.env["TEST_MYSQL_EXIT"] = str(exit_code)
         return subprocess.run(
             [str(SCRIPT), str(self.output), "--defaults-extra-file=protected.cnf"],
@@ -127,10 +134,19 @@ class PreflightTest(unittest.TestCase):
                 result = self.run_export(lines, exit_code, newline)
                 self.assertNotEqual(0, result.returncode, result.stderr)
                 self.assertFalse(self.output.exists())
+        result = self.run_export(good[:2], terminal=False)
+        self.assertNotEqual(0, result.returncode, "complete-line truncation must be rejected")
+        self.assertFalse(self.output.exists())
         self.output.write_text("keep")
         result = self.run_export(good)
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("keep", self.output.read_text())
+
+    def test_mysql_force_cannot_hide_query_failure(self):
+        self.env["TEST_MYSQL_FORCE_FAILURE"] = "1"
+        result = self.run_export([])
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.output.exists())
 
     def test_cancellation_joins_mysql_and_does_not_publish(self):
         read_fd, write_fd = os.pipe()
