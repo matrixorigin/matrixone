@@ -34,7 +34,7 @@ import (
 )
 
 func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
-	for _, scenario := range []string{"eligible", "unmarked lifetime", "missing scope", "missing original owner", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
+	for _, scenario := range []string{"eligible", "unmarked lifetime", "missing scope", "missing original owner", "other original scan", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
 			switch scenario {
@@ -44,6 +44,8 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				builder.temporalResolverAllowed = false
 			case "missing original owner":
 				builder.temporalOriginalScan = temporalOriginalScan{}
+			case "other original scan":
+				builder.temporalOriginalScan.scanID++
 			case "unproved original owner":
 				scan := builder.qry.Nodes[0]
 				scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
