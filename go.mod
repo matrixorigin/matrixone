@@ -5,7 +5,7 @@ go 1.27.1
 
 require (
 	github.com/BurntSushi/toml v1.2.1
-	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/FastFilter/xorfilter v0.5.1
 	github.com/K-Phoen/grabana v0.21.19
 	github.com/K-Phoen/sdk v0.12.3
@@ -76,7 +76,7 @@ require (
 	github.com/ncruces/go-dns v1.2.5
 	github.com/openacid/slimarray v0.1.3
 	github.com/panjf2000/ants/v2 v2.12.0
-	github.com/parquet-go/parquet-go v0.30.0
+	github.com/parquet-go/parquet-go v0.25.1
 	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/pkg/errors v0.9.1
@@ -243,8 +243,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
-	github.com/parquet-go/bitpack v1.0.0 // indirect
-	github.com/parquet-go/jsonlite v1.0.0 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7 // indirect
@@ -269,7 +267,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
@@ -311,3 +308,5 @@ replace (
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
 
 replace github.com/unum-cloud/usearch/golang => github.com/cpegeric/usearch/golang v0.0.0-20261026183644-b1f5768c8466
+
+replace github.com/parquet-go/parquet-go => ./third_party/parquet-go
