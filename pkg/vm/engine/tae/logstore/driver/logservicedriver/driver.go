@@ -93,7 +93,9 @@ type LogServiceDriver struct {
 	truncateQueue          sm.Queue
 	truncateRetryScheduled atomic.Bool
 
-	closeC chan struct{}
+	closeC         chan struct{}
+	truncateCtx    context.Context
+	cancelTruncate context.CancelFunc
 
 	workers   *ants.Pool
 	closeOnce sync.Once
@@ -105,6 +107,7 @@ type LogServiceDriver struct {
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	start := time.Now()
+	truncateCtx, cancelTruncate := context.WithCancel(context.Background())
 	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
@@ -123,6 +126,8 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
 		closeC:              make(chan struct{}),
+		truncateCtx:         truncateCtx,
+		cancelTruncate:      cancelTruncate,
 		closeTimeout:        defaultDriverCloseTimeout,
 		onAppendFailure: func(err error) {
 			logutil.Fatal(
@@ -160,6 +165,7 @@ func (d *LogServiceDriver) MaxWALRecordSize() int {
 func (d *LogServiceDriver) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closeC)
+		d.cancelTruncate()
 		// The deadline covers intake, worker submission and waiter delivery.  In
 		// particular, it must begin before SafeQueue.Stop: a callback may be
 		// waiting to submit to a saturated worker pool.
@@ -366,30 +372,46 @@ func (d *LogServiceDriver) readFromBackend(
 	}()
 
 	var client *wrappedClient
-	if client, err = d.clientPool.Get(); err != nil {
+	if client, err = d.clientPool.GetContext(ctx); err != nil {
 		return
 	}
 	defer client.Putback()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
+		attemptCtx, cancel := context.WithTimeoutCause(
 			ctx,
 			DefaultOneTryTimeout,
 			moerr.CauseReadFromLogService,
 		)
 
 		if records, nextPSN, err = client.wrapped.Read(
-			ctx, firstPSN, uint64(maxSize),
+			attemptCtx, firstPSN, uint64(maxSize),
 		); err == nil {
 			cancel()
 			break
 		}
 		cancel()
 		retryTimes++
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
 		if time.Since(t0) > d.config.MaxTimeout {
 			break
 		}
-		time.Sleep(d.config.RetryInterval(retryTimes))
+		timer := time.NewTimer(d.config.RetryInterval(retryTimes))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+			return
+		}
+		timer.Stop()
 	}
 
 	return

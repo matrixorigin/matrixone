@@ -108,7 +108,7 @@ func (d *LogServiceDriver) doTruncate() {
 		psnTruncated uint64
 	)
 	if psnTruncated, err = d.truncateFromRemote(
-		context.Background(),
+		d.truncateCtx,
 		psnIntent,
 		dsnIntent,
 		10,
@@ -119,7 +119,7 @@ func (d *LogServiceDriver) doTruncate() {
 			zap.Uint64("psn-intent", psnIntent),
 			zap.Error(err),
 		)
-		if err != ErrClientPoolClosed {
+		if err != ErrClientPoolClosed && d.truncateCtx.Err() == nil {
 			d.scheduleTruncateRetry()
 		}
 		return
@@ -191,12 +191,16 @@ func (d *LogServiceDriver) truncateFromRemote(
 		)
 	}()
 
-	if client, err = d.clientPool.GetOnFly(); err != nil {
+	if client, err = d.clientPool.GetOnFlyContext(ctx); err != nil {
 		return
 	}
 	defer client.Putback()
 
 	for ; retryTimes < maxRetry+1; retryTimes++ {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			return
+		}
 		var (
 			cancel  context.CancelFunc
 			loopCtx context.Context
@@ -252,7 +256,7 @@ func (d *LogServiceDriver) getWALTruncateFromBackend(
 			zap.Int("retry-times", retryTimes), zap.Error(err),
 			zap.Duration("duration", time.Since(start)))
 	}()
-	if client, err = d.clientPool.Get(); err != nil {
+	if client, err = d.clientPool.GetContext(ctx); err != nil {
 		return
 	}
 	defer client.Putback()

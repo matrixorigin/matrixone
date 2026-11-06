@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	walentry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -100,6 +101,52 @@ func TestTruncateOnFlyClientFactoryErrorCanRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), psn)
 	require.Equal(t, uint64(1), checkpointedDSN)
+}
+
+type cancelTruncateClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   *atomic.Int32
+}
+
+func (c *cancelTruncateClient) TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestCloseCancelsCheckpointTruncate(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	var calls atomic.Int32
+	cfg := NewConfig("", WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(3*time.Second),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			return &cancelTruncateClient{
+				mockBackendClient: newMockBackendClient(backend),
+				started:           started,
+				calls:             &calls,
+			}, nil
+		}))
+	d := NewLogServiceDriver(&cfg)
+	d.replayState.Store(newReplayState(true, nil, driver.ReplayMode_ReplayForWrite, nil))
+	d.recordSequenceNumbers(1, common.ClosedInterval{Start: 1, End: 1})
+	require.NoError(t, d.Truncate(1))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint Truncate did not reach LogService")
+	}
+	result := make(chan error, 1)
+	go func() { result <- d.Close() }()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for the Truncate retry budget after shutdown")
+	}
+	require.EqualValues(t, 1, calls.Load())
 }
 
 type blockingBackendClient struct {
