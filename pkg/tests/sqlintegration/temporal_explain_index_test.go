@@ -82,8 +82,10 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		plain, analyzed := explain("explain ", query), explain("explain analyze ", query)
 		require.Contains(t, analyzed, "Index Table Scan on events.idx_d", analyzed)
 		require.Contains(t, plain, "Index Table Scan on events.idx_d", plain)
-		readIDs := func(tb testing.TB, rows *sql.Rows) map[int64]string {
+		readIDs := func(tb testing.TB, query func() (*sql.Rows, error)) map[int64]string {
 			tb.Helper()
+			rows, err := query()
+			require.NoError(tb, err)
 			defer rows.Close()
 			columns, err := rows.Columns()
 			require.NoError(tb, err)
@@ -105,9 +107,7 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		}
 		idsWith := func(tb testing.TB, query string) map[int64]string {
 			tb.Helper()
-			rows, err := conn.QueryContext(ctx, query)
-			require.NoError(tb, err)
-			return readIDs(tb, rows)
+			return readIDs(tb, func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) })
 		}
 		ids := func(query string) map[int64]string { return idsWith(t, query) }
 		// TIMESTAMP literals are folded in the session zone. A cached ordinary
@@ -251,9 +251,7 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		defer binaryPrepared.Close()
 		binaryIDs := func() map[int64]string {
 			t.Helper()
-			rows, err := binaryPrepared.QueryContext(ctx, int64(0))
-			require.NoError(t, err)
-			return readIDs(t, rows)
+			return readIDs(t, func() (*sql.Rows, error) { return binaryPrepared.QueryContext(ctx, int64(0)) })
 		}
 		require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), binaryIDs())
 		exec("create table unrelated_ddl(id int)")
@@ -306,9 +304,7 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		readerPrepared, err := reader.PrepareContext(ctx, "select id,d from "+schema+".events where d > now(6) and id >= ?")
 		require.NoError(t, err)
 		defer readerPrepared.Close()
-		preparedRows, err := readerPrepared.QueryContext(ctx, int64(0))
-		require.NoError(t, err)
-		require.Equal(t, expected, readIDs(t, preparedRows))
+		require.Equal(t, expected, readIDs(t, func() (*sql.Rows, error) { return readerPrepared.QueryContext(ctx, int64(0)) }))
 		exec("revoke select on table " + schema + ".events from " + role)
 		rows, err := reader.QueryContext(ctx, "explain select id,d from "+schema+".events where d > now(6)")
 		if rows != nil {
