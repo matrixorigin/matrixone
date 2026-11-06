@@ -2103,4 +2103,49 @@ constraint violation: Column 'v' cannot be null
 select count(*) from coalesce_random;
 ➤ count(*)[-5,64,0]  𝄀
 2
+select random_bytes(cast(0 as signed)) as v, count(*) as c from l group by random_bytes(cast(0 as signed));
+➤ v[12,0,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  2
+select distinct random_bytes(cast(0 as signed)) as v from l;
+➤ v[12,0,0]  𝄀
+null
+select random_bytes(cast(0 as unsigned)) as v, count(*) as c from l group by random_bytes(cast(0 as unsigned));
+➤ v[12,0,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  2
+select distinct random_bytes(cast(0 as unsigned)) as v from l;
+➤ v[12,0,0]  𝄀
+null
+select random_bytes(cast(1025 as signed)) as v, count(*) as c from l group by random_bytes(cast(1025 as signed));
+➤ v[12,0,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  2
+select distinct random_bytes(cast(1025 as signed)) as v from l;
+➤ v[12,0,0]  𝄀
+null
+select random_bytes(cast(1025 as unsigned)) as v, count(*) as c from l group by random_bytes(cast(1025 as unsigned));
+➤ v[12,0,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  2
+select distinct random_bytes(cast(1025 as unsigned)) as v from l;
+➤ v[12,0,0]  𝄀
+null
+select count(random_bytes(0)) as non_null_count, count(*) as all_rows from l;
+➤ non_null_count[-5,64,0]  ¦  all_rows[-5,64,0]  𝄀
+0  ¦  2
+select count(*) from l where random_bytes(0) is null;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from l where random_bytes(0) is not null;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table random_null_result as select random_bytes(0) as v from l;
+select v from random_null_result;
+➤ v[12,0,0]  𝄀
+null  𝄀
+null
+select is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='random_null_result' and column_name='v';
+➤ is_nullable[12,-1,0]  𝄀
+YES
+insert into random_null_result values(null);
+select count(*) as all_rows, count(v) as non_null_count from random_null_result;
+➤ all_rows[-5,64,0]  ¦  non_null_count[-5,64,0]  𝄀
+3  ¦  0
 drop database ctas_output_nullability;

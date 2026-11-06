@@ -412,6 +412,45 @@ func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
+func TestRandomBytesNullabilityContract(t *testing.T) {
+	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			input := vector.NewVec(typ.ToType())
+			t.Cleanup(func() { input.Free(proc.Mp()) })
+			if typ == types.T_int64 {
+				require.NoError(t, vector.AppendFixedList(input, []int64{0, 1025, -1}, nil, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixedList(input, []uint64{0, 1025, ^uint64(0)}, nil, proc.Mp()))
+			}
+			fn, err := GetFunctionByName(proc.Ctx, "random_bytes", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 3)
+			require.NoError(t, err)
+			t.Cleanup(func() { result.Free(proc.Mp()) })
+			require.Equal(t, 3, result.Length())
+			require.False(t, result.IsConst(), "keep volatile evaluation")
+			for row := uint64(0); row < 3; row++ {
+				require.True(t, result.IsNull(row), "invalid non-NULL lengths produce NULL")
+			}
+			for _, nonNullInput := range []bool{true, false} {
+				args := []*plan.Expr{{Typ: plan.Type{Id: int32(typ), NotNullable: nonNullInput}}}
+				require.False(t, DeduceNotNullable(fn.GetEncodedOverloadID(), args),
+					"output nullability must not be inferred solely from argument nullability")
+			}
+		})
+	}
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}},
+		{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}},
+	}
+	require.True(t, DeduceNotNullable(AndFunctionEncodedID, args))
+	args[0].Typ.NotNullable = false
+	require.False(t, DeduceNotNullable(AndFunctionEncodedID, args))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(ISNULL, 0), args[:1]))
+}
+
 func TestRunRandomBytesDirectlyPreservesVolatility(t *testing.T) {
 	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
 		for _, constant := range []bool{false, true} {

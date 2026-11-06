@@ -1503,4 +1503,22 @@ select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random
 select count(*) as row_count, count(*) > count(v) as has_null from ifnull_random_constant;
 insert into coalesce_random values(null);
 select count(*) from coalesce_random;
+
+-- Invalid non-NULL lengths produce NULL: grouping and DISTINCT must keep it.
+select random_bytes(cast(0 as signed)) as v, count(*) as c from l group by random_bytes(cast(0 as signed));
+select distinct random_bytes(cast(0 as signed)) as v from l;
+select random_bytes(cast(0 as unsigned)) as v, count(*) as c from l group by random_bytes(cast(0 as unsigned));
+select distinct random_bytes(cast(0 as unsigned)) as v from l;
+select random_bytes(cast(1025 as signed)) as v, count(*) as c from l group by random_bytes(cast(1025 as signed));
+select distinct random_bytes(cast(1025 as signed)) as v from l;
+select random_bytes(cast(1025 as unsigned)) as v, count(*) as c from l group by random_bytes(cast(1025 as unsigned));
+select distinct random_bytes(cast(1025 as unsigned)) as v from l;
+select count(random_bytes(0)) as non_null_count, count(*) as all_rows from l;
+select count(*) from l where random_bytes(0) is null;
+select count(*) from l where random_bytes(0) is not null;
+create table random_null_result as select random_bytes(0) as v from l;
+select v from random_null_result;
+select is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='random_null_result' and column_name='v';
+insert into random_null_result values(null);
+select count(*) as all_rows, count(v) as non_null_count from random_null_result;
 drop database ctas_output_nullability;

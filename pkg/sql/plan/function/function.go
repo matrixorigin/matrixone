@@ -255,6 +255,10 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	// A NULL-producing function can return NULL even for non-NULL inputs.
+	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NULL) {
+		return false
+	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}

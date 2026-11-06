@@ -3224,7 +3224,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// random_bytes
 	{
 		functionId: RANDOM_BYTES,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
