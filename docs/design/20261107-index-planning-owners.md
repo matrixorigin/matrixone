@@ -39,6 +39,7 @@ is introduced.
 
 | Guarantee | Current duplication | Existing owner after this change |
 | --- | --- | --- |
+| Retain execution-context expressions before folding | Function-ID checks repeated in both generic folders and constant-purpose classification | Existing function registry declares a runtime-evaluation boundary for the two actual internal endpoint families. Generic folders, constant analysis and runtime-tree consumers use that semantic fact; delete the temporal-ID classifier. |
 | Transaction/workspace/snapshot/visibility identity | `engine.TemporalRead` wraps `client.CatalogReadStamp`; frontend, view provider and disttae repeat comparisons | Bind the actual caller operator and sampled visibility to `client.CatalogReadStamp`; its matching methods implement shared identity comparisons. Delete `TemporalRead`. |
 | Ordinary descriptor and borrowed relation came from one authorized lookup | Separate `BorrowingTableResolver`, frontend injection, `ResolveBaseForPlanning` and `ResolveIndexForPlanning` | Optional caller-owned `TableResolution` output on ordinary `CompilerContext.Resolve` and `ResolveIndexTableByRef`. Delete the richer interface, both side-entry methods and resolver injection. |
 | Statement/context and placement still match | Temporal intent/input types and scheduling wrapper | One execution intent passed through the existing root builder/frontend/compile attempt, with placement checked by the existing scheduler. Delete the temporal scheduling type and temporal-only input route names. |
@@ -53,6 +54,26 @@ Copied index statistics, index-pair/schema witnesses and their fixed budgets
 are exposed as the existing relation's `IndexPlanningRelation` capability.
 They carry no temporal control state. The block-observation request retains
 its temporal operator/precision/zone because those are actual predicate inputs.
+
+## Function-owned evaluation boundaries
+
+The two internal endpoint families must remain executable, including their
+arguments, until the current reader/execution context exists. Value stability
+and the existing real-time flag do not express that subtree boundary: NOW can
+fold at a statement boundary, while folding an endpoint's children early would
+capture an earlier execution value. Preserve both current behaviors.
+
+Declare the missing `runtimeOnly` fact on the existing function registration,
+only for those two actual endpoint families. Both generic folding engines stop
+at that boundary; the existing constant-purpose owner denies plan/fold-candidate
+classification but still proves runtime constancy from the ordinary overload
+and argument rules. Runtime-bound-tree observation derives from the same
+registration. Delete `IsTemporalBoundFunction`, `ContainsTemporalBound`, and
+their per-ID folding branches without aliases. This adds no evaluator, cache,
+registry, dynamic flag or broader admission. A function-family boundary retains
+its existing malformed-overload behavior; unknown unrelated functions keep the
+normal lookup/error policy. CASE/ELT laziness, diagnostics and prepared source
+rules remain independent existing contracts.
 
 ## Read identity
 
