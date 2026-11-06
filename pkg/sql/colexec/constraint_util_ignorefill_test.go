@@ -112,6 +112,18 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 
 	floatVec := vector.NewVec(types.T_float64.ToType())
 	fixedPair(floatVec, float64(3))
+	// The low-precision float family stores +0 as all-zero bits, so the
+	// implicit default of each is the zero of its Go type; kept values stay
+	// exactly representable per format (bf16 2, float16 3, float8 4,
+	// float4 6 is the largest finite float4 magnitude).
+	bf16Vec := vector.NewVec(types.T_bf16.ToType())
+	fixedPair(bf16Vec, types.BF16FromFloat32(2))
+	f16Vec := vector.NewVec(types.T_float16.ToType())
+	fixedPair(f16Vec, types.Float16FromFloat32(3))
+	f8Vec := vector.NewVec(types.T_float8.ToType())
+	fixedPair(f8Vec, types.Float8FromFloat32(4))
+	f4Vec := vector.NewVec(types.T_float4.ToType())
+	fixedPair(f4Vec, types.Float4FromFloat32(6))
 	decVec := vector.NewVec(types.T_decimal64.ToType())
 	fixedPair(decVec, types.Decimal64(3))
 	boolVec := vector.NewVec(types.T_bool.ToType())
@@ -151,18 +163,24 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 	require.NoError(t, vector.AppendAny(jsonVec, nil, true, mp))
 
 	vecs := []*vector.Vector{
-		intVec, floatVec, decVec, boolVec, bitVec,
+		intVec, floatVec, bf16Vec, f16Vec, f8Vec, f4Vec,
+		decVec, boolVec, bitVec,
 		dateVec, datetimeVec, timeVec, timestampVec, yearVec,
 		enumVec, uuidVec, varcharVec, jsonVec,
 	}
 	attrs := []string{
-		"i", "f", "de", "b", "bit",
+		"i", "f", "bf", "f16", "f8", "f4",
+		"de", "b", "bit",
 		"d", "dt", "tm", "ts", "y",
 		"e", "u", "s", "j",
 	}
 	cols := []*plan.ColDef{
 		notNullCol("i", types.T_int32),
 		notNullCol("f", types.T_float64),
+		notNullCol("bf", types.T_bf16),
+		notNullCol("f16", types.T_float16),
+		notNullCol("f8", types.T_float8),
+		notNullCol("f4", types.T_float4),
 		notNullCol("de", types.T_decimal64),
 		notNullCol("b", types.T_bool),
 		notNullCol("bit", types.T_bit),
@@ -179,7 +197,7 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 
 	filled, err := BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc)
 	require.NoError(t, err)
-	require.Len(t, filled, 14)
+	require.Len(t, filled, 18)
 	for _, vec := range vecs {
 		require.False(t, vec.GetNulls().Contains(0) || vec.GetNulls().Contains(1),
 			"adjusted vector still has NULLs")
@@ -191,6 +209,14 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		"the NULL cell was adjusted to the implicit default")
 	require.Equal(t, float64(3), vector.GetFixedAtNoTypeCheck[float64](floatVec, 0))
 	require.Equal(t, float64(0), vector.GetFixedAtNoTypeCheck[float64](floatVec, 1))
+	require.Equal(t, types.BF16FromFloat32(2), vector.GetFixedAtNoTypeCheck[types.BF16](bf16Vec, 0))
+	require.Equal(t, types.BF16(0), vector.GetFixedAtNoTypeCheck[types.BF16](bf16Vec, 1))
+	require.Equal(t, types.Float16FromFloat32(3), vector.GetFixedAtNoTypeCheck[types.Float16](f16Vec, 0))
+	require.Equal(t, types.Float16(0), vector.GetFixedAtNoTypeCheck[types.Float16](f16Vec, 1))
+	require.Equal(t, types.Float8FromFloat32(4), vector.GetFixedAtNoTypeCheck[types.Float8](f8Vec, 0))
+	require.Equal(t, types.Float8(0), vector.GetFixedAtNoTypeCheck[types.Float8](f8Vec, 1))
+	require.Equal(t, types.Float4FromFloat32(6), vector.GetFixedAtNoTypeCheck[types.Float4](f4Vec, 0))
+	require.Equal(t, types.Float4(0), vector.GetFixedAtNoTypeCheck[types.Float4](f4Vec, 1))
 	require.Equal(t, types.Decimal64(3), vector.GetFixedAtNoTypeCheck[types.Decimal64](decVec, 0))
 	require.Equal(t, types.Decimal64(0), vector.GetFixedAtNoTypeCheck[types.Decimal64](decVec, 1))
 	require.Equal(t, true, vector.GetFixedAtNoTypeCheck[bool](boolVec, 0))
@@ -219,10 +245,10 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		"the NULL cell was adjusted to the JSON null literal")
 
 	// One warning per adjusted cell, with the MySQL ER_BAD_NULL_ERROR message.
-	// The uuid vector contributes two NULL cells, so the batch total is 15
-	// adjusted cells across the 14 columns.
-	require.Equal(t, uint64(15), session.total)
-	require.Len(t, session.warnings, 15)
+	// The uuid vector contributes two NULL cells, so the batch total is 19
+	// adjusted cells across the 18 columns.
+	require.Equal(t, uint64(19), session.total)
+	require.Len(t, session.warnings, 19)
 	for _, warn := range session.warnings {
 		require.Equal(t, moerr.ER_BAD_NULL_ERROR, warn.code)
 	}

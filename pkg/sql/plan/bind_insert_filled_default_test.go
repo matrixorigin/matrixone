@@ -49,6 +49,13 @@ func TestImplicitFilledChildDefaultExprMirrorsRuntimeFill(t *testing.T) {
 		{Id: int32(types.T_uint64)},
 		{Id: int32(types.T_float32)},
 		{Id: int32(types.T_float64)},
+		// The low-precision float families are the float types the runtime
+		// fill also covers (+0, all-zero bits), mirrored as float32(0)
+		// assignment-cast to the column type.
+		{Id: int32(types.T_bf16)},
+		{Id: int32(types.T_float16)},
+		{Id: int32(types.T_float8)},
+		{Id: int32(types.T_float4)},
 		decimal,
 		{Id: int32(types.T_date)},
 		{Id: int32(types.T_datetime)},

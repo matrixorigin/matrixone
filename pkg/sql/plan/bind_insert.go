@@ -1815,6 +1815,19 @@ func implicitFilledChildDefaultExpr(ctx context.Context, typ plan.Type) (*plan.E
 		return result(makePlan2Float32ConstExprWithType(0))
 	case types.T_float64:
 		return result(makePlan2Float64ConstExprWithType(0))
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// The runtime fill stores all-zero bits, +0 (code 0 in every
+		// low-precision format); mirror it as float32(0) assignment-cast
+		// to the column type, the same shape the decimal families use.
+		// When this plan cannot build the cast the write side still fills
+		// the cell, so the fill is unmirrored (the foreign-key existence
+		// check sees the raw NULL and skips the row), not rejected.
+		zero := makePlan2Float32ConstExprWithType(0)
+		cast, err := makePlan2AssignmentCastExpr(ctx, zero, typ)
+		if err != nil {
+			return nil, implicitFillUnmirrored
+		}
+		return result(cast)
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		zero, err := makePlan2DecimalExprWithType(ctx, "0", false)
 		if err != nil {

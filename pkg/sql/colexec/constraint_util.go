@@ -166,6 +166,14 @@ func setImplicitNotNullDefault(vec *vector.Vector, slot int, mp *mpool.MPool) (b
 		return true, vector.SetFixedAtWithTypeCheck(vec, slot, float32(0))
 	case types.T_float64:
 		return true, vector.SetFixedAtWithTypeCheck(vec, slot, float64(0))
+	case types.T_bf16:
+		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.BF16(0))
+	case types.T_float16:
+		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.Float16(0))
+	case types.T_float8:
+		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.Float8(0))
+	case types.T_float4:
+		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.Float4(0))
 	case types.T_decimal64:
 		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.Decimal64(0))
 	case types.T_decimal128:
