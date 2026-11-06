@@ -387,6 +387,8 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
+	primaryAffected := alterColumnIsPrimary(tableDef, column)
+
 	// We only support dropping column with single-value none Primary Key index covered now.
 	if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
 		return column.Primary, err
@@ -416,7 +418,7 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return primaryAffected, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
@@ -499,7 +501,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 }
 
 func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {
-	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tbInfo.Pkey == nil || tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
 		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {

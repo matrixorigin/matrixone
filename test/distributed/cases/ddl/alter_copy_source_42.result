@@ -1,0 +1,61 @@
+drop database if exists alter_copy_source_42;
+create database alter_copy_source_42;
+use alter_copy_source_42;
+create table plain (id int primary key, v int);
+insert into plain values (1,10),(2,20);
+alter table plain drop column v, add column v int default 7;
+select * from plain order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7
+create table u (id int primary key, v int, unique key uv(v));
+insert into u values (1,10),(2,20);
+alter table u drop column v, add column v int default 7 unique, modify column v int default 7;
+Duplicate entry '7' for key 'v'
+show create table u;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uv` (`v`)
+)
+select * from u force index(uv) order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+insert into u values (3,30);
+select * from u ignore index(uv) order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+create table renamed (id int primary key, v int);
+insert into renamed values (1,10),(2,20);
+alter table renamed drop column v, add column v int default 7, change column v w int default 7;
+select * from renamed order by id;
+➤ id[4,32,0]  ¦  w[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7
+create table p (id int primary key, v int);
+insert into p values (1,10),(2,20);
+alter table p drop primary key, drop column id, add column id int default 8, add primary key(id);
+Duplicate entry '8' for key 'id'
+show create table p;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+p  ¦  CREATE TABLE `p` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select * from p order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+insert into p values (3,30);
+select * from p order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+drop database alter_copy_source_42;

@@ -25,6 +25,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// alterColumnIsPrimary identifies logical members, including composite primary keys.
+func alterColumnIsPrimary(tableDef *TableDef, col *ColDef) bool {
+	if col.Primary {
+		return true
+	}
+	if tableDef.Pkey != nil {
+		for _, name := range tableDef.Pkey.Names {
+			if strings.EqualFold(name, col.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func updateNewColumnInTableDef(
 	cctx CompilerContext,
 	tableDef *TableDef,
@@ -33,6 +48,7 @@ func updateNewColumnInTableDef(
 	nPos *tree.ColumnPosition,
 ) (bool, error) {
 	ctx := cctx.GetContext()
+	primaryAffected := alterColumnIsPrimary(tableDef, oCol)
 
 	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
 	if err != nil {
@@ -65,7 +81,7 @@ func updateNewColumnInTableDef(
 		return false, err
 	}
 
-	return nCol.Primary, nil
+	return primaryAffected || alterColumnIsPrimary(tableDef, nCol), nil
 
 }
 
@@ -101,11 +117,6 @@ func ModifyColumn(
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
-	}
-
-	alterCtx.alterColMap[nColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oCol.Name,
 	}
 
 	return pkAffected, nil

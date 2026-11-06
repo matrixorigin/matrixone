@@ -967,8 +967,8 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 		},
 		{
 			name: "same primary key names skip dedup",
-			old:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
-			new:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
+			old:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}, Cols: []*ColDef{{Name: "id"}}},
+			new:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}, Cols: []*ColDef{{Name: "id"}}},
 			want: true,
 		},
 		{
@@ -981,7 +981,7 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new))
+			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new, map[string]selectExpr{"id": {sexprType: exprColumnName, sexprStr: "id"}}))
 		})
 	}
 }
