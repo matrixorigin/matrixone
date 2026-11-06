@@ -98,6 +98,80 @@ func Test_MockBackend1(t *testing.T) {
 	assert.Equal(t, 3, len(loaded))
 }
 
+type failFirstTruncatedLsnClient struct {
+	*mockBackendClient
+	calls atomic.Int32
+}
+
+func (c *failFirstTruncatedLsnClient) GetTruncatedLsn(ctx context.Context) (uint64, error) {
+	if c.calls.Add(1) == 1 {
+		return 0, errors.New("transient watermark read failure")
+	}
+	return c.mockBackendClient.GetTruncatedLsn(ctx)
+}
+
+func TestReplayForWriteRetriesTruncatedLsnWithLiveContext(t *testing.T) {
+	backend := NewMockBackend()
+	client := &failFirstTruncatedLsnClient{mockBackendClient: newMockBackendClient(backend)}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := d.Replay(ctx, func(*entry.Entry) storeDriver.ReplayEntryState {
+		return storeDriver.RE_Nomal
+	}, func() storeDriver.ReplayMode {
+		return storeDriver.ReplayMode_ReplayForWrite
+	}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, client.calls.Load())
+}
+
+type cancelTruncatedLsnClient struct {
+	*mockBackendClient
+	started chan struct{}
+	calls   atomic.Int32
+}
+
+func (c *cancelTruncatedLsnClient) GetTruncatedLsn(ctx context.Context) (uint64, error) {
+	if c.calls.Add(1) == 1 {
+		close(c.started)
+		<-ctx.Done()
+	}
+	return 0, ctx.Err()
+}
+
+func TestGetTruncatedPSNStopsOnCallerCancellation(t *testing.T) {
+	client := &cancelTruncatedLsnClient{
+		mockBackendClient: newMockBackendClient(NewMockBackend()),
+		started:           make(chan struct{}),
+	}
+	cfg := NewConfig("", WithConfigOptClientFactory(func() (logservice.Client, error) {
+		return client, nil
+	}), WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := d.getTruncatedPSNFromBackend(ctx)
+		result <- err
+	}()
+	<-client.started
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("watermark retry ignored caller cancellation")
+	}
+	require.EqualValues(t, 1, client.calls.Load())
+}
+
 func Test_AppendSkipCmd(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()

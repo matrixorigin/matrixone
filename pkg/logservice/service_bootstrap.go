@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
@@ -57,17 +58,21 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	if !bootstrapping {
 		return nil
 	}
-	// Honor the decision that startReplicas's membership self-check already
-	// made. If (HAKeeperShardID, replicaID) has been classified as a zombie
-	// -- i.e. the authoritative peer view no longer lists this replica in
-	// shard 0 membership -- bootstrap must not recreate it. Starting it here
-	// would undo the skip and resurrect the exact zombie startReplicas
-	// avoided. The existing HAKeeper L/Add -> L/Kill -> L/Start recovery
-	// flow remains authoritative; once HAKeeper has a leader it will
-	// re-add this store with a fresh replicaID.
+	// A persisted replacement is already running. The configured initial
+	// replica ID must not be replayed even when its old metadata was removed.
+	if active := atomic.LoadUint64(&s.store.haKeeperReplicaID); active != 0 && active != replicaID {
+		s.runtime.SubLogger(runtime.SystemInit).Info(
+			"BootstrapHAKeeper: keeping persisted replacement replica",
+			zap.Uint64("activeReplicaID", active),
+			zap.Uint64("initialReplicaID", replicaID))
+		return nil
+	}
+	// Honor startReplicas's decision to skip a removed replica or an older
+	// local HAKeeper ID superseded by a newer one. Replaying the configured
+	// initial ID would undo that selection during a cold restart.
 	if s.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, replicaID) {
 		s.runtime.SubLogger(runtime.SystemInit).Warn(
-			"BootstrapHAKeeper: skipping zombie replica, deferring to HAKeeper recovery",
+			"BootstrapHAKeeper: skipping removed or superseded replica",
 			zap.Uint64("shardID", hakeeper.DefaultHAKeeperShardID),
 			zap.Uint64("replicaID", replicaID))
 		return nil

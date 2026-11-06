@@ -388,7 +388,7 @@ Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦  
 select routine_name, routine_type from procs_priv limit 5;
 ➤ routine_name[1,64,0]  ¦  routine_type[12,10,0]
 desc columns_priv;
@@ -398,7 +398,7 @@ Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 select table_name, column_name from columns_priv limit 5;
 ➤ table_name[1,64,0]  ¦  column_name[1,64,0]
@@ -409,7 +409,7 @@ Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 select host, table_name from tables_priv limit 5;

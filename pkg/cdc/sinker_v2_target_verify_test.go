@@ -47,6 +47,12 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 		{"production driver communication timeout", &mysql.MySQLError{Number: 1159}, true},
 		{"production driver MO RPC timeout", &mysql.MySQLError{Number: moerr.ErrRPCTimeout}, true},
 		{"production driver lock bind changed", &mysql.MySQLError{Number: moerr.ErrLockTableBindChanged}, true},
+		{"native deadlock", moerr.NewDeadLockDetectedNoCtx(), true},
+		{"production driver MO deadlock", &mysql.MySQLError{Number: moerr.ErrDeadLockDetected}, true},
+		{"upstream driver MO deadlock", &gomysql.MySQLError{Number: moerr.ErrDeadLockDetected}, true},
+		{"cancelled deadlock", errors.Join(context.Canceled, moerr.NewDeadLockDetectedNoCtx()), false},
+		{"obsolete owner deadlock", errors.Join(&OwnerFenceLostError{}, moerr.NewDeadLockDetectedNoCtx()), false},
+		{"untyped deadlock", errors.New("deadlock detected"), false},
 		{"wrapped production driver timeout", fmt.Errorf("target: %w", &mysql.MySQLError{Number: 1161}), true},
 		{"production driver syntax error", &mysql.MySQLError{Number: 1064}, false},
 		{"production driver permission denied", &mysql.MySQLError{Number: 1142}, false},
@@ -80,17 +86,18 @@ func TestCDCBackendTransportEquivalence(t *testing.T) {
 		moerr.NewNoAvailableBackend(ctx), moerr.NewBackendCannotConnect(ctx),
 		moerr.NewTNShardNotFound(ctx, "shard", 1), moerr.NewRpcError(ctx, "temporary"),
 		moerr.NewTxnNeedRetryNoCtx(), moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
-		moerr.NewLockTableBindChangedNoCtx(),
+		moerr.NewLockTableBindChangedNoCtx(), moerr.NewDeadLockDetectedNoCtx(),
 		moerr.NewClientClosed(ctx), moerr.NewStreamClosed(ctx),
 	} {
 		t.Run(fmt.Sprint(cause.ErrorCode()), func(t *testing.T) {
 			want := cause.ErrorCode() != moerr.ErrClientClosed && cause.ErrorCode() != moerr.ErrStreamClosed
 			for _, err := range []error{cause, &gomysql.MySQLError{Number: cause.ErrorCode()}, &mysql.MySQLError{Number: cause.ErrorCode()}} {
-				err = fmt.Errorf("backend: %w", err)
-				retryable, classified := ClassifyRetryableError(err)
-				require.True(t, classified)
-				require.Equal(t, want, retryable)
-				require.Equal(t, want, (&TableChangeStream{}).determineRetryable(err))
+				for _, err := range []error{err, fmt.Errorf("backend: %w", err)} {
+					retryable, classified := ClassifyRetryableError(err)
+					require.True(t, classified)
+					require.Equal(t, want, retryable)
+					require.Equal(t, want, (&TableChangeStream{}).determineRetryable(err))
+				}
 			}
 		})
 	}
