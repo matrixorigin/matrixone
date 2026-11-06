@@ -31,6 +31,9 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults": {"collation_revision": 6},
 		"ColDef":           {"result_column_kind": 23},
+		"Type":             {"numeric_attributes": 14},
+		"UpdateCtx":        {"partition_index_ctx": 20},
+		"PreInsertCtx":     {"preserve_input": 18},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {
@@ -48,6 +51,26 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		delete(want, message.GetName())
 	}
 	require.Empty(t, want, "missing merged message descriptors")
+}
+
+func TestPlanConflictFieldsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name     string
+		original proto.Message
+		decoded  proto.Message
+	}{
+		{"numeric attributes", &Type{NumericAttributes: 3}, &Type{}},
+		{"partition index context", &UpdateCtx{PartitionIndexCtx: &PartitionIndexCtx{}}, &UpdateCtx{}},
+		{"preserve input", &PreInsertCtx{PreserveInput: true}, &PreInsertCtx{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := proto.Marshal(test.original)
+			require.NoError(t, err)
+			require.NoError(t, proto.Unmarshal(encoded, test.decoded))
+			require.True(t, proto.Equal(test.original, test.decoded))
+		})
+	}
 }
 
 func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {

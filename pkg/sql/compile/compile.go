@@ -1420,8 +1420,11 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = vectorQueryExecType(sequenceExecType(
-		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	execType := plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
+	if multi_update.ReceivingCNProbeEnabled && multi_update.ReceivingCNForceMultiCN(c.proc) {
+		execType = plan2.ExecTypeAP_MULTICN
+	}
+	c.execType = vectorQueryExecType(sequenceExecType(execType, qry), qry)
 	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
 		c.execType = plan2.ExecTypeAP_ONECN
 	}
@@ -6768,6 +6771,11 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 		return c.compileBroadcastAsofBuildLeft(node, left, right, probeScopes, buildScopes)
 	}
+	// The acceptance-only hook is a no-op in ordinary builds and is admitted
+	// only for the isolated fixture transaction and its posting-index join.
+	if multi_update.ReceivingCNProbeEnabled {
+		multi_update.ReceivingCNForcePostingShuffle(c.proc, node, left, right, c.anal.qry)
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -9627,6 +9635,9 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
+	if multi_update.ReceivingCNProbeEnabled {
+		multi_update.ObserveReceivingCNCompile(c.proc, node.Stats.GetOutcnt(), toWriteS3)
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {

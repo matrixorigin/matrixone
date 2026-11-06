@@ -180,7 +180,11 @@ func TestBigDataBulkWriteAndPrimaryKeyCopyPreserveRows(t *testing.T) {
 			column := "`" + catalog.FakePrimaryKeyColName + "`"
 			execSQLRequire(t, ctx, creator, "create table "+userTable+" ("+column+" bigint unsigned auto_increment primary key, payload varchar(24))")
 			waitCrossCN(t, 0, 1)
-			execSQLRequire(t, ctx, writer, "insert into "+userTable+" (payload) values ('one'),('two'),('three')")
+			inserted, err := writer.ExecContext(ctx, "insert into "+userTable+" (payload) values ('one'),('two'),('three')")
+			require.NoError(t, err)
+			affected, err := inserted.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(3), affected)
 			waitCrossCN(t, 1, 0)
 			var count, distinct int
 			var minID, maxID, total sql.Null[uint64]
