@@ -121,6 +121,19 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "coalesce(mo_view_check_option(tbl.viewdef), 'NONE')")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
+	// issue #31927: outer joins keep one row per ordinary base table (with
+	// NULL partition fields) and one per physical partition; the joined rows
+	// are guarded against partition sub-tables, views, sequences, temporary
+	// tables and internal index tables; stats resolve to the real base or
+	// physical partition identity exactly once per row.
+	assert.Contains(t, InformationSchemaPartitionsDDL, "LEFT JOIN `mo_catalog`.`mo_partition_metadata` `meta`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "LEFT JOIN `mo_catalog`.`mo_partition_tables` `pt`")
+	assert.NotContains(t, InformationSchemaPartitionsDDL, "INNER JOIN")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND NOT startswith(`tbl`.`relname`, '__mo_index_')")
+	assert.NotContains(t, InformationSchemaPartitionsDDL, "NOT LIKE '__mo_index_%'")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND `tbl`.`relkind` NOT IN ('partition', 'v', 'S')")
 	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
 	assert.Contains(t, InformationSchemaSchemataDDL, "cast(NULL as char(0)) AS SQL_PATH")
 	assert.Contains(t, InformationSchemaSchemataDDL, "db.owner IN (SELECT role_id FROM __mo_active_roles)")

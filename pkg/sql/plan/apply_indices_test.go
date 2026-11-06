@@ -6862,6 +6862,98 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForFloatSortKey(t *testing.T
 	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
+func TestEncodedOrderMatchesSQLOrderCaseInsensitiveCollation(t *testing.T) {
+	colExpr := func(typ planpb.Type) *planpb.Expr {
+		return GetColExpr(typ, 100, 1)
+	}
+	// Non-string scalars and byte-ordered string identities keep the encoded
+	// order; floats are rejected for their NaN identity semantics.
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{Id: int32(types.T_int64)})))
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{Id: int32(types.T_float64)})))
+	require.False(t, encodedOrderMatchesSQLOrder(nil))
+
+	// Case-insensitive collations order by folded collation weights, which the
+	// serialized hidden keys and raw storage zonemaps do not share.
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)})))
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)})))
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB3UnicodeCI)})))
+
+	// Byte-ordered identities stay eligible.
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4Bin)})))
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetBinary)})))
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar)})))
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitForCaseInsensitiveSortKey(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	ciType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+	scanNode.TableDef.Cols[1].Typ = ciType
+	sortNode.OrderBy[0].Expr.Typ = ciType
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	// The hidden key and block zonemaps order utf8mb4_general_ci values by raw
+	// bytes, while SQL ordering folds case: keep the logical Sort and send no
+	// TopValue threshold to the scan.
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, scanNode.RecvMsgList)
+	require.Empty(t, sortNode.SendMsgList)
+	require.Equal(t, int32(types.T_varchar), sortNode.OrderBy[0].Expr.Typ.Id)
+	require.Equal(t, int32(1), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestHandleMessageFromTopToScanKeepsOrderedLimitForBinaryCollationSortKey(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	binType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4Bin)}
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+	scanNode.TableDef.Cols[1].Typ = binType
+	sortNode.OrderBy[0].Expr.Typ = binType
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	// utf8mb4_bin orders by raw bytes, exactly the order the serialized hidden
+	// key and storage zonemaps use, so the rewrite and TopValue stay enabled.
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+}
+
+func TestApplyIndicesForProjectSkipsOrderedLimitForCaseInsensitiveSortKey(t *testing.T) {
+	ciType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(ciType, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[2]
+	scanNode.TableDef.Cols[1].Typ = ciType
+	sortNode.OrderBy[0].Expr.Typ = ciType
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	// Same gate as the float case: a general_ci sort key cannot be replaced
+	// by the byte-ordered hidden key, so the index is only an access path.
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, scanNode.RecvMsgList)
+	require.Empty(t, sortNode.SendMsgList)
+	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -114,16 +115,68 @@ type InsertCtx struct {
 	ExternalConfig externalwrite.WriterConfig
 }
 
+// retainUnrecordedSinkObjects transfers the writer's persisted /
+// possibly-persisted names to the workspace's asynchronous cleanup
+// ownership right before the pipeline teardown closes the writer — the
+// unrecorded remainder only: names whose metadata record landed stay
+// with their record's lifecycle, and the workspace filters them (issue
+// #25590 round-19 review, finding 2). Called on the Mpool-free unwind of
+// a writer whose stream never reached its recording consumer: a pipeline
+// failure between persistence and mergeBlock's record, or a record
+// refusal at a saturated admission bound. Without this transfer the
+// writer's Close dropped the only remaining reference to physical
+// objects, and repeated refused statements — each persisting one more
+// object nothing would ever record — leaked without a cleanup owner
+// despite the bounded ledger. Safe to call repeatedly: the retainer
+// filters recorded names and the caller nils the writer after closing.
+func (insert *Insert) retainUnrecordedSinkObjects(proc *process.Process) {
+	// All writers can share one worker pool. Cancel every generation before
+	// waiting for any snapshot so one writer cannot block another's cleanup.
+	insert.ctr.s3Writer.CancelPending()
+	for _, writer := range insert.ctr.partitionS3Writers {
+		writer.CancelPending()
+	}
+	var names []string
+	if writer := insert.ctr.s3Writer; writer != nil {
+		names = append(names, writer.AbandonAndRetainableNames()...)
+	}
+	for _, writer := range insert.ctr.partitionS3Writers {
+		if writer != nil {
+			names = append(names, writer.AbandonAndRetainableNames()...)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return
+	}
+	retainer, ok := ws.(ioutil.UnrecordedSinkerObjectsRetainer)
+	if !ok {
+		return
+	}
+	retainer.RetainUnrecordedS3Objects(
+		names, "s3 insert writer unwound before its metadata record: the pipeline failed or the record was refused between persistence and mergeBlock (issue #25590 round-19 review)")
+}
+
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	//@todo need add Reset method for s3Writer
+	insert.retainUnrecordedSinkObjects(proc)
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Close()
+		_ = insert.ctr.s3Writer.CloseWithCleanup(proc.Ctx, err)
 		insert.ctr.s3Writer = nil
 	}
 	insert.releaseS3MemGrant()
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Close()
+			if writer != nil {
+				_ = writer.CloseWithCleanup(proc.Ctx, err)
+			}
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -144,8 +197,9 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	insert.retainUnrecordedSinkObjects(proc)
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Close()
+		_ = insert.ctr.s3Writer.CloseWithCleanup(proc.Ctx, err)
 		insert.ctr.s3Writer = nil
 	}
 	insert.releaseS3MemGrant()
@@ -153,7 +207,9 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 	// Free the partition table S3writer object resources
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Close()
+			if writer != nil {
+				_ = writer.CloseWithCleanup(proc.Ctx, err)
+			}
 		}
 		insert.ctr.partitionS3Writers = nil
 	}

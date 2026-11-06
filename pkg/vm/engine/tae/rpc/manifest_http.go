@@ -59,7 +59,7 @@ func manifestHTTPHandler(d *db.DB) http.HandlerFunc {
 		}
 
 		dataDir := sharedFSRootPath(d)
-		data, err := GenerateManifestPretty(tbl, dataDir)
+		data, err := GenerateManifestPretty(tbl, dataDir, d.Runtime.Now())
 		if err != nil {
 			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return

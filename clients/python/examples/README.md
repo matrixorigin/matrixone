@@ -108,6 +108,16 @@ make test USE_SOURCE=0
 - `example_14_vector_search.py` - Vector similarity search
 - `example_15_vector_advanced.py` - Advanced vector operations
 
+### PyTorch with vecf8 / vecf4
+
+These need PyTorch 2.9 or later (`pip install 'matrixone-python-sdk[torch]'`) and skip themselves without it.
+`matrixone.vecblock` converts between MatrixOne `vecf8` (MXFP8) / `vecf4` (NVFP4) cells and
+PyTorch FP8 / FP4 tensors without loss.
+- `example_36_pytorch_load_vecblock.py` - Load vecf8 / vecf4 columns into FP8 / FP4 tensors, decode them, stream a table into a training loop
+- `example_37_pytorch_store_vecblock.py` - Quantize tensors in PyTorch and store the cells byte-identical
+- `example_38_pytorch_gpu_scaled_mm.py` - Score the cells on the GPU with `torch._scaled_mm`, bit-identical to `vector_matmul` (needs a Blackwell GPU)
+- `example_39_pytorch_finetune_hard_negatives.py` - Fine-tune a projection with hard negatives mined in MatrixOne by `vector_matmul`
+
 ### Fulltext Search
 - Fulltext search examples (check documentation)
 - JSON Parser examples
