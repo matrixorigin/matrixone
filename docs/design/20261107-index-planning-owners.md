@@ -19,6 +19,10 @@ Move generic read identity, ordinary resolution, statement execution evidence,
 candidate provenance and cache decisions to their existing owners. A new name
 is not sufficient: remove the superseded interface, data representation,
 independent decisions and routes, and migrate every producer and consumer.
+The user explicitly requires cleanup: no deprecated aliases, temporal-to-generic
+forwarders, temporary dual paths or old fields retained as compatibility shims.
+Optional arguments are allowed only as the final ordinary API's real opt-in to
+borrowed observation; they must not select an old implementation.
 
 The supported statement/workspace contract remains serialized. A read stamp
 detects a transition; it is not a lock, a permission or a resource owner.
@@ -82,9 +86,11 @@ retaining ordinary descriptor/error behavior. Synthetic and internal compilers
 may decline by leaving the output empty. Existing descriptor callers need no
 new lookup or native capability.
 
-The borrowed result carries its actual statement owner validation, so the
-builder can recheck the original statement/process/transaction after reentry
-without retaining an alternate resolver. The exact original relation is used
+The ordinary CompilerContext also owns borrowed-result validation, so the
+builder rechecks the original statement/process/transaction after reentry
+without retaining an alternate resolver interface or callback owner. Preserve
+the root input's exact compiler eligibility and identity; wrapper admission is
+not broadened by this refactor. The exact original relation is used
 for costing; the winning hidden relation is resolved once through the same
 ordinary method. Preserve the fresh original/current/publication proofs and
 both real engine pair checks.
@@ -115,7 +121,8 @@ rebuild path; do not add a new Run state machine or extend context budgets.
 
 Cache policy distinguishes three questions: ordinary generation reuse,
 prepared logical-template rebuild and prepared physical-compile reuse. Derive
-the answers together at the frontend cache owner from existing facts. Keep the
+the answers at one frontend cache policy owner from existing facts, computing
+only the requested layer so unrelated dependency walks are not added. Keep the
 current differences for FK actions, view/UDF/subscription/index coverage,
 DDL defaults, percentile/EWM execution configuration and Iceberg snapshots.
 Move their existing checks into this owner rather than inventing a second
