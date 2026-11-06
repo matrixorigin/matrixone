@@ -35,15 +35,45 @@ import (
 )
 
 func TestIssue31401ScalarRefreshProgress(t *testing.T) {
+	const source, peer = "issue31401_progress", "issue31401_peer"
+	var fixture embed.Cluster
+	var systemSourceOwned, peerOwned, completed bool
+	defer func() {
+		if fixture == nil {
+			return
+		}
+		if !completed || t.Failed() {
+			// A child may have left an unknown SQL outcome. Its fixture owner
+			// quarantines that generation; do not issue another destructive DDL.
+			require.NoError(t, embed.CloseBaseClusterTests())
+			return
+		}
+		runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+			require.Same(t, fixture, cluster, "cleanup must retain the scenario's fixture owner")
+			cn, err := cluster.GetCNService(0)
+			require.NoError(t, err)
+			db := openIssue277xxDB(t, cn.GetServiceConfig().CN.Frontend.Port)
+			defer func() { assert.NoError(t, db.Close()) }()
+			var databases []string
+			if systemSourceOwned {
+				databases = append(databases, source)
+			}
+			if peerOwned {
+				databases = append(databases, peer)
+			}
+			require.NoError(t, cleanupIssue31401Databases(t.Context(), db, databases...))
+		})
+	}()
 	for _, mode := range []string{"ordinary", "pk", "allocator", "prepared", "defaults", "other_account", "broad_index", "initial_snapshot", "late_snapshot", "initial_pitr", "late_pitr", "late_branch", "tenant_snapshot", "upgrade_conflict", "initial_fk", "late_fk"} {
 		t.Run(mode, func(t *testing.T) {
 			runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+				fixture = cluster
 				cn, err := cluster.GetCNService(0)
 				require.NoError(t, err)
 				t.Logf("embedded owner pid=%d config=%s/cn-0.toml data=%s", os.Getpid(), cn.GetServiceConfig().DataDir, cn.GetServiceConfig().DataDir)
 				sys := openIssue277xxDB(t, cn.GetServiceConfig().CN.Frontend.Port)
 				defer sys.Close()
-				ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), issue31401ScalarPhaseTimeout)
 				defer cancel()
 				cleanupSQL := func(exec func(context.Context, string, ...any) (sql.Result, error), timeout time.Duration, statement string) error {
 					t.Helper()
@@ -54,7 +84,8 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 					return err
 				}
 				db := sys
-				if mode == "other_account" || mode == "tenant_snapshot" {
+				tenant := mode == "other_account" || mode == "tenant_snapshot"
+				if tenant {
 					execSQLRequire(t, ctx, sys, "create account issue31401_scalar admin_name 'admin' identified by '111'")
 					defer func() {
 						// A failed child operation may still have an unknown result.
@@ -67,18 +98,21 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 					require.NoError(t, err)
 					defer db.Close()
 				}
-				const source, peer = "issue31401_progress", "issue31401_peer"
-				var sourceOwned, peerOwned bool
+				var tenantSourceOwned bool
 				defer func() {
-					if sourceOwned {
+					if tenantSourceOwned {
 						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop database if exists "+source)
 					}
-					if peerOwned {
-						_ = cleanupSQL(sys.ExecContext, 10*time.Second, "drop database if exists "+peer)
-					}
 				}()
+				// The next selected child already resets both databases. Keep
+				// system resources until that reset, then clean the final pair once.
+				// Tenant source cleanup still precedes its dependent DROP ACCOUNT.
 				resetIssue277xxDatabase(t, ctx, db, source)
-				sourceOwned = true
+				if tenant {
+					tenantSourceOwned = true
+				} else {
+					systemSourceOwned = true
+				}
 				resetIssue277xxDatabase(t, ctx, sys, peer)
 				peerOwned = true
 				definition := "id int,v int"
@@ -177,7 +211,7 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				// Fixture setup is complete. Both COPY generations, publication
 				// and the competing SQL share one fresh, fixed exercise budget.
 				cancel()
-				ctx, cancel = context.WithTimeout(t.Context(), 60*time.Second)
+				ctx, cancel = context.WithTimeout(t.Context(), issue31401ScalarPhaseTimeout)
 				defer cancel()
 				alterDone, peerDone := make(chan error, 1), make(chan error, 1)
 				alterJoined, peerStarted, peerJoined := false, false, false
@@ -324,6 +358,7 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 			})
 		})
 	}
+	completed = true
 }
 
 func TestIssue31401ScalarRetainedLocksFastFail(t *testing.T) {
