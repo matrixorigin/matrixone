@@ -2213,10 +2213,13 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 	if expected.GetPubInfo() == nil {
 		return true, nil
 	}
+	// The alias belongs to captured data T. The resolver independently checks
+	// that alias's publication at current authorization A; a current same-named
+	// alias may refer to an unrelated (and denied) publication.
 	currentRef, currentDef, err := resolve(
 		expected.GetSubscriptionName(),
 		expected.GetObjName(),
-		nil,
+		expected.GetSnapshot(),
 	)
 	if err != nil {
 		return false, err
@@ -2225,23 +2228,6 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 		return true, nil
 	}
 	expectedTenant := expected.GetPubInfo().GetTenantId()
-	if plan2.IsSnapshotValid(expected.GetSnapshot()) {
-		if currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
-			currentRef.GetPubInfo().GetTenantId() != expectedTenant {
-			return true, nil
-		}
-		currentRef, currentDef, err = resolve(
-			expected.GetSubscriptionName(),
-			expected.GetObjName(),
-			expected.GetSnapshot(),
-		)
-		if err != nil {
-			return false, err
-		}
-		if currentRef == nil || currentDef == nil || currentRef.GetPubInfo() == nil {
-			return true, nil
-		}
-	}
 	return currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
 		currentRef.GetPubInfo().GetTenantId() != expectedTenant ||
 		currentRef.GetSchemaName() != expected.GetSchemaName() ||

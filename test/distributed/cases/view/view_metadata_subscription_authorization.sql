@@ -2,6 +2,7 @@
 drop snapshot if exists view_subscription_snapshot;
 drop account if exists view_subscription_reader;
 drop publication if exists view_subscription_pub;
+drop publication if exists view_subscription_other_pub;
 drop database if exists view_subscription_source;
 drop database if exists view_subscription_remap;
 create account view_subscription_reader admin_name 'admin' identified by '111';
@@ -74,9 +75,44 @@ select count(*) from information_schema.columns {snapshot='view_subscription_sna
 select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed_late' and table_name='v';
 select x from subscribed.v {snapshot='view_subscription_snapshot'};
 drop database subscribed_late;
+
+-- A cached historical handle must ignore an unrelated, denied current alias.
+create database subscribed from sys publication view_subscription_pub;
+prepare view_subscription_history_stmt from 'select x from subscribed.v {snapshot=''view_subscription_snapshot''}';
+execute view_subscription_history_stmt;
+-- @session
+create publication view_subscription_other_pub database view_subscription_source account view_subscription_reader;
+-- @session:id=9&user=view_subscription_reader:admin&password=111
+drop database subscribed;
+create database subscribed from sys publication view_subscription_other_pub;
+select x from subscribed.v;
+-- @session
+alter publication view_subscription_other_pub account drop view_subscription_reader;
+-- @session:id=7&user=view_subscription_reader:admin&password=111
+select x from subscribed.v;
+select x from subscribed.v {snapshot='view_subscription_snapshot'};
+select character_maximum_length from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+execute view_subscription_history_stmt;
+prepare view_subscription_fresh_stmt from 'select x from subscribed.v {snapshot=''view_subscription_snapshot''}';
+execute view_subscription_fresh_stmt;
+-- @session
+alter publication view_subscription_pub account drop view_subscription_reader;
+-- @session:id=7&user=view_subscription_reader:admin&password=111
+execute view_subscription_history_stmt;
+execute view_subscription_fresh_stmt;
+select count(*) from information_schema.columns {snapshot='view_subscription_snapshot'} where table_schema='subscribed' and table_name='v';
+-- @session
+alter publication view_subscription_pub account add view_subscription_reader;
+-- @session:id=7&user=view_subscription_reader:admin&password=111
+execute view_subscription_history_stmt;
+execute view_subscription_fresh_stmt;
+deallocate prepare view_subscription_history_stmt;
+deallocate prepare view_subscription_fresh_stmt;
+drop database subscribed;
 drop snapshot view_subscription_snapshot;
 -- @session
 drop account view_subscription_reader;
 drop publication view_subscription_pub;
+drop publication view_subscription_other_pub;
 drop database view_subscription_source;
 drop database view_subscription_remap;

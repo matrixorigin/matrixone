@@ -1194,6 +1194,9 @@ func TestViewDescriptionSubscription(t *testing.T) {
 				}
 			})
 		})
+		t.Run("cached historical alias ignores denied current replacement", func(t *testing.T) {
+			testHistoricalSubscriptionCachedAlias(t, ctx, sys, subscriber)
+		})
 		t.Run("cross-account snapshot metadata namespace", func(t *testing.T) {
 			testSnapshotMetadataNamespace(t, ctx, sys, subscriber)
 		})
