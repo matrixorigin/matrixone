@@ -201,17 +201,14 @@ COMMIT reply is reported as uncertain and repeating the same command is safe.
 `SHOW TASK RUNS` appends `runner_cn`, the last recorded owner, not a liveness
 proof; clients requiring an exact column count must accept the extra column.
 
-Fresh catalogs and a new v4.0.8 cluster upgrade add the pointer, schedule
-generation and `(account_id,status,task_name)` run index. Preserve the frozen
-v4.0.7 entries/offset and the original historical DDL, so an existing or
-interrupted v4.0.7 upgrade can complete before v4.0.8. Require the new writer
-protocol before the cluster migration. This protocol check alone cannot prove
-that a partitioned older process has stopped, so upgrading also requires all
-old writers to be stopped or isolated. Legacy queued SQL firings are
-invalidated rather than run under the new protocol. Restores must keep task
-definitions, async rows and runs from one consistent snapshot. Downgrade is
-unsupported until services are stopped and pending async items and
-RUNNING/UNKNOWN runs are reconciled.
+Fresh catalogs and the pending v4.0.7 cluster upgrade add the pointer, schedule
+generation and `(account_id,status,task_name)` run index. The v4.0.0 task DDL
+remains fixed at its released definition; the existing v4.0.7 owner applies
+the new entries when upgrading a released catalog. MatrixOne requires a
+shutdown upgrade, with all old services stopped before the new binary starts.
+Legacy queued SQL firings are invalidated rather than run with stale ownership.
+Restores must keep task definitions, async rows and runs from one consistent
+snapshot. Downgrade is unsupported.
 
 ## Validation
 

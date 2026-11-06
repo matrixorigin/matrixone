@@ -35,11 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 var (
 	ErrNotReady              = moerr.NewInvalidStateNoCtx("task store not ready")
-	errSQLTaskStoreBusy      = fmt.Errorf("task store holder is busy: %w", ErrNotReady)
+	errSQLTaskStoreBusy      = errutil.Wrap(ErrNotReady, "task store holder is busy")
 	taskStorageRefreshFailed = logutil.Event{Name: "task.storage.refresh.failed", Message: "task storage refresh failed"}
 )
 

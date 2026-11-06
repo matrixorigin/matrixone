@@ -20,9 +20,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/require"
 )
+
+func TestForceRecoverSQLTaskCommitUnknownPreservesCause(t *testing.T) {
+	store, mock := newMockStorage(t)
+	lostAck := moerr.NewTxnUnknown(context.Background(), "force-txn")
+	mock.ExpectQuery("select task_id, task_name from sql_task_run where run_id=? and account_id=? and task_name=?").
+		WithArgs(uint64(9), uint32(1), "owned").WillReturnRows(sqlmock.NewRows([]string{"task_id", "task_name"}).AddRow(7, "owned"))
+	mock.ExpectExec("BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("select account_id from mo_catalog.mo_account where account_id=? for update").
+		WithArgs(uint32(1)).WillReturnRows(sqlmock.NewRows([]string{"account_id"}).AddRow(1))
+	mock.ExpectQuery("select task_id, trigger_count, schedule_generation from sql_task where account_id=? and task_name=? for update").
+		WithArgs(uint32(1), "owned").WillReturnRows(sqlmock.NewRows([]string{"task_id", "trigger_count", "schedule_generation"}).AddRow(7, 1, 1))
+	mock.ExpectQuery("select task_id, task_status from sys_async_task where task_parent_id=? and sql_task_run_id=? limit 2 for update").
+		WithArgs("sql-task:7", uint64(9)).WillReturnRows(sqlmock.NewRows([]string{"task_id", "task_status"}))
+	mock.ExpectQuery(selectSQLTaskRun + " AND run_id=? for update").WithArgs(uint64(9)).
+		WillReturnRows(sqlmock.NewRows(sqlTaskRunRows).AddRow(9, 7, "owned", 1, nil, nil, nil, 0, SQLTaskStatusRunning, SQLTaskTriggerScheduled, 1, 0, 0, nil, 1, "old-cn"))
+	mock.ExpectExec("update sql_task set enabled=0, trigger_count=?, schedule_generation=?, updated_at=? where task_id=? and account_id=?").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("update sql_task_run set status=?, finished_at=?, error_message=? where run_id=? and status=?").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("COMMIT").WillReturnError(lostAck)
+	mock.ExpectClose()
+
+	changed, err := store.forceRecoverSQLTaskRun(context.Background(), 1, "owned", 9, "admin")
+	require.False(t, changed)
+	require.ErrorIs(t, err, lostAck)
+	require.ErrorContains(t, err, "recovery may have committed")
+	var identity *moerr.Error
+	require.ErrorAs(t, err, &identity)
+	require.Equal(t, moerr.ErrTxnUnknown, identity.ErrorCode())
+	require.NoError(t, store.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestForceRecoverSQLTaskRun(t *testing.T) {
 	for name, factory := range storages {

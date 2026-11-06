@@ -77,9 +77,12 @@ func TestSQLTaskScheduledAdmissionClaimsExactRun(t *testing.T) {
 			mustAddTestSQLTask(t, store, 1, definition)
 			definition = mustGetTestSQLTask(t, store, 1)[0]
 
-			newFiring := func(sequence uint64) task.AsyncTask {
+			newFiring := func(sequence uint64, legacy bool) task.AsyncTask {
 				spec := &task.SQLTaskContext{TaskId: definition.TaskID, TriggerCount: sequence}
 				value := newTaskFromMetadata(BuildSQLTaskMetadata(spec))
+				if legacy {
+					value.Metadata.ID = fmt.Sprintf("sql-task:%d:%d", definition.TaskID, sequence)
+				}
 				value.ParentTaskID = fmt.Sprintf("sql-task:%d", definition.TaskID)
 				value.Status = task.TaskStatus_Running
 				value.TaskRunner = "cn1"
@@ -92,7 +95,7 @@ func TestSQLTaskScheduledAdmissionClaimsExactRun(t *testing.T) {
 			}
 			run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 			run.TriggerType = SQLTaskTriggerScheduled
-			stale := newFiring(1)
+			stale := newFiring(1, false)
 			reserved := 0
 			admission := testSQLTaskAdmission(claimFor(stale), 1)
 			admission.Reserve = func(account uint32, name string) bool {
@@ -106,7 +109,17 @@ func TestSQLTaskScheduledAdmissionClaimsExactRun(t *testing.T) {
 			require.Zero(t, reserved)
 			mustGetTestSQLTaskRun(t, store, 0)
 
-			value := newFiring(2)
+			// Released 4.2 payloads contain a valid nonzero trigger count, but
+			// their old metadata ID must not acquire ownership after upgrade.
+			legacy := newFiring(2, true)
+			admission.AsyncTaskID, admission.RunnerCN, admission.Epoch = legacy.ID, legacy.TaskRunner, legacy.Epoch
+			admission.ParentTaskID, admission.MetadataID, admission.TriggerSequence = legacy.ParentTaskID, legacy.Metadata.ID, 2
+			_, err = store.AcquireSQLTaskRun(ctx, definition, run, admission)
+			require.ErrorIs(t, err, ErrSQLTaskStaleFiring)
+			require.Zero(t, reserved)
+			mustGetTestSQLTaskRun(t, store, 0)
+
+			value := newFiring(2, false)
 			admission.AsyncTaskID, admission.RunnerCN, admission.Epoch = value.ID, value.TaskRunner, value.Epoch
 			admission.ParentTaskID, admission.MetadataID, admission.TriggerSequence = value.ParentTaskID, value.Metadata.ID, 2
 			runID, err := store.AcquireSQLTaskRun(ctx, definition, run, admission)
