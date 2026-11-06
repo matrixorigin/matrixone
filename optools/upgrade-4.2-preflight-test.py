@@ -154,10 +154,9 @@ class PreflightTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertEqual([], list(self.output.iterdir()))
 
-    def test_cancellation_joins_mysql_and_does_not_publish(self):
+    def assert_cancellation_joins_child(self):
         read_fd, write_fd = os.pipe()
         self.addCleanup(os.close, read_fd)
-        self.env["TEST_MYSQL_BLOCK"] = "1"
         self.env["TEST_READY_FD"] = str(write_fd)
         proc = subprocess.Popen(
             [str(SCRIPT), str(self.output), "--defaults-extra-file=protected.cnf"],
@@ -178,6 +177,26 @@ class PreflightTest(unittest.TestCase):
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.communicate()
+
+    def test_cancellation_joins_mysql_and_does_not_publish(self):
+        self.env["TEST_MYSQL_BLOCK"] = "1"
+        self.assert_cancellation_joins_child()
+
+    def test_cancellation_joins_count_and_publish_commands(self):
+        self.data.write_text("A\t0\t{}\nC\t0\t{}\nZ\tdone\t{}\n")
+        for command in ("wc", "ln"):
+            with self.subTest(command=command):
+                fake = self.root / command
+                fake.write_text(
+                    '#!/bin/sh\n'
+                    'eval "printf \'%s\\n\' $$ >&${TEST_READY_FD}"\n'
+                    'exec sleep 60\n'
+                )
+                fake.chmod(0o700)
+                try:
+                    self.assert_cancellation_joins_child()
+                finally:
+                    fake.unlink()
 
     def test_cancellation_after_publication_keeps_complete_file(self):
         fake_ln = self.root / "ln"

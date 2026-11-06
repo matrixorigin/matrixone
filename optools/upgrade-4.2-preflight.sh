@@ -121,11 +121,16 @@ run_cmd jq -Rc '
     else $snapshot | .edge = $edge | .decision = null end
 ' < "$tmpdir/joined" >> "$outtmp"
 run_cmd awk 'length($0) >= 262144 { exit 1 }' "$outtmp"
-if [[ $(wc -l < "$tmpdir/snapshots.sorted") != $(wc -l < "$tmpdir/joined") ]]; then
+run_cmd wc -l < "$tmpdir/snapshots.sorted" > "$tmpdir/snapshot-count"
+run_cmd wc -l < "$tmpdir/joined" > "$tmpdir/joined-count"
+read -r snapshot_count < "$tmpdir/snapshot-count"
+read -r joined_count < "$tmpdir/joined-count"
+if [[ $snapshot_count != "$joined_count" ]]; then
     echo "snapshot merge was incomplete" >&2
     exit 1
 fi
 # Hard-link creation is atomic and fails if the destination already exists.
-ln -T -- "$outtmp" "$output"
-echo "CDC tasks: $(cat "$tmpdir/cdc-count"); review and remove them as described in the upgrade guide." >&2
+run_cmd ln -T -- "$outtmp" "$output"
+read -r cdc_count < "$tmpdir/cdc-count"
+echo "CDC tasks: $cdc_count; review and remove them as described in the upgrade guide." >&2
 echo "Snapshot decision template written to $output; every decision requires administrator review." >&2
