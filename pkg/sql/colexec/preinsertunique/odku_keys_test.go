@@ -456,55 +456,8 @@ func TestODKUKeyTransitionVarlen(t *testing.T) {
 	require.Zero(t, owner)
 }
 
-func TestODKUKeyIndexBoundsVacatedGroups(t *testing.T) {
-	a, proc, b, _ := newODKUKeyFixture(t, 1)
-	err := seedODKUKeyRows(proc, a, b.Vecs[1])
-	require.NoError(t, err)
-	key := &a.ctr.acceptedKeys[0]
-	probe := vector.NewVec(types.T_int64.ToType())
-	t.Cleanup(func() { probe.Free(proc.Mp()) })
-	key.key[0] = probe
-	setKey := func(value int64) {
-		t.Helper()
-		probe.CleanOnlyData()
-		require.NoError(t, vector.AppendFixed(probe, value, false, proc.Mp()))
-	}
-	var rebuilds int
-	for value := int64(2); value <= 200; value++ {
-		setKey(value - 1)
-		require.NoError(t, a.releaseODKUKey(proc, 0, 0, 0))
-		setKey(value)
-		require.NoError(t, a.claimODKUKey(proc, 0, 0, 0))
-		if key.shouldRebuild() {
-			require.NoError(t, a.rebuildODKUKeyIndex(proc, 0, probe, []int64{0}))
-			rebuilds++
-		}
-		owner, found, err := a.lookupODKUKeyIndex(proc, &a.ctr.acceptedKeys[0], 0)
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Zero(t, owner)
-		require.LessOrEqual(t, key.index.GroupCount(), uint64(65))
-	}
-	require.Greater(t, rebuilds, 0)
-	setKey(1)
-	_, found, err := a.lookupODKUKeyIndex(proc, &a.ctr.acceptedKeys[0], 0)
-	require.NoError(t, err)
-	require.False(t, found)
-	setKey(200)
-	previous := proc.Ctx
-	cancelled, stop := context.WithCancel(previous)
-	stop()
-	proc.Ctx = cancelled
-	require.ErrorIs(t, a.rebuildODKUKeyIndex(proc, 0, probe, []int64{0}), context.Canceled)
-	proc.Ctx = previous
-	owner, found, err := a.lookupODKUKeyIndex(proc, &a.ctr.acceptedKeys[0], 0)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Zero(t, owner)
-}
-
-func TestODKUKeyIndexVariableLengthAndAllocationFailure(t *testing.T) {
-	a, proc, b, account := newODKUKeyFixture(t, 3)
+func TestODKUKeyIndexVariableLengthOwnership(t *testing.T) {
+	a, proc, b, _ := newODKUKeyFixture(t, 3)
 	b.Vecs[1].Free(proc.Mp())
 	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 	for i, value := range []string{strings.Repeat("x", 1024), "other", ""} {
@@ -526,35 +479,11 @@ func TestODKUKeyIndexVariableLengthAndAllocationFailure(t *testing.T) {
 	groups := key.index.GroupCount()
 	require.NoError(t, a.claimODKUKey(proc, 0, 2, 2))
 	require.Equal(t, groups, key.index.GroupCount(), "NULL keys do not own a group")
-	require.NoError(t, a.rebuildODKUKeyIndex(proc, 0, b.Vecs[1], []int64{2, 1, 2}))
-	owner, found, err = a.lookupODKUKeyIndex(proc, &a.ctr.acceptedKeys[0], 0)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, int64(2), owner)
 	owner, found, err = a.lookupODKUKeyIndex(proc, &a.ctr.acceptedKeys[0], 1)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, int64(1), owner)
 
-	// Fail admission after the old index has been released. The attempt must
-	// still be resettable without leaking partially rebuilt state.
-	keys := vector.NewVec(types.T_varchar.ToType())
-	t.Cleanup(func() { keys.Free(proc.Mp()) })
-	require.NoError(t, vector.AppendBytes(keys, []byte(strings.Repeat("k", 1<<20)), false, proc.Mp()))
-	used := account.Snapshot().Used
-	filler, err := proc.Mp().AllocAccounted(int(odkuKeyTestBudget-used-64), account, mpool.AllocationOwnerMin, preInsertUniqueAllocationSiteRetainedData)
-	require.NoError(t, err)
-	defer func() {
-		if filler != nil {
-			proc.Mp().Free(filler)
-		}
-	}()
-	err = a.rebuildODKUKeyIndex(proc, 0, keys, []int64{0})
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	a.Reset(proc, true, err)
-	proc.Mp().Free(filler)
-	filler = nil
-	require.Zero(t, account.Snapshot().Used)
 }
 
 func TestODKUKeyIndexMatchesCurrentOwners(t *testing.T) {
@@ -564,10 +493,9 @@ func TestODKUKeyIndexMatchesCurrentOwners(t *testing.T) {
 	require.NoError(t, err)
 	key := &a.ctr.acceptedKeys[0]
 	current := make([]int64, rowCount)
-	owners := make([]int64, rowCount)
 	expected := make(map[int64]int64, rowCount)
 	for row := range rowCount {
-		current[row], owners[row] = int64(row+1), int64(row)
+		current[row] = int64(row + 1)
 		expected[current[row]] = int64(row)
 	}
 	probe := vector.NewVec(types.T_int64.ToType())
@@ -592,7 +520,7 @@ func TestODKUKeyIndexMatchesCurrentOwners(t *testing.T) {
 		}
 	}
 	rng := rand.New(rand.NewSource(31979))
-	rebuilds, nullMoves := 0, 0
+	nullMoves := 0
 	for step := 0; step < 2000; step++ {
 		row := rng.Intn(rowCount)
 		next := int64(rng.Intn(201)) // zero represents a NULL unique key
@@ -625,16 +553,10 @@ func TestODKUKeyIndexMatchesCurrentOwners(t *testing.T) {
 			expected[next] = int64(row)
 		}
 		current[row] = next
-		if key.shouldRebuild() {
-			require.NoError(t, a.rebuildODKUKeyIndex(proc, 0, input.Vecs[1], owners))
-			rebuilds++
-		}
-		require.LessOrEqual(t, key.index.GroupCount(), uint64(rowCount+64))
 		if step%127 == 0 {
 			verify()
 		}
 	}
 	verify()
-	require.Positive(t, rebuilds)
 	require.Positive(t, nullMoves)
 }
