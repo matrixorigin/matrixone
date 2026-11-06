@@ -1197,7 +1197,6 @@ func preparedCharSourceCast(ctx context.Context, source *Expr, value string) (*E
 // predicate candidates that must be proved again for every cache hit.
 type PreparedExecutionPlan struct {
 	TemporalTypes        *PreparedTemporalTypes
-	TemporalScope        *TemporalPlanningScope
 	Plan                 *Plan
 	FieldTypes           *PreparedFieldTypes
 	DiagnosticCandidates []*Expr
@@ -1229,14 +1228,13 @@ func preparedUnderlyingSelect(stmt tree.Statement) bool {
 // The caller installs the current Process parameter vector before invoking it.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
-	return BuildPreparedExecutionPlanWithTemporalIntent(ctx, stmt, bindings, values, nil)
+	return BuildPreparedExecutionPlanWithTemporalIntent(ctx, stmt, bindings, values, nil, nil)
 }
 
-// BuildPreparedExecutionPlanWithTemporalIntent creates a fresh one-shot scope
-// for each optimizer attempt, including the FIELD metadata rebind. It never
-// shares a scope with nested planning or a later EXECUTE.
+// BuildPreparedExecutionPlanWithTemporalIntent creates a fresh one-shot input
+// for each optimizer attempt, including the FIELD metadata rebind.
 func BuildPreparedExecutionPlanWithTemporalIntent(ctx CompilerContext, stmt tree.Statement,
-	bindings []PreparedSourceBinding, values []any, intent *TemporalPlanningIntent) (*PreparedExecutionPlan, error) {
+	bindings []PreparedSourceBinding, values []any, intent *TemporalPlanningIntent, resolver BorrowingTableResolver) (*PreparedExecutionPlan, error) {
 	var root *tree.Select
 	inner := stmt
 	for inner != nil {
@@ -1255,11 +1253,11 @@ func BuildPreparedExecutionPlanWithTemporalIntent(ctx CompilerContext, stmt tree
 			inner = nil
 		}
 	}
-	newScope := func() *TemporalPlanningScope {
+	newInput := func() *TemporalPlanningInput {
 		if intent == nil || intent.ParameterFree && tree.ParameterCount(stmt) != 0 {
 			return nil
 		}
-		return NewTemporalPlanningScope(root, *intent)
+		return NewTemporalPlanningInput(root, *intent, resolver)
 	}
 	previous := ctx.GetContext()
 	if tree.ParameterCount(stmt) != len(bindings) {
@@ -1274,14 +1272,7 @@ func BuildPreparedExecutionPlanWithTemporalIntent(ctx CompilerContext, stmt tree
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
-	scope := newScope()
-	transferred := false
-	defer func() {
-		if !transferred {
-			scope.Close()
-		}
-	}()
-	query, err := NewPrepareOptimizer(ctx).OptimizeWithTemporalScope(stmt, false, scope)
+	query, err := NewPrepareOptimizer(ctx).OptimizeWithTemporalInput(stmt, false, newInput())
 	if err != nil {
 		return nil, err
 	}
@@ -1292,9 +1283,7 @@ func BuildPreparedExecutionPlanWithTemporalIntent(ctx CompilerContext, stmt tree
 		preparedBindingState(planning).fieldTypes = fieldTypes
 		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 		ctx.SetContext(planning)
-		scope.Close()
-		scope = newScope()
-		query, err = NewPrepareOptimizer(ctx).OptimizeWithTemporalScope(stmt, false, scope)
+		query, err = NewPrepareOptimizer(ctx).OptimizeWithTemporalInput(stmt, false, newInput())
 		if err != nil {
 			return nil, err
 		}
@@ -1305,8 +1294,7 @@ func BuildPreparedExecutionPlanWithTemporalIntent(ctx CompilerContext, stmt tree
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	transferred = true
-	return &PreparedExecutionPlan{TemporalScope: scope, TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
+	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

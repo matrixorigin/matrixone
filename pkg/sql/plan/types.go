@@ -398,7 +398,9 @@ type QueryBuilder struct {
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables     map[int32]deleteIndexScan
 	temporalPlanningIntent    TemporalPlanningIntent
-	temporalPlanningScope     *TemporalPlanningScope
+	temporalResolver          BorrowingTableResolver
+	temporalScanBorrows       []temporalScanBorrow
+	temporalBorrowDisabled    bool
 	hasTemporalPlanningIntent bool
 	temporalOriginalSafeScans map[int32]bool
 	integerPrecision          *integerPrecisionBuilder

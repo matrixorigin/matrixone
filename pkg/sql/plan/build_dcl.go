@@ -27,10 +27,10 @@ import (
 )
 
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
-	return getPreparePlanWithTemporalScope(ctx, stmt, nil)
+	return getPreparePlanWithTemporalInput(ctx, stmt, nil)
 }
 
-func getPreparePlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, temporalScope *TemporalPlanningScope) (*Plan, *Query, error) {
+func getPreparePlanWithTemporalInput(ctx CompilerContext, stmt tree.Statement, temporalInput *TemporalPlanningInput) (*Plan, *Query, error) {
 	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
 		switch source := stmt.(type) {
 		case *tree.Select, *tree.ParenSelect:
@@ -61,7 +61,7 @@ func getPreparePlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, t
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.OptimizeWithTemporalScope(stmt, true, temporalScope)
+		optimized, err := opt.OptimizeWithTemporalInput(stmt, true, temporalInput)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -107,10 +107,10 @@ func getPreparePlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, t
 }
 
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
-	return buildPrepareWithTemporalScope(stmt, ctx, nil)
+	return buildPrepareWithTemporalInput(stmt, ctx, nil)
 }
 
-func buildPrepareWithTemporalScope(stmt tree.Prepare, ctx CompilerContext, temporalScope *TemporalPlanningScope) (*Plan, error) {
+func buildPrepareWithTemporalInput(stmt tree.Prepare, ctx CompilerContext, temporalInput *TemporalPlanningInput) (*Plan, error) {
 	// Views belong to the statement currently being built. Query/DML builders
 	// replace this state, but pure DDL builders do not, so clear the previous
 	// statement's dependencies before planning this PREPARE.
@@ -128,7 +128,7 @@ func buildPrepareWithTemporalScope(stmt tree.Prepare, ctx CompilerContext, tempo
 		stmtName = string(pstmt.Name)
 		preparedStmt = pstmt.Stmt
 		sourceParameterCount = tree.ParameterCount(preparedStmt)
-		preparePlan, transientQuery, err = getPreparePlanWithTemporalScope(ctx, pstmt.Stmt, temporalScope)
+		preparePlan, transientQuery, err = getPreparePlanWithTemporalInput(ctx, pstmt.Stmt, temporalInput)
 		if err != nil {
 			return nil, err
 		}

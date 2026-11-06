@@ -73,7 +73,6 @@ func resolvesUdfInCallerTxn(ctx context.Context) bool {
 }
 
 type TxnCompilerContext struct {
-	temporal             temporalCompilerScopes
 	dbName               string
 	buildAlterView       bool
 	viewBinding          bool
@@ -510,6 +509,7 @@ func (tcc *TxnCompilerContext) getRelation(
 	tableName string,
 	sub *plan.SubscriptionMeta,
 	snapshot *plan2.Snapshot,
+	capture *temporalReadCapture,
 ) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
@@ -550,6 +550,7 @@ func (tcc *TxnCompilerContext) getRelation(
 	if ShouldSwitchToSysAccount(dbName, tableName) {
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
+	capture.begin(tcc, txn)
 
 	start = time.Now()
 
@@ -615,7 +616,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 		if sourceDB == "" {
 			sourceDB = dbName
 		}
-		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot)
+		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot, nil)
 		if err != nil || relation == nil {
 			return nil, err
 		}
@@ -734,7 +735,7 @@ func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.
 	if temporary && def == nil && (err == nil || missing(err)) {
 		// Resolve can hide a relation for subscription/view scope reasons.
 		// Confirm absence in the session's own database before changing ownership.
-		_, relation, lookupErr := tcc.getRelation(dbName, physical, nil, nil)
+		_, relation, lookupErr := tcc.getRelation(dbName, physical, nil, nil, nil)
 		if (lookupErr == nil && relation == nil) || missing(lookupErr) {
 			if owner, ok := ses.(process.MissingTemporaryTableForgetter); ok {
 				owner.ForgetMissingTemporaryTable(dbName, tableName, physical)
@@ -745,14 +746,20 @@ func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolve(dbName, tableName, snapshot, true)
+	return tcc.resolve(dbName, tableName, snapshot, true, nil)
 }
 
 func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolve(dbName, tableName, snapshot, false)
+	return tcc.resolve(dbName, tableName, snapshot, false, nil)
 }
 
-func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (tcc *TxnCompilerContext) ResolveBaseForPlanning(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, *plan2.BorrowedTable, error) {
+	var borrow *plan2.BorrowedTable
+	obj, def, err := tcc.resolve(dbName, tableName, snapshot, true, &borrow)
+	return obj, def, borrow, err
+}
+
+func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool, result **plan2.BorrowedTable) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -809,9 +816,11 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 		}
 	}
 
-	nativeCapture := tcc.beginTemporalNativeResolve(temporalNativeSnapshotOverride(snapshot) || sub != nil || isTmpTable)
-	defer nativeCapture.finish()
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
+	var capture *temporalReadCapture
+	if result != nil && !temporalNativeSnapshotOverride(snapshot) && sub == nil && !isTmpTable {
+		capture = &temporalReadCapture{}
+	}
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot, capture)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -857,7 +866,9 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 			TenantId: pubAccountId,
 		}
 	}
-	nativeCapture.capture(ctx, table, obj, tableDef)
+	if result != nil {
+		*result = capture.finish(tcc, ctx, table, obj, tableDef)
+	}
 	return obj, tableDef, nil
 }
 
@@ -865,6 +876,21 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	ref *plan.ObjectRef,
 	tblName string,
 	snapshot *plan2.Snapshot,
+) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	return tcc.resolveIndexTableByRef(ref, tblName, snapshot, nil)
+}
+
+func (tcc *TxnCompilerContext) ResolveIndexForPlanning(ref *plan.ObjectRef, tblName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, *plan2.BorrowedTable, error) {
+	var borrow *plan2.BorrowedTable
+	obj, def, err := tcc.resolveIndexTableByRef(ref, tblName, snapshot, &borrow)
+	return obj, def, borrow, err
+}
+
+func (tcc *TxnCompilerContext) resolveIndexTableByRef(
+	ref *plan.ObjectRef,
+	tblName string,
+	snapshot *plan2.Snapshot,
+	result **plan2.BorrowedTable,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
@@ -894,9 +920,11 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
-	nativeCapture := tcc.beginTemporalNativeResolve(temporalNativeSnapshotOverride(snapshot) || subMeta != nil || isTmpTable || ref.SubscriptionName != "")
-	defer nativeCapture.finish()
-	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
+	var capture *temporalReadCapture
+	if result != nil && !temporalNativeSnapshotOverride(snapshot) && subMeta == nil && !isTmpTable && ref.SubscriptionName == "" {
+		capture = &temporalReadCapture{}
+	}
+	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot, capture)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -929,7 +957,9 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		tableDef.Name = tblName
 	}
 
-	nativeCapture.capture(ctx, table, obj, tableDef)
+	if result != nil {
+		*result = capture.finish(tcc, ctx, table, obj, tableDef)
+	}
 	return obj, tableDef, nil
 }
 
@@ -1550,7 +1580,7 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	}
 
 	// 2. Get table relation
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}

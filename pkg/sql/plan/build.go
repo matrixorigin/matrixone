@@ -76,7 +76,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	capture func(*BindContext),
 	restoreViewMySQLSpecialTypes bool,
 	persistedViewTarget string,
-	temporalScope *TemporalPlanningScope,
+	temporalInput *TemporalPlanningInput,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -84,24 +84,14 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
-	builder.temporalPlanningIntent, builder.hasTemporalPlanningIntent = temporalScope.claim(stmt)
+	defer builder.clearTemporalBorrows()
+	builder.temporalPlanningIntent, builder.temporalResolver, builder.hasTemporalPlanningIntent = temporalInput.claim(stmt)
 	if builder.hasTemporalPlanningIntent && !builder.temporalPlanningIntent.MatchesProcess(ctx.GetProcess()) {
 		builder.hasTemporalPlanningIntent = false
+		builder.temporalResolver = nil
 	}
-	// Every nested/unclaimed builder shadows an outer source scope, including
-	// nil scopes. Keep the actual compiler context's optional interfaces intact.
-	if holder, ok := ctx.(interface {
-		PushTemporalPlanningScope(*TemporalPlanningScope) func()
-	}); ok {
-		selected := temporalScope
-		if !builder.hasTemporalPlanningIntent {
-			selected = nil
-		}
-		restore := holder.PushTemporalPlanningScope(selected)
-		defer restore()
-		if selected != nil {
-			builder.temporalPlanningScope = selected
-		}
+	if builder.temporalResolver != nil && !builder.temporalResolver.IsSameCompiler(ctx) {
+		builder.temporalResolver = nil
 	}
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
@@ -180,10 +170,6 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if err != nil {
 		return nil, err
 	}
-	if builder.temporalPlanningScope != nil {
-		builder.temporalPlanningScope.SelectQuery(query)
-	}
-
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -622,14 +608,14 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}, err
 }
 
-func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, temporalScope *TemporalPlanningScope) (*Plan, error) {
+func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, temporalInput *TemporalPlanningInput) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	//get query optimizer and execute Optimize
-	plan, err := BuildPlanWithTemporalScope(ctx, stmt, isPrepareStmt, temporalScope)
+	plan, err := BuildPlanWithTemporalInput(ctx, stmt, isPrepareStmt, temporalInput)
 	if err != nil {
 		return nil, err
 	}
@@ -653,18 +639,18 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 	return plan, nil
 }
 
-func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool, temporalScope *TemporalPlanningScope) (*Plan, error) {
+func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool, temporalInput *TemporalPlanningInput) (*Plan, error) {
 	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
 		return nil, err
 	}
-	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, temporalScope)
+	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, temporalInput)
 }
 
-func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool, temporalScope *TemporalPlanningScope) (*Plan, error) {
+func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool, temporalInput *TemporalPlanningInput) (*Plan, error) {
 	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
 		return nil, err
 	}
-	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, temporalScope)
+	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, temporalInput)
 }
 
 func validateExplainOptions(ctx context.Context, options []tree.OptionElem, mode string) error {
@@ -749,21 +735,12 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 }
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
-	return BuildPlanWithTemporalScope(ctx, stmt, isPrepareStmt, nil)
+	return BuildPlanWithTemporalInput(ctx, stmt, isPrepareStmt, nil)
 }
 
-// BuildPlanWithTemporalScope forwards an optional single-attempt authorization
-// only through the root SELECT and its transparent statement wrappers.
-func BuildPlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, temporalScope *TemporalPlanningScope) (result *Plan, err error) {
-	// A new statement dispatcher never borrows an outer attempt's source.
-	// Transparent wrappers still forward their explicit scope to the target SELECT.
-	if holder, ok := ctx.(interface {
-		PushTemporalPlanningScope(*TemporalPlanningScope) func()
-	}); ok {
-		restore := holder.PushTemporalPlanningScope(nil)
-		defer restore()
-	}
-
+// BuildPlanWithTemporalInput forwards a single-attempt planning input only
+// through the root SELECT and its transparent statement wrappers.
+func BuildPlanWithTemporalInput(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, temporalInput *TemporalPlanningInput) (result *Plan, err error) {
 	defer func() {
 		if err == nil {
 			err = plan.RequireLegacyCollations(result)
@@ -783,14 +760,14 @@ func BuildPlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, isPrep
 		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
-		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", temporalScope)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", temporalInput)
 		if err != nil {
 			return nil, err
 		}
 		applySQLSelectLimit(stmt, queryPlan)
 		return queryPlan, nil
 	case *tree.ParenSelect:
-		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", temporalScope)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", temporalInput)
 		if err != nil {
 			return nil, err
 		}
@@ -800,7 +777,7 @@ func BuildPlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, isPrep
 		if err := validateExplainOptions(ctx.GetContext(), stmt.Options, ""); err != nil {
 			return nil, err
 		}
-		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, temporalScope)
+		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, temporalInput)
 		if err != nil {
 			return nil, err
 		}
@@ -809,9 +786,9 @@ func BuildPlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, isPrep
 		}
 		return queryPlan, nil
 	case *tree.ExplainAnalyze:
-		return buildExplainAnalyze(ctx, stmt, isPrepareStmt, temporalScope)
+		return buildExplainAnalyze(ctx, stmt, isPrepareStmt, temporalInput)
 	case *tree.ExplainPhyPlan:
-		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt, temporalScope)
+		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt, temporalInput)
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.MultiInsert:
@@ -931,7 +908,7 @@ func BuildPlanWithTemporalScope(ctx CompilerContext, stmt tree.Statement, isPrep
 	case *tree.Load:
 		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.PrepareStmt:
-		return buildPrepareWithTemporalScope(stmt, ctx, temporalScope)
+		return buildPrepareWithTemporalInput(stmt, ctx, temporalInput)
 	case *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	case *tree.CallStmt:

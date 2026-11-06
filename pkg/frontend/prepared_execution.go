@@ -184,17 +184,13 @@ func buildPreparedBoundQueryWithTemporalIntent(ctx context.Context, ses FeSessio
 		var selected bool
 		bound, selected, buildErr = buildViewSchemaValidationPreparedPlan(planning, ses, compiler, stmt, bindings, values)
 		if !selected {
-			bound, buildErr = plan2.BuildPreparedExecutionPlanWithTemporalIntent(compiler, stmt, bindings, values, intent)
+			bound, buildErr = plan2.BuildPreparedExecutionPlanWithTemporalIntent(compiler, stmt, bindings, values, intent, planningResolver(compiler))
 		}
 		if buildErr != nil {
 			return nil, buildErr
 		}
 		return bound.Plan, nil
 	})
-	if err != nil && bound != nil {
-		bound.TemporalScope.Close()
-		bound.TemporalScope = nil
-	}
 	return bound, err
 }
 

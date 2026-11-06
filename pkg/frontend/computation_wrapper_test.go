@@ -6039,7 +6039,7 @@ func TestRebuildPreparePlanScopesBorrowedSelect(t *testing.T) {
 			currentIntent = nil
 		}
 		_, err := rebuildPreparePlanWithTemporalIntent(execCtx, ses, prepared, currentIntent,
-			func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningScope) (*plan2.Plan, error) {
+			func(_ context.Context, _ FeSession, _ plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningInput) (*plan2.Plan, error) {
 				require.Same(t, root, stmt.(*tree.PrepareStmt).Stmt)
 				require.Equal(t, wantScope, scope != nil)
 				return &plan2.Plan{}, nil

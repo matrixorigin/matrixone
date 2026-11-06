@@ -27,11 +27,11 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,22 +99,32 @@ func TestTemporalCBOObservationRequiresUsableIndex(t *testing.T) {
 	}
 }
 
-// Like the frontend resolver, capture the exact definition returned by this
-// resolution, after its ordinary metadata clone.
+// The fixture returns the hidden borrow with the same resolution result.
 type temporalCBOContext struct {
 	*encodedIndexCostTestContext
-	scope             *TemporalPlanningScope
-	hidden            engine.Relation
-	skipHiddenCapture bool
-	read              engine.TemporalRead
+	hidden         engine.Relation
+	mismatchHidden bool
+	read           engine.TemporalRead
 }
 
-func (c *temporalCBOContext) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *temporalCBOContext) IsSameCompiler(ctx CompilerContext) bool { return ctx == c }
+func (c *temporalCBOContext) BorrowStillCurrent(ctx CompilerContext, proc *process.Process, borrow *BorrowedTable) bool {
+	return c.IsSameCompiler(ctx) && proc != nil && borrow != nil && borrow.Relation != nil && proc.GetTxnOperator() == borrow.Read.Op
+}
+func (c *temporalCBOContext) ResolveBaseForPlanning(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
+	ref, full, err := c.Resolve(database, name, snapshot)
+	return ref, full, nil, err
+}
+func (c *temporalCBOContext) ResolveIndexForPlanning(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
 	ref, full, err := c.MockCompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
-	if err == nil && !c.skipHiddenCapture {
-		c.scope.AddNativeRelation(ref, full, c.hidden, c.read)
+	if err != nil || ref == nil || full == nil {
+		return ref, full, nil, err
 	}
-	return ref, full, err
+	if c.mismatchHidden {
+		ref = DeepCopyObjectRef(ref)
+		ref.Obj++
+	}
+	return ref, full, &BorrowedTable{Relation: c.hidden, Read: c.read}, nil
 }
 
 func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelationFixture, *pb.IndexDef) {
@@ -154,16 +164,15 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	cache.Set(base.TblId, stats)
 	builder.compCtx = &encodedIndexCostTestContext{MockCompilerContext: mock, statsCache: cache}
 	intent := TemporalPlanningIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime, Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "cn:6001", Route: schedule.WorkerRouteLocal}}}
-	scope := NewTemporalPlanningScope(&tree.Select{}, intent)
-	t.Cleanup(scope.Close)
-	builder.temporalPlanningScope = scope
 	builder.temporalPlanningIntent = intent
 	builder.hasTemporalPlanningIntent = true
 	builder.temporalOriginalSafeScans = map[int32]bool{0: true}
 	source := &temporalCBORelationFixture{verify: true, observation: engine.TemporalStats{Rows: stats.TableCnt, Min: float64(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)), Max: float64(types.DatetimeFromClock(2026, 1, 1, 0, 1, 40, 0)), NDV: stats.TableCnt, Kind: types.T_datetime}}
 	read := engine.TemporalRead{Op: proc.GetTxnOperator(), Stamp: client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}}
-	require.True(t, scope.AddNativeRelation(ref, base, source, read))
-	builder.compCtx = &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), scope: scope, hidden: &temporalCBORelationFixture{}, read: read}
+	compiler := &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), hidden: &temporalCBORelationFixture{}, read: read}
+	builder.compCtx = compiler
+	builder.temporalResolver = compiler
+	builder.rememberTemporalScan(0, ref, base, &BorrowedTable{Relation: source, Read: read})
 	builder.collectOriginalTemporalOwner(0)
 	require.True(t, builder.qry.GetTemporalIndexNeedsReplan())
 	return builder, source, index
@@ -206,14 +215,7 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 				bad.IndexName = strings.Repeat("x", engine.MaxTemporalNameBytes+1)
 				builder.qry.Nodes[0].TableDef.Indexes = append(builder.qry.Nodes[0].TableDef.Indexes, bad)
 			case "different hidden definition":
-				context := builder.compCtx.(*temporalCBOContext)
-				mock := context.MockCompilerContext
-				previous := mock.tables["hidden"]
-				context.skipHiddenCapture = true
-				require.True(t, context.scope.AddNativeRelation(mock.objects["hidden"], previous, context.hidden, context.read))
-				changed := DeepCopyTableDef(previous, true)
-				changed.Cols[0].Typ.Scale++
-				mock.tables["hidden"] = changed
+				builder.compCtx.(*temporalCBOContext).mismatchHidden = true
 			}
 			scan := builder.qry.Nodes[0]
 			beforeTag, beforeNames, beforeTags := builder.nextBindTag, maps.Clone(builder.nameByColRef), maps.Clone(builder.tag2NodeID)

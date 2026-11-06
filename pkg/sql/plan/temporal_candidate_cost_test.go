@@ -38,7 +38,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 			case "unmarked lifetime":
 				builder.qry.TemporalIndexNeedsReplan = false
 			case "missing scope":
-				builder.temporalPlanningScope = nil
+				builder.temporalResolver = nil
 			case "missing original owner":
 				builder.temporalOriginalSafeScans = nil
 			case "unproved original owner":
@@ -82,6 +82,16 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 	}
 }
 
+type trackingResolveContext struct {
+	CompilerContext
+	resolves int
+}
+
+func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	c.resolves++
+	return c.CompilerContext.Resolve(database, name, snapshot)
+}
+
 func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
 	builder, scanID, index, _ := newEncodedIndexCostTestCase(t,
 		[]string{"event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, nil,
@@ -108,8 +118,11 @@ func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
 	stmt := stmts[0].(*tree.Select)
 	intent := TemporalPlanningIntent{ParameterFree: true, TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
 		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "local:6001", Route: schedule.WorkerRouteLocal}}}
-	p, err := BuildPlanWithTemporalScope(ctx, stmt, false, NewTemporalPlanningScope(stmt, intent))
+	wrapper := &trackingResolveContext{CompilerContext: ctx}
+	otherCompiler := &temporalCBOContext{encodedIndexCostTestContext: fixture}
+	p, err := BuildPlanWithTemporalInput(wrapper, stmt, false, NewTemporalPlanningInput(stmt, intent, otherCompiler))
 	require.NoError(t, err)
+	require.Positive(t, wrapper.resolves, "a mismatched resolver must not bypass the compiler wrapper")
 	q := p.GetQuery()
 	require.NotNil(t, q)
 	require.True(t, q.GetTemporalIndexNeedsReplan())

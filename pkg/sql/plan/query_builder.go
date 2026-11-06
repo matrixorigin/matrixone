@@ -13887,8 +13887,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Preserve the existing probe; full resolution below owns error handling.
 		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
-		// TODO
-		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
+		var obj *ObjectRef
+		var tableDef *TableDef
+		var borrow *BorrowedTable
+		if resolver := builder.temporalResolver; resolver != nil && resolver.IsSameCompiler(builder.compCtx) {
+			obj, tableDef, borrow, err = resolver.ResolveBaseForPlanning(catalogDatabase, table, snapshot)
+		} else {
+			obj, tableDef, err = builder.compCtx.Resolve(catalogDatabase, table, snapshot)
+		}
 		if err != nil {
 			return 0, "", err
 		}
@@ -13920,6 +13926,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the
 		// immutable column definitions, indexes, constraints, or expressions.
+		fullTableDef := tableDef
 		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
@@ -14197,6 +14204,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
+		builder.rememberTemporalScan(nodeID, obj, fullTableDef, borrow)
 
 		node := builder.qry.Nodes[nodeID]
 		if node.TableDef != nil {

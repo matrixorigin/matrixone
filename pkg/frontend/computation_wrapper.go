@@ -112,7 +112,6 @@ type TxnComputationWrapper struct {
 
 	schedulingTrace         schedule.TraceRecorder
 	temporalPlanningIntent  *plan2.TemporalPlanningIntent
-	temporalScope           *plan2.TemporalPlanningScope
 	temporalIntentValidated bool
 
 	// remapDb is the effective database remap for this statement only. A COM_QUERY
@@ -217,7 +216,6 @@ func (cwft *TxnComputationWrapper) setPlanSnapshotTS(ts timestamp.Timestamp) {
 }
 
 func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
-	cwft.replaceTemporalScope(nil)
 	cwft.plan = nil
 	cwft.temporalPlanningIntent = nil
 	cwft.temporalIntentValidated = false
@@ -250,7 +248,6 @@ func (cwft *TxnComputationWrapper) freeStmt() {
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
-	cwft.replaceTemporalScope(nil)
 	cwft.releaseRuntimeCacheRetiredCompiles()
 	cwft.plan = nil
 	cwft.proc = nil
@@ -414,8 +411,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	defer RecordStatementTxnID(execCtx.reqCtx, cwft.ses)
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 
-	cwft.replaceTemporalScope(nil)
-	defer cwft.replaceTemporalScope(nil)
 	var preparedExprRetry *preparedExecutionRetry
 	temporalOrdinaryRebuilt := false
 	if execCtx.input.isPreparedExpr() {
@@ -428,20 +423,22 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
 		clear(cwft.optimizerStatsVersions)
+		compiler := cwft.ses.GetTxnCompileCtx()
+		var temporalInput *plan2.TemporalPlanningInput
 		if !execCtx.input.isPreparedExpr() {
 			if root, intent, ok := temporalPlanningIntentForStatement(cwft.ses, cwft.proc, cwft.schedulingSQL,
 				sessionSQLModeForScheduling(cwft.ses), cwft.stmt); ok {
 				cwft.temporalPlanningIntent = &intent
-				cwft.temporalScope = plan2.NewTemporalPlanningScope(root, intent)
+				temporalInput = plan2.NewTemporalPlanningInput(root, intent, planningResolver(compiler))
 			}
 		}
-		cwft.plan, err = buildPlanWithPrepareModeAndTemporalScope(
+		cwft.plan, err = buildPlanWithPrepareModeAndTemporalInput(
 			execCtx.reqCtx,
 			cwft.ses,
-			cwft.ses.GetTxnCompileCtx(),
+			compiler,
 			cwft.stmt,
 			execCtx.input.isPreparedExpr(),
-			cwft.temporalScope,
+			temporalInput,
 		)
 		if err != nil {
 			return nil, err
@@ -1114,7 +1111,7 @@ func rebuildPreparePlan(
 	buildFn func(context.Context, FeSession, plan2.CompilerContext, tree.Statement) (*plan2.Plan, error),
 ) (*plan2.Plan, error) {
 	return rebuildPreparePlanWithTemporalIntent(execCtx, executionSes, prepareStmt, nil,
-		func(ctx context.Context, ses FeSession, compiler plan2.CompilerContext, stmt tree.Statement, _ *plan2.TemporalPlanningScope) (*plan2.Plan, error) {
+		func(ctx context.Context, ses FeSession, compiler plan2.CompilerContext, stmt tree.Statement, _ *plan2.TemporalPlanningInput) (*plan2.Plan, error) {
 			return buildFn(ctx, ses, compiler, stmt)
 		})
 }
@@ -1124,23 +1121,11 @@ func rebuildPreparePlanWithTemporalIntent(
 	executionSes FeSession,
 	prepareStmt *PrepareStmt,
 	intent *plan2.TemporalPlanningIntent,
-	buildFn func(context.Context, FeSession, plan2.CompilerContext, tree.Statement, *plan2.TemporalPlanningScope) (*plan2.Plan, error),
+	buildFn func(context.Context, FeSession, plan2.CompilerContext, tree.Statement, *plan2.TemporalPlanningInput) (*plan2.Plan, error),
 ) (*plan2.Plan, error) {
-	p, scope, err := rebuildPreparePlanWithTemporalScope(execCtx, executionSes, prepareStmt, intent, buildFn)
-	scope.Close()
-	return p, err
-}
-
-func rebuildPreparePlanWithTemporalScope(
-	execCtx *ExecCtx,
-	executionSes FeSession,
-	prepareStmt *PrepareStmt,
-	intent *plan2.TemporalPlanningIntent,
-	buildFn func(context.Context, FeSession, plan2.CompilerContext, tree.Statement, *plan2.TemporalPlanningScope) (*plan2.Plan, error),
-) (*plan2.Plan, *plan2.TemporalPlanningScope, error) {
 	innerStmt, owned, err := freshPreparedCloneStatement(execCtx.reqCtx, prepareStmt)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if owned {
 		defer innerStmt.Free()
@@ -1149,13 +1134,13 @@ func rebuildPreparePlanWithTemporalScope(
 		Name: tree.Identifier(prepareStmt.Name),
 		Stmt: innerStmt,
 	}
-	var scope *plan2.TemporalPlanningScope
-	if root := temporalPlanningRoot(innerStmt); intent != nil && root != nil {
-		scope = plan2.NewTemporalPlanningScope(root, *intent)
-	}
 	var newPlan *plan2.Plan
 	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
 		compilerCtx := executionSes.GetTxnCompileCtx()
+		var input *plan2.TemporalPlanningInput
+		if root := temporalPlanningRoot(innerStmt); intent != nil && root != nil {
+			input = plan2.NewTemporalPlanningInput(root, *intent, planningResolver(compilerCtx))
+		}
 		currentDatabase := compilerCtx.GetDatabase()
 		currentContext := compilerCtx.GetContext()
 		warningContext := currentContext
@@ -1167,18 +1152,10 @@ func rebuildPreparePlanWithTemporalScope(
 		defer compilerCtx.SetContext(currentContext)
 		compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
 		defer compilerCtx.SetDatabase(currentDatabase)
-		newPlan, err = buildFn(execCtx.reqCtx, executionSes, compilerCtx, originPrepareStmt, scope)
+		newPlan, err = buildFn(execCtx.reqCtx, executionSes, compilerCtx, originPrepareStmt, input)
 		return err
 	})
-	if err != nil {
-		scope.Close()
-		return nil, nil, err
-	}
-	if !scope.MatchesQuery(newPlan.GetDcl().GetPrepare().GetPlan().GetQuery()) {
-		scope.Close()
-		scope = nil
-	}
-	return newPlan, scope, nil
+	return newPlan, err
 }
 
 // initExecuteStmtParam replaces the plan of the EXECUTE by the plan generated by
@@ -1615,12 +1592,7 @@ func initExecuteStmtParamWithResolverAndTemporalInSession(
 	stmtName string,
 	resolve preparedSchemaResolver, planningContext plan2.CompilerContext,
 	allowTemporal bool,
-) (_ *compile.Compile, _ *plan.Plan, _ tree.Statement, _ string, _ bool, resultErr error) {
-	defer func() {
-		if resultErr != nil {
-			cwft.replaceTemporalScope(nil)
-		}
-	}()
+) (_ *compile.Compile, _ *plan.Plan, _ tree.Statement, _ string, _ bool, _ error) {
 	reqCtx := execCtx.reqCtx
 	if execPlan != nil { // binary protocol, don't have to buildplan, execPlan is nil
 		stmtName = execPlan.GetName()
@@ -1793,14 +1765,13 @@ func initExecuteStmtParamWithResolverAndTemporalInSession(
 	// rollout gate also forces a current-transaction plan until every lock owner
 	// understands the plan-generation snapshot wire contract.
 	if needRebuild {
-		newPlan, rebuiltScope, err := rebuildPreparePlanWithTemporalScope(execCtx, executionSes, prepareStmt,
-			temporalIntent, func(ctx context.Context, ses FeSession, compiler plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningScope) (*plan2.Plan, error) {
-				return buildPlanWithPrepareModeAndTemporalScope(ctx, ses, compiler, stmt, false, scope)
+		newPlan, err := rebuildPreparePlanWithTemporalIntent(execCtx, executionSes, prepareStmt,
+			temporalIntent, func(ctx context.Context, ses FeSession, compiler plan2.CompilerContext, stmt tree.Statement, input *plan2.TemporalPlanningInput) (*plan2.Plan, error) {
+				return buildPlanWithPrepareModeAndTemporalInput(ctx, ses, compiler, stmt, false, input)
 			})
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
-		cwft.replaceTemporalScope(rebuiltScope)
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
 		if preparedFieldDependenciesChanged(preparePlan.GetSchemas(), newPreparePlan.GetSchemas()) {
@@ -2169,7 +2140,6 @@ func initExecuteStmtParamWithResolverAndTemporalInSession(
 						bound = candidate
 						return nil
 					}
-					candidate.TemporalScope.Close()
 				}
 				bound, buildErr = build(fieldTypes)
 				return buildErr
@@ -2177,7 +2147,6 @@ func initExecuteStmtParamWithResolverAndTemporalInSession(
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
-			cwft.replaceTemporalScope(bound.TemporalScope)
 			executionPlan = bound.Plan
 			fieldTypes = bound.FieldTypes
 			temporalTypes = bound.TemporalTypes
@@ -3155,7 +3124,6 @@ func (cwft *TxnComputationWrapper) validatedTemporalPlanningIntent() *plan2.Temp
 }
 
 func (cwft *TxnComputationWrapper) rebuildUnscopedTemporalPlan(execCtx *ExecCtx) (*plan2.Plan, error) {
-	cwft.replaceTemporalScope(nil)
 	rebuilt, err := buildPlanWithPrepareMode(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt, execCtx.input.isPreparedExpr())
 	if err != nil {
 		return nil, err
@@ -3192,7 +3160,6 @@ func (cwft *TxnComputationWrapper) validatePreparedTemporalPlan(execCtx *ExecCtx
 
 func (cwft *TxnComputationWrapper) rebuildUnscopedPreparedTemporalPlan(execCtx *ExecCtx, owner *Session,
 	stmt tree.Statement, sql string) (*plan2.Plan, error) {
-	cwft.replaceTemporalScope(nil)
 	retry := cwft.preparedExecutionRetry()
 	if retry != nil {
 		retry.temporalIntent = nil
@@ -3510,7 +3477,6 @@ func buildPlanForCompileRetryWithTemporalIntent(
 		if err != nil {
 			return nil, err
 		}
-		defer bound.TemporalScope.Close()
 		if err = plan2.ValidatePreparedWindowParams(ctx, bound.Plan, preparedRetry.paramVals); err != nil {
 			return nil, err
 		}
@@ -3520,13 +3486,12 @@ func buildPlanForCompileRetryWithTemporalIntent(
 		return bound.Plan, nil
 	}
 	// No permission verification is required when retry execute buildPlan.
-	var scope *plan2.TemporalPlanningScope
+	var input *plan2.TemporalPlanningInput
 	if intent != nil && !forcePrepare {
-		scope = plan2.NewTemporalPlanningScope(temporalPlanningRoot(stmt), *intent)
+		input = plan2.NewTemporalPlanningInput(temporalPlanningRoot(stmt), *intent, planningResolver(compilerContext))
 	}
-	defer scope.Close()
-	retryPlan, err := buildPlanWithPrepareModeAndTemporalScope(
-		ctx, ses, compilerContext, stmt, forcePrepare, scope)
+	retryPlan, err := buildPlanWithPrepareModeAndTemporalInput(
+		ctx, ses, compilerContext, stmt, forcePrepare, input)
 	if err != nil {
 		return nil, err
 	}
@@ -3658,19 +3623,7 @@ func currentCNPipelineAddress(ses FeSession) string {
 	return pu.ClusterNodes[0].Addr
 }
 
-// A scope belongs only to the current Compile/execute binding. It is never
-// copied into PrepareStmt, logical/runtime caches or reusable compile state.
-func (cwft *TxnComputationWrapper) replaceTemporalScope(scope *plan2.TemporalPlanningScope) {
-	if cwft.temporalScope == scope {
-		return
-	}
-	previous := cwft.temporalScope
-	cwft.temporalScope = scope
-	previous.Close()
-}
-
-// Replacing the outer text EXECUTE AST does not retire the freshly selected
-// execution scope. Reset/Clear/error/rebuild own scope retirement separately.
+// Replace the outer text EXECUTE AST with its prepared execution statement.
 func (cwft *TxnComputationWrapper) installPreparedExecutionStatement(stmt tree.Statement, owned bool) {
 	cwft.freeStmt()
 	cwft.stmt = stmt

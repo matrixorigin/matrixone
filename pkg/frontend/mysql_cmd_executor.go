@@ -2612,11 +2612,9 @@ func doExplainStmtWithTemporalIntent(reqCtx context.Context, ses *Session, stmt 
 	var exPlan *plan.Plan
 	root, intent, eligible := temporalPlanningIntentForStatement(ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt)
 	if eligible {
-		exPlan, err = func() (*plan.Plan, error) {
-			scope := plan2.NewTemporalPlanningScope(root, intent)
-			defer scope.Close()
-			return buildPlanWithAuthorizationAndTemporalScope(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, scope)
-		}()
+		compiler := ses.GetTxnCompileCtx()
+		input := plan2.NewTemporalPlanningInput(root, intent, planningResolver(compiler))
+		exPlan, err = buildPlanWithAuthorizationAndTemporalInput(reqCtx, ses, compiler, stmt.Statement, input)
 		if err == nil {
 			exPlan, _, err = validateTemporalPlanBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
 				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
@@ -4276,16 +4274,16 @@ func buildPlanWithPrepareMode(
 	stmt tree.Statement,
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
-	return buildPlanWithPrepareModeAndTemporalScope(reqCtx, ses, ctx, stmt, forcePrepare, nil)
+	return buildPlanWithPrepareModeAndTemporalInput(reqCtx, ses, ctx, stmt, forcePrepare, nil)
 }
 
-func buildPlanWithPrepareModeAndTemporalScope(
+func buildPlanWithPrepareModeAndTemporalInput(
 	reqCtx context.Context,
 	ses FeSession,
 	ctx plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
-	temporalScope *plan2.TemporalPlanningScope,
+	temporalInput *plan2.TemporalPlanningInput,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
 		// LOAD planning may inspect an external source before producing a plan.
@@ -4344,7 +4342,7 @@ func buildPlanWithPrepareModeAndTemporalScope(
 				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
-				optimized, err := opt.OptimizeWithTemporalScope(stmt, isPrepareStmt, temporalScope)
+				optimized, err := opt.OptimizeWithTemporalInput(stmt, isPrepareStmt, temporalInput)
 				if err != nil {
 					return nil, err
 				}
@@ -4355,7 +4353,7 @@ func buildPlanWithPrepareModeAndTemporalScope(
 					},
 				}
 			default:
-				ret, err = plan2.BuildPlanWithTemporalScope(ctx, stmt, isPrepareStmt, temporalScope)
+				ret, err = plan2.BuildPlanWithTemporalInput(ctx, stmt, isPrepareStmt, temporalInput)
 			}
 		}
 
@@ -4433,15 +4431,15 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 // check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
 // the common planning boundary shared by this and direct compile paths.
 var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
-	return buildPlanWithAuthorizationAndTemporalScope(reqCtx, ses, ctx, stmt, nil)
+	return buildPlanWithAuthorizationAndTemporalInput(reqCtx, ses, ctx, stmt, nil)
 }
 
-func buildPlanWithAuthorizationAndTemporalScope(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningScope) (*plan2.Plan, error) {
+func buildPlanWithAuthorizationAndTemporalInput(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement, scope *plan2.TemporalPlanningInput) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
 
 	// Step 1: Call buildPlan to construct the execution plan
-	plan, err := buildPlanWithPrepareModeAndTemporalScope(reqCtx, ses, ctx, stmt, false, scope)
+	plan, err := buildPlanWithPrepareModeAndTemporalInput(reqCtx, ses, ctx, stmt, false, scope)
 	if err != nil {
 		return nil, err
 	}
