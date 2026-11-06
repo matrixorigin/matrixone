@@ -208,6 +208,14 @@ including nullable branches, so a declined SIMD call adds no per-row arithmetic
 work. This revision changes only the Decimal128 add/sub owners. Retain the first
 screen alongside the final paired measurements rather than label it accepted.
 
+The five-pair refined check finds one remaining scalar-control regression:
+15-row constant-left subtraction +2.43% [1.86%,3.01%]. That input never reaches
+SIMD. Specialize its scalar overflow predicate once on the constant's sign:
+nonnegative-left subtraction overflows only when both subtrahend and result
+are negative; negative-left subtraction overflows only when both are
+nonnegative. This removes repeated XORs without weakening the full-range check.
+Retain that failed comparison and requalify the changed path before acceptance.
+
 Start qualification at128 rows; qualify the operation-specific minimum using
 the existing32/64/128/256 candidates. Place admission only in existing non-NULL
 branches so NULL/selected inputs retain their scalar path. Unsupported builds

@@ -369,13 +369,27 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 			if len2 >= decimalSIMDSub128MinRows {
 				i = decimal128SubSIMDPrefix(v1, v2, rs, len2)
 			}
-			for ; i < len2; i++ {
-				y := v2[i]
-				lo, c := bits.Sub64(a.B0_63, y.B0_63, 0)
-				hi, _ := bits.Sub64(a.B64_127, y.B64_127, c)
-				rs[i] = types.Decimal128{B0_63: lo, B64_127: hi}
-				if int64((a.B64_127^hi)&(a.B64_127^y.B64_127)) < 0 {
-					return i
+			// The left sign is constant. Only the opposite-sign subtrahend
+			// and result can overflow; hoist that choice out of the loop.
+			if int64(a.B64_127) >= 0 {
+				for ; i < len2; i++ {
+					y := v2[i]
+					lo, c := bits.Sub64(a.B0_63, y.B0_63, 0)
+					hi, _ := bits.Sub64(a.B64_127, y.B64_127, c)
+					rs[i] = types.Decimal128{B0_63: lo, B64_127: hi}
+					if int64(y.B64_127&hi) < 0 {
+						return i
+					}
+				}
+			} else {
+				for ; i < len2; i++ {
+					y := v2[i]
+					lo, c := bits.Sub64(a.B0_63, y.B0_63, 0)
+					hi, _ := bits.Sub64(a.B64_127, y.B64_127, c)
+					rs[i] = types.Decimal128{B0_63: lo, B64_127: hi}
+					if int64(y.B64_127|hi) >= 0 {
+						return i
+					}
 				}
 			}
 		} else {
