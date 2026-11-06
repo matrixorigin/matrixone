@@ -34,8 +34,9 @@ const (
 
 // Cache evicts the least recently used items once the total size exceeds the capacity.
 // Set and Get make an item the most recently used. Keys are spread over shards, each
-// ordered by the stamp of its items' last use, and eviction takes the item with the
-// oldest stamp across the shards.
+// ordered by the stamp of its items' last use, and eviction takes the evictable item with
+// the oldest stamp across the shards when it removes it. An item that becomes evictable, or
+// is set oldest, while an eviction scans the shards can be passed over by that eviction.
 type Cache[K comparable, V any] struct {
 	capacity fscache.CapacityFunc
 	seed     maphash.Seed
@@ -318,9 +319,9 @@ func (c *Cache[K, V]) removeTo(target int64) []item[K, V] {
 	return evictions
 }
 
-// removeOldest removes the evictable item with the oldest stamp, or the oldest of the shard
-// it picked when that shard changes meanwhile, and returns false when no item is
-// evictable. The caller holds c.evictor.
+// removeOldest removes the evictable item with the oldest stamp, and returns false when no
+// item is evictable. A shard whose oldest item changed since its stamp was read is read
+// again. The caller holds c.evictor.
 func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
 	for {
 		var oldest *shard[K, V]
@@ -335,7 +336,7 @@ func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
 		}
 		oldest.mu.Lock()
 		e := oldest.order.Back()
-		if e == nil {
+		if e == nil || e.Value.(*item[K, V]).stamp != stamp {
 			oldest.mu.Unlock()
 			continue
 		}
@@ -349,7 +350,8 @@ func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
 	}
 }
 
-// scanOldest is removeOldest looking past the items that are not evictable.
+// scanOldest is removeOldest looking past the items that are not evictable. It scans again
+// when the oldest evictable item of the shard it picked changed meanwhile.
 func (c *Cache[K, V]) scanOldest() (item[K, V], bool) {
 	for {
 		var oldest *shard[K, V]
@@ -368,7 +370,7 @@ func (c *Cache[K, V]) scanOldest() (item[K, V], bool) {
 			return item[K, V]{}, false
 		}
 		oldest.mu.Lock()
-		if e := c.oldestLocked(oldest); e != nil {
+		if e := c.oldestLocked(oldest); e != nil && e.Value.(*item[K, V]).stamp == stamp {
 			it := c.removeLocked(oldest, e)
 			oldest.mu.Unlock()
 			return it, true

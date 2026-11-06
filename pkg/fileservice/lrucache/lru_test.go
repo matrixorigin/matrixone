@@ -377,3 +377,47 @@ func TestConcurrentAccounting(t *testing.T) {
 	require.Equal(t, prepared.Load(), evicted.Load())
 	require.Equal(t, sets.Load()-evicted.Load(), int64(len(present)))
 }
+
+// keyInShard returns a key with prefix that lands in shard want.
+func keyInShard[V any](c *Cache[string, V], prefix string, want int) string {
+	for i := 0; ; i++ {
+		k := prefix + strconv.Itoa(i)
+		if c.shardOf(k) == &c.shards[want] {
+			return k
+		}
+	}
+}
+
+// A Get on the oldest item of the shard a scan picked, while the scan reads a later shard,
+// does not make eviction take that shard's next item over an older one elsewhere.
+func TestScanEvictsOldestAfterConcurrentGet(t *testing.T) {
+	ctx := context.Background()
+	var evicted []string
+	c := NewWithPrepareEvict[string, int](func() int64 { return 1 << 30 }, nil, nil, nil,
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) { evicted = append(evicted, key) })
+	held := keyInShard(c, "held", 12)
+	a1 := keyInShard(c, "a1-", 3)
+	b := keyInShard(c, "b-", 9)
+	a2 := keyInShard(c, "a2-", 3)
+	var armed atomic.Bool
+	c.SetEvictable(func(key string) bool {
+		if key == held {
+			return false
+		}
+		if key == b && armed.CompareAndSwap(true, false) {
+			done := make(chan struct{})
+			go func() {
+				c.Get(ctx, a1)
+				close(done)
+			}()
+			<-done
+		}
+		return true
+	})
+	for _, k := range []string{held, a1, b, a2} {
+		c.Set(ctx, k, 0, 1)
+	}
+	armed.Store(true)
+	c.EvictToTargetWithWait(ctx, 3)
+	require.Equal(t, []string{b}, evicted)
+}

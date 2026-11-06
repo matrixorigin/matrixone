@@ -20,16 +20,20 @@
 // all shards, and eviction takes from the shard holding the oldest member, so the cache evicts
 // as one S3-FIFO. One goroutine evicts at a time.
 //
-// A Set inserts its value, makes it evictable once its insertion is notified, then evicts
-// while Used is over the capacity. When another goroutine is evicting, the Set leaves the
-// eviction to it, which checks Used again once it lets go of the evictor, unless Used is over
-// the ceiling, a sixteenth over the capacity, where the Set waits to evict too. Used exceeds
-// the capacity only while Sets are running, by at most a sixteenth of it and the values being
-// inserted, or after the capacity shrinks until the next Set or eviction.
+// A Set or Replace inserts its value, makes it evictable once its insertion is notified, then
+// evicts while Used is over the capacity. When another goroutine holds the evictor and Used is
+// within the ceiling, a sixteenth over the capacity, it returns and leaves the eviction to that
+// goroutine; over the ceiling it waits for the evictor and evicts too. A Set or Replace that
+// holds the evictor checks Used against the capacity again each time it lets go of it. EvictTo
+// evicts only down to its own target and stops when ctx is done, so bytes left to it can stay
+// over the capacity until the next Set, Replace or eviction. Used also exceeds the capacity
+// while Sets are running, by up to a sixteenth of it plus the values being inserted, and after
+// the capacity shrinks.
 //
 // The cache retains a value when it inserts it and releases it once the value has left the
-// cache, outside all of its locks; a Get retains the value for the caller. When Set returns,
-// its value is either cached, findable, evictable and counted in Used, or not cached at all.
+// cache, outside all of its locks; a Get retains the value for the caller. A Set that returns
+// true published its value, findable and counted in Used, and made it evictable; a concurrent
+// Delete or eviction may have removed it by then. A Set that returns false cached nothing.
 //
 // Locks are taken evictor, then policy shard, then index shard, then ChargeGuard. A Get takes
 // only its index shard.
@@ -504,7 +508,9 @@ func (c *Cache[K, V]) DeleteGroup(group string) {
 }
 
 // EvictTo evicts values until Used is at most target, and returns Used. It stops early when
-// ctx is done or nothing is left to evict.
+// ctx is done or nothing evictable is left, and does not check Used against the capacity, so
+// Used can be over target or the capacity when it returns. Values whose insertion is still
+// being notified are counted in Used but not yet evictable.
 func (c *Cache[K, V]) EvictTo(ctx context.Context, target int64) int64 {
 	var buf [evictBatch]removal[K, V]
 	return c.evictTo(ctx, target, buf[:0])
