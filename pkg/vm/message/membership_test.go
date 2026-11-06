@@ -20,10 +20,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,14 +110,23 @@ func (ctx *membershipBarrierContext) Err() error {
 
 type membershipWaitContext struct {
 	context.Context
-	once    sync.Once
-	entered chan struct{}
+	once     sync.Once
+	entered  chan struct{}
+	waiting  chan struct{}
+	waitOnce sync.Once
 }
 
 func (ctx *membershipWaitContext) Err() error {
 	err := ctx.Context.Err()
 	ctx.once.Do(func() { close(ctx.entered) })
 	return err
+}
+
+func (ctx *membershipWaitContext) Done() <-chan struct{} {
+	if ctx.waiting != nil {
+		ctx.waitOnce.Do(func() { close(ctx.waiting) })
+	}
+	return ctx.Context.Done()
 }
 
 func TestMembershipWaitCancellationAndBuilderFailure(t *testing.T) {
@@ -175,6 +186,72 @@ func TestMembershipWaitCancellationAndBuilderFailure(t *testing.T) {
 				require.NotNil(t, index)
 			}
 			jm.Free()
+		})
+	}
+}
+
+func TestMembershipNativeAllocationFailurePublishes(t *testing.T) {
+	for _, failure := range []string{"oom", "unrelated native failure"} {
+		t.Run(failure, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })
+			jm := membershipJoinMap(t, mp, 2)
+			allocated, charged := mp.AllocatedBytes(), mp.CurrNB()
+			fault.EnableDomain(fault.DomainTest)
+			t.Cleanup(func() { fault.DisableDomain(fault.DomainTest) })
+			require.NoError(t, fault.AddFaultPointInDomain(context.Background(), fault.DomainTest,
+				"simple_c_allocator_calloc", ":::", "echo", 32, failure, false))
+			ctx := &membershipBarrierContext{Context: context.Background(), entered: make(chan struct{}), release: make(chan struct{})}
+			var release sync.Once
+			type outcome struct {
+				index *hashmap.MembershipIndex
+				err   error
+			}
+			builder, waiter := make(chan outcome, 1), make(chan outcome, 1)
+			var wg sync.WaitGroup
+			t.Cleanup(func() { release.Do(func() { close(ctx.release) }); wg.Wait() })
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				index, err := jm.GetMembershipIndex(ctx, 0, types.T_int32.ToType())
+				builder <- outcome{index, err}
+			}()
+			<-ctx.entered
+			waitCtx := &membershipWaitContext{Context: context.Background(), entered: make(chan struct{}), waiting: make(chan struct{})}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				index, err := jm.GetMembershipIndex(waitCtx, 0, types.T_int32.ToType())
+				waiter <- outcome{index, err}
+			}()
+			<-waitCtx.waiting // waiter reached the ready/context select while the builder is blocked
+			release.Do(func() { close(ctx.release) })
+			for _, result := range []outcome{<-builder, <-waiter} {
+				require.Nil(t, result.index)
+				if failure == "oom" {
+					require.NoError(t, result.err, "optional allocator OOM must select the evaluator")
+				} else {
+					require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrInternal))
+					require.ErrorContains(t, result.err, failure)
+				}
+			}
+			select {
+			case <-jm.membership.ready:
+			default:
+				t.Fatal("builder failed without publishing a terminal outcome")
+			}
+			require.Equal(t, allocated, mp.AllocatedBytes())
+			require.Equal(t, charged, mp.CurrNB())
+			require.Equal(t, int32(2), vector.GetFixedAtNoTypeCheck[int32](jm.GetBatches()[0].Vecs[0], 1))
+			jm.Free()
+			jm.Free()
+			require.Zero(t, mp.AllocatedBytes())
+			fault.DisableDomain(fault.DomainTest)
+			fresh := membershipJoinMap(t, mp, 1)
+			index, err := fresh.GetMembershipIndex(context.Background(), 0, types.T_int32.ToType())
+			require.NoError(t, err)
+			require.NotNil(t, index)
+			fresh.Free()
 		})
 	}
 }

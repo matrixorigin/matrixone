@@ -1,8 +1,9 @@
 # 4.1.6-hotfix：有界 NULL-aware membership 索引
 
-关联 issue：#32263。版本：v2，2026-11-06。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
+关联 issue：#32263。版本：v3，2026-11-06。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
 
-v2 明确独立 pipeline 的取消隔离：builder 取消只禁用共享优化，不取消仍有效的兄弟消费者；其余设计保持 v1。
+v2 明确独立 pipeline 的取消隔离：builder 取消只禁用共享优化，不取消仍有效的兄弟消费者。
+v3 闭合原生物理分配失败：MPool 在 calloc 返回错误时回滚已准入的 pool/global 配额并返回原错，确保可选索引仍发布终态。
 
 ## 设计范围与评审结论
 
@@ -78,6 +79,8 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 
 - 支持域不匹配、索引大小超限：返回 nil / 无错误；保留 RHS。
 - 仅在 native 索引分配调用的边界识别 ErrOOM 和本分支明确的 mpool cap 错误；不能按全部 ErrInternal 降级，不能吞其它调用的错误。
+- MPool 在配额准入成功后若物理 calloc 失败，必须补偿 pool/global reservation 并返回原始 error，不得 panic 或登记不存在的 buffer。OOM 经既有 nil-index 分支发布禁用终态并关闭 ready；非 OOM 经错误分支发布原错并关闭 ready。测试在 allocator 的 calloc 边界注入 NULL，区别于 cap 拒绝，不添加 recover 吞任意 panic。
+- 确定性测试点仅在显式启用的 fault 测试域生效，并按 allocation size 过滤；默认禁用的成功路径只增加一次 fault 开关读取，不改变分配大小/所有权。测试必须撤销测试域，不能带入跨测试状态。
 - 发生上下文取消时，builder 自身返回取消；释放未发布数组，向其它消费者发布禁用状态。等待者自身的取消仍优先于回退。
 - 构建每个 bounded 行窗口、碰撞链检查 ctx；probe 每个 bounded 窗口及碰撞链检查 ctx；回退 evaluator 补上行 / RHS batch 间取消检查。
 - 成功发布后查询只读；取消不会销毁别的消费者仍使用的索引。
@@ -95,6 +98,7 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 - pure helper：空/全 NULL/命中+NULL/NULL probe/重复、常量向量、跨 batch、长字符串/内嵌 NUL、反例类型及 GROUPING。
 - 容量：实际并发构建共用小 cap，barrier 保持 live 索引；验证容量限制与部分成功/降级、无编码缓冲；检查清理后恢复基线。
 - shared owner：同 JoinMap 多消费者只构建一次，等待者取消、builder 取消、不同 descriptor 回退、Reset/Free。
+- allocator failure：在 cap 足够时注入 calloc NULL；反复失败后 pool/global 计费与原有 live buffer 不变、可重新使用全部剩余额度。用 barrier 确认等待者到达 ready/context select，再使 builder 分配失败，验证 OOM 回退和非 OOM 错误发布；真实 HashBuild→LoopJoin 消费链验证 evaluator 结果及错误传播。
 - operator：真实 HashBuild → LoopJoin → 输出链；DefaultBatchSize+1、evaluator 差分、错误顺序与非 OOM 传播。
 - SQL：mo-tester 正常比对、NULL 真值表、天然 nullable 输入；另做 #32085 元数据修正后的隔离组合验证。
 - 性能：3,000/6,000 行等值 IN/NOT IN 对照，不在 UT/BVT 中断言耗时。

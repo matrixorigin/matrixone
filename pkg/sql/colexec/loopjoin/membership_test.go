@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -166,6 +168,37 @@ func TestMarkMembershipResetAndBudgetFallback(t *testing.T) {
 	membershipInputs(t, proc, join, build, []int32{1, 2}, []int32{2}, nil, nil)
 	require.Equal(t, [][2]bool{{false, false}, {true, false}}, membershipResults(t, proc, join))
 	require.Positive(t, join.ctr.mp.Size(), "new generation must retry indexing and clear old NULL facts")
+}
+
+func TestMarkMembershipNativeAllocationFailure(t *testing.T) {
+	for _, failure := range []string{"oom", "unrelated native failure"} {
+		t.Run(failure, func(t *testing.T) {
+			mp, err := mpool.NewMPool("mark-native-failure", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			proc, join, build := newMembershipOperators(t, mp)
+			membershipInputs(t, proc, join, build, []int32{1, 2, 0}, []int32{1, 0}, []uint64{2}, []uint64{1})
+			spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr}
+			join.ctr.expr = spy
+			fault.EnableDomain(fault.DomainTest)
+			t.Cleanup(func() { fault.DisableDomain(fault.DomainTest) })
+			// First native allocation is the 32-byte index; unlike a cap
+			// rejection, the allocator fails after both reservations succeed.
+			require.NoError(t, fault.AddFaultPointInDomain(context.Background(), fault.DomainTest,
+				"simple_c_allocator_calloc", "1:1::", "echo", 32, failure, false))
+			if failure == "oom" {
+				require.Equal(t, [][2]bool{{true, false}, {false, true}, {false, true}}, membershipResults(t, proc, join))
+				require.Positive(t, spy.calls, "native OOM must execute the real evaluator fallback")
+				require.NotNil(t, join.ctr.joinBat)
+			} else {
+				_, err := vm.Exec(join, proc)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+				require.ErrorContains(t, err, failure)
+				require.Zero(t, spy.calls, "unrelated allocator errors must not be downgraded")
+			}
+			require.Zero(t, join.ctr.mp.Size())
+			require.Len(t, join.ctr.mp.GetBatches(), 1)
+		})
+	}
 }
 
 func TestMarkMembershipOutputAllocationErrorIsNotFallback(t *testing.T) {
