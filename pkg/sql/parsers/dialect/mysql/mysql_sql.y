@@ -971,7 +971,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
+%type <str> database_name_opt auth_string
+%type <cstr> constraint_keyword_opt constraint_keyword
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -12560,15 +12561,15 @@ index_def:
 constaint_def:
     constraint_keyword constraint_elem
     {
-        if $1 != "" {
+        if $1.Origin() != "" {
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
-                v.ConstraintSymbol = $1
+                v.ConstraintSymbol = $1.Compare()
             case *tree.ForeignKey:
-                v.ConstraintSymbol = $1
+                v.ConstraintSymbol = $1.Compare()
             case *tree.UniqueIndex:
-                v.ConstraintSymbol = $1
-            case *tree.CheckIndex: v.ConstraintSymbol = $1
+                v.ConstraintSymbol = $1.Origin()
+            case *tree.CheckIndex: v.ConstraintSymbol = $1.Compare()
             }
         }
         $$ = $2
@@ -12898,11 +12899,11 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, true, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1.Compare())
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
-        $$ = tree.NewAttributeCheckConstraint($4, $6, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, $6, $1.Compare())
     }
 |   ON UPDATE name_datetime_scale datetime_scale_opt
     {
@@ -12989,7 +12990,7 @@ enforce:
 
 constraint_keyword_opt:
     {
-        $$ = ""
+        $$ = tree.NewCStr("", 1)
     }
  |    constraint_keyword
      {
@@ -12999,11 +13000,11 @@ constraint_keyword_opt:
 constraint_keyword:
     CONSTRAINT
     {
-        $$ = ""
+        $$ = tree.NewCStr("", 1)
     }
 |   CONSTRAINT ident
     {
-        $$ = $2.Compare()
+        $$ = $2
     }
 
 references_def:
