@@ -46,7 +46,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
 				steps := builder.qry.Steps
 				builder.qry.Steps = nil // The original owner is captured before step publication.
-				builder.captureTemporalOriginalOwner(0)
+				builder.collectOriginalTemporalOwner(0)
 				builder.qry.Steps = steps
 				require.Contains(t, builder.temporalOriginalSafeScans, int32(0))
 				require.False(t, builder.temporalOriginalSafeScans[0])

@@ -119,115 +119,137 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	query := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{scan, project}, Steps: []int32{1}}
 	index := &plan.IndexDef{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true, Parts: []string{"d", "id"}}
 	scan.TableDef.Indexes = []*plan.IndexDef{index}
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query))
+	potential := func(ctx context.Context) bool {
+		owner := *query
+		owner.TemporalIndexNeedsReplan = false
+		mock := NewMockCompilerContext(true, proc)
+		mock.SetContext(ctx)
+		builder := &QueryBuilder{qry: &owner, compCtx: mock}
+		builder.collectOriginalTemporalOwner(1)
+		return owner.TemporalIndexNeedsReplan
+	}
+	proofFor := func(ctx context.Context) originalTemporalProof {
+		path, ok := traceTemporalCandidatePath(query)
+		require.True(t, ok)
+		return proveOriginalTemporalPath(ctx, query, path)
+	}
+	excludes := func(ctx context.Context) bool {
+		return originalTemporalPathExcludesIndex(ctx, scan, proofFor(ctx))
+	}
+	require.True(t, potential(proc.Ctx))
 	bindingCtx := withPreparedSourceBindings(proc.Ctx, nil, []any{"unproved"})
 	mock := NewMockCompilerContext(true, proc)
 	mock.SetContext(bindingCtx)
 	builder := &QueryBuilder{qry: query, compCtx: mock}
-	builder.markTemporalAccessLifetime(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.True(t, query.GetTemporalIndexNeedsReplan())
 	require.True(t, preparedBindingState(bindingCtx).valueDependent)
 	query.TemporalIndexNeedsReplan = false
 	builder.isPrepareStatement = true
-	builder.markTemporalAccessLifetime(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.False(t, query.GetTemporalIndexNeedsReplan(), "known prepared provenance cannot enter temporal access")
 	builder.isPrepareStatement = false
 	unresolved := DeepCopyExpr(predicate)
 	unresolved.GetF().Args[1] = &plan.Expr{Typ: Type{Id: int32(types.T_any)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
 	scan.FilterList[0] = unresolved
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "an unproved parameter must still prevent reuse of a base choice")
+	require.True(t, potential(proc.Ctx), "an unproved parameter must still prevent reuse of a base choice")
 	between := DeepCopyExpr(predicate)
 	between.GetF().Func.Obj = function.EncodeOverloadID(function.BETWEEN, 0)
 	between.GetF().Args = append(between.GetF().Args, DeepCopyExpr(unresolved.GetF().Args[1]))
 	scan.FilterList[0] = between
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "a potential range must be detected before range lowering")
+	require.True(t, potential(proc.Ctx), "a potential range must be detected before range lowering")
 	in := DeepCopyExpr(predicate)
 	in.GetF().Func.Obj = function.EncodeOverloadID(function.IN, 0)
 	in.GetF().Args[1] = &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{DeepCopyExpr(unresolved.GetF().Args[1])}}}}
 	scan.FilterList[0] = in
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "a potential IN arm must be detected before lowering")
+	require.True(t, potential(proc.Ctx), "a potential IN arm must be detected before lowering")
 	scan.TableDef.Indexes = nil
-	require.False(t, potentialTemporalIndexAccess(proc.Ctx, query), "unindexed queries do not need temporal replanning")
+	require.False(t, potential(proc.Ctx), "unindexed queries do not need temporal replanning")
 	scan.TableDef.Indexes = []*plan.IndexDef{index}
 	scan.FilterList[0] = predicate
 	literal := &plan.Expr{Typ: Type{Id: int32(types.T_timestamp), Scale: 6}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: 123456}}}}
 	literalPredicate := DeepCopyExpr(predicate)
 	literalPredicate.GetF().Args[1] = literal
 	scan.FilterList[0] = literalPredicate
-	literalBudget := 4096
-	require.True(t, temporalOriginalOwnerFits(proc.Ctx, query, 0, &literalBudget))
-	_, admitted := temporalOriginalSingleMixedLeaf(query, 0)
-	require.True(t, admitted, "the typed literal must pass the original-owner proof")
-	require.False(t, temporalOriginalOwnerExcludesIndex(proc.Ctx, query))
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "a leading key with an eligible typed literal must be replanned")
+	proof := proofFor(proc.Ctx)
+	require.True(t, proof.fits && proof.single, "the typed literal must pass the original-owner proof")
+	require.False(t, excludes(proc.Ctx))
+	require.True(t, potential(proc.Ctx), "a leading key with an eligible typed literal must be replanned")
 	builder.compCtx.SetContext(proc.Ctx)
 	query.TemporalIndexNeedsReplan = false
-	builder.markTemporalAccessLifetime(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.True(t, query.GetTemporalIndexNeedsReplan())
 	builder.compCtx.SetContext(bindingCtx)
 	scan.FilterList[0] = predicate
 	index.Parts = []string{"id", "d"}
-	require.False(t, potentialTemporalIndexAccess(proc.Ctx, query), "a suffix-only temporal column cannot select this access")
-	require.True(t, potentialTemporalIndexAccess(bindingCtx, query), "prepared source provenance remains conservative")
+	require.False(t, potential(proc.Ctx), "a suffix-only temporal column cannot select this access")
+	require.True(t, potential(bindingCtx), "prepared source provenance remains conservative")
 	query.TemporalIndexNeedsReplan = false
 	preparedBindingState(bindingCtx).valueDependent = false
-	builder.markTemporalAccessLifetime(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.True(t, query.GetTemporalIndexNeedsReplan())
 	require.True(t, preparedBindingState(bindingCtx).valueDependent)
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true}, index}
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "incomplete index metadata cannot prove absence")
+	require.True(t, potential(proc.Ctx), "incomplete index metadata cannot prove absence")
 	cancelled, cancel := context.WithCancel(proc.Ctx)
 	cancel()
-	require.True(t, potentialTemporalIndexAccess(cancelled, query), "cancellation keeps the conservative lifetime")
+	require.True(t, potential(cancelled), "cancellation keeps the conservative lifetime")
 	scan.TableDef.Indexes = make([]*plan.IndexDef, engine.MaxTemporalIndexDefinitions+1)
 	for i := range scan.TableDef.Indexes {
 		scan.TableDef.Indexes[i] = index
 	}
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "an index count over the proof budget remains conservative")
+	require.True(t, potential(proc.Ctx), "an index count over the proof budget remains conservative")
 	longName := strings.Repeat("x", engine.MaxTemporalNameBytes+1)
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true, Parts: []string{longName, "d"}}}
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "an oversized key name remains conservative")
+	require.True(t, potential(proc.Ctx), "an oversized key name remains conservative")
 	scan.FilterList = []*plan.Expr{predicate, DeepCopyExpr(predicate)}
-	require.True(t, temporalOriginalOwnerExcludesIndex(proc.Ctx, query), "two original filters cannot produce this candidate")
-	proofBudget := 4096
-	require.True(t, temporalOriginalOwnerFits(proc.Ctx, query, 0, &proofBudget))
-	require.Greater(t, proofBudget, 4096-64, "the proof performs only its initial budget cancellation check")
+	require.True(t, excludes(proc.Ctx), "two original filters cannot produce this candidate")
+	proof = proofFor(proc.Ctx)
+	require.True(t, proof.fits)
+	require.Greater(t, proof.remaining, 4096-64, "the proof performs only its initial budget cancellation check")
 	cancelBase, cancelAfterCheck := context.WithCancel(proc.Ctx)
 	defer cancelAfterCheck()
 	lateCancel := &cancelAfterFirstErrCheck{Context: cancelBase, cancel: cancelAfterCheck}
-	require.False(t, temporalOriginalOwnerExcludesIndex(lateCancel, query), "cancellation during the proof must not exclude the owner")
+	require.False(t, excludes(lateCancel), "cancellation during the proof must not exclude the owner")
 	require.Equal(t, 2, lateCancel.checks, "the final exclusion check must observe cancellation")
 	scan.FilterList = []*plan.Expr{predicate}
 	index.Parts = []string{"d", "id"}
 	scan.TableDef.Indexes = []*plan.IndexDef{index}
 	scan.FilterList = nil
 	project.FilterList = []*plan.Expr{predicate}
-	require.True(t, potentialTemporalIndexAccess(proc.Ctx, query), "detection must precede filter pushdown")
+	require.True(t, potential(proc.Ctx), "detection must precede filter pushdown")
 	project.FilterList = nil
 	scan.FilterList = []*plan.Expr{predicate}
 	indexTable := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Typ: Type{Id: int32(types.T_varchar)}}}}
-	hint, ok, err := temporalIndexHint(proc.Ctx, query, 0, true, index, indexTable, 2, 0)
+	makeHint := func(paramFree bool) (*plan.Expr, bool, error) {
+		atom, ok, err := temporalIndexOperands(proc.Ctx, query, 0, paramFree, index, 0)
+		if err != nil || !ok {
+			return nil, false, err
+		}
+		return makeTemporalIndexHint(proc.Ctx, atom, index, indexTable, 2)
+	}
+	hint, ok, err := makeHint(true)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.True(t, hint.TemporalCandidateFilter)
 	require.True(t, hint.GetF().Args[0].TemporalCandidateGuard)
 	require.False(t, predicate.TemporalCandidateFilter)
-	_, ok, err = temporalIndexHint(proc.Ctx, query, 0, false, index, indexTable, 2, 0)
+	_, ok, err = makeHint(false)
 	require.NoError(t, err)
 	require.False(t, ok)
 	index.Unique = true
-	_, ok, err = temporalIndexHint(proc.Ctx, query, 0, true, index, indexTable, 2, 0)
+	_, ok, err = makeHint(true)
 	require.NoError(t, err)
 	require.False(t, ok, "nullable suffix prevents proving unique-index completeness")
 	index.Unique = false
 	suffix := scan.TableDef.Cols[1]
 	scan.TableDef.Cols[1] = nil
-	_, ok, err = temporalIndexHint(proc.Ctx, query, 0, true, index, indexTable, 2, 0)
+	_, ok, err = makeHint(true)
 	require.NoError(t, err)
 	require.False(t, ok, "incomplete index metadata must decline the hint")
 	scan.TableDef.Cols[1] = suffix
 	project.NodeType = plan.Node_JOIN
-	_, ok, err = temporalIndexHint(proc.Ctx, query, 0, true, index, indexTable, 2, 0)
+	_, ok, err = makeHint(true)
 	require.NoError(t, err)
 	require.False(t, ok)
 }

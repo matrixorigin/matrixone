@@ -22,23 +22,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// temporalIndexHint builds and marks a leading-component candidate only after
-// the original plan and index pass the admission checks. paramFree is a proof
-// from the pre-binding owner, not an inference from materialized literals.
-// Callers must separately establish access-path cost and placement permission.
-func temporalIndexHint(ctx context.Context, query *plan.Query, scanID int32, paramFree bool, index *plan.IndexDef,
-	indexTable *plan.TableDef, indexTag int32, filterPos int,
+// makeTemporalIndexHint constructs a necessary physical filter from the atom
+// just proved by temporalIndexOperands. The caller owns placement, cost and the
+// final relation/transaction proof; this filter never replaces the SQL residual.
+func makeTemporalIndexHint(ctx context.Context, atom temporalCandidateAtom, index *plan.IndexDef,
+	indexTable *plan.TableDef, indexTag int32,
 ) (*plan.Expr, bool, error) {
-	atom, admitted, err := temporalIndexOperands(ctx, query, scanID, paramFree, index, filterPos)
-	if err != nil || !admitted {
-		return nil, false, err
-	}
 	if indexTable == nil || len(indexTable.Cols) == 0 || indexTable.Cols[0] == nil {
 		return nil, false, nil
 	}
 	physical := GetColExpr(indexTable.Cols[0].Typ, indexTag, 0)
 	physical.GetCol().Name = indexTable.Cols[0].Name
 	var hint, guard *plan.Expr
+	var err error
 	if indexTableStoresSerializedKey(index) {
 		if types.T(physical.Typ.Id) != types.T_varchar {
 			return nil, false, nil

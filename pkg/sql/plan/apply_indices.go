@@ -4875,6 +4875,48 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	return builder.appendRegularIndexOnlyScan(node, indexNode)
 }
 
+// buildRegularIndexColumnMap constructs a private physical index mapping. Each
+// caller owns its publication and the surrounding scan-construction contract.
+func buildRegularIndexColumnMap(
+	ctx context.Context, source *plan.Node, index *IndexDef, hidden *plan.TableDef, leading *plan.Expr, tag int32,
+) (map[[2]int32]*plan.Expr, bool, error) {
+	if ctx == nil || source == nil || source.TableDef == nil || source.TableDef.Pkey == nil || len(source.BindingTags) == 0 ||
+		index == nil || len(index.Parts) == 0 || hidden == nil || leading == nil || leading.GetCol() == nil {
+		return nil, false, nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, false, err
+	}
+	mapping := make(map[[2]int32]*plan.Expr, len(index.Parts))
+	for i, part := range index.Parts {
+		if err := context.Cause(ctx); err != nil {
+			return nil, false, err
+		}
+		name := catalog.ResolveAlias(part)
+		pos, ok := source.TableDef.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(source.TableDef.Cols) || source.TableDef.Cols[pos] == nil {
+			return nil, false, nil
+		}
+		key := [2]int32{source.BindingTags[0], pos}
+		switch {
+		case len(index.Parts) == 1:
+			mapping[key] = leading
+		case name == source.TableDef.Pkey.PkeyColName:
+			if len(hidden.Cols) < 2 || hidden.Cols[1] == nil {
+				return nil, false, nil
+			}
+			mapping[key] = GetColExpr(hidden.Cols[1].Typ, tag, 1)
+		default:
+			value, err := MakeSerialExtractExpr(ctx, DeepCopyExpr(leading), source.TableDef.Cols[pos].Typ, int64(i))
+			if err != nil {
+				return nil, false, err
+			}
+			mapping[key] = value
+		}
+	}
+	return mapping, true, nil
+}
+
 // 先构造、后发布，使多分支访问在任一分支失败时仍保留完整原计划。
 func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	idxDef *IndexDef,
@@ -4884,7 +4926,6 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	match *regularIndexOnlyMatch,
 ) *plan.Node {
 	leadingPos := match.filterIdx
-	numParts := len(idxDef.Parts)
 	missFilterIdx := make([]int, 0, len(node.FilterList))
 	for filterIdx := range node.FilterList {
 		isLeading := false
@@ -4919,21 +4960,15 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 		return nil
 	}
 
-	if numParts == 1 {
-		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
-		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
-	} else {
-		for i := 0; i < numParts; i++ {
-			colName := catalog.ResolveAlias(idxDef.Parts[i])
-			colIdx := node.TableDef.Name2ColIndex[colName]
-			if colName == node.TableDef.Pkey.PkeyColName {
-				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
-			} else {
-				origType := node.TableDef.Cols[colIdx].Typ
-				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
-			}
-		}
+	mapping, ok, err := buildRegularIndexColumnMap(builder.GetContext(), node, idxDef, idxTableDef, leadingColExpr, idxTag)
+	if err != nil {
+		panic(err)
+	}
+	if !ok {
+		return nil
+	}
+	for key, value := range mapping {
+		idxColMap[key] = value
 	}
 
 	residualLeadingPos := match.residualLeadingPos

@@ -5,10 +5,6 @@ Issue #31619 reported incorrect results for an indexed `DATETIME` compared with
 index bounds and retaining the SQL predicate. PR #31944 adds a cost-based
 performance path for eligible comparisons; it does not replace that fix.
 
-The design was reviewed before implementation against PR head `c3715c131e` and
-main `57e7871e` by `gpt-6.1-terra` / `max`. Design and subsequent cost-review
-artifacts have SHA-256 `2a96404ad6083d4d4aaf3f22956ebd8c0535fc004d953d200c8ff34e94cdc432`
-and `20c53436b8b6257f5b19794ad6c1637314b385b3293cc2d846343855c9d4996c`.
 The candidate-range proof is in [temporal index ranges](20261028-temporal-index-ranges.md).
 
 ## Contract and scope
@@ -64,10 +60,11 @@ The existing regular-index selector owns enumeration, scoring and final choice;
 normal candidates keep their priority and fallback rules. Temporal candidates
 carry only attempt-local cost estimates and never publish a separate cache or
 winner state. The ordinary covering-scan constructor supplies shared index
-metadata; ordinary and temporal callers prepare their own row and block
-filters. A single publication path registers names, appends the node, inherits
-hints and updates scan statistics. Existing index-merge branches can stage
-nodes without publishing them.
+metadata, and a single validated column mapper handles direct and composite
+index keys for both ordinary and temporal scans. Ordinary and temporal callers
+prepare their own row and block filters. A single publication path registers
+names, appends the node, inherits hints and updates scan statistics. Existing
+index-merge branches can stage nodes without publishing them.
 
 The temporal path borrows relations returned by the ordinary resolver. Before
 publication it verifies account, base/index relation pair, parent, schema and
@@ -78,9 +75,11 @@ existing error or safe path without changing shared tags, names or mappings.
 Borrowed relations are not closed by the observer. Once publication succeeds,
 a late cancellation cannot retroactively replace the selected result.
 
-The original owner's single mixed predicate and absence of parameter
-provenance are proved before rewrites. Eligibility is checked again for the
-current physical plan. Admitted clock-dependent queries are replanned for each
+The original owner is analyzed before rewrites. The analysis independently
+records whether the choice may need replanning and whether the original scan
+has a proved safe single mixed predicate; uncertainty never grants admission.
+Eligibility is checked again for the current physical plan. Admitted
+clock-dependent queries are replanned for each
 execution even when the previous choice was BASE; a cached sparse INDEX choice
 must not survive a transition to a dense bound. Ordinary prepared and EWM
 plans retain their existing cache ownership. Compile-time clock, time-zone or

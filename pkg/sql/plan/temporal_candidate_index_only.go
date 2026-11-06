@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -39,7 +38,8 @@ func (builder *QueryBuilder) applyTemporalIndexOnlyScanResolved(scanID int32, in
 		index == nil || !cost.indexCoversRequiredColumns(index) {
 		return scanID, false, nil
 	}
-	if _, admitted, err := temporalIndexOperands(builder.GetContext(), builder.qry, scanID, true, index, 0); err != nil || !admitted {
+	atom, admitted, err := temporalIndexOperands(builder.GetContext(), builder.qry, scanID, true, index, 0)
+	if err != nil || !admitted {
 		return scanID, false, err
 	}
 	if builder.nextBindTag == math.MaxInt32 {
@@ -48,7 +48,7 @@ func (builder *QueryBuilder) applyTemporalIndexOnlyScanResolved(scanID int32, in
 	// Reserve locally; failed construction or verification publishes no tag.
 	tag := builder.nextBindTag + 1
 	objRef, table := resolved.ref, resolved.table
-	hint, admitted, err := temporalIndexHint(builder.GetContext(), builder.qry, scanID, true, index, table, tag, 0)
+	hint, admitted, err := makeTemporalIndexHint(builder.GetContext(), atom, index, table, tag)
 	if err != nil || !admitted {
 		return scanID, false, err
 	}
@@ -59,25 +59,9 @@ func (builder *QueryBuilder) applyTemporalIndexOnlyScanResolved(scanID int32, in
 	}
 	leading := GetColExpr(table.Cols[0].Typ, tag, 0)
 	leading.GetCol().Name = table.Cols[0].Name
-	localMap := make(map[[2]int32]*plan.Expr, len(index.Parts))
-	for i, part := range index.Parts {
-		name := catalog.ResolveAlias(part)
-		pos := scan.TableDef.Name2ColIndex[name] // verified by temporalIndexHint
-		key := [2]int32{scan.BindingTags[0], pos}
-		switch {
-		case len(index.Parts) == 1:
-			localMap[key] = leading
-		case name == scan.TableDef.Pkey.PkeyColName:
-			if len(table.Cols) < 2 || table.Cols[1] == nil {
-				return scanID, false, nil
-			}
-			localMap[key] = GetColExpr(table.Cols[1].Typ, tag, 1)
-		default:
-			localMap[key], err = MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leading), scan.TableDef.Cols[pos].Typ, int64(i))
-			if err != nil {
-				return scanID, false, err
-			}
-		}
+	localMap, ok, err := buildRegularIndexColumnMap(builder.GetContext(), scan, index, table, leading, tag)
+	if err != nil || !ok {
+		return scanID, false, err
 	}
 	residuals := make([]*plan.Expr, 0, len(scan.FilterList))
 	for _, filter := range scan.FilterList {

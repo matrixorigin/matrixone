@@ -125,8 +125,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if err != nil {
 		return nil, err
 	}
-	builder.markTemporalAccessLifetime(rootId)
-	builder.captureTemporalOriginalOwner(rootId)
+	builder.collectOriginalTemporalOwner(rootId)
 	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}

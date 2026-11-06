@@ -47,7 +47,7 @@ func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
 	builder.temporalOriginalSafeScans = nil
 	steps := builder.qry.Steps
 	builder.qry.Steps = nil
-	builder.captureTemporalOriginalOwner(0)
+	builder.collectOriginalTemporalOwner(0)
 	builder.qry.Steps = steps
 	require.True(t, builder.temporalOriginalSafeScans[0], "the original typed predicate must be admitted")
 	id, err := builder.applyIndicesWithOrder(0, map[[2]int32]int{{scan.BindingTags[0], 0}: 1}, make(map[[2]int32]*pb.Expr), false)

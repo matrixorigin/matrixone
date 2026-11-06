@@ -15,40 +15,10 @@
 package plan
 
 import (
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
-
-// captureTemporalOriginalOwner records admission before optimizer rewrites
-// can remove expressions or replace a scan. Every subsequent candidate must
-// also pass the current-plan checks; this snapshot grants no placement or
-// cost permission by itself.
-func (builder *QueryBuilder) captureTemporalOriginalOwner(rootID int32) {
-	if builder == nil || builder.qry == nil || !builder.hasTemporalPlanningIntent || !builder.temporalPlanningIntent.ParameterFree {
-		return
-	}
-	ctx := context.Background()
-	if builder.compCtx != nil {
-		ctx = builder.GetContext()
-	}
-	budget := 4096
-	owner := *builder.qry
-	owner.Steps = append(append([]int32(nil), owner.Steps...), rootID)
-	for id, node := range owner.Nodes {
-		if node != nil && node.NodeType == plan.Node_TABLE_SCAN && temporalCandidateSimplePathSafe(&owner, int32(id)) {
-			if builder.temporalOriginalSafeScans == nil {
-				builder.temporalOriginalSafeScans = make(map[int32]bool)
-			}
-			if temporalOriginalOwnerFits(ctx, &owner, int32(id), &budget) {
-				_, builder.temporalOriginalSafeScans[int32(id)] = temporalOriginalSingleMixedLeaf(&owner, int32(id))
-			} else {
-				builder.temporalOriginalSafeScans[int32(id)] = false
-			}
-		}
-	}
-}
 
 type temporalCandidateAtom struct {
 	column *plan.Expr
@@ -83,9 +53,13 @@ func temporalCandidateAtomForExpr(expr *plan.Expr) (temporalCandidateAtom, bool)
 	default:
 		return temporalCandidateAtom{}, false
 	}
-	column, bound := fn.Args[0], fn.Args[1]
-	if column.GetCol() == nil {
-		column, bound = bound, column
+	column := indexComparisonColumn(fn)
+	if column == nil {
+		return temporalCandidateAtom{}, false
+	}
+	bound := fn.Args[1]
+	if column == fn.Args[1] {
+		bound = fn.Args[0]
 		switch op {
 		case types.TemporalLess:
 			op = types.TemporalGreater
@@ -97,7 +71,7 @@ func temporalCandidateAtomForExpr(expr *plan.Expr) (temporalCandidateAtom, bool)
 			op = types.TemporalLessEqual
 		}
 	}
-	if column.GetCol() == nil || !isDatetimeTimestampTypePair(types.T(column.Typ.Id), types.T(bound.Typ.Id)) || !temporalCandidateBoundSafe(bound) {
+	if !isDatetimeTimestampTypePair(types.T(column.Typ.Id), types.T(bound.Typ.Id)) || !temporalCandidateBoundSafe(bound) {
 		return temporalCandidateAtom{}, false
 	}
 	scale := column.Typ.Scale
@@ -231,122 +205,9 @@ func temporalCandidateScanExpressionsSafe(node *plan.Node) bool {
 	return true
 }
 
-// temporalCandidateSimplePathShape is the permanent owner-shape proof shared
-// by access admission and cache lifetime detection. It deliberately does not
-// inspect parameter values or expression diagnostics.
-func temporalCandidateSimplePathShape(query *plan.Query, scanID int32) bool {
-	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) != 1 || len(query.Nodes) > 64 {
-		return false
-	}
-	visited := make(map[int32]struct{})
-	for id := query.Steps[0]; ; {
-		if id < 0 || int(id) >= len(query.Nodes) {
-			return false
-		}
-		if _, exists := visited[id]; exists {
-			return false
-		}
-		visited[id] = struct{}{}
-		node := query.Nodes[id]
-		if node == nil || node.Limit != nil || node.Offset != nil || node.RankOption != nil ||
-			len(node.OnList) != 0 || len(node.GroupBy) != 0 || len(node.AggList) != 0 ||
-			len(node.WinSpecList) != 0 || len(node.OrderBy) != 0 || len(node.TblFuncExprList) != 0 || len(node.SourceStep) != 0 {
-			return false
-		}
-		if id == scanID {
-			return node.NodeType == plan.Node_TABLE_SCAN && len(node.Children) == 0
-		}
-		if node.NodeType != plan.Node_PROJECT && node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
-			return false
-		}
-		id = node.Children[0]
-	}
-}
-
-// temporalCandidateSimplePathSafe adds value/provenance and expression safety
-// to the shared shape proof. Original parameter freedom is still required.
+// temporalCandidateSimplePathSafe checks the current rewritten path. The
+// original-owner proof and final catalog/publication proof are separate.
 func temporalCandidateSimplePathSafe(query *plan.Query, scanID int32) bool {
-	if !temporalCandidateSimplePathShape(query, scanID) || len(query.Params) != 0 {
-		return false
-	}
-	for id := query.Steps[0]; ; {
-		node := query.Nodes[id]
-		if id == scanID {
-			return temporalCandidateScanExpressionsSafe(node)
-		}
-		for _, expr := range node.ProjectList {
-			if expr == nil || temporalCandidateHasUnprovedSource(expr) || !isTruncationSafeRowExpr(expr) {
-				return false
-			}
-		}
-		for _, expr := range node.FilterList {
-			if !temporalCandidatePredicateSafe(expr) {
-				return false
-			}
-		}
-		id = node.Children[0]
-	}
-}
-
-// Bound the original owner before the older recursive diagnostics proof. The
-// independent capture allowance belongs to bindSelect, before Optimize starts.
-func temporalOriginalOwnerFits(ctx context.Context, q *plan.Query, scan int32, budget *int) bool {
-	if q == nil || len(q.Steps) != 1 || len(q.Nodes) > 64 {
-		return false
-	}
-	nodes := 0
-	for id, steps := q.Steps[0], 0; steps < 64; steps++ {
-		if id < 0 || int(id) >= len(q.Nodes) || q.Nodes[id] == nil || !spendTemporalCostWork(ctx, budget, 1) {
-			return false
-		}
-		n := q.Nodes[id]
-		for _, list := range [][]*plan.Expr{n.ProjectList, n.FilterList, n.BlockFilterList} {
-			if len(list) > 64 {
-				return false
-			}
-			for _, e := range list {
-				if !temporalCostExpressionFits(ctx, e, 0, &nodes, budget) {
-					return false
-				}
-			}
-		}
-		if id == scan {
-			return true
-		}
-		if len(n.Children) != 1 || (n.NodeType != plan.Node_PROJECT && n.NodeType != plan.Node_FILTER) {
-			return false
-		}
-		id = n.Children[0]
-	}
-	return false
-}
-
-// Called only after the bounded full original-owner diagnostics proof.
-// A true value grants cost evidence; false or absent declines the candidate.
-func temporalOriginalSingleMixedLeaf(q *plan.Query, scan int32) (temporalCandidateAtom, bool) {
-	var predicate *plan.Expr
-	for id, steps := q.Steps[0], 0; steps < 64; steps++ {
-		n := q.Nodes[id]
-		for _, e := range n.FilterList {
-			if predicate != nil {
-				return temporalCandidateAtom{}, false
-			}
-			predicate = e
-		}
-		if id == scan {
-			atom, ok := temporalCandidateAtomForExpr(predicate)
-			if !ok {
-				return temporalCandidateAtom{}, false
-			}
-			ref := atom.column.GetCol()
-			table := n.TableDef
-			if len(n.BindingTags) != 1 || ref.RelPos != n.BindingTags[0] || table == nil || ref.ColPos < 0 || int(ref.ColPos) >= len(table.Cols) || table.Cols[ref.ColPos] == nil {
-				return temporalCandidateAtom{}, false
-			}
-			col := table.Cols[ref.ColPos]
-			return atom, col.Typ.Id == atom.column.Typ.Id && col.Typ.Scale == atom.column.Typ.Scale
-		}
-		id = n.Children[0]
-	}
-	return temporalCandidateAtom{}, false
+	path, ok := traceTemporalCandidatePath(query)
+	return ok && path.ids[path.len-1] == scanID && temporalPathExpressionsSafe(query, path)
 }

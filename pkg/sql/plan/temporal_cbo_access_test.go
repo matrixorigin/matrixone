@@ -164,7 +164,7 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 	read := engine.TemporalRead{Op: proc.GetTxnOperator(), Stamp: client.CatalogReadStamp{TransactionID: "fixture", Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}}
 	require.True(t, scope.AddNativeRelation(ref, base, source, read))
 	builder.compCtx = &temporalCBOContext{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), scope: scope, hidden: &temporalCBORelationFixture{}, read: read}
-	builder.markTemporalAccessLifetime(0)
+	builder.collectOriginalTemporalOwner(0)
 	require.True(t, builder.qry.GetTemporalIndexNeedsReplan())
 	return builder, source, index
 }

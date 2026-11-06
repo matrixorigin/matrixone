@@ -252,6 +252,30 @@ func TestRegularIndexMergeBranchBudget(t *testing.T) {
 	require.Len(t, arms, 1, "AND 不能展开为笛卡尔积")
 }
 
+func TestRegularIndexOnlyAliasedSinglePartMapping(t *testing.T) {
+	ctx := newIndexMergePlanContext(t)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+	table := ctx.tables["index_hint_t"]
+	tag := builder.genNewBindTag()
+	typ := table.Cols[2].Typ
+	bound := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 10}}}}
+	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{GetColExpr(typ, tag, 2), bound})
+	require.NoError(t, err)
+	index := &planpb.IndexDef{IndexName: "idx_b", IndexTableName: "idx_hint_b", Unique: true, Parts: []string{catalog.CreateAlias("b")}}
+	ctx.tables[index.IndexTableName].Cols[0].Typ = typ
+	node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, TableDef: table, ObjRef: ctx.objects[table.Name],
+		BindingTags: []int32{tag}, FilterList: []*planpb.Expr{filter}, Limit: MakePlan2Uint64ConstExprWithType(5)}
+	mapping := make(map[[2]int32]*planpb.Expr)
+	scan := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+		filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
+	})
+	require.NotNil(t, scan)
+	require.NotNil(t, mapping[[2]int32{tag, 2}], "the alias resolves to b rather than the primary key")
+	require.NotContains(t, mapping, [2]int32{tag, 0})
+	require.Same(t, node.Limit, scan.Limit)
+	require.Equal(t, int32(0), scan.FilterList[0].GetF().Args[0].GetCol().ColPos)
+}
+
 func TestRegularIndexMergeConstructionFailure(t *testing.T) {
 	ctx := newIndexMergePlanContext(t)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)

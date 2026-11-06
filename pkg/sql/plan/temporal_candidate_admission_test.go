@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -107,22 +108,22 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 	project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: []*Expr{col}}
 	query := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{scan, project}}
 	builder := &QueryBuilder{qry: query, hasTemporalPlanningIntent: true, temporalPlanningIntent: TemporalPlanningIntent{ParameterFree: true}}
-	builder.captureTemporalOriginalOwner(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.Contains(t, builder.temporalOriginalSafeScans, int32(0))
 	require.Empty(t, query.Steps, "proof must not mutate the original plan")
 
 	unsafe := &Expr{Typ: Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
 	project.ProjectList = append(project.ProjectList, unsafe)
 	builder.temporalOriginalSafeScans = nil
-	builder.captureTemporalOriginalOwner(1)
+	builder.collectOriginalTemporalOwner(1)
 	project.ProjectList = project.ProjectList[:1] // a later rewrite removes the unsafe expression
 	require.Empty(t, builder.temporalOriginalSafeScans)
 	builder.temporalPlanningIntent.ParameterFree = false
-	builder.captureTemporalOriginalOwner(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.Empty(t, builder.temporalOriginalSafeScans)
 	builder.temporalPlanningIntent.ParameterFree = true
 	builder.hasTemporalPlanningIntent = false
-	builder.captureTemporalOriginalOwner(1)
+	builder.collectOriginalTemporalOwner(1)
 	require.Empty(t, builder.temporalOriginalSafeScans)
 }
 
@@ -132,18 +133,77 @@ func TestTemporalOriginalSingleLeafHasIndependentCostEvidence(t *testing.T) {
 	builder.hasTemporalPlanningIntent = true
 	builder.temporalPlanningIntent.ParameterFree = true
 	builder.temporalOriginalSafeScans = nil
-	builder.captureTemporalOriginalOwner(0)
+	builder.collectOriginalTemporalOwner(0)
 	require.True(t, builder.temporalOriginalSafeScans[0])
 	scan := builder.qry.Nodes[0]
 	scan.FilterList[0].GetF().Args[0].GetCol().RelPos++
-	builder.captureTemporalOriginalOwner(0)
+	builder.collectOriginalTemporalOwner(0)
 	_, admitted := builder.temporalOriginalSafeScans[0]
 	require.True(t, admitted)
 	require.False(t, builder.temporalOriginalSafeScans[0], "a foreign source cannot grant single-leaf cost")
 	scan.FilterList[0].GetF().Args[0].GetCol().RelPos--
 	scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
-	builder.captureTemporalOriginalOwner(0)
+	builder.collectOriginalTemporalOwner(0)
 	require.False(t, builder.temporalOriginalSafeScans[0])
 	scan.FilterList = scan.FilterList[:1]
 	require.False(t, builder.temporalOriginalSafeScans[0], "later optimizer removal cannot recover original single-leaf evidence")
+}
+
+func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		replan      bool
+		safePresent bool
+		safe        bool
+		dependent   bool
+	}{
+		{name: "suffix", safePresent: true, safe: true},
+		{name: "prepared suffix", replan: true, safePresent: true, safe: true, dependent: true},
+		{name: "unsafe projection", replan: true},
+		{name: "no index", safePresent: true, safe: true},
+		{name: "already published root", replan: true},
+		{name: "cancelled", replan: true, safePresent: true},
+		{name: "unproved parameter", replan: true},
+		{name: "prepare statement", safePresent: true, safe: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, _, index := temporalCBOTraversalFixture(t)
+			builder.qry.Steps = nil
+			builder.qry.TemporalIndexNeedsReplan = false
+			builder.temporalOriginalSafeScans = nil
+			scan := builder.qry.Nodes[0]
+			root := int32(0)
+			compiler := builder.compCtx.(*temporalCBOContext).encodedIndexCostTestContext.MockCompilerContext
+			switch tc.name {
+			case "suffix", "prepared suffix":
+				index.Parts = []string{"id", "d"}
+				if tc.name == "prepared suffix" {
+					compiler.SetContext(withPreparedSourceBindings(builder.GetContext(), nil, []any{"unproved"}))
+				}
+			case "unsafe projection":
+				builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0},
+					ProjectList: []*plan.Expr{{Typ: Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}}})
+				root = 1
+			case "no index":
+				scan.TableDef.Indexes = nil
+			case "already published root":
+				builder.qry.Steps = []int32{0}
+			case "cancelled":
+				ctx, cancel := context.WithCancel(builder.GetContext())
+				cancel()
+				compiler.SetContext(ctx)
+			case "unproved parameter":
+				scan.FilterList[0].GetF().Args[1] = &plan.Expr{Typ: Type{Id: int32(types.T_any)}, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
+			case "prepare statement":
+				builder.isPrepareStatement = true
+			}
+			builder.collectOriginalTemporalOwner(root)
+			require.Equal(t, tc.replan, builder.qry.TemporalIndexNeedsReplan)
+			safe, present := builder.temporalOriginalSafeScans[0]
+			require.Equal(t, tc.safePresent, present)
+			require.Equal(t, tc.safe, safe)
+			state := preparedBindingState(builder.GetContext())
+			require.Equal(t, tc.dependent, state != nil && state.valueDependent)
+		})
+	}
 }
