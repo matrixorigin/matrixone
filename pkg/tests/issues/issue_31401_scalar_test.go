@@ -174,6 +174,11 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 						return callCtx.Err()
 					}
 				}
+				// Fixture setup is complete. Both COPY generations, publication
+				// and the competing SQL share one fresh, fixed exercise budget.
+				cancel()
+				ctx, cancel = context.WithTimeout(t.Context(), 60*time.Second)
+				defer cancel()
 				alterDone, peerDone := make(chan error, 1), make(chan error, 1)
 				alterJoined, peerStarted, peerJoined := false, false, false
 				defer func() {
