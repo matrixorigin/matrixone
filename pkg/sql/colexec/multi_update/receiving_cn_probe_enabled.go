@@ -20,10 +20,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"os"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -88,11 +88,11 @@ func ObserveReceivingCNReceiver(proc *process.Process) func() {
 // and honor its context; only progress may inject an error.
 func InstallReceivingCNProbe(runID string, txnID [16]byte, handle func(context.Context, ReceivingCNEvent) error) (func(), error) {
 	if runID == "" || txnID == [16]byte{} || handle == nil {
-		return nil, errors.New("receiving CN probe requires run, transaction, and handler")
+		return nil, moerr.NewInternalErrorNoCtx("receiving CN probe requires run, transaction, and handler")
 	}
 	p := &receivingCNProbe{runID: runID, txnID: txnID, handle: handle}
 	if !currentReceivingCNProbe.CompareAndSwap(nil, p) {
-		return nil, errors.New("receiving CN probe already installed")
+		return nil, moerr.NewInternalErrorNoCtx("receiving CN probe already installed")
 	}
 	return func() { currentReceivingCNProbe.CompareAndSwap(p, nil) }, nil
 }
