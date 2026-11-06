@@ -30,3 +30,5 @@ func decimalMulSubSIMDPrefix(_, _ []types.Decimal64, _ types.Decimal64, _ []type
 }
 func decimal64MulSIMDPrefix(_, _ []types.Decimal64, _ []types.Decimal128, _ int) int { return 0 }
 func decimal64WidenSIMDPrefix(_ []types.Decimal64, _ []types.Decimal128, _ int) int  { return 0 }
+func decimal128AddSIMDPrefix(_, _, _ []types.Decimal128, _ int) int                  { return 0 }
+func decimal128SubSIMDPrefix(_, _, _ []types.Decimal128, _ int) int                  { return 0 }

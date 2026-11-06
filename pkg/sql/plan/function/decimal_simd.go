@@ -26,6 +26,8 @@ const (
 	decimalSIMDFusedMinRows    = 32
 	decimalSIMDMultiplyMinRows = 32
 	decimalSIMDCastMinRows     = 64
+	decimalSIMDAdd128MinRows   = 128
+	decimalSIMDSub128MinRows   = 128
 )
 
 func decimalArithmeticSIMDMinRows(op int32, x, y, out *vector.Vector) int {

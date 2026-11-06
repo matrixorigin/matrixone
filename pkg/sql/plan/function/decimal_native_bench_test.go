@@ -40,6 +40,9 @@ func BenchmarkDecimalNativeDispatch(b *testing.B) {
 			if family != "fused" && family != "cast" {
 				shapes = append(shapes, "left_const", "right_const")
 			}
+			if family == "add128" || family == "sub128" {
+				shapes = append(shapes, "alias_left", "alias_right")
+			}
 			if family == "fused" && n == 1 {
 				shapes = append(shapes, "left_const", "right_const")
 			}
@@ -71,6 +74,11 @@ func BenchmarkDecimalNativeDispatch(b *testing.B) {
 					if shape == "right_const" {
 						c = c[:1]
 						cc = cc[:1]
+					}
+					if shape == "alias_left" {
+						out = aa
+					} else if shape == "alias_right" {
+						out = cc
 					}
 					var run func()
 					switch family {

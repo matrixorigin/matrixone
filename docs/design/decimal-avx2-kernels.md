@@ -17,8 +17,9 @@ fusion is introduced.
 
 Ordinary unscaled Decimal64 multiplication, fused x*(c-y), and lossless
 same-scale Decimal64-to-Decimal128 casts use private slice kernels. Ordinary
-checked add/sub retains its scalar implementation after qualification rejected
-the candidate kernels. Prepared aggregate arguments use
+checked Decimal64 add/sub retains its scalar implementation after qualification
+rejected those candidates. Native Decimal128 add/sub now has the checked-prefix
+revision below, with performance qualification still required. Prepared aggregate arguments use
 their existing admission/proof boundary before optional SIMD dispatch. They
 support D64 add/sub to64/128, D128 add/sub to128/256, and D64xD64 orD128xD64
 multiplication to128/256. Unsupported shapes and scale changes remain scalar.
@@ -28,8 +29,8 @@ multiplication to128/256. Unsupported shapes and scale changes remain scalar.
 Go1.27 goexperiment.simd/amd64 helpers check runtime AVX2; other builds use
 scalar stubs. Minimum lengths are operation-specific and qualified over32/64/128/256 candidates; scalar tails. Flat non-NULL operands and
 constant broadcasts are supported. Existing CASE selection/packing owns active rows; NULL/grouping fallbacks remain scalar.
-The checked ordinary candidate was measured separately and dropped under the
-approved gate; its qualification decisions are recorded below.
+Earlier checked ordinary candidates were dropped under the approved gate;
+their qualification decisions remain below alongside the native128 revision.
 
 Prepared add/sub uses original per-node precision proofs; wide output retains
 the exact extra sign/carry limb. D64-output kernels omit unused high limbs.
@@ -174,3 +175,50 @@ it adds no reads, allocation or SIMD family. Existing constant-batch tests add
 four/five-row boundaries while retaining scale changes, narrowing and errors.
 One-row fused broadcasts inline their ordinary exact64-bit difference/product;
 the65-bit difference still uses the original total scalar owner.
+
+## Native Decimal128 add/sub scope revision, 2026-11-06
+
+The requester explicitly adds Decimal128 add/sub to this PR and defers other
+new kernels. Retain archsimd. Earlier rejected checked-kernel measurements stay
+historical evidence, and the new implementation must qualify independently.
+
+The native same-scale owners also serve in-place scale alignment. Their slice
+interface has no precision proof, so SQL type metadata alone cannot authorize
+unchecked arithmetic here. Keep their API and full signed128 domain. Introduce
+private AVX2 checked-prefix kernels for flat inputs and either constant operand,
+using eight-row blocks with a combined overflow test before publishing stores.
+On rejection, leave that block and its suffix untouched; the scalar owner
+continues from the completed prefix and publishes only through its first
+overflowing row. Cache broadcast values before any aliased result stores.
+Existing allocation, NULL/selection handling, scale alignment and diagnostics
+retain their owners. Actual callers provide disjoint or exact in-place spans.
+
+Use the signed overflow identities on original high words and the computed
+high result: add `(a^r)&^(a^b)`, subtract `(a^r)&(a^b)`. Their sign bit is the
+overflow flag. The scalar continuation uses the same identities, eliminating
+redundant sign extraction while preserving wrapped result and first-error
+publication. Unsigned low-word carry/borrow uses sign-biased AVX2 comparisons;
+no AVX-512 instructions, temporary result array, production big.Int or new API.
+
+The first screen shows larger-array wins but rejects the added one-row entry
+cost. A one-row add/sub uses direct NULL membership and the exact scalar
+operation, retaining alias/overflow semantics without batch bitmap setup.
+All scalar add/sub branches use the same original-high-word overflow identities,
+including nullable branches, so a declined SIMD call adds no per-row arithmetic
+work. This revision changes only the Decimal128 add/sub owners. Retain the first
+screen alongside the final paired measurements rather than label it accepted.
+
+Start qualification at128 rows; qualify the operation-specific minimum using
+the existing32/64/128/256 candidates. Place admission only in existing non-NULL
+branches so NULL/selected inputs retain their scalar path. Unsupported builds
+use constant-refusal stubs. Preserve all pre-existing carrier/overflow checks.
+
+Prove exact arithmetic with independent big.Int models, every overflow lane,
+carry/borrow and signed128 endpoints, broadcasts, exact aliases, offsets,
+minimum/tail boundaries, and untouched output suffixes. Exercise rescaling,
+NULL/CASE selection and public plus/minus through their existing fixtures.
+Benchmark against an independent pre-extension checkout before broader timing;
+retain tiny/NULL/alias/refusal controls and every paired observation. No confirmed
+regression is accepted. Full Q1-Q22 uses the already loaded local datasets, cold
+exclusion and established no-spill/resource rules; the requester permits local
+disk-backed SF100. Do not claim old-head timings qualify changed arithmetic.
