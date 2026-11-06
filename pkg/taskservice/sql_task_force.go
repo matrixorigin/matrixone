@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 // ForceRecoverSQLTaskRun releases one unprovable run. It does not stop SQL or
@@ -199,7 +200,7 @@ func (m *mysqlTaskStorage) forceRecoverSQLTaskRun(ctx context.Context, account u
 		return nil
 	})
 	if err != nil && commitAttempted {
-		return false, fmt.Errorf("SQL task recovery may have committed; check the run or repeat the same recovery command: %w", err)
+		return false, errutil.Wrap(err, "SQL task recovery may have committed; check the run or repeat the same recovery command")
 	}
 	return changed && err == nil, err
 }

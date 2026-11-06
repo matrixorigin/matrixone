@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -45,29 +44,15 @@ func statisticsFinalUpgradeVersion() versions.Version {
 	return s.getFinalVersionHandle().Metadata()
 }
 
-// Some recovery tests model the released 4.0.7 binary itself, rather than the
-// current registry. Keep that historical fixture pinned as later versions land.
-func initFrozenV407Upgrade(s *service) {
-	s.initUpgrade()
-	for i, handler := range s.handles {
-		if handler == v4_0_7.Handler {
-			s.handles = s.handles[:i+1]
-			return
-		}
-	}
-	panic("missing frozen 4.0.7 upgrade handler")
-}
-
 func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
 	for _, tc := range []struct {
 		name, version string
 		offset        uint32
 		hops          [][2]string
 	}{
-		{name: "4.1", version: "4.0.1", offset: 1, hops: [][2]string{{"4.0.1", "4.0.2"}, {"4.0.2", "4.0.3"}, {"4.0.3", "4.0.4"}, {"4.0.4", "4.0.5"}, {"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}, {"4.0.7", "4.0.8"}}},
-		{name: "4.2", version: "4.0.6", offset: 5, hops: [][2]string{{"4.0.6", "4.0.7"}, {"4.0.7", "4.0.8"}}},
-		{name: "frozen", version: "4.0.7", offset: v4_0_7.Handler.Metadata().VersionOffset, hops: [][2]string{{"4.0.7", "4.0.8"}}},
-		{name: "already_current", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset},
+		{name: "4.1", version: "4.0.1", offset: 1, hops: [][2]string{{"4.0.1", "4.0.2"}, {"4.0.2", "4.0.3"}, {"4.0.3", "4.0.4"}, {"4.0.4", "4.0.5"}, {"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}}},
+		{name: "4.2", version: "4.0.6", offset: 5, hops: [][2]string{{"4.0.6", "4.0.7"}}},
+		{name: "already_current", version: "4.0.7", offset: v4_0_7.Handler.Metadata().VersionOffset},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -87,12 +72,12 @@ func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
 				}, &testTxnOperator{})
 				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
 				t.Cleanup(s.stopper.Stop)
-				require.Equal(t, "4.0.8", s.GetFinalVersion())
+				require.Equal(t, "4.0.7", s.GetFinalVersion())
 				require.Equal(t, uint32(5), v4_0_6.Handler.Metadata().VersionOffset)
 				require.NoError(t, s.doCheckUpgrade(t.Context()))
 				require.Len(t, upgrades, len(tc.hops))
 				for i, hop := range tc.hops {
-					require.Contains(t, upgrades[i], fmt.Sprintf("values ('%s', '%s', '4.0.8',", hop[0], hop[1]))
+					require.Contains(t, upgrades[i], fmt.Sprintf("values ('%s', '%s', '4.0.7',", hop[0], hop[1]))
 				}
 			})
 		})

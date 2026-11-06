@@ -704,6 +704,7 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	require.Equal(t, 3, mockQC.releaseCalls)
 
 	// A failed CN must not prevent syncing from the other responses.
+	originalIdentity, originalCanceled := queryErrorIdentity(err)
 	mockQC.sendCalls, mockQC.releaseCalls = 0, 0
 	mockQC.sendError["cn1:6001"] = errors.New("injected query failure")
 	mockTC.syncCalled = false
@@ -715,6 +716,20 @@ func TestHandleSQLTaskMutationsSyncCommitTimestamp(t *testing.T) {
 	require.True(t, mockTC.syncCalled)
 	require.Equal(t, ts2, mockTC.syncCalledWith)
 	require.GreaterOrEqual(t, testutil.ToFloat64(v2.SQLTaskSyncCommitFailureCounter)-beforeFailures, float64(1))
+
+	// An execution error plus an incomplete visibility fence must retain the
+	// business error's public identity while reporting the visibility failure.
+	err = handleExecuteSQLTask(ctx, ses, &tree.ExecuteSQLTask{Name: tree.Identifier("task_sync_commit")})
+	require.ErrorContains(t, err, "syntax")
+	require.ErrorContains(t, err, "task metadata visibility could not be confirmed")
+	identity, onlyCanceled := queryErrorIdentity(err)
+	require.Equal(t, originalCanceled, onlyCanceled)
+	if originalIdentity == nil {
+		require.Nil(t, identity)
+	} else {
+		require.NotNil(t, identity)
+		require.Equal(t, originalIdentity.ErrorCode(), identity.ErrorCode())
+	}
 
 	// A response can accompany an RPC error and still belongs to the client.
 	mockQC.responseWithError = true

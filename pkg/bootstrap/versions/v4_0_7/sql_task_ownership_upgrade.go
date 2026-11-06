@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_8
+package v4_0_7
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -36,8 +35,8 @@ var (
 		UpgType:   versions.ADD_INDEX,
 		UpgSql:    "create index idx_task_running on mo_task.sql_task_run(account_id, status, task_name)",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return v4_0_7.CheckTaskIndex(txn, accountID, catalog.MOSQLTaskRun,
-				"idx_task_running", "account_id", "status", "task_name")
+			return checkCatalogIndex(txn, accountID, catalog.MOTaskDB, catalog.MOSQLTaskRun,
+				"idx_task_running", false, "account_id", "status", "task_name")
 		},
 	}
 )

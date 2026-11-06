@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -264,7 +264,7 @@ func handleExecuteSQLTask(ctx context.Context, ses *Session, stmt *tree.ExecuteS
 			return moerr.NewInternalError(ctx, "sql task is already running")
 		}
 		if visibilityErr != nil {
-			return fmt.Errorf("%w (task metadata visibility could not be confirmed)", err)
+			return errutil.Wrap(err, "task metadata visibility could not be confirmed")
 		}
 		return err
 	}
