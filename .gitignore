@@ -121,3 +121,4 @@ test/esqltvf/reports/
 
 # kafka external table E2E reports (local artifacts)
 test/kafkaexttab/reports/
+/.sca-go-module-cache/
