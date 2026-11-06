@@ -157,6 +157,18 @@ class PreflightTest(unittest.TestCase):
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.communicate()
 
+    def test_cancellation_after_publication_keeps_complete_file(self):
+        fake_ln = self.root / "ln"
+        fake_ln.write_text('#!/bin/sh\n/usr/bin/ln "$@" || exit\nkill -TERM "$PPID"\n')
+        fake_ln.chmod(0o700)
+        rows = ["A\t0\t{}", "C\t0\t{}", "S\t42\t" + encoded(snapshot("42"))]
+        result = self.run_export(rows)
+        self.assertNotEqual(0, result.returncode)
+        records = [json.loads(line) for line in self.output.read_text().splitlines()]
+        self.assertEqual(2, len(records))
+        self.assertEqual("__mo_branch_42", records[1]["name"])
+        self.assertIsNone(records[1]["decision"])
+
 
 if __name__ == "__main__":
     unittest.main()
