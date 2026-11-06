@@ -126,6 +126,6 @@ if [[ $(wc -l < "$tmpdir/snapshots.sorted") != $(wc -l < "$tmpdir/joined") ]]; t
     exit 1
 fi
 # Hard-link creation is atomic and fails if the destination already exists.
-ln -- "$outtmp" "$output"
+ln -T -- "$outtmp" "$output"
 echo "CDC tasks: $(cat "$tmpdir/cdc-count"); review and remove them as described in the upgrade guide." >&2
 echo "Snapshot decision template written to $output; every decision requires administrator review." >&2

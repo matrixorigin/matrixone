@@ -148,6 +148,12 @@ class PreflightTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertFalse(self.output.exists())
 
+    def test_existing_directory_is_not_an_output_file(self):
+        self.output.mkdir()
+        result = self.run_export(["A\t0\t{}", "C\t0\t{}"])
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual([], list(self.output.iterdir()))
+
     def test_cancellation_joins_mysql_and_does_not_publish(self):
         read_fd, write_fd = os.pipe()
         self.addCleanup(os.close, read_fd)
