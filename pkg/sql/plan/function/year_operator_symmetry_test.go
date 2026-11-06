@@ -26,11 +26,12 @@ import (
 // TestYearOperatorSymmetry pins issue #31902: YEAR on the right of an
 // arithmetic/comparison operator must bind the same way YEAR on the left
 // already does (MySQL treats YEAR as a numeric year value in both orders).
-// Also YEAR + YEAR must bind (MINUS/MULTI already did).
+// Also YEAR + YEAR must bind (MINUS/MULTI already did), and '/' must bind
+// integral/YEAR in both orders via the rule-2 FLOAT64 cast targets.
 func TestYearOperatorSymmetry(t *testing.T) {
 	ctx := context.Background()
 	year := types.T_year.ToType()
-	ops := []string{"+", "-", "*", "=", "<>", ">", "<", ">=", "<="}
+	ops := []string{"+", "-", "*", "/", "=", "<>", ">", "<", ">=", "<="}
 
 	// Column INT is T_int32; TINYINT is T_int8. Only T_int64 x YEAR existed.
 	for _, num := range []types.Type{
