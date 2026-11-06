@@ -332,7 +332,8 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		ls.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+		// Detach the zonemap so block ordering cannot pin the full object metadata.
+		ls.blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap().Clone()
 	}
 }
 
