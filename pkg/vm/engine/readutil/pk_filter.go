@@ -106,6 +106,12 @@ func ConstructBlockPKFilter(
 		if err != nil {
 			return objectio.BlockReadFilter{}, err
 		}
+		if (disjuncts[idx].Oid == types.T_float32 || disjuncts[idx].Oid == types.T_float64) &&
+			(disjuncts[idx].Op == function.IN || disjuncts[idx].Op == function.BETWEEN) {
+			// Storage's numeric ordering does not place NaNs in a total order.
+			// A "sorted" [1, NaN, 2] can make binary search miss a finite key.
+			sortedFunc = unsortedFunc
+		}
 		if sortedFunc == nil {
 			sortedMissing = true
 		} else {

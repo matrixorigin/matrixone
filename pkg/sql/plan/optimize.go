@@ -96,6 +96,28 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 	for _, step := range qry.Steps {
 		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
 	}
+	// Catalog dependencies can originate in a bound but non-executable
+	// expression. Preserve its real scan metadata for authorization and plan
+	// invalidation; no preserved scan is added to the execution steps.
+	if len(qry.CatalogDependencies) > 0 {
+		reachable := make(map[*plan.Node]struct{}, len(newNodes))
+		for _, node := range newNodes {
+			reachable[node] = struct{}{}
+		}
+		for _, node := range qry.Nodes {
+			if _, ok := reachable[node]; ok || node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil || node.TableDef == nil {
+				continue
+			}
+			ref := prepareSchemaRefWithSnapshot(node.ObjRef, node.TableDef, node.ScanSnapshot)
+			for _, dependency := range qry.CatalogDependencies {
+				if samePrepareSchema(dependency, ref) {
+					node.NodeId = int32(len(newNodes))
+					newNodes = append(newNodes, node)
+					break
+				}
+			}
+		}
+	}
 
 	qry.Steps = newSteps
 	qry.Nodes = newNodes

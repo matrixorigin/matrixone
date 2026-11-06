@@ -206,15 +206,6 @@ const externalTableUnsupportedDMLCause = "external table"
 // moerr.NewUnsupportedDML formats it ("unsupported DML: %s").
 const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupportedDMLCause
 
-// noPkOnDupUpdateCause is the cause bindInsert raises for ON DUPLICATE KEY
-// UPDATE on a table with neither a primary key nor a unique key: the modern
-// dedup+MULTI_UPDATE has no key to represent the upsert, so this degenerate
-// corner (semantically a plain INSERT) is deferred to the legacy planner. The
-// INSERT entry point matches the full message to allow the fallback for this
-// case only, without re-routing real PK/unique-key ODKU off the modern path.
-const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
-const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
-
 const icebergRowLevelDMLUnsupportedCause = "Iceberg row-level DML"
 
 const icebergRowLevelDMLUnsupportedMsg = "unsupported DML: " + icebergRowLevelDMLUnsupportedCause

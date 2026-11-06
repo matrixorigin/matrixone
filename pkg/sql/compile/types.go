@@ -283,6 +283,7 @@ type Compile struct {
 	executionGeneration uint64
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
+	odkuResult *odkuAttemptResult
 	// cn address
 	addr string
 	// db current database name.
@@ -325,6 +326,8 @@ type Compile struct {
 	materializedSinkScanNodes map[int32][]int32
 	materializedSources       map[int32]*materialized.Source
 	materializedReaderIDs     map[[2]int32]int
+	odkuViews                 []engine.StatementKeyView
+	odkuWriterSources         []*materialized.Source
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string

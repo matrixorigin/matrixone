@@ -44,6 +44,7 @@ import (
 func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
+	snapshot types.TS,
 	txnOffset int,
 	pState *logtailreplay.PartitionState,
 	rangesSlice objectio.BlockInfoSlice,
@@ -78,7 +79,7 @@ func NewLocalDataSource(
 
 	source.table = table
 	source.txnOffset = txnOffset
-	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
+	source.snapshotTS = snapshot
 
 	source.iteratePhase = engine.InMem
 	if skipReadMem {
@@ -93,6 +94,8 @@ func NewLocalDataSource(
 // --------------------------------------------------------------------------------
 
 type LocalDisttaeDataSource struct {
+	statementView bool
+
 	category        engine.DataSourceType
 	extraTombstones engine.Tombstoner
 	rangeSlice      objectio.BlockInfoSlice
@@ -550,7 +553,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 
 	outBatch.SetRowCount(0)
 
-	if ls.category != engine.ShardingRemoteDataSource {
+	if ls.category != engine.ShardingRemoteDataSource && !ls.statementView {
 		if err = ls.filterInMemUnCommittedInserts(ctx, seqNums, pkSeqNums, mp, outBatch); err != nil {
 			return err
 		}
@@ -992,7 +995,7 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 
 	var err error
 
-	if ls.category == engine.ShardingRemoteDataSource {
+	if ls.category == engine.ShardingRemoteDataSource || ls.statementView {
 		if ls.extraTombstones != nil {
 			rowsOffset = ls.extraTombstones.ApplyInMemTombstones(bid, rowsOffset, nil)
 			rowsOffset, err = ls.extraTombstones.ApplyPersistedTombstones(ctx, ls.fs, &ls.snapshotTS, bid, rowsOffset, nil)
@@ -1054,7 +1057,7 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 
 	deletedRows = objectio.GetReusableBitmap()
 
-	if ls.category == engine.ShardingRemoteDataSource {
+	if ls.category == engine.ShardingRemoteDataSource || ls.statementView {
 		if ls.extraTombstones != nil {
 			ls.extraTombstones.ApplyInMemTombstones(bid, nil, &deletedRows)
 			if _, err = ls.extraTombstones.ApplyPersistedTombstones(

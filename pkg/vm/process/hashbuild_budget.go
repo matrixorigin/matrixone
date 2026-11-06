@@ -1136,8 +1136,8 @@ func (g *HashBuildBudgetGeneration) AcquireAllocationCapacity(size uint64) error
 	}
 }
 
-// ReleaseAllocationCapacity is called only by physical MPool Free through the
-// allocation account. A mismatch is an ownership invariant failure.
+// ReleaseAllocationCapacity releases a physical allocation-account lease or
+// a non-MPool memory reservation. A mismatch is an ownership invariant failure.
 func (g *HashBuildBudgetGeneration) ReleaseAllocationCapacity(size uint64) {
 	if size == 0 {
 		return
@@ -1159,9 +1159,9 @@ func (g *HashBuildBudgetGeneration) ReleaseAllocationCapacity(size uint64) {
 	observeHashBuildBudget("memory", "release", "cn", size)
 }
 
-// acquireMemory admits one physical MPool allocation. The allocation account
-// is the only owner of the charge and releases it from MPool.Free; there is no
-// parallel estimate/reservation token.
+// acquireMemory admits storage against the query and CN capacity. Physical
+// MPool bytes have one allocation-account lease, released by MPool.Free.
+// Non-MPool storage uses ReserveMemory and must not duplicate that lease.
 func (g *HashBuildBudgetGeneration) acquireMemory(size uint64) error {
 	if g == nil || g.budget == nil {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "nil hash build generation"}

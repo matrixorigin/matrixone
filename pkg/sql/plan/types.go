@@ -239,6 +239,9 @@ type ViewData struct {
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
+	// A duplicate-update clause with no possible conflict is bound only for
+	// validation. Its parameters still belong to the prepared statement.
+	odkuValidationParams map[int32]*plan.Expr
 
 	ctxByNode                   []*BindContext
 	nameByColRef                map[[2]int32]string
@@ -299,15 +302,15 @@ type QueryBuilder struct {
 	// form), mirroring how regular insert maintenance is built.
 	//
 	// For ON DUPLICATE KEY UPDATE the conflicting rows must also drop their old
-	// index entries: irregularMaintDeleteStep holds the old-row image (keyed by
-	// the immutable PK) from which delete sub-plans are built. It is -1 (unset)
+	// index entries: irregularMaintDeleteStep holds the original PK separately
+	// from the final image. It is -1 (unset)
 	// for plain INSERT/LOAD where no old rows exist.
 	irregularMaintSourceStep int32
 	irregularMaintDeleteStep int32
-	// irregularMaintDeletePkPos / Typ identify, inside the materialized maintenance
-	// step, the base-table PK column the stale index entries are keyed by. For ODKU
-	// this is the (immutable) final PK; for REPLACE it is the matched old row's PK,
-	// which can differ from the new PK when the conflict is on a non-PK unique key.
+	// The tagged original-PK reference survives pruning until the source SINK
+	// resolves it to its child's physical output position. SINK's own projection
+	// is metadata; the compiler dispatches the child batch unchanged.
+	irregularMaintDeletePkRef [2]int32
 	irregularMaintDeletePkPos int32
 	irregularMaintDeletePkTyp plan.Type
 	irregularMaintIndexes     []*plan.IndexDef
@@ -325,12 +328,9 @@ type QueryBuilder struct {
 	returningTableName  string
 	returningAlias      string
 	returningColPos     map[string]int32
-	// sinkColRef records, per materialized step, the post-pruning column remap
-	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
-	// -> newColPos. The irregular-index maintenance sub-plans are appended after
-	// createQuery and read the (already column-pruned) materialized sink directly,
-	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
-	// through this map before use.
+	// sinkColRef maps logical SINK output positions to compact SINK metadata.
+	// It does not describe the physical child batch emitted by compileSink;
+	// late irregular-index readers use irregularMaintDeletePkCol for that.
 	sinkColRef map[[2]int32]int
 
 	// cteRefs contains only non-recursive CTEs that were actually bound. It is

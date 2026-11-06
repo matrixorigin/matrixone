@@ -235,16 +235,6 @@ type container struct {
 	batches       []*batch.Batch
 	batchRowCount int64
 
-	exprExecs []colexec.ExpressionExecutor
-
-	joinBat1 *batch.Batch
-	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
-
-	joinBat2 *batch.Batch
-	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
-
-	savedVecs []*vector.Vector
-
 	evecs []evalVector
 	vecs  []*vector.Vector
 
@@ -303,8 +293,6 @@ type DedupJoin struct {
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
-	UpdateColIdxList          []int32
-	UpdateColExprList         []*plan.Expr
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -372,7 +360,7 @@ func (dedupJoin *DedupJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil ||
-		len(dedupJoin.ctr.evecs) != 0 || len(dedupJoin.ctr.exprExecs) != 0 ||
+		len(dedupJoin.ctr.evecs) != 0 ||
 		dedupJoin.ctr.matched != nil || dedupJoin.ctr.captured != nil ||
 		len(dedupJoin.ctr.capturedVecs) != 0 || dedupJoin.ctr.rbat != nil ||
 		len(dedupJoin.ctr.buf) != 0 {
@@ -454,7 +442,6 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
-	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -475,7 +462,6 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
-	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
@@ -485,15 +471,6 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
-}
-
-func (ctr *container) cleanExprExecutor() {
-	for i := range ctr.exprExecs {
-		if ctr.exprExecs[i] != nil {
-			ctr.exprExecs[i].Free()
-		}
-	}
-	ctr.exprExecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
@@ -532,16 +509,6 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		ctr.rbat.Clean(proc.GetMPool())
 		ctr.rbat = nil
 	}
-	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(proc.GetMPool())
-		ctr.joinBat1 = nil
-	}
-	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(proc.GetMPool())
-		ctr.joinBat2 = nil
-	}
-	clear(ctr.savedVecs)
-	ctr.savedVecs = nil
 }
 
 // cleanBucketState releases per-bucket state before advancing to the next

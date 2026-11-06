@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -912,26 +913,99 @@ func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
 }
 
 func TestNewMergeScopeLimitsLoadReceiverChannelBuffer(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-
-	normalScope := &Scope{
-		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
-		Proc:     testCompile.proc.NewNoContextChildProc(0),
+	tests := []struct {
+		name                           string
+		address                        string
+		mcpu, capacity, nilCount, ends int
+		load, empty                    bool
+	}{
+		{name: "normal", address: "cn1:6001", mcpu: 8, capacity: 8, nilCount: 8, ends: 8},
+		{name: "load", address: "cn1:6001", mcpu: 8, capacity: loadMergeReceiverChannelBufferSize, nilCount: 8, ends: 8, load: true},
+		{name: "remote", address: "cn2:6001", mcpu: 8, capacity: 8, nilCount: 1, ends: 1},
+		{name: "default end count", address: "cn1:6001", capacity: 1, ends: 1},
+		{name: "empty", empty: true},
 	}
-	normalMerge := testCompile.newMergeScope([]*Scope{normalScope})
-	_, normalCap := process.WaitRegisterChannelState(normalMerge.Proc.Reg.MergeReceivers[0])
-	require.Equal(t, 8, normalCap)
-
-	loadProc := testCompile.proc.NewNoContextChildProc(0)
-	loadProc.Base.LoadTag = true
-	loadScope := &Scope{
-		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
-		Proc:     loadProc,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn1:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			c.proc.Base.LoadTag = tc.load
+			mp := c.proc.Mp()
+			t.Cleanup(func() { c.proc.Free(); require.Zero(t, mp.CurrNB()) })
+			var inputs []*Scope
+			if !tc.empty {
+				input := newScope(Remote)
+				input.NodeInfo = engine.Node{Addr: tc.address, Mcpu: tc.mcpu}
+				input.Proc = c.proc.NewNoContextChildProc(0)
+				input.RootOp = projection.NewArgument()
+				inputs = []*Scope{input}
+			}
+			merged := c.newMergeScope(inputs)
+			t.Cleanup(merged.release)
+			require.Equal(t, inputs, merged.PreScopes)
+			require.Same(t, c.proc.Base, merged.Proc.Base)
+			require.Equal(t, tc.load, merged.Proc.Base.LoadTag)
+			if tc.empty {
+				require.Nil(t, merged.Proc.Reg.MergeReceivers)
+				return
+			}
+			require.Len(t, merged.Proc.Reg.MergeReceivers, 1)
+			reg := merged.Proc.Reg.MergeReceivers[0]
+			require.Same(t, reg, inputs[0].RootOp.(*connector.Connector).Reg)
+			checkFresh := func() {
+				require.Equal(t, tc.capacity, cap(reg.Ch2))
+				require.Empty(t, reg.Ch2)
+				require.Equal(t, tc.nilCount, reg.NilBatchCnt)
+				require.NoError(t, reg.Err())
+				select {
+				case <-reg.Done():
+					t.Fatal("fresh receiver is done")
+				default:
+				}
+				select {
+				case <-reg.Aborted():
+					t.Fatal("fresh receiver is aborted")
+				default:
+				}
+			}
+			checkFresh()
+			for sent := 0; sent < tc.ends; sent++ {
+				require.True(t, reg.SendEnd())
+				<-reg.Ch2
+				if sent+1 < tc.ends {
+					select {
+					case <-reg.Done():
+						t.Fatal("receiver ended before all senders")
+					default:
+					}
+				}
+			}
+			select {
+			case <-reg.Done():
+			default:
+				t.Fatal("receiver did not complete")
+			}
+			reg.ResetForReuse(tc.capacity, tc.nilCount)
+			checkFresh()
+			failure := moerr.NewInternalErrorNoCtx("merge receiver failure")
+			// A bounded LOAD buffer may not hold every sender's notification;
+			// the fatal state must retain the cause even when enqueue is partial.
+			require.Equal(t, tc.capacity >= tc.ends, reg.SendError(failure))
+			require.Same(t, failure, reg.Err())
+			reg.ResetTerminalStateForReuse()
+			checkFresh()
+			require.Equal(t, tc.capacity >= tc.ends, reg.Abort(context.Canceled))
+			require.ErrorIs(t, reg.Err(), context.Canceled)
+			select {
+			case <-reg.Aborted():
+			default:
+				t.Fatal("receiver did not abort")
+			}
+			reg.ResetForReuse(tc.capacity, tc.nilCount)
+			checkFresh()
+		})
 	}
-	loadMerge := testCompile.newMergeScope([]*Scope{loadScope})
-	_, loadCap := process.WaitRegisterChannelState(loadMerge.Proc.Reg.MergeReceivers[0])
-	require.Equal(t, loadMergeReceiverChannelBufferSize, loadCap)
 }
 
 func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
@@ -2989,4 +3063,89 @@ func TestRetainedExternalSourceRechecksRole(t *testing.T) {
 	c.proc.Base.SessionInfo.Role = "public"
 	_, err = c.getExternParam(c.proc, scan, string(encoded))
 	require.ErrorContains(t, err, "only the sys account moadmin role")
+}
+
+func TestCompileODKUArbiterPreservesSingleLocalOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		change                     func(*Compile, *Scope)
+		inline, ordinary, multiple bool
+	}{
+		{name: "local remote scope", inline: true},
+		{name: "existing merge dependencies", inline: true, change: func(c *Compile, s *Scope) {
+			s.Magic = Merge
+			s.RootOp.Release()
+			s.RootOp = merge.NewArgument()
+			s.Proc.Reg.MergeReceivers = []*process.WaitRegister{process.NewPipelineEdge(1, 1)}
+			child := newScope(Remote)
+			child.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 3}
+			child.Proc = c.proc.NewNoContextChildProc(0)
+			child.RootOp = projection.NewArgument()
+			s.PreScopes = []*Scope{child}
+		}},
+		{name: "remote placement", change: func(_ *Compile, s *Scope) { s.NodeInfo.Addr = "cn2:6001" }},
+		{name: "unknown placement", change: func(_ *Compile, s *Scope) { s.NodeInfo.Addr = "" }},
+		{name: "parallel input", change: func(_ *Compile, s *Scope) { s.NodeInfo.Mcpu = 2 }},
+		{name: "remote execution", change: func(_ *Compile, s *Scope) { s.IsRemote = true }},
+		{name: "ended input", change: func(_ *Compile, s *Scope) { s.IsEnd = true }},
+		{name: "load input", change: func(_ *Compile, s *Scope) { s.IsLoad = true }},
+		{name: "table function", change: func(_ *Compile, s *Scope) { s.IsTbFunc = true }},
+		{name: "vector execution", change: func(_ *Compile, s *Scope) { s.VectorQueryScope = true }},
+		{name: "unsupported scope kind", change: func(_ *Compile, s *Scope) { s.Magic = Normal }},
+		{name: "multiple streams", multiple: true},
+		{name: "ordinary unique insert", ordinary: true, inline: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn1:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			mp := c.proc.Mp()
+			t.Cleanup(func() { c.proc.Free(); require.Zero(t, mp.CurrNB()) })
+			input := newScope(Remote)
+			input.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+			input.Proc = c.proc.NewNoContextChildProc(0)
+			input.RootOp = projection.NewArgument()
+			if tc.change != nil {
+				tc.change(c, input)
+			}
+			childOp := input.RootOp
+			dependencies := append([]*Scope(nil), input.PreScopes...)
+			receivers := append([]*process.WaitRegister(nil), input.Proc.Reg.MergeReceivers...)
+			inputs := []*Scope{input}
+			if tc.multiple {
+				other := newScope(Remote)
+				other.NodeInfo = input.NodeInfo
+				other.Proc = c.proc.NewNoContextChildProc(0)
+				other.RootOp = projection.NewArgument()
+				inputs = append(inputs, other)
+			}
+			node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{OrderedOdku: !tc.ordinary}}
+			result := c.compilePreInsertUk(node, inputs)
+			require.Len(t, result, 1)
+			t.Cleanup(func() { ReleaseScopes(result) })
+			arbiter, ok := result[0].RootOp.(*preinsertunique.PreInsertUnique)
+			require.True(t, ok)
+			require.Same(t, node.PreInsertUkCtx, arbiter.PreInsertCtx)
+			require.Equal(t, !tc.ordinary, c.hasMergeOp)
+			if tc.inline {
+				require.Same(t, input, result[0])
+				require.Same(t, childOp, arbiter.GetChildren(0))
+				require.Equal(t, dependencies, result[0].PreScopes)
+				require.Equal(t, receivers, result[0].Proc.Reg.MergeReceivers)
+			} else {
+				require.NotSame(t, input, result[0])
+				require.Equal(t, Merge, result[0].Magic)
+				require.Equal(t, 1, result[0].NodeInfo.Mcpu)
+				require.Equal(t, inputs, result[0].PreScopes)
+				require.Len(t, result[0].Proc.Reg.MergeReceivers, len(inputs))
+				for i, s := range inputs {
+					if s.IsEnd {
+						require.Same(t, childOp, s.RootOp, "ended scopes retain their existing terminal operator")
+					} else {
+						require.Same(t, result[0].Proc.Reg.MergeReceivers[i], s.RootOp.(*connector.Connector).Reg)
+					}
+				}
+			}
+		})
+	}
 }

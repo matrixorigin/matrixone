@@ -898,6 +898,9 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 			Typ: plan.Type{
 				Id:          d.Typ.Id,
 				NotNullable: false,
+				Width:       d.Typ.Width,
+				Scale:       d.Typ.Scale,
+				Enumvalues:  d.Typ.Enumvalues,
 			},
 		}, nil
 	}

@@ -597,7 +597,7 @@ message FrameBound {
 }
 
 // OnDuplicateKeyCtx removed: legacy ON DUPLICATE KEY operator path eliminated.
-// ON DUPLICATE KEY UPDATE is now planned on the DEDUP JOIN + MULTI_UPDATE path.
+// ON DUPLICATE KEY UPDATE uses ordered PreInsertUnique actions and MultiUpdate.
 
 message OldColCapture {
   // build_placeholder: position on the DEDUP JOIN build (right) side that
@@ -612,8 +612,7 @@ message OldColCapture {
 
 message DedupJoinCtx {
   repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
-  repeated int32 update_col_idx_list = 2;
-  repeated Expr update_col_expr_list = 3;
+  reserved 2, 3;
   // old_col_capture_list: used by REPLACE INTO's merged main-table scan.
   // When non-empty, the DEDUP JOIN captures probe-side columns on match
   // and emits them in finalize() into the build-side placeholder slots,
@@ -1001,6 +1000,8 @@ message Node {
 
   // Statement-local scalar vector source; field number matches main.
   int32 vector_query_source_id = 93;
+  // Preserve validation before a later selector while keeping FILTER output.
+  bool filter_is_barrier = 79;
 }
 
 message SnapshotExtraInfo {
@@ -1227,6 +1228,53 @@ message PreInsertUkCtx {
   int32 pk_column = 2;
   Type pk_type = 3 [(gogoproto.nullable) = false];
   Type uk_type = 4 [(gogoproto.nullable) = false];
+  // Fields 5 through 19 are assigned on main; keep numbering coordinated.
+  bool ordered_odku = 20;
+  OdkuActionCtx odku_actions = 21;
+}
+
+// ODKU evaluates against a current table image (relation 0) and one converted
+// source row (relation 1). Source/old columns and lookup hits refer to the child
+// plan; assignment, key and assertion expressions use that fixed row layout.
+message OdkuActionCtx {
+  repeated Expr source_columns = 1;
+  repeated int32 input_columns = 2;
+  repeated Expr old_columns = 3;
+  int32 pk_column = 4;
+  int32 row_id_column = 5;
+  repeated int32 update_columns = 6;
+  repeated Expr update_exprs = 7;
+  repeated Expr insert_checks = 8;
+  repeated Expr update_checks = 9;
+  uint32 insert_check_constraint_count = 10;
+  repeated OdkuForeignKeyCheck foreign_key_checks = 11;
+  int32 action_final_column = 12;
+  Expr source_ordinal = 13;
+  repeated OdkuConstraint constraints = 14;
+  // Present only when generated assignments can change a conflict key.
+  OdkuPriorData prior_data = 15;
+  // The prefix evaluates explicit assignments and generated values independent
+  // of implicit ON UPDATE. The next assignments run only on an effective change.
+  uint32 change_check_assignment_count = 16;
+  uint32 auto_update_assignment_count = 17;
+  repeated int32 change_check_columns = 18;
+  // One-based source position; zero means final rows need no deferred FK check.
+  uint32 physical_changed_column = 19;
+}
+
+message OdkuPriorData {
+  ObjectRef ref = 1;
+  TableDef table_def = 2;
+}
+
+message OdkuConstraint {
+  string name = 1;
+  repeated Type types = 2 [(gogoproto.nullable) = false];
+  bool target_eligible = 3;
+  Expr input_key = 4;
+  Expr prior_target = 5;
+  Expr current_key = 6;
+  ObjectRef lookup_ref = 7;
 }
 
 message PreInsertCtx {
@@ -2027,4 +2075,10 @@ enum AlterPartitionType {
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
   int64 nprobe = 2; // Query-level base probe count; zero uses the session default.
+}
+
+message OdkuForeignKeyCheck {
+ repeated ColRef columns = 1 [(gogoproto.nullable) = false];
+ Expr eligibility = 2;
+ bool check_updates = 3;
 }

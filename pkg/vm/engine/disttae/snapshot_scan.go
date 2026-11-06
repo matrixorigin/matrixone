@@ -110,16 +110,17 @@ func ScanSnapshotWithCurrentRanges(
 		)
 	}
 
+	currentSnapshot := tbl.db.op.SnapshotTS()
 	var pState *logtailreplay.PartitionState
 	if relData == nil {
-		pState, err = tbl.getPartitionState(ctx)
+		pState, err = tbl.getPartitionStateAt(ctx, currentSnapshot)
 	} else {
-		pState, err = extractPStateFromRelData(ctx, tbl, relData)
+		pState, err = extractPStateFromRelData(ctx, tbl, relData, currentSnapshot)
 	}
 	if err != nil {
 		return err
 	}
-	currentTS := types.TimestampToTS(tbl.db.op.SnapshotTS())
+	currentTS := types.TimestampToTS(currentSnapshot)
 	tombstones, err := collectSnapshotScanTombstones(pState, currentTS)
 	if err != nil {
 		return err
