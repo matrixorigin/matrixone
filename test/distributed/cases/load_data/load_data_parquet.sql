@@ -242,6 +242,19 @@ load data infile {'filepath'='$resources/parquet/with_stats.parquet', 'format'='
 select * from pq_stats_check;
 select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
 
+-- Issue 32229: optional footer statistics must not change the loaded values.
+drop table if exists pq_coalesced_bool;
+create table pq_coalesced_bool(a int primary key, s varchar(6000));
+load data infile {'filepath'='$resources/parquet/coalesced_bool_statistics.parquet', 'format'='parquet'} into table pq_coalesced_bool;
+select a, length(s), s = case a when 1 then 'a' else repeat('z', 5000) end from pq_coalesced_bool order by a;
+truncate table pq_coalesced_bool;
+load data infile {'filepath'='$resources/parquet/coalesced_bool_no_statistics.parquet', 'format'='parquet'} into table pq_coalesced_bool;
+select a, length(s), s = case a when 1 then 'a' else repeat('z', 5000) end from pq_coalesced_bool order by a;
+truncate table pq_coalesced_bool;
+load data infile {'filepath'='$resources/parquet/coalesced_bool_statistics.parquet', 'format'='parquet'} into table pq_coalesced_bool parallel 'false';
+select a, length(s), s = case a when 1 then 'a' else repeat('z', 5000) end from pq_coalesced_bool order by a;
+drop table pq_coalesced_bool;
+
 -- empty file
 -- parquet file column number equal to table column number, and column name is not same
 drop table if exists empty_table;
