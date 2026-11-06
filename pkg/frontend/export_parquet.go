@@ -93,7 +93,7 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 	buf := &bytes.Buffer{}
 	// Disable parquet-go's separate write buffer so Flush makes the serialized
 	// row-group bytes observable through buf.Len for split-size accounting.
-	writer := parquet.NewGenericWriter[any](buf, schema, parquet.WriteBufferSize(0))
+	writer := parquet.NewGenericWriter[any](buf, schema, parquet.WriteBufferSize(0), parquet.DataPageStatistics(false))
 
 	return &ParquetWriter{
 		ctx:         ctx,

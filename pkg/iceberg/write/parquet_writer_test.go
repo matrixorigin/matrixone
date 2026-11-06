@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/testutil/parquettest"
 	"io"
 	"math"
 	"strings"
@@ -75,6 +76,7 @@ func TestParquetDataWriterWritesFieldIDsMetricsAndPartition(t *testing.T) {
 	dataFile, err := writer.Close(ctx)
 	require.NoError(t, err)
 
+	parquettest.RequireNoDataPageStatistics(t, buf.Bytes())
 	file, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 	require.Equal(t, 1, file.Root().Column("id").ID())

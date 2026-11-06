@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/testutil/parquettest"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -135,8 +136,10 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 		require.Equal(t, "PAR1", string(data[:4]))
 		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
+		parquettest.RequireNoDataPageStatistics(t, data)
 		require.Equal(t, int64(4), file.NumRows())
-		require.NotNil(t, file.Metadata().Schema[1].LogicalType.UTF8)
+		require.True(t, file.Metadata().Schema[1].LogicalType.Valid)
+		require.NotNil(t, file.Metadata().Schema[1].LogicalType.V.UTF8)
 	})
 
 	t.Run("binary-flagged columns bypass validation and stay lossless", func(t *testing.T) {
