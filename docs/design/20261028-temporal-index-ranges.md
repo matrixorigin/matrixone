@@ -78,11 +78,12 @@ The current AUTO path uses one mixed atom over the leading component of a coveri
 index and retains every remapped original SQL predicate in the row filter.
 
 The generated necessary condition is separately marked as `TemporalCandidateFilter`.
-Only its internal empty guard carries `TemporalCandidateGuard`; ordinary folded
-false expressions cannot trigger the empty-reader optimization. Preserve both bits
-through deep copy, folding and process transport. Unknown/malformed/nonconstant
-folds and unsupported storage filters fail open. Reader outputs still run the full
-original predicate, including physical tails and sentinel values.
+Preserve this marker through deep copy, folding and process transport. It identifies
+necessary candidate ranges, including the reader's OR and seek behavior. Unknown,
+malformed or nonconstant folds and unsupported storage filters fail open. Reader
+outputs still run the full original predicate, including physical tails and sentinel
+values. The execution and empty-guard consolidation is specified in
+[Temporal access consolidation](20261106-temporal-access-consolidation.md).
 
 Time, timezone, placement and transaction identity belong to the current execution.
 The cost observation never replaces the runtime expression. A changed execution
