@@ -411,11 +411,15 @@ func (s *VectorIndexSearch) Destroy() {
 	s.DestroyWithReason("")
 }
 
+// notifyCacheInvalidated passes reason to the algorithm's optional hook, at most once per
+// wrapper. Every teardown calls it before Algo.Destroy, with "" when it has no reason, so a
+// notification from a losing eviction claimant either completes before that Destroy or is
+// skipped.
 func (s *VectorIndexSearch) notifyCacheInvalidated(reason string) {
-	if reason == "" {
-		return
-	}
 	s.invalidationOnce.Do(func() {
+		if reason == "" {
+			return
+		}
 		if aware, ok := s.Algo.(cacheInvalidationAware); ok {
 			aware.OnCacheInvalidated(reason)
 		}
@@ -466,13 +470,16 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 // removed that exact entry from the map. It deliberately skips the optional
 // invalidation hook: FULLTEXT2 clears reusable state in Load's error defer, and
 // invoking a key-wide hook after a replacement load starts could clear the new
-// generation. The lock still serializes destruction with waiters/searchers.
+// generation. It still consumes the hook's once, so a concurrent eviction
+// claimant's notification cannot reach the algorithm after this Destroy. The
+// lock still serializes destruction with waiters/searchers.
 func (s *VectorIndexSearch) destroyFailedLoad() {
 	s.Mutex.Lock()
 	defer func() {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
+	s.notifyCacheInvalidated("")
 	s.Algo.Destroy()
 	s.Status.Store(STATUS_DESTROYED)
 	s.markDestroyed()
