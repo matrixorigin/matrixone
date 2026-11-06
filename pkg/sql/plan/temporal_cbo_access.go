@@ -32,11 +32,15 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 			access, err = temporalIndexAccess{}, context.Cause(ctx)
 		}
 	}()
-	resolver := builder.temporalResolver
-	if proc == nil || resolver == nil || !resolver.IsSameCompiler(builder.compCtx) || len(indexes) > engine.MaxTemporalIndexDefinitions || !cost.valid {
+	if proc == nil {
 		return temporalIndexAccess{}, context.Cause(ctx)
 	}
-	if !builder.temporalPlanningIntent.Placement.AllowsNamedTemporalCandidate() || GetForceScanOnMultiCN() {
+	resolver := builder.temporalPlanningResolver()
+	if resolver == nil || len(indexes) > engine.MaxTemporalIndexDefinitions || !cost.valid {
+		return temporalIndexAccess{}, context.Cause(ctx)
+	}
+	input := builder.temporalInput
+	if !input.intent.Placement.AllowsNamedTemporalCandidate() || GetForceScanOnMultiCN() {
 		return temporalIndexAccess{}, nil
 	}
 	budget := engine.MaxTemporalBindingWork
@@ -153,8 +157,8 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 			request := engine.TemporalBlockInputRequest{Column: column.Name, Observed: stats.GetStats(), Stats: observation,
 				BoundType: scalar.typ.Oid, Scale: atom.scale, Op: atom.op, Zone: proc.GetSessionInfo().TimeZone}
 			copy(request.Bound[:], scalar.value)
-			input, complete, cause := provider.ObserveTemporalBlockInput(ctx, read, request, &budget)
-			if cause != nil || !complete || input.Rows == 0 || input.Blocks == 0 || !builder.temporalPlanningIntent.MatchesProcess(proc) {
+			blockInput, complete, cause := provider.ObserveTemporalBlockInput(ctx, read, request, &budget)
+			if cause != nil || !complete || blockInput.Rows == 0 || blockInput.Blocks == 0 || !input.intent.MatchesProcess(proc) {
 				return temporalIndexAccess{}, cause
 			}
 			// Compare the optimistic parallel BASE latency with the index's
@@ -172,9 +176,9 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 				}
 			}
 			if classify && GetExecType(builder.qry, false, builder.isPrepareStatement) != ExecTypeTP {
-				readers = min(cost.localScanReaders(), float64(input.Blocks))
+				readers = min(cost.localScanReaders(), float64(blockInput.Blocks))
 			}
-			baseWork = float64(input.Rows) * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork) / readers
+			baseWork = float64(blockInput.Rows) * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork) / readers
 			if !finitePositive(baseWork) || budget <= 0 {
 				return temporalIndexAccess{}, context.Cause(ctx)
 			}
@@ -224,8 +228,11 @@ func (builder *QueryBuilder) applyTemporalIndexCandidate(scanID int32, index *pl
 			result, err = scanID, context.Cause(ctx)
 		}
 	}()
-	resolver := builder.temporalResolver
-	if access.budget <= 0 || resolver == nil || !resolver.IsSameCompiler(builder.compCtx) || !resolver.BorrowStillCurrent(builder.compCtx, proc, access.borrow) || !builder.temporalPlanningIntent.MatchesProcess(proc) || context.Cause(ctx) != nil {
+	if access.budget <= 0 {
+		return scanID, false, context.Cause(ctx)
+	}
+	resolver := builder.temporalPlanningResolver()
+	if resolver == nil || !resolver.BorrowStillCurrent(builder.compCtx, proc, access.borrow) || !builder.temporalInput.intent.MatchesProcess(proc) || context.Cause(ctx) != nil {
 		return scanID, false, context.Cause(ctx)
 	}
 	scan := builder.qry.Nodes[scanID]
@@ -240,7 +247,7 @@ func (builder *QueryBuilder) applyTemporalIndexCandidate(scanID int32, index *pl
 	}
 	resolved := &temporalResolvedIndex{ref: ref, table: table, verify: func() (bool, error) {
 		valid, cause := access.provider.VerifyTemporalIndexPair(ctx, access.borrow.Read, engine.TemporalPairCheck{BaseRef: scan.ObjRef, HiddenRef: ref, BaseFull: access.full, BaseScan: scan.TableDef, HiddenFull: table, Index: index, Column: access.column, Hidden: hiddenBorrow.Relation, HiddenRead: hiddenBorrow.Read}, &access.budget)
-		return valid && access.borrow.Read.Op == proc.GetTxnOperator() && access.budget > 0 && resolver.BorrowStillCurrent(builder.compCtx, proc, access.borrow) && resolver.BorrowStillCurrent(builder.compCtx, proc, hiddenBorrow) && builder.temporalPlanningIntent.MatchesProcess(proc) && context.Cause(ctx) == nil, cause
+		return valid && access.borrow.Read.Op == proc.GetTxnOperator() && access.budget > 0 && resolver.BorrowStillCurrent(builder.compCtx, proc, access.borrow) && resolver.BorrowStillCurrent(builder.compCtx, proc, hiddenBorrow) && builder.temporalInput.intent.MatchesProcess(proc) && context.Cause(ctx) == nil, cause
 	}}
 	return builder.applyTemporalIndexOnlyScanResolved(scanID, index, remap, cost, resolved)
 }

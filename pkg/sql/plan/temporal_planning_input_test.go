@@ -33,16 +33,12 @@ func TestTemporalPlanningInputIsSingleUseAndRootOwned(t *testing.T) {
 	other := &tree.Select{}
 	intent := TemporalPlanningIntent{ParameterFree: true}
 	scope := NewTemporalPlanningInput(root, intent, nil)
-	_, _, ok := scope.claim(other)
-	require.False(t, ok)
-	got, _, ok := scope.claim(root)
-	require.True(t, ok)
-	require.True(t, got.ParameterFree)
-	_, _, ok = scope.claim(root)
-	require.False(t, ok)
+	require.False(t, scope.claim(other))
+	require.True(t, scope.claim(root))
+	require.True(t, scope.intent.ParameterFree)
+	require.False(t, scope.claim(root))
 	var absent *TemporalPlanningInput
-	_, _, ok = absent.claim(root)
-	require.False(t, ok)
+	require.False(t, absent.claim(root))
 
 	// Two optimization attempts can share an immutable borrowed AST without
 	// sharing a claim; concurrent claims within one attempt still have one owner.
@@ -53,15 +49,14 @@ func TestTemporalPlanningInputIsSingleUseAndRootOwned(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, _, claimed := fresh.claim(root); claimed {
+			if fresh.claim(root) {
 				successes.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
 	require.EqualValues(t, 1, successes.Load())
-	_, _, ok = NewTemporalPlanningInput(root, intent, nil).claim(root)
-	require.True(t, ok)
+	require.True(t, NewTemporalPlanningInput(root, intent, nil).claim(root))
 }
 
 func TestTemporalIntentRejectsSessionLimitDrift(t *testing.T) {
@@ -106,26 +101,22 @@ func TestTemporalPlanningInputFollowsRootStatementWrappers(t *testing.T) {
 			scope := NewTemporalPlanningInput(root, TemporalPlanningIntent{ParameterFree: true}, nil)
 			_, err = NewBaseOptimizer(ctx).OptimizeWithTemporalInput(stmt, false, scope)
 			require.NoError(t, err)
-			_, _, claimed := scope.claim(root)
-			require.False(t, claimed, "the actual root builder must consume the one-shot scope")
+			require.False(t, scope.claim(root), "the actual root builder must consume the one-shot scope")
 			other := &tree.Select{}
 			mismatch := NewTemporalPlanningInput(other, TemporalPlanningIntent{ParameterFree: true}, nil)
 			_, err = BuildPlanWithTemporalInput(ctx, stmt, false, mismatch)
 			require.NoError(t, err)
-			_, _, claimed = mismatch.claim(other)
-			require.True(t, claimed, "a different root must not consume the scope")
+			require.True(t, mismatch.claim(other), "a different root must not consume the scope")
 			if sql == "select 1" {
 				prepared := &tree.PrepareStmt{Name: "temporal_scope", Stmt: root}
 				preparedScope := NewTemporalPlanningInput(root, TemporalPlanningIntent{ParameterFree: true}, nil)
 				_, err = BuildPlanWithTemporalInput(ctx, prepared, false, preparedScope)
 				require.NoError(t, err)
-				_, _, claimed = preparedScope.claim(root)
-				require.False(t, claimed, "the explicit prepared AST must reach its own optimizer attempt")
+				require.False(t, preparedScope.claim(root), "the explicit prepared AST must reach its own optimizer attempt")
 				stringScope := NewTemporalPlanningInput(root, TemporalPlanningIntent{ParameterFree: true}, nil)
 				_, err = BuildPlanWithTemporalInput(ctx, tree.NewPrepareString("temporal_text", "select 1"), false, stringScope)
 				require.NoError(t, err)
-				_, _, claimed = stringScope.claim(root)
-				require.True(t, claimed, "a separately parsed PREPARE string must not consume another AST's scope")
+				require.True(t, stringScope.claim(root), "a separately parsed PREPARE string must not consume another AST's scope")
 			}
 		})
 	}
@@ -167,6 +158,7 @@ func TestTemporalScanBorrowDeclinesDuplicatesAndOverflow(t *testing.T) {
 	for _, duplicate := range []bool{true, false} {
 		t.Run(map[bool]string{true: "duplicate", false: "overflow"}[duplicate], func(t *testing.T) {
 			builder, _, _ := temporalCBOTraversalFixture(t)
+			input := builder.temporalInput
 			borrow := builder.temporalScanBorrows[0].borrow
 			for i := 1; i <= maxTemporalNativeRelations; i++ {
 				id := uint64(42 + i)
@@ -187,8 +179,17 @@ func TestTemporalScanBorrowDeclinesDuplicatesAndOverflow(t *testing.T) {
 			}
 			require.True(t, builder.temporalBorrowDisabled)
 			require.Empty(t, builder.temporalScanBorrows)
+			require.Same(t, input, builder.temporalInput)
+			require.True(t, builder.temporalResolverAllowed)
 			_, _, ok := builder.temporalScanBorrow(0)
 			require.False(t, ok)
+			builder.qry.Nodes = builder.qry.Nodes[:1]
+			builder.qry.Steps = nil
+			builder.qry.TemporalIndexNeedsReplan = false
+			builder.temporalOriginalSafeScans = nil
+			builder.collectOriginalTemporalOwner(0)
+			require.True(t, builder.qry.TemporalIndexNeedsReplan)
+			require.True(t, builder.temporalOriginalSafeScans[0])
 		})
 	}
 }

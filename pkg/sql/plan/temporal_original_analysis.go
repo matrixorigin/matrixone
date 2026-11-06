@@ -249,8 +249,9 @@ func (builder *QueryBuilder) collectOriginalTemporalOwner(rootID int32) {
 	if builder == nil || builder.qry == nil {
 		return
 	}
-	lifetime := builder.compCtx != nil && !builder.isPrepareStatement && (!builder.hasTemporalPlanningIntent || builder.temporalPlanningIntent.ParameterFree)
-	capture := builder.hasTemporalPlanningIntent && builder.temporalPlanningIntent.ParameterFree && len(builder.qry.Steps) == 0
+	input := builder.temporalInput
+	lifetime := builder.compCtx != nil && !builder.isPrepareStatement && (input == nil || input.intent.ParameterFree)
+	capture := input != nil && input.intent.ParameterFree && len(builder.qry.Steps) == 0
 	if !lifetime && !capture {
 		return
 	}

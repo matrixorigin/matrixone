@@ -107,7 +107,7 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 	scan := &plan.Node{NodeType: plan.Node_TABLE_SCAN}
 	project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: []*Expr{col}}
 	query := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{scan, project}}
-	builder := &QueryBuilder{qry: query, hasTemporalPlanningIntent: true, temporalPlanningIntent: TemporalPlanningIntent{ParameterFree: true}}
+	builder := &QueryBuilder{qry: query, temporalInput: &TemporalPlanningInput{intent: TemporalPlanningIntent{ParameterFree: true}}}
 	builder.collectOriginalTemporalOwner(1)
 	require.Contains(t, builder.temporalOriginalSafeScans, int32(0))
 	require.Empty(t, query.Steps, "proof must not mutate the original plan")
@@ -118,11 +118,10 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 	builder.collectOriginalTemporalOwner(1)
 	project.ProjectList = project.ProjectList[:1] // a later rewrite removes the unsafe expression
 	require.Empty(t, builder.temporalOriginalSafeScans)
-	builder.temporalPlanningIntent.ParameterFree = false
+	builder.temporalInput.intent.ParameterFree = false
 	builder.collectOriginalTemporalOwner(1)
 	require.Empty(t, builder.temporalOriginalSafeScans)
-	builder.temporalPlanningIntent.ParameterFree = true
-	builder.hasTemporalPlanningIntent = false
+	builder.temporalInput = nil
 	builder.collectOriginalTemporalOwner(1)
 	require.Empty(t, builder.temporalOriginalSafeScans)
 }
@@ -130,8 +129,7 @@ func TestTemporalOriginalOwnerProofPrecedesRewrite(t *testing.T) {
 func TestTemporalOriginalSingleLeafHasIndependentCostEvidence(t *testing.T) {
 	builder, _, _ := temporalCBOTraversalFixture(t)
 	builder.qry.Steps = nil
-	builder.hasTemporalPlanningIntent = true
-	builder.temporalPlanningIntent.ParameterFree = true
+	builder.temporalInput.intent.ParameterFree = true
 	builder.temporalOriginalSafeScans = nil
 	builder.collectOriginalTemporalOwner(0)
 	require.True(t, builder.temporalOriginalSafeScans[0])

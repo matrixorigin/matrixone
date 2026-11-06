@@ -56,12 +56,14 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			root := stmt.(*tree.Select)
-			input := NewTemporalPlanningInput(root, fixture.temporalPlanningIntent, compiler)
+			input := NewTemporalPlanningInput(root, fixture.temporalInput.intent, compiler)
 			var builder *QueryBuilder
 			var backing []temporalScanBorrow
 			marker := errors.New("stop after binding")
 			validate := func(*Query) error {
 				require.NotNil(t, builder)
+				require.Same(t, input, builder.temporalInput)
+				require.True(t, builder.temporalResolverAllowed)
 				require.Len(t, builder.temporalScanBorrows, 1, "the real bind must have retained the borrow")
 				backing = builder.temporalScanBorrows
 				switch outcome {
@@ -85,6 +87,8 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 				require.NoError(t, run())
 			}
 			require.NotNil(t, builder)
+			require.Nil(t, builder.temporalInput, "the AST and resolver must not survive the attempt")
+			require.False(t, builder.temporalResolverAllowed)
 			require.Nil(t, builder.temporalScanBorrows, "no transaction reference may survive the attempt")
 			require.Len(t, backing, 1)
 			require.Equal(t, temporalScanBorrow{}, backing[0], "the old backing array must not retain the transaction")

@@ -84,14 +84,10 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
-	defer builder.clearTemporalBorrows()
-	builder.temporalPlanningIntent, builder.temporalResolver, builder.hasTemporalPlanningIntent = temporalInput.claim(stmt)
-	if builder.hasTemporalPlanningIntent && !builder.temporalPlanningIntent.MatchesProcess(ctx.GetProcess()) {
-		builder.hasTemporalPlanningIntent = false
-		builder.temporalResolver = nil
-	}
-	if builder.temporalResolver != nil && !builder.temporalResolver.IsSameCompiler(ctx) {
-		builder.temporalResolver = nil
+	defer builder.finishTemporalPlanning()
+	if temporalInput.claim(stmt) && temporalInput.intent.MatchesProcess(ctx.GetProcess()) {
+		builder.temporalInput = temporalInput
+		builder.temporalResolverAllowed = temporalInput.resolver != nil && temporalInput.resolver.IsSameCompiler(ctx)
 	}
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget

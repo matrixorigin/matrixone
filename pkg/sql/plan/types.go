@@ -397,11 +397,10 @@ type QueryBuilder struct {
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables     map[int32]deleteIndexScan
-	temporalPlanningIntent    TemporalPlanningIntent
-	temporalResolver          BorrowingTableResolver
+	temporalInput             *TemporalPlanningInput
 	temporalScanBorrows       []temporalScanBorrow
 	temporalBorrowDisabled    bool
-	hasTemporalPlanningIntent bool
+	temporalResolverAllowed   bool
 	temporalOriginalSafeScans map[int32]bool
 	integerPrecision          *integerPrecisionBuilder
 	correlationRouteNodes     map[int32]bool

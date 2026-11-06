@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +39,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 			case "unmarked lifetime":
 				builder.qry.TemporalIndexNeedsReplan = false
 			case "missing scope":
-				builder.temporalResolver = nil
+				builder.temporalResolverAllowed = false
 			case "missing original owner":
 				builder.temporalOriginalSafeScans = nil
 			case "unproved original owner":
@@ -52,13 +53,13 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				require.False(t, builder.temporalOriginalSafeScans[0])
 				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
-				builder.temporalPlanningIntent.ParameterFree = false
+				builder.temporalInput.intent.ParameterFree = false
 			case "prepared statement":
 				builder.isPrepareStatement = true
 			case "sirius":
-				builder.temporalPlanningIntent.Placement.Sirius = true
+				builder.temporalInput.intent.Placement.Sirius = true
 			case "clock drift":
-				builder.temporalPlanningIntent.UnixTime++
+				builder.temporalInput.intent.UnixTime++
 			case "session row limit":
 				builder.sessionSelectLimitMayStopEarly = true
 			case "unknown session row limit":
@@ -90,6 +91,93 @@ type trackingResolveContext struct {
 func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	c.resolves++
 	return c.CompilerContext.Resolve(database, name, snapshot)
+}
+
+type changingPlanningResolver struct {
+	compiler CompilerContext
+	answers  []bool
+	checks   int
+	base     int
+	hidden   int
+}
+
+func (r *changingPlanningResolver) IsSameCompiler(CompilerContext) bool {
+	index := min(r.checks, len(r.answers)-1)
+	r.checks++
+	return r.answers[index]
+}
+
+func (r *changingPlanningResolver) ResolveBaseForPlanning(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
+	r.base++
+	ref, def, err := r.compiler.Resolve(database, name, snapshot)
+	return ref, def, nil, err
+}
+
+func (r *changingPlanningResolver) ResolveIndexForPlanning(base *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
+	r.hidden++
+	ref, def, err := r.compiler.ResolveIndexTableByRef(base, name, snapshot)
+	return ref, def, nil, err
+}
+
+func (r *changingPlanningResolver) BorrowStillCurrent(CompilerContext, *process.Process, *BorrowedTable) bool {
+	return false
+}
+
+func TestTemporalPlanningResolverIdentityChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		answers         []bool
+		processMismatch bool
+	}{
+		{name: "initial rejection stays rejected", answers: []bool{false, true}},
+		{name: "later rejection falls back", answers: []bool{true, false, true}},
+		{name: "process mismatch", answers: []bool{true}, processMismatch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, _, _ := temporalCBOTraversalFixture(t)
+			scan := fixture.qry.Nodes[0]
+			underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+			underlying.tables["base"] = scan.TableDef
+			underlying.objects["base"] = scan.ObjRef
+			compiler := &trackingResolveContext{CompilerContext: underlying}
+			resolver := &changingPlanningResolver{compiler: compiler, answers: tc.answers}
+			stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where d > now()", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			root := stmt.(*tree.Select)
+			intent := fixture.temporalInput.intent
+			if tc.processMismatch {
+				intent.UnixTime++
+			}
+			p, err := BuildPlanWithTemporalInput(compiler, root, false, NewTemporalPlanningInput(root, intent, resolver))
+			require.NoError(t, err)
+			require.Equal(t, 1, compiler.resolves, "fallback must use the ordinary resolver once")
+			require.Zero(t, resolver.base)
+			require.Zero(t, resolver.hidden)
+			require.True(t, p.GetQuery().GetTemporalIndexNeedsReplan(), "resolver rejection must not drop the cache-lifetime fact")
+			if tc.processMismatch {
+				require.Zero(t, resolver.checks)
+			} else if !tc.answers[0] {
+				require.Equal(t, 1, resolver.checks, "initial rejection must remain latched")
+				require.True(t, resolver.IsSameCompiler(compiler), "the test resolver would later accept")
+			} else {
+				require.GreaterOrEqual(t, resolver.checks, 2)
+			}
+		})
+	}
+}
+
+func TestTemporalCandidateDirectEntryWithoutInput(t *testing.T) {
+	builder, _, index := temporalCBOTraversalFixture(t)
+	builder.temporalInput = nil
+	_, err := builder.enumerateTemporalIndexCandidates(0, []*plan.IndexDef{index}, nil, func(regularIndexAccessCandidate) {
+		t.Fatal("a missing input cannot yield a temporal candidate")
+	})
+	require.NoError(t, err)
+	id, applied, err := builder.applyTemporalIndexCandidate(0, index, nil, nil, temporalIndexAccess{budget: 1})
+	require.NoError(t, err)
+	require.Zero(t, id)
+	require.False(t, applied)
 }
 
 func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {

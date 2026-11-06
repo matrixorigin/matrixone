@@ -87,11 +87,19 @@ func NewTemporalPlanningInput(root *tree.Select, intent TemporalPlanningIntent, 
 	return &TemporalPlanningInput{root: root, intent: intent, resolver: resolver}
 }
 
-func (input *TemporalPlanningInput) claim(root *tree.Select) (TemporalPlanningIntent, BorrowingTableResolver, bool) {
-	if input == nil || root == nil || input.root != root || !input.claimed.CompareAndSwap(false, true) {
-		return TemporalPlanningIntent{}, nil, false
+func (input *TemporalPlanningInput) claim(root *tree.Select) bool {
+	return input != nil && root != nil && input.root == root && input.claimed.CompareAndSwap(false, true)
+}
+
+func (builder *QueryBuilder) temporalPlanningResolver() BorrowingTableResolver {
+	if builder.temporalInput == nil || !builder.temporalResolverAllowed {
+		return nil
 	}
-	return input.intent, input.resolver, true
+	resolver := builder.temporalInput.resolver
+	if resolver == nil || !resolver.IsSameCompiler(builder.compCtx) {
+		return nil
+	}
+	return resolver
 }
 
 // temporalScanBorrow connects the same resolver result to the actual scan that
@@ -155,4 +163,10 @@ func (builder *QueryBuilder) temporalScanBorrow(scanID int32) (*TableDef, *Borro
 func (builder *QueryBuilder) clearTemporalBorrows() {
 	clear(builder.temporalScanBorrows)
 	builder.temporalScanBorrows = nil
+}
+
+func (builder *QueryBuilder) finishTemporalPlanning() {
+	builder.clearTemporalBorrows()
+	builder.temporalInput = nil
+	builder.temporalResolverAllowed = false
 }

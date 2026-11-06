@@ -13890,7 +13890,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		var obj *ObjectRef
 		var tableDef *TableDef
 		var borrow *BorrowedTable
-		if resolver := builder.temporalResolver; resolver != nil && resolver.IsSameCompiler(builder.compCtx) {
+		if resolver := builder.temporalPlanningResolver(); resolver != nil {
 			obj, tableDef, borrow, err = resolver.ResolveBaseForPlanning(catalogDatabase, table, snapshot)
 		} else {
 			obj, tableDef, err = builder.compCtx.Resolve(catalogDatabase, table, snapshot)
