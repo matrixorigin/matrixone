@@ -4960,7 +4960,18 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 		return nil
 	}
 
-	mapping, ok, err := buildRegularIndexColumnMap(builder.GetContext(), node, idxDef, idxTableDef, leadingColExpr, idxTag)
+	// A single key needs the context only for cancellation; composite keys also
+	// bind serial_extract and therefore need the builder's expression options.
+	var mappingCtx context.Context
+	if len(idxDef.Parts) == 1 {
+		mappingCtx = builder.compCtx.GetContext()
+		if mappingCtx == nil {
+			mappingCtx = context.Background()
+		}
+	} else {
+		mappingCtx = builder.GetContext()
+	}
+	mapping, ok, err := buildRegularIndexColumnMap(mappingCtx, node, idxDef, idxTableDef, leadingColExpr, idxTag)
 	if err != nil {
 		panic(err)
 	}
