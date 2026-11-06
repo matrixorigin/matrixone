@@ -85,6 +85,37 @@ func testInventoryCAS(t *testing.T, table string, public bool, isolation pbtxn.T
 	testInventoryCASOrder(t, table, public, isolation, 0, false, false)
 }
 
+func inventoryCASTxnForConn(t *testing.T, cn embed.ServiceOperator, connID uint32) (string, pbtxn.TxnMeta) {
+	t.Helper()
+	require.NotZero(t, connID)
+	provider, ok := cn.RawService().(interface {
+		SessionMgr() *queryservice.SessionManager
+	})
+	require.True(t, ok)
+	require.NotNil(t, provider.SessionMgr())
+	txnClient := cn.RawService().(cnservice.Service).GetTxnClient()
+	var sessionTxnIDs []string
+	for _, session := range provider.SessionMgr().GetAllStatusSessions() {
+		if session.NodeID == cn.ServiceID() && session.ConnID == connID {
+			sessionTxnIDs = append(sessionTxnIDs, session.TxnID)
+		}
+	}
+	require.Len(t, sessionTxnIDs, 1, "identify the SQL session for connection %d", connID)
+	txnID := sessionTxnIDs[0]
+	require.NotEmpty(t, txnID, "connection %d must have an active transaction", connID)
+	var matches []pbtxn.TxnMeta
+	txnClient.IterTxns(func(v client.TxnOverview) bool {
+		if v.UserTxn && fmt.Sprintf("%x", v.Meta.ID) == txnID {
+			matches = append(matches, v.Meta)
+		}
+		return true
+	})
+	require.Len(t, matches, 1, "identify the active user transaction for connection %d", connID)
+	require.Equal(t, pbtxn.TxnStatus_Active, matches[0].Status)
+	require.False(t, matches[0].SnapshotTS.IsEmpty())
+	return txnID, matches[0]
+}
+
 func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation, first int, restart, interfere bool) {
 	t.Helper()
 	withInventoryCASCluster(t, func(c embed.Cluster) {
@@ -179,34 +210,7 @@ func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pb
 		if public {
 			testContext := moruntime.MustGetTestingContext(cn.ServiceID())
 			mode := moruntime.TxnModeTestConfig{AccountID: 0, Mode: pbtxn.TxnMode_Optimistic, Enabled: true}
-			provider, ok := cn.RawService().(interface {
-				SessionMgr() *queryservice.SessionManager
-			})
-			require.True(t, ok)
-			require.NotNil(t, provider.SessionMgr())
-			txnClient := cn.RawService().(cnservice.Service).GetTxnClient()
-			txnForConn := func(connID uint32) (string, pbtxn.TxnMeta) {
-				t.Helper()
-				var sessionTxnIDs []string
-				for _, session := range provider.SessionMgr().GetAllStatusSessions() {
-					if session.NodeID == cn.ServiceID() && session.ConnID == connID {
-						sessionTxnIDs = append(sessionTxnIDs, session.TxnID)
-					}
-				}
-				require.Len(t, sessionTxnIDs, 1, "identify the SQL session for connection %d", connID)
-				txnID := sessionTxnIDs[0]
-				require.NotEmpty(t, txnID, "connection %d must have an active transaction", connID)
-				var matches []pbtxn.TxnMeta
-				txnClient.IterTxns(func(v client.TxnOverview) bool {
-					if v.UserTxn && fmt.Sprintf("%x", v.Meta.ID) == txnID {
-						matches = append(matches, v.Meta)
-					}
-					return true
-				})
-				require.Len(t, matches, 1, "identify the active user transaction for connection %d", connID)
-				require.Equal(t, pbtxn.TxnStatus_Active, matches[0].Status)
-				return txnID, matches[0]
-			}
+
 			var transactions [2]*sql.Tx
 			var connIDs [2]uint32
 			var otherTxn *sql.Tx
@@ -252,26 +256,26 @@ func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pb
 					var count int
 					require.NoError(t, otherTxn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&count))
 					require.Equal(t, 1, count)
-					otherTxnID, _ = txnForConn(otherConnID)
+					otherTxnID, _ = inventoryCASTxnForConn(t, cn, otherConnID)
 					t.Logf("CAS_INTERFERENCE connection=%d id=%s", otherConnID, otherTxnID)
 				}
-				writerID, meta := txnForConn(connIDs[i])
+				writerID, meta := inventoryCASTxnForConn(t, cn, connIDs[i])
 				require.NoError(t, checkMeta(i, meta))
 				require.Equal(t, writerID, ids[i])
 				if interfere {
-					currentOtherID, _ := txnForConn(otherConnID)
+					currentOtherID, _ := inventoryCASTxnForConn(t, cn, otherConnID)
 					require.Equal(t, otherTxnID, currentOtherID)
 					require.NotEqual(t, otherTxnID, ids[i])
 				}
 			}
 			for i, connID := range connIDs {
-				writerID, meta := txnForConn(connID)
+				writerID, meta := inventoryCASTxnForConn(t, cn, connID)
 				require.Equal(t, ids[i], writerID, "writer transaction changed before commit")
 				require.NoError(t, checkMeta(i, meta))
 			}
 			require.NotEqual(t, ids[0], ids[1])
 			if interfere {
-				currentOtherID, _ := txnForConn(otherConnID)
+				currentOtherID, _ := inventoryCASTxnForConn(t, cn, otherConnID)
 				require.Equal(t, otherTxnID, currentOtherID)
 				require.NoError(t, otherTxn.Rollback())
 			}
@@ -450,6 +454,14 @@ func TestInventoryCASRCTransfer(t *testing.T) {
 		}
 		require.NoError(t, tx.Commit())
 		require.Greater(t, transferCount(), beforeTransfer, "the original delete RowID must actually transfer")
+		// The pooled reader is a different SQL session. The optimistic test
+		// override does not enable CN-wide read-after-commit consistency.
+		txnClient := cn.RawService().(cnservice.Service).GetTxnClient()
+		frontier := txnClient.GetLatestCommitTS()
+		require.False(t, frontier.IsEmpty())
+		applied, err := txnClient.WaitLogTailAppliedAt(ctx, frontier)
+		require.NoError(t, err)
+		require.True(t, frontier.Less(applied), "the reader must see the committed update")
 		var count, epoch int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*),max(epoch) from nr_transfer_probe.inventory").Scan(&count, &epoch))
 		require.Equal(t, 1, count)
@@ -472,11 +484,34 @@ func TestInventoryCASPessimisticRC(t *testing.T) {
 		exec("create database nr_pess_probe")
 		exec("create table nr_pess_probe.inventory(id int primary key,epoch int)")
 		exec("insert into nr_pess_probe.inventory values(1,1)")
+		// Keep a legitimate SI transaction active across both writer checks.
+		other, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer other.Close()
+		var otherConnID uint32
+		require.NoError(t, other.QueryRowContext(ctx, "select connection_id()").Scan(&otherConnID))
+		_, err = other.ExecContext(ctx, "set session transaction isolation level repeatable read")
+		require.NoError(t, err)
+		otherTxn, err := other.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer otherTxn.Rollback()
+		var one int
+		require.NoError(t, otherTxn.QueryRowContext(ctx, "select 1").Scan(&one))
+		require.Equal(t, 1, one)
+		otherID, _ := inventoryCASTxnForConn(t, cn, otherConnID)
+		var connIDs [2]uint32
+		var writerIDs [2]string
 		var txs [2]*sql.Tx
 		for i := range 2 {
 			conn, e := db.Conn(ctx)
 			require.NoError(t, e)
 			defer conn.Close()
+			require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connIDs[i]))
+			require.NotZero(t, connIDs[i])
+			require.NotEqual(t, otherConnID, connIDs[i])
+			if i > 0 {
+				require.NotEqual(t, connIDs[0], connIDs[i])
+			}
 			_, e = conn.ExecContext(ctx, "set session transaction isolation level read committed")
 			require.NoError(t, e)
 			txs[i], e = conn.BeginTx(ctx, nil)
@@ -489,13 +524,21 @@ func TestInventoryCASPessimisticRC(t *testing.T) {
 			n, e := r.RowsAffected()
 			require.NoError(t, e)
 			require.EqualValues(t, 1-i, n)
-			cn.RawService().(cnservice.Service).GetTxnClient().IterTxns(func(v client.TxnOverview) bool {
-				if v.UserTxn {
-					require.Equal(t, pbtxn.TxnMode_Pessimistic, v.Meta.Mode)
-					require.Equal(t, pbtxn.TxnIsolation_RC, v.Meta.Isolation)
-				}
-				return true
-			})
+			id, meta := inventoryCASTxnForConn(t, cn, connIDs[i])
+			writerIDs[i] = id
+			require.Equal(t, pbtxn.TxnMode_Pessimistic, meta.Mode)
+			require.Equal(t, pbtxn.TxnIsolation_RC, meta.Isolation)
+			require.False(t, meta.SnapshotTS.IsEmpty())
+			require.NotEqual(t, otherID, id)
+			if i > 0 {
+				require.NotEqual(t, writerIDs[0], id)
+			}
+			currentOtherID, otherMeta := inventoryCASTxnForConn(t, cn, otherConnID)
+			require.Equal(t, otherID, currentOtherID)
+			require.Equal(t, pbtxn.TxnIsolation_SI, otherMeta.Isolation)
+			if i == 1 {
+				require.NoError(t, otherTxn.Rollback())
+			}
 			require.NoError(t, txs[i].Commit())
 		}
 		var count, epoch int

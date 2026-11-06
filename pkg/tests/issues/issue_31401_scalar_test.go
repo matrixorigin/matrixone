@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"os"
 	"strings"
@@ -29,41 +30,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssue31401ScalarRefreshProgress(t *testing.T) {
-	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		cn, err := cluster.GetCNService(0)
-		require.NoError(t, err)
-		t.Logf("embedded owner pid=%d config=%s/cn-0.toml data=%s", os.Getpid(), cn.GetServiceConfig().DataDir, cn.GetServiceConfig().DataDir)
-		sys := openIssue277xxDB(t, cn.GetServiceConfig().CN.Frontend.Port)
-		defer sys.Close()
-		for _, mode := range []string{"ordinary", "pk", "allocator", "prepared", "defaults", "other_account", "broad_index", "initial_snapshot", "late_snapshot", "initial_pitr", "late_pitr", "late_branch", "tenant_snapshot", "upgrade_conflict", "initial_fk", "late_fk"} {
-			t.Run(mode, func(t *testing.T) {
+	for _, mode := range []string{"ordinary", "pk", "allocator", "prepared", "defaults", "other_account", "broad_index", "initial_snapshot", "late_snapshot", "initial_pitr", "late_pitr", "late_branch", "tenant_snapshot", "upgrade_conflict", "initial_fk", "late_fk"} {
+		t.Run(mode, func(t *testing.T) {
+			runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+				cn, err := cluster.GetCNService(0)
+				require.NoError(t, err)
+				t.Logf("embedded owner pid=%d config=%s/cn-0.toml data=%s", os.Getpid(), cn.GetServiceConfig().DataDir, cn.GetServiceConfig().DataDir)
+				sys := openIssue277xxDB(t, cn.GetServiceConfig().CN.Frontend.Port)
+				defer sys.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 				defer cancel()
+				cleanupSQL := func(exec func(context.Context, string, ...any) (sql.Result, error), timeout time.Duration, statement string) error {
+					t.Helper()
+					cleanup, stop := context.WithTimeout(context.Background(), timeout)
+					defer stop()
+					_, err := exec(cleanup, statement)
+					assert.NoErrorf(t, err, "cleanup SQL: %s", statement)
+					return err
+				}
 				db := sys
 				if mode == "other_account" || mode == "tenant_snapshot" {
 					execSQLRequire(t, ctx, sys, "create account issue31401_scalar admin_name 'admin' identified by '111'")
 					defer func() {
-						clean, stop := context.WithTimeout(context.Background(), 20*time.Second)
-						defer stop()
-						execSQLMaybe(t, clean, sys, "drop account if exists issue31401_scalar")
+						// A failed child operation may still have an unknown result.
+						// The failed fixture owns shutdown instead of another parent DDL.
+						if !t.Failed() {
+							_ = cleanupSQL(sys.ExecContext, 20*time.Second, "drop account if exists issue31401_scalar")
+						}
 					}()
 					db, err = sql.Open("mysql", fmt.Sprintf("issue31401_scalar#admin#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 					require.NoError(t, err)
 					defer db.Close()
 				}
 				const source, peer = "issue31401_progress", "issue31401_peer"
-				resetIssue277xxDatabase(t, ctx, db, source)
-				resetIssue277xxDatabase(t, ctx, sys, peer)
+				var sourceOwned, peerOwned bool
 				defer func() {
-					clean, stop := context.WithTimeout(context.Background(), 10*time.Second)
-					defer stop()
-					execSQLMaybe(t, clean, db, "drop database if exists "+source)
-					execSQLMaybe(t, clean, sys, "drop database if exists "+peer)
+					if sourceOwned {
+						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop database if exists "+source)
+					}
+					if peerOwned {
+						_ = cleanupSQL(sys.ExecContext, 10*time.Second, "drop database if exists "+peer)
+					}
 				}()
+				resetIssue277xxDatabase(t, ctx, db, source)
+				sourceOwned = true
+				resetIssue277xxDatabase(t, ctx, sys, peer)
+				peerOwned = true
 				definition := "id int,v int"
 				if mode == "pk" || mode == "other_account" || strings.HasSuffix(mode, "fk") || mode == "late_branch" {
 					definition = "id int primary key,v int"
@@ -100,13 +117,11 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				}
 				if strings.Contains(mode, "snapshot") || mode == "upgrade_conflict" || strings.Contains(mode, "pitr") {
 					defer func() {
-						clean, stop := context.WithTimeout(context.Background(), 10*time.Second)
-						defer stop()
 						kind := "snapshot"
 						if strings.Contains(mode, "pitr") {
 							kind = "pitr"
 						}
-						execSQLMaybe(t, clean, db, "drop "+kind+" if exists issue31401_protect")
+						_ = cleanupSQL(db.ExecContext, 10*time.Second, "drop "+kind+" if exists issue31401_protect")
 					}()
 				}
 				if strings.HasPrefix(mode, "initial_") && mode != "initial_fk" || mode == "tenant_snapshot" {
@@ -119,7 +134,11 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				conn, e := sys.Conn(ctx)
 				require.NoError(t, e)
 				defer conn.Close()
-				defer func() { _, _ = conn.ExecContext(context.Background(), "rollback") }()
+				defer func() {
+					if err := cleanupSQL(conn.ExecContext, 10*time.Second, "rollback"); err != nil {
+						_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+					}
+				}()
 				alterSQL := "alter table " + source + ".t add column d int default 7"
 				var preparedAlter *sql.Stmt
 				if mode == "prepared" {
@@ -298,8 +317,8 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				}
 				require.Zero(t, queryIssue277xxInt(t, ctx, db, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like 't_copy_%'", source))
 			})
-		}
-	})
+		})
+	}
 }
 
 func TestIssue31401ScalarRetainedLocksFastFail(t *testing.T) {

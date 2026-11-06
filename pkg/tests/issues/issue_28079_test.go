@@ -351,26 +351,7 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 		const successful = "issue_28079_refresh_success"
 		const rejected = "issue_28079_refresh_rejected"
 		cleanup := func() error {
-			var cleanupErr error
-			for _, account := range []string{successful, rejected} {
-				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				_, dropErr := db0.ExecContext(cleanupCtx, "drop account if exists `"+account+"`")
-				cleanupCancel()
-				if dropErr != nil {
-					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("drop %s: %w", account, dropErr))
-				}
-			}
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
-			var count int
-			if err := db0.QueryRowContext(cleanupCtx,
-				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
-				successful, rejected).Scan(&count); err != nil {
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("verify account cleanup: %w", err))
-			} else if count != 0 {
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("account cleanup left %d rows", count))
-			}
-			return cleanupErr
+			return cleanupIssue28079RefreshAccounts(db0, successful, rejected)
 		}
 		require.NoError(t, cleanup())
 		t.Cleanup(func() {
@@ -590,6 +571,23 @@ func TestIssue28079LifecycleRefreshAndViewFailure(t *testing.T) {
 					[]byte(catalog.MO_VIEW_REFRESH)).total() == 0
 		}, 30*time.Second, 10*time.Millisecond, "account lifecycle locks remained after success/failure")
 	})
+}
+
+func cleanupIssue28079RefreshAccounts(db *sql.DB, successful, rejected string) error {
+	cleanupErr := cleanupIssueAccounts(db, successful, rejected)
+	// A timed-out DROP has an unknown result. Preserve the original aggregate
+	// check even when the per-account cleanup returned an error.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var count int
+	if err := db.QueryRowContext(ctx,
+		"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
+		successful, rejected).Scan(&count); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("verify account cleanup: %w", err))
+	} else if count != 0 {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("account cleanup left %d rows", count))
+	}
+	return cleanupErr
 }
 
 func issue28079CommitLifecycleGate(
