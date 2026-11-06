@@ -270,6 +270,19 @@ func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Bat
 		// allocations here and insert_external releases them once the write
 		// consumed the batch; otherwise each affected batch would leave one
 		// more replacement recorded in the pool with an owner nobody calls.
+		//
+		// The staged default of a dependent NOT NULL column
+		// (b DEFAULT (a)) lowers to a raw column reference while a stays
+		// nullable, and the child projection hands that reference the very
+		// vector holding a: one flat vector feeds two slots. The flat leg
+		// of the fill rewrites its destination in place, so it would also
+		// overwrite a's NULL cells with b's implicit default and drop
+		// a's null bitmap. PreInsert normally gives repeated vectors an
+		// independent copy, but this minimal external plan runs no
+		// PreInsert, so the detachment is booked here the same way.
+		if err := insert.detachAliasedFillDestinations(bat, proc); err != nil {
+			return err
+		}
 		before := insert.snapshotConstantNullSlots(bat)
 		_, err := colexec.BatchDataNotNullFillForIgnore(
 			bat.Vecs, insert.InsertCtx.Attrs, insert.ctr.extCols, proc)
@@ -313,6 +326,53 @@ func (insert *Insert) snapshotConstantNullSlots(bat *batch.Batch) []*vector.Vect
 			continue
 		}
 		return slices.Clone(bat.Vecs)
+	}
+	return nil
+}
+
+// detachAliasedFillDestinations gives every fill destination whose flat
+// vector also occupies another slot independent storage before the IGNORE
+// fill runs. The in-place leg of the fill overwrites NULL cells and clears
+// the null bitmap of the vector holding them, so a shared vector would let
+// b's adjustment also set a's cell to the implicit default and clear a's
+// live NULL - the writer would emit a value where the row supplied NULL.
+// Only a vector that actually holds a NULL can be rewritten, so vectors
+// without one keep the single in-place fill. Every detachment is booked with
+// the same ownership the constant replacement uses: releaseExtFillOwned
+// hands the borrowed slot back to the child and frees the copy on each path
+// out of insert_external.
+func (insert *Insert) detachAliasedFillDestinations(bat *batch.Batch, proc *process.Process) error {
+	hasDestination := false
+	for _, col := range insert.ctr.extCols {
+		if colexec.ColForbidsNull(col) {
+			hasDestination = true
+			break
+		}
+	}
+	if !hasDestination {
+		return nil
+	}
+	shared := make(map[*vector.Vector]int, len(bat.Vecs))
+	for _, v := range bat.Vecs {
+		if v != nil && !v.IsConst() && nulls.Any(v.GetNulls()) {
+			shared[v]++
+		}
+	}
+	for j, v := range bat.Vecs {
+		if shared[v] < 2 || j >= len(insert.ctr.extCols) {
+			continue
+		}
+		if !colexec.ColForbidsNull(insert.ctr.extCols[j]) {
+			continue
+		}
+		detached := vector.NewVec(*v.GetType())
+		if err := detached.UnionBatch(v, 0, v.Length(), nil, proc.Mp()); err != nil {
+			detached.Free(proc.Mp())
+			return err
+		}
+		bat.Vecs[j] = detached
+		insert.ctr.extFillOwned = append(insert.ctr.extFillOwned,
+			extFillReplacement{slot: j, orig: v, fill: detached})
 	}
 	return nil
 }

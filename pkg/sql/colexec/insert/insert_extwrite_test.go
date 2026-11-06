@@ -44,10 +44,17 @@ type mockExtWriter struct {
 	failure    error
 	writeBytes int64
 	closeBytes int64
+	// onWrite, when set, observes each batch inside its synchronous
+	// WriteBatch window - exactly the time the external IGNORE fill's
+	// per-batch adaptations are installed for.
+	onWrite func(*batch.Batch)
 }
 
 func (m *mockExtWriter) WriteBatch(ctx context.Context, bat *batch.Batch, analyzer process.Analyzer) error {
 	m.writes++
+	if m.onWrite != nil {
+		m.onWrite(bat)
+	}
 	err := process.MeasureFilesystemWaitErr(analyzer, func() error {
 		if m.writeBytes > 0 {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -660,4 +667,236 @@ func TestExternalInsertReleasesPartialFillOnViolation(t *testing.T) {
 	require.Equal(t, beforeBytes, afterBytes)
 	require.Equal(t, beforeObjects, afterObjects)
 	src.Clean(q)
+}
+
+// aliasedNullSiblingRow is one external-write observation of the review's
+// aliased-fill shape: a's cell and b's cell, captured while the writer held
+// the batch.
+type aliasedNullSiblingRow struct {
+	aNull bool
+	aV    int64
+	bNull bool
+	bV    int64
+}
+
+// TestCheckExternalNotNullIgnoreDetachesAliasedFlatDestination pins the
+// component-level fact behind the aliased-fill review: a dependent NOT NULL
+// default on a nullable reference (b BIGINT NOT NULL DEFAULT (a)) lowers to
+// a raw column reference, so the external projection shares one flat vector
+// between a's slot and b's. The IGNORE fill of b runs in place, so it must
+// not clear a's live NULL row while it fills b's: the aliased destination is
+// detached into operator-owned storage first, the sibling keeps its null
+// bitmap, and the borrowed slot is handed back with the copy released.
+func TestCheckExternalNotNullIgnoreDetachesAliasedFlatDestination(t *testing.T) {
+	q := mpool.MustNewZero()
+	proc := newExternalIgnoreLoadProc(t, q)
+
+	ins := NewArgument()
+	defer ins.Release()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "b"}}
+	ins.ctr.extCols = []*plan.ColDef{nullableCol("a"), notNullCol("b")}
+
+	// both slots share one flat vector holding (1, NULL, 2)
+	shared := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](shared, 1, false, q))
+	require.NoError(t, vector.AppendFixed[int64](shared, 0, true, q))
+	require.NoError(t, vector.AppendFixed[int64](shared, 2, false, q))
+	bat := batch.New([]string{"a", "b"})
+	bat.Vecs[0] = shared
+	bat.Vecs[1] = shared
+	bat.SetRowCount(3)
+	beforeBytes, beforeObjects := q.OnHeapOutstanding()
+
+	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	require.True(t, shared.IsNull(1),
+		"the nullable sibling must keep its live NULL while b is filled")
+	require.False(t, bat.Vecs[1] == shared,
+		"the aliased fill destination runs in its own detached storage")
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0))
+	require.False(t, bat.Vecs[1].IsNull(1))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 1),
+		"DEFAULT (a) projected a's NULL, and IGNORE filled b with the implicit default")
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 2))
+	require.Equal(t, uint64(1), proc.Session.(*extIgnoreWarningSession).total,
+		"one warning for b's adjusted row")
+	require.Len(t, ins.ctr.extFillOwned, 1)
+	require.Equal(t, shared, ins.ctr.extFillOwned[0].orig)
+	require.Equal(t, bat.Vecs[1], ins.ctr.extFillOwned[0].fill)
+
+	ins.releaseExtFillOwned(bat, proc)
+	require.True(t, bat.Vecs[1] == shared,
+		"the child's borrowed slot is handed back once the batch was written")
+	require.Empty(t, ins.ctr.extFillOwned)
+	afterBytes, afterObjects := q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes,
+		"the detached copy does not survive its batch")
+	require.Equal(t, beforeObjects, afterObjects)
+	shared.Free(q)
+}
+
+// TestCheckExternalNotNullIgnoreDetachesEachAliasedDestination pins the
+// counterexample to a single-detach shortcut: when two NOT NULL dependent
+// columns (b1, b2 both DEFAULT (a)) share a's flat vector, each destination
+// needs its own detached storage - one shared detachment would keep the
+// b1/b2 alias, so filling it for b1 would clear the shared NULL before b2's
+// own fill, and b2's adjusted-row warning would never be recorded. Each
+// column reports its own adjusted row.
+func TestCheckExternalNotNullIgnoreDetachesEachAliasedDestination(t *testing.T) {
+	q := mpool.MustNewZero()
+	proc := newExternalIgnoreLoadProc(t, q)
+	session := proc.Session.(*extIgnoreWarningSession)
+
+	ins := NewArgument()
+	defer ins.Release()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "b1", "b2"}}
+	ins.ctr.extCols = []*plan.ColDef{nullableCol("a"), notNullCol("b1"), notNullCol("b2")}
+
+	shared := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](shared, 1, false, q))
+	require.NoError(t, vector.AppendFixed[int64](shared, 0, true, q))
+	require.NoError(t, vector.AppendFixed[int64](shared, 2, false, q))
+	bat := batch.New([]string{"a", "b1", "b2"})
+	for j := range bat.Vecs {
+		bat.Vecs[j] = shared
+	}
+	bat.SetRowCount(3)
+	beforeBytes, beforeObjects := q.OnHeapOutstanding()
+
+	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	require.True(t, shared.IsNull(1), "a keeps its live NULL row")
+	require.False(t, bat.Vecs[1] == shared, "b1 runs in its own detached storage")
+	require.False(t, bat.Vecs[2] == shared, "b2 runs in its own detached storage")
+	require.False(t, bat.Vecs[1] == bat.Vecs[2],
+		"the two destinations were not detached from each other into one copy")
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 1))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], 1),
+		"the second destination was still a NULL when its own fill ran")
+	require.Len(t, ins.ctr.extFillOwned, 2)
+	require.Equal(t, uint64(2), session.total,
+		"each dependent column reports its own adjusted row")
+	require.Equal(t, []string{
+		"Column 'b1' cannot be null",
+		"Column 'b2' cannot be null",
+	}, session.messages)
+
+	ins.releaseExtFillOwned(bat, proc)
+	require.True(t, bat.Vecs[1] == shared && bat.Vecs[2] == shared)
+	require.Empty(t, ins.ctr.extFillOwned)
+	afterBytes, afterObjects := q.OnHeapOutstanding()
+	require.Equal(t, beforeBytes, afterBytes)
+	require.Equal(t, beforeObjects, afterObjects)
+	shared.Free(q)
+}
+
+// TestExternalInsertIgnoreFillKeepsAliasedNullableSibling walks the review's
+// LOAD shape through the same projection-to-writer lifecycle as the other
+// external-write legs: the file supplies only the nullable a with mixed rows
+// (1, NULL, 2), and b BIGINT NOT NULL DEFAULT (a) projects a's own vector
+// into its slot - a nullable reference gets no coalesce rewrite, and the
+// column executor hands out the child's vector for both expressions. The
+// writer, which consumes the batch synchronously, must receive a's NULL row
+// untouched while b carries the implicit default, the child-owned supply
+// vector must not have been modified, and any detached copy must die with
+// the batch instead of staying recorded in the mpool.
+func TestExternalInsertIgnoreFillKeepsAliasedNullableSibling(t *testing.T) {
+	q := mpool.MustNewZero()
+	proc := newExternalIgnoreLoadProc(t, q)
+
+	const rowsPerBatch = 3
+	const batches = 2
+	newSrc := func() *batch.Batch {
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed[int64](vec, 1, false, q))
+		require.NoError(t, vector.AppendFixed[int64](vec, 0, true, q))
+		require.NoError(t, vector.AppendFixed[int64](vec, 2, false, q))
+		src := batch.New([]string{"s"})
+		src.Vecs[0] = vec
+		src.SetRowCount(rowsPerBatch)
+		return src
+	}
+	supply := make([]*batch.Batch, 0, batches)
+	for range batches {
+		supply = append(supply, newSrc())
+	}
+
+	proj := projection.NewArgument()
+	proj.ProjectList = []*plan.Expr{
+		{ // a: the supplied column
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		},
+		{ // b: DEFAULT (a) lowers to the same raw reference
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		},
+	}
+	proj.AppendChild(colexec.NewMockOperator().WithBatchs(append(supply, nil)))
+	require.NoError(t, proj.Prepare(proc))
+
+	ins := NewArgument()
+	defer ins.Release()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a", "b"}, AddAffectedRows: true}
+	ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+	ins.ctr.extCols = []*plan.ColDef{nullableCol("a"), notNullCol("b")}
+	writer := &mockExtWriter{}
+	ins.ctr.extWriter = writer
+	ins.AppendChild(proj)
+
+	written := make([][]aliasedNullSiblingRow, 0, batches)
+	writer.onWrite = func(bat *batch.Batch) {
+		rows := make([]aliasedNullSiblingRow, 0, bat.RowCount())
+		for r := 0; r < bat.RowCount(); r++ {
+			rows = append(rows, aliasedNullSiblingRow{
+				aNull: bat.Vecs[0].IsNull(uint64(r)),
+				aV:    vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], r),
+				bNull: bat.Vecs[1].IsNull(uint64(r)),
+				bV:    vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], r),
+			})
+		}
+		written = append(written, rows)
+	}
+
+	bytesAfterBatch := make([]int64, batches)
+	objectsAfterBatch := make([]int64, batches)
+	for i := range batches {
+		ins.OpAnalyzer.Start()
+		_, err := ins.Call(proc)
+		ins.OpAnalyzer.Stop()
+		require.NoError(t, err)
+		bytesAfterBatch[i], objectsAfterBatch[i] = q.OnHeapOutstanding()
+	}
+	ins.OpAnalyzer.Start()
+	_, err := ins.Call(proc) // EOF: flush and finalize the writer's file
+	ins.OpAnalyzer.Stop()
+	require.NoError(t, err)
+	ins.Free(proc, false, nil)
+
+	require.Equal(t, batches, writer.writes)
+	require.Equal(t, uint64(batches*rowsPerBatch), writer.rows)
+	require.Equal(t, 1, writer.closes)
+	wantRows := []aliasedNullSiblingRow{
+		{aNull: false, aV: 1, bNull: false, bV: 1},
+		{aNull: true, aV: 0, bNull: false, bV: 0},
+		{aNull: false, aV: 2, bNull: false, bV: 2},
+	}
+	require.Len(t, written, batches)
+	for i, rows := range written {
+		require.Equal(t, wantRows, rows,
+			"batch %d: the writer must observe a's NULL row while b carries the implicit default", i)
+	}
+	require.Equal(t, uint64(batches), proc.Session.(*extIgnoreWarningSession).total,
+		"one warning per written batch for b's adjusted NULL row")
+	for i := 1; i < batches; i++ {
+		require.Equal(t, bytesAfterBatch[0], bytesAfterBatch[i],
+			"an aliased destination's detached copy must not stay recorded in the mpool past its own batch")
+		require.Equal(t, objectsAfterBatch[0], objectsAfterBatch[i])
+	}
+	for _, src := range supply {
+		require.True(t, src.Vecs[0].IsNull(1),
+			"the child-owned supply vector keeps its NULL row after the write")
+		src.Clean(q)
+	}
 }
