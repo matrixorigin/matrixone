@@ -546,7 +546,7 @@ func (rb *remoteBackend) markIdle(maxIdle time.Duration) bool {
 	}
 	if rb.stateMu.state == stateRunning {
 		for _, f := range rb.mu.futures {
-			if f.isUserUnary() && f.send.Ctx.Err() == nil {
+			if !f.send.internal && !f.send.stream && !f.oneWay && f.send.Ctx.Err() == nil {
 				return false
 			}
 		}

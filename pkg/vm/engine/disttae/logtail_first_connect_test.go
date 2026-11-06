@@ -16,9 +16,11 @@ package disttae
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"testing/synctest"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 	"github.com/stretchr/testify/require"
@@ -38,8 +40,8 @@ func TestFirstConnectDisconnectHandoff(t *testing.T) {
 				tc := &firstConnectTxnClient{}
 				e := &Engine{cli: tc}
 				c := &e.pClient
-				ctx := c.start(context.Background())
-				t.Cleanup(func() { require.NoError(t, c.Close()) })
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 				c.connector = newConnector(c, e)
 				c.subscriber = newLogTailSubscriber()
 				c.pauseC = make(chan bool, 1)
@@ -58,7 +60,7 @@ func TestFirstConnectDisconnectHandoff(t *testing.T) {
 				}
 				c.pause(reconnect)
 				resumed := make(chan bool, 1)
-				c.runOwned(func() { resumed <- c.waitForResume(ctx, <-c.pauseC) })
+				go func() { resumed <- c.waitForResume(ctx, <-c.pauseC) }()
 				synctest.Wait()
 				if phase == "before-completion" {
 					require.Empty(t, c.connector.signal)
@@ -85,17 +87,21 @@ func TestFirstConnectPauseRetryAndCancel(t *testing.T) {
 	for _, cancelWait := range []bool{false, true} {
 		t.Run(map[bool]string{false: "retry-before-replay", true: "owner-cancel"}[cancelWait], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				c := &PushClient{pauseC: make(chan bool, 1), resumeC: make(chan struct{})}
-				ctx := c.start(context.Background())
-				t.Cleanup(func() { require.NoError(t, c.Close()) })
+				c := &PushClient{
+					subscriber: newLogTailSubscriber(),
+					pauseC:     make(chan bool, 1),
+					resumeC:    make(chan struct{}),
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 				c.connector = newConnector(c, nil)
 				c.pause(false)
 				resumed := make(chan bool, 1)
-				c.runOwned(func() { resumed <- c.waitForResume(ctx, <-c.pauseC) })
+				go func() { resumed <- c.waitForResume(ctx, <-c.pauseC) }()
 				synctest.Wait()
 				require.Empty(t, c.connector.signal)
 				if cancelWait {
-					require.NoError(t, c.Close())
+					cancel()
 					require.False(t, <-resumed)
 				} else {
 					c.resume()
@@ -113,17 +119,18 @@ func TestFirstConnectReceiverStreamFailure(t *testing.T) {
 		tc := &firstConnectTxnClient{}
 		e := &Engine{cli: tc}
 		c := &e.pClient
-		ctx := c.start(context.Background())
-		t.Cleanup(func() { require.NoError(t, c.Close()) })
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		c.connector = newConnector(c, e)
 		c.subscriber = newLogTailSubscriber()
 		c.pauseC = make(chan bool, 1)
 		c.resumeC = make(chan struct{})
-		stream := newCloseRaceStream()
+		stream := &firstConnectFailureStream{recv: make(chan morpc.Message)}
 		lc, err := service.NewLogtailClient(ctx, stream)
 		require.NoError(t, err)
+		defer func() { require.NoError(t, lc.Close()) }()
 		c.subscriber.swapClient(lc)
-		c.runOwned(func() { c.receiveLogtails(ctx, e) })
+		go c.receiveLogtails(ctx, e)
 		require.NoError(t, stream.Close(true))
 		synctest.Wait()
 		require.True(t, c.mu.paused)
@@ -134,4 +141,19 @@ func TestFirstConnectReceiverStreamFailure(t *testing.T) {
 		require.Zero(t, tc.resumes)
 		require.False(t, c.subscriber.ready())
 	})
+}
+
+// Close the real LogtailClient's transport input without depending on a later
+// PushClient owner-lifecycle API that is not present on this release branch.
+type firstConnectFailureStream struct {
+	recv chan morpc.Message
+	once sync.Once
+}
+
+func (*firstConnectFailureStream) ID() uint64                                { return 1 }
+func (*firstConnectFailureStream) Send(context.Context, morpc.Message) error { return nil }
+func (s *firstConnectFailureStream) Receive() (chan morpc.Message, error)    { return s.recv, nil }
+func (s *firstConnectFailureStream) Close(bool) error {
+	s.once.Do(func() { close(s.recv) })
+	return nil
 }

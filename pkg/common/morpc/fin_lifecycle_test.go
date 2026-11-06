@@ -44,11 +44,10 @@ func TestFinishStreamCloseWithQueuedAck(t *testing.T) {
 	var queued *Future
 	select {
 	case queued = <-cs.c:
-		cs.changeQueueDepth(-1)
 	case <-ctx.Done():
 		t.Fatal("FIN was not admitted")
 	}
-	enqueueClientSessionFutureForTest(cs, queued)
+	cs.c <- queued
 	closed := make(chan error, 1)
 	go func() { closed <- cs.Close() }()
 	select {
@@ -71,7 +70,7 @@ func TestFinishStreamCloseWithQueuedAck(t *testing.T) {
 	require.Equal(t, int32(1), futureReleases.Load())
 	require.Equal(t, float64(0), testutil.ToFloat64(cs.metrics.receivedStreamStateGauge))
 	require.Equal(t, float64(0), testutil.ToFloat64(cs.metrics.sentStreamStateGauge))
-	require.Equal(t, float64(0), testutil.ToFloat64(cs.metrics.sendingQueueSizeGauge))
+	require.Empty(t, cs.c)
 	require.False(t, cs.validateStreamRequest(11, 1), "closed session cannot resurrect a retired stream")
 }
 
@@ -102,8 +101,7 @@ func TestFinishStreamWriterExitDrainsAck(t *testing.T) {
 	}()
 	select {
 	case queued := <-cs.c:
-		cs.changeQueueDepth(-1)
-		enqueueClientSessionFutureForTest(cs, queued)
+		cs.c <- queued
 	case <-ctx.Done():
 		t.Fatal("FIN was not queued behind blocked writer")
 	}
@@ -143,8 +141,7 @@ func TestFinishStreamClaimExcludesLaterRequests(t *testing.T) {
 	}()
 	select {
 	case queued := <-cs.c:
-		cs.changeQueueDepth(-1)
-		enqueueClientSessionFutureForTest(cs, queued)
+		cs.c <- queued
 	case <-ctx.Done():
 		t.Fatal("FIN was not admitted")
 	}
@@ -212,5 +209,5 @@ func TestFinishStreamCanceledAdmissionDrainsFullQueue(t *testing.T) {
 	require.Equal(t, int32(2), releases.Load(), "rejected FIN and queued response each have one release owner")
 	require.Equal(t, int32(2), futureReleases.Load())
 	require.Empty(t, cs.receivedStreamSequences)
-	require.Equal(t, float64(0), testutil.ToFloat64(cs.metrics.sendingQueueSizeGauge))
+	require.Empty(t, cs.c)
 }

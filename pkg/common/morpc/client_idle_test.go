@@ -74,7 +74,7 @@ func TestIdleGCPreservesPendingUnary(t *testing.T) {
 			requestCtx, cancelRequest := context.WithCancel(ctx)
 			t.Cleanup(cancelRequest)
 			if scenario == "deadline" {
-				expiring := newManuallyExpiringContext(time.Now().Add(time.Hour))
+				expiring := newIdleGCExpiringContext(time.Now().Add(time.Hour))
 				requestCtx, cancelRequest = expiring, expiring.expire
 				t.Cleanup(cancelRequest)
 			}
@@ -233,7 +233,6 @@ func TestIdleGCAdmissionOrder(t *testing.T) {
 			if scenario == "request_first" {
 				require.NoError(t, err)
 				require.Same(t, f, <-rb.writeC)
-				rb.changeQueueDepth(-1)
 				f.messageSent(nil)
 				require.False(t, rb.markIdle(time.Minute), "a written unary still owns its response")
 			} else {
@@ -251,3 +250,28 @@ func TestIdleGCAdmissionOrder(t *testing.T) {
 		})
 	}
 }
+
+// The deadline is a real context error, but its expiration is controlled by
+// the test instead of a scheduler delay while the request is in flight.
+type idleGCExpiringContext struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newIdleGCExpiringContext(deadline time.Time) *idleGCExpiringContext {
+	return &idleGCExpiringContext{Context: context.Background(), deadline: deadline, done: make(chan struct{})}
+}
+
+func (c *idleGCExpiringContext) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *idleGCExpiringContext) Done() <-chan struct{}       { return c.done }
+func (c *idleGCExpiringContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (c *idleGCExpiringContext) expire() { c.once.Do(func() { close(c.done) }) }
