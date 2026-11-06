@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -70,21 +71,21 @@ func TestInventoryCASOrdinaryPublicRC(t *testing.T) {
 		require.Equal(t, 1, one)
 	}
 	runSQLIntegration(t, shared)
-	testInventoryCAS(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_RC)
+	testInventoryCASOrder(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_RC, 0, false, true)
 	// The dedicated cluster must release ownership for later shared scenarios.
 	runSQLIntegration(t, shared)
 }
 
 func TestInventoryCASOrdinaryPublicRCReverse(t *testing.T) {
-	testInventoryCASOrder(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_RC, 1, true)
+	testInventoryCASOrder(t, "nr_cas_probe.inventory", true, pbtxn.TxnIsolation_RC, 1, true, false)
 }
 
 func testInventoryCAS(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation) {
 	t.Helper()
-	testInventoryCASOrder(t, table, public, isolation, 0, false)
+	testInventoryCASOrder(t, table, public, isolation, 0, false, false)
 }
 
-func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation, first int, restart bool) {
+func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pbtxn.TxnIsolation, first int, restart, interfere bool) {
 	t.Helper()
 	withInventoryCASCluster(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
@@ -177,49 +178,102 @@ func testInventoryCASOrder(t *testing.T, table string, public bool, isolation pb
 		}
 		if public {
 			testContext := moruntime.MustGetTestingContext(cn.ServiceID())
-			previous := testContext.SetTxnModeTestConfig(moruntime.TxnModeTestConfig{AccountID: 0, Mode: pbtxn.TxnMode_Optimistic, Enabled: true})
-			defer testContext.SetTxnModeTestConfig(previous)
+			mode := moruntime.TxnModeTestConfig{AccountID: 0, Mode: pbtxn.TxnMode_Optimistic, Enabled: true}
+			provider, ok := cn.RawService().(interface {
+				SessionMgr() *queryservice.SessionManager
+			})
+			require.True(t, ok)
+			require.NotNil(t, provider.SessionMgr())
+			txnClient := cn.RawService().(cnservice.Service).GetTxnClient()
+			txnForConn := func(connID uint32) (string, pbtxn.TxnMeta) {
+				t.Helper()
+				var sessionTxnIDs []string
+				for _, session := range provider.SessionMgr().GetAllStatusSessions() {
+					if session.NodeID == cn.ServiceID() && session.ConnID == connID {
+						sessionTxnIDs = append(sessionTxnIDs, session.TxnID)
+					}
+				}
+				require.Len(t, sessionTxnIDs, 1, "identify the SQL session for connection %d", connID)
+				txnID := sessionTxnIDs[0]
+				require.NotEmpty(t, txnID, "connection %d must have an active transaction", connID)
+				var matches []pbtxn.TxnMeta
+				txnClient.IterTxns(func(v client.TxnOverview) bool {
+					if v.UserTxn && fmt.Sprintf("%x", v.Meta.ID) == txnID {
+						matches = append(matches, v.Meta)
+					}
+					return true
+				})
+				require.Len(t, matches, 1, "identify the active user transaction for connection %d", connID)
+				require.Equal(t, pbtxn.TxnStatus_Active, matches[0].Status)
+				return txnID, matches[0]
+			}
 			var transactions [2]*sql.Tx
-			seen := make(map[string]bool)
+			var connIDs [2]uint32
+			var otherTxn *sql.Tx
+			var otherConnID uint32
+			var otherTxnID string
 			for i := range 2 {
 				conn, e := db.Conn(ctx)
 				require.NoError(t, e)
 				defer conn.Close()
+				require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&connIDs[i]))
+				require.NotZero(t, connIDs[i])
+				if i > 0 {
+					require.NotEqual(t, connIDs[0], connIDs[i])
+				}
 				level := "repeatable read"
 				if isolation == pbtxn.TxnIsolation_RC {
 					level = "read committed"
 				}
 				_, e = conn.ExecContext(ctx, "set session transaction isolation level "+level)
 				require.NoError(t, e)
+				previous := testContext.SetTxnModeTestConfig(mode)
+				defer testContext.SetTxnModeTestConfig(previous)
 				transactions[i], e = conn.BeginTx(ctx, nil)
 				require.NoError(t, e)
 				defer transactions[i].Rollback()
 				r, e := transactions[i].ExecContext(ctx, query)
+				testContext.SetTxnModeTestConfig(previous)
 				require.NoError(t, e)
 				n, e := r.RowsAffected()
 				require.NoError(t, e)
 				require.EqualValues(t, 1, n)
-				var current []pbtxn.TxnMeta
-				cn.RawService().(cnservice.Service).GetTxnClient().IterTxns(func(v client.TxnOverview) bool {
-					if v.UserTxn && !seen[fmt.Sprintf("%x", v.Meta.ID)] {
-						current = append(current, v.Meta)
-					}
-					return true
-				})
-				require.Len(t, current, 1, "identify the newly started SQL transaction")
-				require.NoError(t, checkMeta(i, current[0]))
-				seen[ids[i]] = true
-			}
-			var metas []pbtxn.TxnMeta
-			cn.RawService().(cnservice.Service).GetTxnClient().IterTxns(func(v client.TxnOverview) bool {
-				if v.UserTxn {
-					metas = append(metas, v.Meta)
+				if interfere && i == 0 {
+					// Keep an unrelated SQL user transaction active while both
+					// writers are identified, as background tasks can be in CI.
+					otherConn, otherErr := db.Conn(ctx)
+					require.NoError(t, otherErr)
+					defer otherConn.Close()
+					require.NoError(t, otherConn.QueryRowContext(ctx, "select connection_id()").Scan(&otherConnID))
+					require.NotZero(t, otherConnID)
+					otherTxn, otherErr = otherConn.BeginTx(ctx, nil)
+					require.NoError(t, otherErr)
+					defer otherTxn.Rollback()
+					var count int
+					require.NoError(t, otherTxn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&count))
+					require.Equal(t, 1, count)
+					otherTxnID, _ = txnForConn(otherConnID)
+					t.Logf("CAS_INTERFERENCE connection=%d id=%s", otherConnID, otherTxnID)
 				}
-				return true
-			})
-			require.Len(t, metas, 2, "identify both user transactions before commit")
-			for _, meta := range metas {
-				require.True(t, seen[fmt.Sprintf("%x", meta.ID)])
+				writerID, meta := txnForConn(connIDs[i])
+				require.NoError(t, checkMeta(i, meta))
+				require.Equal(t, writerID, ids[i])
+				if interfere {
+					currentOtherID, _ := txnForConn(otherConnID)
+					require.Equal(t, otherTxnID, currentOtherID)
+					require.NotEqual(t, otherTxnID, ids[i])
+				}
+			}
+			for i, connID := range connIDs {
+				writerID, meta := txnForConn(connID)
+				require.Equal(t, ids[i], writerID, "writer transaction changed before commit")
+				require.NoError(t, checkMeta(i, meta))
+			}
+			require.NotEqual(t, ids[0], ids[1])
+			if interfere {
+				currentOtherID, _ := txnForConn(otherConnID)
+				require.Equal(t, otherTxnID, currentOtherID)
+				require.NoError(t, otherTxn.Rollback())
 			}
 			commits[first] = transactions[first].Commit()
 			commits[1-first] = transactions[1-first].Commit()
