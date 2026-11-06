@@ -1563,4 +1563,18 @@ select * from conditional_result order by case_div;
 select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='conditional_result' and column_name in ('case_div','if_div','case_regex','if_regex') order by ordinal_position;
 insert into conditional_result values(null,null,null,null);
 select count(*) as all_rows,count(case_div) as case_div_values,count(if_div) as if_div_values,count(case_regex) as case_regex_values,count(if_regex) as if_regex_values from conditional_result;
+-- Type reconciliation may convert a non-NULL literal fallback to DOUBLE.
+insert into l values(3);
+update r set v=0 where id=1;
+insert into r values(3,2);
+create table converted_fallback as select ifnull(1/r.v,0) as if_implicit,coalesce(1/r.v,0) as co_implicit,ifnull(1/r.v,cast(0 as double)) as if_explicit,coalesce(1/r.v,cast(0 as double)) as co_explicit,ifnull(1/r.v,0e0) as if_direct,coalesce(1/r.v,0e0) as co_direct from l left join r on l.id=r.id;
+select * from converted_fallback order by if_implicit;
+select column_name,data_type,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='converted_fallback' and column_name in ('if_implicit','co_implicit','if_explicit','co_explicit','if_direct','co_direct') order by ordinal_position;
+insert into converted_fallback values(null,0,0,0,0,0);
+insert into converted_fallback values(0,null,0,0,0,0);
+insert into converted_fallback values(0,0,null,0,0,0);
+insert into converted_fallback values(0,0,0,null,0,0);
+insert into converted_fallback values(0,0,0,0,null,0);
+insert into converted_fallback values(0,0,0,0,0,null);
+select count(*) from converted_fallback;
 drop database ctas_output_nullability;

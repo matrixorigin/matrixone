@@ -332,6 +332,30 @@ func outputTypeAfterNullExtension(node *plan.Node, childIdx int, typ plan.Type) 
 	return typ
 }
 
+// A converted literal can provide an independent fallback guarantee. Do not
+// substitute an arbitrary expression's (possibly optimistic) type annotation.
+func isNonNullLiteralFallback(expr *plan.Expr) bool {
+	if lit := expr.GetLit(); lit != nil {
+		return !lit.Isnull
+	}
+	cast := expr.GetF()
+	if cast == nil || cast.Func.ObjName != "cast" || len(cast.Args) != 2 {
+		return false
+	}
+	fid, overload := function.DecodeOverloadID(cast.Func.Obj)
+	if fid != function.CAST || overload != 0 || !isNonNullLiteralFallback(cast.Args[0]) {
+		return false
+	}
+	from, to := types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id)
+	if from.IsInteger() && to.IsInteger() {
+		return from.IsSignedInt() == to.IsSignedInt() && from.TypeLen() <= to.TypeLen()
+	}
+	// Numeric conversion to ordinary DOUBLE returns a value or an error, not
+	// NULL. Exclude fixed-width FLOAT(M,D) and domain-sensitive conversions.
+	return to == types.T_float64 && expr.Typ.Width == 0 &&
+		(from.IsInteger() || from == types.T_float32 || from == types.T_float64)
+}
+
 func isIfNullCase(fn *plan.Function) bool {
 	if fn.Func.ObjName != "case" || len(fn.Args) != 3 {
 		return false
@@ -392,8 +416,8 @@ func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 		}
 		if impl.F.Func.ObjName == "coalesce" {
 			for _, arg := range impl.F.Args {
-				if lit := arg.GetLit(); lit != nil && !lit.Isnull {
-					// A non-NULL literal is an independent output guarantee,
+				if isNonNullLiteralFallback(arg) {
+					// A proven non-NULL constant is an independent guarantee,
 					// unlike a potentially stale argument type annotation.
 					expr.Typ.NotNullable = true
 					break
@@ -401,7 +425,7 @@ func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 			}
 		} else if isIfNullCase(impl.F) {
 			// IFNULL is bound as CASE WHEN x IS NULL THEN fallback ELSE x.
-			if lit := impl.F.Args[1].GetLit(); lit != nil && !lit.Isnull {
+			if isNonNullLiteralFallback(impl.F.Args[1]) {
 				expr.Typ.NotNullable = true
 			}
 		}

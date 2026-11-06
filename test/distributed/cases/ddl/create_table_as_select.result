@@ -2262,4 +2262,36 @@ insert into conditional_result values(null,null,null,null);
 select count(*) as all_rows,count(case_div) as case_div_values,count(if_div) as if_div_values,count(case_regex) as case_regex_values,count(if_regex) as if_regex_values from conditional_result;
 ➤ all_rows[-5,64,0]  ¦  case_div_values[-5,64,0]  ¦  if_div_values[-5,64,0]  ¦  case_regex_values[-5,64,0]  ¦  if_regex_values[-5,64,0]  𝄀
 3  ¦  1  ¦  1  ¦  1  ¦  1
+insert into l values(3);
+update r set v=0 where id=1;
+insert into r values(3,2);
+create table converted_fallback as select ifnull(1/r.v,0) as if_implicit,coalesce(1/r.v,0) as co_implicit,ifnull(1/r.v,cast(0 as double)) as if_explicit,coalesce(1/r.v,cast(0 as double)) as co_explicit,ifnull(1/r.v,0e0) as if_direct,coalesce(1/r.v,0e0) as co_direct from l left join r on l.id=r.id;
+select * from converted_fallback order by if_implicit;
+➤ if_implicit[8,54,0]  ¦  co_implicit[8,54,0]  ¦  if_explicit[8,54,0]  ¦  co_explicit[8,54,0]  ¦  if_direct[8,54,0]  ¦  co_direct[8,54,0]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  𝄀
+0.5  ¦  0.5  ¦  0.5  ¦  0.5  ¦  0.5  ¦  0.5
+select column_name,data_type,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='converted_fallback' and column_name in ('if_implicit','co_implicit','if_explicit','co_explicit','if_direct','co_direct') order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+if_implicit  ¦  DOUBLE  ¦  NO  𝄀
+co_implicit  ¦  DOUBLE  ¦  NO  𝄀
+if_explicit  ¦  DOUBLE  ¦  NO  𝄀
+co_explicit  ¦  DOUBLE  ¦  NO  𝄀
+if_direct  ¦  DOUBLE  ¦  NO  𝄀
+co_direct  ¦  DOUBLE  ¦  NO
+insert into converted_fallback values(null,0,0,0,0,0);
+constraint violation: Column 'if_implicit' cannot be null
+insert into converted_fallback values(0,null,0,0,0,0);
+constraint violation: Column 'co_implicit' cannot be null
+insert into converted_fallback values(0,0,null,0,0,0);
+constraint violation: Column 'if_explicit' cannot be null
+insert into converted_fallback values(0,0,0,null,0,0);
+constraint violation: Column 'co_explicit' cannot be null
+insert into converted_fallback values(0,0,0,0,null,0);
+constraint violation: Column 'if_direct' cannot be null
+insert into converted_fallback values(0,0,0,0,0,null);
+constraint violation: Column 'co_direct' cannot be null
+select count(*) from converted_fallback;
+➤ count(*)[-5,64,0]  𝄀
+3
 drop database ctas_output_nullability;

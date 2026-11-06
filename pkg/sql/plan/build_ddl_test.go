@@ -631,6 +631,62 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestNonNullLiteralFallback(t *testing.T) {
+	literal := func(typ types.T, null bool) *plan.Expr {
+		lit := &plan.Literal{Isnull: null, Value: &plan.Literal_I64Val{I64Val: 0}}
+		if typ == types.T_int32 {
+			lit.Value = &plan.Literal_I32Val{I32Val: 0}
+		} else if typ == types.T_uint64 {
+			lit.Value = &plan.Literal_U64Val{U64Val: 0}
+		} else if typ == types.T_float64 {
+			lit.Value = &plan.Literal_Dval{Dval: 0}
+		} else if typ == types.T_float32 {
+			lit.Value = &plan.Literal_Fval{Fval: 0}
+		} else if typ == types.T_varchar {
+			lit.Value = &plan.Literal_Sval{Sval: "0"}
+		}
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_Lit{Lit: lit}}
+	}
+	cast := func(input *plan.Expr, typ types.T) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+			Args: []*plan.Expr{input, {Typ: plan.Type{Id: int32(typ)}}},
+		}}}
+	}
+	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	fixedDouble := cast(literal(types.T_int64, false), types.T_float64)
+	fixedDouble.Typ.Width = 10
+	otherOverload := cast(literal(types.T_int64, false), types.T_float64)
+	otherOverload.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
+	missingTarget := cast(literal(types.T_int64, false), types.T_float64)
+	missingTarget.GetF().Args = missingTarget.GetF().Args[:1]
+	for _, test := range []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{"literal", literal(types.T_int64, false), true},
+		{"null literal", literal(types.T_int64, true), false},
+		{"integer double", cast(literal(types.T_int64, false), types.T_float64), true},
+		{"unsigned double", cast(literal(types.T_uint64, false), types.T_float64), true},
+		{"same double", cast(literal(types.T_float64, false), types.T_float64), true},
+		{"float widening", cast(literal(types.T_float32, false), types.T_float64), true},
+		{"integer widening", cast(literal(types.T_int32, false), types.T_int64), true},
+		{"nested widening", cast(cast(literal(types.T_int32, false), types.T_int64), types.T_float64), true},
+		{"integer narrowing", cast(literal(types.T_int64, false), types.T_int32), false},
+		{"sign change", cast(literal(types.T_int64, false), types.T_uint64), false},
+		{"string conversion", cast(literal(types.T_varchar, false), types.T_float64), false},
+		{"null conversion", cast(literal(types.T_int64, true), types.T_float64), false},
+		{"column annotation", column, false},
+		{"converted column", cast(column, types.T_float64), false},
+		{"fixed double", fixedDouble, false},
+		{"other cast overload", otherOverload, false},
+		{"missing cast target", missingTarget, false},
+	} {
+		t.Run(test.name, func(t *testing.T) { require.Equal(t, test.want, isNonNullLiteralFallback(test.expr)) })
+	}
+}
+
 func TestRefreshConditionalNullabilityNeverStrengthens(t *testing.T) {
 	for _, fid := range []int32{function.CASE, function.IFF} {
 		for _, initiallyNonNull := range []bool{false, true} {
@@ -680,6 +736,12 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
 		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
 		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull converted integer fallback", "select ifnull(1/r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce converted integer fallback", "select coalesce(1/r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull explicit double fallback", "select ifnull(1/r.r_regionkey,cast(0 as double)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce explicit double fallback", "select coalesce(1/r.r_regionkey,cast(0 as double)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull direct double fallback", "select ifnull(1/r.r_regionkey,0e0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce direct double fallback", "select coalesce(1/r.r_regionkey,0e0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"case untrusted division branch", "select case when n_comment='x' then 1/n_nationkey else 7 end as v from nation", []bool{true}},
 		{"if untrusted division branch", "select if(n_comment='x',1/n_nationkey,7) as v from nation", []bool{true}},
 		{"case untrusted regex branch", "select case when n_comment='x' then regexp_substr(n_name,'z') else '7' end as v from nation", []bool{true}},
