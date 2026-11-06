@@ -71,6 +71,9 @@ func sqlprocTxn(sqlproc *sqlexec.SqlProcess) client.TxnOperator {
 func NewEnv(sqlproc *sqlexec.SqlProcess, files *Files, txn client.TxnOperator, tempDir string) *Env {
 	proc := sqlproc.Proc
 	env := &Env{Proc: proc, Txn: txn, TempDir: tempDir}
+	if proc != nil || sqlproc.SqlCtx != nil {
+		env.Service = sqlproc.GetService()
+	}
 	if files != nil {
 		env.Engine, env.Cache = files.Engine, files.Cache
 	} else if proc != nil {

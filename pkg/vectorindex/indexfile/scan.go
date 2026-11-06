@@ -21,9 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -73,12 +75,16 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	}
 	proc := env.Proc
 	if proc == nil {
+		ls, err := cnLockService(env.Service)
+		if err != nil {
+			return err
+		}
 		mp, err := mpool.NewMPool("index_file_scan", 0, mpool.NoFixed)
 		if err != nil {
 			return err
 		}
 		defer mpool.DeleteMPool(mp)
-		proc = process.NewTopProcess(ctx, mp, nil, env.Txn, nil, nil, nil, nil, nil, nil, nil)
+		proc = process.NewTopProcess(ctx, mp, nil, env.Txn, nil, ls, nil, nil, nil, nil, nil)
 		defer proc.Free()
 		// rel was opened without a process, and Ranges reads the relation's process.
 		if rel, err = openRelation(ctx, env, ref, proc); err != nil {
@@ -128,6 +134,19 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 		}
 	}
 	return nil
+}
+
+// cnLockService returns the lock service of CN service. A process bound to it reports the
+// CN's service ID, under which the storage reader's prefetch finds the CN's IO pipeline.
+func cnLockService(service string) (lockservice.LockService, error) {
+	if rt := runtime.ServiceRuntime(service); rt != nil {
+		if v, ok := rt.GetGlobalVariables(runtime.LockService); ok {
+			if ls, ok := v.(lockservice.LockService); ok && ls != nil {
+				return ls, nil
+			}
+		}
+	}
+	return nil, moerr.NewInternalErrorNoCtxf("index file: no lock service for CN %q", service)
 }
 
 // workspaceOffset is the workspace position a SQL SELECT on env.Proc would read to: the

@@ -38,12 +38,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -320,6 +323,8 @@ type fakeTable struct {
 	rows    func() []chunkRow
 	scans   atomic.Int32
 	filters chan *plan.Expr
+	// service is the CN service ID a background read's process must report.
+	service string
 }
 
 func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *fileservice.IndexFileCache) *Env {
@@ -380,6 +385,9 @@ func newEnvWithProc(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache
 			got, ok := p.(*process.Process)
 			require.True(t, ok)
 			require.NotNil(t, got.Mp())
+			if proc == nil {
+				require.Equal(t, tbl.service, got.GetService())
+			}
 			if proc != nil {
 				require.Same(t, proc, got)
 			}
@@ -623,9 +631,11 @@ func TestOpenWithoutProcess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	data := randomBytes(2*ChunkSize+7, 21)
 	ref := testRef(data)
-	tbl := &fakeTable{tableID: 21, rows: func() []chunkRow { return fileRows(ref, data, 22) }}
+	const service = "indexfile-background-cn"
+	registerCNLockService(t, ctrl, service)
+	tbl := &fakeTable{tableID: 21, rows: func() []chunkRow { return fileRows(ref, data, 22) }, service: service}
 	env := newEnvWithProc(t, ctrl, tbl, newCache(t, t.TempDir()), nil)
-	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(context.Background(), "cn", env.Txn, 3, nil))
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(context.Background(), service, env.Txn, 3, nil))
 	files := &Files{Engine: env.Engine, Cache: env.Cache}
 	for i := 0; i < 2; i++ {
 		f, err := OpenWithProcess(sqlproc, files, ref, "")
@@ -634,6 +644,28 @@ func TestOpenWithoutProcess(t *testing.T) {
 		require.NoError(t, f.Close())
 		require.Equal(t, int32(1), tbl.scans.Load(), "open %d", i)
 	}
+}
+
+// registerCNLockService registers a lock service for CN service in its runtime.
+func registerCNLockService(t *testing.T, ctrl *gomock.Controller, service string) {
+	ls := mock_lock.NewMockLockService(ctrl)
+	ls.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.LockService, ls)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+}
+
+// A background read on a CN with no lock service in its runtime fails before scanning.
+func TestOpenWithoutProcessNeedsCNLockService(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(ChunkSize+7, 23)
+	ref := testRef(data)
+	tbl := &fakeTable{tableID: 23, rows: func() []chunkRow { return fileRows(ref, data, 24) }}
+	env := newEnvWithProc(t, ctrl, tbl, newCache(t, t.TempDir()), nil)
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(context.Background(), "indexfile-unknown-cn", env.Txn, 3, nil))
+	_, err := OpenWithProcess(sqlproc, &Files{Engine: env.Engine, Cache: env.Cache}, ref, "")
+	require.ErrorContains(t, err, `no lock service for CN "indexfile-unknown-cn"`)
+	require.Zero(t, tbl.scans.Load())
 }
 
 func TestOpenWithoutCache(t *testing.T) {

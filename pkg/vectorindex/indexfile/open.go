@@ -39,9 +39,12 @@ type Env struct {
 	Engine engine.Engine
 	// Proc is the caller's process; nil for a background job, whose reads then run on a
 	// process of their own.
-	Proc  *process.Process
-	Txn   client.TxnOperator
-	Cache *fileservice.IndexFileCache
+	Proc *process.Process
+	// Service is the CN's service ID; a read without Proc runs on a process bound to that
+	// CN's lock service.
+	Service string
+	Txn     client.TxnOperator
+	Cache   *fileservice.IndexFileCache
 	// TempDir holds the files written or rebuilt outside the cache; empty means the system
 	// temp directory.
 	TempDir string
