@@ -1253,6 +1253,13 @@ message OdkuActionCtx {
   repeated OdkuConstraint constraints = 14;
   // Present only when generated assignments can change a conflict key.
   OdkuPriorData prior_data = 15;
+  // The prefix evaluates explicit assignments and generated values independent
+  // of implicit ON UPDATE. The next assignments run only on an effective change.
+  uint32 change_check_assignment_count = 16;
+  uint32 auto_update_assignment_count = 17;
+  repeated int32 change_check_columns = 18;
+  // One-based source position; zero means final rows need no deferred FK check.
+  uint32 physical_changed_column = 19;
 }
 
 message OdkuPriorData {

@@ -71,6 +71,7 @@ func odkuActionFixture(t *testing.T, limit uint64) (*PreInsertUnique, *process.P
 	}}}
 	c := &plan.OdkuActionCtx{
 		InputColumns: []int32{0, 1, 2, -1}, PkColumn: 0, RowIdColumn: 3, ActionFinalColumn: -1,
+		ChangeCheckAssignmentCount: 1, ChangeCheckColumns: []int32{2},
 		SourceOrdinal: ref(0, 3, types.T_int64), UpdateColumns: []int32{2}, UpdateExprs: []*plan.Expr{add},
 	}
 	for i := range 4 {
@@ -391,6 +392,11 @@ func TestODKUActionsInvalidMetadata(t *testing.T) {
 		"wrong rowid":               func(c *plan.OdkuActionCtx) { c.OldColumns[3].Typ.Id = int32(types.T_int64) },
 		"assignment image":          func(c *plan.OdkuActionCtx) { c.UpdateColumns[0] = 4 },
 		"check prefix":              func(c *plan.OdkuActionCtx) { c.InsertCheckConstraintCount = 1 },
+		"missing update phase":      func(c *plan.OdkuActionCtx) { c.ChangeCheckAssignmentCount = 0 },
+		"automatic phase overflow":  func(c *plan.OdkuActionCtx) { c.AutoUpdateAssignmentCount = 2 },
+		"missing change columns":    func(c *plan.OdkuActionCtx) { c.ChangeCheckColumns = nil },
+		"invalid change column":     func(c *plan.OdkuActionCtx) { c.ChangeCheckColumns[0] = 9 },
+		"physical flag layout":      func(c *plan.OdkuActionCtx) { c.PhysicalChangedColumn = 99 },
 		"unmaterialized key":        func(c *plan.OdkuActionCtx) { c.Constraints[0].InputKey.GetCol().RelPos = 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -526,11 +532,12 @@ func TestODKUDeferredOriginalPreservesImagesAndRepeatedActions(t *testing.T) {
 				require.True(t, a.ctr.actions.staticKeys)
 				out, err := a.Call(proc)
 				require.NoError(t, err)
-				require.NotNil(t, out.Batch)
 				if onlyNoop {
-					require.Equal(t, 1, out.Batch.RowCount(), "the owner retains the final candidate for the existing SQL no-op filter")
-					require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[2], 0))
+					require.Nil(t, out.Batch, "a physical no-op needs no writer row")
+					require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](a.ctr.actionRows.images.Vecs[2], 0))
+					require.Zero(t, a.ctr.actions.logicalAffected)
 				} else {
+					require.NotNil(t, out.Batch)
 					require.Equal(t, []int64{12, 17}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[2]))
 					require.Equal(t, []int64{3, 4}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[4]))
 					require.Equal(t, []int64{7, 11}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[6]))
@@ -543,6 +550,51 @@ func TestODKUDeferredOriginalPreservesImagesAndRepeatedActions(t *testing.T) {
 				child.Free(proc, false, nil)
 				require.Zero(t, account.Snapshot().Used)
 			}
+		})
+	}
+}
+
+func TestODKUAutomaticAssignmentFollowsEffectiveChange(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		inputs   []int64
+		want     []int64
+		affected uint64
+	}{
+		{"noop", []int64{0}, nil, 0},
+		{"change then noop", []int64{1, 0}, []int64{99, 8}, 2},
+		{"change then revert", []int64{1, -1}, []int64{99, 7}, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, proc, child, _ := odkuActionFixture(t, 16<<20)
+			c := a.PreInsertCtx.OdkuActions
+			c.Constraints = c.Constraints[:1] // Column u is ordinary in this fixture.
+			c.UpdateColumns = append(c.UpdateColumns, 1)
+			c.UpdateExprs = append(c.UpdateExprs, &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 99}}}})
+			c.AutoUpdateAssignmentCount = 1
+			inputs := make([][9]int64, len(tc.inputs))
+			for i, value := range tc.inputs {
+				inputs[i] = [9]int64{3, 30, value, int64(i + 1), 3, 3, 3, 30, 7}
+			}
+			child.WithBatchs([]*batch.Batch{odkuActionInput(t, proc, inputs)})
+			var count uint64
+			publications := 0
+			a.PublishAffectedRows = func(rows uint64) error { count = rows; publications++; return nil }
+			require.NoError(t, a.Prepare(proc))
+			out, err := a.Call(proc)
+			require.NoError(t, err)
+			if tc.want == nil {
+				require.Nil(t, out.Batch)
+			} else {
+				require.NotNil(t, out.Batch)
+				require.Equal(t, tc.want[0], vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[1], 0))
+				require.Equal(t, tc.want[1], vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[2], 0))
+			}
+			out, err = a.Call(proc)
+			require.NoError(t, err)
+			require.Nil(t, out.Batch)
+			require.Equal(t, tc.affected, count)
+			require.Equal(t, 1, publications)
 		})
 	}
 }

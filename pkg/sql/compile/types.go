@@ -283,6 +283,7 @@ type Compile struct {
 	executionGeneration uint64
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
+	odkuResult *odkuAttemptResult
 	// cn address
 	addr string
 	// db current database name.

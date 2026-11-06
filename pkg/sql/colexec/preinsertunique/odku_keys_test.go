@@ -103,7 +103,9 @@ func TestODKUPhysicalKeyMapMatchesGeneric(t *testing.T) {
 							require.NoError(t, a.initODKUKey(proc, 0))
 							hashmap.IteratorClearOwner(a.ctr.acceptedKeys[0].iterator)
 							a.ctr.acceptedKeys[0].index.Free()
-							a.ctr.acceptedKeys[0].fixedKeys.Free(mp)
+							if a.ctr.acceptedKeys[0].fixedKeys != nil {
+								a.ctr.acceptedKeys[0].fixedKeys.Free(mp)
+							}
 							a.ctr.acceptedKeys[0].fixedKeys = nil
 							require.NoError(t, a.newODKUKeyStrMap(proc, &a.ctr.acceptedKeys[0]))
 						}
@@ -118,7 +120,7 @@ func TestODKUPhysicalKeyMapMatchesGeneric(t *testing.T) {
 							}
 						}
 
-						if !generic {
+						if !generic && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 {
 							require.IsType(t, &hashmap.IntHashMap{}, a.ctr.acceptedKeys[0].index)
 						}
 					}()

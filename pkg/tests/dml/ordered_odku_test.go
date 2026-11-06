@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -103,6 +103,111 @@ func TestODKUSystematicSQL(t *testing.T) {
 		exec(t, "use odku_systematic")
 		exec(t, "create table parent (id int primary key)")
 		exec(t, "insert into parent values (1)")
+		affected := func(t *testing.T, want int64, q string, args ...any) {
+			t.Helper()
+			result, err := conn.ExecContext(ctx, q, args...)
+			require.NoError(t, err, q)
+			count, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, want, count, q)
+		}
+		t.Run("physical floating key identities", func(t *testing.T) {
+			for _, primary := range []bool{false, true} {
+				for _, negativeFirst := range []bool{false, true} {
+					name := fmt.Sprintf("physical_zero_%t_%t", primary, negativeFirst)
+					keys := "primary key(id),unique key uk(k)"
+					if primary {
+						keys = "primary key(k),unique key ui(id)"
+					}
+					exec(t, "create table "+name+"(id int,k double,v int,"+keys+")")
+					first, second := float64(0), math.Copysign(0, -1)
+					if negativeFirst {
+						first, second = second, first
+					}
+					// Binary parameters preserve the two IEEE zero representations.
+					affected(t, 2, "insert into "+name+" values(?,?,?),(?,?,?) on duplicate key update v=values(v)", 1, first, 11, 2, second, 22)
+					require.Equal(t, []string{"1|11", "2|22"}, rows(t, "select id,v from "+name+" order by id"))
+					affected(t, 2, "insert into "+name+" values(?,?,?) on duplicate key update v=values(v)", 3, second, 99)
+					require.Equal(t, []string{"1|11", "2|99"}, rows(t, "select id,v from "+name+" order by id"))
+					if !primary {
+						require.Equal(t, []string{"1|11", "2|99"}, rows(t, "select id,v from "+name+" force index(uk) where k between -1 and 1 order by id"))
+					}
+				}
+			}
+			t.Run("captured unique workspace keeps both zero owners", func(t *testing.T) {
+				exec(t, "create table physical_zero_workspace(id int primary key,a double,g double generated always as(a) stored,v int,unique key ug(g))")
+				exec(t, "begin")
+				t.Cleanup(func() { cleanupODKUSQL(t, conn, "rollback") })
+				affected(t, 1, "insert into physical_zero_workspace(id,a,v) values(?,?,?)", 1, float64(0), 0)
+				affected(t, 1, "insert into physical_zero_workspace(id,a,v) values(?,?,?)", 2, math.Copysign(0, -1), 0)
+				affected(t, 4, "insert into physical_zero_workspace(id,a,v) values(?,?,?),(?,?,?) on duplicate key update a=values(a),v=v+values(v)", 9, float64(0), 1, 10, math.Copysign(0, -1), 1)
+				require.Equal(t, []string{"1|1", "2|1"}, rows(t, "select id,v from physical_zero_workspace order by id"))
+				exec(t, "rollback")
+				require.Empty(t, rows(t, "select id from physical_zero_workspace"))
+			})
+		})
+		t.Run("effective action precedes automatic generated keys", func(t *testing.T) {
+			year := rows(t, "select year(now())")[0]
+			for _, primary := range []bool{false, true} {
+				name := fmt.Sprintf("automatic_key_%t", primary)
+				keys := "primary key(id),unique key ug(g)"
+				if primary {
+					keys = "primary key(g),unique key ui(id)"
+				}
+				exec(t, "create table "+name+"(id int,v int,ts timestamp not null default current_timestamp on update current_timestamp,g int generated always as(year(ts)) stored,"+keys+")")
+				exec(t, "insert into "+name+"(id,v,ts) values(1,0,'2000-01-01'),(2,0,now())")
+				statement := "insert into " + name + "(id,v,ts) values(1,?,'2000-01-01') on duplicate key update v=values(v)"
+				affected(t, 0, statement, 0)
+				want := []string{"1|0|2000|2000", "2|0|" + year + "|" + year}
+				require.Equal(t, want, rows(t, "select id,v,year(ts),g from "+name+" order by id"))
+				_, err := conn.ExecContext(ctx, statement, 1)
+				constraintError(t, err, 1062, "Duplicate entry")
+				require.Equal(t, want, rows(t, "select id,v,year(ts),g from "+name+" order by id"), "the real collision rolls back the whole action")
+			}
+		})
+		t.Run("logical action counts and final automatic image", func(t *testing.T) {
+			exec(t, "create table action_counts(id int primary key,v int)")
+			affected(t, 1, "insert into action_counts values(1,0)")
+			affected(t, 4, "insert into action_counts values(1,1),(1,2),(1,2) on duplicate key update v=values(v)")
+			affected(t, 0, "insert into action_counts values(1,2) on duplicate key update v=values(v)")
+			require.Equal(t, []string{"1|2"}, rows(t, "select * from action_counts"))
+			affected(t, 0, "insert into action_counts select id,v from action_counts where false on duplicate key update v=values(v)")
+			exec(t, "truncate table action_counts")
+			affected(t, 3, "insert into action_counts values(1,1),(1,2) on duplicate key update v=values(v)")
+			require.Equal(t, []string{"1|2"}, rows(t, "select * from action_counts"))
+			statement, err := conn.PrepareContext(ctx, "insert into action_counts values(1,?) on duplicate key update v=values(v)")
+			require.NoError(t, err)
+			defer statement.Close()
+			for _, action := range []struct{ value, count int64 }{{3, 2}, {3, 0}, {2, 2}} {
+				result, err := statement.ExecContext(ctx, action.value)
+				require.NoError(t, err)
+				count, err := result.RowsAffected()
+				require.NoError(t, err)
+				require.Equal(t, action.count, count)
+			}
+			exec(t, "create table action_revert(id int primary key,v int,ts timestamp not null default current_timestamp on update current_timestamp)")
+			exec(t, "insert into action_revert values(1,0,'2000-01-01')")
+			affected(t, 4, "insert into action_revert(id,v) values(1,1),(1,0) on duplicate key update v=values(v)")
+			require.Equal(t, []string{"1|0|" + rows(t, "select year(now())")[0]}, rows(t, "select id,v,year(ts) from action_revert"))
+		})
+		t.Run("no-op retains JSON representation for the next action", func(t *testing.T) {
+			exec(t, "create table action_json(id int primary key,j json,seen varchar(32))")
+			exec(t, `insert into action_json values(1,'{"n":1.0}','none')`)
+			require.Equal(t, []string{"1"}, rows(t, `select cast('{"n":1}' as json) <=> cast('{"n":1.0}' as json)`))
+			affected(t, 2, `insert into action_json values(1,'{"n":1}','keep'),(1,'{"n":1}','read') on duplicate key update j=if(values(seen)='keep',values(j),j),seen=if(values(seen)='read',json_type(json_extract(j,'$.n')),seen)`)
+			require.Equal(t, []string{"DOUBLE|DOUBLE"}, rows(t, "select json_type(json_extract(j,'$.n')),seen from action_json"))
+			// A real change may store a SQL-equal JSON representation. It must
+			// remain visible; restoring every equal column would lose this value.
+			affected(t, 4, `insert into action_json values(1,'{"n":1}','change'),(1,'{"n":1}','read') on duplicate key update j=if(values(seen)='change',values(j),j),seen=if(values(seen)='read',json_type(json_extract(j,'$.n')),values(seen))`)
+			require.Equal(t, []string{"INTEGER|INTEGER"}, rows(t, "select json_type(json_extract(j,'$.n')),seen from action_json"))
+		})
+		t.Run("typed no-op comparison preserves SQL equality", func(t *testing.T) {
+			exec(t, "create table action_types(id int primary key,c char(8),e enum('red','blue'),f float(8,2),n int)")
+			exec(t, "insert into action_types values(1,'A','red',1.23,null)")
+			affected(t, 0, "insert into action_types values(1,'A','red',1.234,null) on duplicate key update c=values(c),e=values(e),f=values(f),n=values(n)")
+			affected(t, 2, "insert into action_types values(1,'B','blue',1.25,7) on duplicate key update c=values(c),e=values(e),f=values(f),n=values(n)")
+			require.Equal(t, []string{"B|blue|1.25|7"}, rows(t, "select c,e,f,n from action_types"))
+		})
 		t.Run("insert claims and snapshot keys retain constraint priority", func(t *testing.T) {
 			exec(t, "create table static_priority(id int primary key,u int unique,v int)")
 			exec(t, "insert into static_priority values(1,10,100)")
@@ -712,6 +817,97 @@ func TestODKUSystematicSQL(t *testing.T) {
 					})
 				}
 			}
+			// The TN policy normalization is shared by all optimistic writes.
+			// Cover ordinary DML through real commits independently of ODKU.
+			for i, tc := range []struct {
+				name       string
+				first      []string
+				second     string
+				want       []string
+				conflict   bool
+				persisted  bool
+				fullPolicy bool
+			}{
+				{"insert conflict memory", []string{"insert into $t values(3,30,10)"}, "insert into $t values(3,30,20)", []string{"1|1", "2|2", "3|20"}, true, false, false},
+				{"insert conflict persisted", []string{"insert into $t values(3,30,10)"}, "insert into $t values(3,30,20)", []string{"1|1", "2|2", "3|20"}, true, true, false},
+				{"unique conflict persisted", []string{"insert into $t values(3,30,10)"}, "insert into $t values(4,30,20)", []string{"1|1", "2|2", "4|20"}, true, true, false},
+				{"insert conflict explicit full", []string{"insert into $t values(3,30,10)"}, "insert into $t values(3,30,20)", []string{"1|1", "2|2", "3|20"}, true, true, true},
+				{"disjoint inserts persisted", []string{"insert into $t values(3,30,10)"}, "insert into $t values(4,40,20)", []string{"1|1", "2|2", "3|10", "4|20"}, false, true, false},
+				{"update conflict", []string{"update $t set v=11 where id=1"}, "update $t set v=21 where id=1", []string{"1|21", "2|2"}, true, false, false},
+				{"delete conflict", []string{"delete from $t where id=1"}, "update $t set v=21 where id=1", []string{"1|21", "2|2"}, true, true, false},
+				{"disjoint update delete", []string{"update $t set v=11 where id=1"}, "delete from $t where id=2", []string{"1|11"}, false, true, false},
+				{"workspace replace same key", []string{"update $t set v=11 where id=1", "delete from $t where id=1", "insert into $t values(1,10,99)"}, "update $t set v=22 where id=2", []string{"1|99", "2|22"}, false, true, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
+					name := fmt.Sprintf("ordinary_optimistic_%d", i)
+					exec(t, "create table "+name+"(id int primary key,u int unique,v int)")
+					exec(t, "insert into "+name+" values(1,10,1),(2,20,2)")
+					rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Optimistic)
+					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_SI)
+					defer func() {
+						rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+						rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
+					}()
+					if tc.persisted {
+						if fault.Enable() {
+							defer fault.Disable()
+						}
+						remove, err := objectio.SimpleInject(objectio.FJ_CNWorkspaceForceFlush)
+						require.NoError(t, err)
+						defer remove()
+					}
+					competeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+					defer cancel()
+					competing, err := db.Conn(competeCtx)
+					require.NoError(t, err)
+					defer competing.Close()
+					_, err = competing.ExecContext(competeCtx, "use odku_systematic")
+					require.NoError(t, err)
+					if tc.fullPolicy {
+						exec(t, "set mo_pk_check_by_dn=1")
+						defer cleanupODKUSQL(t, conn, "set mo_pk_check_by_dn=0")
+					}
+					first, err := conn.BeginTx(competeCtx, nil)
+					require.NoError(t, err)
+					defer first.Rollback()
+					var policy int
+					require.NoError(t, first.QueryRowContext(competeCtx, "select @@mo_pk_check_by_dn").Scan(&policy))
+					require.Equal(t, tc.fullPolicy, policy == 1)
+					for _, statement := range tc.first {
+						_, err = first.ExecContext(competeCtx, strings.ReplaceAll(statement, "$t", name))
+						require.NoError(t, err)
+					}
+					second, err := competing.BeginTx(competeCtx, nil)
+					require.NoError(t, err)
+					defer second.Rollback()
+					var original int
+					require.NoError(t, second.QueryRowContext(competeCtx, "select v from "+name+" where id=1").Scan(&original))
+					require.Equal(t, 1, original)
+					_, err = second.ExecContext(competeCtx, strings.ReplaceAll(tc.second, "$t", name))
+					require.NoError(t, err)
+					require.NoError(t, second.Commit())
+					err = first.Commit()
+					if tc.conflict {
+						var serverError *mysqlDriver.MySQLError
+						require.ErrorAs(t, err, &serverError)
+						require.True(t, serverError.Number == 1062 || strings.Contains(strings.ToLower(serverError.Message), "conflict"), "%v", err)
+					} else {
+						require.NoError(t, err)
+					}
+					_, err = conn.ExecContext(competeCtx, "rollback")
+					require.NoError(t, err)
+					// Each reader has observed its own commit; use the transaction
+					// that committed last as the causal visibility floor.
+					reader := conn
+					if tc.conflict {
+						reader = competing
+					}
+					require.Equal(t, tc.want, rowsFrom(t, reader, "select id,v from "+name+" order by id"))
+					require.Equal(t, tc.want, rowsFrom(t, reader, "select id,v from "+name+" force index(u) where u between 0 and 100 order by id"))
+				})
+			}
 		})
 		t.Run("explicit key assignments remain unsupported", func(t *testing.T) {
 			exec(t, "create table direct_key (id int primary key,u int unique,v int)")
@@ -938,29 +1134,6 @@ func TestODKUSystematicSQL(t *testing.T) {
 					}
 				})
 			}
-			t.Run("ordered protocol gate", func(t *testing.T) {
-				exec(t, "create table generated_gate (id int primary key,a int,b int)")
-				exec(t, "insert into generated_gate values (1,1,0)")
-				oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-				t.Cleanup(func() {
-					if hadVersion {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-					} else if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-						rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
-					}
-				})
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion11))
-				for _, hint := range []string{"", "skipDedup=1"} {
-					exec(t, "set session optimizer_hints = '"+hint+"'")
-					_, e := conn.ExecContext(ctx, "insert into generated_gate values (1,0,0) on duplicate key update a=a+1,b=a")
-					constraintError(t, e, moerr.ErrNotSupported, "protocol version 12")
-					require.Equal(t, []string{"1|0"}, rows(t, "select a,b from generated_gate"))
-				}
-
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12))
-				exec(t, "insert into generated_gate values (1,0,0) on duplicate key update a=a+1,b=a")
-				require.Equal(t, []string{"2|2"}, rows(t, "select a,b from generated_gate"))
-			})
 		})
 		t.Run("varlen assignment aliases remain stable", func(t *testing.T) {
 			exec(t, "create table aliases (id int primary key,u int unique,a varchar(2048),b varchar(2048),suffix varchar(32))")

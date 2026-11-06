@@ -20,9 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -49,22 +47,20 @@ func bindIndexKeyStorageExpr(b *QueryBuilder, e *plan.Expr, t plan.Type) (*plan.
 	return nil, moerr.NewInternalErrorf(b.GetContext(), "index key type mismatch: logical %d, physical %d", e.Typ.Id, t.Id)
 }
 
-func (builder *QueryBuilder) requireOrderedODKUProtocol() error {
-	proc := builder.compCtx.GetProcess()
-	if proc == nil {
-		return nil
+// A unique index is a hidden relation whose key is its own physical PK.
+// Preserve that identity without changing the typed writer/lock payload.
+func bindStoredKeyEquality(b *QueryBuilder, left, right *plan.Expr, typ plan.Type) (*plan.Expr, error) {
+	left, err := bindPrimaryKeyIdentityExpr(b, left, typ)
+	if err != nil {
+		return nil, err
 	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return moerr.NewNotSupported(builder.GetContext(), "ordered ODKU requires 4.2 protocol version 12")
+	right, err = bindPrimaryKeyIdentityExpr(b, right, typ)
+	if err != nil {
+		return nil, err
 	}
-	v, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	n, valid := v.(int64)
-	if ok && valid && n >= defines.MORPCVersion12 {
-		return nil
-	}
-	return moerr.NewNotSupported(builder.GetContext(), "ordered ODKU requires 4.2 protocol version 12")
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "=", []*plan.Expr{left, right})
 }
+
 func odkuAffectedColumns(t *plan.TableDef, names []string) map[string]bool {
 	affected := make(map[string]bool, len(names))
 	for _, n := range names {

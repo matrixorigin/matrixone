@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -86,286 +88,75 @@ func noopFilterNotBranch(expr *planpb.Expr) *planpb.Function {
 	return notExpr
 }
 
-// TestUpsertAffectRowsPlan verifies the plan-level wiring of the MySQL-compatible
-// affected-rows fix: REPLACE and INSERT ... ON DUPLICATE KEY UPDATE flag their
-// main-table UpdateCtx so the executor counts the conflicting-row DELETE, ODKU
-// additionally inserts a no-op guard FILTER, and plain INSERT / UPDATE keep the
-// flag off so they count once.
+// TestUpsertAffectRowsPlan keeps writer flags separate from the ordered
+// owner's per-action change comparison and logical affected-row result.
 func TestUpsertAffectRowsPlan(t *testing.T) {
 	mock := NewMockOptimizer(true)
-
-	t.Run("ODKU flags main ctx and adds no-op filter", func(t *testing.T) {
-		// dept goes through the dedup-join + MULTI_UPDATE path; loc is not part of
-		// any key, so it is a legal ON DUPLICATE KEY UPDATE target.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
-		require.NoError(t, err)
-		require.True(t, mainUpdateCtxCountDelete(t, p),
-			"ODKU main UpdateCtx should set CountDeleteAffectRows")
-		require.True(t, hasNoopFilter(p),
-			"ODKU plan should contain a NOT(<=>) no-op filter")
-	})
-
-	t.Run("REPLACE flags main ctx", func(t *testing.T) {
-		p, err := runOneStmt(mock, t,
-			"replace into constraint_test.emp(empno, ename, job) values (1, 'A', 'B')")
-		require.NoError(t, err)
-		require.True(t, mainUpdateCtxCountDelete(t, p),
-			"REPLACE main UpdateCtx should set CountDeleteAffectRows")
-		require.False(t, hasNoopFilter(p),
-			"REPLACE always rewrites a conflicting row, so it has no no-op filter")
-	})
-
-	t.Run("plain INSERT has no no-op filter", func(t *testing.T) {
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.emp(empno, ename, job) values (1, 'A', 'B')")
-		require.NoError(t, err)
-		require.False(t, hasNoopFilter(p),
-			"plain INSERT must not add a no-op filter")
-	})
-
-	t.Run("ODKU no-op filter excludes ON UPDATE columns", func(t *testing.T) {
-		// t_on_update has: id (PK), val, updated_at (ON UPDATE CURRENT_TIMESTAMP).
-		// ODKU with v=v should skip updated_at in the no-op filter so that the
-		// auto-update expression does not defeat the no-op guard.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.t_on_update(id, val) values (1, 10) on duplicate key update val = val")
-		require.NoError(t, err)
-		require.True(t, mainUpdateCtxCountDelete(t, p),
-			"ODKU main UpdateCtx should set CountDeleteAffectRows")
-		require.True(t, hasNoopFilter(p),
-			"ODKU plan should contain a NOT(<=>) no-op filter")
-		// The no-op filter must not reference the auto-update column.
-		require.False(t, noopFilterReferencesCol(p, "updated_at"),
-			"no-op FILTER must not reference auto-update column updated_at")
-	})
-
-	t.Run("ODKU no-op filter keeps non-conflicting rows via rowid guard", func(t *testing.T) {
-		// An all-NULL insert row into a nullable unique key never conflicts, so
-		// its old image is all-NULL and every <=> in the no-op chain evaluates
-		// to true. The isnull(old rowid) OR-branch must be present so such rows
-		// are inserted instead of silently dropped. hasNoopFilter only matches
-		// the or(isnull(rowid), not(...)) shape, so a true result asserts the
-		// guard exists.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
-		require.NoError(t, err)
-		require.True(t, hasNoopFilter(p),
-			"ODKU no-op filter must carry the isnull(old rowid) guard for non-conflicting rows")
-	})
-
-	t.Run("ODKU no-op filter compares only written columns on secondary-unique conflict", func(t *testing.T) {
-		// dept has PK deptno and a secondary UNIQUE key on dname. An ODKU whose
-		// conflict is resolved through dname can carry an incoming deptno that
-		// differs from the existing row's deptno. The update (loc = loc) writes
-		// only loc, so the row is a genuine no-op and MySQL returns
-		// affected-rows = 0. The no-op guard must therefore compare the final
-		// written value of loc only — not the immutable PK deptno nor the
-		// conflict-key dname against the raw incoming image, which would
-		// spuriously turn the no-op into a counted update.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') on duplicate key update loc = loc")
-		require.NoError(t, err)
-		require.True(t, hasNoopFilter(p),
-			"ODKU plan should contain a no-op filter")
-		require.Equal(t, 1, countNoopEqComparisons(p),
-			"no-op FILTER must compare only the single written column (loc), not immutable deptno/dname")
-		require.True(t, noopEqRightOperandsAreCols(p),
-			"no-op FILTER must compare against the materialized new-image column, not re-run the assignment")
-	})
-
-	t.Run("ODKU no-op filter references materialized value for computed update", func(t *testing.T) {
-		// A computed assignment (loc = substring(loc, 1, 2)) is evaluated once by
-		// the dedup-update join and written into the new-image column. The no-op
-		// guard must compare against that materialized column, never re-evaluate
-		// the expression — otherwise a non-deterministic assignment would be
-		// evaluated twice and the no-op decision could disagree with the value
-		// actually stored.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = substring(loc, 1, 2)")
-		require.NoError(t, err)
-		require.True(t, hasNoopFilter(p),
-			"ODKU plan should contain a no-op filter")
-		require.True(t, noopEqRightOperandsAreCols(p),
-			"no-op FILTER must reference the materialized new-image column, not the substring() expression")
-	})
-
-	t.Run("DeepCopyNode preserves CountDeleteAffectRows on MULTI_UPDATE", func(t *testing.T) {
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = loc")
-		require.NoError(t, err)
-		var mu *planpb.Node
-		for _, n := range p.GetQuery().Nodes {
-			if n.NodeType == planpb.Node_MULTI_UPDATE {
-				mu = n
-				break
+	actions := func(t *testing.T, p *Plan) *planpb.OdkuActionCtx {
+		t.Helper()
+		var found *planpb.OdkuActionCtx
+		for _, node := range p.GetQuery().Nodes {
+			if c := node.PreInsertUkCtx.GetOdkuActions(); c != nil {
+				require.Nil(t, found)
+				found = c
 			}
 		}
-		require.NotNil(t, mu)
-		require.True(t, mu.UpdateCtxList[0].CountDeleteAffectRows)
-		copied := DeepCopyNode(mu)
-		require.True(t, copied.UpdateCtxList[0].CountDeleteAffectRows,
-			"DeepCopyUpdateCtxList must preserve CountDeleteAffectRows")
-	})
-
-	t.Run("ODKU no-op filter excludes generated column derived from ON UPDATE", func(t *testing.T) {
-		// t_on_update_gen has: id (PK), val, updated_at (ON UPDATE CURRENT_TIMESTAMP),
-		// g (stored, g AS (updated_at)). ODKU with val=val must skip both updated_at
-		// and its dependent generated column g, otherwise g's recomputed value would
-		// defeat the no-op guard.
-		p, err := runOneStmt(mock, t,
-			"insert into constraint_test.t_on_update_gen(id, val) values (1, 10) on duplicate key update val = val")
+		require.NotNil(t, found)
+		return found
+	}
+	for _, tc := range []struct {
+		name, sql string
+		columns   []int32
+		automatic uint32
+	}{
+		{"self assignment", "insert into constraint_test.dept(deptno,dname,loc) values(1,'A','B') on duplicate key update loc=loc", []int32{2}, 0},
+		{"secondary conflict compares written columns", "insert into constraint_test.dept(deptno,dname,loc) values(999,'Sales','NY') on duplicate key update loc=loc", []int32{2}, 0},
+		{"computed assignment evaluated once", "insert into constraint_test.dept(deptno,dname,loc) values(1,'A','B') on duplicate key update loc=substring(loc,1,2)", []int32{2}, 0},
+		{"implicit automatic column excluded", "insert into constraint_test.t_on_update(id,val) values(1,10) on duplicate key update val=val", []int32{1}, 1},
+		{"automatic generated dependency excluded", "insert into constraint_test.t_on_update_gen(id,val) values(1,10) on duplicate key update val=val", []int32{1}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.True(t, mainUpdateCtxCountDelete(t, p))
+			require.False(t, hasNoopFilter(p), "post-publication SQL no-op filtering must not re-evaluate an action")
+			c := actions(t, p)
+			require.Equal(t, tc.columns, c.ChangeCheckColumns)
+			require.Equal(t, uint32(1), c.ChangeCheckAssignmentCount)
+			require.Equal(t, tc.automatic, c.AutoUpdateAssignmentCount)
+			require.Equal(t, int32(types.T_Rowid), c.OldColumns[c.RowIdColumn].Typ.Id, "new owners retain a nullable original identity")
+		})
+	}
+	for _, tc := range []struct {
+		name, sql   string
+		countDelete bool
+	}{
+		{"replace", "replace into constraint_test.emp(empno,ename,job) values(1,'A','B')", true},
+		{"insert", "insert into constraint_test.emp(empno,ename,job) values(1,'A','B')", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.countDelete, mainUpdateCtxCountDelete(t, p))
+			require.False(t, hasNoopFilter(p))
+			for _, node := range p.GetQuery().Nodes {
+				require.Nil(t, node.PreInsertUkCtx.GetOdkuActions())
+			}
+		})
+	}
+	t.Run("deep copy preserves action phases and writer flags", func(t *testing.T) {
+		p, err := runOneStmt(mock, t, "insert into constraint_test.t_on_update_gen(id,val) values(1,10) on duplicate key update val=val")
 		require.NoError(t, err)
-		require.True(t, mainUpdateCtxCountDelete(t, p),
-			"ODKU main UpdateCtx should set CountDeleteAffectRows")
-		require.True(t, hasNoopFilter(p),
-			"ODKU plan should contain a NOT(<=>) no-op filter")
-		require.False(t, noopFilterReferencesCol(p, "updated_at"),
-			"no-op FILTER must not reference auto-update column updated_at")
-		require.False(t, noopFilterReferencesCol(p, "g"),
-			"no-op FILTER must not reference generated column g derived from updated_at")
+		for _, node := range p.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_MULTI_UPDATE {
+				copied := DeepCopyNode(node)
+				require.True(t, copied.UpdateCtxList[0].CountDeleteAffectRows)
+			}
+			if node.PreInsertUkCtx.GetOdkuActions() != nil {
+				copied := DeepCopyNode(node)
+				require.Equal(t, node.PreInsertUkCtx, copied.PreInsertUkCtx)
+				require.NotSame(t, node.PreInsertUkCtx.OdkuActions, copied.PreInsertUkCtx.OdkuActions)
+			}
+		}
 	})
-}
-
-// noopFilterReferencesCol reports whether the ODKU no-op FILTER's AND/<=>
-// predicate chain contains a ColRef whose name equals colName.
-func noopFilterReferencesCol(p *Plan, colName string) bool {
-	q := p.GetQuery()
-	if q == nil {
-		return false
-	}
-	for _, n := range q.Nodes {
-		if n.NodeType != planpb.Node_FILTER {
-			continue
-		}
-		for _, cond := range n.FilterList {
-			exprs := collectNoopColRefs(cond)
-			for _, e := range exprs {
-				if e.GetCol() != nil && e.GetCol().Name == colName {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-// countNoopEqComparisons returns the number of null-safe-equal (<=>)
-// comparisons in the ODKU no-op FILTER's equality chain, or -1 if no such
-// filter exists. It counts exactly the columns the update actually writes.
-func countNoopEqComparisons(p *Plan) int {
-	q := p.GetQuery()
-	if q == nil {
-		return -1
-	}
-	for _, n := range q.Nodes {
-		if n.NodeType != planpb.Node_FILTER {
-			continue
-		}
-		for _, cond := range n.FilterList {
-			if notExpr := noopFilterNotBranch(cond); notExpr != nil {
-				return countNullSafeEq(notExpr.Args[0])
-			}
-		}
-	}
-	return -1
-}
-
-// countNullSafeEq counts <=> nodes in an AND/<=> predicate tree.
-func countNullSafeEq(expr *planpb.Expr) int {
-	f := expr.GetF()
-	if f == nil || f.Func == nil {
-		return 0
-	}
-	switch f.Func.ObjName {
-	case "and":
-		total := 0
-		for _, arg := range f.Args {
-			total += countNullSafeEq(arg)
-		}
-		return total
-	case "<=>":
-		return 1
-	default:
-		return 0
-	}
-}
-
-// noopEqRightOperandsAreCols reports whether every <=> in the ODKU no-op FILTER
-// compares against a bare column reference on its right-hand (new-image) side.
-// The no-op guard must reference the final written value the dedup-update join
-// already materialized into the new image, never re-evaluate the assignment
-// expression (which would double-evaluate a non-deterministic update such as
-// v = floor(rand()*2)). Returns false if no no-op FILTER exists.
-func noopEqRightOperandsAreCols(p *Plan) bool {
-	q := p.GetQuery()
-	if q == nil {
-		return false
-	}
-	for _, n := range q.Nodes {
-		if n.NodeType != planpb.Node_FILTER {
-			continue
-		}
-		for _, cond := range n.FilterList {
-			notExpr := noopFilterNotBranch(cond)
-			if notExpr == nil {
-				continue
-			}
-			return eqRightOperandsAreCols(notExpr.Args[0])
-		}
-	}
-	return false
-}
-
-func eqRightOperandsAreCols(expr *planpb.Expr) bool {
-	f := expr.GetF()
-	if f == nil || f.Func == nil {
-		return false
-	}
-	switch f.Func.ObjName {
-	case "and":
-		for _, arg := range f.Args {
-			if !eqRightOperandsAreCols(arg) {
-				return false
-			}
-		}
-		return true
-	case "<=>":
-		return len(f.Args) == 2 && f.Args[1].GetCol() != nil
-	default:
-		return false
-	}
-}
-
-// collectNoopColRefs collects all ColRef expressions nested inside the
-// OR(isnull(rowid), NOT(AND(<=>(...)))) no-op FILTER pattern. Returns nil
-// if the pattern does not match. Only the equality chain's ColRefs are
-// returned; the rowid guard is not part of the compared columns.
-func collectNoopColRefs(expr *planpb.Expr) []*planpb.Expr {
-	notExpr := noopFilterNotBranch(expr)
-	if notExpr == nil {
-		return nil
-	}
-	return collectAndNullSafeColRefs(notExpr.Args[0])
-}
-
-// collectAndNullSafeColRefs recursively collects ColRef expressions from
-// an AND/<=> predicate tree.
-func collectAndNullSafeColRefs(expr *planpb.Expr) []*planpb.Expr {
-	f := expr.GetF()
-	if f == nil || f.Func == nil {
-		return nil
-	}
-	switch f.Func.ObjName {
-	case "and":
-		var res []*planpb.Expr
-		for _, arg := range f.Args {
-			res = append(res, collectAndNullSafeColRefs(arg)...)
-		}
-		return res
-	case "<=>":
-		return f.Args
-	default:
-		return nil
-	}
 }

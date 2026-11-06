@@ -548,6 +548,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseBase = 0
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
+	if runC.odkuResult != nil {
+		queryResult.AffectRows, err = runC.odkuResult.result()
+		if err != nil {
+			return nil, err
+		}
+	}
 	if c.uid != "mo_logger" &&
 		strings.Contains(strings.ToLower(c.sql), "insert") &&
 		(strings.Contains(c.sql, "{MO_TS =") ||

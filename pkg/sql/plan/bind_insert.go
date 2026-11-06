@@ -1081,7 +1081,7 @@ func (builder *QueryBuilder) buildODKUInput(
 		if err != nil {
 			return 0, 0, err
 		}
-		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{existingKey, incomingValExpr})
+		joinCond, err := bindStoredKeyEquality(builder, existingKey, incomingValExpr, idxColTyp)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -1873,6 +1873,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	autoUpdateCols := make(map[string]bool)
 	var orderedNames []string
 	var orderedExprs []*plan.Expr
+	var explicitAssignments, implicitAssignments int
 	affectedCols := make(map[string]bool)
 	pkMayChange := false
 
@@ -1895,6 +1896,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			return 0, err
 		}
 
+		explicitAssignments = len(orderedNames)
+
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
 				newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
@@ -1907,6 +1910,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				autoUpdateCols[col.Name] = true
 				orderedNames = append(orderedNames, col.Name)
 				orderedExprs = append(orderedExprs, newDefExpr)
+				implicitAssignments++
 			}
 		}
 
@@ -2115,18 +2119,24 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	var odkuActions *plan.OdkuActionCtx
 	actionFinalPos := int32(-1)
 	if useTargetPk {
-		if err := builder.requireOrderedODKUProtocol(); err != nil {
-			return 0, err
-		}
 		lastNodeID, selectTag, selectNode = builder.preserveODKUSourceColumns(bindCtx, lastNodeID, selectTag, scanTag, selectNode, orderedExprs, updateExprs)
 		oldSelectTag := selectTag
 		actionFKs, actionFinalPos, err = builder.odkuForeignKeyChecks(tableDef, scanTag, selectTag, selectNode, affectedCols)
 		if err != nil {
 			return 0, err
 		}
+		orderedNames, orderedExprs, changeCount, changeColumns := orderODKUUpdatePhases(tableDef, orderedNames, orderedExprs, explicitAssignments, implicitAssignments, autoUpdateCols)
 		odkuActions, err = builder.buildODKUActions(tableDef, scanTag, selectTag, colName2Idx, orderedNames, orderedExprs, affectedCols, actionFKs, actionFinalPos)
 		if err != nil {
 			return 0, err
+		}
+		odkuActions.ChangeCheckAssignmentCount = uint32(changeCount)
+		odkuActions.AutoUpdateAssignmentCount = uint32(implicitAssignments)
+		odkuActions.ChangeCheckColumns = changeColumns
+		// Keep final FK validation ahead of physical no-op filtering.
+		if len(actionFKs) > 0 {
+			odkuActions.PhysicalChangedColumn = uint32(len(selectNode.ProjectList) + 1)
+			selectNode.ProjectList = append(selectNode.ProjectList, makePlan2BoolConstExprWithType(true))
 		}
 		if keyMayChange {
 			odkuActions.PriorData = &plan.OdkuPriorData{Ref: dmlCtx.objRefs[0], TableDef: tableDef}
@@ -2668,106 +2678,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	var deferredKeep *plan.Expr
-
-	// ODKU no-op guard: drop rows where every column the update actually writes
-	// is NULL-safe-equal between the old image (scanTag) and the final written
-	// value the ordered action owner materialized into the new image (selectTag).
-	// MySQL returns affected-rows=0 for such rows.
-	// Placed before the final PROJECT so scanTag columns survive column remapping.
-	if onDupAction == plan.Node_UPDATE {
-		// Columns excluded from the no-op equality chain: implicit ON UPDATE
-		// columns (whose new value always advances) plus any generated column
-		// that transitively derives from such a column — otherwise the recomputed
-		// generated value would defeat the no-op guard even when the user's
-		// explicit update changed nothing. A generated column whose source is a
-		// user-updated column is still caught by that source column's own <=>.
-		noopSkipCols := make(map[string]bool, len(autoUpdateCols))
-		for name := range autoUpdateCols {
-			noopSkipCols[name] = true
-		}
-		for changed := true; changed; {
-			changed = false
-			for _, col := range tableDef.Cols {
-				if col.GeneratedCol == nil || noopSkipCols[col.Name] {
-					continue
-				}
-				for _, pos := range collectRefColPos(col.GeneratedCol.Expr) {
-					if int(pos) < len(tableDef.Cols) && noopSkipCols[tableDef.Cols[pos].Name] {
-						noopSkipCols[col.Name] = true
-						changed = true
-						break
-					}
-				}
-			}
-		}
-		var allColsEqual *plan.Expr
-		for i, col := range tableDef.Cols {
-			if col.Name == catalog.Row_ID || col.Hidden {
-				continue
-			}
-			if noopSkipCols[col.Name] {
-				continue
-			}
-			// Only compare columns the update actually writes. A column absent from
-			// updateExprs keeps its old value and is trivially unchanged, so it must
-			// be excluded — otherwise an immutable key column resolved through a
-			// secondary UNIQUE conflict (where the incoming PK differs from the
-			// existing row's PK) would spuriously fail the equality chain and turn a
-			// no-op update into a counted one.
-			if _, written := updateExprs[col.Name]; !written {
-				continue
-			}
-			// Compare the old value against the FINAL written value already
-			// materialized by the action owner, not a fresh evaluation of the
-			// assignment expression. The join evaluates each update expression once
-			// and writes the result back into the new-image (selectTag) column at
-			// colName2Idx; re-executing it here would double-evaluate non-
-			// deterministic assignments (e.g. v = floor(rand()*2)), so the no-op
-			// check could disagree with the value actually stored.
-			newColPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
-			if !ok {
-				continue
-			}
-			oldColExpr := oldColumn(int32(i))
-			newColExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectTag,
-						ColPos: newColPos,
-					},
-				},
-			}
-			eqExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldColExpr, newColExpr})
-			if allColsEqual == nil {
-				allColsEqual = eqExpr
-			} else {
-				allColsEqual, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allColsEqual, eqExpr})
-			}
-		}
-		if allColsEqual != nil {
-			// The dedup-join output also carries non-conflicting rows, whose old
-			// image is all-NULL. Such a row must always be inserted, yet every
-			// NULL <=> NULL comparison above yields true (e.g. an all-NULL row
-			// into a nullable UNIQUE key never conflicts but would match the
-			// equality chain). Gate the no-op check on the old row actually
-			// existing: keep the row when old __mo_rowid IS NULL (fresh insert)
-			// or when any compared column differs (real update).
-			rowIDIdx := tableDef.Name2ColIndex[catalog.Row_ID]
-			oldRowIDExpr := oldColumn(rowIDIdx)
-			noOldRowExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{oldRowIDExpr})
-			notEqualExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allColsEqual})
-			keepExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{noOldRowExpr, notEqualExpr})
-			if len(actionFKs) > 0 {
-				deferredKeep = keepExpr
-			} else {
-				lastNodeID = builder.appendNode(&plan.Node{
-					NodeType:   plan.Node_FILTER,
-					Children:   []int32{lastNodeID},
-					FilterList: []*plan.Expr{keepExpr},
-				}, bindCtx)
-			}
-		}
+	if odkuActions != nil && odkuActions.PhysicalChangedColumn != 0 {
+		deferredKeep = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: selectTag, ColPos: int32(odkuActions.PhysicalChangedColumn - 1),
+		}}}
 	}
 
 	newProjLen := len(selectNode.ProjectList) + len(appendedUniqueProjs)
@@ -3085,7 +2999,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				},
 			}
 
-			joinCond, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
+			joinCond, bindErr := bindStoredKeyEquality(builder, leftExpr, rightExpr, pkTyp)
 			if bindErr != nil {
 				return 0, bindErr
 			}
