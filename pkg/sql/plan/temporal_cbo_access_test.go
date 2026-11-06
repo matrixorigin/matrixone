@@ -269,46 +269,123 @@ func TestTemporalCBOConstructionBudgetBeforeCopy(t *testing.T) {
 	require.LessOrEqual(t, budget, 0)
 }
 
+func TestTemporalCBORejectsUnmatchedReaderBeforeStats(t *testing.T) {
+	for _, scenario := range []string{"column", "bound", "operator", "scale", "marker", "provenance", "clean literal"} {
+		t.Run(scenario, func(t *testing.T) {
+			builder, source, _ := temporalCBOTraversalFixture(t)
+			scan := builder.qry.Nodes[0]
+			if scenario == "provenance" || scenario == "clean literal" {
+				bound := scan.FilterList[0].GetF().Args[1]
+				scan.FilterList[0].GetF().Args[1] = &pb.Expr{Typ: bound.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{
+					Value: &pb.Literal_Timestampval{Timestampval: int64(types.UnixNanoToTimestamp(builder.compCtx.GetProcess().Base.UnixTime))},
+				}}}
+			}
+			scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
+			filter := scan.BlockFilterList[0]
+			switch scenario {
+			case "column":
+				filter.GetF().Args[0].GetCol().ColPos = 1
+			case "bound":
+				filter.GetF().Args[1].GetF().Func.ObjName = "different_clock"
+			case "operator":
+				other, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<", filter.GetF().Args)
+				require.NoError(t, err)
+				scan.BlockFilterList[0] = other
+			case "scale":
+				filter.GetF().Args[0].Typ.Scale++
+			case "marker":
+				filter.TemporalCandidateFilter = true
+			case "provenance":
+				filter.GetF().Args[1].GetLit().Src = &pb.Expr{Expr: &pb.Expr_P{P: &pb.ParamRef{}}}
+			}
+			readStats := false
+			source.onRead = func() { readStats = true }
+			beforeTag := builder.nextBindTag
+			beforeNames, beforeTags := maps.Clone(builder.nameByColRef), maps.Clone(builder.tag2NodeID)
+			mapping := make(map[[2]int32]*pb.Expr)
+			refs := map[[2]int32]int{{scan.BindingTags[0], 0}: 1}
+			id, err := builder.applyIndicesWithOrder(0, refs, mapping, false)
+			require.NoError(t, err)
+			require.Zero(t, id)
+			if scenario == "clean literal" {
+				require.True(t, readStats)
+			} else {
+				require.False(t, readStats)
+			}
+			require.Zero(t, source.observed)
+			require.Empty(t, mapping)
+			require.Len(t, builder.qry.Nodes, 1)
+			require.Equal(t, beforeTag, builder.nextBindTag)
+			require.Equal(t, beforeNames, builder.nameByColRef)
+			require.Equal(t, beforeTags, builder.tag2NodeID)
+		})
+	}
+}
+
+func TestTemporalCBOReaderProofRequiresBudget(t *testing.T) {
+	zero, one := 0, 1
+	for _, tc := range []struct {
+		name   string
+		budget *int
+	}{{"missing", nil}, {"exhausted", &zero}, {"insufficient", &one}} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, _, _ := temporalCBOTraversalFixture(t)
+			require.False(t, temporalBaseReaderShapeSafe(builder.GetContext(), builder.qry, 0, tc.budget))
+		})
+	}
+}
+
 func TestTemporalCBOBaseRequiresFinalReaderPruning(t *testing.T) {
-	for _, scenario := range []string{"empty", "mirror", "unknown blocks", "different predicate", "cancelled", "budget exhausted", "invalid selectivity"} {
+	for _, scenario := range []string{"empty", "mirror", "unknown blocks", "different predicate", "multiple blocks", "multiple filters", "cancelled", "invalid selectivity"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, source, _ := temporalCBOTraversalFixture(t)
 			scan := builder.qry.Nodes[0]
 			originalSelectivity := scan.FilterList[0].Selectivity
 			refs := map[[2]int32]int{{scan.BindingTags[0], 0}: 1}
-			cost := builder.newEncodedRegularIndexCostContext(scan, refs)
-			oldWork := cost.baseWork
-			observation := source.observation
-			observation.Blocks = 512
+			source.observation.Blocks = 512
+			source.input = &engine.TemporalBlockInput{Rows: uint64(scan.Stats.TableCnt), Blocks: 512}
 			if scenario != "empty" {
 				scan.BlockFilterList = []*pb.Expr{DeepCopyExpr(scan.FilterList[0])}
+				scan.BlockFilterList[0].Selectivity = 0.5
+				scan.BlockFilterList[0].Ndv = 123
 			}
 			switch scenario {
 			case "unknown blocks":
-				observation.Blocks = 0
+				source.observation.Blocks = 0
 			case "different predicate":
 				scan.BlockFilterList[0].GetF().Args[0].GetCol().ColPos = 1
+			case "multiple blocks":
+				scan.BlockFilterList = append(scan.BlockFilterList, DeepCopyExpr(scan.BlockFilterList[0]))
+			case "multiple filters":
+				scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
 			case "cancelled":
 				ctx, cancel := context.WithCancel(builder.GetContext())
 				cancel()
 				builder.compCtx.SetContext(ctx)
+			case "invalid selectivity":
+				source.observation.NDV = math.NaN()
 			}
-			budget := engine.MaxTemporalBindingWork
-			selectivity := .000001
-			if scenario == "budget exhausted" {
-				budget = 0
+			mapping := make(map[[2]int32]*pb.Expr)
+			beforeTag := builder.nextBindTag
+			beforeNames, beforeTags := maps.Clone(builder.nameByColRef), maps.Clone(builder.tag2NodeID)
+			id, err := builder.applyIndicesWithOrder(0, refs, mapping, false)
+			if scenario == "cancelled" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
 			}
-			if scenario == "invalid selectivity" {
-				selectivity = math.NaN()
-			}
-			ok := builder.temporalCBOBaseEligible(scan, observation, selectivity, &budget)
 			switch scenario {
 			case "empty", "mirror":
-				require.True(t, ok)
+				require.NotZero(t, id)
 			default:
-				require.False(t, ok)
+				require.Zero(t, id)
+				require.Empty(t, mapping)
+				require.Zero(t, source.observed)
+				require.Len(t, builder.qry.Nodes, 1)
+				require.Equal(t, beforeTag, builder.nextBindTag)
+				require.Equal(t, beforeNames, builder.nameByColRef)
+				require.Equal(t, beforeTags, builder.tag2NodeID)
 			}
-			require.Equal(t, oldWork, cost.baseWork)
 			require.Equal(t, originalSelectivity, scan.FilterList[0].Selectivity)
 		})
 	}

@@ -92,7 +92,23 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 	if len(cost.unknownRangeLowerSelectivities) != 0 {
 		return temporalIndexAccess{}, nil
 	}
-	if !builder.temporalCBOBaseEligible(scan, observation, selectivity, &budget) {
+	// The reader-shape check above already proved block/filter correspondence.
+	// Check the remaining finalized-reader conditions before observing blocks.
+	if !finitePositive(selectivity) || selectivity > 1 || !finitePositive(observation.Rows) ||
+		!temporalBaseBlockFiltersFinal(ctx, scan, true, &budget) {
+		return temporalIndexAccess{}, context.Cause(ctx)
+	}
+	if len(scan.BlockFilterList) != 0 {
+		if len(scan.BlockFilterList) != 1 || len(scan.FilterList) != 1 || observation.Blocks <= 0 {
+			return temporalIndexAccess{}, context.Cause(ctx)
+		}
+		nodes := 0
+		if !temporalCostExpressionFits(ctx, scan.FilterList[0], 0, &nodes, &budget) || !spendTemporalCostWork(ctx, &budget, 8*nodes) ||
+			!ScanStorageFilterEligible(proc, scan.BlockFilterList[0], false) {
+			return temporalIndexAccess{}, context.Cause(ctx)
+		}
+	}
+	if budget <= 0 || context.Cause(ctx) != nil {
 		return temporalIndexAccess{}, context.Cause(ctx)
 	}
 	needsBaseInput := len(scan.BlockFilterList) != 0
@@ -258,25 +274,4 @@ func prepayTemporalCBOConstruction(ctx context.Context, bound *plan.Expr, budget
 		return false
 	}
 	return spendTemporalCostWork(ctx, budget, 16*(nodes+64)+16*bound.ProtoSize()) && *budget > 0
-}
-
-// Only a finalized, executable reader predicate permits a block observation.
-// The cost-only range never becomes a base filter or changes shared stats.
-func (builder *QueryBuilder) temporalCBOBaseEligible(scan *plan.Node, stats engine.TemporalStats, selectivity float64, budget *int) bool {
-	ctx := builder.GetContext()
-	if !finitePositive(selectivity) || selectivity > 1 || !finitePositive(stats.Rows) || !temporalBaseBlockFiltersFinal(ctx, scan, true, budget) {
-		return false
-	}
-	if len(scan.BlockFilterList) != 0 {
-		if len(scan.BlockFilterList) != 1 || len(scan.FilterList) != 1 || stats.Blocks <= 0 ||
-			!temporalCostFiltersEqual(ctx, scan.BlockFilterList[0], scan.FilterList[0], budget) {
-			return false
-		}
-		nodes := 0
-		if !temporalCostExpressionFits(ctx, scan.FilterList[0], 0, &nodes, budget) || !spendTemporalCostWork(ctx, budget, 8*nodes) ||
-			!ScanStorageFilterEligible(builder.compCtx.GetProcess(), scan.BlockFilterList[0], false) {
-			return false
-		}
-	}
-	return budget != nil && *budget > 0 && context.Cause(ctx) == nil
 }

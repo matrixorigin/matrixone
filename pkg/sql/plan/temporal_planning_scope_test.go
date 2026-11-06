@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+type temporalScopeReleaseProbe struct {
+	scope           *TemporalPlanningScope
+	calls           int
+	releasedOutside bool
+	cleared         bool
+}
+
+func (p *temporalScopeReleaseProbe) ReleaseTemporalScope() {
+	p.calls++
+	p.releasedOutside = p.scope.nativeMu.TryLock()
+	if p.releasedOutside {
+		p.cleared = !p.scope.Usable() && p.scope.root.Load() == nil && p.scope.query.Load() == nil &&
+			p.scope.sources == nil && p.scope.nativeOwner == nil
+		p.scope.nativeMu.Unlock()
+	}
+}
 
 func TestTemporalPlanningScopeIsSingleUseAndRootOwned(t *testing.T) {
 	root := &tree.Select{}
@@ -148,16 +166,103 @@ func TestTemporalPlanningScopeBorrowsCanonicalRelation(t *testing.T) {
 	wrong.SchemaName = "another_database"
 	_, _, _, ok = scope.NativeRelation(wrong, scan.TableDef)
 	require.False(t, ok)
+	wrongVersion := *scan.TableDef
+	wrongVersion.Version++
+	_, _, _, ok = scope.NativeRelation(scan.ObjRef, &wrongVersion)
+	require.False(t, ok)
+	unknownRef, unknownDef := *scan.ObjRef, *scan.TableDef
+	unknownRef.Obj, unknownRef.ObjName = 9999, "unregistered"
+	unknownDef.TblId, unknownDef.Name = uint64(unknownRef.Obj), unknownRef.ObjName
+	_, _, _, ok = scope.NativeRelation(&unknownRef, &unknownDef)
+	require.False(t, ok)
+	scope.SelectQuery(builder.qry)
+	require.True(t, scope.MatchesQuery(builder.qry))
+	owner := &temporalScopeReleaseProbe{scope: scope}
+	require.True(t, scope.SetNativeOwner(owner))
+	borrowed := scope.sources
 	scope.Close()
-	require.Zero(t, scope.sourceCount)
-	for _, record := range scope.sources {
-		require.Nil(t, record.relation)
-		require.Nil(t, record.full)
-		require.Nil(t, record.read.Op)
+	require.Nil(t, scope.sources)
+	for _, record := range borrowed {
+		require.Zero(t, record)
 	}
+	require.Equal(t, 1, owner.calls)
+	require.True(t, owner.releasedOutside)
+	require.True(t, owner.cleared)
 	_, _, _, ok = scope.NativeRelation(scan.ObjRef, scan.TableDef)
 	require.False(t, ok)
+	require.False(t, scope.AddNativeRelation(scan.ObjRef, scan.TableDef, relation, read))
 	scope.Close()
+	require.Equal(t, 1, owner.calls)
+}
+
+func TestTemporalPlanningScopeNativeRelationLimit(t *testing.T) {
+	builder, relation, _ := temporalCBOTraversalFixture(t)
+	scope := builder.temporalPlanningScope
+	scan := builder.qry.Nodes[0]
+	_, _, read, ok := scope.NativeRelation(scan.ObjRef, scan.TableDef)
+	require.True(t, ok)
+
+	const limit = 64
+	refs := make([]*ObjectRef, 0, limit)
+	defs := make([]*TableDef, 0, limit)
+	refs, defs = append(refs, scan.ObjRef), append(defs, scan.TableDef)
+	for i := 1; i < limit; i++ {
+		ref, def := *scan.ObjRef, *scan.TableDef
+		ref.Obj = int64(100 + i)
+		ref.ObjName = "table_" + strconv.Itoa(i)
+		def.TblId, def.Name = uint64(ref.Obj), ref.ObjName
+		require.True(t, scope.AddNativeRelation(&ref, &def, relation, read))
+		refs, defs = append(refs, &ref), append(defs, &def)
+	}
+	for i := range refs {
+		got, full, _, ok := scope.NativeRelation(refs[i], defs[i])
+		require.True(t, ok)
+		require.Same(t, relation, got)
+		require.Same(t, defs[i], full)
+	}
+	ref, def := *scan.ObjRef, *scan.TableDef
+	ref.Obj, ref.ObjName = 1000, "overflow"
+	def.TblId, def.Name = uint64(ref.Obj), ref.ObjName
+	require.False(t, scope.AddNativeRelation(&ref, &def, relation, read))
+	require.False(t, scope.Usable())
+	_, _, _, ok = scope.NativeRelation(refs[0], defs[0])
+	require.False(t, ok)
+}
+
+func TestTemporalPlanningScopeConcurrentNativeClose(t *testing.T) {
+	builder, relation, _ := temporalCBOTraversalFixture(t)
+	scope := builder.temporalPlanningScope
+	scan := builder.qry.Nodes[0]
+	_, _, read, ok := scope.NativeRelation(scan.ObjRef, scan.TableDef)
+	require.True(t, ok)
+
+	const workers = 16
+	start := make(chan struct{})
+	ready := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ref, def := *scan.ObjRef, *scan.TableDef
+			ref.Obj, ref.ObjName = int64(1000+i), "table_"+strconv.Itoa(i)
+			def.TblId, def.Name = uint64(ref.Obj), ref.ObjName
+			<-start
+			ready <- struct{}{}
+			scope.AddNativeRelation(&ref, &def, relation, read)
+			scope.NativeRelation(scan.ObjRef, scan.TableDef)
+		}(i)
+	}
+	close(start)
+	for range workers {
+		<-ready
+	}
+	scope.Close()
+	wg.Wait()
+	require.False(t, scope.Usable())
+	require.Nil(t, scope.sources)
+	_, _, _, ok = scope.NativeRelation(scan.ObjRef, scan.TableDef)
+	require.False(t, ok)
 }
 
 func TestTemporalPlanningScopeDuplicateRelationDeclines(t *testing.T) {
@@ -165,6 +270,8 @@ func TestTemporalPlanningScopeDuplicateRelationDeclines(t *testing.T) {
 	scope := builder.temporalPlanningScope
 	scan := builder.qry.Nodes[0]
 	read := engine.TemporalRead{Op: builder.compCtx.GetProcess().GetTxnOperator(), Stamp: client.CatalogReadStamp{Snapshot: timestamp.Timestamp{PhysicalTime: 1}, Workspace: &temporalCBOTestWorkspace{}}}
-	require.False(t, scope.AddNativeRelation(scan.ObjRef, scan.TableDef, relation, read))
+	otherName := *scan.ObjRef
+	otherName.ObjName = "another_name"
+	require.False(t, scope.AddNativeRelation(&otherName, scan.TableDef, relation, read))
 	require.False(t, scope.Usable())
 }

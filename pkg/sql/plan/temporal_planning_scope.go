@@ -17,14 +17,15 @@ package plan
 import (
 	"sync"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const maxTemporalNativeRelations = 64
 
 // TemporalPlanningIntent contains only one execution's placement and original
 // parameter provenance. Neither the AST nor this value belongs in a plan cache.
@@ -64,8 +65,7 @@ type TemporalPlanningScope struct {
 	admission   atomic.Uint32
 	query       atomic.Pointer[Query]
 	nativeMu    sync.Mutex
-	sources     [64]temporalNativeBinding
-	sourceCount int
+	sources     []temporalNativeBinding
 	nativeOwner any
 }
 
@@ -127,19 +127,17 @@ func (scope *TemporalPlanningScope) AddNativeRelation(ref *ObjectRef, full *Tabl
 	if !scope.Usable() {
 		return false
 	}
-	for i := range scope.sourceCount {
-		previous := scope.sources[i]
+	for _, previous := range scope.sources {
 		if previous.full.TblId == full.TblId {
 			scope.Invalidate()
 			return false
 		}
 	}
-	if scope.sourceCount == len(scope.sources) {
+	if len(scope.sources) >= maxTemporalNativeRelations {
 		scope.Invalidate()
 		return false
 	}
-	scope.sources[scope.sourceCount] = temporalNativeBinding{relation: relation, full: full, read: read, database: ref.SchemaName, table: ref.ObjName}
-	scope.sourceCount++
+	scope.sources = append(scope.sources, temporalNativeBinding{relation: relation, full: full, read: read, database: ref.SchemaName, table: ref.ObjName})
 	return true
 }
 
@@ -151,8 +149,7 @@ func (scope *TemporalPlanningScope) NativeRelation(ref *ObjectRef, def *TableDef
 	if !scope.Usable() {
 		return nil, nil, engine.TemporalRead{}, false
 	}
-	for i := range scope.sourceCount {
-		record := scope.sources[i]
+	for _, record := range scope.sources {
 		if record.full.TblId == def.TblId && record.full.Version == def.Version && record.database == ref.SchemaName && record.table == ref.ObjName {
 			return record.relation, record.full, record.read, true
 		}
@@ -169,8 +166,8 @@ func (scope *TemporalPlanningScope) Close() {
 	scope.query.Store(nil)
 	scope.nativeMu.Lock()
 	owner := scope.nativeOwner
-	clear(scope.sources[:])
-	scope.sourceCount = 0
+	clear(scope.sources)
+	scope.sources = nil
 	scope.nativeOwner = nil
 	scope.nativeMu.Unlock()
 	if release, ok := owner.(interface{ ReleaseTemporalScope() }); ok {
