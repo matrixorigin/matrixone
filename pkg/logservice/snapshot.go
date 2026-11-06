@@ -15,7 +15,9 @@
 package logservice
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -104,6 +106,9 @@ type snapshotRecord struct {
 	nodeID nodeID
 	// items are sorted by .index
 	items []*snapshotItem
+	// An export request can time out while Dragonboat is still completing it.
+	// Keep checking disk on later truncation ticks after that result is unknown.
+	uncertainExport bool
 }
 
 func newNodeSnapshot(fs vfs.FS, nodeID nodeID) *snapshotRecord {
@@ -258,6 +263,9 @@ func (sm *snapshotManager) snapshotPath(nodeID nodeID, index snapshotIndex) stri
 func (sm *snapshotManager) prepareDir(path string) error {
 	s, err := sm.cfg.FS.Stat(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		if e := sm.cfg.FS.MkdirAll(path, defaultExportedDirMode); e != nil {
 			return e
 		}
@@ -269,20 +277,10 @@ func (sm *snapshotManager) prepareDir(path string) error {
 	return nil
 }
 
-func (sm *snapshotManager) parse(dir string) (int, error) {
-	var index int
-	_, err := fmt.Sscanf(dir, snapshotPathPattern, &index)
-	if err != nil {
-		return 0, err
-	}
-	return index, nil
-}
-
-// Init implements the ISnapshotManager interface.
-func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+// ReconcileInterruptedExport removes exported snapshots left after Dragonboat
+// renamed a completed snapshot but before it removed its completion flag.
+// Call this only during store startup, before the replica can export again.
+func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64) error {
 	path := sm.exportPath(shardID, replicaID)
 	if err := sm.prepareDir(path); err != nil {
 		return err
@@ -291,28 +289,155 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 	if err != nil {
 		return err
 	}
-	indexes := make([]int, 0, len(names))
 	for _, name := range names {
-		index, err := sm.parse(name)
-		if err != nil {
+		var index uint64
+		count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
+		if err != nil || count != 1 || name != fmt.Sprintf(snapshotPathPattern, index) {
 			continue
 		}
-		indexes = append(indexes, index)
-	}
-	// The snapshots in the manager must be sorted.
-	sort.Ints(indexes)
-	nid := nodeID{shardID: shardID, replicaID: replicaID}
-	snapshots := newNodeSnapshot(sm.cfg.FS, nid)
-	for _, idx := range indexes {
-		if idx > 0 {
-			_ = snapshots.add(snapshotIndex(idx), sm.snapshotPath(nid, snapshotIndex(idx)))
+		dir := sm.cfg.FS.PathJoin(path, name)
+		_, err = sm.cfg.FS.Stat(sm.cfg.FS.PathJoin(dir, "dragonboat.snapshot.message"))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := sm.cfg.FS.RemoveAll(dir); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// Init implements the ISnapshotManager interface.
+func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.initLocked(shardID, replicaID)
+}
+
+func (sm *snapshotManager) initLocked(shardID uint64, replicaID uint64) error {
+	snapshots, err := sm.loadCompletedSnapshots(shardID, replicaID)
+	if err != nil {
+		return err
+	}
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
 	if current, ok := sm.snapshots[nid]; ok {
+		snapshots.uncertainExport = current.uncertainExport
 		current.release()
 	}
 	sm.snapshots[nid] = snapshots
 	return nil
+}
+
+// loadCompletedSnapshots builds a fresh view without changing the published
+// one. Dragonboat can be writing while a runtime reconciliation scans, so
+// only canonical final directories with the complete two-file layout enter
+// the view; marker-bearing or incomplete directories remain for later scans.
+func (sm *snapshotManager) loadCompletedSnapshots(shardID uint64, replicaID uint64) (*snapshotRecord, error) {
+	path := sm.exportPath(shardID, replicaID)
+	if err := sm.prepareDir(path); err != nil {
+		return nil, err
+	}
+	names, err := sm.cfg.FS.List(path)
+	if err != nil {
+		return nil, err
+	}
+	indexes := make([]snapshotIndex, 0, len(names))
+	for _, name := range names {
+		var index uint64
+		count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
+		if err != nil || count != 1 || index == 0 || name != fmt.Sprintf(snapshotPathPattern, index) {
+			continue
+		}
+		indexes = append(indexes, snapshotIndex(index))
+	}
+	sort.Slice(indexes, func(i, j int) bool { return indexes[i] < indexes[j] })
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	snapshots := newNodeSnapshot(sm.cfg.FS, nid)
+	for _, index := range indexes {
+		dir := sm.snapshotPath(nid, index)
+		info, err := sm.cfg.FS.Stat(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			snapshots.release()
+			return nil, err
+		}
+		if !info.IsDir() {
+			continue
+		}
+		files, err := sm.cfg.FS.List(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			snapshots.release()
+			return nil, err
+		}
+		sort.Strings(files)
+		if len(files) == 2 && files[0] == fmt.Sprintf(snapshotPathPattern+".gbsnap", index) &&
+			files[1] == "snapshot.metadata" {
+			snapshots.items = append(snapshots.items, getSnapshotItem(snapshotItem{
+				fs: sm.cfg.FS, index: index, dir: dir,
+			}))
+		}
+	}
+	return snapshots, nil
+}
+
+// MarkExportUncertain records that a failed request may still finish writing
+// an exported snapshot after its caller has returned.
+func (sm *snapshotManager) MarkExportUncertain(shardID, replicaID uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok {
+		ss = newNodeSnapshot(sm.cfg.FS, nid)
+		sm.snapshots[nid] = ss
+	}
+	ss.uncertainExport = true
+}
+
+// ReconcileUncertainExports reloads completed snapshots after an export with
+// an unknown result. The flag remains set because a timed-out request may
+// finish after any individual scan. Ordinary replicas avoid the disk scan.
+func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, maxCount int) (uint64, bool, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok || !ss.uncertainExport {
+		return 0, false, nil
+	}
+	next, err := sm.loadCompletedSnapshots(shardID, replicaID)
+	if err != nil {
+		return 0, false, err
+	}
+	limit := maxCount
+	if limit < 1 {
+		limit = 1 // preserve the oldest import candidate even with quota zero
+	}
+	// A late completion can put disk over quota before the next scan. Drop
+	// newest exports first, retaining the oldest importable candidate.
+	trimmed := false
+	for len(next.items) > limit {
+		if err := next.removeLast(); err != nil {
+			next.release()
+			return 0, trimmed, err
+		}
+		trimmed = true
+	}
+	next.uncertainExport = true
+	sm.snapshots[nid] = next
+	ss.release()
+	if last := next.last(); last != nil {
+		return uint64(last.index), trimmed, nil
+	}
+	return 0, trimmed, nil
 }
 
 // Count implements the ISnapshotManager interface.
