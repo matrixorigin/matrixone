@@ -433,11 +433,12 @@ func TestNumericCastNullContract(t *testing.T) {
 		}
 		return result
 	}
-	targets := make([]types.Type, 0, len(inputs)+2)
+	targets := make([]types.Type, 0, len(inputs)+5)
 	for _, input := range inputs {
 		targets = append(targets, typeOf(input.typ))
 	}
-	targets = append(targets, types.New(types.T_float32, 10, 2), types.New(types.T_float64, 10, 2))
+	targets = append(targets, types.New(types.T_float32, 10, 2), types.New(types.T_float64, 10, 2),
+		types.New(types.T_char, 64, 0), types.New(types.T_varchar, 64, 0), types.T_text.ToType())
 	for _, source := range inputs {
 		for _, target := range targets {
 			t.Run(fmt.Sprintf("%s_to_%s_%d_%d", source.typ, target.Oid, target.Width, target.Scale), func(t *testing.T) {
@@ -462,20 +463,26 @@ func TestNumericCastNullContract(t *testing.T) {
 				require.False(t, result.IsNull(0))
 				require.False(t, result.IsNull(1))
 				require.True(t, result.IsNull(2))
+				if target.Oid == types.T_char || target.Oid == types.T_varchar || target.Oid == types.T_text {
+					require.Equal(t, "0", string(result.GetBytesAt(0)))
+					require.Equal(t, "1", string(result.GetBytesAt(1)))
+				}
 			})
 		}
 	}
-	t.Run("narrowing_error", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
-		input := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{300})
-		t.Cleanup(func() { input.Free(proc.Mp()) })
-		target := vector.NewVec(types.T_int8.ToType())
-		t.Cleanup(func() { target.Free(proc.Mp()) })
-		result, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, 0), []*vector.Vector{input, target}, 1)
-		require.Error(t, err, "nonnull proof must not turn conversion errors into success")
-		require.Nil(t, result)
-	})
+	for _, targetType := range []types.Type{types.T_int8.ToType(), types.New(types.T_varchar, 1, 0)} {
+		t.Run(fmt.Sprintf("%s_error", targetType.Oid), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			input := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{300})
+			t.Cleanup(func() { input.Free(proc.Mp()) })
+			target := vector.NewVec(targetType)
+			t.Cleanup(func() { target.Free(proc.Mp()) })
+			result, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, 0), []*vector.Vector{input, target}, 1)
+			require.Error(t, err, "nonnull proof must not turn conversion errors into success")
+			require.Nil(t, result)
+		})
+	}
 }
 
 func TestRandomBytesNullabilityContract(t *testing.T) {

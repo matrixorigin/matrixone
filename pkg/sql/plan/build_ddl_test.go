@@ -635,8 +635,9 @@ func TestCastPreservesNonNull(t *testing.T) {
 	numeric := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128, types.T_decimal256}
+	targets := append(append([]types.T{}, numeric...), types.T_char, types.T_varchar, types.T_text)
 	for _, from := range numeric {
-		for _, to := range numeric {
+		for _, to := range targets {
 			expr := &plan.Expr{Typ: plan.Type{Id: int32(to)}, Expr: &plan.Expr_F{F: &plan.Function{
 				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
 				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(from)}}, {Typ: plan.Type{Id: int32(to)}}},
@@ -782,6 +783,14 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
 		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
 		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce mixed dynamic fallback", "select coalesce(r.r_name,cast(1/r.r_regionkey as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull mixed dynamic fallback", "select ifnull(r.r_name,cast(1/r.r_regionkey as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce mixed null fallback", "select coalesce(r.r_name,cast(null as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull mixed null fallback", "select ifnull(r.r_name,cast(null as char)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce mixed string source", "select coalesce(r.r_name,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull mixed string source", "select ifnull(r.r_name,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce mixed numeric source", "select coalesce(r.r_regionkey,'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull mixed numeric source", "select ifnull(r.r_regionkey,'ok') as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"ifnull float fallback", "select ifnull(1/r.r_regionkey,cast(0 as float)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"coalesce float fallback", "select coalesce(1/r.r_regionkey,cast(0 as float)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"ifnull unsigned fallback", "select ifnull(1/r.r_regionkey,cast(0 as unsigned)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},

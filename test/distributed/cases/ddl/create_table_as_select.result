@@ -2365,4 +2365,41 @@ constraint violation: Column 'uint_co' cannot be null
 select count(*) from numeric_fallback;
 ➤ count(*)[-5,64,0]  𝄀
 3
+create table mixed_fallback as select coalesce(r.s,0) as co_text,ifnull(r.s,0) as if_text,coalesce(r.v,'ok') as co_num,ifnull(r.v,'ok') as if_num from l left join r on l.id=r.id;
+select * from mixed_fallback order by co_text;
+➤ co_text[12,-1,0]  ¦  if_text[12,-1,0]  ¦  co_num[12,-1,0]  ¦  if_num[12,-1,0]  𝄀
+0  ¦  0  ¦  ok  ¦  ok  𝄀
+a  ¦  a  ¦  0  ¦  0  𝄀
+b  ¦  b  ¦  2  ¦  2
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='mixed_fallback' and column_name in ('co_text','if_text','co_num','if_num') order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+co_text  ¦  NO  𝄀
+if_text  ¦  NO  𝄀
+co_num  ¦  NO  𝄀
+if_num  ¦  NO
+insert into mixed_fallback values(null,'x','x','x');
+constraint violation: Column 'co_text' cannot be null
+insert into mixed_fallback values('x',null,'x','x');
+constraint violation: Column 'if_text' cannot be null
+insert into mixed_fallback values('x','x',null,'x');
+constraint violation: Column 'co_num' cannot be null
+insert into mixed_fallback values('x','x','x',null);
+constraint violation: Column 'if_num' cannot be null
+select count(*) from mixed_fallback;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table mixed_dynamic as select coalesce(r.s,cast(1/r.v as char)) as co_text,ifnull(r.s,cast(1/r.v as char)) as if_text from l left join r on l.id=r.id;
+select * from mixed_dynamic order by co_text;
+➤ co_text[12,-1,0]  ¦  if_text[12,-1,0]  𝄀
+null  ¦  null  𝄀
+a  ¦  a  𝄀
+b  ¦  b
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='mixed_dynamic' and column_name in ('co_text','if_text') order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+co_text  ¦  YES  𝄀
+if_text  ¦  YES
+insert into mixed_dynamic values(null,null);
+select count(*) from mixed_dynamic;
+➤ count(*)[-5,64,0]  𝄀
+4
 drop database ctas_output_nullability;

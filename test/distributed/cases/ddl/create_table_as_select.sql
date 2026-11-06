@@ -1608,4 +1608,18 @@ insert into numeric_fallback values(0,0,0,0,0,null,0,0);
 insert into numeric_fallback values(0,0,0,0,0,0,null,0);
 insert into numeric_fallback values(0,0,0,0,0,0,0,null);
 select count(*) from numeric_fallback;
+-- Mixed numeric/text reconciliation must retain safe fallback guarantees.
+create table mixed_fallback as select coalesce(r.s,0) as co_text,ifnull(r.s,0) as if_text,coalesce(r.v,'ok') as co_num,ifnull(r.v,'ok') as if_num from l left join r on l.id=r.id;
+select * from mixed_fallback order by co_text;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='mixed_fallback' and column_name in ('co_text','if_text','co_num','if_num') order by ordinal_position;
+insert into mixed_fallback values(null,'x','x','x');
+insert into mixed_fallback values('x',null,'x','x');
+insert into mixed_fallback values('x','x',null,'x');
+insert into mixed_fallback values('x','x','x',null);
+select count(*) from mixed_fallback;
+create table mixed_dynamic as select coalesce(r.s,cast(1/r.v as char)) as co_text,ifnull(r.s,cast(1/r.v as char)) as if_text from l left join r on l.id=r.id;
+select * from mixed_dynamic order by co_text;
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='mixed_dynamic' and column_name in ('co_text','if_text') order by ordinal_position;
+insert into mixed_dynamic values(null,null);
+select count(*) from mixed_dynamic;
 drop database ctas_output_nullability;

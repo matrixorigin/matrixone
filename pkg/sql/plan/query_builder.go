@@ -353,16 +353,17 @@ func castPreservesNonNull(expr *plan.Expr) bool {
 		return false
 	}
 	from, to := types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id)
-	// Numeric casts may round, narrow, change signedness or fail, but their
-	// conversion routines introduce SQL NULL only for NULL input.
+	textResult := to == types.T_char || to == types.T_varchar || to == types.T_text
+	// Numeric conversions, including formatting as text, return a value or
+	// error for non-NULL input. Precision and signedness do not prove nullness.
 	if (from.IsInteger() || from.IsFloat() || from.IsDecimal()) &&
-		(to.IsInteger() || to.IsFloat() || to.IsDecimal()) {
+		(to.IsInteger() || to.IsFloat() || to.IsDecimal() || textResult) {
 		return true
 	}
 	// The binder represents decimal syntax such as 0.0 as a string-to-decimal
 	// cast. strToDecimal and strToStr return a value or error for non-NULL input.
 	return (from == types.T_char || from == types.T_varchar || from == types.T_text) &&
-		(to.IsDecimal() || to == types.T_char || to == types.T_varchar || to == types.T_text)
+		(to.IsDecimal() || textResult)
 }
 
 func isIfNullCase(fn *plan.Function) bool {
