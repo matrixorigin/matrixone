@@ -87,6 +87,9 @@ func ColForbidsNull(col *plan.ColDef) bool {
 // the value adjustment MySQL applies for INSERT/UPDATE/LOAD with IGNORE. The
 // row itself is kept. vec indices whose vectors were modified are returned so
 // selector pipelines can mirror the adjustment into their un-shrunk output.
+// A constant NULL broadcast carries no backing storage, so it is replaced by
+// an equivalent constant of the implicit default instead of being written
+// in place.
 // A NOT NULL column whose type has no implicit default keeps the
 // constraint-violation error: storing NULL would trade the report for corruption.
 func BatchDataNotNullFillForIgnore(
@@ -106,11 +109,36 @@ func BatchDataNotNullFillForIgnore(
 			continue
 		}
 		attr := attrs[j]
-		slotCount := vec.Length()
 		if vec.IsConst() {
-			// A constant vector owns one physical slot; adjust it once.
-			slotCount = 1
+			// A constant vector broadcasts its single physical slot, and a
+			// constant NULL owns no backing storage at all (NewConstNull
+			// allocates no data), so the in-place setters below would fail
+			// on it: LOAD legs project an omitted column's folded NULL
+			// default straight into this helper. Replace the broadcast with
+			// a constant carrying the implicit default - the sanctioned
+			// NewConstFixed shape - so every logical row keeps its row and
+			// one warning is published per adjusted row.
+			if !vec.IsNull(0) || vec.Length() <= 0 {
+				continue
+			}
+			rows := vec.Length()
+			fillVec, ok, err := constImplicitNotNullDefaultVec(vec, rows, proc.Mp())
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, moerr.NewConstraintViolation(proc.Ctx,
+					fmt.Sprintf("Column '%s' cannot be null", attr))
+			}
+			for row := 0; row < rows; row++ {
+				warnings.Add(moerr.ER_BAD_NULL_ERROR,
+					fmt.Sprintf("Column '%s' cannot be null", attr))
+			}
+			vecs[j] = fillVec
+			filled = append(filled, j)
+			continue
 		}
+		slotCount := vec.Length()
 		adjusted := false
 		for slot := 0; slot < slotCount; slot++ {
 			if !vec.IsNull(uint64(slot)) {
@@ -135,6 +163,29 @@ func BatchDataNotNullFillForIgnore(
 	}
 	warnings.Flush(proc)
 	return filled, nil
+}
+
+// constImplicitNotNullDefaultVec builds the replacement for a constant NULL
+// broadcast: one physical slot carrying the implicit default of the column
+// type, broadcast over the original logical length. The value comes from the
+// shared per-type rule, so the broadcast fill and the in-place fill can never
+// diverge. It reports false when the type has no implicit default.
+func constImplicitNotNullDefaultVec(vec *vector.Vector, rows int, mp *mpool.MPool) (*vector.Vector, bool, error) {
+	dst := vector.NewVec(*vec.GetType())
+	if err := vector.AppendAny(dst, nil, true, mp); err != nil {
+		dst.Free(mp)
+		return nil, false, err
+	}
+	// The appended NULL slot is the cell the shared rule overwrites.
+	ok, err := setImplicitNotNullDefault(dst, 0, mp)
+	if err != nil || !ok {
+		dst.Free(mp)
+		return nil, ok, err
+	}
+	nulls.Del(dst.GetNulls(), 0)
+	dst.ToConst()
+	dst.SetLength(rows)
+	return dst, true, nil
 }
 
 // setImplicitNotNullDefault overwrites one NULL cell with the implicit default
@@ -194,8 +245,20 @@ func setImplicitNotNullDefault(vec *vector.Vector, slot int, mp *mpool.MPool) (b
 		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.Enum(0))
 	case types.T_uuid:
 		return true, vector.SetFixedAtWithTypeCheck(vec, slot, types.Uuid{})
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_blob, types.T_text:
+	case types.T_binary:
+		// BINARY(n) is fixed width: a plain assignment right-pads any
+		// shorter value with 0x00 to the declared width - the rule the
+		// string->binary cast applies (func_cast strToStr) and
+		// dtype/binary.result pins - so the implicit default is n zero
+		// bytes, exactly what an ordinary empty-string assignment stores.
+		// A width without room cannot be padded and keeps the empty
+		// payload, mirroring the cast's len < width guard.
+		payload := []byte{}
+		if w := int(vec.GetType().Width); w > 0 {
+			payload = make([]byte, w)
+		}
+		return true, vector.SetBytesAt(vec, slot, payload, mp)
+	case types.T_char, types.T_varchar, types.T_varbinary, types.T_blob, types.T_text:
 		return true, vector.SetBytesAt(vec, slot, []byte{}, mp)
 	case types.T_geometry, types.T_geometry32, types.T_datalink:
 		// A geometry payload is an interpreted WKB/EWKB value and a datalink

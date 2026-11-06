@@ -96,6 +96,34 @@ func TestImplicitFilledChildDefaultExprMirrorsRuntimeFill(t *testing.T) {
 	timeExpr, _ := implicitFilledChildDefaultExpr(ctx, plan.Type{Id: int32(types.T_time)})
 	require.EqualValues(t, int64(0), timeExpr.GetLit().GetTimeval(), "TIME fills to zero")
 
+	// The byte-string payloads keep their own contracts: VARBINARY fills
+	// with the empty payload itself, while fixed-width BINARY(n) fills with
+	// the padded empty-string assignment - n 0x00 bytes, the value an
+	// ordinary empty-string assignment stores - so its mirror is the
+	// assignment cast of the empty payload to the column type, the same
+	// cast the assignment runs, rather than a raw empty constant.
+	varbinExpr, varbinMode := implicitFilledChildDefaultExpr(ctx, plan.Type{Id: int32(types.T_varbinary), Width: 8})
+	require.Equal(t, implicitFillMirrored, varbinMode)
+	require.Equal(t, int32(types.T_varbinary), varbinExpr.Typ.Id)
+	require.Equal(t, "", varbinExpr.GetLit().GetSval())
+	binExpr, binMode := implicitFilledChildDefaultExpr(ctx, plan.Type{Id: int32(types.T_binary), Width: 2})
+	require.Equal(t, implicitFillMirrored, binMode)
+	require.Equal(t, int32(types.T_binary), binExpr.Typ.Id)
+	require.EqualValues(t, 2, binExpr.Typ.Width, "the BINARY mirror keeps the declared width")
+	binCast := binExpr.GetF()
+	require.NotNil(t, binCast, "BINARY(n) mirrors its fill as an assignment cast")
+	require.Equal(t, "cast", binCast.Func.ObjName,
+		"the BINARY mirror is the plain assignment cast - its zero-fill rule applies in every cast mode")
+	require.Len(t, binCast.Args, 2)
+	require.Equal(t, "", binCast.Args[0].GetLit().GetSval(),
+		"the cast source is the empty payload")
+	srcTyp := binCast.Args[0].GetTyp()
+	require.Equal(t, int32(types.T_varbinary), srcTyp.GetId(),
+		"the empty payload keeps its literal type before the cast")
+	dstTyp := binCast.Args[1].GetTyp()
+	require.Equal(t, int32(types.T_binary), dstTyp.GetId(),
+		"the cast lands on the column type")
+
 	// The write side stores a filled value for these families (zero uuid,
 	// json null payload) but the plan has no constant for it: the caller must
 	// drop the MATCH-SIMPLE exemption while checking the raw column.

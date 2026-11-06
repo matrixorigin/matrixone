@@ -90,9 +90,10 @@ func fillMainInsertNotNullForIgnore(
 	// drop below.
 	pkColIdx := colexec.IgnoreNullPkColumnIdx(updateCtx.TableDef)
 	var (
-		vecs  = make([]*vector.Vector, 0, len(updateCtx.InsertCols))
-		attrs = make([]string, 0, len(updateCtx.InsertCols))
-		cols  = make([]*plan.ColDef, 0, len(updateCtx.InsertCols))
+		vecs       = make([]*vector.Vector, 0, len(updateCtx.InsertCols))
+		attrs      = make([]string, 0, len(updateCtx.InsertCols))
+		cols       = make([]*plan.ColDef, 0, len(updateCtx.InsertCols))
+		constSlots [][2]int
 	)
 	for insertIdx, inputIdx := range updateCtx.InsertCols {
 		if insertIdx >= len(updateCtx.TableDef.Cols) {
@@ -114,9 +115,20 @@ func fillMainInsertNotNullForIgnore(
 		vecs = append(vecs, bat.Vecs[inputIdx])
 		attrs = append(attrs, col.Name)
 		cols = append(cols, col)
+		// vecs is a fresh list, so a constant NULL the shared fill replaces
+		// (it owns no backing storage) must be installed back into the
+		// batch the write legs read.
+		if bat.Vecs[inputIdx].IsConst() {
+			constSlots = append(constSlots, [2]int{len(vecs) - 1, inputIdx})
+		}
 	}
 	if _, err := colexec.BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc); err != nil {
 		return true, false, err
+	}
+	for _, slot := range constSlots {
+		if vecs[slot[0]] != bat.Vecs[slot[1]] {
+			bat.Vecs[slot[1]] = vecs[slot[0]]
+		}
 	}
 	if pkColIdx < 0 {
 		return true, false, nil

@@ -219,6 +219,52 @@ func TestCheckExternalNotNullIgnoreAdjustsInsteadOfRejecting(t *testing.T) {
 	require.Equal(t, []string{"Column 'a' cannot be null"}, session.messages)
 }
 
+// TestCheckExternalNotNullIgnoreFillsConstNullVector extends the strict
+// const-null red leg with IGNORE coverage, mirroring the LOAD fact of the
+// review: a writable external-table load omits a NOT NULL column whose folded
+// default is a constant NULL (e.g. DEFAULT (abs(null))). The projection
+// delivers a NewConstNull broadcast with no backing storage; under statement
+// IGNORE the gate must still fill every logical row of the implicit default
+// with one warning per row instead of failing the load on the mutation.
+func TestCheckExternalNotNullIgnoreFillsConstNullVector(t *testing.T) {
+	proc := testutil.NewProc(t)
+	session := &extIgnoreWarningSession{}
+	proc.Session = session
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	defer proc.Free()
+	mp := mpool.MustNewZero()
+
+	ins := NewArgument()
+	ins.ToExternal = true
+	ins.InsertCtx = &InsertCtx{Attrs: []string{"a"}}
+	ins.ctr.extCols = []*plan.ColDef{notNullCol("a")}
+	defer ins.Release()
+
+	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
+	bat := batch.New([]string{"a"})
+	bat.Vecs[0] = cn
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	require.NoError(t, ins.checkExternalNotNull(proc, bat))
+	filled := bat.Vecs[0]
+	require.NotSame(t, cn, filled,
+		"a constant NULL has no backing storage and is replaced by the fill")
+	require.True(t, filled.IsConst(), "the replacement keeps the broadcast")
+	require.Equal(t, 3, filled.Length(), "logical length is preserved")
+	require.False(t, filled.IsConstNull())
+	require.False(t, filled.GetNulls().Contains(0))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](filled, 0),
+		"the broadcast row carries the implicit default")
+	require.Equal(t, uint64(3), session.total,
+		"one warning per adjusted logical row")
+	require.Len(t, session.messages, 3)
+	for _, msg := range session.messages {
+		require.Equal(t, "Column 'a' cannot be null", msg)
+	}
+}
+
 // TestExternalResetAborts: a writer still alive at Reset/Free means the stream
 // did not end cleanly — the file must be aborted, never finalized.
 func TestExternalResetAborts(t *testing.T) {

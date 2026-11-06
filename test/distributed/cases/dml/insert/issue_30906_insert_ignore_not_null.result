@@ -857,4 +857,34 @@ select 'r14_vcnd' as mark, id, u from r14_vcnd order by id;
 ➤ mark[12,8,0]  ¦  id[4,32,0]  ¦  u[12,32,0]  𝄀
 r14_vcnd  ¦  1  ¦  
 drop table r14_vcnd;
+create table r15_bin(id int primary key, b binary(2) not null, vb varbinary(4) not null);
+insert ignore into r15_bin(id, b, vb) values(1, null, null);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'b' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'vb' cannot be null
+insert into r15_bin values(2, '', '');
+select 'r15_bin' as mark, id, hex(b) as b_hex, length(b) as b_len,
+hex(vb) as vb_hex, length(vb) as vb_len from r15_bin order by id;
+➤ mark[12,7,0]  ¦  id[4,32,0]  ¦  b_hex[12,4,0]  ¦  b_len[-5,64,0]  ¦  vb_hex[12,8,0]  ¦  vb_len[-5,64,0]  𝄀
+r15_bin  ¦  1  ¦  0000  ¦  2  ¦    ¦  0  𝄀
+r15_bin  ¦  2  ¦  0000  ¦  2  ¦    ¦  0
+drop table r15_bin;
+create table r15_ld(id int primary key, u bigint not null default (abs(null)), b binary(2) not null default (''));
+load data inline format='csv', data='1\n2' ignore into table r15_ld fields terminated by ',' (id);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null  𝄀
+Warning  ¦  1048  ¦  Column 'u' cannot be null
+select 'r15_ld' as mark, id, u, hex(b) as b_hex, length(b) as b_len from r15_ld order by id;
+➤ mark[12,6,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  ¦  b_hex[12,4,0]  ¦  b_len[-5,64,0]  𝄀
+r15_ld  ¦  1  ¦  0  ¦  0000  ¦  2  𝄀
+r15_ld  ¦  2  ¦  0  ¦  0000  ¦  2
+insert into r15_ld values(3, 1, '');
+select 'r15_ld_after' as mark, id, u, hex(b) as b_hex, length(b) as b_len from r15_ld order by id;
+➤ mark[12,12,0]  ¦  id[4,32,0]  ¦  u[-5,64,0]  ¦  b_hex[12,4,0]  ¦  b_len[-5,64,0]  𝄀
+r15_ld_after  ¦  1  ¦  0  ¦  0000  ¦  2  𝄀
+r15_ld_after  ¦  2  ¦  0  ¦  0000  ¦  2  𝄀
+r15_ld_after  ¦  3  ¦  1  ¦  0000  ¦  2
+drop table r15_ld;
 drop database issue_30906_insert_ignore_not_null;

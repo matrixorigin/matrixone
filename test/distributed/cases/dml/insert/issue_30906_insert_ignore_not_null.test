@@ -633,4 +633,31 @@ show warnings;
 select 'r14_vcnd' as mark, id, u from r14_vcnd order by id;
 drop table r14_vcnd;
 
+-- r15 review finding: the byte-string fill follows plain assignment. A
+-- plain assignment right-pads any shorter value with 0x00 to BINARY(n)'s
+-- declared width, so the adjusted cell of BINARY(2) stores 0000 with the
+-- same HEX/LENGTH as the ordinary empty-string assignment, while
+-- VARBINARY(4) keeps the empty payload (LENGTH 0).
+create table r15_bin(id int primary key, b binary(2) not null, vb varbinary(4) not null);
+insert ignore into r15_bin(id, b, vb) values(1, null, null);
+show warnings;
+insert into r15_bin values(2, '', '');
+select 'r15_bin' as mark, id, hex(b) as b_hex, length(b) as b_len,
+hex(vb) as vb_hex, length(vb) as vb_len from r15_bin order by id;
+drop table r15_bin;
+
+-- r15 review finding: a NOT NULL column whose omitted DEFAULT folds to a
+-- constant NULL projects a broadcast with no backing storage on LOAD legs.
+-- Under LOAD ... ignore every logical row keeps its row and stores the
+-- implicit default of the column type (u adjusts to 0 with warning 1048 per
+-- row) instead of the load failing the statement; the declared '' default
+-- of BINARY(2) stores its padded assignment like any ordinary insert.
+create table r15_ld(id int primary key, u bigint not null default (abs(null)), b binary(2) not null default (''));
+load data inline format='csv', data='1\n2' ignore into table r15_ld fields terminated by ',' (id);
+show warnings;
+select 'r15_ld' as mark, id, u, hex(b) as b_hex, length(b) as b_len from r15_ld order by id;
+insert into r15_ld values(3, 1, '');
+select 'r15_ld_after' as mark, id, u, hex(b) as b_hex, length(b) as b_len from r15_ld order by id;
+drop table r15_ld;
+
 drop database issue_30906_insert_ignore_not_null;

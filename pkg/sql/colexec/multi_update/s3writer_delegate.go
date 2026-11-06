@@ -386,9 +386,26 @@ func (writer *s3WriterDelegate) append(
 			continue
 		}
 		insertAttrs := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).insertAttrs
-		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		tableType := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).tableType
+
+		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
+		if tableType == UpdateMainTable {
+			// Under statement IGNORE adjust NULL cells of NOT NULL columns
+			// before the shared legs below; the projection taken below and
+			// every filtered or checked copy inherit the adjusted values
+			// through the shared vectors. A constant NULL owns no backing
+			// storage, so the fill replaces it instead of writing it in
+			// place - the fill must therefore run before the projection
+			// snapshots the vector pointers. Rows with a NULL primary key
+			// are dropped here, and the projection re-counts after the
+			// drop.
+			if _, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, contextBatch, false, writer.fillInsertOwned); fillErr != nil {
+				return fillErr
+			}
+		}
+
+		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		mainTablePkProjectIdx := -1
 		mainTableNullPkFilter := false
@@ -400,20 +417,7 @@ func (writer *s3WriterDelegate) append(
 			mainTableNullPkFilter = projBat.Vecs[mainTablePkProjectIdx].HasNull()
 		}
 
-		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
-			// Under statement IGNORE adjust NULL cells of NOT NULL columns
-			// before the shared legs below; every filtered or checked copy
-			// inherits the adjusted values from the shared vectors. Rows with
-			// a NULL primary key are dropped here, so the selection sharing
-			// the vectors must re-count after the drop.
-			_, droppedRows, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, contextBatch, false, writer.fillInsertOwned)
-			if fillErr != nil {
-				return fillErr
-			}
-			if droppedRows {
-				projBat.SetRowCount(contextBatch.RowCount())
-			}
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
 				// This validation copy leaves any allocation-accounted join owner;

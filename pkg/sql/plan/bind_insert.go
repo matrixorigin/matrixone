@@ -1853,8 +1853,22 @@ func implicitFilledChildDefaultExpr(ctx context.Context, typ plan.Type) (*plan.E
 		return result(makePlan2Int16ConstExprWithType(0))
 	case types.T_char, types.T_varchar:
 		return result(makePlan2StringConstExprWithType(""))
-	case types.T_binary, types.T_varbinary:
+	case types.T_varbinary:
 		return result(makePlan2VarBinaryConstExprWithType(""))
+	case types.T_binary:
+		// The runtime fill right-pads BINARY(n) with 0x00 to the declared
+		// width - exactly the value an ordinary empty-string assignment
+		// stores, per the string->binary cast's zero-fill rule. Evaluate
+		// the mirror through that assignment cast so the checked value and
+		// the stored fill agree byte for byte; if the cast cannot be built
+		// the fill stays unmirrored instead of diverging from the stored
+		// value.
+		empty := makePlan2VarBinaryConstExprWithType("")
+		cast, err := makePlan2AssignmentCastExpr(ctx, empty, typ)
+		if err != nil {
+			return nil, implicitFillUnmirrored
+		}
+		return result(cast)
 	case types.T_blob, types.T_text:
 		return result(makePlan2StringConstExprWithType(""))
 	case types.T_enum:

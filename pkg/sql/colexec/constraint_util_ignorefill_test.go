@@ -153,6 +153,20 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(varcharVec, []byte("me"), false, mp))
 	require.NoError(t, vector.AppendAny(varcharVec, nil, true, mp))
 
+	// The byte-string family pins the BINARY(n) divergence: a plain
+	// assignment right-pads any shorter value with 0x00 to the declared
+	// width, so BINARY(2)'s implicit default is two zero bytes, while
+	// VARBINARY keeps the empty payload.
+	binVec := vector.NewVec(types.New(types.T_binary, 2, 0))
+	defer binVec.Free(mp)
+	require.NoError(t, vector.AppendBytes(binVec, []byte{0x11, 0x22}, false, mp))
+	require.NoError(t, vector.AppendAny(binVec, nil, true, mp))
+
+	varbinVec := vector.NewVec(types.New(types.T_varbinary, 4, 0))
+	defer varbinVec.Free(mp)
+	require.NoError(t, vector.AppendBytes(varbinVec, []byte("ab"), false, mp))
+	require.NoError(t, vector.AppendAny(varbinVec, nil, true, mp))
+
 	jsonVec := vector.NewVec(types.T_json.ToType())
 	defer jsonVec.Free(mp)
 	jsonSeed, err := bytejson.ParseFromByteSlice([]byte(`{"k":1}`))
@@ -166,13 +180,13 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		intVec, floatVec, bf16Vec, f16Vec, f8Vec, f4Vec,
 		decVec, boolVec, bitVec,
 		dateVec, datetimeVec, timeVec, timestampVec, yearVec,
-		enumVec, uuidVec, varcharVec, jsonVec,
+		enumVec, uuidVec, varcharVec, binVec, varbinVec, jsonVec,
 	}
 	attrs := []string{
 		"i", "f", "bf", "f16", "f8", "f4",
 		"de", "b", "bit",
 		"d", "dt", "tm", "ts", "y",
-		"e", "u", "s", "j",
+		"e", "u", "s", "bn", "vb", "j",
 	}
 	cols := []*plan.ColDef{
 		notNullCol("i", types.T_int32),
@@ -192,12 +206,26 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 		notNullCol("e", types.T_enum),
 		notNullCol("u", types.T_uuid),
 		notNullCol("s", types.T_varchar),
+		{
+			Name: "bn",
+			Typ:  plan.Type{Id: int32(types.T_binary), Width: 2},
+			Default: &plan.Default{
+				NullAbility: false,
+			},
+		},
+		{
+			Name: "vb",
+			Typ:  plan.Type{Id: int32(types.T_varbinary), Width: 4},
+			Default: &plan.Default{
+				NullAbility: false,
+			},
+		},
 		notNullCol("j", types.T_json),
 	}
 
 	filled, err := BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc)
 	require.NoError(t, err)
-	require.Len(t, filled, 18)
+	require.Len(t, filled, 20)
 	for _, vec := range vecs {
 		require.False(t, vec.GetNulls().Contains(0) || vec.GetNulls().Contains(1),
 			"adjusted vector still has NULLs")
@@ -239,16 +267,22 @@ func TestBatchDataNotNullFillForIgnoreAdjustsEveryFillableType(t *testing.T) {
 	require.Equal(t, types.Uuid{}, vector.GetFixedAtNoTypeCheck[types.Uuid](uuidVec, 1))
 	require.Equal(t, "me", varcharVec.GetStringAt(0), "non-null cells keep their values")
 	require.Equal(t, "", varcharVec.GetStringAt(1))
+	require.Equal(t, []byte{0x11, 0x22}, binVec.GetBytesAt(0), "non-null cells keep their values")
+	require.Equal(t, []byte{0, 0}, binVec.GetBytesAt(1),
+		"BINARY(2) fills with the padded empty-string assignment (two 0x00 bytes)")
+	require.Equal(t, []byte("ab"), varbinVec.GetBytesAt(0), "non-null cells keep their values")
+	require.Empty(t, varbinVec.GetBytesAt(1),
+		"VARBINARY keeps the empty payload: padding is the BINARY(n) rule")
 	require.Equal(t, jsonSeed, types.DecodeJson(jsonVec.GetBytesAt(0)),
 		"non-null cells keep their values")
 	require.Equal(t, bytejson.Null, types.DecodeJson(jsonVec.GetBytesAt(1)),
 		"the NULL cell was adjusted to the JSON null literal")
 
 	// One warning per adjusted cell, with the MySQL ER_BAD_NULL_ERROR message.
-	// The uuid vector contributes two NULL cells, so the batch total is 19
-	// adjusted cells across the 18 columns.
-	require.Equal(t, uint64(19), session.total)
-	require.Len(t, session.warnings, 19)
+	// The uuid vector contributes two NULL cells, so the batch total is 21
+	// adjusted cells across the 20 columns.
+	require.Equal(t, uint64(21), session.total)
+	require.Len(t, session.warnings, 21)
 	for _, warn := range session.warnings {
 		require.Equal(t, moerr.ER_BAD_NULL_ERROR, warn.code)
 	}
@@ -357,6 +391,102 @@ func TestBatchDataNotNullFillForIgnoreGeometryKeepsViolation(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 	require.Zero(t, session.total, "an aborted adjustment publishes no warnings")
 	require.True(t, geoVec.IsNull(0), "the geometry NULL cell was left untouched")
+}
+
+// TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts pins the
+// constant-NULL contract of the LOAD legs: a NOT NULL column whose folded
+// default projects as NewConstNull carries no backing storage, so the fill
+// replaces the broadcast with an equivalent constant of the implicit default
+// (the sanctioned NewConstFixed shape), keeps every logical row and reports
+// one ER_BAD_NULL_ERROR warning per adjusted row.
+func TestBatchDataNotNullFillForIgnoreReplacesConstNullBroadcasts(t *testing.T) {
+	proc, session := newIgnoreFillProc(t)
+	defer proc.Free()
+	mp := proc.Mp()
+
+	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
+	// A nullable column's constant NULL stays untouched alongside the fill.
+	nbCn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
+	keepVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 3, mp)
+	require.NoError(t, err)
+	// The BINARY(2) broadcast proves the padded value through the same
+	// shared rule the in-place fill uses.
+	binCn := vector.NewConstNull(types.New(types.T_binary, 2, 0), 2, mp)
+	// Every NOT NULL broadcast above gains a replacement the cleanup frees.
+	replacements := make([]*vector.Vector, 0, 2)
+	t.Cleanup(func() {
+		for _, vec := range replacements {
+			vec.Free(mp)
+		}
+	})
+
+	vecs := []*vector.Vector{cn, nbCn, keepVec, binCn}
+	attrs := []string{"a", "n", "k", "bn"}
+	cols := []*plan.ColDef{
+		notNullCol("a", types.T_int64),
+		nullableCol("n", types.T_int64),
+		notNullCol("k", types.T_int64),
+		{
+			Name: "bn",
+			Typ:  plan.Type{Id: int32(types.T_binary), Width: 2},
+			Default: &plan.Default{
+				NullAbility: false,
+			},
+		},
+	}
+
+	filled, err := BatchDataNotNullFillForIgnore(vecs, attrs, cols, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 3}, filled,
+		"the constant NULL broadcasts of NOT NULL columns were adjusted")
+	require.Same(t, nbCn, vecs[1], "nullable constant NULL is untouched")
+	require.Same(t, keepVec, vecs[2], "non-null constant is untouched")
+
+	for _, idx := range []int{0, 3} {
+		got := vecs[idx]
+		require.True(t, got.IsConst(),
+			"the replacement keeps the constant broadcast of the original")
+		replacements = append(replacements, got)
+	}
+	require.NotSame(t, cn, vecs[0], "the constant NULL was replaced")
+	require.NotSame(t, binCn, vecs[3], "the constant NULL was replaced")
+	require.Equal(t, 3, vecs[0].Length(), "logical length is preserved")
+	require.False(t, vecs[0].IsConstNull())
+	require.False(t, vecs[0].GetNulls().Contains(0))
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](vecs[0], 0),
+		"the broadcast cell carries the implicit default")
+
+	require.Equal(t, 2, vecs[3].Length())
+	require.Equal(t, []byte{0, 0}, vecs[3].GetBytesAt(0),
+		"BINARY(2) broadcast fills with the padded empty-string assignment")
+
+	require.Equal(t, uint64(5), session.total,
+		"one warning per adjusted logical row")
+	require.Len(t, session.warnings, 5)
+	for i, warn := range session.warnings {
+		require.Equal(t, moerr.ER_BAD_NULL_ERROR, warn.code)
+		if i < 3 {
+			require.Equal(t, "Column 'a' cannot be null", warn.msg)
+		} else {
+			require.Equal(t, "Column 'bn' cannot be null", warn.msg)
+		}
+	}
+}
+
+// TestBatchDataNotNullFillForIgnoreConstNullWithoutDefaultKeepsViolation keeps
+// the strict-mode failure for a constant NULL of a type with no implicit
+// default: IGNORE cannot trade the report for corrupted rows.
+func TestBatchDataNotNullFillForIgnoreConstNullWithoutDefaultKeepsViolation(t *testing.T) {
+	proc, session := newIgnoreFillProc(t)
+	defer proc.Free()
+
+	geoCn := vector.NewConstNull(types.T_geometry.ToType(), 2, proc.Mp())
+	vecs := []*vector.Vector{geoCn}
+	cols := []*plan.ColDef{notNullCol("g", types.T_geometry)}
+	_, err := BatchDataNotNullFillForIgnore(vecs, []string{"g"}, cols, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
+	require.Zero(t, session.total, "an aborted adjustment publishes no warnings")
 }
 
 // TestBatchDataNotNullCheckStrictStillRejects is the strict-mode red leg for
