@@ -16,9 +16,12 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -99,7 +102,12 @@ type s3WriterDelegate struct {
 	schemaVersions []uint32
 	isClusterBys   []bool
 
-	deleteBlockMap      []map[types.Blockid]*deleteBlockData
+	deleteBlockMap []map[types.Blockid]*deleteBlockData
+	// Each retained delete source owns its future split/dedup/merge growth.
+	// Credit remains live until preparation and synchronous serialization have
+	// both retired the source and all intermediate split/merge buffers.
+	deleteFutureBytes   []int64
+	deleteKeys          []*deleteKeySet
 	deleteBlockInfo     []*deleteBlockInfo
 	insertBlockInfo     []*batch.Batch
 	insertBlockRowCount []uint64
@@ -108,15 +116,28 @@ type s3WriterDelegate struct {
 	// so pre-allocated vector capacity is reused instead of re-allocated.
 	insertFreeLists []*containers.BatchFreeList
 
-	outputBat *batch.Batch
+	outputBat        *batch.Batch
+	ownedMP          *mpool.MPool
+	outputMP         *mpool.MPool
+	metadata         [2]*batch.Batch
+	metadataRead     int
+	tailFlushed      bool
+	metadataGranted  int64
+	outputLease      *rscthrottler.InputLease
+	outputFrameLimit int64
+	activeWorkspace  *rscthrottler.WorkspaceLease
+	activeMP         *mpool.MPool
+	writeUnit        int64
+	writeCounters    *perfcounter.CounterSet
 
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols []int
-	buf           bytes.Buffer
+	buf bytes.Buffer
 
 	memController struct {
+		mu          sync.Mutex
+		mutations   int
 		grantedSize int64
 		throttler   rscthrottler.RSCThrottler
 	}
@@ -142,6 +163,8 @@ func newS3Writer(
 		insertBlockInfo:     make([]*batch.Batch, tableCount),
 		insertBlockRowCount: make([]uint64, tableCount),
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
+		deleteFutureBytes:   make([]int64, tableCount),
+		deleteKeys:          make([]*deleteKeySet, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
@@ -185,18 +208,14 @@ func newS3Writer(
 		//update
 		writer.action = actionUpdate
 		writer.flushThreshold = threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	} else if len(upCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
 		writer.flushThreshold = threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
 	} else {
 		//delete
 		writer.action = actionDelete
 		writer.flushThreshold = DeleteWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	}
 
 	return writer, nil
@@ -216,20 +235,64 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		if len(updateCtx.InsertCols) == 0 {
 			continue
 		}
+		unit := writer.writerUnit(proc)
 		opts := []ioutil.SinkerOption{
 			ioutil.WithBuffer(writer.insertFreeLists[i], false),
+			ioutil.WithBufferBytes(unit),
+			ioutil.WithRetainedRelease(writer.sourceReleased),
+		}
+		if proc.Base.ImportMemory != nil {
+			opts = append(opts, ioutil.WithMemoryWorkspace(proc.Base.ImportMemory.WorkingSet))
+			if writer.pipelineInsert(proc) {
+				opts = append(opts, ioutil.WithPipelineFlush())
+			}
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
 		}
+		threshold := -1
+		if writer.pipelineInsert(proc) {
+			threshold = int(unit)
+		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, updateCtx.TableDef, -1, false,
+			writer.memoryPool(proc), fs, updateCtx.TableDef, threshold, false,
 			opts...)
 	}
 	return nil
 }
 
+func (writer *s3WriterDelegate) pipelineInsert(proc *process.Process) bool {
+	return proc.Base.ImportMemory != nil && writer.action == actionInsert && InsertOnlyOutput(writer.updateCtxs)
+}
+
+func (writer *s3WriterDelegate) insertWriteContext(ctx context.Context) context.Context {
+	if writer.writeCounters == nil {
+		writer.writeCounters = new(perfcounter.CounterSet)
+	}
+	return perfcounter.AttachS3RequestKey(ctx, writer.writeCounters)
+}
+
+func (writer *s3WriterDelegate) writerUnit(proc *process.Process) int64 {
+	unit := rscthrottler.BatchBytes(writer.memController.throttler)
+	if proc.Base.ImportMemory == nil {
+		return unit
+	}
+	if !writer.pipelineInsert(proc) {
+		return min(unit, proc.Base.ImportMemory.UnitBytes)
+	}
+	if writer.writeUnit == 0 {
+		schemas := make([][]types.Type, 0, len(writer.updateCtxs))
+		for _, update := range writer.updateCtxs {
+			_, schema, _, _, _ := colexec.GetSequmsAttrsSortKeyIdxFromTableDef(update.TableDef)
+			schemas = append(schemas, schema)
+		}
+		writer.writeUnit = ioutil.WriterBufferBytes(proc.Base.ImportMemory.WorkingSet, unit, schemas)
+	}
+	return writer.writeUnit
+}
+
 func (writer *s3WriterDelegate) cleanDeleteBatches(mp *mpool.MPool) {
+	clear(writer.deleteFutureBytes)
 	for i, bs := range writer.deleteBatches {
 		if bs == nil {
 			continue
@@ -242,24 +305,484 @@ func (writer *s3WriterDelegate) cleanDeleteBatches(mp *mpool.MPool) {
 	}
 
 	writer.batchSize = 0
+}
 
-	if writer.memController.grantedSize > 0 {
-		writer.memController.throttler.Release(writer.memController.grantedSize)
+func (writer *s3WriterDelegate) releaseMemory() {
+	if size := writer.memController.grantedSize; size > 0 {
+		writer.memController.throttler.Release(size)
 		writer.memController.grantedSize = 0
 	}
 }
 
-func (writer *s3WriterDelegate) append(
+// Retire all private insert buffers before returning their admission grants.
+// The byte-bounded global arena pool may still reuse their writer scratch.
+func (writer *s3WriterDelegate) closeInsertSinkers(mp *mpool.MPool) (err error) {
+	for i, s3w := range writer.insertSinkers {
+		if s3w != nil {
+			err = errors.Join(err, s3w.Close())
+			writer.insertSinkers[i] = nil
+		}
+	}
+	for _, fl := range writer.insertFreeLists {
+		if fl != nil {
+			fl.Close(mp)
+		}
+	}
+	return
+}
+
+func (writer *s3WriterDelegate) ensureOutputSlot(proc *process.Process) error {
+	if writer.outputLease != nil || proc.Base.ImportMemory == nil {
+		if writer.outputLease != nil && !InsertOnlyOutput(writer.updateCtxs) {
+			writer.outputFrameLimit = writer.outputLease.Capacity() / 4
+		}
+		return nil
+	}
+	lease, err := proc.Base.ImportMemory.AcquireOutput(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	if lease == nil {
+		return moerr.NewInternalErrorNoCtx("admitted multi-update has no output slot")
+	}
+	limit := lease.Capacity() / 4
+	if InsertOnlyOutput(writer.updateCtxs) {
+		unit := min(proc.Base.ImportMemory.UnitBytes, rscthrottler.BatchBytes(writer.memController.throttler))
+		metadata, boundErr := colexec.InsertMetadataFrameLimit(unit, len(writer.updateCtxs))
+		if boundErr != nil {
+			lease.Release()
+			return boundErr
+		}
+		limit = min(limit, metadata)
+	}
+	writer.outputLease = lease
+	writer.outputFrameLimit = limit
+	return nil
+}
+func (writer *s3WriterDelegate) releaseOutputSlot() {
+	if writer.metadataGranted > 0 {
+		writer.memController.throttler.Release(writer.metadataGranted)
+		writer.metadataGranted = 0
+	}
+	if writer.outputLease != nil {
+		writer.outputLease.Release()
+		writer.outputLease = nil
+		writer.outputFrameLimit = 0
+	}
+}
+
+// Imported output uses I. Legacy writers retain a separate claim on their
+// existing D throttler, so raw RowID/key payloads cannot bypass admission.
+func (writer *s3WriterDelegate) reserveMetadata(proc *process.Process, growth, encoded int64) error {
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	if writer.outputLease != nil {
+		if encoded > 0 {
+			growth = addMemoryBytes(growth, addMemoryBytes(encoded, int64(writer.buf.Cap())))
+		}
+		return colexec.GrowMetadataOutput(proc.Ctx, writer.outputLease, writer.metadataPool().AllocatedBytes(), growth)
+	}
+	if encoded > int64(writer.buf.Cap()) {
+		growth = addMemoryBytes(growth, addMemoryBytes(encoded, encoded))
+	}
+	retained := addMemoryBytes(writer.metadataPool().AllocatedBytes(), int64(writer.buf.Cap()))
+	capacity, err := colexec.MetadataOutputCapacity(retained, growth)
+	if err != nil || capacity <= writer.metadataGranted {
+		return err
+	}
+	need := capacity - writer.metadataGranted
+	if maximum := rscthrottler.MaxAcquire(writer.memController.throttler); need > maximum {
+		return &rscthrottler.RequestTooLargeError{Requested: need, Maximum: maximum}
+	}
+	if _, ok := writer.memController.throttler.Acquire(need); !ok {
+		if err := context.Cause(proc.Ctx); err != nil {
+			return err
+		}
+		return &rscthrottler.WorkingSetCapacityError{Minimum: need, Available: max(0, writer.memController.throttler.Available())}
+	}
+	writer.metadataGranted = capacity
+	return nil
+}
+
+func (writer *s3WriterDelegate) metadataPool() *mpool.MPool {
+	if writer.outputMP == nil {
+		writer.outputMP = mpool.MustNew("multi-update-output")
+	}
+	return writer.outputMP
+}
+
+func (writer *s3WriterDelegate) memoryPool(proc *process.Process) *mpool.MPool {
+	if writer.activeMP != nil {
+		return writer.activeMP
+	}
+	if writer.ownedMP == nil {
+		writer.ownedMP = mpool.MustNew("multi-update-writer")
+	}
+	return writer.ownedMP
+}
+
+// retainedBytes counts source/writer D capacity and committed-block maps.
+// Output keeps its own I/D claim; IO and delete dedup have separate owners.
+func (writer *s3WriterDelegate) retainedBytes() int64 {
+	var size int64
+	if writer.ownedMP != nil {
+		size = writer.ownedMP.AllocatedBytes()
+	}
+	for _, sinker := range writer.insertSinkers {
+		if sinker != nil {
+			size += sinker.RetainedBitmapBytes()
+		}
+	}
+	for _, blocks := range writer.deleteBlockMap {
+		// Include map growth slack and per-entry Go objects in addition to the
+		// separately tracked vectors. These maps are discarded after a flush;
+		// no empty high-water map remains behind a released grant.
+		for _, block := range blocks {
+			if block != nil {
+				size += int64(nulls.Allocated(block.bitmap)) + deleteBlockObjectsBytes
+				size += batchBitmapBytes(block.bat)
+			}
+		}
+	}
+	for _, batches := range writer.deleteBatches {
+		if batches != nil {
+			for i := 0; i < batches.Length(); i++ {
+				size += batchBitmapBytes(batches.Get(i))
+			}
+		}
+	}
+	return size
+}
+
+func batchBitmapBytes(bat *batch.Batch) int64 {
+	var size int64
+	if bat != nil {
+		for _, vec := range bat.Vecs {
+			size += int64(nulls.Allocated(vec.GetNulls()) + nulls.Allocated(vec.GetGrouping()))
+		}
+	}
+	return size
+}
+
+func (writer *s3WriterDelegate) chargedBytes() int64 {
+	size := writer.retainedBytes()
+	for _, future := range writer.deleteFutureBytes {
+		size = addMemoryBytes(size, future)
+	}
+	return size
+}
+
+func (writer *s3WriterDelegate) beginMemoryMutation() {
+	writer.memController.mu.Lock()
+	writer.memController.mutations++
+	writer.memController.mu.Unlock()
+}
+func (writer *s3WriterDelegate) endMemoryMutation() {
+	writer.memController.mu.Lock()
+	writer.memController.mutations--
+	if writer.memController.mutations == 0 {
+		writer.reconcileMemoryLocked()
+	}
+	writer.memController.mu.Unlock()
+}
+func (writer *s3WriterDelegate) sourceReleased() {
+	writer.memController.mu.Lock()
+	defer writer.memController.mu.Unlock()
+	// A main operation may have reserved a complete new N that has not been
+	// materialized yet. Never treat that future allocation as unused credit.
+	if writer.memController.mutations == 0 {
+		writer.reconcileMemoryLocked()
+	}
+}
+func (writer *s3WriterDelegate) reconcileMemoryLocked() {
+	if excess := writer.memController.grantedSize - writer.chargedBytes(); excess > 0 {
+		writer.memController.throttler.Release(excess)
+		writer.memController.grantedSize -= excess
+	}
+}
+func (writer *s3WriterDelegate) reconcileMemory() {
+	writer.memController.mu.Lock()
+	defer writer.memController.mu.Unlock()
+	writer.reconcileMemoryLocked()
+}
+
+var errBorrowedSpill = moerr.NewInternalErrorNoCtx("use admitted IO workspace")
+
+func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer process.Analyzer, size int64, recompute func() int64) error {
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	if size <= 0 {
+		return nil
+	}
+	if _, ok := writer.memController.throttler.Acquire(size); ok {
+		writer.memController.grantedSize += size
+		return nil
+	}
+
+	// Retire actual D owners before retrying. Ready borrowed-upload jobs
+	// already own W; an empty INSERT writer need not join them to retry D.
+	if !writer.pipelineInsert(proc) || writer.chargedBytes() > 0 {
+		if err := writer.sortAndSync(proc, analyzer); err != nil {
+			return err
+		}
+		if err := writer.flushInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		if err := writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
+			return err
+		}
+		if err := writer.collectMetadata(proc, false); err != nil {
+			return err
+		}
+	}
+	writer.reconcileMemory()
+	if recompute != nil {
+		size = recompute()
+	}
+	if size <= 0 {
+		return nil
+	}
+	objectio.ReleaseIdleArenas()
+	if _, ok := writer.memController.throttler.Acquire(size); ok {
+		writer.memController.grantedSize += size
+		return nil
+	}
+	if proc.Base.ImportMemory != nil {
+		return errBorrowedSpill
+	}
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	// Retained output cannot drain before EOF; it cannot wait on itself.
+	if writer.metadataGranted > 0 || proc.MemoryAdmissionNoWait() {
+		if maximum := rscthrottler.MaxAcquire(writer.memController.throttler); size > maximum {
+			return &rscthrottler.RequestTooLargeError{Requested: size, Maximum: maximum}
+		}
+		return &rscthrottler.WorkingSetCapacityError{Minimum: size, Available: max(0, writer.memController.throttler.Available())}
+	}
+	// The coordinator coalesces process sampling and wakes from Release or
+	// reclaim. This path has no per-writer timer or periodic ForceRefresh.
+	if err := rscthrottler.AcquireContext(proc.Ctx, writer.memController.throttler, size); err != nil {
+		return err
+	}
+	writer.memController.grantedSize += size
+	return nil
+}
+
+// projectionBytes counts every materialized projection and only the payload
+// referenced by this window. Vector.Window shares the entire source area;
+// using its Size would repeatedly count unrelated rows.
+func (writer *s3WriterDelegate) projectionBytes(bat *batch.Batch, start, end int) int64 {
+	var size int64
+	for _, c := range writer.updateCtxs {
+		for _, idx := range c.InsertCols {
+			size += bat.Vecs[idx].WindowSize(start, end)
+		}
+		if len(c.DeleteCols) > 0 && bat.Vecs[c.DeleteCols[0]].GetNulls().Count() == bat.RowCount() {
+			continue
+		}
+		for _, idx := range c.DeleteCols {
+			size += bat.Vecs[idx].WindowSize(start, end)
+		}
+	}
+	return size
+}
+
+func (writer *s3WriterDelegate) windowEnd(bat *batch.Batch, start int, unit int64) int {
+	last := min(bat.RowCount(), start+objectio.BlockMaxRows)
+	if writer.windowFootprint(bat, start, last) <= unit {
+		return last
+	}
+	lo, hi := start+1, last
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if writer.windowFootprint(bat, start, mid) <= unit {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
+
+func (writer *s3WriterDelegate) append(proc *process.Process, analyzer process.Analyzer, inBatch *batch.Batch) error {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
+	unit := writer.writerUnit(proc)
+	if writer.flushThreshold > uint64(unit) {
+		writer.flushThreshold = uint64(unit)
+	}
+	if unit <= 0 {
+		unit = 64 << 20
+	}
+	for start := 0; start < inBatch.RowCount(); {
+		end := writer.windowEnd(inBatch, start, unit)
+		window, err := inBatch.Window(start, end)
+		if err != nil {
+			return err
+		}
+		err = writer.appendWindow(proc, analyzer, window)
+		window.Clean(writer.memoryPool(proc))
+		if err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
+}
+
+func (writer *s3WriterDelegate) appendAllocation(inBatch *batch.Batch, unit int64) int64 {
+	var increment int64
+	for i, updateCtx := range writer.updateCtxs {
+		if len(updateCtx.InsertCols) > 0 {
+			proj := inBatch.SelectColumns(updateCtx.InsertCols, nil)
+			if i < len(writer.insertSinkers) && writer.insertSinkers[i] != nil {
+				increment += writer.insertSinkers[i].AppendAllocation(proj)
+			} else {
+				var buffers containers.IBatchBuffer
+				if i < len(writer.insertFreeLists) {
+					buffers = writer.insertFreeLists[i]
+				}
+				increment += ioutil.SinkerAppendAllocation(proj, nil, buffers, unit)
+			}
+			// Constraint filtering clones a projection only when nulls exist.
+			// Reserve the complete new capacity before that clone is made.
+			tableType := UpdateMainTable
+			if updateCtx.TableDef != nil {
+				if info := writer.updateCtxInfos[updateCtx.TableDef.Name]; info != nil {
+					tableType = info.tableType
+				}
+			}
+			clone := tableType == UpdateMainTable && updateCtx.SkipInsertOnNullPk && updateCtx.InsertPkColIdx >= 0 && updateCtx.InsertPkColIdx < len(updateCtx.InsertCols) && inBatch.Vecs[updateCtx.InsertCols[updateCtx.InsertPkColIdx]].HasNull()
+			if tableType != UpdateMainTable && i < len(writer.sortIndexes) && writer.sortIndexes[i] >= 0 && !writer.isClusterBys[i] {
+				clone = inBatch.Vecs[updateCtx.InsertCols[writer.sortIndexes[i]]].HasNull()
+			}
+			if clone {
+				for _, j := range updateCtx.InsertCols {
+					tmp := vector.NewOffHeapVecWithType(*inBatch.Vecs[j].GetType())
+					increment += tmp.AppendWindowAllocation(inBatch.Vecs[j], 0, inBatch.RowCount())
+				}
+			}
+		}
+		if len(updateCtx.DeleteCols) > 0 {
+			rowids := inBatch.Vecs[updateCtx.DeleteCols[0]]
+			if rowids.GetNulls().Count() == inBatch.RowCount() {
+				continue
+			}
+			increment = addMemoryBytes(increment, writer.deleteAppendAllocation(i, inBatch, updateCtx.DeleteCols))
+			increment = addMemoryBytes(increment, deletePreparationBytes(inBatch, 0, inBatch.RowCount(), updateCtx.DeleteCols))
+		}
+	}
+	return increment
+}
+
+func (writer *s3WriterDelegate) appendWindow(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	inBatch *batch.Batch,
 ) (err error) {
+	defer writer.reconcileMemory()
+	// Reserve every projection before Write/Extend can copy it, including a
+	// single wide batch that already exceeds the normal flush threshold.
+	unit := writer.writerUnit(proc)
+	// Keep the retained aggregate below one shared byte unit. Flush before a
+	// crossing window so W's bound need not include two complete units.
+	windowBytes := uint64(writer.windowFootprint(inBatch, 0, inBatch.RowCount()))
+	if writer.batchSize > 0 && writer.batchSize+windowBytes > uint64(unit) {
+		if err = writer.sortAndSync(proc, analyzer); err != nil {
+			return err
+		}
+		if err = writer.submitInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		if !writer.pipelineInsert(proc) {
+			if err = writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
+				return err
+			}
+		}
+		if err = writer.collectMetadata(proc, false); err != nil {
+			return err
+		}
+		writer.reconcileMemory()
+	}
+	recompute := func() int64 { return writer.appendAllocation(inBatch, unit) }
+	increment := recompute()
+
+	direct := false
+	if err = writer.acquireMemory(proc, analyzer, increment, recompute); err != nil {
+		if !errors.Is(err, errBorrowedSpill) {
+			return err
+		}
+		direct = true
+		err = nil
+	}
+	var ioLease *rscthrottler.WorkspaceLease
+	if direct {
+		// Persistent INSERT sinkers must not capture the one-window W pool.
+		if writer.pipelineInsert(proc) {
+			if err = writer.ensureInsertSinkers(proc); err != nil {
+				return err
+			}
+		}
+		if err = writer.ensureOutputSlot(proc); err != nil {
+			return err
+		}
+		need := proc.Base.ImportMemory.WorkingSet.IOBytes()
+		if writer.pipelineInsert(proc) {
+			need = 0
+			for _, update := range writer.updateCtxs {
+				if len(update.InsertCols) == 0 {
+					continue
+				}
+				projection := inBatch.SelectColumns(update.InsertCols, nil)
+				peak, _, boundErr := ioutil.BatchIOEnvelope(projection, unit)
+				if boundErr != nil {
+					return boundErr
+				}
+				need = max(need, peak)
+			}
+		}
+		ioLease, err = proc.Base.ImportMemory.WorkingSet.AcquireIO(proc.Ctx, need)
+		if err != nil {
+			return err
+		}
+		writer.activeWorkspace = ioLease
+		ioMP := mpool.MustNew("multi-update-io")
+		writer.activeMP = ioMP
+		defer func() {
+			if writer.pipelineInsert(proc) {
+				writer.activeMP = nil
+				writer.activeWorkspace = nil
+			}
+			if err != nil {
+				err = errors.Join(err, writer.free(proc))
+			} else if !writer.pipelineInsert(proc) {
+				err = errors.Join(err, writer.closeInsertSinkers(ioMP))
+			}
+			writer.activeMP = nil
+			mpool.DeleteMPool(ioMP)
+			writer.activeWorkspace = nil
+			ioLease.Release()
+		}()
+	}
 
 	if err = writer.ensureInsertSinkers(proc); err != nil {
 		return
 	}
 
-	mp := proc.Mp()
+	mp := writer.memoryPool(proc)
+	writeCtx := proc.Ctx
+	if writer.pipelineInsert(proc) {
+		writeCtx = writer.insertWriteContext(writeCtx)
+	}
+	writeProjection := func(w *colexec.CNS3Writer, b *batch.Batch) error {
+		if direct {
+			return w.WriteBorrowedToFile(writeCtx, b, ioLease)
+		}
+		return w.Write(writeCtx, b)
+	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
 	// Auto-spill S3 writes during Write use proc.Ctx; perfcounter tracking
@@ -342,7 +865,7 @@ func (writer *s3WriterDelegate) append(
 						return
 					}
 				}
-				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
+				err = writeProjection(writer.insertSinkers[i], filtered)
 			}
 			filtered.Clean(mp)
 			if err != nil {
@@ -357,48 +880,62 @@ func (writer *s3WriterDelegate) append(
 			}
 		}
 
-		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {
+		if err = writeProjection(writer.insertSinkers[i], projBat); err != nil {
 			return
 		}
 	}
 
 	// Accumulate delete columns in per-table BatchSets (2 cols only).
 	for i, updateCtx := range writer.updateCtxs {
-		if len(updateCtx.DeleteCols) == 0 {
+		if len(updateCtx.DeleteCols) == 0 || inBatch.Vecs[updateCtx.DeleteCols[0]].GetNulls().Count() == inBatch.RowCount() {
 			continue
 		}
 		if writer.deleteBatches[i] == nil {
 			writer.deleteBatches[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		}
+		if !direct {
+			if len(writer.deleteFutureBytes) < len(writer.updateCtxs) {
+				writer.deleteFutureBytes = append(writer.deleteFutureBytes, make([]int64, len(writer.updateCtxs)-len(writer.deleteFutureBytes))...)
+			}
+			writer.deleteFutureBytes[i] = addMemoryBytes(writer.deleteFutureBytes[i], deletePreparationBytes(inBatch, 0, inBatch.RowCount(), updateCtx.DeleteCols))
+		}
 		projBat := inBatch.SelectColumns(updateCtx.DeleteCols, DeleteBatchAttrs)
 		if _, err = writer.deleteBatches[i].Extend(mp, projBat, nil); err != nil {
 			return
 		}
+		if direct {
+			// W is sized for the largest individual projection/singleton.
+			// Several wide index keys must not coexist as cloned delete
+			// sources. Serialize this table before materializing the next;
+			// retain the already acquired O slot until all metadata is retained.
+			if err = writer.prepareAndSyncDeleteTable(proc, analyzer, i); err != nil {
+				return
+			}
+			writer.deleteBatches[i] = nil
+		}
 	}
 
-	var (
-		increment      uint64
-		acquireGranted bool
-	)
-	for _, idx := range writer.checkSizeCols {
-		increment += uint64(inBatch.Vecs[idx].Size())
-	}
+	writer.batchSize += windowBytes
 
-	writer.batchSize += increment
-	if writer.batchSize >= writer.flushThreshold {
-		err = writer.sortAndSync(proc, analyzer)
-		return err
+	if writer.pipelineInsert(proc) && (direct || writer.batchSize >= writer.flushThreshold) {
+		if err = writer.submitInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		writer.batchSize = 0
+		return writer.collectMetadata(proc, false)
 	}
-
-	// acquire memory failed, should flush as soon as possible, and then
-	// release the pinned batches to avoid oom.
-	if _, acquireGranted =
-		writer.memController.throttler.Acquire(int64(increment)); !acquireGranted {
-		err = writer.sortAndSync(proc, analyzer)
-		return err
+	if direct || writer.batchSize >= writer.flushThreshold {
+		if err = writer.sortAndSync(proc, analyzer); err != nil {
+			return err
+		}
+		if err = writer.flushInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		if err = writer.closeInsertSinkers(mp); err != nil {
+			return err
+		}
+		return writer.collectMetadata(proc, false)
 	}
-
-	writer.memController.grantedSize += int64(increment)
 
 	return
 }
@@ -421,10 +958,12 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	src []*batch.Batch,
 	needClean bool,
 ) ([]*batch.Batch, error) {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
 	defer func() {
 		if needClean {
 			for _, bat := range src {
-				bat.Clean(proc.GetMPool())
+				bat.Clean(writer.memoryPool(proc))
 			}
 		}
 	}()
@@ -435,6 +974,16 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	}
 	blockMap := writer.deleteBlockMap[idx]
 
+	var uncommitted *batch.Batch
+	defer func() {
+		if uncommitted != nil {
+			uncommitted.Clean(writer.memoryPool(proc))
+		}
+	}()
+	if len(writer.deleteKeys) < len(writer.deleteBlockMap) {
+		writer.deleteKeys = make([]*deleteKeySet, len(writer.deleteBlockMap))
+	}
+
 	for _, bat := range src {
 		rowIDVec := bat.GetVector(RowIDIdx)
 		nulls := rowIDVec.GetNulls()
@@ -444,6 +993,9 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec)
 		for i, rowID := range rowIDs {
+			if err := context.Cause(proc.Ctx); err != nil {
+				return nil, err
+			}
 			if nulls.Contains(uint64(i)) {
 				continue
 			}
@@ -453,22 +1005,41 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			// blkOffset := rowID.GetBlockOffset()
 			rowOffset := rowID.GetRowOffset()
 
+			tableID := uint64(0)
+			var txnID []byte
+			if idx < len(writer.updateCtxs) && writer.updateCtxs[idx] != nil && writer.updateCtxs[idx].TableDef != nil {
+				tableID = writer.updateCtxs[idx].TableDef.TblId
+			}
+			if op := proc.GetTxnOperator(); op != nil {
+				txnID = op.Txn().ID
+			}
+			if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid, tableID, txnID) {
+				if writer.deleteKeys[idx] == nil {
+					writer.deleteKeys[idx] = &deleteKeySet{}
+				}
+				fresh, keyErr := writer.deleteKeys[idx].add(proc.Ctx, rowID)
+				if keyErr != nil {
+					return nil, keyErr
+				}
+				if !fresh {
+					continue
+				}
+				if uncommitted == nil {
+					uncommitted = newDeleteBatch(bat, PkIdx)
+				}
+				if e := vector.AppendFixed(uncommitted.Vecs[RowIDIdx], rowID, false, writer.memoryPool(proc)); e != nil {
+					return nil, e
+				}
+				if e := uncommitted.Vecs[PkIdx].UnionOne(bat.Vecs[PkIdx], int64(i), writer.memoryPool(proc)); e != nil {
+					return nil, e
+				}
+				uncommitted.SetRowCount(uncommitted.Vecs[0].Length())
+				continue
+			}
+
 			if blockMap[blkid] == nil {
 				blockMap[blkid] = newDeleteBlockData(bat, 1)
 
-				tableId := uint64(0)
-				txnID := []byte(nil)
-				if idx < len(writer.updateCtxs) && writer.updateCtxs[idx] != nil && writer.updateCtxs[idx].TableDef != nil {
-					tableId = writer.updateCtxs[idx].TableDef.TblId
-				}
-				if txnOp := proc.GetTxnOperator(); txnOp != nil {
-					txnID = txnOp.Txn().ID
-				}
-				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid, tableId, txnID) {
-					blockMap[blkid].typ = deletion.DeletionOnTxnUnCommit
-				} else {
-					blockMap[blkid].typ = deletion.DeletionOnCommitted
-				}
 			}
 
 			block := blockMap[blkid]
@@ -480,9 +1051,19 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 				bitmap.Add(uint64(rowOffset))
 			}
 
-			vector.AppendFixed(block.bat.GetVector(RowIDIdx), rowID, false, proc.GetMPool())
-			block.bat.GetVector(PkIdx).UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool())
+			if e := vector.AppendFixed(block.bat.GetVector(RowIDIdx), rowID, false, writer.memoryPool(proc)); e != nil {
+				return nil, e
+			}
+			if e := block.bat.GetVector(PkIdx).UnionOne(bat.GetVector(PkIdx), int64(i), writer.memoryPool(proc)); e != nil {
+				return nil, e
+			}
 			block.bat.SetRowCount(block.bat.Vecs[0].Length())
+		}
+	}
+
+	if uncommitted != nil && uncommitted.RowCount() > 0 {
+		if e := writer.appendMetadata(proc, actionDelete, idx, uint64(uncommitted.RowCount()), objectio.PhysicalAddr_Attr, uncommitted); e != nil {
+			return nil, e
 		}
 	}
 
@@ -502,41 +1083,48 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	for _, blkid := range blkids {
 		bat := blockMap[blkid].bat
 		delete(blockMap, blkid)
-		err := deleteBats.Push(proc.GetMPool(), bat)
+		err := deleteBats.Push(writer.memoryPool(proc), bat)
 		if err != nil {
+			deleteBats.Clean(writer.memoryPool(proc))
 			return nil, err
 		}
+	}
+	if len(blockMap) == 0 {
+		writer.deleteBlockMap[idx] = nil
 	}
 	retBatchs := deleteBats.TakeBatches()
 	return retBatchs, nil
 }
 
 func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
+	if err = writer.ensureOutputSlot(proc); err != nil {
+		return err
+	}
 
 	defer func() {
-		writer.cleanDeleteBatches(proc.Mp())
+		writer.cleanDeleteBatches(writer.memoryPool(proc))
 	}()
 
 	for i, updateCtx := range writer.updateCtxs {
 		if len(updateCtx.DeleteCols) == 0 || writer.deleteBatches[i] == nil {
 			continue
 		}
-		// Take batches from the per-table delete accumulator.
-		delSrcBats := writer.deleteBatches[i].TakeBatches()
-		var delBatches []*batch.Batch
-		// needClean=true: prepareDeleteBatches cleans source batches after use.
-		if delBatches, err = writer.prepareDeleteBatches(proc, i, delSrcBats, true); err != nil {
-			return
-		}
-		if err = writer.sortAndSyncOneTable(
-			proc, updateCtx.TableDef, analyzer, i, true, delBatches, true,
-		); err != nil {
+		if err = writer.prepareAndSyncDeleteTable(proc, analyzer, i); err != nil {
 			return
 		}
 		// Insert data is managed by persistent sinkers (auto-spill via Write).
 	}
 
 	return
+}
+
+func (writer *s3WriterDelegate) prepareAndSyncDeleteTable(proc *process.Process, analyzer process.Analyzer, idx int) error {
+	src := writer.deleteBatches[idx].TakeBatches()
+	prepared, err := writer.prepareDeleteBatches(proc, idx, src, true)
+	if err != nil {
+		return err
+	}
+	return writer.sortAndSyncOneTable(proc, writer.updateCtxs[idx].TableDef, analyzer, idx, true, prepared, true)
 }
 
 func (writer *s3WriterDelegate) sortAndSyncOneTable(
@@ -553,12 +1141,15 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	if len(bats) == 0 {
 		return
 	}
+	if err = writer.ensureOutputSlot(proc); err != nil {
+		return err
+	}
 
 	defer func() {
 		if cleanBatchAfterUse {
 			for i, bat := range bats {
 				if bat != nil {
-					bat.Clean(proc.GetMPool())
+					bat.Clean(writer.memoryPool(proc))
 					bats[i] = nil
 				}
 			}
@@ -576,13 +1167,22 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	unit := rscthrottler.BatchBytes(writer.memController.throttler)
+	if proc.Base.ImportMemory != nil {
+		unit = min(unit, proc.Base.ImportMemory.UnitBytes)
+	}
+	opts = append(opts, ioutil.WithBufferBytes(unit))
+	if proc.Base.ImportMemory != nil && writer.activeWorkspace == nil {
+		opts = append(opts, ioutil.WithMemoryWorkspace(proc.Base.ImportMemory.WorkingSet))
+	}
+
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
+			writer.memoryPool(proc), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
 		)
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
+		s3Writer = colexec.NewCNS3DataWriter(writer.memoryPool(proc), fs, tblDef, -1, false, opts...)
 	}
 
 	defer s3Writer.Close()
@@ -607,7 +1207,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			}
 			if !owned {
 				// WriteOwned already copied the batch on this path.
-				bats[i].Clean(proc.GetMPool())
+				bats[i].Clean(writer.memoryPool(proc))
 				bats[i] = nil
 			}
 			continue
@@ -684,7 +1284,7 @@ func (writer *s3WriterDelegate) fillDeleteBlockInfo(
 	info.name = fmt.Sprintf("%s|%d", objId, deletion.FlushDeltaLoc)
 	info.rawRowCount += uint64(rowCount)
 
-	return appendVarlenaBatch(info.bat, bat, proc.GetMPool())
+	return appendVarlenaBatch(info.bat, bat, writer.memoryPool(proc))
 }
 
 func (writer *s3WriterDelegate) fillInsertBlockInfo(
@@ -701,16 +1301,62 @@ func (writer *s3WriterDelegate) fillInsertBlockInfo(
 
 	writer.insertBlockRowCount[idx] += uint64(rowCount)
 
-	return appendVarlenaBatch(writer.insertBlockInfo[idx], bat, proc.GetMPool())
+	return appendVarlenaBatch(writer.insertBlockInfo[idx], bat, writer.memoryPool(proc))
 }
 
-func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) (err error) {
-	counterSet := analyzer.GetOpCounterSet()
-	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
+func (writer *s3WriterDelegate) flushInsertSinkers(proc *process.Process, analyzer process.Analyzer) (err error) {
+	return writer.flushInsertSinkersMode(proc, analyzer, true)
+}
+
+func (writer *s3WriterDelegate) submitInsertSinkers(proc *process.Process, analyzer process.Analyzer) error {
+	wait := !writer.pipelineInsert(proc)
+	return writer.flushInsertSinkersMode(proc, analyzer, wait)
+}
+
+func (writer *s3WriterDelegate) flushInsertSinkersMode(proc *process.Process, analyzer process.Analyzer, wait bool) (err error) {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
+	bounded := writer.pipelineInsert(proc)
+	if err = writer.ensureOutputSlot(proc); err != nil {
+		return err
+	}
+	var counterSet *perfcounter.CounterSet
+	var writeCtx context.Context
+	if bounded {
+		writeCtx = writer.insertWriteContext(proc.Ctx)
+		counterSet = writer.writeCounters
+	} else {
+		counterSet = analyzer.GetOpCounterSet()
+		writeCtx = perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
+	}
+	if bounded {
+		for _, s3w := range writer.insertSinkers {
+			if s3w != nil {
+				if err := s3w.Flush(writeCtx); err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	// Sync all insert sinkers — flushes remaining in-memory data to S3.
 	for i, s3w := range writer.insertSinkers {
 		if s3w == nil {
+			continue
+		}
+		if bounded {
+			if wait {
+				if _, err := s3w.Sync(writeCtx); err != nil {
+					return err
+				}
+			}
+			stats, err := s3w.TakeCompletedStats()
+			if err != nil {
+				return err
+			}
+			if err := writer.collectInsertStats(proc, i, stats); err != nil {
+				return err
+			}
 			continue
 		}
 		stats, syncErr := process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
@@ -722,7 +1368,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if len(stats) == 0 {
 			continue
 		}
-		blockInfoBat, fillErr := s3w.FillBlockInfoBat()
+		blockInfoBat, fillErr := s3w.SyncAndFillBlockInfoBat(writeCtx)
 		if fillErr != nil {
 			return fillErr
 		}
@@ -734,6 +1380,12 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			return
 		}
 	}
+	if wait {
+		analyzer.AddS3RequestCount(counterSet)
+		analyzer.AddFileServiceCacheInfo(counterSet)
+		analyzer.AddDiskIO(counterSet)
+		counterSet.Reset()
+	}
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated
 	// deleteBatches are processed through prepareDeleteBatches into
@@ -742,115 +1394,274 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	if err = writer.sortAndSync(proc, analyzer); err != nil {
 		return
 	}
-
-	if writer.outputBat == nil {
-		writer.outputBat = makeS3OutputBatch()
-	}
-	mp := proc.GetMPool()
-
-	//write delete block info to workspace
-	for i, block := range writer.deleteBlockInfo {
-		// normal table
-		if block != nil && block.bat.RowCount() > 0 {
-			err = writer.addBatchToOutput(mp, actionDelete, i, block.rawRowCount, block.name, block.bat)
-			if err != nil {
-				return
-			}
-		}
-	}
-
-	//write delete batch (which not flush to s3) to workspace
-	for i, block := range writer.deleteBlockMap {
-		// normal table
-		for _, blockData := range block {
-			name := objectio.PhysicalAddr_Attr
-			err = writer.addBatchToOutput(mp, actionDelete, i, uint64(blockData.bat.RowCount()), name, blockData.bat)
-			if err != nil {
-				return
-			}
-		}
-	}
-
-	//write insert block info to workspace
-	for i, bat := range writer.insertBlockInfo {
-		// normal table
-		if bat != nil && bat.RowCount() > 0 {
-			resetMergeBlockForOldCN(proc, bat)
-			err = writer.addBatchToOutput(mp, actionInsert, i, writer.insertBlockRowCount[i], "", bat)
-			if err != nil {
-				return
-			}
-		}
-	}
-
 	return nil
 }
 
-func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
+func (writer *s3WriterDelegate) collectInsertStats(proc *process.Process, idx int, stats []objectio.ObjectStats) error {
+	if len(stats) == 0 {
+		return nil
+	}
+	if err := writer.ensureOutputSlot(proc); err != nil {
+		return err
+	}
+	mp := writer.metadataPool()
+	metadata := colexec.AllocCNS3ResultBat(false)
+	defer metadata.Clean(mp)
+	for i := range stats {
+		bound := int64(stats[i].BlkCnt())*int64(objectio.BlockInfoSize+24) + int64(objectio.ObjectStatsLen) + 4096
+		if err := writer.checkMetadataFrameSize(bound); err != nil {
+			return err
+		}
+		var growth int64
+		for col, count := range []int{int(stats[i].BlkCnt()), 1} {
+			width := []int{objectio.BlockInfoSize, objectio.ObjectStatsLen}[col]
+			growth += metadata.Vecs[col].AppendAllocation(count, count*width)
+		}
+		if err := writer.reserveMetadata(proc, growth, 0); err != nil {
+			return err
+		}
+		if err := colexec.ExpandObjectStatsToBatch(mp, false, metadata, true, stats[i]); err != nil {
+			return err
+		}
+		if err := writer.appendMetadata(proc, actionInsert, idx, uint64(stats[i].Rows()), "", metadata); err != nil {
+			return err
+		}
+		metadata.CleanOnlyData()
+	}
+	return nil
+}
 
-	writer.cleanDeleteBatches(proc.Mp())
+func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) error {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
+	if !writer.tailFlushed {
+		if err := writer.flushInsertSinkers(proc, analyzer); err != nil {
+			return err
+		}
+		if err := writer.sortAndSync(proc, analyzer); err != nil {
+			return err
+		}
+		if err := writer.closeInsertSinkers(writer.memoryPool(proc)); err != nil {
+			return err
+		}
+		if err := writer.collectMetadata(proc, true); err != nil {
+			return err
+		}
+		writer.tailFlushed = true
+		writer.reconcileMemory()
+	}
+	return writer.readMetadataFrame(proc)
+}
 
-	// Reset persistent insert sinkers so any buffered data from a failed
-	// pipeline execution is discarded. The sinkers stay alive and reuse
-	// their buffer pools and arenas on the next append() call.  On the
-	// success path the sinkers were already flushed by
-	// flushTailAndWriteToOutput(), so Reset() is a no-op on the data side.
-	for _, s3w := range writer.insertSinkers {
-		if s3w != nil {
-			s3w.Reset()
+// Append metadata to the existing output schema while Build owns it. The
+// output slot covers cumulative backing; Eval emits compact single-row frames.
+func (writer *s3WriterDelegate) appendMetadata(proc *process.Process, action actionType, idx int, rows uint64, name string, src *batch.Batch) error {
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	if err := writer.ensureOutputSlot(proc); err != nil {
+		return err
+	}
+	srcSize, err := src.MarshalBinarySize()
+	if err != nil {
+		return err
+	}
+	if err = writer.checkMetadataFrameSize(int64(srcSize) + int64(len(name)) + 4096); err != nil {
+		return err
+	}
+	if action != actionInsert && action != actionDelete {
+		return moerr.NewInternalErrorNoCtx("invalid metadata action")
+	}
+	if writer.metadata[action] == nil {
+		writer.metadata[action] = makeS3OutputBatch()
+	}
+	out := writer.metadata[action]
+	var growth int64
+	for i, area := range []int{0, 0, 0, len(name), srcSize} {
+		growth += out.Vecs[i].AppendAllocation(1, area)
+	}
+	mp := writer.metadataPool()
+	if err = writer.reserveMetadata(proc, growth, int64(srcSize)); err != nil {
+		return err
+	}
+	return writer.addBatchToOutput(mp, out, action, idx, rows, name, src)
+}
+
+func (writer *s3WriterDelegate) checkMetadataFrameSize(n int64) error {
+	if n < 0 || writer.outputLease != nil && n > writer.outputFrameLimit {
+		return moerr.NewInternalErrorNoCtxf("import metadata frame exceeds admitted output capacity: %d bytes", n)
+	}
+	return nil
+}
+
+func (writer *s3WriterDelegate) collectMetadata(proc *process.Process, final bool) error {
+	writer.reconcileMemory()
+	mp := writer.memoryPool(proc)
+	for i, block := range writer.deleteBlockInfo {
+		if block == nil || block.bat.RowCount() == 0 {
+			continue
+		}
+		if err := writer.appendMetadata(proc, actionDelete, i, block.rawRowCount, block.name, block.bat); err != nil {
+			return err
+		}
+		block.bat.Clean(mp)
+		writer.deleteBlockInfo[i] = nil
+	}
+	if final {
+		for i, blocks := range writer.deleteBlockMap {
+			for key, block := range blocks {
+				if block == nil || block.bat == nil {
+					continue
+				}
+				if err := writer.appendMetadata(proc, actionDelete, i, uint64(block.bat.RowCount()), objectio.PhysicalAddr_Attr, block.bat); err != nil {
+					return err
+				}
+				block.bat.Clean(mp)
+				delete(blocks, key)
+			}
+			writer.deleteBlockMap[i] = nil
 		}
 	}
+	for i, bat := range writer.insertBlockInfo {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		if err := resetMergeBlockForOldCN(proc, bat); err != nil {
+			return err
+		}
+		if err := writer.appendMetadata(proc, actionInsert, i, writer.insertBlockRowCount[i], "", bat); err != nil {
+			return err
+		}
+		bat.Clean(mp)
+		writer.insertBlockInfo[i] = nil
+		writer.insertBlockRowCount[i] = 0
+	}
+	return nil
+}
 
-	for _, bat := range writer.insertBlockInfo {
+func (writer *s3WriterDelegate) readMetadataFrame(proc *process.Process) error {
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	writer.buf = bytes.Buffer{}
+	mp := writer.metadataPool()
+	if writer.outputBat != nil {
+		writer.outputBat.Clean(mp)
+		writer.outputBat = nil
+	}
+	for _, action := range []actionType{actionDelete, actionInsert} {
+		src := writer.metadata[action]
+		if src == nil {
+			continue
+		}
+		if writer.metadataRead == src.RowCount() {
+			src.Clean(mp)
+			writer.metadata[action] = nil
+			writer.metadataRead = 0
+			continue
+		}
+		writer.outputBat = makeS3OutputBatch()
+		var growth int64
+		for i, vec := range writer.outputBat.Vecs {
+			growth += vec.AppendWindowAllocation(src.Vecs[i], writer.metadataRead, writer.metadataRead+1)
+		}
+		if err := writer.reserveMetadata(proc, growth, 0); err != nil {
+			return err
+		}
+		// Copy just this row: a borrowed window would serialize the complete
+		// retained varlena area again when the frame crosses a pipeline edge.
+		if err := writer.outputBat.UnionOne(src, int64(writer.metadataRead), mp); err != nil {
+			return err
+		}
+		writer.metadataRead++
+		return nil
+	}
+	writer.releaseOutputSlot()
+	return nil
+}
+
+func (writer *s3WriterDelegate) closeDeleteKeys() error {
+	var err error
+	for i, keys := range writer.deleteKeys {
+		err = errors.Join(err, keys.close())
+		writer.deleteKeys[i] = nil
+	}
+	return err
+}
+
+func (writer *s3WriterDelegate) cleanMetadata() {
+	for i, bat := range writer.metadata {
 		if bat != nil {
-			bat.CleanOnlyData()
+			bat.Clean(writer.metadataPool())
+			writer.metadata[i] = nil
+		}
+	}
+	writer.metadataRead = 0
+	writer.tailFlushed = false
+	writer.writeUnit = 0
+	writer.writeCounters = nil
+}
+
+func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
+	defer func() { err = errors.Join(err, writer.closeDeleteKeys()) }()
+
+	writer.cleanDeleteBatches(writer.memoryPool(proc))
+
+	// A new execution must not inherit private buffers with released grants.
+	// Normal append calls still share persistent sinkers within an execution.
+	err = writer.closeInsertSinkers(writer.memoryPool(proc))
+
+	for i, bat := range writer.insertBlockInfo {
+		if bat != nil {
+			bat.Clean(writer.memoryPool(proc))
+			writer.insertBlockInfo[i] = nil
 		}
 	}
 	for i := range writer.insertBlockRowCount {
 		writer.insertBlockRowCount[i] = 0
 	}
-	for _, block := range writer.deleteBlockInfo {
+	for i, block := range writer.deleteBlockInfo {
 		if block != nil {
-			block.bat.CleanOnlyData()
-			block.rawRowCount = 0
+			block.bat.Clean(writer.memoryPool(proc))
+			writer.deleteBlockInfo[i] = nil
 		}
 	}
-	for _, data := range writer.deleteBlockMap {
+	for i, data := range writer.deleteBlockMap {
 		for k, block := range data {
 			if block != nil && block.bat != nil {
-				block.bat.Clean(proc.Mp())
+				block.bat.Clean(writer.memoryPool(proc))
 			}
 			delete(data, k)
 		}
+		writer.deleteBlockMap[i] = nil
 	}
 
 	if writer.outputBat != nil {
-		writer.outputBat.CleanOnlyData()
+		writer.outputBat.Clean(writer.metadataPool())
+		writer.outputBat = nil
 	}
 
-	writer.buf.Reset()
+	writer.cleanMetadata()
+	writer.buf = bytes.Buffer{}
+	writer.releaseOutputSlot()
+	writer.reconcileMemory()
 	return
 }
 
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
+	defer func() { err = errors.Join(err, writer.closeDeleteKeys()) }()
+	defer writer.releaseMemory()
 
-	writer.cleanDeleteBatches(proc.Mp())
-	mp := proc.Mp()
+	writer.cleanDeleteBatches(writer.memoryPool(proc))
+	mp := writer.memoryPool(proc)
 
-	// Close persistent insert sinkers.
-	for i, s3w := range writer.insertSinkers {
-		if s3w != nil {
-			s3w.Close()
-			writer.insertSinkers[i] = nil
-		}
-	}
+	err = writer.closeInsertSinkers(mp)
 	writer.insertSinkers = nil
 
-	for _, fl := range writer.insertFreeLists {
-		if fl != nil {
-			fl.Close(mp)
-		}
-	}
 	writer.insertFreeLists = nil
 
 	for _, bat := range writer.insertBlockInfo {
@@ -878,24 +1689,29 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	writer.deleteBlockMap = nil
 
 	if writer.outputBat != nil {
-		writer.outputBat.Clean(mp)
+		writer.outputBat.Clean(writer.metadataPool())
 		writer.outputBat = nil
 	}
-	writer.buf.Reset()
+	writer.cleanMetadata()
+	writer.buf = bytes.Buffer{}
+	writer.releaseOutputSlot()
+	mpool.DeleteMPool(writer.ownedMP)
+	writer.ownedMP = nil
+	mpool.DeleteMPool(writer.outputMP)
+	writer.outputMP = nil
 
 	return
 }
 
 func (writer *s3WriterDelegate) addBatchToOutput(
 	mp *mpool.MPool,
+	output *batch.Batch,
 	action actionType,
 	idx int,
 	rowCount uint64,
 	name string,
 	bat *batch.Batch,
 ) (err error) {
-	output := writer.outputBat
-
 	if err = vector.AppendFixed(output.Vecs[0], uint8(action), false, mp); err != nil {
 		return
 	}

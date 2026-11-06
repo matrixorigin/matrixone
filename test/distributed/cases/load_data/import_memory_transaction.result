@@ -1,0 +1,80 @@
+drop database if exists import_memory_transaction;
+create database import_memory_transaction;
+use import_memory_transaction;
+create table kept (id int primary key, payload varchar(8));
+create table incoming (id int primary key);
+begin;
+insert into kept values (1, 'first');
+load data local infile '$resources/load_data/test_columnlist_04.csv' into table incoming fields terminated by ',' lines terminated by '\n' parallel 'false';
+select id, payload from kept order by id;
+id    payload
+1    first
+select id from incoming order by id;
+id
+1
+2
+select count(*) as n from import_memory_transaction.kept;
+n
+0
+select count(*) as n from import_memory_transaction.incoming;
+n
+0
+commit;
+select id, payload from import_memory_transaction.kept order by id;
+id    payload
+1    first
+select id from import_memory_transaction.incoming order by id;
+id
+1
+2
+delete from incoming;
+begin;
+insert into kept values (2, 'undo');
+load data local infile '$resources/load_data/test_columnlist_04.csv' into table incoming fields terminated by ',' lines terminated by '\n' parallel 'false';
+select id, payload from kept order by id;
+id    payload
+1    first
+2    undo
+select id from incoming order by id;
+id
+1
+2
+rollback;
+select id, payload from kept order by id;
+id    payload
+1    first
+select count(*) as n from incoming;
+n
+0
+set autocommit=0;
+insert into kept values (3, 'third');
+load data local infile '$resources/load_data/test_columnlist_04.csv' into table incoming fields terminated by ',' lines terminated by '\n' parallel 'false';
+commit;
+set autocommit=1;
+select id, payload from kept order by id;
+id    payload
+1    first
+3    third
+select id from incoming order by id;
+id
+1
+2
+delete from incoming;
+set autocommit=0;
+insert into kept values (4, 'undo');
+load data local infile '$resources/load_data/test_columnlist_04.csv' into table incoming fields terminated by ',' lines terminated by '\n' parallel 'false';
+rollback;
+set autocommit=1;
+select id, payload from kept order by id;
+id    payload
+1    first
+3    third
+select count(*) as n from incoming;
+n
+0
+load data local infile '$resources/load_data/test_columnlist_04.csv' into table incoming fields terminated by ',' lines terminated by '\n' parallel 'false';
+select id from incoming order by id;
+id
+1
+2
+drop database import_memory_transaction;
