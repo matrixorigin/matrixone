@@ -142,8 +142,8 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	mock.SetContext(bindingCtx)
 	builder := &QueryBuilder{qry: query, compCtx: mock}
 	builder.collectOriginalTemporalOwner(1)
-	require.True(t, query.GetExecutionDependentAccess())
-	require.True(t, preparedBindingState(bindingCtx).valueDependent)
+	require.False(t, query.GetExecutionDependentAccess())
+	require.False(t, preparedBindingState(bindingCtx).valueDependent)
 	query.ExecutionDependentAccess = false
 	builder.isPrepareStatement = true
 	builder.collectOriginalTemporalOwner(1)
@@ -183,12 +183,12 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	scan.FilterList[0] = predicate
 	index.Parts = []string{"id", "d"}
 	require.False(t, potential(proc.Ctx), "a suffix-only temporal column cannot select this access")
-	require.True(t, potential(bindingCtx), "prepared source provenance remains conservative")
+	require.False(t, potential(bindingCtx), "bound prepared plans retain their existing reuse owner")
 	query.ExecutionDependentAccess = false
 	preparedBindingState(bindingCtx).valueDependent = false
 	builder.collectOriginalTemporalOwner(1)
-	require.True(t, query.GetExecutionDependentAccess())
-	require.True(t, preparedBindingState(bindingCtx).valueDependent)
+	require.False(t, query.GetExecutionDependentAccess())
+	require.False(t, preparedBindingState(bindingCtx).valueDependent)
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true}, index}
 	require.True(t, potential(proc.Ctx), "incomplete index metadata cannot prove absence")
 	cancelled, cancel := context.WithCancel(proc.Ctx)
