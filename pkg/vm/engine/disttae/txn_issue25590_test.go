@@ -6135,6 +6135,7 @@ func TestIssue25590DirectWritesReserveAndRetainOnUnwind(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { pool.Release() })
 	require.NoError(t, e.ResetGCWorkerPool(pool))
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
 	rel, err := txn.getTable(ctx, 1, "db", "tbl")
 	require.NoError(t, err)
@@ -6363,6 +6364,7 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { gcPool.Release() })
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
 	// The data-column table whose dirty objects the pass rewrites:
 	// [a(pk), v, rowid] exactly like a physical table's def.
@@ -6681,6 +6683,7 @@ func TestIssue25590RecordFailureAfterStagedReplacementRetracts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { gcPool.Release() })
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
 	dbv := txn.databaseOps.existAndActive(genDatabaseKey(1, "db"))
 	require.NotNil(t, dbv)
@@ -6996,6 +6999,7 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { gcPool.Release() })
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
 	rel, err := txn.getTable(ctx, 1, "db", "tbl")
 	require.NoError(t, err)
@@ -7156,6 +7160,7 @@ func TestIssue25590TombstoneWriterReserveAndRetainOnUnwind(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { gcPool.Release() })
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
 	freshTombstone := func() *colexec.CNS3Writer {
 		return colexec.NewCNS3TombstoneWriterForService(
@@ -7279,6 +7284,51 @@ func issue25590NewRound21TxnForTest(t *testing.T) (*Transaction, *issue25590Post
 	return txn, failFS
 }
 
+// issue25590NewRound21ManualDrainTxnForTest keeps the real GC pool while
+// preventing its background queue drain from racing a test's manual drain.
+func issue25590NewRound21ManualDrainTxnForTest(t *testing.T) (*Transaction, *issue25590PostPersistFailFS) {
+	t.Helper()
+	txn, fs := issue25590NewRound21TxnForTest(t)
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, txn.engine))
+	return txn, fs
+}
+
+// issue25590BlockDrainUntilObserved holds physical deletes until the caller
+// has inspected the queue, then releases and joins the scheduled worker.
+func issue25590BlockDrainUntilObserved(t *testing.T, e *Engine, fs *issue25590PostPersistFailFS) func() {
+	t.Helper()
+	blockedBefore := fs.blockedDeleteCalls()
+	release := fs.armDeleteBlock()
+	t.Cleanup(func() {
+		release()
+		e.cancelUnpublishedPendingDrains()
+		e.unpublishedPending.mu.Lock()
+		idle := e.unpublishedPending.drainIdle
+		e.unpublishedPending.mu.Unlock()
+		if idle != nil {
+			select {
+			case <-idle:
+			case <-time.After(10 * time.Second):
+				t.Error("cleanup drain did not stop after release and cancellation")
+			}
+		}
+	})
+	return func() {
+		require.Eventually(t, func() bool { return fs.blockedDeleteCalls() > blockedBefore },
+			10*time.Second, 10*time.Millisecond, "the scheduled worker must reach the blocked delete")
+		e.unpublishedPending.mu.Lock()
+		idle := e.unpublishedPending.drainIdle
+		e.unpublishedPending.mu.Unlock()
+		require.NotNil(t, idle, "the scheduled drain must remain active while deletion is blocked")
+		release()
+		select {
+		case <-idle:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the released cleanup drain did not finish")
+		}
+	}
+}
+
 // issue25590BindRound21Txn completes the lite fixture the way production
 // binds a session's process: the process carries the transaction operator,
 // so the structural workspace resolution (WorkspaceSinkerCapacityOption)
@@ -7390,7 +7440,7 @@ func issue25590Round22PushTombstoneResult(
 // the commit publishes it, nothing deletes the physical object, and the
 // ledger retires it exactly once.
 func TestIssue25590InflightPublicationSurvivesDrain(t *testing.T) {
-	txn, failFS := issue25590NewRound21TxnForTest(t)
+	txn, failFS := issue25590NewRound21ManualDrainTxnForTest(t)
 	ctx := context.Background()
 	e := txn.engine
 
@@ -7467,8 +7517,7 @@ func TestIssue25590InflightPublicationSurvivesDrain(t *testing.T) {
 	// The drain runs across everything: nothing is queued, the object is
 	// safe.
 	require.NoError(t, e.deleteQueuedUnpublishedPendingOnce(ctx))
-	require.Len(t, failFS.persistedSnapshot(), 1)
-	require.Equal(t, name, failFS.persistedSnapshot()[0],
+	issue25590RequireKept(t, failFS.FileService, name,
 		"the in-flight publication's physical object survives the drain after its record landed")
 
 	// The commit classifies SUCCESS: the recorded name releases as
@@ -7479,10 +7528,8 @@ func TestIssue25590InflightPublicationSurvivesDrain(t *testing.T) {
 	require.Zero(t, queued)
 	require.Zero(t, live)
 	require.Zero(t, inFlight)
-	require.Len(t, failFS.persistedSnapshot(), 1,
-		"the published object stays on storage after the successful commit")
 	require.NoError(t, e.deleteQueuedUnpublishedPendingOnce(ctx))
-	require.Len(t, failFS.persistedSnapshot(), 1,
+	issue25590RequireKept(t, failFS.FileService, name,
 		"the published object is not a deletion obligation at any drain")
 }
 
@@ -7492,7 +7539,7 @@ func TestIssue25590InflightPublicationSurvivesDrain(t *testing.T) {
 // receives the recorded object; the commit draft itself keeps the capacity
 // reserved (G3) and the success classification retires it exactly.
 func TestIssue25590RecordedBeforeBoundaryKeepsObjectOutofQueue(t *testing.T) {
-	txn, failFS := issue25590NewRound21TxnForTest(t)
+	txn, failFS := issue25590NewRound21ManualDrainTxnForTest(t)
 	ctx := context.Background()
 	e := txn.engine
 
@@ -7529,7 +7576,7 @@ func TestIssue25590RecordedBeforeBoundaryKeepsObjectOutofQueue(t *testing.T) {
 	_, live, inFlight := issue25590LedgerNow(e)
 	require.Zero(t, live)
 	require.Zero(t, inFlight)
-	require.Equal(t, name, failFS.persistedSnapshot()[0],
+	issue25590RequireKept(t, failFS.FileService, name,
 		"the published object stays on storage through the successful commit")
 }
 
@@ -7539,7 +7586,7 @@ func TestIssue25590RecordedBeforeBoundaryKeepsObjectOutofQueue(t *testing.T) {
 // in-flight guard may not become a leak (the queue receives it and the
 // drain deletes the physical file, the ledger balanced).
 func TestIssue25590UnrecordedRetainedNameDrainsAtBoundary(t *testing.T) {
-	txn, failFS := issue25590NewRound21TxnForTest(t)
+	txn, failFS := issue25590NewRound21ManualDrainTxnForTest(t)
 	ctx := context.Background()
 	e := txn.engine
 
@@ -7581,7 +7628,7 @@ func TestIssue25590UnrecordedRetainedNameDrainsAtBoundary(t *testing.T) {
 // classification retires the recorded names exactly, and the unknown
 // classification retires WITHOUT deleting.
 func TestIssue25590ParkedCommitKeepsUnitAndFailureTransfersOnce(t *testing.T) {
-	txnA, failFS := issue25590NewRound21TxnForTest(t)
+	txnA, failFS := issue25590NewRound21ManualDrainTxnForTest(t)
 	ctx := context.Background()
 	e := txnA.engine
 	savedLimit := unpublishedPendingAdmissionLimit
@@ -7702,7 +7749,7 @@ func TestIssue25590ParkedCommitKeepsUnitAndFailureTransfersOnce(t *testing.T) {
 // binding — the exact residues the manually-optioned r20 tombstone test
 // could not see.
 func TestIssue25590StandaloneDeleteFlushProducerBindsReservesAndHandsOver(t *testing.T) {
-	txn, failFS := issue25590NewRound21TxnForTest(t)
+	txn, failFS := issue25590NewRound21ManualDrainTxnForTest(t)
 	ctx := context.Background()
 	e := txn.engine
 	savedLimit := unpublishedPendingAdmissionLimit
@@ -7798,11 +7845,12 @@ func TestIssue25590StandaloneDeleteFlushProducerBindsReservesAndHandsOver(t *tes
 	require.Equal(t, failFS.persistedSnapshot()[len(failFS.persistedSnapshot())-1],
 		txn.pendingObjectCleanupNames()[0],
 		"the collected name is exactly the saturated flush's newest persisted object")
+	retainedName := txn.pendingObjectCleanupNames()[0]
+	persistedAtRefusal := len(failFS.persistedSnapshot())
 	argC2 := newDeletionArg()
 	err := argC2.SplitBatch(txn.proc, bigDeleteBatch(70000), argC2.OpAnalyzer)
 	require.ErrorContains(t, err, "workspace admission paused",
 		"r5/G4 (RED on r20): the production deletion writer's spill is refused at a saturated bound — the missing binding was exactly this leg's hole")
-	persistedAtRefusal := len(failFS.persistedSnapshot())
 	require.Len(t, failFS.persistedSnapshot(), persistedAtRefusal,
 		"the refused spill persisted nothing new")
 	argC2.Free(txn.proc, true, err)
@@ -7810,6 +7858,7 @@ func TestIssue25590StandaloneDeleteFlushProducerBindsReservesAndHandsOver(t *tes
 	// refused one contributes nothing; the boundary + drain collect the
 	// physical file and the ledger empties exactly.
 	names := append([]string(nil), txn.pendingObjectCleanupNames()...)
+	require.Equal(t, []string{retainedName}, names)
 	txn.Lock()
 	txn.handoffPendingObjectCleanupLocked(true)
 	txn.Unlock()
@@ -7859,12 +7908,12 @@ func TestIssue25590RemoteFragmentSettlement(t *testing.T) {
 		"r5/G2 (RED on r20): the transferred settlement retires the fragment's owned membership")
 	require.Zero(t, inFlightR,
 		"r5/G2 (RED on r20): the transferred settlement retires the fragment's reservation")
-	require.Contains(t, failFS.persistedSnapshot(), nameR,
+	issue25590RequireKept(t, failFS.FileService, nameR,
 		"the transferred settlement deleted nothing — the coordinator owns the fate")
 
 	// The coordinator acknowledges by recording: its own engine's ledger
 	// carries the object, its success classification retires it.
-	coordinatorTxn, _ := issue25590NewRound21TxnForTest(t)
+	coordinatorTxn, _ := issue25590NewRound21ManualDrainTxnForTest(t)
 	engineC := coordinatorTxn.engine
 	engineC.fs = failFS
 	coordinatorTxn.StartStatement()
@@ -7882,7 +7931,7 @@ func TestIssue25590RemoteFragmentSettlement(t *testing.T) {
 	_, liveC, inFlightC := issue25590LedgerNow(engineC)
 	require.Zero(t, liveC)
 	require.Zero(t, inFlightC)
-	require.Contains(t, failFS.persistedSnapshot(), nameR,
+	issue25590RequireKept(t, failFS.FileService, nameR,
 		"the published remote-produced object survives the coordinator's commit")
 
 	// THE REFUSED ACKNOWLEDGMENT: a second fragment run releases (settles
@@ -7958,13 +8007,16 @@ func TestIssue25590RemoteFragmentSettlement(t *testing.T) {
 	nameR3, _, wR3 := issue25590Round21PushTombstone(t, fragmentTxn3, failFS)
 	fragmentTxn3.RetainUnrecordedS3Objects([]string{nameR3}, "remote fragment teardown on a failed run")
 	wR3.Close()
+	releaseDrain := issue25590BlockDrainUntilObserved(t, engineR, failFS)
 	require.NoError(t, fragmentTxn3.FinalizeRemoteFragmentWorkspace(ctx, false))
 	require.Equal(t, []string{nameR3}, issue25590QueuedNames(engineR),
 		"the failed run's settlement retained the names on the fragment engine's own queue")
-	require.NoError(t, engineR.deleteQueuedUnpublishedPendingOnce(ctx))
+	issue25590RequireKept(t, failFS.FileService, nameR3, "the blocked drain has not deleted the object")
+	releaseDrain()
 	issue25590RequireGone(t, failFS.FileService, nameR3,
 		"the failed fragment's object, deleted by the fragment engine's drain — a reachable owner everywhere")
-	_, liveR3, inFlightR3 := issue25590LedgerNow(engineR)
+	queuedR3, liveR3, inFlightR3 := issue25590LedgerNow(engineR)
+	require.Zero(t, queuedR3)
 	require.Zero(t, liveR3)
 	require.Zero(t, inFlightR3)
 }
@@ -7988,9 +8040,9 @@ func TestIssue25590RemoteFragmentSettlement(t *testing.T) {
 func TestIssue25590RemoteIntakeAdoptsBeforeRelease(t *testing.T) {
 	ctx := context.Background()
 	colexec.NewServer("")
-	fragmentTxn, failFS := issue25590NewRound21TxnForTest(t)
+	fragmentTxn, failFS := issue25590NewRound21ManualDrainTxnForTest(t)
 	engineR := fragmentTxn.engine
-	coordinatorTxn, _ := issue25590NewRound21TxnForTest(t)
+	coordinatorTxn, _ := issue25590NewRound21ManualDrainTxnForTest(t)
 	engineC := coordinatorTxn.engine
 	engineC.fs = failFS
 
@@ -8339,7 +8391,7 @@ func TestIssue25590OrdinaryQueryRowsCannotBecomeCleanupObligations(t *testing.T)
 	// r22 intake fixture.
 	fragmentTxn, failFS := issue25590NewRound21TxnForTest(t)
 	engineR := fragmentTxn.engine
-	recordingFix, _ := issue25590NewRound21TxnForTest(t)
+	recordingFix, _ := issue25590NewRound21ManualDrainTxnForTest(t)
 	engineC := recordingFix.engine
 	engineC.fs = failFS
 
@@ -8461,6 +8513,8 @@ func TestIssue25590StandaloneProducerFormatsAdoptBeforeRelease(t *testing.T) {
 	recordingFix, _ := issue25590NewRound21TxnForTest(t)
 	engineC := recordingFix.engine
 	engineC.fs = failFS
+	resumeDrain := sync.OnceFunc(issue25590FreezeUnpublishedDrainScheduling(t, engineC))
+	t.Cleanup(resumeDrain)
 
 	// RECEIVER - the standalone INSERT result stream.
 	nameA, statsA, wA := issue25590Round21PushTombstone(t, fragmentTxn, failFS)
@@ -8589,8 +8643,8 @@ func TestIssue25590StandaloneProducerFormatsAdoptBeforeRelease(t *testing.T) {
 	savedLimit := unpublishedPendingAdmissionLimit
 	unpublishedPendingAdmissionLimit = bound
 	t.Cleanup(func() { unpublishedPendingAdmissionLimit = savedLimit })
-	unblockDeletes := failFS.armDeleteBlock()
-	t.Cleanup(unblockDeletes)
+	releaseDrain := issue25590BlockDrainUntilObserved(t, engineC, failFS)
+	resumeDrain()
 
 	satTxn := newTransactionWithActivePKTableForTest(t, "pk")
 	satTxn.engine = engineC
@@ -8624,12 +8678,18 @@ func TestIssue25590StandaloneProducerFormatsAdoptBeforeRelease(t *testing.T) {
 		"the bounded accounting holds through the stalled drain - deletion is blocked, so the backlog cannot retire yet")
 	// The blocked backend stalls the physical retirement; once the
 	// drain can delete again the whole bounded backlog retires.
-	unblockDeletes()
-	require.NoError(t, engineC.deleteQueuedUnpublishedPendingOnce(ctx))
+	for _, name := range satNames[:bound] {
+		issue25590RequireKept(t, failFS.FileService, name, "the blocked drain has not deleted the object")
+	}
+	releaseDrain()
 	for _, name := range satNames[:bound] {
 		issue25590RequireGone(t, failFS.FileService, name,
 			"the bounded backlog retires physically once the drain can delete")
 	}
+	queued, live, inFlight := issue25590LedgerNow(engineC)
+	require.Zero(t, queued)
+	require.Zero(t, live)
+	require.Zero(t, inFlight)
 }
 
 // TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement pins the

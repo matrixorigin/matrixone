@@ -68,6 +68,13 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement, planningInput *Pla
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.CloneTable:
+		if stmt.ToAccountOpt != nil && !stmt.IsRestore {
+			p, err := buildPrepareCloneTableWithAccount(stmt, ctx)
+			return p, nil, err
+		}
+		p, err := BuildPlan(ctx, stmt, true, nil)
+		return p, nil, err
 	case *tree.ShowPublications:
 		if stmt.Like != nil {
 			switch pattern := stmt.Like.Right.(type) {
@@ -365,6 +372,7 @@ func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*
 func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {
 	var tableNames []*tree.TableName
 	var schemas []*plan.ObjectRef
+	temporaryTargets := make(map[*tree.TableName]bool)
 	resolveTable := ctx.Resolve
 
 	addTableNames := func(names tree.TableNames) {
@@ -377,7 +385,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, fk.Refer.TableName)
 		}
 	}
-	addRenameTarget := func(source *tree.TableName, rename *tree.AlterOptionTableName) {
+	addRenameTarget := func(source *tree.TableName, rename *tree.AlterOptionTableName, temporary bool) {
 		if source == nil || rename == nil || rename.Name == nil {
 			return
 		}
@@ -387,6 +395,9 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		// the SQL spells an explicit target database.
 		target.SchemaName = source.SchemaName
 		tableNames = append(tableNames, &target)
+		if temporary {
+			temporaryTargets[&target] = true
+		}
 	}
 	addQuerySchemas := func(selectStmt *tree.Select) error {
 		if selectStmt == nil {
@@ -426,9 +437,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 	switch ddl := stmt.(type) {
 	case *tree.AlterTable:
 		tableNames = append(tableNames, ddl.Table)
+		temporary := preparePlan.GetDdl().GetAlterTable().GetTableDef().GetIsTemporary()
 		for _, option := range ddl.Options {
 			if rename, ok := option.(*tree.AlterOptionTableName); ok {
-				addRenameTarget(ddl.Table, rename)
+				addRenameTarget(ddl.Table, rename, temporary)
 			}
 			if add, ok := option.(*tree.AlterOptionAdd); ok {
 				if fk, ok := add.Def.(*tree.ForeignKey); ok {
@@ -444,7 +456,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, alterTable.Table)
 			for _, option := range alterTable.Options {
 				if rename, ok := option.(*tree.AlterOptionTableName); ok {
-					addRenameTarget(alterTable.Table, rename)
+					addRenameTarget(alterTable.Table, rename, false)
 				}
 			}
 		}
@@ -474,6 +486,9 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		}
 	case *tree.CreateTable:
 		tableNames = append(tableNames, &ddl.Table)
+		if ddl.Temporary {
+			temporaryTargets[&ddl.Table] = true
+		}
 		if ddl.IsAsLike {
 			tableNames = append(tableNames, &ddl.LikeTableName)
 		}
@@ -495,8 +510,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			return nil, err
 		}
 	case *tree.CloneTable:
-		if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
-			return nil, err
+		if ddl.ToAccountOpt == nil || ddl.IsRestore {
+			if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -509,7 +526,14 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			databaseName = ctx.DefaultDatabase()
 		}
 		name := string(tableName.ObjectName)
-		objRef, tableDef, err := resolveTable(databaseName, name, nil)
+		var objRef *plan.ObjectRef
+		var tableDef *plan.TableDef
+		var err error
+		if temporaryTargets[tableName] {
+			objRef, tableDef, err = resolveTemporaryTable(ctx, databaseName, name, nil)
+		} else {
+			objRef, tableDef, err = resolveTable(databaseName, name, nil)
+		}
 		if err != nil {
 			return nil, err
 		}

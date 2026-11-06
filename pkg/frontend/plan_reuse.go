@@ -58,7 +58,10 @@ func planReuse(schemaChanged bool, p *plan.Plan, layer planReuseLayer) planReuse
 			return allow
 		}
 		if ddl := p.GetDdl(); ddl != nil {
-			if create := ddl.GetCreateTable(); create != nil && create.DatabaseDefaults != nil {
+			if create := ddl.GetCreateTable(); create != nil && (create.DatabaseDefaults != nil || create.GetTemporary()) {
+				return deny
+			}
+			if alter := ddl.GetAlterTable(); alter != nil && alter.GetTableDef().GetIsTemporary() {
 				return deny
 			}
 			if ddl.GetAlterDatabase() != nil || ddl.GetCreateDatabase().GetDefaults() != nil {

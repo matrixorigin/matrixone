@@ -11937,11 +11937,15 @@ func Test_handleShowTableStatus(t *testing.T) {
 
 		var statsSQL, indexSQL string
 		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			probe := &process.Process{Ctx: reqCtx, Base: &process.BaseProcess{}}
 			switch {
 			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				// The separate ordinary-table query does not inherit the index capability.
+				require.Error(t, process.CheckIndexRelationAccess(probe, catalog.IndexTableNamePrefix, "", 0))
 				statsSQL = sql
 				return []ExecResult{statsRet}, nil
 			case strings.Contains(sql, "mo_table_size(db, tbl)"):
+				require.NoError(t, process.CheckIndexRelationAccess(probe, catalog.IndexTableNamePrefix, "", 0))
 				indexSQL = sql
 				return []ExecResult{indexRet}, nil
 			default:

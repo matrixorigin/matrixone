@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -651,4 +652,70 @@ func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
 	missSC, freeMiss := build("desc nation nosuch")
 	require.Nil(t, missSC.Like, "the unknown-name shortcut derives per plan and stays pristine")
 	freeMiss()
+}
+
+// The status projection invokes a privileged relation helper. Its input must
+// first pass the physical-index filter, including after planner rewrites.
+func TestShowMetadataFiltersPhysicalIndexesBeforeProjection(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+		"show table status from tpch like 'n%'",
+		"show table status from tpch where Name = 'nation'",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			query := built.GetQuery()
+			require.NotNil(t, query)
+
+			// The optimizer can leave dead nodes in Query.Nodes. The filter
+			// must be in the projection's reachable input subtree.
+			var subtreeContainsFilter func(int32) bool
+			subtreeContainsFilter = func(id int32) bool {
+				node := query.Nodes[id]
+				for _, expr := range node.FilterList {
+					if exprContainsFuncName(expr, "mo_is_physical_index") {
+						return true
+					}
+				}
+				for _, child := range node.Children {
+					if subtreeContainsFilter(child) {
+						return true
+					}
+				}
+				return false
+			}
+			foundFilter, foundProjection := false, false
+			var inspect func(int32)
+			inspect = func(id int32) {
+				node := query.Nodes[id]
+				for _, expr := range node.FilterList {
+					foundFilter = foundFilter || exprContainsFuncName(expr, "mo_is_physical_index")
+				}
+				for _, expr := range node.ProjectList {
+					if exprContainsFuncName(expr, "internal_auto_increment") {
+						foundProjection = true
+						require.True(t, subtreeContainsFilter(id), "the classifier must run before the auto-increment projection")
+					}
+				}
+				for _, child := range node.Children {
+					inspect(child)
+				}
+			}
+			for _, root := range query.Steps {
+				inspect(root)
+			}
+			require.True(t, foundFilter)
+			if strings.HasPrefix(statement, "show table status") {
+				require.True(t, foundProjection)
+			}
+		})
+	}
 }

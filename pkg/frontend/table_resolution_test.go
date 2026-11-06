@@ -178,3 +178,42 @@ func TestPlanningResolverUsesOneOrdinaryLookup(t *testing.T) {
 		})
 	}
 }
+
+// Catalog validation may inspect optimizer-generated index nodes, but it must
+// not turn that metadata authority into a borrowed user relation.
+func TestBorrowedResolutionPreservesIndexAdmission(t *testing.T) {
+	for _, catalogOnly := range []bool{false, true} {
+		t.Run(map[bool]string{false: "user denied", true: "catalog identity only"}[catalogOnly], func(t *testing.T) {
+			f := newViewSchemaOwnedFixture(t)
+			f.op.SetSnapshotTS(timestamp.Timestamp{PhysicalTime: 3})
+			f.session.SetFromRealUser(true)
+			f.session.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"})
+			ctrl := gomock.NewController(t)
+			storage := mockfrontend.NewMockEngine(ctrl)
+			db := mockfrontend.NewMockDatabase(ctrl)
+			relation := mockfrontend.NewMockRelation(ctrl)
+			f.session.txnHandler.storage = storage
+			definition := &pbplan.TableDef{TblId: 42, Name: "events", TableType: catalog.SystemIndexRel}
+			storage.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, f.op).Return(db, nil).Times(1)
+			db.EXPECT().Relation(gomock.Any(), "events", nil).Return(&temporalCaptureRelation{Relation: relation}, nil).Times(1)
+			relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).Times(1)
+			relation.EXPECT().GetTableDef(gomock.Any()).Return(definition).Times(1)
+			output := plan.TableResolution{Borrow: &plan.BorrowedTable{Owner: f.parent.execCtx}}
+			resolve := f.parent.Resolve
+			if catalogOnly {
+				resolve = f.parent.resolveForCatalogValidation
+			}
+			obj, def, err := resolve(catalog.MO_CATALOG, "events", nil, &output)
+			require.Nil(t, output.Borrow)
+			if catalogOnly {
+				require.NoError(t, err)
+				require.EqualValues(t, 42, obj.Obj)
+				require.EqualValues(t, 42, def.TblId)
+			} else {
+				require.ErrorContains(t, err, "do not have privilege")
+				require.Nil(t, obj)
+				require.Nil(t, def)
+			}
+		})
+	}
+}

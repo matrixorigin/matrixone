@@ -58,6 +58,18 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 // time interface check below catches missing methods.
 type CatalogHooks struct{}
 
+// MaintenanceOperands projects config fields onto the relations IVF-PQ consumes.
+func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.Ivfpq_TblType_Metadata, Name: cfg.MetadataTable},
+		{Role: catalog.Ivfpq_TblType_Storage, Name: cfg.IndexTable},
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
+
 // HiddenTableTypes lists the IndexAlgoTableType strings this algorithm
 // uses for its hidden tables. The order does not matter; downstream code
 // keys into the map by name. IVF-PQ needs two: metadata + storage.

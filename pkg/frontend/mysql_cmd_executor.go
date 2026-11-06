@@ -611,7 +611,12 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
-		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
+		// The operands come from the visible base tables' catalog definitions,
+		// not user SQL. Limit the capability to this generated query. Its
+		// VALUE_SCAN is compiled on the coordinator (compileValueScan uses
+		// c.addr), so the capability need not cross the process wire.
+		indexCtx := process.WithTrustedIndexRelationAccess(ctx)
+		rets, err := ExeSqlInBgSes(indexCtx, bh, sqlBuilder.String())
 		if err != nil {
 			return nil, err
 		}
@@ -5168,6 +5173,9 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if err := checkFrontendIndexTarget(reqCtx, ses, stmt); err != nil {
+		return stats, err
+	}
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
@@ -5829,6 +5837,15 @@ func executeStmtWithTxn(ses FeSession,
 		if err = enforceReadOnlyTxnAccessMode(ses, execCtx, execCtx.stmt, ses.GetDatabaseName()); err != nil {
 			return err
 		}
+		effective, database, resolveErr := effectiveStatementForTxn(execCtx.reqCtx, ses, execCtx.stmt)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		admissionCtx := *execCtx
+		admissionCtx.effectiveTxnDefaultDatabase = database
+		if err = checkFrontendIndexTargetWithCatalog(&admissionCtx, effective); err != nil {
+			return err
+		}
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -6003,6 +6020,12 @@ func executeStmtWithWorkspace(ses FeSession,
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
+		return err
+	}
+	// A statement that started without an active transaction could only run
+	// the name check at the earlier admission point. Resolve existing target
+	// kinds now, before a workspace statement or frontend side effect starts.
+	if err = checkFrontendIndexTargetWithCatalog(execCtx, effectiveStmt); err != nil {
 		return err
 	}
 	if execCtx.deferReadOnlyOwnership {
@@ -6191,7 +6214,7 @@ func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 	ses.GetTxnCompileCtx().tcw = execCtx.cw
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
-		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
+		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().resolveForCatalogValidation)
 		if err != nil {
 			return err
 		}
@@ -6836,6 +6859,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		if receipt, ok := makeOutfileReceipt(diagnosticStmt); ok && ses.tStmt != nil {
 			ses.tStmt.SetOutfileReceipt(*receipt)
+		}
+		// Explicit index targets must be rejected before an implicit DDL commit.
+		// EXECUTE was resolved above, so the saved target is checked with the
+		// current role and input provenance rather than the EXECUTE wrapper.
+		if resolveErr == nil {
+			admissionCtx := *execCtx
+			admissionCtx.input = currentInput
+			if handler := ses.GetTxnHandler(); handler != nil && handler.GetTxn() != nil {
+				proc.Base.TxnOperator = handler.GetTxn()
+			}
+			if err = checkFrontendIndexTargetWithCatalog(&admissionCtx, effectiveStmt); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction

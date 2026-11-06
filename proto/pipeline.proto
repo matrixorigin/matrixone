@@ -425,6 +425,7 @@ message TableFunction {
   bool is_single = 6;
   reserved 7, 8, 9, 10;
   reserved "index_reader_param", "runtime_filter_probe_list", "fulltext_source_ref", "fulltext_index_ref";
+  IndexMaintenanceSpec index_maintenance = 11;
 }
 
 message ExternalName2ColIndex {
@@ -925,4 +926,20 @@ message ArrowRecordBatchShard {
   repeated int32 required_dictionary_block_indices = 4;
   int64 estimated_rows = 5;
   int64 estimated_wire_bytes = 6;
+}
+
+message IndexMaintenanceTarget {
+  string role = 1;
+  string name = 2;
+  uint64 id = 3;
+}
+
+message IndexMaintenanceSpec {
+  string function = 1;
+  uint32 account_id = 2;
+  string database = 3;
+  uint64 database_id = 4;
+  string base_name = 5;
+  uint64 base_id = 6;
+  repeated IndexMaintenanceTarget targets = 7;
 }

@@ -13127,6 +13127,9 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
 	}
+	if err = protectHistoricalTableListing(builder.GetContext(), schema, table, viewData.Stmt, snapshot, viewStmt.AsSource); err != nil {
+		return 0, err
+	}
 
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
 		if err = rejectViewSchemaUnstableStar(state.request, viewStmt.AsSource); err != nil {
@@ -13887,15 +13890,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Preserve the existing probe; full resolution below owns error handling.
 		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
+		// SHOW sources retain their exact AST-bound authorization route.
+		parent := showIndexGeneratedSource(builder.GetContext(), tbl)
 		var obj *ObjectRef
 		var tableDef *TableDef
 		var borrow *BorrowedTable
-		if resolver := builder.borrowingCompiler(); resolver != nil {
+		if parent != nil {
+			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot)
+		} else if resolver := builder.borrowingCompiler(); resolver != nil {
 			var resolved TableResolution
-			obj, tableDef, err = resolver.Resolve(catalogDatabase, table, snapshot, &resolved)
+			obj, tableDef, err = resolveIndexMaintenanceSource(resolver, tbl, catalogDatabase, table, snapshot, &resolved)
 			borrow = resolved.Borrow
 		} else {
-			obj, tableDef, err = builder.compCtx.Resolve(catalogDatabase, table, snapshot)
+			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot)
 		}
 		if err != nil {
 			return 0, "", err
@@ -14201,6 +14208,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			NodeType:     nodeType,
 			Stats:        nil,
 			ObjRef:       obj,
+			ParentObjRef: DeepCopyObjectRef(parent),
 			TableDef:     tableDef,
 			ExternScan:   externScan,
 			BindingTags:  []int32{builder.genNewBindTag()},

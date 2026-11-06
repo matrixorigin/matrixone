@@ -746,11 +746,59 @@ func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolve(dbName, tableName, snapshot, true, plan2.PrepareTableResolution(borrowOutput...))
+	return tcc.resolveUserRelation(dbName, tableName, snapshot, true, plan2.PrepareTableResolution(borrowOutput...))
 }
 
 func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolve(dbName, tableName, snapshot, false, plan2.PrepareTableResolution(borrowOutput...))
+	return tcc.resolveUserRelation(dbName, tableName, snapshot, false, plan2.PrepareTableResolution(borrowOutput...))
+}
+
+// ResolveTemporaryTable checks a destination in the session namespace only.
+// When an alias exists, normal resolution still enforces physical-index access.
+func (tcc *TxnCompilerContext) ResolveTemporaryTable(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	if dbName == "" {
+		dbName = tcc.DefaultDatabase()
+	}
+	ses := tcc.GetSession()
+	if ses == nil {
+		return nil, nil, moerr.NewInternalError(tcc.GetContext(), "session is unavailable for temporary table resolution")
+	}
+	if _, ok := ses.GetTempTable(dbName, tableName); !ok {
+		if owner, ok := ses.(process.TemporaryTableDDL); !ok || !owner.OwnsTemporaryTable(dbName, tableName) {
+			return nil, nil, nil
+		}
+	}
+	return tcc.Resolve(dbName, tableName, snapshot)
+}
+
+func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, snapshot *plan2.Snapshot, temporaryAlias bool, result *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	var resolved plan2.TableResolution
+	var captureOutput *plan2.TableResolution
+	if result != nil {
+		captureOutput = &resolved
+	}
+	obj, def, err := tcc.resolve(dbName, tableName, snapshot, temporaryAlias, captureOutput)
+	if err != nil || def == nil {
+		return obj, def, err
+	}
+	physical := def.Name
+	if obj != nil && obj.ObjName != "" {
+		physical = obj.ObjName
+	}
+	if err = checkResolvedIndexRelation(tcc.execCtx, tableName, physical, def.TableType, def.FeatureFlag); err != nil {
+		return nil, nil, err
+	}
+	if result != nil {
+		result.Borrow = resolved.Borrow
+	}
+	return obj, def, nil
+}
+
+// resolveForCatalogValidation checks a cached plan's object identity/version.
+// Its inputs include optimizer-generated index nodes and are not SQL targets.
+func (tcc *TxnCompilerContext) resolveForCatalogValidation(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	plan2.PrepareTableResolution(borrowOutput...)
+	return tcc.resolve(dbName, tableName, snapshot, true, nil)
 }
 
 func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool, result *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
@@ -821,7 +869,11 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 	if table == nil {
 		return nil, nil, nil
 	}
-	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	resolvedDef := table.GetTableDef(ctx)
+	if resolvedDef == nil {
+		return nil, nil, moerr.NewInternalError(ctx, "table definition is unavailable for index relation admission")
+	}
+	tableDef := plan2.CloneTableDefForPlan(resolvedDef, true)
 	if err := tcc.recoverLegacyTinyText(ctx, dbName, tableDef, sub, snapshot); err != nil {
 		return nil, nil, err
 	}
