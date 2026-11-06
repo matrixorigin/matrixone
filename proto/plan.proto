@@ -327,8 +327,6 @@ message Expr {
 
   int32 aux_id = 16;
   // Keep these flags next to aux_id so they use its alignment padding.
-  // Planner-only proof that this is an admitted temporal candidate guard.
-  bool temporal_candidate_guard = 26;
   // Planner-only proof that this entire filter is an admitted candidate.
   bool temporal_candidate_filter = 27;
   double ndv = 17;
@@ -397,8 +395,6 @@ message FoldVal {
   int32 id = 1;
   bool is_const = 2;
   bytes data = 3;
-  // Copied only from an admitted temporal candidate guard expression.
-  bool temporal_candidate_guard = 4;
 }
 
 message LiteralVec {

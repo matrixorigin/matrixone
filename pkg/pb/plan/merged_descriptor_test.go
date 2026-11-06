@@ -82,9 +82,9 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
 	// Physical OID 32 is decimal64; numeric attribute mask 3 is normalized ZEROFILL.
 	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, TemporalIndexNeedsReplan: true, Nodes: []*Node{{FilterList: []*Expr{{
-		Typ:                    Type{Id: 32, Width: 10, Scale: 2, NumericAttributes: 3},
-		TemporalCandidateGuard: true, TemporalCandidateFilter: true,
-		Expr: &Expr_Fold{Fold: &FoldVal{TemporalCandidateGuard: true}},
+		Typ:                     Type{Id: 32, Width: 10, Scale: 2, NumericAttributes: 3},
+		TemporalCandidateFilter: true,
+		Expr:                    &Expr_Fold{Fold: &FoldVal{IsConst: true, Data: []byte{1}}},
 	}}}}}
 	encoded, err := original.Marshal()
 	require.NoError(t, err)

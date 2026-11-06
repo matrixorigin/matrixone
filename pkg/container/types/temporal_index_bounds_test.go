@@ -112,3 +112,21 @@ func TestTimestampRoundingPositiveOffGridCannotMatch(t *testing.T) {
 		}
 	}
 }
+
+// The planner rejects both Empty and Full. Off-grid equality must fall into
+// one of those cases, including near overflow, before its old guard is removed.
+func TestTemporalOffGridEqualityIsNotCostable(t *testing.T) {
+	for scale := int32(0); scale < 6; scale++ {
+		q := int64(scaleTable[scale])
+		for _, bound := range []int64{q + 1, int64(DatetimeFromClock(2026, 1, 1, 0, 0, 0, 0)) + 1, math.MaxInt64 - q, math.MaxInt64 - 1, math.MaxInt64} {
+			if bound <= q || bound%q == 0 {
+				continue
+			}
+			for _, offset := range []int{-14 * 3600, 0, 14 * 3600} {
+				candidate, err := BuildTemporalCandidate(context.Background(), T_datetime, scale, bound, false, TemporalEqual, time.FixedZone("fixed", offset))
+				require.NoError(t, err)
+				require.True(t, candidate.Empty || candidate.Full, "scale=%d bound=%d offset=%d", scale, bound, offset)
+			}
+		}
+	}
+}

@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -42,68 +41,36 @@ func TestTemporalAccessDriftSentinelIdentity(t *testing.T) {
 	require.NotErrorIs(t, moerr.NewInternalErrorNoCtx("different internal error"), ErrTemporalAccessDrift)
 }
 
-func TestTemporalCandidatePermissionRequiresProvenanceAndCopy(t *testing.T) {
-	helper := func() *plan.Expr {
-		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.TEMPORAL_DATETIME_BOUND, 0)},
-			Args: []*plan.Expr{nil, nil, nil, nil, plan2.MakePlan2BoolConstExprWithType(false)},
-		}}}
-	}
-	marked := helper()
-	marked.TemporalCandidateFilter = true
-	unmarked := helper()
-	rowFilter := helper()
-	markedRow := plan2.DeepCopyExpr(marked)
-	template := &plan.Query{Nodes: []*plan.Node{{BlockFilterList: []*plan.Expr{marked, unmarked}, FilterList: []*plan.Expr{rowFilter, markedRow}}}}
-	execution := plan2.DeepCopyQuery(template)
-	setTemporalCandidateNarrowing(execution, true)
-	getPermission := func(expr *plan.Expr) bool { return expr.GetF().Args[4].GetLit().GetBval() }
-	require.True(t, getPermission(execution.Nodes[0].BlockFilterList[0]))
-	require.False(t, getPermission(execution.Nodes[0].BlockFilterList[1]))
-	require.False(t, getPermission(execution.Nodes[0].FilterList[0]))
-	require.True(t, getPermission(execution.Nodes[0].FilterList[1]))
-	require.False(t, getPermission(template.Nodes[0].BlockFilterList[0]), "execution must not mutate the reusable template")
-	require.False(t, getPermission(template.Nodes[0].FilterList[1]))
-	setTemporalCandidateNarrowing(execution, false)
-	require.False(t, getPermission(execution.Nodes[0].BlockFilterList[0]))
-	require.False(t, getPermission(execution.Nodes[0].FilterList[1]))
-
+func TestTemporalCandidateExecutionFenceAndReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	templatePlan := &plan.Plan{Plan: &plan.Plan_Query{Query: template}}
 	proc.GetSessionInfo().TimeZone = time.FixedZone("test", 1234)
 	c := &Compile{proc: proc, addr: "local:6001"}
 	intent := &plan2.TemporalPlanningIntent{
 		TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
-		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{
-			ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal,
-		}},
+		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}},
 	}
-	require.False(t, getPermission(c.prepareTemporalExecutionPlan(context.Background(), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
+	marked := &plan.Expr{TemporalCandidateFilter: true}
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{ForceOneCN: true}, IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true}, BlockFilterList: []*plan.Expr{marked},
+	}}}}}
+	require.False(t, c.temporalExecutionAllowed(context.Background()))
 	c.SetValidatedTemporalAccessIntent(intent)
-	fixed := c.prepareTemporalExecutionPlan(context.Background(), templatePlan)
-	require.NotSame(t, templatePlan, fixed)
-	require.True(t, getPermission(fixed.GetQuery().Nodes[0].BlockFilterList[0]))
-	require.False(t, getPermission(templatePlan.GetQuery().Nodes[0].BlockFilterList[0]))
-	rowOnly := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{plan2.DeepCopyExpr(markedRow)}}}}}}
-	rowExecution := c.prepareTemporalExecutionPlan(context.Background(), rowOnly)
-	require.NotSame(t, rowOnly, rowExecution)
-	require.True(t, getPermission(rowExecution.GetQuery().Nodes[0].FilterList[0]))
-	require.False(t, getPermission(rowOnly.GetQuery().Nodes[0].FilterList[0]))
-	require.False(t, getPermission(c.prepareTemporalExecutionPlan(WithSiriusOffload(context.Background()), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
+	require.True(t, c.temporalExecutionAllowed(context.Background()))
+	require.False(t, c.temporalExecutionAllowed(WithSiriusOffload(context.Background())))
 	c.querySchedulingIntent.Explicit = true
-	require.False(t, getPermission(c.prepareTemporalExecutionPlan(context.Background(), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
+	require.False(t, c.temporalExecutionAllowed(context.Background()))
 	c.querySchedulingIntent.Explicit = false
 	c.temporalCandidateTopology = true
 	require.False(t, c.temporalRetryNeedsRebuild())
 	proc.Base.UnixTime++
-	require.False(t, getPermission(c.prepareTemporalExecutionPlan(context.Background(), templatePlan).GetQuery().Nodes[0].BlockFilterList[0]))
-	require.True(t, c.temporalRetryNeedsRebuild(), "retry must replan rather than scan the full index after clock drift")
+	require.False(t, c.temporalExecutionAllowed(context.Background()))
+	require.True(t, c.temporalRetryNeedsRebuild())
 	c.temporalCandidateTopology = false
-	require.False(t, c.temporalRetryNeedsRebuild(), "a published safe generation must not keep forcing temporal rebuilds")
+	require.False(t, c.temporalRetryNeedsRebuild())
 	proc.Base.UnixTime--
-	c.pn = templatePlan
-	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr, "candidate topology cannot be reused across executions")
+	c.pn = template
+	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr)
 	require.Nil(t, c.temporalAccessIntent)
 	folded := plan2.MakePlan2BoolConstExprWithType(true)
 	folded.TemporalCandidateFilter = true
@@ -111,14 +78,36 @@ func TestTemporalCandidatePermissionRequiresProvenanceAndCopy(t *testing.T) {
 	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr, "folding must not hide candidate ownership")
 	c.pn = nil
 	c.temporalCandidateTopology = true
-	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr, "the topology remembers ownership even if rewrites remove the filter")
+	require.ErrorIs(t, c.Reset(nil, time.Time{}, nil, ""), cantCompileForPrepareErr, "topology remains sticky")
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
 	intent.TimeZone = zone
 	c.SetValidatedTemporalAccessIntent(intent)
-	named := c.prepareTemporalExecutionPlan(context.Background(), templatePlan)
-	require.False(t, getPermission(named.GetQuery().Nodes[0].BlockFilterList[0]))
+	require.False(t, c.temporalExecutionAllowed(context.Background()))
+}
+
+func TestTemporalCandidateWithoutPhysicalIndexOrIntentFailsPreflight(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.UTC
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	c := NewTemporalCompile("local:6001", "", "select 1", "", "", nil, proc, nil, false, nil, time.Time{})
+	marked := &plan.Expr{TemporalCandidateFilter: true}
+	node := &plan.Node{FilterList: []*plan.Expr{marked}}
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}}}}
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
+	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
+		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
+	node.NodeType = plan.Node_TABLE_SCAN
+	node.IndexScanInfo.IsIndexScan = true
+	node.Stats = &plan.Stats{ForceOneCN: true}
+	c.SetValidatedTemporalAccessIntent(nil)
+	require.ErrorIs(t, c.Compile(context.Background(), p, nil), ErrTemporalAccessDrift)
+	c.DiscardTemporalPreflight()
+	require.Same(t, board, proc.GetMessageBoard())
 }
 
 func TestTemporalPreflightDiscardPreservesProcess(t *testing.T) {
@@ -206,7 +195,7 @@ func TestTemporalPreflightWorkspacePanicDoesNotPublishBoard(t *testing.T) {
 	c.SetValidatedTemporalAccessIntent(&plan2.TemporalPlanningIntent{TimeZone: proc.GetSessionInfo().TimeZone, UnixTime: proc.Base.UnixTime,
 		Placement: schedule.TemporalAccessIntent{CurrentCN: schedule.Worker{ID: proc.GetService(), Addr: c.addr, Route: schedule.WorkerRouteLocal}}})
 	marked := &plan.Expr{TemporalCandidateFilter: true}
-	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{ForceOneCN: true}, IndexScanInfo: plan.IndexScanInfo{IsIndexScan: true}, FilterList: []*plan.Expr{marked}}}}}}
 	require.Error(t, c.Compile(context.Background(), p, nil))
 	c.Release()
 	require.Same(t, board, proc.GetMessageBoard())
@@ -350,6 +339,9 @@ func TestTemporalIndexPlacementChecksEveryScan(t *testing.T) {
 	template.GetQuery().Nodes[1].Stats.ForceOneCN = false
 	require.False(t, c.temporalIndexPlacementAllowed(template), "every marked scan must retain local placement")
 	template.GetQuery().Nodes[1].Stats.ForceOneCN = true
+	template.GetQuery().Nodes[1].IndexScanInfo.IsIndexScan = false
+	require.False(t, c.temporalIndexPlacementAllowed(template), "every marked node must be a physical index scan")
+	template.GetQuery().Nodes[1].IndexScanInfo.IsIndexScan = true
 	c.ncpu = 5
 	require.True(t, c.temporalIndexPlacementAllowed(template), "ordinary estimated cost is not an execution permission")
 	c.ncpu = 4
@@ -358,14 +350,6 @@ func TestTemporalIndexPlacementChecksEveryScan(t *testing.T) {
 	c.SetValidatedTemporalAccessIntent(intent)
 	plan2.SetForceScanOnMultiCN(true)
 	require.False(t, c.temporalIndexPlacementAllowed(template))
-	// Successful preflight owns its decision; a later global flip cannot change
-	// helper narrowing. compileQuery and scan placement separately retain local.
 	plan2.SetForceScanOnMultiCN(false)
 	require.True(t, c.temporalIndexPlacementAllowed(template))
-	helper := &plan.Expr{TemporalCandidateFilter: true, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.TEMPORAL_DATETIME_BOUND, 0)}, Args: []*plan.Expr{nil, nil, nil, nil, plan2.MakePlan2BoolConstExprWithType(false)}}}}
-	template.GetQuery().Nodes[0].BlockFilterList = []*plan.Expr{helper}
-	plan2.SetForceScanOnMultiCN(true)
-	prepared := c.prepareTemporalExecutionPlan(proc.Ctx, template)
-	require.True(t, prepared.GetQuery().Nodes[0].BlockFilterList[0].GetF().Args[4].GetLit().GetBval())
-	require.False(t, helper.GetF().Args[4].GetLit().GetBval(), "execution never mutates the template")
 }

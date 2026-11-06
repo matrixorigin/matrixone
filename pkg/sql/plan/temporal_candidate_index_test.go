@@ -232,7 +232,6 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.True(t, hint.TemporalCandidateFilter)
-	require.True(t, hint.GetF().Args[0].TemporalCandidateGuard)
 	require.False(t, predicate.TemporalCandidateFilter)
 	_, ok, err = makeHint(false)
 	require.NoError(t, err)

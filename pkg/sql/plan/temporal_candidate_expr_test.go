@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"testing"
 	"time"
 
@@ -24,68 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-func TestDirectTemporalCandidateStartsUnadmitted(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	now, err := BindFuncExprImplByPlanExpr(proc.Ctx, "now", nil)
-	require.NoError(t, err)
-	datetimeCol := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
-	timestampCol := GetColExpr(Type{Id: int32(types.T_timestamp), Scale: 3}, 0, 0)
-	datetimeBound := &plan.Expr{Typ: datetimeCol.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Datetimeval{Datetimeval: 10}}}}
-	for _, tc := range []struct {
-		column, bound *plan.Expr
-		scale         int32
-	}{{datetimeCol, now, 0}, {timestampCol, datetimeBound, 3}} {
-		candidate, guard, err := makeDirectTemporalCandidate(proc.Ctx, tc.column, tc.bound, types.TemporalLess, tc.scale)
-		require.NoError(t, err)
-		require.True(t, function.ContainsTemporalBound(candidate))
-		require.False(t, candidate.TemporalCandidateFilter)
-		require.False(t, guard.TemporalCandidateGuard)
-		var checkPermission func(*plan.Expr)
-		checkPermission = func(expr *plan.Expr) {
-			if fn := expr.GetF(); fn != nil {
-				id, _ := function.DecodeOverloadID(fn.Func.Obj)
-				if id == function.TEMPORAL_DATETIME_BOUND || id == function.TEMPORAL_TIMESTAMP_BOUND {
-					require.False(t, fn.Args[4].GetLit().GetBval(), "narrowing requires execution placement proof")
-				}
-				for _, arg := range fn.Args {
-					checkPermission(arg)
-				}
-			}
-		}
-		checkPermission(candidate)
-	}
-}
-
-func TestDirectTemporalCandidateWithNarrowingDisabledKeepsPhysicalDomain(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.GetSessionInfo().TimeZone = time.UTC
-	now, err := BindFuncExprImplByPlanExpr(proc.Ctx, "now", nil)
-	require.NoError(t, err)
-	col := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
-	candidate, _, err := makeDirectTemporalCandidate(proc.Ctx, col, now, types.TemporalLess, 0)
-	require.NoError(t, err)
-	executor, err := colexec.NewExpressionExecutor(proc, candidate)
-	require.NoError(t, err)
-	defer executor.Free()
-	bat := batch.NewWithSize(1)
-	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
-	rows := []types.Datetime{math.MinInt64, -2, -1, 0, 1, types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999), math.MaxInt64}
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], rows, nil, proc.Mp()))
-	bat.SetRowCount(len(rows))
-	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	for row := range rows {
-		require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, row), "physical row %d", row)
-	}
-}
 
 func TestDirectTemporalCandidateCoversScalarMatches(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -95,9 +35,8 @@ func TestDirectTemporalCandidateCoversScalarMatches(t *testing.T) {
 	now, err := BindFuncExprImplByPlanExpr(proc.Ctx, "now", nil)
 	require.NoError(t, err)
 	col := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
-	candidate, _, err := makeDirectTemporalCandidate(proc.Ctx, col, now, types.TemporalLess, 0)
+	candidate, err := makeDirectTemporalCandidate(proc.Ctx, col, now, types.TemporalLess, 0)
 	require.NoError(t, err)
-	allowTemporalCandidateNarrowingForTest(candidate)
 	executor, err := colexec.NewExpressionExecutor(proc, candidate)
 	require.NoError(t, err)
 	defer executor.Free()
@@ -127,9 +66,8 @@ func TestTemporalRowCandidateRefreshesClockAfterExecutorReset(t *testing.T) {
 	now, err := BindFuncExprImplByPlanExpr(proc.Ctx, "now", nil)
 	require.NoError(t, err)
 	col := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
-	candidate, _, err := makeDirectTemporalCandidate(proc.Ctx, col, now, types.TemporalLess, 0)
+	candidate, err := makeDirectTemporalCandidate(proc.Ctx, col, now, types.TemporalLess, 0)
 	require.NoError(t, err)
-	allowTemporalCandidateNarrowingForTest(candidate)
 	executor, err := colexec.NewExpressionExecutor(proc, candidate)
 	require.NoError(t, err)
 	defer executor.Free()
@@ -157,9 +95,8 @@ func TestEncodedTemporalCandidateCoversScalarMatches(t *testing.T) {
 	require.NoError(t, err)
 	component := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
 	key := GetColExpr(Type{Id: int32(types.T_varchar)}, 0, 0)
-	candidate, _, err := makeEncodedTemporalCandidate(proc.Ctx, key, component, now, types.TemporalLess, 0)
+	candidate, err := makeEncodedTemporalCandidate(proc.Ctx, key, component, now, types.TemporalLess, 0)
 	require.NoError(t, err)
-	allowTemporalCandidateNarrowingForTest(candidate)
 	serial, err := BindFuncExprImplByPlanExpr(proc.Ctx, indexTableComparisonSerialFunc(), []*plan.Expr{component, MakePlan2Int64ConstExprWithType(7)})
 	require.NoError(t, err)
 	encoder, err := colexec.NewExpressionExecutor(proc, serial)
@@ -189,16 +126,4 @@ func TestEncodedTemporalCandidateCoversScalarMatches(t *testing.T) {
 		}
 	}
 	require.False(t, vector.GetFixedAtWithTypeCheck[bool](result, len(rows)-1))
-}
-
-func allowTemporalCandidateNarrowingForTest(expr *plan.Expr) {
-	if fn := expr.GetF(); fn != nil {
-		id, _ := function.DecodeOverloadID(fn.Func.Obj)
-		if id == function.TEMPORAL_DATETIME_BOUND || id == function.TEMPORAL_TIMESTAMP_BOUND {
-			fn.Args[4] = MakePlan2BoolConstExprWithType(true)
-		}
-		for _, arg := range fn.Args {
-			allowTemporalCandidateNarrowingForTest(arg)
-		}
-	}
 }

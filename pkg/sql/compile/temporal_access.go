@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // ErrTemporalAccessDrift is internal control flow: the execution owner must
@@ -38,14 +37,6 @@ func (c *Compile) SetValidatedTemporalAccessIntent(intent *plan2.TemporalPlannin
 		copy := *intent
 		c.temporalAccessIntent = &copy
 	}
-}
-
-// prepareTemporalExecutionPlan is called only when the current plan contains a
-// candidate. Never grant permission by modifying the reusable template.
-func (c *Compile) prepareTemporalExecutionPlan(ctx context.Context, template *plan.Plan) *plan.Plan {
-	execution := plan2.DeepCopyPlan(template)
-	setTemporalCandidateNarrowing(execution.GetQuery(), c.temporalExecutionAllowed(ctx))
-	return execution
 }
 
 func (c *Compile) temporalExecutionAllowed(ctx context.Context) bool {
@@ -74,71 +65,31 @@ func queryHasTemporalCandidates(query *plan.Query) bool {
 		return false
 	}
 	for _, node := range query.Nodes {
-		if node == nil {
-			continue
+		if nodeHasTemporalCandidate(node) {
+			return true
 		}
-		for _, list := range [][]*plan.Expr{node.BlockFilterList, node.FilterList} {
-			for _, expr := range list {
-				// Folding can replace a temporal helper with a FoldVal. The
-				// owner marker survives that rewrite and remains sufficient to
-				// deny cached physical-topology reuse.
-				if expr.GetTemporalCandidateFilter() {
-					return true
-				}
+	}
+	return false
+}
+
+func nodeHasTemporalCandidate(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, list := range [][]*plan.Expr{node.BlockFilterList, node.FilterList} {
+		for _, expr := range list {
+			// The owner marker survives folding and denies physical reuse.
+			if expr.GetTemporalCandidateFilter() {
+				return true
 			}
 		}
 	}
 	return false
 }
 
-// setTemporalCandidateNarrowing mutates only the execution-owned query copy.
-// The caller must prove placement and timezone identity before allowing it.
-// Expressions lacking complete candidate provenance remain untouched.
-func setTemporalCandidateNarrowing(query *plan.Query, allow bool) {
-	if query == nil {
-		return
-	}
-	var visit func(*plan.Expr, bool)
-	visit = func(expr *plan.Expr, admitted bool) {
-		if expr == nil {
-			return
-		}
-		admitted = admitted || expr.TemporalCandidateFilter
-		if fn := expr.GetF(); fn != nil {
-			if fn.Func != nil && admitted {
-				id, _ := function.DecodeOverloadID(fn.Func.Obj)
-				if (id == function.TEMPORAL_DATETIME_BOUND || id == function.TEMPORAL_TIMESTAMP_BOUND) && len(fn.Args) == 5 &&
-					fn.Args[4] != nil && types.T(fn.Args[4].Typ.Id) == types.T_bool && fn.Args[4].GetLit() != nil && !fn.Args[4].GetLit().Isnull {
-					if _, valid := fn.Args[4].GetLit().Value.(*plan.Literal_Bval); valid {
-						fn.Args[4] = plan2.MakePlan2BoolConstExprWithType(allow)
-					}
-				}
-			}
-			for _, arg := range fn.Args {
-				visit(arg, admitted)
-			}
-		}
-		if list := expr.GetList(); list != nil {
-			for _, item := range list.List {
-				visit(item, admitted)
-			}
-		}
-	}
-	for _, node := range query.Nodes {
-		if node == nil {
-			continue
-		}
-		for _, list := range [][]*plan.Expr{node.BlockFilterList, node.FilterList} {
-			for _, expr := range list {
-				visit(expr, false)
-			}
-		}
-	}
-}
-
 // Check every marked scan, including a missing/cleared local placement bit.
 func (c *Compile) temporalIndexPlacementAllowed(template *plan.Plan) bool {
-	if !plan2.HasTemporalPhysicalIndexScans(template.GetQuery()) {
+	if !HasTemporalIndexCandidates(template) {
 		return true
 	}
 	intent := c.temporalAccessIntent
@@ -146,7 +97,7 @@ func (c *Compile) temporalIndexPlacementAllowed(template *plan.Plan) bool {
 		return false
 	}
 	for _, node := range template.GetQuery().Nodes {
-		if plan2.TemporalPhysicalIndexScan(node) && (node.Stats == nil || !node.Stats.ForceOneCN) {
+		if nodeHasTemporalCandidate(node) && (!plan2.TemporalPhysicalIndexScan(node) || node.Stats == nil || !node.Stats.ForceOneCN) {
 			return false
 		}
 	}

@@ -41,7 +41,6 @@ func temporalBoundEndpoint[Input, Output temporalBoundValue](parameters []*vecto
 	ops := vector.GenerateFunctionFixedTypeParameter[int32](parameters[1])
 	scales := vector.GenerateFunctionFixedTypeParameter[int32](parameters[2])
 	selectors := vector.GenerateFunctionFixedTypeParameter[int32](parameters[3])
-	permissions := vector.GenerateFunctionFixedTypeParameter[bool](parameters[4])
 	out := vector.MustFunctionResult[Output](result)
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selections, row) {
@@ -57,13 +56,16 @@ func temporalBoundEndpoint[Input, Output temporalBoundValue](parameters []*vecto
 		op, opNull := ops.GetValue(row)
 		scale, scaleNull := scales.GetValue(row)
 		selector, selectorNull := selectors.GetValue(row)
-		permission, permissionNull := permissions.GetValue(row)
 		candidate := types.TemporalCandidate{Lo: math.MinInt64, Hi: math.MaxInt64, Sentinel: math.MinInt64, Full: true}
-		if !opNull && !scaleNull && !selectorNull && !permissionNull && permission && op >= 0 && op <= int32(types.TemporalGreaterEqual) && selector >= 0 && selector <= 2 {
-			var err error
-			candidate, err = types.BuildTemporalCandidate(proc.Ctx, key, scale, int64(value), valueNull, types.TemporalOp(op), proc.GetSessionInfo().TimeZone)
+		if !opNull && !scaleNull && !selectorNull && op >= 0 && op <= int32(types.TemporalGreaterEqual) && selector >= 0 && selector <= 2 {
+			bound, err := types.BuildTemporalCandidate(proc.Ctx, key, scale, int64(value), valueNull, types.TemporalOp(op), proc.GetSessionInfo().TimeZone)
 			if err != nil {
 				return err
+			}
+			// Empty and NULL have no matching SQL row. Widen them so that the
+			// residual predicate, rather than a pruning hint, decides the result.
+			if !bound.Empty {
+				candidate = bound
 			}
 		}
 		selected := candidate.Lo
@@ -78,62 +80,4 @@ func temporalBoundEndpoint[Input, Output temporalBoundValue](parameters []*vecto
 		}
 	}
 	return nil
-}
-
-func temporalTimestampBoundNotEmpty(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selections *FunctionSelectList) error {
-	values := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[0])
-	ops := vector.GenerateFunctionFixedTypeParameter[int32](parameters[1])
-	scales := vector.GenerateFunctionFixedTypeParameter[int32](parameters[2])
-	out := vector.MustFunctionResult[bool](result)
-	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selections, row) {
-			if err := out.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
-		value, isNull := values.GetValue(row)
-		op, opNull := ops.GetValue(row)
-		scale, scaleNull := scales.GetValue(row)
-		notEmpty := !isNull
-		if notEmpty && !opNull && !scaleNull {
-			notEmpty = TemporalTimestampBoundNotEmpty(value, op, scale)
-		}
-		if err := out.Append(notEmpty, false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func temporalDatetimeBoundNotEmpty(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selections *FunctionSelectList) error {
-	values := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
-	out := vector.MustFunctionResult[bool](result)
-	for row := uint64(0); row < uint64(length); row++ {
-		if functionRowSkipped(selections, row) {
-			if err := out.Append(false, true); err != nil {
-				return err
-			}
-			continue
-		}
-		_, isNull := values.GetValue(row)
-		if err := out.Append(!isNull, false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// TemporalTimestampBoundNotEmpty is the non-NULL scalar part of the runtime
-// guard. It is distinct from BuildTemporalCandidate.Empty: bound overflow may
-// conservatively produce Full even when equality is off the timestamp grid.
-func TemporalTimestampBoundNotEmpty(value types.Timestamp, op, scale int32) bool {
-	if op == int32(types.TemporalEqual) && scale >= 0 && scale < 6 {
-		q := int64(1)
-		for i := scale; i < 6; i++ {
-			q *= 10
-		}
-		return int64(value) <= q || int64(value)%q == 0
-	}
-	return true
 }

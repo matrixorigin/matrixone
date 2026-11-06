@@ -103,6 +103,7 @@ func TestTemporalCBOObservationRequiresUsableIndex(t *testing.T) {
 type temporalCBOContext struct {
 	*encodedIndexCostTestContext
 	hidden         engine.Relation
+	onResolve      func()
 	mismatchHidden bool
 	read           engine.TemporalRead
 }
@@ -116,6 +117,9 @@ func (c *temporalCBOContext) ResolveBaseForPlanning(database, name string, snaps
 	return ref, full, nil, err
 }
 func (c *temporalCBOContext) ResolveIndexForPlanning(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, *BorrowedTable, error) {
+	if c.onResolve != nil {
+		c.onResolve()
+	}
 	ref, full, err := c.MockCompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
 	if err != nil || ref == nil || full == nil {
 		return ref, full, nil, err
@@ -181,7 +185,7 @@ func temporalCBOTraversalFixture(t *testing.T) (*QueryBuilder, *temporalCBORelat
 }
 
 func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
-	for _, scenario := range []string{"selected", "empty access", "cancel empty access", "unknown stats", "unknown estimate", "budget exhausted", "cancel binding", "cancel verification", "cancel verification with exhausted budget", "winner rejected", "different hidden definition", "invalid key collation", "bind tag overflow", "incomplete enumeration", "early producer"} {
+	for _, scenario := range []string{"selected", "empty access", "cancel empty access", "unknown stats", "unknown estimate", "budget exhausted", "cancel binding", "cancel verification", "cancel verification with exhausted budget", "winner rejected", "different hidden definition", "resolver changes predicate", "resolver changes path", "invalid key collation", "bind tag overflow", "incomplete enumeration", "early producer"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, source, index := temporalCBOTraversalFixture(t)
 			stop := errors.New("statement owner stopped")
@@ -218,6 +222,14 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 				builder.qry.Nodes[0].TableDef.Indexes = append(builder.qry.Nodes[0].TableDef.Indexes, bad)
 			case "different hidden definition":
 				builder.compCtx.(*temporalCBOContext).mismatchHidden = true
+			case "resolver changes predicate":
+				builder.compCtx.(*temporalCBOContext).onResolve = func() {
+					builder.qry.Nodes[0].FilterList[0] = MakePlan2BoolConstExprWithType(true)
+				}
+			case "resolver changes path":
+				builder.compCtx.(*temporalCBOContext).onResolve = func() {
+					builder.qry.Nodes[0].Limit = MakePlan2Int64ConstExprWithType(1)
+				}
 			}
 			scan := builder.qry.Nodes[0]
 			beforeTag, beforeNames, beforeTags := builder.nextBindTag, maps.Clone(builder.nameByColRef), maps.Clone(builder.tag2NodeID)
@@ -239,7 +251,7 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			if scenario == "different hidden definition" || scenario == "incomplete enumeration" || scenario == "empty access" || scenario == "cancel empty access" {
+			if scenario == "different hidden definition" || scenario == "resolver changes predicate" || scenario == "resolver changes path" || scenario == "incomplete enumeration" || scenario == "empty access" || scenario == "cancel empty access" {
 				require.Zero(t, source.verified, "invalid access must decline before native verification")
 			}
 			if scenario != "selected" {

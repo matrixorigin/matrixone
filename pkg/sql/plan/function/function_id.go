@@ -972,17 +972,15 @@ const (
 	// Internal temporal candidate helpers.
 	TEMPORAL_DATETIME_BOUND  = 633
 	TEMPORAL_TIMESTAMP_BOUND = 634
-	TEMPORAL_BOUND_NOT_EMPTY = 635
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 636
+	FUNCTION_END_NUMBER = 635
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	"__mo_temporal_datetime_bound":  TEMPORAL_DATETIME_BOUND,
 	"__mo_temporal_timestamp_bound": TEMPORAL_TIMESTAMP_BOUND,
-	"__mo_temporal_bound_not_empty": TEMPORAL_BOUND_NOT_EMPTY,
 	"timestampadd_second_interval":  TIMESTAMPADD_SECOND_INTERVAL,
 	"_check_async_datalink_source":  CHECK_ASYNC_DATALINK_SOURCE,
 

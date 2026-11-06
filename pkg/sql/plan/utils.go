@@ -8677,8 +8677,7 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 					Typ: fn.Args[i].Typ,
 					Expr: &plan.Expr_Fold{
 						Fold: &plan.FoldVal{
-							Id:                     int32(newID),
-							TemporalCandidateGuard: fn.Args[i].TemporalCandidateGuard,
+							Id: int32(newID),
 						},
 					},
 					AuxId:       fn.Args[i].AuxId,

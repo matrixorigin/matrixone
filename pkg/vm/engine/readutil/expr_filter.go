@@ -579,19 +579,6 @@ func compileFilterExprWithProof(
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Fold:
-		fold := exprImpl.Fold
-		if !temporalCandidate || types.T(expr.Typ.Id) != types.T_bool || fold == nil || !fold.TemporalCandidateGuard ||
-			!fold.IsConst || len(fold.Data) != 1 || fold.Data[0] != 0 {
-			return nil, nil, nil, nil, nil, false, false
-		}
-		fastFilterOp = func(*objectio.ObjectStats) (bool, error) { return false, nil }
-		objectFilterOp = func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error) { return false, nil }
-		blockFilterOp = func(int, objectio.BlockObject, objectio.BloomFilter) (bool, bool, error) {
-			return true, false, nil
-		}
-		seekOp = func(meta objectio.ObjectDataMeta) int { return int(meta.BlockCount()) }
-		return
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
 		if function.GetZoneMapEvaluation(exprImpl.F) == function.ZoneMapUnsupported {

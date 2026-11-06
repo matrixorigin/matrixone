@@ -416,7 +416,7 @@ func IsRuntimeConstant(expr *plan.Expr) bool {
 
 // IsTemporalBoundFunction identifies the execution-scoped index helpers.
 func IsTemporalBoundFunction(fid int32) bool {
-	return fid == TEMPORAL_DATETIME_BOUND || fid == TEMPORAL_TIMESTAMP_BOUND || fid == TEMPORAL_BOUND_NOT_EMPTY
+	return fid == TEMPORAL_DATETIME_BOUND || fid == TEMPORAL_TIMESTAMP_BOUND
 }
 
 // ContainsTemporalBound identifies a runtime-bound expression tree.

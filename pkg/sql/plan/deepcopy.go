@@ -1227,7 +1227,6 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		Ndv:                     expr.Ndv,
 		Selectivity:             expr.Selectivity,
 		PreparedNumeric:         copyPreparedNumericMetadata(expr.PreparedNumeric),
-		TemporalCandidateGuard:  expr.TemporalCandidateGuard,
 		TemporalCandidateFilter: expr.TemporalCandidateFilter,
 	}
 	// Positive AuxId values belong to later execution/zonemap numbering and
@@ -1436,10 +1435,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Fold:
 		newExpr.Expr = &plan.Expr_Fold{
 			Fold: &plan.FoldVal{
-				Id:                     item.Fold.Id,
-				IsConst:                item.Fold.IsConst,
-				Data:                   bytes.Clone(item.Fold.Data),
-				TemporalCandidateGuard: item.Fold.TemporalCandidateGuard,
+				Id:      item.Fold.Id,
+				IsConst: item.Fold.IsConst,
+				Data:    bytes.Clone(item.Fold.Data),
 			},
 		}
 	}

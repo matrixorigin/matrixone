@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -741,7 +740,7 @@ func TestCompileFilterExprORSeekSkipsAbsentRange(t *testing.T) {
 }
 
 // A generic folded boolean has no proof that skipping rows preserves other
-// predicates' diagnostics. It must not be interpreted as a temporal guard.
+// predicates' diagnostics, so an unsupported folded boolean must fail open.
 func TestUnmarkedFoldedBooleanDoesNotPrune(t *testing.T) {
 	value := false
 	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
@@ -765,11 +764,8 @@ func TestUnmarkedFoldedBooleanDoesNotPrune(t *testing.T) {
 	require.False(t, base.Valid)
 }
 
-func TestTemporalCandidateGuardRequiresBothProofs(t *testing.T) {
-	value := false
-	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
-		IsConst: true, Data: types.EncodeBool(&value), TemporalCandidateGuard: true,
-	}}}
+func TestFoldedFalseCandidateDoesNotForceEmptyPKFilter(t *testing.T) {
+	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{0}}}}
 	table := &plan.TableDef{
 		Name2ColIndex: map[string]int32{"amount": 0},
 		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}},
@@ -778,38 +774,13 @@ func TestTemporalCandidateGuardRequiresBothProofs(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	filter := foldedFunction("and", []*plan.Expr{guard, int64FoldedFilter("=", 2)})
-	base, err := ConstructBasePKFilter(filter, table, proc.Mp())
-	require.NoError(t, err)
-	require.False(t, base.Empty)
-	base.Cleanup()
-	filter.TemporalCandidateFilter = true
-	base, err = ConstructBasePKFilter(filter, table, proc.Mp())
-	require.NoError(t, err)
-	require.True(t, base.Valid && base.Empty)
-	mem, err := NewMemPKFilter(table, timestamp.Timestamp{}, nil, base, engine.FilterHint{})
-	require.NoError(t, err)
-	require.False(t, mem.MayMatchKeyRange([]byte{1}, []byte{2}))
-	block, err := ConstructBlockPKFilter(false, base, nil)
-	require.NoError(t, err)
-	require.True(t, block.Valid)
-	require.Empty(t, block.SortedSearchFunc(nil))
-	require.Empty(t, block.UnSortedSearchFunc(nil))
-	base.Cleanup()
-	_, _, _, _, _, compiled, _ := CompileFilterExpr(filter, table, nil)
-	require.True(t, compiled)
-	for _, data := range [][]byte{nil, {1}, {2}, {0, 0}} {
-		guard.GetFold().Data = data
-		base, err = ConstructBasePKFilter(filter, table, proc.Mp())
+	for _, marked := range []bool{false, true} {
+		filter.TemporalCandidateFilter = marked
+		base, err := ConstructBasePKFilter(filter, table, proc.Mp())
 		require.NoError(t, err)
-		require.False(t, base.Empty, "invalid or true guard bytes %v", data)
+		require.False(t, base.Empty, "a folded false value alone does not prove an empty scan")
 		base.Cleanup()
 	}
-	guard.GetFold().Data = []byte{0}
-	guard.GetFold().IsConst = false
-	base, err = ConstructBasePKFilter(filter, table, proc.Mp())
-	require.NoError(t, err)
-	require.False(t, base.Empty)
-	base.Cleanup()
 }
 
 func TestCompileFilterExprDecimalSortedBetweenPaths(t *testing.T) {
@@ -1622,14 +1593,13 @@ func TestTemporalObjectFastFilterUsesSortedColumnProof(t *testing.T) {
 	}
 }
 
-func TestTemporalEmptyGuardCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
+func TestTemporalCandidateCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
 	for _, charset := range []uint32{uint32(types.CharsetUTF8MB4Bin), uint32(types.CharsetUTF8MB4UnicodeCI)} {
 		typ := plan.Type{Id: int32(types.T_varchar), Width: 64, Charset: charset}
 		table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Typ: typ, Primary: true}}, Name2ColIndex: map[string]int32{"key": 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "key", Names: []string{"key"}}}
 		column := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "key"}}}
 		bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("x")}}}
-		guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{0}, TemporalCandidateGuard: true}}}
-		filter := foldedFunction("and", []*plan.Expr{guard, foldedFunction("prefix_eq", []*plan.Expr{column, bound})})
+		filter := foldedFunction("prefix_eq", []*plan.Expr{column, bound})
 		filter.TemporalCandidateFilter = true
 		fast, _, _, _, _, compiled, _ := CompileFilterExprs([]*plan.Expr{filter}, table, nil)
 		if charset == uint32(types.CharsetUTF8MB4UnicodeCI) {
@@ -1638,9 +1608,6 @@ func TestTemporalEmptyGuardCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
 		} else {
 			require.True(t, compiled)
 			require.NotNil(t, fast)
-			matches, err := fast(objectio.NewObjectStats())
-			require.NoError(t, err)
-			require.False(t, matches)
 		}
 	}
 }

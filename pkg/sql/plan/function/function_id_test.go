@@ -893,8 +893,7 @@ var predefinedFunids = map[int]int{
 	UNZIP_FILE:               632,
 	TEMPORAL_DATETIME_BOUND:  633,
 	TEMPORAL_TIMESTAMP_BOUND: 634,
-	TEMPORAL_BOUND_NOT_EMPTY: 635,
-	FUNCTION_END_NUMBER:      636,
+	FUNCTION_END_NUMBER:      635,
 }
 
 func Test_funids(t *testing.T) {
@@ -920,7 +919,6 @@ func Test_funids(t *testing.T) {
 func TestEWMAndTemporalFunctionRegistryCoexist(t *testing.T) {
 	f := types.T_float64.ToType()
 	n := types.T_int32.ToType()
-	b := types.T_bool.ToType()
 	tests := []struct {
 		name   string
 		id     int32
@@ -932,25 +930,16 @@ func TestEWMAndTemporalFunctionRegistryCoexist(t *testing.T) {
 		{"ewmstd", EWM_STD, []types.Type{f, f}, true},
 		{"ewmcov", EWM_COV, []types.Type{f, f, f}, true},
 		{"ewmcorr", EWM_CORR, []types.Type{f, f, f}, true},
-		{"__mo_temporal_datetime_bound", TEMPORAL_DATETIME_BOUND, []types.Type{types.T_timestamp.ToType(), n, n, n, b}, false},
-		{"__mo_temporal_timestamp_bound", TEMPORAL_TIMESTAMP_BOUND, []types.Type{types.T_datetime.ToType(), n, n, n, b}, false},
-		{"__mo_temporal_bound_not_empty", TEMPORAL_BOUND_NOT_EMPTY, []types.Type{types.T_timestamp.ToType(), n, n}, false},
-		{"__mo_temporal_bound_not_empty", TEMPORAL_BOUND_NOT_EMPTY, []types.Type{types.T_datetime.ToType(), n, n}, false},
+		{"__mo_temporal_datetime_bound", TEMPORAL_DATETIME_BOUND, []types.Type{types.T_timestamp.ToType(), n, n, n}, false},
+		{"__mo_temporal_timestamp_bound", TEMPORAL_TIMESTAMP_BOUND, []types.Type{types.T_datetime.ToType(), n, n, n}, false},
 	}
 	seen := make(map[int32]string)
 	for _, tc := range tests {
 		result, err := GetFunctionByName(context.Background(), tc.name, tc.args)
 		require.NoError(t, err, tc.name)
 		encoded := result.GetEncodedOverloadID()
-		id, overload := DecodeOverloadID(encoded)
+		id, _ := DecodeOverloadID(encoded)
 		require.Equal(t, tc.id, id, tc.name)
-		if tc.id == TEMPORAL_BOUND_NOT_EMPTY {
-			expected := int32(0)
-			if tc.args[0].Oid == types.T_datetime {
-				expected = 1
-			}
-			require.Equal(t, expected, overload, tc.name)
-		}
 		if old, exists := seen[id]; exists {
 			require.Equal(t, old, tc.name)
 		} else {
@@ -970,5 +959,9 @@ func TestEWMAndTemporalFunctionRegistryCoexist(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, tc.window, actual.IsWin(), tc.name)
 	}
-	require.Len(t, seen, 8)
+	require.Len(t, seen, 7)
+	_, err := GetFunctionByName(context.Background(), "__mo_temporal_bound_not_empty", []types.Type{types.T_timestamp.ToType(), n, n})
+	require.Error(t, err)
+	_, err = GetFunctionByName(context.Background(), "__mo_temporal_datetime_bound", []types.Type{types.T_timestamp.ToType(), n, n, n, types.T_bool.ToType()})
+	require.Error(t, err)
 }

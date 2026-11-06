@@ -33,29 +33,28 @@ func makeTemporalIndexHint(ctx context.Context, atom temporalCandidateAtom, inde
 	}
 	physical := GetColExpr(indexTable.Cols[0].Typ, indexTag, 0)
 	physical.GetCol().Name = indexTable.Cols[0].Name
-	var hint, guard *plan.Expr
+	var hint *plan.Expr
 	var err error
 	if indexTableStoresSerializedKey(index) {
 		if types.T(physical.Typ.Id) != types.T_varchar {
 			return nil, false, nil
 		}
-		hint, guard, err = makeEncodedTemporalCandidate(ctx, physical, atom.column, atom.bound, atom.op, atom.scale)
+		hint, err = makeEncodedTemporalCandidate(ctx, physical, atom.column, atom.bound, atom.op, atom.scale)
 	} else {
 		if physical.Typ.Id != atom.column.Typ.Id || physical.Typ.Scale != atom.column.Typ.Scale {
 			return nil, false, nil
 		}
-		hint, guard, err = makeDirectTemporalCandidate(ctx, physical, atom.bound, atom.op, atom.scale)
+		hint, err = makeDirectTemporalCandidate(ctx, physical, atom.bound, atom.op, atom.scale)
 	}
 	if err != nil || hint == nil {
 		return nil, false, err
 	}
 	hint.TemporalCandidateFilter = true
-	guard.TemporalCandidateGuard = true
 	return hint, true, nil
 }
 
-// temporalIndexOperands proves the original owner, index completeness and
-// leading key before optional catalog resolution or candidate construction.
+// temporalIndexOperands rechecks the current path and index at publication.
+// Catalog resolution may reenter planning, so an earlier proof is not enough.
 func temporalIndexOperands(ctx context.Context, query *plan.Query, scanID int32, paramFree bool, index *plan.IndexDef,
 	filterPos int,
 ) (temporalCandidateAtom, bool, error) {
@@ -65,32 +64,41 @@ func temporalIndexOperands(ctx context.Context, query *plan.Query, scanID int32,
 	if err := ctx.Err(); err != nil {
 		return temporalCandidateAtom{}, false, err
 	}
-	if !paramFree || !temporalCandidateSimplePathSafe(query, scanID) || index == nil || !index.TableExist ||
-		!catalog.IsRegularIndexAlgo(index.IndexAlgo) || isSpatialIndexDef(index) || index.KeyFormat != 0 || len(index.Parts) == 0 || len(index.Parts) > 16 ||
-		regularIndexHasDeclaredPrefix(index) {
+	if !paramFree || !temporalCandidateSimplePathSafe(query, scanID) {
 		return temporalCandidateAtom{}, false, nil
 	}
 	scan := query.Nodes[scanID]
-	if scan.TableDef == nil || scan.TableDef.Pkey == nil || len(scan.BindingTags) == 0 || len(scan.FilterList) != 1 || filterPos != 0 {
+	if len(scan.FilterList) != 1 || filterPos != 0 {
 		return temporalCandidateAtom{}, false, nil
+	}
+	atom, ok := temporalCandidateAtomForExpr(scan.FilterList[filterPos])
+	if !ok || !temporalIndexMatches(scan, index, atom) {
+		return temporalCandidateAtom{}, false, nil
+	}
+	return atom, true, nil
+}
+
+// temporalIndexMatches checks only index-specific facts. Enumeration already
+// proved the current path and atom once; publication repeats the full proof.
+func temporalIndexMatches(scan *plan.Node, index *plan.IndexDef, atom temporalCandidateAtom) bool {
+	if scan == nil || scan.TableDef == nil || scan.TableDef.Pkey == nil || len(scan.BindingTags) == 0 ||
+		index == nil || !index.TableExist || !catalog.IsRegularIndexAlgo(index.IndexAlgo) || isSpatialIndexDef(index) ||
+		index.KeyFormat != 0 || len(index.Parts) == 0 || len(index.Parts) > 16 || regularIndexHasDeclaredPrefix(index) {
+		return false
 	}
 	for _, part := range index.Parts {
 		pos, exists := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
 		if !exists || pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil {
-			return temporalCandidateAtom{}, false, nil
+			return false
 		}
 	}
 	if indexUsesUnicodeCollation(index, scan.TableDef) || functionalIndexColumn(scan.TableDef, index) != nil || !hintedIndexContainsQualifyingRows(index, scan) {
-		return temporalCandidateAtom{}, false, nil
+		return false
 	}
 	position, ok := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
 	if !ok || position < 0 || int(position) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[position] == nil {
-		return temporalCandidateAtom{}, false, nil
+		return false
 	}
-	atom, ok := temporalCandidateAtomForExpr(scan.FilterList[filterPos])
-	if !ok || atom.column.GetCol().RelPos != scan.BindingTags[0] || atom.column.GetCol().ColPos != position ||
-		atom.column.Typ.Id != scan.TableDef.Cols[position].Typ.Id || atom.column.Typ.Scale != scan.TableDef.Cols[position].Typ.Scale {
-		return temporalCandidateAtom{}, false, nil
-	}
-	return atom, true, nil
+	return atom.column.GetCol().RelPos == scan.BindingTags[0] && atom.column.GetCol().ColPos == position &&
+		atom.column.Typ.Id == scan.TableDef.Cols[position].Typ.Id && atom.column.Typ.Scale == scan.TableDef.Cols[position].Typ.Scale
 }

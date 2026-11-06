@@ -332,11 +332,7 @@ func TestAppendTemporalStorageHintsKeepsRowFilterIndependent(t *testing.T) {
 	different := plan2.DeepCopyExpr(helper)
 	different.GetF().Args = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
 	require.Len(t, appendTemporalStorageHints([]*plan.Expr{row, different}, []*plan.Expr{helper}), 3,
-		"different execution permissions must not be deduplicated")
-	different = plan2.DeepCopyExpr(helper)
-	different.GetF().Args[0].TemporalCandidateGuard = true
-	require.Len(t, appendTemporalStorageHints([]*plan.Expr{row, different}, []*plan.Expr{helper}), 3,
-		"different provenance must not be deduplicated")
+		"different values must not be deduplicated")
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {

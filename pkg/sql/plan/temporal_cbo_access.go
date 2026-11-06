@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -90,9 +89,6 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 	if err != nil {
 		return temporalIndexAccess{}, err
 	}
-	if scalar.typ.Oid == types.T_timestamp && !function.TemporalTimestampBoundNotEmpty(types.Timestamp(bound), int32(atom.op), atom.scale) {
-		return temporalIndexAccess{}, nil
-	}
 	selectivity, ok := estimateTemporalRange(observation, candidate, types.T(atom.column.Typ.Id))
 	if !ok || selectivity <= 0 {
 		return temporalIndexAccess{}, nil
@@ -145,11 +141,10 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 		if !cost.indexCoversRequiredColumns(index) {
 			continue
 		}
-		_, matched, cause := temporalIndexOperands(ctx, builder.qry, scanID, true, index, 0)
-		if cause != nil {
+		if cause := ctx.Err(); cause != nil {
 			return temporalIndexAccess{}, cause
 		}
-		if !matched {
+		if !temporalIndexMatches(scan, index, atom) {
 			continue
 		}
 		// Observe once, only after a usable covering candidate exists.
@@ -190,11 +185,12 @@ func (builder *QueryBuilder) enumerateTemporalIndexCandidates(scanID int32, inde
 			return temporalIndexAccess{}, context.Cause(ctx)
 		}
 		var hint *plan.Expr
+		var cause error
 		if indexTableStoresSerializedKey(index) {
 			physical := GetColExpr(plan.Type{Id: int32(types.T_varchar)}, 0, 0)
-			hint, _, cause = makeEncodedTemporalCandidate(ctx, physical, atom.column, atom.bound, atom.op, atom.scale)
+			hint, cause = makeEncodedTemporalCandidate(ctx, physical, atom.column, atom.bound, atom.op, atom.scale)
 		} else {
-			hint, _, cause = makeDirectTemporalCandidate(ctx, atom.column, atom.bound, atom.op, atom.scale)
+			hint, cause = makeDirectTemporalCandidate(ctx, atom.column, atom.bound, atom.op, atom.scale)
 		}
 		if cause != nil {
 			return temporalIndexAccess{}, cause
@@ -276,7 +272,7 @@ func temporalCBOStructure(root *plan.Expr, budget *int, ctx context.Context) (in
 	return nodes, predicates, ok
 }
 
-// The fixed topology has at most seven bound endpoints plus its guard. The
+// The fixed topology has at most seven bound endpoints. The
 // encoded form also copies endpoint trees into serial leaves. Reserve twice
 // those copies and their bounded wrapper nodes before any construction. The
 // subsequent walk independently charges inspection of the resulting tree.

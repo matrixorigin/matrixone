@@ -149,11 +149,10 @@ func (c *Compile) Compile(
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
 	}()
 
-	if plan2.HasTemporalPhysicalIndexScans(queryPlan.GetQuery()) && (!c.temporalExecutionAllowed(execTopContext) || !c.temporalIndexPlacementAllowed(queryPlan)) {
+	hasTemporalCandidates := HasTemporalIndexCandidates(queryPlan)
+	if hasTemporalCandidates && (!c.temporalExecutionAllowed(execTopContext) || !c.temporalIndexPlacementAllowed(queryPlan)) {
 		return ErrTemporalAccessDrift
 	}
-
-	hasTemporalCandidates := HasTemporalIndexCandidates(queryPlan)
 	if c.temporalPreflightPending && (c.temporalCandidateTopology || hasTemporalCandidates) && c.temporalAccessIntent != nil &&
 		!c.temporalExecutionAllowed(execTopContext) {
 		return ErrTemporalAccessDrift
@@ -173,9 +172,6 @@ func (c *Compile) Compile(
 		return err
 	}
 	c.temporalCandidateTopology = c.temporalCandidateTopology || hasTemporalCandidates
-	if hasTemporalCandidates {
-		queryPlan = c.prepareTemporalExecutionPlan(execTopContext, queryPlan)
-	}
 
 	// Refresh borrowed CREATE plans before effects without advancing or
 	// rolling back the caller's workspace statement. This also covers

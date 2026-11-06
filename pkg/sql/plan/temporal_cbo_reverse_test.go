@@ -95,7 +95,6 @@ func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
 	}
 	toInput(candidate)
 	toInput(residual)
-	allowTemporalCandidateNarrowingForTest(candidate)
 	candidateExec, err := colexec.NewExpressionExecutor(proc, candidate)
 	require.NoError(t, err)
 	defer candidateExec.Free()

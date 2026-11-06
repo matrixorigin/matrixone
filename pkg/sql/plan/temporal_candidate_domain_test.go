@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -89,10 +88,9 @@ func TestTemporalInteriorDomainUsesActualCurrentTimestamp(t *testing.T) {
 	}
 }
 
-// The oracle is the old four-arm set, derived independently from the scalar
-// bound primitive. It includes raw out-of-calendar int64 values, not only rows
-// that a SQL INSERT normally accepts.
-func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64, scale int32, op types.TemporalOp, zone *time.Location, encoded, allow bool, literal *types.Timestamp) {
+// Check the necessary-range union and independent scalar comparisons, including
+// raw out-of-calendar int64 values that SQL INSERT normally cannot produce.
+func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64, scale int32, op types.TemporalOp, zone *time.Location, encoded bool, literal *types.Timestamp) {
 	t.Helper()
 	proc.Base.UnixTime = clock
 	proc.GetSessionInfo().TimeZone = zone
@@ -106,24 +104,21 @@ func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64
 	column := GetColExpr(Type{Id: int32(types.T_datetime), Scale: scale}, 0, 0)
 	var candidate *pb.Expr
 	if encoded {
-		candidate, _, err = makeEncodedTemporalCandidate(proc.Ctx, GetColExpr(Type{Id: int32(types.T_varchar)}, 0, 0), column, bound, op, scale)
+		candidate, err = makeEncodedTemporalCandidate(proc.Ctx, GetColExpr(Type{Id: int32(types.T_varchar)}, 0, 0), column, bound, op, scale)
 	} else {
-		candidate, _, err = makeDirectTemporalCandidate(proc.Ctx, column, bound, op, scale)
+		candidate, err = makeDirectTemporalCandidate(proc.Ctx, column, bound, op, scale)
 	}
 	require.NoError(t, err)
-	if allow {
-		allowTemporalCandidateNarrowingForTest(candidate)
-	}
 	interval, err := types.BuildTemporalCandidate(proc.Ctx, types.T_datetime, scale, int64(stamp), false, op, zone)
 	require.NoError(t, err)
-	if allow && literal == nil && clock == 1714067100123456000 && scale == 6 {
+	if literal == nil && clock == 1714067100123456000 && scale == 6 {
 		if zone == time.UTC {
 			require.False(t, interval.Full, "the oracle must actually cover selective fixed-zone ranges")
 		} else if zone.String() == "America/New_York" {
 			require.True(t, interval.Full, "named zones retain the complete range")
 		}
 	}
-	if !allow {
+	if interval.Empty {
 		interval = types.TemporalCandidate{Lo: math.MinInt64, Hi: math.MaxInt64, Sentinel: math.MinInt64, Full: true}
 	}
 	maximum := int64(types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
@@ -162,12 +157,11 @@ func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64
 	defer exe.Free()
 	result, err := exe.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
-	guard := function.TemporalTimestampBoundNotEmpty(stamp, int32(op), scale)
 	for i, row := range rows {
 		v := int64(row)
-		old := guard && (interval.Full || v >= interval.Lo && v <= interval.Hi || v == interval.Sentinel || v < -1 || v > maximum)
+		expected := interval.Full || v >= interval.Lo && v <= interval.Hi || v == interval.Sentinel || v < -1 || v > maximum
 		selected := !result.IsNull(uint64(i)) && vector.GetFixedAtWithTypeCheck[bool](result, i)
-		require.Equal(t, old, selected, "clock=%d scale=%d op=%d zone=%s encoded=%v allow=%v row=%d", clock, scale, op, zone, encoded, allow, row)
+		require.Equal(t, expected, selected, "clock=%d scale=%d op=%d zone=%s encoded=%v row=%d", clock, scale, op, zone, encoded, row)
 		if row >= -1 && v <= maximum {
 			scalar := row.ToTimestamp(zone).TruncateToScale(scale)
 			match := false
@@ -202,9 +196,7 @@ func TestTemporalInteriorUnionMatchesFourArmOracle(t *testing.T) {
 			for op := types.TemporalEqual; op <= types.TemporalGreaterEqual; op++ {
 				for _, zone := range zones {
 					for _, encoded := range []bool{false, true} {
-						for _, allow := range []bool{false, true} {
-							checkInteriorTemporalUnion(t, proc, clock, scale, op, zone, encoded, allow, nil)
-						}
+						checkInteriorTemporalUnion(t, proc, clock, scale, op, zone, encoded, nil)
 					}
 				}
 			}
@@ -221,10 +213,8 @@ func TestTemporalInteriorLiteralUnionMatchesFourArmOracle(t *testing.T) {
 		for _, scale := range []int32{0, 3, 6} {
 			for op := types.TemporalEqual; op <= types.TemporalGreaterEqual; op++ {
 				for _, zone := range []*time.Location{time.UTC, time.FixedZone("offset-min", math.MinInt32), time.FixedZone("offset-max", math.MaxInt32)} {
-					for _, allow := range []bool{false, true} {
-						for mode := 0; mode < 2; mode++ {
-							checkInteriorTemporalUnion(t, proc, 0, scale, op, zone, mode != 0, allow, &bound)
-						}
+					for mode := 0; mode < 2; mode++ {
+						checkInteriorTemporalUnion(t, proc, 0, scale, op, zone, mode != 0, &bound)
 					}
 				}
 			}

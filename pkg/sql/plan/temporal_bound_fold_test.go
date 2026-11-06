@@ -46,18 +46,12 @@ func TestTemporalCandidateProvenanceSurvivesFoldAndCopy(t *testing.T) {
 	defer proc.Free()
 	now, err := BindFuncExprImplByPlanExpr(proc.Ctx, "now", nil)
 	require.NoError(t, err)
-	guard, err := BindFuncExprImplByPlanExpr(proc.Ctx, "__mo_temporal_bound_not_empty", []*Expr{
-		now, MakePlan2Int32ConstExprWithType(0), MakePlan2Int32ConstExprWithType(0),
-	})
-	require.NoError(t, err)
-	guard.TemporalCandidateGuard = true
-	column := GetColExpr(Type{Id: int32(types.T_bool)}, 0, 0)
-	filter, err := BindFuncExprImplByPlanExpr(proc.Ctx, "and", []*Expr{column, guard})
+	column := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
+	filter, err := makeDirectTemporalCandidate(proc.Ctx, column, now, types.TemporalLess, 0)
 	require.NoError(t, err)
 	filter.TemporalCandidateFilter = true
 	filter = DeepCopyExpr(filter)
 	require.True(t, filter.TemporalCandidateFilter)
-	require.True(t, filter.GetF().Args[1].TemporalCandidateGuard)
 	var executors []colexec.ExpressionExecutor
 	defer func() {
 		for _, executor := range executors {
@@ -66,22 +60,18 @@ func TestTemporalCandidateProvenanceSurvivesFoldAndCopy(t *testing.T) {
 	}()
 	_, err = ReplaceFoldExpr(proc, filter, &executors)
 	require.NoError(t, err)
-	require.True(t, filter.GetF().Args[1].GetFold().TemporalCandidateGuard)
 	require.NoError(t, EvalFoldExpr(proc, filter, &executors))
 	for _, executor := range executors {
 		executor.ResetForNextQuery()
 	}
 	require.NoError(t, EvalFoldExpr(proc, filter, &executors))
-	require.True(t, filter.GetF().Args[1].GetFold().TemporalCandidateGuard)
 	copy := DeepCopyExpr(filter)
 	require.True(t, copy.TemporalCandidateFilter)
-	require.True(t, copy.GetF().Args[1].GetFold().TemporalCandidateGuard)
 	data, err := proto.Marshal(copy)
 	require.NoError(t, err)
 	var decoded Expr
 	require.NoError(t, proto.Unmarshal(data, &decoded))
 	require.True(t, decoded.TemporalCandidateFilter)
-	require.True(t, decoded.GetF().Args[1].GetFold().TemporalCandidateGuard)
 }
 
 func TestTemporalBoundKeepsClockThroughPlanningFold(t *testing.T) {
@@ -91,7 +81,7 @@ func TestTemporalBoundKeepsClockThroughPlanningFold(t *testing.T) {
 	require.NoError(t, err)
 	bound, err := BindFuncExprImplByPlanExpr(proc.Ctx, "__mo_temporal_datetime_bound", []*Expr{
 		now, MakePlan2Int32ConstExprWithType(int32(0)), MakePlan2Int32ConstExprWithType(0),
-		MakePlan2Int32ConstExprWithType(0), MakePlan2BoolConstExprWithType(true),
+		MakePlan2Int32ConstExprWithType(0),
 	})
 	require.NoError(t, err)
 	serial, err := BindFuncExprImplByPlanExpr(proc.Ctx, "serial", []*Expr{bound})
@@ -117,7 +107,7 @@ func TestTemporalBoundRuntimeFoldRefreshesClock(t *testing.T) {
 	require.NoError(t, err)
 	bound, err := BindFuncExprImplByPlanExpr(proc.Ctx, "__mo_temporal_datetime_bound", []*Expr{
 		now, MakePlan2Int32ConstExprWithType(0), MakePlan2Int32ConstExprWithType(0),
-		MakePlan2Int32ConstExprWithType(0), MakePlan2BoolConstExprWithType(true),
+		MakePlan2Int32ConstExprWithType(0),
 	})
 	require.NoError(t, err)
 	serial, err := BindFuncExprImplByPlanExpr(proc.Ctx, "serial", []*Expr{bound})

@@ -30,7 +30,7 @@ func TestZoneMapCapabilityRegistryCoverage(t *testing.T) {
 		AND, OR, IN, ISNULL, ISNOTNULL, PLUS, MINUS, MULTI, DIV, INTEGER_DIV, UNARY_PLUS, UNARY_MINUS,
 		PREFIX_EQ, PREFIX_BETWEEN, PREFIX_IN_RANGE, PREFIX_IN, IN_RANGE, CEIL, FLOOR, ROUND, PI,
 		TS_TO_TIME, CURRENT_TIMESTAMP, LOCALTIME, DATE, DATE_SUB, FROM_UNIXTIME, YEAR, DATE_TRUNC,
-		TEMPORAL_DATETIME_BOUND, TEMPORAL_TIMESTAMP_BOUND, TEMPORAL_BOUND_NOT_EMPTY}
+		TEMPORAL_DATETIME_BOUND, TEMPORAL_TIMESTAMP_BOUND}
 	families := make(map[int32]bool, len(expected))
 	for _, id := range expected {
 		require.True(t, allSupportedFunctions[id].testFlag(plan.Function_ZONEMAPPABLE))
@@ -57,10 +57,8 @@ func TestZoneMapTemporalHelperScalarPolicy(t *testing.T) {
 		id   int64
 		args []*plan.Expr
 	}{
-		{"datetime bound", EncodeOverloadID(TEMPORAL_DATETIME_BOUND, 0), []*plan.Expr{literal(types.T_timestamp), literal(types.T_int32), literal(types.T_int32), literal(types.T_int32), literal(types.T_bool)}},
-		{"timestamp bound", EncodeOverloadID(TEMPORAL_TIMESTAMP_BOUND, 0), []*plan.Expr{literal(types.T_datetime), literal(types.T_int32), literal(types.T_int32), literal(types.T_int32), literal(types.T_bool)}},
-		{"timestamp guard", EncodeOverloadID(TEMPORAL_BOUND_NOT_EMPTY, 0), []*plan.Expr{literal(types.T_timestamp), literal(types.T_int32), literal(types.T_int32)}},
-		{"datetime guard", EncodeOverloadID(TEMPORAL_BOUND_NOT_EMPTY, 1), []*plan.Expr{literal(types.T_datetime), literal(types.T_int32), literal(types.T_int32)}},
+		{"datetime bound", EncodeOverloadID(TEMPORAL_DATETIME_BOUND, 0), []*plan.Expr{literal(types.T_timestamp), literal(types.T_int32), literal(types.T_int32), literal(types.T_int32)}},
+		{"timestamp bound", EncodeOverloadID(TEMPORAL_TIMESTAMP_BOUND, 0), []*plan.Expr{literal(types.T_datetime), literal(types.T_int32), literal(types.T_int32), literal(types.T_int32)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fn := &plan.Function{Func: &plan.ObjectRef{Obj: tc.id}, Args: tc.args}

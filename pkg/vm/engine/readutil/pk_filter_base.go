@@ -162,7 +162,7 @@ func ConstructBasePKFilter(
 	if tablePrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
 		return BasePKFilter{}, nil
 	}
-	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, primaryKeySortKeyName(tblDef), false)
+	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, primaryKeySortKeyName(tblDef))
 	if err != nil || !filter.Valid {
 		cleanup.run()
 		filter.cleanup = nil
@@ -194,7 +194,7 @@ func ConstructBaseClusterFilter(
 		return BasePKFilter{}, nil
 	}
 	cleanup := &basePKFilterCleanup{}
-	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, name, false)
+	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, name)
 	if err != nil || !filter.Valid {
 		cleanup.run()
 		filter.cleanup = nil
@@ -295,12 +295,10 @@ func constructBaseSortKeyFilter(
 	mp *mpool.MPool,
 	cleanup *basePKFilterCleanup,
 	sortKeyName string,
-	temporalCandidate bool,
 ) (filter BasePKFilter, err error) {
 	if expr == nil {
 		return
 	}
-	temporalCandidate = temporalCandidate || expr.TemporalCandidateFilter
 
 	defer func() {
 		// The serialized compound key columns -- __mo_cpkey_col and the
@@ -319,19 +317,12 @@ func constructBaseSortKeyFilter(
 	}()
 
 	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Fold:
-		fold := exprImpl.Fold
-		if temporalCandidate && types.T(expr.Typ.Id) == types.T_bool && fold != nil && fold.TemporalCandidateGuard &&
-			fold.IsConst && len(fold.Data) == 1 && fold.Data[0] == 0 {
-			return BasePKFilter{Valid: true, Empty: true}, nil
-		}
-		return BasePKFilter{}, nil
 	case *plan.Expr_F:
 		switch name := exprImpl.F.Func.ObjName; name {
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
-				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName, temporalCandidate)
+				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
@@ -383,7 +374,7 @@ func constructBaseSortKeyFilter(
 			)
 
 			for idx := range exprImpl.F.Args {
-				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName, temporalCandidate)
+				ff, err := constructBaseSortKeyFilter(exprImpl.F.Args[idx], tblDef, mp, cleanup, sortKeyName)
 				if err != nil {
 					return BasePKFilter{}, err
 				}

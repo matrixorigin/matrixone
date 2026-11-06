@@ -74,33 +74,32 @@ func temporalCandidateInteriorTimestampBound(bound *plan.Expr) bool {
 // makeDirectTemporalCandidate constructs a typed direct-key hint. This helper
 // does not admit or mark the hint: its caller must first establish the complete
 // scan, ancestor, prepared-provenance, placement and index-completeness proofs.
-// Permission is false until execution placement has been established.
-func makeDirectTemporalCandidate(ctx context.Context, column, bound *plan.Expr, op types.TemporalOp, scale int32) (*plan.Expr, *plan.Expr, error) {
+func makeDirectTemporalCandidate(ctx context.Context, column, bound *plan.Expr, op types.TemporalOp, scale int32) (*plan.Expr, error) {
 	return buildTemporalCandidate(ctx, column, bound, nil, op, scale)
 }
 
 // Serialized temporal access is supported only for a leading component of a
 // composite binary key. Unsupported physical metadata declines the candidate.
-func makeEncodedTemporalCandidate(ctx context.Context, physicalColumn, component, bound *plan.Expr, op types.TemporalOp, scale int32) (*plan.Expr, *plan.Expr, error) {
+func makeEncodedTemporalCandidate(ctx context.Context, physicalColumn, component, bound *plan.Expr, op types.TemporalOp, scale int32) (*plan.Expr, error) {
 	if physicalColumn == nil || physicalColumn.GetCol() == nil || types.T(physicalColumn.Typ.Id) != types.T_varchar ||
 		types.IsUnicodeCollation(uint8(physicalColumn.Typ.Charset)) || physicalColumn.Typ.ValidateCollation() != nil ||
 		component == nil || component.GetCol() == nil || component.Typ.ValidateCollation() != nil {
-		return nil, nil, nil
+		return nil, nil
 	}
-	candidate, guard, err := buildTemporalCandidate(ctx, component, bound, physicalColumn, op, scale)
+	candidate, err := buildTemporalCandidate(ctx, component, bound, physicalColumn, op, scale)
 	if stop := context.Cause(ctx); stop != nil {
-		return nil, nil, stop
+		return nil, stop
 	}
-	return candidate, guard, err
+	return candidate, err
 }
 
-// One topology owns the main interval, zero point, physical tails and guard.
+// One topology owns the main interval, zero point and physical tails.
 // A nonnil physical key emits serialized prefix leaves directly, avoiding an
 // intermediate direct expression tree.
-func buildTemporalCandidate(ctx context.Context, column, bound, physical *plan.Expr, op types.TemporalOp, scale int32) (candidate, guard *plan.Expr, err error) {
+func buildTemporalCandidate(ctx context.Context, column, bound, physical *plan.Expr, op types.TemporalOp, scale int32) (candidate *plan.Expr, err error) {
 	if column == nil || column.GetCol() == nil || bound == nil || scale < 0 || scale > 6 || op > types.TemporalGreaterEqual ||
 		!isDatetimeTimestampTypePair(types.T(column.Typ.Id), types.T(bound.Typ.Id)) || !temporalCandidateBoundSafe(bound) {
-		return nil, nil, moerr.NewInternalError(ctx, "unsupported temporal candidate")
+		return nil, moerr.NewInternalError(ctx, "unsupported temporal candidate")
 	}
 	kind := types.T(column.Typ.Id)
 	bind := func(name string, args ...*plan.Expr) (*plan.Expr, error) {
@@ -112,7 +111,7 @@ func buildTemporalCandidate(ctx context.Context, column, bound, physical *plan.E
 	}
 	control := func(value int32) *plan.Expr { return MakePlan2Int32ConstExprWithType(value) }
 	endpoint := func(selector int32) (*plan.Expr, error) {
-		expr, bindErr := bind(name, DeepCopyExpr(bound), control(int32(op)), control(scale), control(selector), MakePlan2BoolConstExprWithType(false))
+		expr, bindErr := bind(name, DeepCopyExpr(bound), control(int32(op)), control(scale), control(selector))
 		if bindErr == nil {
 			expr.Typ.Scale = column.Typ.Scale
 		}
@@ -149,34 +148,30 @@ func buildTemporalCandidate(ctx context.Context, column, bound, physical *plan.E
 	if lowerRay {
 		lo = literal(math.MinInt64)
 	} else if lo, err = endpoint(0); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if upperRay {
 		hi = literal(math.MaxInt64)
 	} else if hi, err = endpoint(1); err != nil {
-		return nil, nil, err
-	}
-	guard, err = bind("__mo_temporal_bound_not_empty", DeepCopyExpr(bound), control(int32(op)), control(scale))
-	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	candidate, err = leaf("between", lo, hi)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if kind == types.T_datetime {
 		if !interior {
 			point, pointErr := endpoint(2)
 			if pointErr != nil {
-				return nil, nil, pointErr
+				return nil, pointErr
 			}
 			pointExpr, pointErr := leaf("=", point)
 			if pointErr != nil {
-				return nil, nil, pointErr
+				return nil, pointErr
 			}
 			candidate, err = bind("or", candidate, pointExpr)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 		maxDate := int64(types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
@@ -189,14 +184,13 @@ func buildTemporalCandidate(ctx context.Context, column, bound, physical *plan.E
 		for _, tail := range tails {
 			tailExpr, tailErr := leaf("between", literal(tail[0]), literal(tail[1]))
 			if tailErr != nil {
-				return nil, nil, tailErr
+				return nil, tailErr
 			}
 			candidate, err = bind("or", candidate, tailExpr)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 	}
-	candidate, err = bind("and", guard, candidate)
-	return candidate, guard, err
+	return candidate, nil
 }

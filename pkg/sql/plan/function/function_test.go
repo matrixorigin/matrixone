@@ -1496,7 +1496,7 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 			// Temporal bound helpers are statement-stable real-time scalars, not
 			// legacy volatile/no-fold functions. Their own scalar policy is tested
 			// independently in TestZoneMapTemporalHelperScalarPolicy.
-			temporalScalar := fn.functionId == TEMPORAL_DATETIME_BOUND || fn.functionId == TEMPORAL_TIMESTAMP_BOUND || fn.functionId == TEMPORAL_BOUND_NOT_EMPTY
+			temporalScalar := fn.functionId == TEMPORAL_DATETIME_BOUND || fn.functionId == TEMPORAL_TIMESTAMP_BOUND
 			wantStable := temporalScalar || stable[int32(fn.functionId)] && ov.IsVolatile()
 			require.Equal(t, wantStable, ov.executionStable, "function %d overload %d", fn.functionId, index)
 			unstable, known := GetFunctionValueUnstableByID(id)
