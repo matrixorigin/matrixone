@@ -1492,6 +1492,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	// The download outlives ctx once the reader returned in async mode; until then ctx
 	// cancels it.
 	fillCtx, cancelFill := context.WithCancel(context.WithoutCancel(ctx))
+	stopCancelFill := context.AfterFunc(ctx, cancelFill)
+	defer stopCancelFill()
 	diskPath := s.diskCache.pathForFile(file)
 	started := make(chan *objectDownload, 1)
 	setDone := make(chan error, 1)
@@ -1549,6 +1551,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	if captured && s.asyncUpdate {
 		select {
 		case backgroundFills <- struct{}{}:
+			stopCancelFill()
 			go func() {
 				_ = waitSet()
 				<-backgroundFills

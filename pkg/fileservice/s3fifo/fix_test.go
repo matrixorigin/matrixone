@@ -347,3 +347,34 @@ func TestZeroSizeNotGhosted(t *testing.T) {
 	require.Equal(t, 1, n)
 	require.Zero(t, misuse.Load())
 }
+
+// A shard's head deleted after eviction chose that shard does not let eviction take the
+// shard's next member ahead of an older member of another shard.
+func TestEvictRechecksChosenHead(t *testing.T) {
+	var misuse atomic.Int32
+	c := newCache(1 << 20)
+	shard := func(k int) *policyShard[int, *value] { return c.policyOf(hashInt(k)) }
+	a1, b2 := 0, 1
+	for shard(b2) == shard(a1) {
+		b2++
+	}
+	a3 := b2 + 1
+	for shard(a3) != shard(a1) {
+		a3++
+	}
+	for _, k := range []int{a1, b2, a3} {
+		c.Set(k, newValue(k, &misuse), 10)
+	}
+
+	ps, head := c.oldest(true)
+	require.Same(t, shard(a1), ps)
+	c.Delete(a1)
+	_, evicted := c.step(ps, true, head)
+	require.False(t, evicted)
+	require.True(t, c.Contains(a3))
+
+	c.EvictTo(context.Background(), 10)
+	require.False(t, c.Contains(b2), "the oldest member left first")
+	require.True(t, c.Contains(a3))
+	require.Zero(t, misuse.Load())
+}

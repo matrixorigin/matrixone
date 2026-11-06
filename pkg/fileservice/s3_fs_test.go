@@ -3272,3 +3272,38 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 		require.Equal(t, activeBefore, testutil.ToFloat64(metrics.numActiveRead))
 	})
 }
+
+// With every background slot taken, cancelling a reader that waits for its download
+// cancels the download and returns.
+func TestS3FSReadFullObjectToDiskCacheStreamingCancelWhileWaiting(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	for i := 0; i < cap(backgroundFills); i++ {
+		backgroundFills <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < cap(backgroundFills); i++ {
+			<-backgroundFills
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello")) }()
+	cache, _, done := streamFill(t, ctx, func(fillCtx context.Context, _ *int64, _ *int64) (io.ReadCloser, error) {
+		go func() {
+			<-fillCtx.Done()
+			_ = pw.CloseWithError(fillCtx.Err())
+		}()
+		return pr, nil
+	})
+
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before its download ended: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	require.Error(t, waitResult(t, done))
+	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+}

@@ -312,7 +312,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 						continue // ignore
 					}
 
-					d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
+					d.cache.SetOldest(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 				}
 			}
 		}()

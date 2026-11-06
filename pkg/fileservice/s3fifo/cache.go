@@ -591,26 +591,27 @@ func (c *Cache[K, V]) evictOne(capacity, target int64) (removal[K, V], bool) {
 	smallLimit := max(capacity/10-max(capacity-target, 0), 0)
 	for {
 		small := c.smallBytes.Load() > smallLimit || c.mainBytes.Load() == 0
-		if c.oldest(small) == nil {
+		if ps, _ := c.oldest(small); ps == nil {
 			small = !small
 		}
 		for {
-			ps := c.oldest(small)
+			ps, head := c.oldest(small)
 			if ps == nil {
 				if c.smallBytes.Load() == 0 && c.mainBytes.Load() == 0 {
 					return removal[K, V]{}, false
 				}
 				break
 			}
-			if r, evicted := c.step(ps, small); evicted {
+			if r, evicted := c.step(ps, small, head); evicted {
 				return r, true
 			}
 		}
 	}
 }
 
-// oldest returns the policy shard holding the oldest member of the small or the main queue.
-func (c *Cache[K, V]) oldest(small bool) *policyShard[K, V] {
+// oldest returns the policy shard holding the oldest member of the small or the main queue,
+// and that member's order.
+func (c *Cache[K, V]) oldest(small bool) (*policyShard[K, V], uint64) {
 	var found *policyShard[K, V]
 	min := uint64(noOrder)
 	for i := range c.policy {
@@ -623,16 +624,20 @@ func (c *Cache[K, V]) oldest(small bool) *policyShard[K, V] {
 			min, found = h, ps
 		}
 	}
-	return found
+	return found, min
 }
 
-// step takes the oldest member of one queue of ps and evicts it, or moves it on.
-func (c *Cache[K, V]) step(ps *policyShard[K, V], small bool) (removal[K, V], bool) {
+// step takes the oldest member of one queue of ps and evicts it, or moves it on. It does
+// neither when that member is no longer the one at order head.
+func (c *Cache[K, V]) step(ps *policyShard[K, V], small bool, head uint64) (removal[K, V], bool) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	q := &ps.main
 	if small {
 		q = &ps.small
+	}
+	if q.head.Load() != head {
+		return removal[K, V]{}, false
 	}
 	e, ok := q.pop()
 	if !ok {
