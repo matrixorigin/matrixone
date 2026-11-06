@@ -354,10 +354,20 @@ func castPreservesNonNull(expr *plan.Expr) bool {
 	}
 	from, to := types.T(cast.Args[0].Typ.Id), types.T(expr.Typ.Id)
 	textResult := to == types.T_char || to == types.T_varchar || to == types.T_text
-	// Numeric conversions, including formatting as text, return a value or
-	// error for non-NULL input. Precision and signedness do not prove nullness.
-	if (from.IsInteger() || from.IsFloat() || from.IsDecimal()) &&
-		(to.IsInteger() || to.IsFloat() || to.IsDecimal() || textResult) {
+	numericInput := from.IsInteger() || from.IsFloat() || from.IsDecimal()
+	numericResult := to.IsInteger() || to.IsFloat() || to.IsDecimal()
+	// BOOL has no direct float/decimal CAST implementation. BIT uses the
+	// unsigned numeric conversions; its text encoding preserves nullness too.
+	if from == types.T_bool {
+		return to.IsInteger() || to == types.T_bool || to == types.T_bit || textResult
+	}
+	if from == types.T_bit {
+		return numericResult || to == types.T_bool || to == types.T_bit || textResult
+	}
+	// Numeric conversions return a value or error for non-NULL input.
+	// DECIMAL to BOOL is not implemented; numeric to BIT can fail on overflow.
+	if numericInput && (numericResult || textResult || to == types.T_bit ||
+		(to == types.T_bool && !from.IsDecimal())) {
 		return true
 	}
 	// The binder represents decimal syntax such as 0.0 as a string-to-decimal

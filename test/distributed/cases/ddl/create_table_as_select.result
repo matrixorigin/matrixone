@@ -2402,4 +2402,38 @@ insert into mixed_dynamic values(null,null);
 select count(*) from mixed_dynamic;
 ➤ count(*)[-5,64,0]  𝄀
 4
+alter table r add column b bool not null default false;
+alter table r add column bi bit(8) not null default 0;
+update r set b=true,bi=1 where id=3;
+create table boolbit_fallback as select coalesce(r.b,0) as co_bool,ifnull(r.b,0) as if_bool,coalesce(r.bi,0) as co_bit,ifnull(r.bi,0) as if_bit from l left join r on l.id=r.id;
+select cast(co_bool as unsigned) as co_bool,cast(if_bool as unsigned) as if_bool,cast(co_bit as unsigned) as co_bit,cast(if_bit as unsigned) as if_bit from boolbit_fallback order by co_bool;
+➤ co_bool[-5,64,0]  ¦  if_bool[-5,64,0]  ¦  co_bit[-5,64,0]  ¦  if_bit[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  ¦  1
+select column_name,is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name='boolbit_fallback' and column_name in ('co_bool','if_bool','co_bit','if_bit') order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+co_bool  ¦  NO  𝄀
+if_bool  ¦  NO  𝄀
+co_bit  ¦  NO  𝄀
+if_bit  ¦  NO
+insert into boolbit_fallback values(null,0,0,0);
+constraint violation: Column 'co_bool' cannot be null
+insert into boolbit_fallback values(0,null,0,0);
+constraint violation: Column 'if_bool' cannot be null
+insert into boolbit_fallback values(0,0,null,0);
+constraint violation: Column 'co_bit' cannot be null
+insert into boolbit_fallback values(0,0,0,null);
+constraint violation: Column 'if_bit' cannot be null
+select count(*) from boolbit_fallback;
+➤ count(*)[-5,64,0]  𝄀
+3
+create table boolbit_nullable as select coalesce(r.b,cast(null as signed)) as b,ifnull(r.bi,cast(null as unsigned)) as bi from l left join r on l.id=r.id;
+select count(*),count(b),count(bi) from boolbit_nullable;
+➤ count(*)[-5,64,0]  ¦  count(b)[-5,64,0]  ¦  count(bi)[-5,64,0]  𝄀
+3  ¦  2  ¦  2
+insert into boolbit_nullable values(null,null);
+select count(*) from boolbit_nullable;
+➤ count(*)[-5,64,0]  𝄀
+4
 drop database ctas_output_nullability;

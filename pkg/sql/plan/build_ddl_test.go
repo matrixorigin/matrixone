@@ -635,15 +635,18 @@ func TestCastPreservesNonNull(t *testing.T) {
 	numeric := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128, types.T_decimal256}
-	targets := append(append([]types.T{}, numeric...), types.T_char, types.T_varchar, types.T_text)
-	for _, from := range numeric {
+	scalars := append(append([]types.T{}, numeric...), types.T_bool, types.T_bit)
+	targets := append(append([]types.T{}, scalars...), types.T_char, types.T_varchar, types.T_text)
+	for _, from := range scalars {
 		for _, to := range targets {
 			expr := &plan.Expr{Typ: plan.Type{Id: int32(to)}, Expr: &plan.Expr_F{F: &plan.Function{
 				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
 				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(from)}}, {Typ: plan.Type{Id: int32(to)}}},
 			}}}
-			require.True(t, castPreservesNonNull(expr), "%v to %v", from, to)
-			require.False(t, isNonNullLiteralFallback(expr), "nonliteral numeric casts cannot prove a constant fallback")
+			want := !(from == types.T_bool && (to.IsFloat() || to.IsDecimal())) &&
+				!(from.IsDecimal() && to == types.T_bool)
+			require.Equal(t, want, castPreservesNonNull(expr), "%v to %v", from, to)
+			require.False(t, isNonNullLiteralFallback(expr), "nonliteral casts cannot prove a constant fallback")
 		}
 	}
 	for _, test := range []struct {
@@ -667,6 +670,9 @@ func TestCastPreservesNonNull(t *testing.T) {
 		{types.T_varchar, types.T_float64, false},
 		{types.T_varchar, types.T_date, false},
 		{types.T_json, types.T_varchar, false},
+		{types.T_bit, types.T_timestamp, false},
+		{types.T_int64, types.T_timestamp, false},
+		{types.T_bool, types.T_date, false},
 	} {
 		expr := &plan.Expr{Typ: plan.Type{Id: int32(test.to)}, Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
@@ -863,6 +869,20 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 				require.Equal(t, !nullable, cols[i].Typ.NotNullable, "column %d type", i)
 			}
 		})
+	}
+}
+
+func TestCreateTableAsSelectBoolBitFallback(t *testing.T) {
+	for _, typ := range []types.T{types.T_bool, types.T_bit} {
+		for _, fn := range []string{"ifnull", "coalesce"} {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["region"].Cols[0].Typ = plan.Type{Id: int32(typ), Width: 8, NotNullable: true}
+			p, err := buildSingleStmt(mock, t, "create table bool_bit_fallback as select "+fn+"(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=1")
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.True(t, col.Typ.NotNullable, "%v %s", typ, fn)
+			require.False(t, col.Default.NullAbility, "%v %s", typ, fn)
+		}
 	}
 }
 

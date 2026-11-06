@@ -425,11 +425,15 @@ func TestNumericCastNullContract(t *testing.T) {
 		{types.T_decimal64, []types.Decimal64{0, 1, 0}},
 		{types.T_decimal128, []types.Decimal128{{}, {B0_63: 1}, {}}},
 		{types.T_decimal256, nil},
+		{types.T_bool, []bool{false, true, false}},
+		{types.T_bit, []uint64{0, 1, 0}},
 	}
 	typeOf := func(typ types.T) types.Type {
 		result := typ.ToType()
 		if typ.IsDecimal() {
 			result.Width, result.Scale = 18, 0
+		} else if typ == types.T_bit {
+			result.Width = 64
 		}
 		return result
 	}
@@ -439,8 +443,15 @@ func TestNumericCastNullContract(t *testing.T) {
 	}
 	targets = append(targets, types.New(types.T_float32, 10, 2), types.New(types.T_float64, 10, 2),
 		types.New(types.T_char, 64, 0), types.New(types.T_varchar, 64, 0), types.T_text.ToType())
+	tested := 0
 	for _, source := range inputs {
 		for _, target := range targets {
+			// These pairs are not implemented by CAST, not admitted by the proof.
+			if (source.typ == types.T_bool && (target.Oid.IsFloat() || target.Oid.IsDecimal())) ||
+				(source.typ.IsDecimal() && target.Oid == types.T_bool) {
+				continue
+			}
+			tested++
 			t.Run(fmt.Sprintf("%s_to_%s_%d_%d", source.typ, target.Oid, target.Width, target.Scale), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
@@ -464,13 +475,19 @@ func TestNumericCastNullContract(t *testing.T) {
 				require.False(t, result.IsNull(1))
 				require.True(t, result.IsNull(2))
 				if target.Oid == types.T_char || target.Oid == types.T_varchar || target.Oid == types.T_text {
-					require.Equal(t, "0", string(result.GetBytesAt(0)))
-					require.Equal(t, "1", string(result.GetBytesAt(1)))
+					if source.typ == types.T_bit {
+						require.Equal(t, []byte{0}, result.GetBytesAt(0))
+						require.Equal(t, []byte{1}, result.GetBytesAt(1))
+					} else {
+						require.Equal(t, "0", string(result.GetBytesAt(0)))
+						require.Equal(t, "1", string(result.GetBytesAt(1)))
+					}
 				}
 			})
 		}
 	}
-	for _, targetType := range []types.Type{types.T_int8.ToType(), types.New(types.T_varchar, 1, 0)} {
+	require.Equal(t, 290, tested, "every admitted scalar/target configuration must execute")
+	for _, targetType := range []types.Type{types.T_int8.ToType(), types.New(types.T_varchar, 1, 0), types.New(types.T_bit, 1, 0)} {
 		t.Run(fmt.Sprintf("%s_error", targetType.Oid), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
