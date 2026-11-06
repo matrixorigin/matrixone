@@ -76,7 +76,7 @@ Routine_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Routine_type  ¦  varchar(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
 Proc_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦  
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦  
 show columns from `columns_priv`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 Host  ¦  char(255)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
@@ -84,7 +84,7 @@ Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Column_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 show columns from `tables_priv`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -93,7 +93,7 @@ Db  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 User  ¦  char(32)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Table_name  ¦  char(64)  ¦  NO  ¦  PRI  ¦    ¦    ¦    𝄀
 Grantor  ¦  varchar(288)  ¦  NO  ¦  MUL  ¦    ¦    ¦    𝄀
-Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦    ¦    𝄀
+Timestamp  ¦  timestamp  ¦  NO  ¦    ¦  CURRENT_TIMESTAMP()  ¦  DEFAULT_GENERATED  ¦    𝄀
 Table_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
 Column_priv  ¦  varchar(10)  ¦  NO  ¦    ¦    ¦    ¦  
 use information_schema;
@@ -258,8 +258,8 @@ show columns from `mo_data_key`;
 account_id  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 key_id  ¦  uuid  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 encrypted_key  ¦  varchar(128)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-create_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦    ¦    𝄀
-update_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦    ¦  
+create_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦  DEFAULT_GENERATED  ¦    𝄀
+update_time  ¦  timestamp  ¦  NO  ¦    ¦  current_timestamp()  ¦  DEFAULT_GENERATED  ¦  
 drop database if exists test;
 create database test;
 use test;
