@@ -411,6 +411,14 @@ func TestTemporalCBOBaseCostRespectsLocalReaders(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Positive(t, work)
+		// Compare costing against the ordinary query-plan DOP, capped by the
+		// observed number of matching blocks.
+		cpus := min(int64(system.GoMaxProcs()), maxDOP)
+		queryPlan := &pb.Plan{Plan: &pb.Plan_Query{Query: builder.qry}}
+		CalcQueryDOP(queryPlan, int32(cpus), 1, GetExecType(builder.qry, false, false))
+		readers := min(float64(scan.Stats.Dop), float64(blocks))
+		serialWork := float64(source.input.Rows) * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork)
+		require.InDelta(t, serialWork/readers, work, serialWork*1e-8)
 		return work
 	}
 	serial := observe(1, 4, false)
