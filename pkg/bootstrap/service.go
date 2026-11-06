@@ -133,7 +133,6 @@ func init() {
 }
 
 type service struct {
-	sid     string
 	logger  *log.MOLogger
 	lock    Locker
 	clock   clock.Clock
@@ -148,23 +147,21 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch                               int
-		catalogObjectLimit                               uint64
-		decisionFileService                              fileservice.FileService
-		checkUpgradeDuration                             time.Duration
-		checkUpgradeTenantDuration                       time.Duration
-		upgradeTenantTasks                               int
-		finalVersionCompleted                            atomic.Bool
-		failure                                          atomic.Pointer[upgradeFailure]
-		orphanPrivilegeMaintenanceWorkerRunning          atomic.Bool
-		orphanPrivilegeMaintenanceRunning                atomic.Bool
-		orphanPrivilegeMaintenanceState                  orphanPrivilegeMaintenanceState
-		orphanPrivilegeMaintenanceStart                  func() string
-		informationSchemaViewsMaintenanceRunning         atomic.Bool
-		informationSchemaViewsMaintenanceState           informationSchemaViewsMaintenanceState
-		informationSchemaColumnsTablesMaintenanceRunning atomic.Bool
-		informationSchemaColumnsTablesMaintenanceState   informationSchemaColumnsTablesMaintenanceState
-		kek                                              string
+		upgradeTenantBatch                       int
+		catalogObjectLimit                       uint64
+		decisionFileService                      fileservice.FileService
+		checkUpgradeDuration                     time.Duration
+		checkUpgradeTenantDuration               time.Duration
+		upgradeTenantTasks                       int
+		finalVersionCompleted                    atomic.Bool
+		failure                                  atomic.Pointer[upgradeFailure]
+		orphanPrivilegeMaintenanceWorkerRunning  atomic.Bool
+		orphanPrivilegeMaintenanceRunning        atomic.Bool
+		orphanPrivilegeMaintenanceState          orphanPrivilegeMaintenanceState
+		orphanPrivilegeMaintenanceStart          func() string
+		informationSchemaViewsMaintenanceRunning atomic.Bool
+		informationSchemaViewsMaintenanceState   informationSchemaViewsMaintenanceState
+		kek                                      string
 	}
 }
 
@@ -178,7 +175,6 @@ func NewService(
 	opts ...Option,
 ) Service {
 	s := &service{
-		sid:     sid,
 		clock:   clock,
 		exec:    exec,
 		lock:    lock,
@@ -497,6 +493,16 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 			// commit can safely reconcile both definitions again.
 			entry := versions.InformationSchemaTablesUpgradeEntry()
 			if err := entry.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
+			// Same-version refresh rail for PARTITIONS: a cluster already at
+			// the current version keeps its persisted definition until this
+			// reconciliation replaces it; the definition check makes the
+			// converged state an idempotent no-op. Crossing tenants keep
+			// using the v4_0_7 tenant upgrade entry.
+			partitions := versions.InformationSchemaPartitionsUpgradeEntry()
+			if err := partitions.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
 				return err
 			}
 

@@ -112,7 +112,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
-	flatFixedSize := 0
+	uniformRowSize := 0
 	add := func(row int, size int) error {
 		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
@@ -145,10 +145,11 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			continue
 		}
 
-		// Raw string keys need no per-row type/collation dispatch. Keep the
+		// Flat byte-domain strings need no per-row type/collation dispatch. Keep the
 		// exact sizing pass (and allocation admission) before encoding, but
 		// read the physical vector and nullable bitmap only once per column.
-		if isFlatRawStringHashKey(vec) {
+		flatChar := isFlatCharStringHashKey(vec)
+		if isFlatRawStringHashKey(vec) || flatChar {
 			values, area := vector.MustVarlenaRawData(vec)
 			nsp := vec.GetNulls()
 			hasNulls := nsp.Any()
@@ -162,7 +163,11 @@ func (itr *strHashmapIterator) prepareHashKeys(
 					}
 					continue
 				}
-				if err := add(i, prefix+4+len(values[row].GetByteSlice(area))); err != nil {
+				value := values[row].GetByteSlice(area)
+				if flatChar {
+					value = canonicalVarlenaHashValue(types.T_char, value)
+				}
+				if err := add(i, prefix+4+len(value)); err != nil {
 					return err
 				}
 			}
@@ -176,31 +181,31 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if !hasGrouping && !vec.GetNulls().Any() {
 			if vec.GetType().IsFixedLen() {
 				size := prefix + vec.GetType().TypeSize()
-				if size < 0 || flatFixedSize > maxInt-size {
+				if size < 0 || uniformRowSize > maxInt-size {
 					return mpool.ErrAllocationAccountInvalid
 				}
-				flatFixedSize += size
+				uniformRowSize += size
 				continue
 			}
 			if vec.IsConst() {
 				value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(0))
-				valueSize := len(value)
-				if vec.GetType().Oid == types.T_json {
-					valueSize = keycodec.CanonicalJSONSize(value)
+				size := prefix + 4 + hashKeyValueSize(vec.GetType().Oid, value)
+				if size < 0 || uniformRowSize > maxInt-size {
+					return mpool.ErrAllocationAccountInvalid
 				}
-				size := prefix + 4 + valueSize
-				for i := 0; i < count; i++ {
-					if err := add(i, size); err != nil {
-						return err
-					}
-				}
+				uniformRowSize += size
 				continue
 			}
 			values, area := vector.MustVarlenaRawData(vec)
-			if vec.GetType().Oid == types.T_json {
+			if count > 0 && (vec.GetType().Oid == types.T_char ||
+				(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) {
+				if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
+					return err
+				}
+			} else if oid := vec.GetType().Oid; oid == types.T_json || oid.IsBlockScaledArray() {
 				for i := 0; i < count; i++ {
 					value := values[start+i].GetByteSlice(area)
-					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
+					if err := add(i, prefix+4+hashKeyValueSize(oid, value)); err != nil {
 						return err
 					}
 				}
@@ -218,6 +223,13 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		}
 
 		fixed := vec.GetType().IsFixedLen()
+		if !fixed && count > 0 && (vec.GetType().Oid == types.T_char ||
+			(types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString())) && !vec.IsConst() {
+			if err := itr.sizeCanonicalStringKeys(vec, start, count, prefix); err != nil {
+				return err
+			}
+			continue
+		}
 		for i := 0; i < count; i++ {
 			row := start + i
 			if withDomain && vec.GetGrouping().Contains(uint64(row)) {
@@ -245,19 +257,15 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				valueRow = 0
 			}
 			value := canonicalVarlenaHashValueForType(*vec.GetType(), vec.GetBytesAt(valueRow))
-			valueSize := len(value)
-			if vec.GetType().Oid == types.T_json {
-				valueSize = keycodec.CanonicalJSONSize(value)
-			}
-			if err := add(i, prefix+4+valueSize); err != nil {
+			if err := add(i, prefix+4+hashKeyValueSize(vec.GetType().Oid, value)); err != nil {
 				return err
 			}
 		}
 	}
-	// Fixed, flat columns contribute the same width to every row. Accumulate
-	// them once above instead of walking the row set once per key column.
+	// Fixed, flat columns and non-null constants contribute a uniform size.
+	// Accumulate it once instead of walking the row set per key column.
 	for i := 0; i < count; i++ {
-		if err := add(i, flatFixedSize); err != nil {
+		if err := add(i, uniformRowSize); err != nil {
 			return err
 		}
 	}
@@ -370,11 +378,19 @@ func (m *StrHashMap) Size() int64 {
 }
 
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	if count == UnitLimit && len(vecs) >= 2 && len(vecs) <= 16 &&
+		itr.encodeFlatFixedKeyRows(vecs, start, count) {
+		return
+	}
 	for _, vec := range vecs {
+		if isFlatCharStringHashKey(vec) {
+			fillFlatCharStringHashKey(itr, vec, count, start)
+			continue
+		}
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
 			default:
 				fillGroupingAwareStr(itr, vec, count, start)
@@ -393,7 +409,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		} else {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
-				types.T_array_bf16, types.T_array_float16:
+				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 				fillCanonicalStringGroupStr(itr, vec, count, start)
 			default:
 				fillStringGroupStr(itr, vec, count, start, len(vecs))
@@ -406,6 +422,71 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
+}
+
+// hashKeyValueSize is the length appendVarlenaHashKey appends for a value already passed
+// through canonicalVarlenaHashValueForType: a JSON or vecf8/vecf4 key differs in length
+// from the stored value. keycodec.CanonicalValueSize takes the stored value instead and
+// would apply the collation key a second time.
+func hashKeyValueSize(oid types.T, value []byte) int {
+	switch {
+	case oid == types.T_json:
+		return keycodec.CanonicalJSONSize(value)
+	case oid.IsBlockScaledArray():
+		return keycodec.CanonicalVecBlockSize(value)
+	}
+	return len(value)
+}
+
+// encodeFlatFixedKeyRows writes complete fixed-width keys in one pass over the
+// rows. prepareHashKeys has already validated the vectors and allocated each
+// key's exact capacity, including its domain bytes and minimum padding.
+// Representations needing normalization or per-row metadata use the original
+// column-wise encoder.
+func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, start, count int) bool {
+	if len(vecs) < 2 || len(vecs) > 16 {
+		return false
+	}
+	type fixedKeyColumn struct {
+		data  []byte
+		width int
+	}
+	var columns [16]fixedKeyColumn
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	keySize := 0
+	for i, vec := range vecs {
+		typ := vec.GetType()
+		// typeswitch:partial bf16/float16/float8/float4 zeros are stored as +0 (CanonicalLowPrecFloat), so their bytes are the key
+		if !typ.IsFixedLen() || typ.Oid == types.T_float32 || typ.Oid == types.T_float64 ||
+			vec.IsConst() || vec.HasGrouping() || vec.GetNulls().Any() {
+			return false
+		}
+		width := typ.TypeSize()
+		columns[i] = fixedKeyColumn{data: vec.GetData(), width: width}
+		keySize += width
+		if withDomain {
+			keySize++
+		}
+	}
+	bufferSize := max(16, keySize)
+	for row := 0; row < count; row++ {
+		key := itr.keys[row][:bufferSize]
+		offset := 0
+		for _, column := range columns[:len(vecs)] {
+			if withDomain {
+				key[offset] = 0
+				offset++
+			}
+			from := (start + row) * column.width
+			copy(key[offset:offset+column.width], column.data[from:from+column.width])
+			offset += column.width
+		}
+		if offset < 16 {
+			copy(key[offset:16], hashtable.StrKeyPadding[offset:])
+		}
+		itr.keys[row] = key
+	}
+	return true
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
@@ -424,6 +505,8 @@ func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
 		return keycodec.AppendCanonicalVecF64(dst, value)
 	case types.T_array_bf16, types.T_array_float16:
 		return keycodec.AppendCanonicalVecF16(dst, value)
+	case types.T_array_float8, types.T_array_float4:
+		return keycodec.AppendCanonicalVecBlock(dst, value)
 	default:
 		return append(dst, value...)
 	}
@@ -639,6 +722,85 @@ func isFlatRawStringHashKey(vec *vector.Vector) bool {
 	typ := vec.GetType()
 	return typ.Oid.IsMySQLString() && typ.Oid != types.T_char &&
 		!types.IsUnicodeCollation(typ.Charset) && !vec.IsConst() && !vec.HasGrouping()
+}
+
+func (itr *strHashmapIterator) sizeCanonicalStringKeys(vec *vector.Vector, start, n, prefix int) error {
+	values, area := vector.MustVarlenaRawData(vec)
+	typ := vec.GetType()
+	nsp, gsp := vec.GetNulls(), vec.GetGrouping()
+	hasNulls, hasGrouping := nsp.Any(), prefix != 0 && vec.HasGrouping()
+	const maxInt = int(^uint(0) >> 1)
+	if types.IsUnicodeCollation(typ.Charset) {
+		for i := 0; i < n; i++ {
+			row, size := start+i, 0
+			if hasGrouping && gsp.Contains(uint64(row)) {
+				size = 1
+			} else if hasNulls && nsp.Contains(uint64(row)) {
+				if itr.mp.hasNull {
+					size = 1
+				}
+			} else {
+				value := types.CollationKeyOrOriginal(typ.Charset, values[row].GetByteSlice(area))
+				size = prefix + 4 + len(value)
+			}
+			if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			itr.zValues[i] += int64(size)
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			row, size := start+i, 0
+			if hasGrouping && gsp.Contains(uint64(row)) {
+				size = 1
+			} else if hasNulls && nsp.Contains(uint64(row)) {
+				if itr.mp.hasNull {
+					size = 1
+				}
+			} else {
+				value := keycodec.CanonicalCharValue(values[row].GetByteSlice(area))
+				size = prefix + 4 + len(value)
+			}
+			if size < 0 || itr.zValues[i] > int64(maxInt-size) {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			itr.zValues[i] += int64(size)
+		}
+	}
+	return nil
+}
+
+// CHAR cannot use the raw-string path: its byte domain removes trailing ASCII
+// spaces. Unicode keys, constants and GROUPING rows keep their existing path.
+func isFlatCharStringHashKey(vec *vector.Vector) bool {
+	typ := vec.GetType()
+	return typ.Oid == types.T_char && !types.IsUnicodeCollation(typ.Charset) &&
+		!vec.IsConst() && !vec.HasGrouping()
+}
+
+func fillFlatCharStringHashKey(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+	values, area := vector.MustVarlenaRawData(vec)
+	nsp := vec.GetNulls()
+	hasNulls := nsp.Any()
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	for i := 0; i < n; i++ {
+		row := start + i
+		if hasNulls && nsp.Contains(uint64(row)) {
+			if itr.mp.hasNull {
+				itr.keys[i] = append(itr.keys[i], byte(1))
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		value := canonicalVarlenaHashValue(types.T_char, values[row].GetByteSlice(area))
+		length := uint32(len(value))
+		if withDomain {
+			itr.keys[i] = append(itr.keys[i], byte(0))
+		}
+		itr.keys[i] = append(itr.keys[i], util.UnsafeToBytes(&length)...)
+		itr.keys[i] = append(itr.keys[i], value...)
+	}
 }
 
 func fillFlatRawStringGroupingAwareStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {

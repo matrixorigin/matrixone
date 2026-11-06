@@ -68,16 +68,19 @@ func TestLoadAutoIncrementObservedDemand(t *testing.T) {
 		// Four pipeline batches cross the default cache size and exercise learned
 		// demand through the real LOAD consumer without a throughput assertion.
 		const n = 32768
-		load(file("bulk.csv", strings.Repeat("7\n", n)), "generated", "(v)")
+		result := load(file("bulk.csv", strings.Repeat("7\n", n)), "generated", "(v)")
+		first, err := result.LastInsertId()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), first)
 		require.Equal(t, uint64(n), number("select count(*) from generated"))
 		require.Equal(t, uint64(1), number("select min(id) from generated"))
 		require.Equal(t, uint64(n), number("select max(id) from generated"))
-		// LOAD preserves the session baseline (frontend status_stmt.go); INSERT
-		// below exercises the first-generated-ID protocol result.
-		require.Zero(t, number("select last_insert_id()"))
+		// LOAD publishes the first generated ID in both the protocol and session;
+		// subsequent INSERTs continue from the allocated range.
+		require.Equal(t, uint64(1), number("select last_insert_id()"))
 		require.Equal(t, uint64(n+1), number("select auto_increment from information_schema.tables where table_schema=database() and table_name='generated'"))
-		result := exec("insert into generated(v) values(8),(9)")
-		first, err := result.LastInsertId()
+		result = exec("insert into generated(v) values(8),(9)")
+		first, err = result.LastInsertId()
 		require.NoError(t, err)
 		require.Equal(t, int64(n+1), first)
 		result = exec("insert into generated values(NULL,10),(1000000,11),(NULL,12)")
@@ -105,9 +108,12 @@ func TestLoadAutoIncrementObservedDemand(t *testing.T) {
 		exec("set auto_increment_increment=4")
 		exec("set auto_increment_offset=3")
 		exec("create table series(id bigint auto_increment primary key,v int)")
-		load(file("series.csv", "1\n2\n3\n"), "series", "(v)")
+		result = load(file("series.csv", "1\n2\n3\n"), "series", "(v)")
+		first, err = result.LastInsertId()
+		require.NoError(t, err)
+		require.Equal(t, int64(3), first)
 		require.Equal(t, uint64(3), number("select count(*) from series where id in(3,7,11)"))
-		require.Equal(t, previous, number("select last_insert_id()"))
+		require.Equal(t, uint64(3), number("select last_insert_id()"))
 		exec("set auto_increment_increment=1")
 		exec("set auto_increment_offset=1")
 
@@ -126,5 +132,64 @@ func TestLoadAutoIncrementObservedDemand(t *testing.T) {
 			}
 			require.Equal(t, uint64(2), number("select count(*) from "+table+" where id in(1,2)"))
 		}
+	})
+}
+
+// A manual insert on a second allocator owner can claim an ID still cached on
+// the first CN. One CN cannot construct this state: its manual insert also
+// advances that same cache. Reuse the canonical two-CN fixture, with three rows.
+func TestLoadAutoIncrementManualConflict(t *testing.T) {
+	defer func() { require.NoError(t, embed.CloseBaseClusterTests()) }()
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		var conns [2]*sql.Conn
+		for i := range conns {
+			cn, err := c.GetCNService(i)
+			require.NoError(t, err)
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer db.Close()
+			conns[i], err = db.Conn(ctx)
+			require.NoError(t, err)
+			defer conns[i].Close()
+		}
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists auto_increment_manual_conflict")
+		exec := func(i int, q string) {
+			t.Helper()
+			_, err := conns[i].ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		exec(0, "create database auto_increment_manual_conflict")
+		// INSERT ALL sends generated values through a remote PreInsert. A new
+		// target can still have an empty partition on that CN; keep its first range.
+		exec(0, "create table auto_increment_manual_conflict.fresh(id bigint auto_increment primary key,v int)")
+		exec(0, "create table auto_increment_manual_conflict.source(v int)")
+		exec(0, "insert into auto_increment_manual_conflict.source values(1),(2),(3)")
+		exec(0, "insert all into auto_increment_manual_conflict.fresh(v) select v from auto_increment_manual_conflict.source")
+		var first, last, distinctIDs uint64
+		require.NoError(t, conns[0].QueryRowContext(ctx, "select min(id),max(id),count(distinct id) from auto_increment_manual_conflict.fresh").Scan(&first, &last, &distinctIDs))
+		require.Equal(t, uint64(1), first)
+		require.Equal(t, uint64(3), last)
+		require.Equal(t, uint64(3), distinctIDs)
+		exec(0, "create table auto_increment_manual_conflict.t(id bigint auto_increment primary key,v int)")
+		exec(0, "insert into auto_increment_manual_conflict.t(v) values(1)") // CN 0 retains ID 2.
+		exec(1, "insert into auto_increment_manual_conflict.t values(2,2)")
+		var flush string
+		require.NoError(t, conns[1].QueryRowContext(ctx, "select mo_ctl('dn','flush','auto_increment_manual_conflict.t')").Scan(&flush))
+		var next uint64
+		require.NoError(t, conns[0].QueryRowContext(ctx, "select auto_increment from information_schema.tables where table_schema='auto_increment_manual_conflict' and table_name='t'").Scan(&next))
+		require.Equal(t, uint64(2), next, "the first CN must still hold the colliding cached ID")
+		path := filepath.Join(t.TempDir(), "one.csv")
+		require.NoError(t, os.WriteFile(path, []byte("3\n"), 0600))
+		exec(0, "load data infile '"+strings.ReplaceAll(path, "'", "''")+"' into table auto_increment_manual_conflict.t(v)")
+		var rows, distinct, manual, generated uint64
+		require.NoError(t, conns[0].QueryRowContext(ctx, "select count(*),count(distinct id),sum(id=2 and v=2),sum(id=3 and v=3) from auto_increment_manual_conflict.t").Scan(&rows, &distinct, &manual, &generated))
+		require.Equal(t, uint64(3), rows)
+		require.Equal(t, rows, distinct)
+		require.Equal(t, uint64(1), manual)
+		require.Equal(t, uint64(1), generated)
 	})
 }

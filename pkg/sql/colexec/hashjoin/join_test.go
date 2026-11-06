@@ -87,6 +87,7 @@ func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	key := newExpr(0, types.T_int32.ToType())
+	floatKey := newExpr(0, types.T_float64.ToType())
 
 	tests := []struct {
 		name string
@@ -109,6 +110,26 @@ func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
 				JoinType: plan.Node_MARK,
 				EqConds:  [][]*plan.Expr{{key, key}, {key, key}},
 			},
+		},
+		{
+			name: "existence mode on inner join",
+			arg:  &HashJoin{JoinType: plan.Node_INNER, ExistenceOnly: true},
+		},
+		{
+			name: "existence mode on shuffle",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, IsShuffle: true, EqConds: [][]*plan.Expr{{key, key}, {key, key}}},
+		},
+		{
+			name: "existence mode on right join",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, IsRightJoin: true, EqConds: [][]*plan.Expr{{key, key}, {key, key}}},
+		},
+		{
+			name: "existence mode with floating-point keys",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, EqConds: [][]*plan.Expr{{floatKey, floatKey}, {floatKey, floatKey}}},
+		},
+		{
+			name: "existence mode with PK shortcut",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, HashOnPK: true, EqConds: [][]*plan.Expr{{key, key}, {key, key}}},
 		},
 		{
 			name: "build-side result column",

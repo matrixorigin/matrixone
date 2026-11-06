@@ -199,16 +199,20 @@ func unmarshalSpillGroupByRows(
 }
 
 type ResHashRelated struct {
-	mp         *mpool.MPool
-	Hash       hashmap.HashMap
-	TxnItr     hashmap.TransactionalIterator
-	insertPlan hashmap.InsertPlan
+	mp              *mpool.MPool
+	Hash            hashmap.HashMap
+	TxnItr          hashmap.TransactionalIterator
+	insertPlan      hashmap.InsertPlan
+	compact         *compactGroupLookup
+	compactRows     int
+	compactDisabled bool
 }
 
 type groupInsertPreview struct {
-	values    []uint64
-	inserted  []uint8
-	newGroups int
+	values       []uint64
+	inserted     []uint8
+	newGroups    int
+	existingOnly bool
 }
 
 type groupKeySourcePublication struct {
@@ -248,6 +252,9 @@ func (ctr *container) commitGroupByChunk(
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	if preview.existingOnly {
+		return preview.values, 0, nil
+	}
 	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
 	if !hasStringSourceMetadata {
 		for _, vec := range vectors {
@@ -271,13 +278,10 @@ func (ctr *container) commitGroupByChunk(
 		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	more, err := ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
+	err = ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, preview.newGroups, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
-	}
-	if more != preview.newGroups {
-		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
 	if hasStringSourceMetadata {
 		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
@@ -285,7 +289,7 @@ func (ctr *container) commitGroupByChunk(
 		}
 		ctr.groupKeyStringSourceMetadata = true
 	}
-	return values, more, nil
+	return values, preview.newGroups, nil
 }
 
 func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
@@ -505,6 +509,7 @@ func (hr *ResHashRelated) BuildHashTable(
 		return moerr.NewInternalError(ctx, "hr.map mpool reset to different mpool")
 	}
 	if rebuild {
+		hr.freeCompactGroups()
 		if hr.Hash != nil {
 			hr.Hash.Free()
 			hr.Hash = nil
@@ -574,6 +579,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	return nil
 }
 func (hr *ResHashRelated) Free0() {
+	hr.freeCompactGroups()
 	if hr.Hash != nil {
 		hr.Hash.Free()
 		hr.Hash = nil
@@ -585,43 +591,17 @@ func (hr *ResHashRelated) Free0() {
 	hr.mp = nil
 }
 
-// countNonZeroAndFindKth is a helper function to count the number of non-zero values
-// and find index of values, that is the kth non-zero, -1 if there are less than k
-// non-zero values.
-func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
-	count = 0
-	kth = -1
-	if len(values) < k {
-		for _, v := range values {
-			if v == 0 {
-				continue
+// findKthNonZero returns the row of the kth selected value, or -1 if absent.
+func findKthNonZero(values []uint8, k int) int {
+	for row, flag := range values {
+		if flag != 0 {
+			k--
+			if k == 0 {
+				return row
 			}
-			count++
-		}
-		return count, kth
-	}
-
-	for i, v := range values {
-		if v == 0 {
-			continue
-		}
-
-		count++
-		if count == k {
-			kth = i
-			break
 		}
 	}
-
-	if kth != -1 {
-		for i := kth + 1; i < len(values); i++ {
-			if values[i] == 0 {
-				continue
-			}
-			count++
-		}
-	}
-	return count, kth
+	return -1
 }
 
 func resizeGroupScratch[T any](
@@ -2028,7 +2008,7 @@ func hllVectorStateSupported(
 	}
 	switch types.T(args[0].Typ.Id) {
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

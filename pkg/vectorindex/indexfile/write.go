@@ -17,7 +17,6 @@ package indexfile
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -40,32 +39,33 @@ const FuncName = "index_file_chunks"
 
 // Write stores the bytes of src as the chunk rows of ref in env's transaction and caches
 // the file. ref.Size is ignored; ref.Checksum names the cached file when set (a CDC tail
-// frame's checksum), otherwise the MD5 does. runSQL runs one statement in env's
+// frame's checksum), otherwise the file's Checksum does. runSQL runs one statement in env's
 // transaction; each writes at most ChunksPerStatement chunks through
-// INSERT ... SELECT FROM index_file_chunks(...). It returns the file size and hex MD5.
+// INSERT ... SELECT FROM index_file_chunks(...). It returns the file size and Checksum.
 func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sql string) error) (size int64, sum string, err error) {
 	check := ref
 	check.Size = 0
 	if check.Checksum == "" {
-		check.Checksum = "md5"
+		check.Checksum = "crc"
 	}
 	if err := check.validate(); err != nil {
 		return 0, "", err
 	}
 
-	stage, err := newStagingWriter(env.Cache)
+	stage, err := newStagingWriter(env.Cache, env.TempDir)
 	if err != nil {
 		return 0, "", err
 	}
 	defer stage.close()
 
-	md5h, crch := md5.New(), crc32.New(castagnoli)
-	size, err = io.Copy(io.MultiWriter(stage, md5h, crch), src)
+	crch := crc32.New(castagnoli)
+	size, err = io.Copy(io.MultiWriter(stage, crch), src)
 	if err != nil {
 		return 0, "", err
 	}
 	tmp := stage.f
-	sum = hex.EncodeToString(md5h.Sum(nil))
+	crc := crch.Sum32()
+	sum = formatCRC(crc)
 	ref.Size = size
 	if ref.Checksum == "" {
 		ref.Checksum = sum
@@ -93,7 +93,6 @@ func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sq
 			return 0, "", err
 		}
 		name := entryName(rel.GetTableID(ctx), &ref)
-		crc := crch.Sum32()
 		written, err := env.Cache.Put(ctx, name, []fileservice.IndexCacheFile{
 			{Name: dataFile, Path: tmp.Name()},
 			{Name: manifestFile, Open: func(context.Context) (io.ReadCloser, error) {
@@ -118,27 +117,31 @@ type stagingWriter struct {
 	remove  func()
 	cached  bool
 	written int64
+	tempDir string
 }
 
-func newStagingWriter(cache *fileservice.IndexFileCache) (*stagingWriter, error) {
+func newStagingWriter(cache *fileservice.IndexFileCache, tempDir string) (*stagingWriter, error) {
 	if cache != nil {
 		if f, remove, err := cache.CreateTempFile(); err == nil {
-			return &stagingWriter{f: f, remove: remove, cached: true}, nil
+			return &stagingWriter{f: f, remove: remove, cached: true, tempDir: tempDir}, nil
 		}
 	}
-	f, remove, err := createPrivateTemp()
+	f, remove, err := createPrivateTemp(tempDir)
 	if err != nil {
 		return nil, err
 	}
-	return &stagingWriter{f: f, remove: remove}, nil
+	return &stagingWriter{f: f, remove: remove, tempDir: tempDir}, nil
 }
 
-func createPrivateTemp() (*os.File, func(), error) {
-	f, err := os.CreateTemp("", "indexfile-*")
+// createPrivateTemp creates a temp file in dir, unlinked at once so a crash leaves
+// nothing behind.
+func createPrivateTemp(dir string) (*os.File, func(), error) {
+	f, err := os.CreateTemp(dir, "indexfile-*")
 	if err != nil {
 		return nil, nil, err
 	}
-	return f, func() { _ = os.Remove(f.Name()) }, nil
+	_ = os.Remove(f.Name())
+	return f, func() {}, nil
 }
 
 func (w *stagingWriter) Write(p []byte) (int, error) {
@@ -156,7 +159,7 @@ func (w *stagingWriter) Write(p []byte) (int, error) {
 }
 
 func (w *stagingWriter) toPrivate() error {
-	f, remove, err := createPrivateTemp()
+	f, remove, err := createPrivateTemp(w.tempDir)
 	if err != nil {
 		return err
 	}

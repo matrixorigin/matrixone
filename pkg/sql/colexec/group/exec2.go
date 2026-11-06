@@ -309,6 +309,12 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
+			for i, arg := range ag.GetArgExpressions() {
+				// Most aggregate arguments need no specialization discovery.
+				if f := arg.GetF(); f != nil && f.Func != nil && (f.Func.ObjName == "+" || f.Func.ObjName == "-" || f.Func.ObjName == "*") && types.T(arg.Typ.Id).IsDecimal() {
+					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
+				}
+			}
 			group.ctr.aggArgEvaluate = append(group.ctr.aggArgEvaluate, e)
 		}
 	}
@@ -367,6 +373,9 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 		}
 		if id == types.T_array_bf16 || id == types.T_array_float16 {
 			width *= 2
+		}
+		if f, ok := id.BlockScaledFormat(); ok {
+			width = types.BlockScaledCellSize(f, width)
 		}
 		// T_array_int8 / T_array_uint8 are 1 byte/element -> width unchanged
 		// (width0 already counts).
@@ -650,6 +659,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		count := bat.RowCount()
 		evaluated := false
 		var hashBytesBefore int64
+		var compactHitRows int64
+		compactEligible := !group.DynamicGrouping && !group.ctr.groupingAware && !group.ctr.legacyH8CharSemantics &&
+			compactGroupExpressions(group.GroupBy)
 		if !group.ctr.hr.IsEmpty() {
 			hashBytesBefore = group.ctr.hr.Hash.Size()
 		}
@@ -684,14 +696,20 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				if err == nil {
 					hashKeyVecs := group.ctr.hashKeyVectors(
 						group.ctr.groupByEvaluate.Vec)
-					err = group.ctr.hr.TxnItr.PreviewInsert(
-						i, n, hashKeyVecs,
-						group.ctr.hr.Hash.GroupCount(),
-						&group.ctr.hr.insertPlan)
-					if err == nil {
-						preview.values = group.ctr.hr.insertPlan.Values()
-						preview.inserted = group.ctr.hr.insertPlan.Inserted()
-						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+					var compact bool
+					if compactEligible {
+						preview, compact, err = group.ctr.previewCompactGroups(hashKeyVecs, i, n)
+					}
+					if err == nil && !compact {
+						err = group.ctr.hr.TxnItr.PreviewInsert(
+							i, n, hashKeyVecs,
+							group.ctr.hr.Hash.GroupCount(),
+							&group.ctr.hr.insertPlan)
+						if err == nil {
+							preview.values = group.ctr.hr.insertPlan.Values()
+							preview.inserted = group.ctr.hr.insertPlan.Inserted()
+							preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+						}
 					}
 					if err == nil && preview.newGroups > 0 {
 						var growth uint64
@@ -723,7 +741,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					}
 					if err == nil {
 						err = group.ctr.hr.Hash.PreAlloc(
-							group.ctr.hr.insertPlan.NewGroups())
+							uint64(preview.newGroups))
 					}
 					if err == nil {
 						err = group.ctr.preflightBuildChunk(
@@ -782,6 +800,11 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 								return false, err
 							}
 						}
+						if preview.existingOnly {
+							compactHitRows += int64(n)
+						} else {
+							group.ctr.hr.publishCompactGroups(vals[:n])
+						}
 						break
 					}
 				}
@@ -794,6 +817,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		} // end of mini batch for loop
 
+		if compactHitRows > 0 {
+			group.OpAnalyzer.GetOpStats().AddExtraStat("GroupCompactLookupRows", compactHitRows)
+		}
 		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
 		// Prefer subdividing eligible exact DISTINCT keys before generic Group
 		// spill. A hot group's key set can make progress only on this axis.
@@ -858,23 +884,45 @@ func dynamicGroupingAggregateGroups(
 	if marker == nil || marker.GetType().Oid != types.T_bool || offset < 0 || offset+len(groups) > marker.Length() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dynamic grouping aggregate marker")
 	}
+	if len(groups) == 0 {
+		return groups, nil
+	}
 
-	hasSynthetic := false
-	for i := range groups {
-		row := offset + i
-		if marker.IsNull(uint64(row)) {
+	// Projection produces constant markers, while shuffle can materialize them.
+	// Avoid inspecting every row of the ordinary constant-false marker.
+	if marker.IsConst() {
+		if marker.IsConstNull() {
 			return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
 		}
-		if vector.GetFixedAtNoTypeCheck[bool](marker, row) {
-			hasSynthetic = true
+		if !vector.GetFixedAtNoTypeCheck[bool](marker, 0) {
+			return groups, nil
+		}
+		for i := range groups {
+			scratch[i] = aggexec.GroupNotMatched
+		}
+		return scratch[:len(groups)], nil
+	}
+
+	// Validate the entire selected window before changing scratch. NULLs outside
+	// this mini-batch are checked when their own window is consumed.
+	if nulls := marker.GetNulls(); nulls.Any() {
+		for i := range groups {
+			if nulls.Contains(uint64(offset + i)) {
+				return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
+			}
 		}
 	}
-	if !hasSynthetic {
+	markers := vector.MustFixedColNoTypeCheck[bool](marker)[offset : offset+len(groups)]
+	firstSynthetic := 0
+	for firstSynthetic < len(markers) && !markers[firstSynthetic] {
+		firstSynthetic++
+	}
+	if firstSynthetic == len(markers) {
 		return groups, nil
 	}
 	copy(scratch, groups)
-	for i := range groups {
-		if vector.GetFixedAtNoTypeCheck[bool](marker, offset+i) {
+	for i := firstSynthetic; i < len(markers); i++ {
+		if markers[i] {
 			scratch[i] = aggexec.GroupNotMatched
 		}
 	}
@@ -1213,26 +1261,20 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 	return b, nil
 }
 
-func (ctr *container) appendGroupByBatch(
-	vs []*vector.Vector,
-	offset int,
-	insertList []uint8,
-) (int, error) {
-	return ctr.appendGroupByBatchWithStringSources(vs, offset, insertList, nil, 0)
-}
-
+// toIncrease is the exact selection count validated before hash publication.
+// Keep that count when splitting a chunk across output batches.
 func (ctr *container) appendGroupByBatchWithStringSources(
 	vs []*vector.Vector,
 	offset int,
 	insertList []uint8,
+	toIncrease int,
 	stringSources [][]types.StringSource,
 	stringSourceOffset int,
-) (int, error) {
-	toIncrease, _ := countNonZeroAndFindKth(insertList, len(insertList)+1)
+) error {
 	if toIncrease == 0 {
 		// A duplicate-only chunk must not create a fresh retained batch after
 		// the hash preview has committed no new groups.
-		return 0, nil
+		return nil
 	}
 
 	// first find the target batch.
@@ -1244,7 +1286,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 			var err error
 			groupByBatch, err = ctr.createNewGroupByBatch(vs, aggBatchSize)
 			if err != nil {
-				return 0, err
+				return err
 			}
 		}
 		ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
@@ -1256,7 +1298,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	addedRows := toIncrease
 	kth := -1
 	if toIncrease > spaceLeft {
-		_, kth = countNonZeroAndFindKth(insertList, spaceLeft)
+		kth = findKthNonZero(insertList, spaceLeft)
 		thisTime = insertList[:kth+1]
 		addedRows = spaceLeft
 	}
@@ -1269,14 +1311,14 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
 		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
 			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
-			return 0, mpool.ErrAllocationAccountInvariant
+			return mpool.ErrAllocationAccountInvariant
 		} else {
 			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 				vs[i], int64(offset), len(thisTime), thisTime,
 				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
 		}
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 	currBatch.AddRowCount(addedRows)
@@ -1284,14 +1326,11 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		_, err := ctr.appendGroupByBatchWithStringSources(
-			vs, offset+kth+1, insertList[kth+1:], stringSources,
+		return ctr.appendGroupByBatchWithStringSources(
+			vs, offset+kth+1, insertList[kth+1:], toIncrease-spaceLeft, stringSources,
 			stringSourceOffset+kth+1)
-		if err != nil {
-			return 0, err
-		}
 	}
-	return toIncrease, nil
+	return nil
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {

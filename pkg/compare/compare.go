@@ -108,6 +108,14 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 			return newCompare(types.Float64OrderDescCompare, genericCopy[float64], nullsLast)
 		}
 		return newCompare(types.Float64OrderAscCompare, genericCopy[float64], nullsLast)
+	case types.T_bf16:
+		return newCompare(lowPrecisionCompare[types.BF16](desc), valueCopy[types.BF16], nullsLast)
+	case types.T_float16:
+		return newCompare(lowPrecisionCompare[types.Float16](desc), valueCopy[types.Float16], nullsLast)
+	case types.T_float8:
+		return newCompare(lowPrecisionCompare[types.Float8](desc), valueCopy[types.Float8], nullsLast)
+	case types.T_float4:
+		return newCompare(lowPrecisionCompare[types.Float4](desc), valueCopy[types.Float4], nullsLast)
 	case types.T_date:
 		if desc {
 			return newCompare(types.GenericDescCompare[types.Date], genericCopy[types.Date], nullsLast)
@@ -174,18 +182,14 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 		}
 		return newCompare(types.GenericAscCompare[types.MoYear], genericCopy[types.MoYear], nullsLast)
 	case types.T_json:
-		if sqlOrder {
-			return &jsonCompare{
-				desc:        desc,
-				nullsLast:   nullsLast,
-				vs:          make([]*vector.Vector, 2),
-				isConstNull: make([]bool, 2),
-			}
-		}
-		return &strCompare{
+		// JSON equality/identity follows MySQL JSON value semantics, never raw
+		// bytes: 1, 1.0 and 1e0 are one value, and members/elements compare by
+		// their own typed semantics. This is the same comparator ORDER BY uses,
+		// so grouping/splitting consumers (window PARTITION BY feeds, transfer
+		// identity checks) agree with the SQL = operator and GROUP BY.
+		return &jsonCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,
-			typ:         typ,
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
@@ -194,12 +198,14 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 		return &strCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,
+			sqlOrder:    sqlOrder,
 			typ:         typ,
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		//NOTE: Used by merge_order, merge_top, top agg operators.
 		return &arrayCompare{
 			desc:        desc,
@@ -239,6 +245,19 @@ func rowidCopy(vecDst, vecSrc []types.Rowid, dst, src int64) {
 }
 
 func blockidCopy(vecDst, vecSrc []types.Blockid, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+// lowPrecisionCompare orders bf16, float16, float8 and float4 values by their float32
+// value, with the float32 ORDER BY relation (NaNs are peers and sort last).
+func lowPrecisionCompare[T interface{ ToFloat32() float32 }](desc bool) func(T, T) int {
+	if desc {
+		return func(x, y T) int { return types.Float32OrderDescCompare(x.ToFloat32(), y.ToFloat32()) }
+	}
+	return func(x, y T) int { return types.Float32OrderAscCompare(x.ToFloat32(), y.ToFloat32()) }
+}
+
+func valueCopy[T any](vecDst, vecSrc []T, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

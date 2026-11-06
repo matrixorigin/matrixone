@@ -540,9 +540,12 @@ func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 // Count terminal calls after an explicit completion signal.
 type prefetchCountingFS struct {
 	fileservice.FileService
-	calls atomic.Int32
-	done  chan struct{}
+	calls   atomic.Int32
+	done    chan struct{}
+	evicted bool
 }
+
+func (fs *prefetchCountingFS) WholeObjectPreloadSkipped(string, uint64) bool { return fs.evicted }
 
 func (fs *prefetchCountingFS) PrefetchFile(context.Context, string) error {
 	fs.calls.Add(1)
@@ -562,9 +565,10 @@ func (ts *prefetchCountingTombstones) PrefetchTombstones(_ context.Context, _ st
 }
 func TestRemoteDataSourceFilteredPrefetchRetainsTombstones(t *testing.T) {
 	proc := testutil.NewProc(t)
-	for _, skip := range []bool{false, true} {
-		t.Run(fmt.Sprint(skip), func(t *testing.T) {
-			fs := &prefetchCountingFS{done: make(chan struct{}, 4)}
+	for _, mode := range []string{"scan", "skip", "narrow-evicted"} {
+		t.Run(mode, func(t *testing.T) {
+			skip := mode != "scan"
+			fs := &prefetchCountingFS{done: make(chan struct{}, 4), evicted: mode == "narrow-evicted"}
 			tombstones := &prefetchCountingTombstones{}
 			data := NewBlockListRelationData(0)
 			for i := 0; i < 4; i++ {
@@ -575,8 +579,11 @@ func TestRemoteDataSourceFilteredPrefetchRetainsTombstones(t *testing.T) {
 			require.NoError(t, data.AttachTombstones(tombstones))
 			ds := &RemoteDataSource{ctx: proc.Ctx, proc: proc, fs: fs, data: data}
 			ctx := proc.Ctx
-			if skip {
+			switch mode {
+			case "skip":
 				ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
+			case "narrow-evicted":
+				ctx = fileservice.WithFileServicePolicy(ctx, fileservice.NarrowRead)
 			}
 			rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
 			proc.Base.LockService = &prefetchTestLockService{id: t.Name()}

@@ -294,7 +294,9 @@ func DropNullPkRowsForIgnore(
 			continue
 		}
 		shrank[vec] = struct{}{}
-		vec.Shrink(keep, false)
+		if err := vec.Shrink(keep, false, proc.Mp()); err != nil {
+			return false, err
+		}
 	}
 	bat.SetRowCount(len(keep))
 	return true, nil

@@ -183,21 +183,32 @@ func comparisonPlanLiteral(column *plan.MongoColumnMapping, expr *plan.Expr, op 
 func temporalLiteralUnixMicroseconds(expr *plan.Expr) (int64, bool) {
 	literal := expr.GetLit()
 	if literal != nil && !literal.Isnull {
-		if value, ok := literal.GetValue().(*plan.Literal_I64Val); ok {
-			switch types.T(expr.Typ.Id) {
-			case types.T_datetime:
-				datetime := types.Datetime(value.I64Val)
-				if datetime == types.ZeroDatetime {
-					return 0, false
-				}
-				return datetime.ConvertToGoTime(time.UTC).UnixMicro(), true
-			case types.T_timestamp:
-				timestamp := types.Timestamp(value.I64Val)
-				if timestamp == types.ZeroTimestamp {
-					return 0, false
-				}
-				return timestamp.ToDatetime(time.UTC).ConvertToGoTime(time.UTC).UnixMicro(), true
+		var raw int64
+		switch value := literal.GetValue().(type) {
+		case *plan.Literal_I64Val:
+			raw = value.I64Val
+		case *plan.Literal_Datetimeval:
+			// The constant folder emits the typed DATETIME carrier.
+			if types.T(expr.Typ.Id) != types.T_datetime {
+				return 0, false
 			}
+			raw = value.Datetimeval
+		default:
+			return 0, false
+		}
+		switch types.T(expr.Typ.Id) {
+		case types.T_datetime:
+			datetime := types.Datetime(raw)
+			if datetime == types.ZeroDatetime {
+				return 0, false
+			}
+			return datetime.ConvertToGoTime(time.UTC).UnixMicro(), true
+		case types.T_timestamp:
+			timestamp := types.Timestamp(raw)
+			if timestamp == types.ZeroTimestamp {
+				return 0, false
+			}
+			return timestamp.ToDatetime(time.UTC).ConvertToGoTime(time.UTC).UnixMicro(), true
 		}
 	}
 

@@ -395,8 +395,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
-		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and relname != '%s' and relkind != '%s' and (%s)",
+		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Historical rows cannot be matched against current object grants. A
 	// subscription is admitted by subscriber-local broad authorization and keeps
@@ -471,8 +471,8 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and (%s)",
-		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and relname != '%s' and (%s)",
+		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -642,6 +642,21 @@ func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, de
 	query.ViewMetadataDependsOnUdf = query.ViewMetadataDependsOnUdf || dependsOnUdf
 }
 
+// descColumnLikeInstaller installs the DESCRIBE <table> <col> shortcut's
+// derived LIKE predicate for the current build and returns the undo function.
+// The derived comparison never survives the build: the frontend reuses the
+// saved prepared AST (computation_wrapper.go, mysql_cmd_executor.go), and a
+// persisted derived LIKE would keep the first build's stored spelling and
+// skip re-derivation on replan. Restoring the authored statement makes every
+// plan regenerate the predicate from the current column spelling.
+func descColumnLikeInstaller(stmt *tree.ShowColumns, pattern string) func() {
+	savedLike := stmt.Like
+	stmt.Like = tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal(pattern, pattern, false, tree.P_char))
+	return func() {
+		stmt.Like = savedLike
+	}
+}
+
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
@@ -679,6 +694,31 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		colNameOrigin := col.GetOriginCaseName()
 		colIdToOriginName[col.ColId] = colNameOrigin
 		colNameToOriginName[col.Name] = colNameOrigin
+	}
+
+	// DESCRIBE tbl col_name is MySQL's shortcut for SHOW COLUMNS FROM tbl
+	// LIKE 'col_name': reuse the LIKE filter returnByLikeAndSQL composes.
+	// An exact column keeps its stored case via the origin-name map, so
+	// `desc tbl mixcase` still finds `MixCase`; anything else preserves the
+	// argument's original spelling so %/_ patterns match exactly like the
+	// equivalent public SHOW COLUMNS ... LIKE, and a missing name yields
+	// the empty set. The literal is the parser's own value-level string
+	// literal (NumVal/P_char), never spliced SQL text.
+	// DESCRIBE tbl col_name keeps the physical catalog map as the authority
+	// for ordinary targets. User views are excluded here: their rows come
+	// from the live logical description resolved (and subscription-bound)
+	// further below, which must also own the filter's exact-name spelling
+	// even when the physical map still hits with a stale stored origin
+	// (#32197 review F1/F2).
+	if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil &&
+		!isUserViewMetadata(dbName, tableDef) {
+		pattern := stmt.ColName.ColNameOrigin()
+		if origin, ok := colNameToOriginName[stmt.ColName.ColName()]; ok {
+			pattern = origin
+		} else if origin, ok := colNameToOriginName[pattern]; ok {
+			pattern = origin
+		}
+		defer descColumnLikeInstaller(stmt, pattern)()
 	}
 
 	var sub *SubscriptionMeta
@@ -786,9 +826,29 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
-		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
+		columns, liveCols, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
+		}
+		// F1: this live description owns the DESCRIBE filter's exact-name
+		// spelling even when the physical column map hits with a stale stored
+		// origin. F2: it is the same resolved, subscription-bound description
+		// instance that produced the row source, so a published view derives
+		// from the publisher-side binding exactly like its rows; a live miss
+		// keeps the authored spelling (unknown-name semantics unchanged).
+		if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil {
+			descPattern := stmt.ColName.ColNameOrigin()
+			for _, col := range liveCols {
+				if col.Hidden {
+					continue
+				}
+				if strings.EqualFold(col.Name, stmt.ColName.ColName()) ||
+					strings.EqualFold(col.GetOriginCaseName(), descPattern) {
+					descPattern = col.GetOriginCaseName()
+					break
+				}
+			}
+			defer descColumnLikeInstaller(stmt, descPattern)()
 		}
 		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
 		viewDependencies = dependencies
@@ -875,10 +935,11 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				reldatabase = '%s'
 				and relkind != '%s'
 				and relname != '%s'
-				and relname not like '%s'
+				and not startswith(relname, '%s')
 				and relname != '%s'
-				and (%s)`
-	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+				and (%s)
+				and %s`
+	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.MO_ACCOUNT_LOCK, accountClause, catalog.NonTemporaryTableSQLPredicate(""))
 	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
 		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
 	}
@@ -1051,7 +1112,10 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
 		"'A' as `Collation`, 0 as `Cardinality`, " +
-		"'NULL' as `Sub_part`, " +
+		// Retained prefix lengths come from the canonical index metadata:
+		// the number of indexed characters when the part carries a prefix,
+		// actual SQL NULL for whole-column index parts (#30935).
+		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
 		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +

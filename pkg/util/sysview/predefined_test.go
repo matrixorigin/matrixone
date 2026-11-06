@@ -121,6 +121,19 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "coalesce(mo_view_check_option(tbl.viewdef), 'NONE')")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
+	// issue #31927: outer joins keep one row per ordinary base table (with
+	// NULL partition fields) and one per physical partition; the joined rows
+	// are guarded against partition sub-tables, views, sequences, temporary
+	// tables and internal index tables; stats resolve to the real base or
+	// physical partition identity exactly once per row.
+	assert.Contains(t, InformationSchemaPartitionsDDL, "LEFT JOIN `mo_catalog`.`mo_partition_metadata` `meta`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "LEFT JOIN `mo_catalog`.`mo_partition_tables` `pt`")
+	assert.NotContains(t, InformationSchemaPartitionsDDL, "INNER JOIN")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND NOT startswith(`tbl`.`relname`, '__mo_index_')")
+	assert.NotContains(t, InformationSchemaPartitionsDDL, "NOT LIKE '__mo_index_%'")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND `tbl`.`relkind` NOT IN ('partition', 'v', 'S')")
 	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
 	assert.Contains(t, InformationSchemaSchemataDDL, "cast(NULL as char(0)) AS SQL_PATH")
 	assert.Contains(t, InformationSchemaSchemataDDL, "db.owner IN (SELECT role_id FROM __mo_active_roles)")
@@ -178,9 +191,24 @@ func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
 	assert.Contains(t, InformationSchemaStatisticsDDL, "group by `tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`type`, `idx`.`name`")
 	assert.Contains(t, InformationSchemaStatisticsDDL, "not startswith(`tbl`.`relname`, '"+catalog.IndexTableNamePrefix+"')")
+	// The current projection derives SUB_PART from the retained index prefix
+	// metadata and stays SQL NULL for whole-column index parts; the
+	// historical template keeps its unconditional NULL AS SUB_PART for the
+	// base-era upgrade entries that still publish it (#30935).
+	assert.Contains(t, InformationSchemaStatisticsPrefixSubPartDDL,
+		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) AS `SUB_PART`,")
+	assert.NotContains(t, InformationSchemaStatisticsPrefixSubPartDDL, "NULL AS `SUB_PART`,")
+	assert.Contains(t, InformationSchemaStatisticsPrefixSubPartDDL, "`idx`.`column_name`, `idx`.`algo_params`, `tcl`.`attnotnull`,")
+	assert.Contains(t, InformationSchemaStatisticsDDL, "NULL AS `SUB_PART`,")
+	assert.NotContains(t, InformationSchemaStatisticsDDL, "mo_index_sub_part(")
 	statements, err := mysql.Parse(context.Background(), InformationSchemaStatisticsDDL, 1)
 	assert.NoError(t, err)
 	for _, statement := range statements {
+		statement.Free()
+	}
+	legacyStatements, err := mysql.Parse(context.Background(), InformationSchemaStatisticsPrefixSubPartDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range legacyStatements {
 		statement.Free()
 	}
 }
@@ -313,6 +341,12 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117} {
 		definitions := InitInformationSchemaSysTablesForProtocol(protocol)
 		require.Contains(t, definitions, InformationSchemaSchemataLegacyDDL)
+		// Every rung at or above the metadata ladder selects the corrected
+		// current identities: unconditional publication through the
+		// grandfathered rungs (design 5.1, I2).
+		require.Contains(t, definitions, InformationSchemaColumnsDDL)
+		require.Contains(t, definitions, InformationSchemaStatisticsPrefixSubPartDDL)
+		require.NotContains(t, strings.Join(definitions, "\n"), InformationSchemaStatisticsDDL)
 		require.Contains(t, definitions, InformationSchemaTablesDDL)
 		require.NotContains(t, strings.Join(definitions, "\n"), "mo_database_defaults")
 		require.NotContains(t, definitions, InformationSchemaTablesV118DDL)
@@ -322,6 +356,8 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	require.Contains(t, definitions, InformationSchemaTablesV118DDL)
 	require.Contains(t, definitions, InformationSchemaViewsLegacyDDL)
 	require.NotContains(t, definitions, InformationSchemaViewsDDL)
+	require.Contains(t, definitions, InformationSchemaColumnsDDL)
+	require.Contains(t, definitions, InformationSchemaStatisticsPrefixSubPartDDL)
 	predecessor := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion119)
 	require.Contains(t, predecessor, InformationSchemaViewsLegacyDDL)
 	require.NotContains(t, predecessor, InformationSchemaViewsDDL)
@@ -357,9 +393,13 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	require.NotContains(t, predecessor125, InformationSchemaViewsDDL)
 	require.Contains(t, predecessor125, InformationSchemaTablesV118DDL)
 	require.Contains(t, predecessor125, InformationSchemaColumnsDDL)
+
+	// The current list is the unconditional publication set every bootstrap
+	// uses once the negotiated floor reaches the base early-return floor.
 	current := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion126)
 	assert.Equal(t, InitInformationSchemaSysTables, current)
 	assert.Contains(t, current, InformationSchemaColumnsDDL)
+	assert.Contains(t, current, InformationSchemaStatisticsPrefixSubPartDDL)
 	assert.Contains(t, strings.Join(current, "\n"), "mo_view_definition(")
 }
 
@@ -404,6 +444,94 @@ func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T)
 	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion99), current)
 	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), current)
 	require.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), current)
+}
+
+func TestInformationSchemaColumnsDDL_UnsignedDecimalLocalBranchOnly(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	// Exactly one decoration: the local mo_columns branch carries the mask
+	// reference; the derived View and subscription projections keep the plain
+	// decimal spelling until a later gated template references the producers'
+	// code-only att_is_unsigned output.
+	require.Equal(t, 1, strings.Count(current, "mc.att_is_unsigned"))
+	require.Equal(t, 1, strings.Count(current, "' unsigned zerofill'"))
+	require.Equal(t, 1, strings.Count(current, "'DECIMAL%' then"))
+	require.Contains(t, current,
+		"case mc.att_is_unsigned when 3 then ' unsigned zerofill' when 1 then ' unsigned' else '' end")
+	// Local-branch DATA_TYPE keeps the plain decimal spelling; only
+	// COLUMN_TYPE is decorated.
+	require.Contains(t, current, "split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1)")
+	// The frozen binary-null pre-change template underneath the current
+	// identity: a pre-change binary persists exactly this text, and the
+	// historical adapter recognizes it as a byte-stable pass-through
+	// identity (see view_columns_history_test.go). The merged current
+	// composes the label-aware, unbounded pre-decoration derivation over
+	// this template before the decoration applies.
+	preAttributes := informationSchemaColumnsPreAttributesBinaryNullDDL()
+	require.NotContains(t, preAttributes, "att_is_unsigned")
+	require.NotContains(t, preAttributes, "unsigned zerofill")
+	require.NotEqual(t, preAttributes, current)
+	assertInformationSchemaInitSQLParses(t, current)
+	assertInformationSchemaInitSQLParses(t, preAttributes)
+}
+
+func TestInformationSchemaColumnsDDL_UnsignedDecimalAncientConstructs(t *testing.T) {
+	// The frozen-template rule: the decoration composes only concat, upper,
+	// like, case, the two-argument mo_show_visible_bin and one outer
+	// cast-as-varchar width pin, so a persisted definition never depends on a
+	// builtin introduced after the historical template fence. The historical
+	// templates themselves already carry cast-as-varchar (TABLE_SCHEMA,
+	// TABLE_NAME, EXTRA, GENERATION_EXPRESSION), so the width pin is fence
+	// safe; it exists because a bare concat of the varchar(65535) base with
+	// the suffix promotes to TEXT and the UNION would widen the public
+	// COLUMN_TYPE header away from main's.
+	current := InformationSchemaColumnsDDL
+	start := strings.Index(current, "cast(concat((case when length(mc.attr_enum)")
+	require.NotEqual(t, -1, start)
+	end := strings.Index(current[start:], "as COLUMN_TYPE,")
+	require.NotEqual(t, -1, end)
+	window := current[start : start+end]
+	for _, forbidden := range []string{
+		"internal_", "split_part(", "ifnull(",
+		"internal_column_character_set", "mo_view_columns", "mo_subscription_",
+	} {
+		require.NotContains(t, window, forbidden)
+	}
+	// The single permitted cast is the outer width pin on the decoration.
+	require.Equal(t, 1, strings.Count(window, "cast("))
+	require.True(t, strings.HasPrefix(window, "cast(concat("))
+	require.Contains(t, window, "as varchar(65535))")
+}
+
+// TestInformationSchemaColumnsDDL_DeclaredLabelMetadataProjections pins the
+// projection rewrite every current branch takes: information_schema.COLUMNS
+// metadata must consult the declared ENUM/SET labels next to the physical
+// type, while the historical V110/V109 predecessor templates keep their
+// single-argument projections byte-stable.
+func TestInformationSchemaColumnsDDL_DeclaredLabelMetadataProjections(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	for _, fragment := range []string{
+		"internal_char_length(mc.atttyp, mc.attr_enum) AS CHARACTER_MAXIMUM_LENGTH,",
+		"internal_char_size(mc.atttyp, mc.attr_enum) AS CHARACTER_OCTET_LENGTH,",
+		"internal_numeric_precision(mc.atttyp, mc.attr_enum) AS NUMERIC_PRECISION,",
+		"internal_numeric_scale(mc.atttyp, mc.attr_enum) AS NUMERIC_SCALE,",
+	} {
+		require.Equal(t, 4, strings.Count(current, fragment))
+		require.NotContains(t, InformationSchemaColumnsV110DDL(), fragment)
+		require.NotContains(t, InformationSchemaColumnsV109DDL(), fragment)
+	}
+	// The rewrite must never leak the single-argument form.
+	require.NotContains(t, current, "internal_char_length(mc.atttyp) AS")
+	require.NotContains(t, current, "internal_char_size(mc.atttyp) AS")
+	require.NotContains(t, current, "internal_numeric_precision(mc.atttyp) AS")
+	require.NotContains(t, current, "internal_numeric_scale(mc.atttyp) AS")
+	// The current definition renders the full stored generated expression
+	// (mo_columns.attr_generated is varchar(2048)); the historical
+	// predecessor templates keep their 500-character bound.
+	require.NotContains(t, current, "as varchar(500)) as GENERATION_EXPRESSION")
+	require.Contains(t, InformationSchemaColumnsV110DDL(), "as varchar(500)) as GENERATION_EXPRESSION")
+	require.Contains(t, current,
+		"case when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 5), '') else '' end as GENERATION_EXPRESSION,")
+	assertInformationSchemaInitSQLParses(t, current)
 }
 
 func TestInformationSchemaColumnsDDL_MapsNativeUnicodeCollations(t *testing.T) {
@@ -611,18 +739,19 @@ func TestInformationSchemaColumnsDDL_NullsBinaryFamilyCharacterSet(t *testing.T)
 }
 
 func TestInformationSchemaColumnsUpgradeAndReplayContracts(t *testing.T) {
-	// Persisted definition of a tenant migrated by any pre-#31160 binary:
-	// current shape, historical 'binary' selector. Reconstruct its exact bytes
-	// because the fix is a pure ReplaceAll.
+	// Persisted definition with the current shape and the historical
+	// 'binary' selector - a selector-drift replay of the current
+	// definition. Reconstruct its exact bytes because the NULL fix is a
+	// pure ReplaceAll.
 	replayed := strings.ReplaceAll(InformationSchemaColumnsDDL,
 		"WHEN 2 then NULL", "WHEN 2 then 'binary'")
 	require.Contains(t, replayed, "mo_subscription_view_columns(")
 	require.Equal(t, 8, strings.Count(replayed, "WHEN 2 then 'binary'"))
 	require.NotContains(t, replayed, "WHEN 2 then NULL")
-	// (a) Upgrade convergence for v4_0_14/v4_0_15/v4_0_17 entries is pure
-	// string equality (CheckFunc: definition == InformationSchemaColumnsDDL):
-	// the replayed definition must MISMATCH (one idempotent rebuild) while the
-	// rebuilt definition must MATCH (no rebuild loop, no permanent skip).
+	// (a) Upgrade identity fencing: the drifted replay MISMATCHES the
+	// current definition the shared entry and maintenance compare with, so
+	// it is repaired once, and restoring the selector yields the current
+	// definition again: no repair loop, no permanent skip.
 	require.NotEqual(t, replayed, InformationSchemaColumnsDDL, "CheckFunc rebuilds once")
 	require.Equal(t, strings.ReplaceAll(replayed, "WHEN 2 then 'binary'", "WHEN 2 then NULL"),
 		InformationSchemaColumnsDDL, "after the idempotent rebuild CheckFunc matches: no loop")
@@ -659,6 +788,7 @@ func TestInformationSchemaTablesV118DDL_NullsFreshUpdateAndCheckTime(t *testing.
 	// against InformationSchemaTablesV118DDL): a tenant republished by any
 	// pre-fix binary still has the fabricated-time text and must mismatch once.
 	legacyV118 := strings.NewReplacer(
+		"not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')", "tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'",
 		"cast(null as timestamp) AS UPDATE_TIME,",
 		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,",
 		"cast(null as timestamp) AS CHECK_TIME,",
@@ -823,5 +953,25 @@ func TestMetadataVisibilityPolicyMatchesPersistedViews(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, sql, "tbl.account_id = current_account_id()")
 		require.Contains(t, sql, "rp.obj_id = tbl.rel_logical_id")
+	}
+}
+
+func TestInformationSchemaTablesLiteralIndexPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name, ddl string
+		branches  int
+	}{
+		{"legacy", InformationSchemaTablesV41DDL, 1},
+		{"current", InformationSchemaTablesDDL, 2},
+		{"protocol 118", InformationSchemaTablesV118DDL, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "protocol 118" {
+				require.Equal(t, tc.branches, strings.Count(tc.ddl, "not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')"))
+				require.NotContains(t, tc.ddl, "relname not like '"+catalog.IndexTableNamePrefix+"%'")
+			} else {
+				require.Equal(t, tc.branches, strings.Count(tc.ddl, "tbl.relname not like '"+catalog.IndexTableNamePrefix+"%'"))
+			}
+		})
 	}
 }

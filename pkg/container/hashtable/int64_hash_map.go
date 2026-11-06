@@ -292,22 +292,22 @@ func (ht *Int64HashMap) PlanInsertBatch(
 	var planned [512]uint16
 	const plannedMask = len(planned) - 1
 	next := ht.elemCnt
+	cells, blockBits := ht.cells, ht.blockCellCntBits
+	blockMask, mask := ht.blockCellCnt()-1, ht.cellCntMask
+rows:
 	for row, hash := range hashes[:n] {
 		if useRing && zValues[row] == 0 {
 			continue
 		}
-		index := hash & ht.cellCntMask
-		found := false
+		index := hash & mask
 		for probes := uint64(0); probes < ht.cellCnt; probes++ {
-			cell := ht.cellAt(index)
+			cell := &cells[index>>blockBits][index&blockMask]
+			if cell.Key == hash && cell.Mapped != 0 {
+				values[row], slots[row] = cell.Mapped, index
+				continue rows
+			}
 			if cell.Mapped != 0 {
-				if cell.Key == hash {
-					values[row] = cell.Mapped
-					slots[row] = index
-					found = true
-					break
-				}
-				index = (index + 1) & ht.cellCntMask
+				index = (index + 1) & mask
 				continue
 			}
 
@@ -316,31 +316,23 @@ func (ht *Int64HashMap) PlanInsertBatch(
 				prior := int(planned[bucket] - 1)
 				if slots[prior] == index {
 					if hashes[prior] == hash {
-						values[row] = values[prior]
-						slots[row] = index
-						found = true
+						values[row], slots[row] = values[prior], index
+						continue rows
 					}
 					break
 				}
 				bucket = (bucket + 1) & plannedMask
 			}
-			if found {
-				break
-			}
 			if planned[bucket] == 0 {
 				next++
-				values[row] = next
-				slots[row] = index
+				values[row], slots[row] = next, index
 				inserted[row] = 1
 				planned[bucket] = uint16(row + 1)
-				found = true
-				break
+				continue rows
 			}
-			index = (index + 1) & ht.cellCntMask
+			index = (index + 1) & mask
 		}
-		if !found {
-			return 0, ht.version, false, nil
-		}
+		return 0, ht.version, false, nil
 	}
 	return next - ht.elemCnt, ht.version, true, nil
 }
@@ -406,6 +398,21 @@ func (ht *Int64HashMap) Version() uint64 { return ht.version }
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
 	if hashes[0] == 0 {
 		Int64BatchHash(keysPtr, &hashes[0], n)
+	}
+
+	if len(ht.cells) == 1 {
+		// A single physical block needs no block lookup for each probe.
+		cells, mask := ht.cells[0], ht.cellCntMask
+		for i, hash := range hashes {
+			for idx := hash & mask; ; idx = (idx + 1) & mask {
+				cell := &cells[idx]
+				if cell.Key == hash || cell.Mapped == 0 {
+					values[i] = cell.Mapped
+					break
+				}
+			}
+		}
+		return
 	}
 
 	for i, hash := range hashes {

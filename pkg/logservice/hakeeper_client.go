@@ -260,10 +260,7 @@ var sendCNAllocateIDWithRequestIDFunc = (*hakeeperClient).sendCNAllocateIDWithRe
 func NewClusterHAKeeperClient(
 	ctx context.Context, sid string, cfg HAKeeperClientConfig,
 ) (ClusterHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -277,10 +274,7 @@ func NewCNHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (CNHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -294,10 +288,7 @@ func NewTNHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (TNHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -311,10 +302,7 @@ func NewLogHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (LogHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -373,13 +361,17 @@ func NewProxyHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (ProxyHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
+func validateHAKeeperClientConfigAndContext(cfg *HAKeeperClientConfig, ctx context.Context) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return validateHAKeeperClientContext(ctx)
 }
 
 func validateHAKeeperClientContext(ctx context.Context) error {
@@ -902,8 +894,13 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 			}
 			return pb.CommandBatch{}, err
 		}
-		cb, err := client.sendLogHeartbeat(ctx, hb)
-		if shouldResetHAKeeperClient(err) {
+		cb, attempted, err := client.sendLogHeartbeat(ctx, hb)
+		// The service gives each heartbeat a shorter deadline than the shared
+		// backend read timeout. An unanswered heartbeat must release its chosen
+		// endpoint so the next heartbeat can discover a reachable HAKeeper.
+		if shouldResetHAKeeperClient(err) ||
+			(attempted && errors.Is(err, context.DeadlineExceeded) &&
+				errors.Is(ctx.Err(), context.DeadlineExceeded)) {
 			c.resetClientIfCurrent(client)
 		}
 		if c.isRetryableError(err) {
@@ -1584,7 +1581,7 @@ func (c *hakeeperClient) getScheduleCommands(
 	if err != nil {
 		return pb.CommandBatch{}, err
 	}
-	return c.sendHeartbeatWithClient(ctx, client, req)
+	return c.sendHeartbeatWithClient(ctx, client, req, nil)
 }
 
 // getScheduleCommandClient owns a transport that is independent from the
@@ -1629,32 +1626,34 @@ func (c *hakeeperClient) getScheduleCommandClient(ctx context.Context) (morpc.RP
 }
 
 func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
-	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
+	hb pb.LogStoreHeartbeat) (pb.CommandBatch, bool, error) {
 	req := pb.Request{
 		Method:       pb.LOG_HEARTBEAT,
 		LogHeartbeat: &hb,
 	}
-	cb, err := c.sendHeartbeat(ctx, req)
+	var attempted bool
+	cb, err := c.sendHeartbeatWithClient(ctx, c.client, req, &attempted)
 	if err != nil {
-		return pb.CommandBatch{}, err
+		return pb.CommandBatch{}, attempted, err
 	}
 	for _, cmd := range cb.Commands {
 		logutil.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
 	}
-	return cb, nil
+	return cb, attempted, nil
 }
 
 func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 	req pb.Request) (pb.CommandBatch, error) {
-	return c.sendHeartbeatWithClient(ctx, c.client, req)
+	return c.sendHeartbeatWithClient(ctx, c.client, req, nil)
 }
 
 func (c *hakeeperClient) sendHeartbeatWithClient(
 	ctx context.Context,
 	client morpc.RPCClient,
 	req pb.Request,
+	attempted *bool,
 ) (pb.CommandBatch, error) {
-	resp, err := c.requestWithClient(ctx, client, req)
+	resp, err := c.requestWithClient(ctx, client, req, attempted)
 	if err != nil {
 		return pb.CommandBatch{}, err
 	}
@@ -1779,13 +1778,14 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 	if c == nil {
 		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
 	}
-	return c.requestWithClient(ctx, c.client, req)
+	return c.requestWithClient(ctx, c.client, req, nil)
 }
 
 func (c *hakeeperClient) requestWithClient(
 	ctx context.Context,
 	client morpc.RPCClient,
 	req pb.Request,
+	attempted *bool,
 ) (pb.Response, error) {
 	if c == nil {
 		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
@@ -1800,6 +1800,11 @@ func (c *hakeeperClient) requestWithClient(
 	defer span.End()
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
+	if attempted != nil {
+		// The caller may invalidate its selected endpoint only after the RPC
+		// has entered the transport, not on a deadline during preparation.
+		*attempted = true
+	}
 	future, err := client.Send(ctx, c.addr, r)
 	if err != nil {
 		return pb.Response{}, normalizeHAKeeperClientError(ctx, err)

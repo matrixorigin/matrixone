@@ -549,9 +549,6 @@ func (exec *txnExecutor) Exec(
 	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
-	if exec.opts.ResolveVariableFunc() != nil {
-		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
-	}
 	if process.HasSystemCTELimits(exec.ctx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(exec.opts.ResolveVariableFunc()))
 	}
@@ -618,7 +615,7 @@ func (exec *txnExecutor) Exec(
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		//*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 
 		opt := plan.NewBaseOptimizer(compileContext)

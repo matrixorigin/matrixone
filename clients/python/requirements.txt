@@ -1,13 +1,13 @@
 # MatrixOne Python SDK Dependencies
 
 # Core database connectivity
-PyMySQL>=1.0.0
+PyMySQL>=1.0.0,!=1.2.1,!=1.2.2,<1.3
 
 # Async support
 aiomysql>=0.2.0
 
 # SQLAlchemy integration
-SQLAlchemy>=1.4.0,<2.0.0
+SQLAlchemy>=1.4.54,<2.0.0
 
 # Type hints support
 typing-extensions>=4.0.0

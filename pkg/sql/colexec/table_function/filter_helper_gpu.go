@@ -19,10 +19,10 @@ package table_function
 import (
 	"fmt"
 	"strings"
-	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
@@ -70,7 +70,7 @@ func initFilterColumns(build filterColumnBuilder, cols []cuvsfilter.ColumnMeta) 
 //
 // The raw-bytes contract matches the C++ side: row-major, elem_size bytes per
 // value, native byte order (LE on x86_64). For numeric types we slice the
-// cell directly via unsafe.Pointer rather than re-encode.
+// cell directly via util.UnsafeToBytes rather than re-encode.
 //
 // VARCHAR (FilterColTypeUint64) is NOT supported at this layer — the DDL
 // layer is expected to have emitted a precomputed hash column. Leaving the
@@ -101,31 +101,31 @@ func appendFilterRow(
 		switch meta.TypeOid {
 		case cuvsfilter.ColTypeInt32:
 			val := vector.GetFixedAtNoTypeCheck[int32](v, nthRow)
-			buf := (*[4]byte)(unsafe.Pointer(&val))[:]
+			buf := util.UnsafeToBytes(&val)
 			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeInt64:
 			val := vector.GetFixedAtNoTypeCheck[int64](v, nthRow)
-			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+			buf := util.UnsafeToBytes(&val)
 			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeFloat32:
 			val := vector.GetFixedAtNoTypeCheck[float32](v, nthRow)
-			buf := (*[4]byte)(unsafe.Pointer(&val))[:]
+			buf := util.UnsafeToBytes(&val)
 			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeFloat64:
 			val := vector.GetFixedAtNoTypeCheck[float64](v, nthRow)
-			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+			buf := util.UnsafeToBytes(&val)
 			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
 		case cuvsfilter.ColTypeUint64:
 			val := vector.GetFixedAtNoTypeCheck[uint64](v, nthRow)
-			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+			buf := util.UnsafeToBytes(&val)
 			if err := build.AddFilterChunk(uint32(i), buf, nullBitmap, 1); err != nil {
 				return err
 			}
@@ -217,23 +217,23 @@ func encodeIncludeRowFromArgVecs(
 		switch meta.TypeOid {
 		case cuvsfilter.ColTypeInt32:
 			val := vector.GetFixedAtNoTypeCheck[int32](v, nthRow)
-			src := (*[4]byte)(unsafe.Pointer(&val))[:]
+			src := util.UnsafeToBytes(&val)
 			copy(buf[off:off+4], src)
 		case cuvsfilter.ColTypeInt64:
 			val := vector.GetFixedAtNoTypeCheck[int64](v, nthRow)
-			src := (*[8]byte)(unsafe.Pointer(&val))[:]
+			src := util.UnsafeToBytes(&val)
 			copy(buf[off:off+8], src)
 		case cuvsfilter.ColTypeFloat32:
 			val := vector.GetFixedAtNoTypeCheck[float32](v, nthRow)
-			src := (*[4]byte)(unsafe.Pointer(&val))[:]
+			src := util.UnsafeToBytes(&val)
 			copy(buf[off:off+4], src)
 		case cuvsfilter.ColTypeFloat64:
 			val := vector.GetFixedAtNoTypeCheck[float64](v, nthRow)
-			src := (*[8]byte)(unsafe.Pointer(&val))[:]
+			src := util.UnsafeToBytes(&val)
 			copy(buf[off:off+8], src)
 		case cuvsfilter.ColTypeUint64:
 			val := vector.GetFixedAtNoTypeCheck[uint64](v, nthRow)
-			src := (*[8]byte)(unsafe.Pointer(&val))[:]
+			src := util.UnsafeToBytes(&val)
 			copy(buf[off:off+8], src)
 		default:
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(

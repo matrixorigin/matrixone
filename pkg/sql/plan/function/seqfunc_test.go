@@ -109,6 +109,48 @@ func TestCurrvalResolvesDatabaseOncePerBatch(t *testing.T) {
 	}
 }
 
+// CURRVAL resolves through the same session policy boundary: the vector
+// argument must reach the relation lookup under the spelling CREATE stored —
+// mode 1 folds identifiers while the mixed mode 2 keeps them, exactly like
+// the mysql lexer's mode-1-only GetDbOrTblName folding.
+func TestCurrvalAppliesSessionCasePolicy(t *testing.T) {
+	newCase := func(policy int64, arg, lookup string) func(t *testing.T) {
+		return func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			txn := mock_frontend.NewMockTxnOperator(ctrl)
+
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.InitSeq()
+			proc.Base.TxnOperator = txn
+			proc.Base.SessionInfo.Database = "session_db"
+			proc.Base.SessionInfo.SeqCurValues[314] = "4242"
+			proc.SetResolveVariableFunc(sequenceCasePolicyResolver(policy))
+			proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, eng)
+
+			eng.EXPECT().Database(gomock.Any(), "session_db", txn).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), lookup, nil).Return(rel, nil)
+			rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(314))
+
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(arg), 1, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			require.NoError(t, Currval([]*vector.Vector{input}, result, proc, 1, nil))
+			require.Equal(t, []byte("4242"), result.GetResultVector().GetBytesAt(0))
+		}
+	}
+
+	t.Run("mode 1 folds the argument to the stored lowercase name", newCase(1, "MySeq", "myseq"))
+	t.Run("mode 2 reaches the lookup with the created spelling", newCase(2, "MySeq", "MySeq"))
+}
+
 func TestSequenceHiddenOverloadExecutors(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -273,7 +315,7 @@ func TestNextvalRejectsNonSequenceBeforeSQL(t *testing.T) {
 		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel}),
 	}, nil)
 
-	_, err := nextval("fake", "db", proc, eng, txn)
+	_, err := resolveNextval("fake", "db", proc, eng, txn)
 	require.EqualError(t, err, "internal error: Table input is not a sequence")
 	require.Zero(t, sql.calls)
 	require.Equal(t, "sentinel", proc.Base.SessionInfo.SeqAddValues[7])
@@ -428,6 +470,13 @@ func TestSequenceSQLMetadata(t *testing.T) {
 	}
 }
 
+// Mechanism mapping (round-8, design §4 D): this test pinned the old
+// shared-transaction read-modify-write serialization of same-statement child
+// processes. The successor guarantee it now pins is equal-or-stronger:
+// siblings still serialize on the Base-owned sequence gate, each serialized
+// NEXTVAL allocates in its own committed autonomous transaction, and session
+// publication (SeqAddValues + SeqLastValue) happens only after that
+// autonomous commit, inside the gate interval.
 func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	parent := testutil.NewProcess(t)
@@ -440,12 +489,30 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
-	eng.EXPECT().Database(gomock.Any(), "db", parent.Base.TxnOperator).Return(db, nil).Times(2)
+	eng.EXPECT().Database(gomock.Any(), "db", txnIdentity{parent.Base.TxnOperator}).Return(db, nil).Times(2)
 	db.EXPECT().Relation(gomock.Any(), "seq", nil).Return(rel, nil).Times(2)
 	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
 		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
 	}, nil).Times(2)
+	// Identity threading (design §4 D): the caller resolution also supplies
+	// the generation identity the route probes against.
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("d7").Times(2)
 	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(7)).Times(2)
+	// After the caller-transaction resolution above, each NEXTVAL allocates in
+	// a fresh autonomous transaction that resolves the sequence again through
+	// its own transaction (design §4 D). autTxn stands in for that transaction;
+	// the metadata state machine below is shared, so the serialized sibling
+	// observes the first sibling's committed allocation.
+	autTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	autDB := mock_frontend.NewMockDatabase(ctrl)
+	autRel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", txnIdentity{autTxn}).Return(autDB, nil).Times(2)
+	autDB.EXPECT().GetDatabaseId(gomock.Any()).Return("d7").Times(2)
+	autDB.EXPECT().Relation(gomock.Any(), "seq", nil).Return(autRel, nil).Times(2)
+	autRel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
+	}, nil).Times(2)
+	autRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(7)).Times(2)
 	parent.Ctx = context.WithValue(parent.Ctx, defines.EngineKey{}, eng)
 
 	type sequenceMetadataState struct {
@@ -496,7 +563,7 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 		}
 		return mem.GetResult(), nil
 	}
-	sqlExec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+	sqlExec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 		normalized := strings.ToLower(strings.TrimSpace(sql))
 		if strings.HasPrefix(normalized, "select last_seq_num") {
 			state.Lock()
@@ -540,7 +607,7 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 			return executor.Result{}, nil
 		}
 		return executor.Result{}, fmt.Errorf("unexpected sequence SQL: %s", sql)
-	})
+	}, autTxn)
 	runtimeService := runtime.ServiceRuntime(parent.GetService())
 	previous, hadPrevious := runtimeService.GetGlobalVariables(runtime.InternalSQLExecutor)
 	runtimeService.SetGlobalVariables(runtime.InternalSQLExecutor, sqlExec)
@@ -672,9 +739,17 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 	require.True(t, state.called)
 	require.Equal(t, 2, state.selectCalls)
 	state.Unlock()
+	require.Equal(t, "2", parent.GetSessionInfo().SeqAddValues[uint64(7)],
+		"each autonomous commit replicates its emission to the session sequence cache")
 	require.Equal(t, "2", parent.GetSessionInfo().SeqLastValue[0])
 }
 
+// Mechanism mapping (round-8, design §4 D): previously SETVAL's counter
+// UPDATE ran inside the caller transaction. It now runs in a fresh autonomous
+// transaction; the pinned guarantee is unchanged and now includes the commit
+// boundary: while SETVAL's autonomous UPDATE is blocked, CURRVAL and LASTVAL
+// readers of the same statement Base observe no pre-publication state, and
+// after the commit all three outputs reflect the assignment.
 func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	parent := testutil.NewProcess(t)
@@ -689,12 +764,26 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
-	eng.EXPECT().Database(gomock.Any(), "db", parent.Base.TxnOperator).Return(db, nil).AnyTimes()
+	eng.EXPECT().Database(gomock.Any(), "db", txnIdentity{parent.Base.TxnOperator}).Return(db, nil).AnyTimes()
 	db.EXPECT().Relation(gomock.Any(), "seq", nil).Return(rel, nil).AnyTimes()
 	rel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
 		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
 	}, nil).AnyTimes()
 	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(7)).AnyTimes()
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("d7").AnyTimes()
+	// SETVAL resolves through the caller transaction and then again inside its
+	// autonomous assignment transaction (design §4 D), which autTxn stands in
+	// for here.
+	autTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	autDB := mock_frontend.NewMockDatabase(ctrl)
+	autRel := mock_frontend.NewMockRelation(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", txnIdentity{autTxn}).Return(autDB, nil).AnyTimes()
+	autDB.EXPECT().GetDatabaseId(gomock.Any()).Return("d7").AnyTimes()
+	autDB.EXPECT().Relation(gomock.Any(), "seq", nil).Return(autRel, nil).AnyTimes()
+	autRel.EXPECT().TableDefs(gomock.Any()).Return([]engine.TableDef{
+		sequenceProperties(engine.Property{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSequenceRel}),
+	}, nil).AnyTimes()
+	autRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(7)).AnyTimes()
 	parent.Ctx = context.WithValue(parent.Ctx, defines.EngineKey{}, eng)
 
 	type metadataState struct {
@@ -732,7 +821,7 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 		}
 		return mem.GetResult(), nil
 	}
-	sqlExec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+	sqlExec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 		normalized := strings.ToLower(strings.TrimSpace(sql))
 		if strings.HasPrefix(normalized, "select last_seq_num") {
 			state.Lock()
@@ -773,7 +862,7 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 			return executor.Result{}, nil
 		}
 		return executor.Result{}, fmt.Errorf("unexpected sequence SQL: %s", sql)
-	})
+	}, autTxn)
 	runtimeService := runtime.ServiceRuntime(parent.GetService())
 	previous, hadPrevious := runtimeService.GetGlobalVariables(runtime.InternalSQLExecutor)
 	runtimeService.SetGlobalVariables(runtime.InternalSQLExecutor, sqlExec)
@@ -903,10 +992,11 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 			err   error
 		}{value: value, err: err}
 	}()
-	// SETVAL's metadata UPDATE is blocked before setVal publishes SeqAddValues
-	// and LASTVAL. Both readers must reach the same Base-owned permit before it
-	// is released; this is an admission barrier rather than a timed absence
-	// check. If either gate were removed, its result would be observable below.
+	// SETVAL's metadata UPDATE is blocked inside its autonomous transaction,
+	// before the commit publishes SeqAddValues and LASTVAL. Both readers must
+	// reach the same Base-owned permit before it is released; this is an
+	// admission barrier rather than a timed absence check. If either gate were
+	// removed, its result would be observable below.
 	select {
 	case <-currGateCalled:
 	case <-time.After(time.Second):
@@ -942,4 +1032,24 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 	require.Equal(t, int64(10), state.last)
 	state.Unlock()
 	require.Equal(t, "10", parent.GetSessionInfo().SeqLastValue[0])
+}
+
+func TestSequenceMutationHonorsReadOnlyStamp(t *testing.T) {
+	// Unstamped and explicitly read-write contexts pass the mutation
+	// boundary unchanged; a stamped read-only mode is rejected with
+	// ERROR 1792 before any engine or counter work happens.
+	require.NoError(t, rejectSequenceMutationInReadOnly(nil))
+
+	proc := testutil.NewProcess(t)
+	require.NoError(t, rejectSequenceMutationInReadOnly(proc))
+
+	rwProc := testutil.NewProcess(t)
+	rwProc.SetReadOnlyTxnAccessMode(false)
+	require.NoError(t, rejectSequenceMutationInReadOnly(rwProc))
+
+	roProc := testutil.NewProcess(t)
+	roProc.SetReadOnlyTxnAccessMode(true)
+	err := rejectSequenceMutationInReadOnly(roProc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
 }

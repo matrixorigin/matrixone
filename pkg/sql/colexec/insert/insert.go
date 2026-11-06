@@ -173,6 +173,24 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			pipelineFlush = true
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
+		// Bind this statement's writer to its workspace's per-object
+		// capacity admission (issue #25590 round-19 review): the
+		// SinkerOwner structural interface saves this package from
+		// importing the workspace's engine while the writer gains the
+		// SAME reservation-before-persistence gate the workspace dump
+		// carries — every object this writer spills reserves one
+		// in-flight unit under the bound BEFORE it goes durable, a
+		// saturated ledger refuses the spill, and the refused statement
+		// persists no orphan its metadata could never have recorded. A
+		// workspace (or test double) without the owner surface keeps an
+		// unhooked writer — exactly the pre-fix behavior.
+		if txnOp := proc.GetTxnOperator(); txnOp != nil {
+			if owner, ok := txnOp.GetWorkspace().(ioutil.SinkerOwner); ok {
+				if opt := owner.SinkerCapacityOption(); opt != nil {
+					sinkerOpts = append(sinkerOpts, opt)
+				}
+			}
+		}
 		s3Writer := colexec.NewCNS3DataWriterForService(
 			proc.GetService(), proc.Mp(), fs, insert.InsertCtx.TableDef, -1, false,
 			sinkerOpts...)

@@ -670,4 +670,41 @@ order by id;
 1  ¦  false  𝄀
 2  ¦  false  𝄀
 3  ¦  true
+insert into t_case_nullable_condition values (4, 1);
+select id, case when cond then case when id = 4 then null else id end else null end as case_value
+from t_case_nullable_condition order by id;
+➤ id[4,32,0]  ¦  case_value[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  3  𝄀
+4  ¦  null
+select id, case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id < 4 order by id;
+➤ id[4,32,0]  ¦  case_value[3,18,2]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  7.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id = 4;
+➤ case_value[3,18,2]  𝄀
+0.00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'bad'
 drop table t_case_nullable_condition;
+select case when 1 then 'x' else false end as case_str_bool_t, case when 0 then 'x' else false end as case_str_bool_f;
+➤ case_str_bool_t[12,65535,0]  ¦  case_str_bool_f[12,65535,0]  𝄀
+x  ¦  0
+select case when 0 then true else 'y' end as case_bool_str_f;
+➤ case_bool_str_f[12,65535,0]  𝄀
+y
+drop table if exists t_case_str_bool;
+create table t_case_str_bool (id int primary key, s varchar(10), b bool);
+insert into t_case_str_bool values (1, 'abc', true), (2, 'def', false);
+select id, case when b then s else b end as case_col from t_case_str_bool order by id;
+➤ id[4,32,0]  ¦  case_col[12,65535,0]  𝄀
+1  ¦  abc  𝄀
+2  ¦  0
+drop table t_case_str_bool;

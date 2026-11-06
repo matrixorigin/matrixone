@@ -1162,7 +1162,10 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		// Lifting any visible volatile result across the join can change both
 		// its evaluation count and DISTINCT cardinality.  Keep this shape
 		// fail-closed until it can be decorrelated without moving evaluation.
-		if containsVolatileFunction(ctx.projects[i]) ||
+		// CAST9 is a pure, execution-stable conversion even though SQL-mode
+		// sensitivity forbids folding. Only this nullable, match-guarded lift
+		// may use that proof; diagnostic/unstable inputs remain inadmissible.
+		if containsVolatileFunctionImpl(ctx.projects[i], true) ||
 			(hasCorrCol(ctx.projects[i]) && !builder.casePreservesType(ctx.projects[i])) {
 			return unsafe()
 		}
@@ -1443,9 +1446,7 @@ func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
 // Inspect only referenced origins in the input graph, without expanding or
 // mutating expressions. Unknown producers retain the historical IS TRUE barrier.
 func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*plan.Expr, inputs ...int32) bool {
-	if !areTruncationSafePredicates(predicates) {
-		return false
-	}
+	legacyProof := areTruncationSafePredicates(predicates)
 	origins := make(map[int32]*plan.Node)
 	visited := make(map[int32]uint8)
 	var collect func(int32) bool
@@ -1506,6 +1507,47 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 		}
 	}
 
+	// TEXT width zero also describes some unbounded computed expressions. Only
+	// use the ordinary stored TEXT byte limit after following transparent column
+	// references to the actual table definition.
+	storedTextIsBounded := func(expr *plan.Expr) bool {
+		seen := make(map[[2]int32]bool)
+		for expr != nil && types.T(expr.Typ.Id) == types.T_text && expr.Typ.Width == 0 {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 {
+				return false
+			}
+			key := [2]int32{col.RelPos, col.ColPos}
+			if seen[key] {
+				return false
+			}
+			seen[key] = true
+			node := origins[col.RelPos]
+			if node == nil {
+				return false
+			}
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				if int(col.ColPos) >= len(node.TableDef.Cols) || node.TableDef.Cols[col.ColPos] == nil {
+					return false
+				}
+				typ := node.TableDef.Cols[col.ColPos].Typ
+				return types.T(typ.Id) == types.T_text && typ.Width == 0
+			}
+			if node.NodeType != plan.Node_PROJECT || int(col.ColPos) >= len(node.ProjectList) {
+				return false
+			}
+			expr = node.ProjectList[col.ColPos]
+		}
+		return false
+	}
+	if !legacyProof {
+		for _, predicate := range predicates {
+			if !builder.existentialPredicateIsTotal(predicate, storedTextIsBounded) {
+				return false
+			}
+		}
+	}
+
 	proved := make(map[[2]int32]uint8)
 	var inspect func(*plan.Expr) bool
 	inspect = func(expr *plan.Expr) bool {
@@ -1528,7 +1570,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 					return false
 				}
 				origin := node.ProjectList[col.ColPos]
-				if !isTruncationSafePredicateValue(origin) || !inspect(origin) {
+				if !(legacyProof && isTruncationSafePredicateValue(origin) || builder.existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
 					return false
 				}
 			}
@@ -1560,6 +1602,11 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
+	if outerPred == nil {
+		if root, marker, rewritten, rewriteErr := builder.tryExistentialDisjunction(left, right, joinPreds, negate, ctx); rewritten || rewriteErr != nil {
+			return root, marker, rewriteErr
+		}
+	}
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
 
@@ -1592,12 +1639,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	markNotNullable := outerPred != nil && outerPred.Typ.NotNullable
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_JOIN,
-		Children:    []int32{left, right},
-		BindingTags: []int32{markTag},
-		JoinType:    plan.Node_MARK,
-		OnList:      joinPreds,
-		SpillMem:    builder.joinSpillMem,
+		NodeType:          plan.Node_JOIN,
+		Children:          []int32{left, right},
+		BindingTags:       []int32{markTag},
+		JoinType:          plan.Node_MARK,
+		MarkExistenceOnly: keepRawExistential,
+		OnList:            joinPreds,
+		SpillMem:          builder.joinSpillMem,
 	}, ctx)
 
 	markExpr = &plan.Expr{
@@ -4888,7 +4936,8 @@ func correlatedPaginationPartitionTypeSupported(typ types.T) bool {
 		types.T_varbinary, types.T_json, types.T_text, types.T_datalink,
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

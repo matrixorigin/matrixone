@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base
 
 from matrixone import Client, AsyncClient
-from matrixone._sql_literals import fulltext_term_token
+from matrixone._sql_literals import string_grammar_token
 from matrixone.exceptions import QueryError, PitrError
 from matrixone.search_vector_index import PineconeCompatibleIndex
 from matrixone.stage import StageManager, AsyncStageManager
@@ -51,12 +51,12 @@ def test_duplicate_labels_rejected_even_without_rows():
 @pytest.mark.parametrize('term', ['bad\0value', r'bad\$value'])
 def test_unrepresentable_fulltext_term_rejected(term):
     with pytest.raises(ValueError):
-        fulltext_term_token(term)
+        string_grammar_token(term)
 
 
 def test_fulltext_term_is_one_token():
-    assert fulltext_term_token("O'Reilly $tag$") == "'O''Reilly $tag$'"
-    assert fulltext_term_token(r'C:\path') == r'$sdk$C:\path$sdk$'
+    assert string_grammar_token("O'Reilly $tag$") == "'O''Reilly $tag$'"
+    assert string_grammar_token(r'C:\path') == r'$sdk$C:\path$sdk$'
 
 
 @pytest.mark.asyncio

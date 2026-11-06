@@ -17,10 +17,12 @@ package function
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -29,18 +31,167 @@ import (
 
 func Test_Operator_Unary_Tilde(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	tc := tcTemp{
-		info: "select unary_tilde(num) with num = 5, -5, null",
-		inputs: []FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(),
-				[]int64{5, -5, 0}, []bool{false, false, true}),
-		},
-		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-			[]uint64{18446744073709551610, 4, 0}, []bool{false, false, true}),
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(num) with num = 5, -5, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5, -5, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{18446744073709551610, 4, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
 	}
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
-	succeed, info := tcc.RunAndFree()
-	require.True(t, succeed, tc.info, info)
+	{
+		// issue #31905: ~ on an unsigned column must be taken in the unsigned
+		// 64-bit numeric domain, whatever the storage width is. zero is the
+		// discriminating row: a width-typed complement would return 255 here.
+		tc := tcTemp{
+			info: "select unary_tilde(tinyint unsigned) with num = 0, 1, 255, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{0, 1, 255, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744073709551360, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(smallint unsigned) with num = 0, 65535, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint16.ToType(),
+					[]uint16{0, 65535, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, 18446744073709486080, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint16])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(int unsigned) with num = 0, 1, 4294967295, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(),
+					[]uint32{0, 1, 4294967295, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744069414584320, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint32])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// bigint unsigned already complemented in the 64-bit domain, keep it.
+		tc := tcTemp{
+			info: "select unary_tilde(bigint unsigned) with num = 0, max, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{0, math.MaxUint64, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, 0, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint64])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// signed neighbors must keep the sign-extension complement behavior.
+		tc := tcTemp{
+			info: "select unary_tilde(tinyint) with num = -1, -128, 127, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{-1, -128, 127, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 127, 18446744073709551488, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int8])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(smallint) with num = -32768, 32767, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int16.ToType(),
+					[]int16{-32768, 32767, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{32767, 18446744073709518848, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int16])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(int) with num = -2147483648, 2147483647, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{-2147483648, 2147483647, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{2147483647, 18446744071562067968, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int32])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(bigint) with num = min, max, 0, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{math.MinInt64, math.MaxInt64, 0, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{9223372036854775807, 9223372036854775808, math.MaxUint64, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// constant input column takes the same numeric-domain path.
+		tc := tcTemp{
+			info: "select unary_tilde(const tinyint unsigned zero)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{0}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// selective evaluation mask must not change the emitted rows.
+		tc := tcTemp{
+			info: "select unary_tilde(tinyint unsigned) with select list",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{0, 1, 255}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744073709551360}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8]).
+			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}})
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
 }
 
 func Test_Operator_Unary_Minus(t *testing.T) {
@@ -664,6 +815,104 @@ func TestCaseCheckVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestCaseFixedNullElse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tt := range []struct {
+		name         string
+		typ          types.Type
+		values, want any
+	}{
+		{"int64", types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, []int64{1, 0, 0, 0, 5}},
+		{"decimal128", types.T_decimal128.ToType(), []types.Decimal128{{B0_63: 1}, {B0_63: 2}, {B0_63: 3}, {B0_63: 4}, {B0_63: 5}}, []types.Decimal128{{B0_63: 1}, {}, {}, {}, {B0_63: 5}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true, true, true}, []bool{false, false, true, false, false}),
+				NewFunctionTestInput(tt.typ, tt.values, []bool{false, false, false, true, false}),
+				NewFunctionTestConstInput(tt.typ, tt.values, []bool{true}),
+			}, NewFunctionTestResult(tt.typ, false, tt.want, []bool{false, true, true, true, false}), caseFn)
+			defer tc.Free()
+			for i := 0; i < 2; i++ {
+				ok, info := tc.Run()
+				require.True(t, ok, info)
+			}
+		})
+	}
+
+	for _, valueIsNull := range []bool{false, true} {
+		t.Run(fmt.Sprintf("constant-value-null=%t", valueIsNull), func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{9}, []bool{valueIsNull}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{9, 0, 9}, []bool{valueIsNull, true, valueIsNull}), caseFn)
+			defer tc.Free()
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("accounted-bitmap-word-boundaries-and-resize", func(t *testing.T) {
+		const size = 130
+		conditions, values := make([]bool, size), make([]int64, size)
+		for _, row := range []int{0, 63, 65, 129} {
+			conditions[row], values[row] = true, int64(row+1)
+		}
+		tc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), conditions, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), values, nil),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), caseFn)
+		defer tc.Free()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		require.NoError(t, err)
+		tc.result.Free()
+		tc.result, err = vector.NewFunctionResultWrapperWithAllocation(types.T_int64.ToType(), proc.Mp(), selection)
+		require.NoError(t, err)
+		for _, n := range []int{130, 65, 130} {
+			require.NoError(t, tc.result.PreExtendAndReset(n))
+			require.NoError(t, caseFn(tc.parameters, tc.result, proc, n, nil))
+			result := tc.result.GetResultVector()
+			require.True(t, result.GetNulls().GetBitmap().HasExternalStorage())
+			for i := 0; i < n; i++ {
+				require.Equal(t, !conditions[i], result.IsNull(uint64(i)), "length %d row %d", n, i)
+				if conditions[i] {
+					require.Equal(t, values[i], vector.MustFixedColWithTypeCheck[int64](result)[i])
+				}
+			}
+		}
+		tc.result.Free()
+		tc.result = nil
+		require.Zero(t, account.Snapshot().Used)
+	})
+}
+
+func TestCaseFixedNullElseControls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cond := NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil)
+	value := NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2}, nil)
+	for _, test := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		want   []int64
+		nulls  []bool
+	}{
+		{"implicit-null", []FunctionTestInput{cond, value}, []int64{1, 0}, []bool{false, true}},
+		{"non-null-else", []FunctionTestInput{cond, value, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, nil)}, []int64{1, 3}, nil},
+		{"multiple-when", []FunctionTestInput{cond, value, cond, value, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true})}, []int64{1, 0}, []bool{false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, test.inputs, NewFunctionTestResult(types.T_int64.ToType(), false, test.want, test.nulls), caseFn)
+			ok, info := tc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestCaseFnVectorResults(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
@@ -897,6 +1146,14 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+
+	enumVec := newVectorByType(proc.Mp(), types.T_enum.ToType(), []types.Enum{0, 2, 1}, nil)
+	enumVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err := IffConditionTruthyAt(enumVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestIffFn_StringCondition(t *testing.T) {
@@ -910,6 +1167,241 @@ func TestIffFn_StringCondition(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
 	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
+}
+
+// ENUM storage is admitted as an IF condition and keeps its own numeric
+// truthiness. A NULL condition selects the ELSE branch with its value, and
+// the display label never reaches IF through this path.
+func TestIffFn_EnumCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	enumType := types.T_enum.ToType()
+	_, err := GetFunctionByName(context.Background(), "if",
+		[]types.Type{enumType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err, "registry must admit ENUM storage as an IF condition")
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(enumType, []types.Enum{0, 1, 2, 2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12, 13}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22, 23}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{20, 11, 12, 23}, nil), iffFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+func TestIffFn_JsonCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+	_, err := GetFunctionByName(context.Background(), "if",
+		[]types.Type{jsonType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err, "registry must admit JSON scalars as an IF condition")
+
+	encodedJSON := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		return string(encoded)
+	}
+	// JSON scalars follow MySQL numeric truth in a boolean condition: 1, true
+	// and the string "1" are true; 0, false and the JSON null select the ELSE
+	// branch, as does a SQL NULL condition.
+	conditions := make([]string, 0, 7)
+	conditions = append(conditions,
+		encodedJSON("0"), encodedJSON("1"), encodedJSON("true"),
+		encodedJSON("false"), encodedJSON(`"1"`), encodedJSON("null"))
+	nulls := make([]bool, len(conditions)+1)
+	nulls[len(nulls)-1] = true
+	conditions = append(conditions, encodedJSON("0"))
+	thenValues := make([]int64, 0, len(conditions))
+	elseValues := make([]int64, 0, len(conditions))
+	for i := range conditions {
+		thenValues = append(thenValues, int64(10+i))
+		elseValues = append(elseValues, int64(20+i))
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(jsonType, conditions, nulls),
+			NewFunctionTestInput(types.T_int64.ToType(), thenValues, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), elseValues, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{20, 11, 12, 23, 14, 25, 26}, nil), iffFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+// MySQL conditional truth coerces a JSON STRING through its leading numeric
+// prefix, not through the strict boolean parser that explicit CAST keeps:
+// "2tail" is true like 2, "abc"/""/the string "true" are false like 0, objects
+// and arrays coerce to zero, and JSON null or a SQL NULL condition selects the
+// ELSE branch. This pins the reviewer-quoted reference boundary.
+func TestIffFn_JsonStringCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+	_, err := GetFunctionByName(context.Background(), "if",
+		[]types.Type{jsonType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err, "registry must admit JSON scalars as an IF condition")
+
+	encodedJSON := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		b, err := bj.Marshal()
+		require.NoError(t, err)
+		return string(b)
+	}
+
+	texts := []string{
+		`"true"`,                             // string "true": 0 numerically -> FALSE, unlike the literal true
+		`"abc"`,                              // nonnumeric -> 0 -> FALSE
+		`"2tail"`, `"2.5"`, `" 12"`, `"1e2"`, // numeric prefixes -> TRUE
+		`""`,                // empty -> 0 -> FALSE
+		`"true"`, `"false"`, // behavior of the earlier vector
+	}
+	want := []bool{false, false, true, true, true, true, false, false, false}
+
+	conditions := make([]string, 0, len(texts)+2)
+	for _, text := range texts {
+		conditions = append(conditions, encodedJSON(text))
+	}
+	conditions = append(conditions,
+		encodedJSON(`{"x":1}`), // object coerces to zero -> FALSE
+		encodedJSON("[1,2]"),   // array coerces to zero -> FALSE
+	)
+	nulls := make([]bool, len(conditions)+2)
+	nulls[len(nulls)-1] = true // final row: SQL NULL condition
+	conditions = append(conditions, encodedJSON("0"), encodedJSON("null"))
+
+	result := make([]int64, len(conditions))
+	for i := range result {
+		if i < len(want) && want[i] {
+			result[i] = 1
+		} else {
+			result[i] = 0
+		}
+	}
+
+	thenValues := make([]int64, len(conditions))
+	elseValues := make([]int64, len(conditions))
+	for i := range thenValues {
+		thenValues[i] = 1
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(jsonType, conditions, nulls),
+			NewFunctionTestInput(types.T_int64.ToType(), thenValues, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), elseValues, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, result, nil), iffFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+// Searched CASE shares IF's conditional JSON kernel: a JSON condition stays
+// in-domain (no strict JSON-to-BOOL cast) and evaluates with the numeric
+// coercion above, while explicit CAST ... AS BOOL keeps the strict parser.
+func TestCaseFn_JsonCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+	strType := types.T_varchar.ToType()
+	_, err := GetFunctionByName(context.Background(), "case",
+		[]types.Type{jsonType, strType, strType})
+	require.NoError(t, err, "registry must resolve case(json, varchar, varchar)")
+
+	encodedJSON := func(text string) string {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		b, err := bj.Marshal()
+		require.NoError(t, err)
+		return string(b)
+	}
+
+	texts := []string{`"true"`, `"abc"`, `"2tail"`, `""`, `"0.5"`, `"1e2"`, `true`}
+	conditions := make([]string, 0, len(texts))
+	for _, text := range texts {
+		conditions = append(conditions, encodedJSON(text))
+	}
+	want := []string{"n", "n", "y", "n", "y", "y", "y"}
+
+	thenValues := make([]string, len(texts))
+	for i := range thenValues {
+		thenValues[i] = "y"
+	}
+	elseValues := make([]string, len(texts))
+	for i := range elseValues {
+		elseValues[i] = "n"
+	}
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(jsonType, conditions, nil),
+			NewFunctionTestInput(strType, thenValues, nil),
+			NewFunctionTestInput(strType, elseValues, nil),
+		},
+		NewFunctionTestResult(strType, false, want, nil), caseFn)
+	succeed, info := tc.RunAndFree()
+	require.True(t, succeed, info)
+
+	// A NULL ELSE must not route the JSON condition through the BOOL fast path.
+	intType := types.T_int64.ToType()
+	tc = NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(jsonType, conditions, nil),
+		NewFunctionTestConstInput(intType, []int64{1}, nil),
+		NewFunctionTestConstInput(intType, []int64{0}, []bool{true}),
+	}, NewFunctionTestResult(intType, false, []int64{0, 0, 1, 0, 1, 1, 1},
+		[]bool{true, true, false, true, false, false, false}), caseFn)
+	succeed, info = tc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+// TestJsonNumericPrefix pins MySQL string-to-number conversion for the JSON
+// conditional kernel: leading whitespace and sign, one decimal point, a
+// well-formed exponent, and zero when no numeric prefix exists.
+// TestParseSaturatedDecimalFloatPrefix pins the below-extension-dispatch
+// decimal-prefix conversion the conditional JSON kernel shares with ordinary
+// string->numeric casts: extension candidates (hex/binary/octal prefixes,
+// NaN/Inf text) have no numeric prefix here, and an overflowing prefix
+// saturates to +-MaxFloat64 instead of erroring - so the conditional IF/CASE
+// kernel reads "1e309" as true while a general string cast keeps its own
+// extension behavior (D9).
+func TestParseSaturatedDecimalFloatPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want float64
+	}{
+		{"2tail", 2},
+		{"2.5x", 2.5},
+		{"abc", 0},
+		{"true", 0},
+		{"", 0},
+		{"  12", 12},
+		{"-0.01", -0.01},
+		{"+7", 7},
+		{".5", 0.5},
+		{"1e2", 100},
+		{"1e", 1},
+		{"1e+", 1},
+		{"0.00e1", 0},
+		{"0", 0},
+		{"1e309", math.MaxFloat64},
+		{"-1e309", -math.MaxFloat64},
+		{"0x10", 0},
+		{"nan", 0},
+		{"information", 0},
+	} {
+		prefix, negative, ok := scanDecimalFloatPrefix(tc.text)
+		if !ok {
+			require.Equal(t, float64(0), tc.want, "text %q must scan false without a numeric prefix", tc.text)
+			continue
+		}
+		value, valid := parseSaturatedDecimalFloatPrefix(prefix, negative, 64)
+		require.True(t, valid, "text %q", tc.text)
+		require.Equal(t, tc.want, value, "text %q", tc.text)
+	}
 }
 
 func TestIffFn_BinaryResults(t *testing.T) {
@@ -1067,6 +1559,163 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.True(t, result.finalType[2].Oid.IsMySQLString())
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[1].Width)
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
+}
+
+// MySQL treats TRUE/FALSE as the integers 1/0, so a string value branch next
+// to a BOOL value branch resolves to VARCHAR and a selected BOOL renders as
+// '1'/'0'. Picking BOOL instead casts the string branch to BOOL and fails
+// with "'x' is not a valid bool expression" (issue #31294).
+func Test_CaseCheck_MixedStringBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "string then bool",
+			inputs: []types.Type{
+				types.T_bool.ToType(),
+				types.New(types.T_varchar, 11, 0),
+				types.T_bool.ToType(),
+			},
+		},
+		{
+			name: "bool then string",
+			inputs: []types.Type{
+				types.T_bool.ToType(),
+				types.T_bool.ToType(),
+				types.New(types.T_varchar, 11, 0),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, 3)
+			require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+			require.True(t, result.finalType[1].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[1].Oid)
+			require.True(t, result.finalType[2].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[2].Oid)
+		})
+	}
+}
+
+func Test_IffCheck_MixedStringBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name:   "string then bool",
+			inputs: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType(), types.T_bool.ToType()},
+		},
+		{
+			name:   "bool then string",
+			inputs: []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), types.T_varchar.ToType()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := iffCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, 3)
+			require.Equal(t, types.T_bool.ToType(), result.finalType[0])
+			require.True(t, result.finalType[1].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[1].Oid)
+			require.True(t, result.finalType[2].Oid.IsMySQLString(),
+				"value branch should cast to a string type, got: %v", result.finalType[2].Oid)
+		})
+	}
+
+	// BOOL-only branches have no string and keep the BOOL result.
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.T_bool.ToType(),
+		types.T_bool.ToType(),
+	})
+	require.Equal(t, succeedMatched, result.status)
+}
+
+func TestMixedStringNumericToVarcharWithBool(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+		wantOK bool
+	}{
+		{name: "string and bool", source: []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()}, wantOK: true},
+		{name: "bool and string", source: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()}, wantOK: true},
+		{name: "char and bool", source: []types.Type{types.New(types.T_char, 5, 0), types.T_bool.ToType()}, wantOK: true},
+		{name: "null string and bool", source: []types.Type{types.T_any.ToType(), types.T_varchar.ToType(), types.T_bool.ToType()}, wantOK: true},
+		{name: "bool only", source: []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, wantOK: false},
+		{name: "bool and int without string", source: []types.Type{types.T_bool.ToType(), types.T_int32.ToType()}, wantOK: false},
+		{name: "string only", source: []types.Type{types.T_varchar.ToType()}, wantOK: false},
+		{name: "bool and temporal", source: []types.Type{types.T_bool.ToType(), types.T_date.ToType()}, wantOK: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			retType, ok := mixedStringNumericToVarchar(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if test.wantOK {
+				require.True(t, retType.Oid.IsMySQLString(), "common type should be a string type, got: %v", retType.Oid)
+			}
+		})
+	}
+}
+
+// TestMixedStringNumericToVarcharConservativeCapacity pins the shared
+// conditional string+numeric contract: TEXT/BLOB branches keep the
+// conservative VARCHAR(65535) target, matching the control-flow metadata
+// contract (TestBindControlFlowMetadata). BOOL counts as numeric
+// (issue #31294), so string/TEXT/BLOB branches mixed with BOOL resolve the
+// same way as branches mixed with an integer.
+func TestMixedStringNumericToVarcharConservativeCapacity(t *testing.T) {
+	mediumText := types.New(types.T_text, types.MaxMediumTextLen, 0)
+	mediumBlob := types.New(types.T_blob, types.MaxMediumTextLen, 0)
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+	}{
+		{name: "string and bool", source: []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()}},
+		{name: "bool and string", source: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()}},
+		{name: "width zero text and bool", source: []types.Type{types.T_text.ToType(), types.T_bool.ToType()}},
+		{name: "bool and width zero text", source: []types.Type{types.T_bool.ToType(), types.T_text.ToType()}},
+		{name: "width zero text and int", source: []types.Type{types.T_text.ToType(), types.T_int32.ToType()}},
+		{name: "width zero blob and bool", source: []types.Type{types.T_blob.ToType(), types.T_bool.ToType()}},
+		{name: "bool and width zero blob", source: []types.Type{types.T_bool.ToType(), types.T_blob.ToType()}},
+		{name: "mediumtext and bool", source: []types.Type{mediumText, types.T_bool.ToType()}},
+		{name: "mediumblob and bool", source: []types.Type{mediumBlob, types.T_bool.ToType()}},
+		{name: "mediumblob mediumtext and bool", source: []types.Type{mediumBlob, mediumText, types.T_bool.ToType()}},
+		{name: "tinytext and bool", source: []types.Type{types.New(types.T_text, types.MaxTinyTextLen, 0), types.T_bool.ToType()}},
+		{name: "plain blob and bool", source: []types.Type{types.New(types.T_blob, types.MaxStringSize, 0), types.T_bool.ToType()}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			retType, ok := mixedStringNumericToVarchar(test.source)
+			require.True(t, ok)
+			require.Equal(t, types.T_varchar, retType.Oid)
+			require.Equal(t, int32(types.MaxVarBinaryLen), retType.Width)
+		})
+	}
+}
+
+// TestConditionalCheckStringBoolBranchCasts proves the conservative VARCHAR
+// target flows through CASE/IF branch casting and the return-type callback
+// when a string branch mixes with a BOOL branch (issue #31294).
+func TestConditionalCheckStringBoolBranchCasts(t *testing.T) {
+	caseResult := caseCheck(nil, []types.Type{types.T_bool.ToType(), types.T_text.ToType(), types.T_bool.ToType()})
+	require.Equal(t, succeedWithCast, caseResult.status)
+	require.Len(t, caseResult.finalType, 3)
+	require.Equal(t, types.T_bool, caseResult.finalType[0].Oid)
+	require.Equal(t, types.T_varchar, caseResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), caseResult.finalType[1].Width)
+	require.Equal(t, types.T_varchar, caseResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), caseResult.finalType[2].Width)
+
+	iffResult := iffCheck(nil, []types.Type{types.T_bool.ToType(), types.T_bool.ToType(), types.T_varchar.ToType()})
+	require.Equal(t, succeedWithCast, iffResult.status)
+	require.Len(t, iffResult.finalType, 3)
+	require.Equal(t, types.T_varchar, iffResult.finalType[1].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), iffResult.finalType[1].Width)
+	require.Equal(t, types.T_varchar, iffResult.finalType[2].Oid)
+	require.Equal(t, int32(types.MaxVarBinaryLen), iffResult.finalType[2].Width)
+	require.Equal(t, int32(types.MaxVarBinaryLen), iffReturnType(iffResult.finalType).Width)
 }
 
 func TestCaseCheckAcceptsImplicitBooleanConditions(t *testing.T) {
@@ -1671,10 +2320,19 @@ func Test_SetSafeDecimalWidthAndScaleFromSourceBranches(t *testing.T) {
 	noDecimalOrInteger := types.New(types.T_decimal64, 18, 0)
 	originalNoDecimalOrInteger := noDecimalOrInteger
 	require.True(t, setSafeDecimalWidthAndScaleFromSource(&noDecimalOrInteger, []types.Type{
-		types.T_bool.ToType(),
 		types.T_varchar.ToType(),
+		types.T_date.ToType(),
 	}))
 	require.Equal(t, originalNoDecimalOrInteger, noDecimalOrInteger)
+
+	// TRUE/FALSE count as a numeric 0/1 source with exactly one integral
+	// digit, matching MySQL semantics when a BOOL value meets a DECIMAL.
+	boolNumericSource := types.New(types.T_decimal64, 18, 0)
+	require.True(t, setSafeDecimalWidthAndScaleFromSource(&boolNumericSource, []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_decimal64, 2, 2),
+	}))
+	require.Equal(t, types.New(types.T_decimal64, 3, 2), boolNumericSource)
 
 	decimalScaleLargerThanWidth := types.New(types.T_decimal64, 18, 0)
 	require.True(t, setSafeDecimalWidthAndScaleFromSource(&decimalScaleLargerThanWidth, []types.Type{
@@ -2327,4 +2985,102 @@ func Test_CaseWhen_WithNullAndStringComparison(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, strCaseFn)
 	succeed, info := tcc.RunAndFree()
 	require.True(t, succeed, tc.info, info)
+}
+
+// TestConditionalBooleanModeGates pins the D11 two-carrier contract at the
+// admission layer: the default statement keeps the MySQL contracts (JSON IF
+// and CASE conditions admitted), while a native-mode statement binds with the
+// pre-contract admission (JSON conditions reject, exactly as base did).
+func TestConditionalBooleanModeGates(t *testing.T) {
+	jsonType := types.T_json.ToType()
+	boolType := types.T_bool.ToType()
+	intType := types.T_int64.ToType()
+	mysqlCtx := context.Background()
+	nativeCtx := WithMySQLConditionalBooleanContracts(context.Background(), false)
+	require.True(t, MySQLConditionalBooleanContracts(mysqlCtx), "default statement keeps the MySQL contracts")
+	require.False(t, MySQLConditionalBooleanContracts(nativeCtx))
+
+	_, err := GetFunctionByName(mysqlCtx, "if",
+		[]types.Type{jsonType, intType, intType})
+	require.NoError(t, err, "MySQL statement admits a JSON scalar IF condition")
+	_, err = GetFunctionByName(nativeCtx, "if",
+		[]types.Type{jsonType, intType, intType})
+	require.Error(t, err, "native statement rejects a JSON IF condition like the pre-contract behavior")
+
+	_, err = GetFunctionByName(mysqlCtx, "case",
+		[]types.Type{jsonType, intType, boolType, intType})
+	require.NoError(t, err, "MySQL statement admits a JSON CASE WHEN condition")
+	_, err = GetFunctionByName(nativeCtx, "case",
+		[]types.Type{jsonType, intType, boolType, intType})
+	require.Error(t, err, "native statement rejects a JSON CASE WHEN condition like the pre-contract behavior")
+
+	// Raw ENUM conditions outside the display wrapper: the MySQL contracts
+	// admit them (the cut list keeps the storage-typed condition in-domain),
+	// while the pre-contract admission rejected them - the display-wrapped
+	// VARCHAR is what base silently consumed as text truth.
+	enumType := types.T_enum.ToType()
+	_, err = GetFunctionByName(mysqlCtx, "if", []types.Type{enumType, intType, intType})
+	require.NoError(t, err)
+	_, err = GetFunctionByName(nativeCtx, "if", []types.Type{enumType, intType, intType})
+	require.Error(t, err, "the pre-contract admission rejected a raw ENUM condition")
+
+	// The searched CASE keeps the same two-mode boundary: a raw ENUM
+	// condition binds through the storage-truth contracts only in MySQL mode,
+	// and a native-mode statement keeps the legacy admission that the
+	// pre-contract table rejected. The display-wrapped operand a native
+	// statement actually binds is handled below by the byte-identical legacy
+	// string path.
+	_, err = GetFunctionByName(mysqlCtx, "case", []types.Type{enumType, intType, intType})
+	require.NoError(t, err)
+	_, err = GetFunctionByName(nativeCtx, "case", []types.Type{enumType, intType, intType})
+	require.Error(t, err, "native statement rejects a raw ENUM CASE WHEN condition like the pre-contract behavior")
+}
+
+// TestEnumBoolCastContractBoundaries pins the D11 shared cast boundary after
+// the general implicit-cast rule reverted to base. The general table keeps no
+// ENUM -> BOOL row in any mode, so every context-free consumer (AND/OR/XOR,
+// NOT, IS TRUE/FALSE, legacy IF/CASE admission) keeps its base behavior; the
+// storage-truth BOOL cast stays reachable only through the explicitly
+// mode-gated cast bindings and the MySQL-only condition admissions.
+func TestEnumBoolCastContractBoundaries(t *testing.T) {
+	mysqlCtx := context.Background()
+	nativeCtx := WithMySQLConditionalBooleanContracts(context.Background(), false)
+	enumType := types.T_enum.ToType()
+	boolType := types.T_bool.ToType()
+	int64Type := types.T_int64.ToType()
+
+	// The general implicit-cast table is mode-free: the ENUM -> BOOL row base
+	// never had must stay absent, otherwise the byte-for-byte legacy checkers
+	// (AND/OR/XOR/NOT, legacy IF/CASE) would admit the new conversion on
+	// native-mode statements.
+	can, cost := fixedImplicitTypeCast(enumType, types.T_bool)
+	require.False(t, can)
+	require.Zero(t, cost)
+
+	// The explicit cast applications keep the pair in MySQL mode and reject
+	// it in native mode (base admitted no such pair). cast_strict resolves
+	// string/temporal targets only, so BOOL rejects in both modes before the
+	// mode gate is even consulted.
+	_, strictErr := GetFunctionByName(mysqlCtx, "cast_strict", []types.Type{enumType, boolType})
+	require.Error(t, strictErr, "BOOL is not a strict string/temporal assignment target in any mode")
+	for _, name := range []string{"cast", "cast_assign", "cast_ignore"} {
+		_, err := GetFunctionByName(mysqlCtx, name, []types.Type{enumType, boolType})
+		require.NoError(t, err, name, "MySQL-mode statements keep the ENUM storage-truth BOOL cast")
+		_, err = GetFunctionByName(nativeCtx, name, []types.Type{enumType, boolType})
+		require.Error(t, err, name, "native-mode statements keep the pre-contract cast rejection")
+	}
+
+	// The boolean-argument operators stay base-identical for raw ENUM
+	// operands in native mode; the MySQL-mode normalization hands them a
+	// BOOL-typed operand instead, through the explicit cast above.
+	for _, name := range []string{"and", "or", "xor", "not", "istrue", "isnottrue", "isfalse", "isnotfalse"} {
+		_, err := GetFunctionByName(nativeCtx, name, []types.Type{enumType})
+		if name == "and" || name == "or" || name == "xor" {
+			_, err = GetFunctionByName(nativeCtx, name, []types.Type{enumType, enumType})
+		}
+		require.Error(t, err, name, "the raw ENUM operand keeps the pre-contract rejection on native statements")
+	}
+	_, err := GetFunctionByName(mysqlCtx, "and", []types.Type{enumType, int64Type})
+	require.Error(t, err,
+		"the binding seam stays mode-free: a raw ENUM operand still rejects AND even in MySQL mode; the rewiring belongs to the binder-side recovery")
 }

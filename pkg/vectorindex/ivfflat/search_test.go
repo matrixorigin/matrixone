@@ -239,7 +239,7 @@ func TestIvfflatEmptyGeneration(t *testing.T) {
 	load := func(id int64, isNull bool) *IvfflatSearch[float32] {
 		proc := testutil.NewProcessWithMPool(t, "", mp)
 		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.RelationScanner = &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+		sqlproc.RelationScanner = &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(3)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -727,7 +727,7 @@ func TestGetBloomFilterUsesRuntimeFilterPayloadForExactPk(t *testing.T) {
 
 	rawPayload, err := keyVec.MarshalBinary()
 	require.NoError(t, err)
-	sqlproc.IvfRuntimeFilterData = rawPayload
+	sqlproc.IvfRuntimeFilterData = testutil.RuntimeKeyPayload(t, rawPayload)
 
 	idx := &IvfflatSearchIndex[float32]{Version: 3}
 	err = idx.getBloomFilter(sqlproc)
@@ -791,7 +791,7 @@ func TestIvfSearchIncludeModeConvertsRuntimePayloadBeforeRunSql(t *testing.T) {
 			RankedCentroidIDs: []int64{101},
 		},
 		SearchRoundLimit:  3,
-		RuntimeFilterData: rawPayload,
+		RuntimeFilterData: testutil.RuntimeKeyPayload(t, rawPayload),
 	}
 
 	idx := &IvfflatSearchIndex[float32]{Version: 7}

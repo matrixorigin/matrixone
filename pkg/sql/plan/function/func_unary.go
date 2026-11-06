@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/common/zipstream"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -376,6 +377,30 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	}, selectList)
 }
 
+// L1NormNarrowArray is l1_norm of a bf16/f16/int8/uint8 vector, computed on its float32
+// values, which hold every element exactly.
+func L1NormNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.L1Norm(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
+// L2NormNarrowArray is l2_norm of a bf16/f16/int8/uint8 vector, computed on its float32
+// values.
+func L2NormNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.L2Norm(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
+// SummationNarrowArray is summation of a bf16/f16/int8/uint8 vector, computed on its
+// float32 values.
+func SummationNarrowArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+		return moarray.Summation(types.ToFloat32Array(types.BytesToArray[T](in)))
+	}, selectList)
+}
+
 func VectorDimsArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
@@ -391,7 +416,7 @@ func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 	}, selectList)
 }
 
-func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubVectorWith2Args[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -421,7 +446,7 @@ func SubVectorWith2Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SubVectorWith3Args[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -1167,6 +1192,9 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			// ParseDatetime reports only invalid-input errors. Malformed strings
 			// share the input-NULL path without consulting the zero-date policy.
 			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+			if err != nil && !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+			}
 			null = err != nil
 		}
 		if null {
@@ -1458,7 +1486,8 @@ func QuoteString(str string) string {
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
+	isJSON := ivecs[0].GetType().Oid == types.T_json
+	isUTF8Text := isJSON || isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1467,7 +1496,10 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			}
 			continue
 		}
-		value, null := parameter.GetStrValue(row)
+		value, null, err := getJSONStringConsumerValue(proc.Ctx, parameter, row)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
 				return err
@@ -5843,6 +5875,33 @@ func soundexTextString(str string) string {
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if ivecs[0].GetType().Oid == types.T_json {
+		parameter := vector.GenerateFunctionStrParameter(ivecs[0])
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for row := uint64(0); row < uint64(length); row++ {
+			if functionRowSkipped(selectList, row) {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			value, isNull, err := getJSONStringConsumerValue(proc.Ctx, parameter, row)
+			if err != nil {
+				return err
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			resultValue := functionUtil.QuickStrToBytes(soundexTextString(functionUtil.QuickBytesToStr(value)))
+			if err := rs.AppendBytes(resultValue, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	textSoundex := SoundexString
 	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
 		textSoundex = soundexTextString
@@ -6013,6 +6072,119 @@ func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byt
 		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	return contents, nil
+}
+
+// ctxReader fails a Read once ctx is done.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+// unzipContents returns the decompressed bytes of the first file of the zip archive r, and
+// closes r.
+func unzipContents(r io.ReadCloser, proc *process.Process) ([]byte, error) {
+	zr, closeDecoder, err := zipstream.NewReader(proc.Ctx, ctxReader{ctx: proc.Ctx, r: r})
+	if err != nil {
+		r.Close()
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(zr, int64(types.MaxBlobLen)+1))
+	var closeErr error
+	if closeDecoder != nil {
+		closeErr = closeDecoder()
+	}
+	if err := r.Close(); closeErr == nil {
+		closeErr = err
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
+func openUnzipFilePath(filePath string, proc *process.Process) (io.ReadCloser, error) {
+	path, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return readFromParsedPath(process.SQLFileAccessContext(proc.Ctx, proc), filePath, path, proc.GetFileService(), 0, -1)
+}
+
+func openUnzipFileDatalink(filePath string, proc *process.Process) (io.ReadCloser, error) {
+	dl, err := datalink.NewDatalink(filePath, proc)
+	if err != nil {
+		return nil, err
+	}
+	return dl.NewReadCloser(proc)
+}
+
+// unzipFile returns unzip_file over the files open opens: the decompressed bytes of the first
+// file of each zip archive, as a blob.
+func unzipFile(open func(string, *process.Process) (io.ReadCloser, error)) func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error {
+	read := func(filePath string, proc *process.Process) ([]byte, error) {
+		r, err := open(filePath, proc)
+		if err != nil {
+			return nil, err
+		}
+		return unzipContents(r, proc)
+	}
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		if length == 0 {
+			return nil
+		}
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		ivec := vector.GenerateFunctionStrParameter(ivecs[0])
+		if ivecs[0].IsConst() {
+			filePath, isNull := ivec.GetStrValue(0)
+			if isNull {
+				rs.SetNullResult(uint64(length))
+				return nil
+			}
+			contents, err := read(util.UnsafeBytesToString(filePath), proc)
+			if err != nil {
+				return err
+			}
+			if len(contents) == 0 {
+				rs.SetNullResult(uint64(length))
+				return nil
+			}
+			return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
+		}
+		for i := uint64(0); i < uint64(length); i++ {
+			filePath, isNull := ivec.GetStrValue(i)
+			if selectList.Contains(i) || isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			contents, err := read(util.UnsafeBytesToString(filePath), proc)
+			if err != nil {
+				return err
+			}
+			if err := rs.AppendBytes(contents, len(contents) == 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // LoadFileDatalink reads a file from the file service and returns the content as a blob.
@@ -6406,10 +6578,18 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := result.GetResultVector().GetType().Scale
-	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
+	return opUnaryBytesToFixedWithNullOnError[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
 		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
+			// MySQL doctrine: TIME() yields NULL with a truncation warning for
+			// an invalid argument instead of failing the whole statement.
+			if proc != nil {
+				if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+					appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+						fmt.Sprintf("Truncated incorrect time value: '%s'", string(v)))
+				}
+			}
+			return 0, e
 		}
 		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)
@@ -9321,7 +9501,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
+	return jsonStringConsumerUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
 		sum := md5.Sum(data)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)
@@ -9726,7 +9906,10 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
-		data, null := source.GetStrValue(i)
+		data, null, err := getJSONStringConsumerValue(proc.Ctx, source, i)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -9845,6 +10028,30 @@ func strLengthBinary(xs []byte) uint64 {
 
 func strLengthBinaryInt64(xs []byte) int64 {
 	return int64(len(xs))
+}
+
+// LengthBit evaluates the length family over a native BIT vector. MySQL
+// converts a BIT(M) value to its fixed-width binary string form
+// (Field_bit::val_str): ceil(M/8) big-endian bytes with leading zero bytes
+// preserved, in the single-byte binary charset, so LENGTH, OCTET_LENGTH and
+// CHAR_LENGTH all return the declared byte width for every non-NULL value.
+// The width M arrives on the input vector's type; a BIT type without a valid
+// declared width falls back to the value's minimal big-endian byte count.
+func LengthBit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	width := ivecs[0].GetType().Width
+	if width >= 1 && width <= 64 {
+		widthBytes := int64((width + 7) / 8)
+		return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(uint64) int64 {
+			return widthBytes
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+		n := int64(1)
+		for rest := v; rest >= 0x100; rest >>= 8 {
+			n++
+		}
+		return n
+	}, selectList)
 }
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -13064,18 +13271,6 @@ func detachUserLevelLocksForOwner(owner, sessionID string) uint64 {
 	return detached
 }
 
-func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, err
-	}
-	timeoutSeconds, err := userLevelLockTimeoutSeconds(timeout)
-	if err != nil {
-		return 0, err
-	}
-	return getUserLevelLockValidated(name, timeoutSeconds, proc)
-}
-
 // getUserLevelLockValidated expects an already normalized lock name and a
 // bounded timeout in whole seconds. Vector wrappers prevalidate their entire
 // evaluated batch before calling it, so an invalid later row cannot leave an
@@ -13147,18 +13342,11 @@ func getUserLevelLockValidated(name string, timeoutSeconds uint32, proc *process
 	return 1, nil
 }
 
-// releaseUserLevelLock releases a user-level lock.
+// releaseUserLevelLockValidated releases a user-level lock.
 // It returns (value, isNull, error):
 //   - (1, false, nil): lock was released by this call.
 //   - (0, false, nil): lock exists but is held by another session.
 //   - (0, true, nil):  lock does not exist (MySQL returns NULL).
-func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, false, err
-	}
-	return releaseUserLevelLockValidated(name, proc)
-}
 
 func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, bool, error) {
 	ls, err := userLevelLockService(proc)
@@ -13221,14 +13409,6 @@ func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, b
 	return 1, false, nil
 }
 
-func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, err
-	}
-	return isUserLevelLockFreeValidated(name, proc)
-}
-
 func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
@@ -13271,14 +13451,6 @@ func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, er
 	}
 	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 	return 1, nil
-}
-
-func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
-	name, err := validateUserLevelLockName(name)
-	if err != nil {
-		return 0, false, err
-	}
-	return isUserLevelLockUsedValidated(name, proc)
 }
 
 func isUserLevelLockUsedValidated(name string, proc *process.Process) (uint64, bool, error) {
@@ -13908,6 +14080,10 @@ func BitCast(
 	toType := parameters[1].GetType()
 	ctx := proc.Ctx
 
+	// stored bf16/float16/float8/float4 values are finite with a +0 zero; arbitrary bits are not
+	if toType.Oid.IsLowPrecisionFloat() {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("bit_cast to %s", toType))
+	}
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
@@ -14011,7 +14187,7 @@ func SHA1Func(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+	return jsonStringConsumerUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		sum := sha1.Sum(v)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)

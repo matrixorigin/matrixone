@@ -314,7 +314,9 @@ func GetTombstonesByBlockId(
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
 			if needShrink {
-				oData.data[idx].Shrink(deleteRows, true)
+				if err := oData.data[idx].Shrink(deleteRows, true, common.DebugAllocator); err != nil {
+					return false, err
+				}
 			}
 		}
 		return true, nil
@@ -359,7 +361,10 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 							return false, err
 						}
 						if len(visibleRows) != bat.Vecs[0].Length() {
-							bat.Shrink(visibleRows, false)
+							if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+								bat.Clean(common.DebugAllocator)
+								return false, err
+							}
 						}
 					}
 					if id == 0 {
@@ -472,7 +477,10 @@ func trimTombstoneData(
 			return err
 		}
 		if len(visibleRows) != bat.Vecs[0].Length() {
-			bat.Shrink(visibleRows, false)
+			if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+				bat.Clean(common.DebugAllocator)
+				return err
+			}
 		}
 		canonical, err := canonicalizeBackupTombstone(ctx, bat, layout)
 		if err != nil {
@@ -627,10 +635,6 @@ func LoadCheckpointEntriesFromKey(
 			createAt, deletedAt types.TS,
 			rowID types.Rowid,
 		) error {
-			commitAt := createAt
-			if !deletedAt.IsEmpty() {
-				commitAt = deletedAt
-			}
 			isAblk := objectStats.GetAppendable()
 			if objectStats.Extent().End() == 0 {
 				// tn obj is in the batch too
@@ -647,10 +651,13 @@ func LoadCheckpointEntriesFromKey(
 				CrateTS:  createAt,
 				DropTS:   deletedAt,
 			}
-			if baseTS.IsEmpty() || (!baseTS.IsEmpty() &&
-				(createAt.GE(baseTS) || commitAt.GE(baseTS))) {
-				bo.NeedCopy = true
-			}
+			// Deleting an immutable object changes its visibility, not its file.
+			// Reuse older files from the backup chain even when a later checkpoint
+			// records their deletion; GC may already have removed the source.
+			// Appendable objects can be persisted after creation, so retain the
+			// flush/drop timestamp check for them.
+			bo.NeedCopy = baseTS.IsEmpty() || createAt.GE(baseTS) ||
+				(isAblk && !deletedAt.IsEmpty() && deletedAt.GE(baseTS))
 			locations = append(locations, bo)
 			if !deletedAt.IsEmpty() {
 				if softDeletes != nil {

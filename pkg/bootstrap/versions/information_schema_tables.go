@@ -20,10 +20,16 @@ import (
 )
 
 // InformationSchemaTablesUpgradeEntry refreshes the current TABLES definition.
-// Historical and forward handlers share the same idempotent view repair; the
-// exact-equality CheckFunc makes the persisted definition the durable marker,
-// so a tenant already at the final version is repaired once and never
-// replaced afterwards.
+// Historical and forward handlers share the same idempotent view repair.
 func InformationSchemaTablesUpgradeEntry() UpgradeEntry {
 	return InformationSchemaViewUpgradeEntry("TABLES", sysview.InformationSchemaTablesV118DDL, defines.MORPCVersion118)
+}
+
+// InformationSchemaPartitionsUpgradeEntry refreshes the current PARTITIONS
+// definition on the startup rail InitSystemViews already applies for TABLES.
+// Tenants crossing versions keep using the v4_0_7 tenant upgrade entry; this
+// entry makes a cluster already at the current version converge a persisted
+// old PARTITIONS definition, with the same idempotent no-op definition check.
+func InformationSchemaPartitionsUpgradeEntry() UpgradeEntry {
+	return InformationSchemaViewUpgradeEntry("PARTITIONS", sysview.InformationSchemaPartitionsDDL, defines.MORPCVersion41)
 }

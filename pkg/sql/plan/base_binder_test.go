@@ -1215,6 +1215,11 @@ func TestMinMaxGeneratedTableFunctionStringsUseExplicitGeneralCICollation(t *tes
 			query:    "select min(file), max(file) from stage_list('stage://s/') s",
 			aggCount: 2,
 		},
+		{
+			name:     "desc file name",
+			query:    "select min(file), max(file) from desc_file('stage://s/') d where not is_dir and size > 0",
+			aggCount: 2,
+		},
 	}
 
 	for _, test := range tests {
@@ -1410,6 +1415,11 @@ func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 }
 
 func TestBindUnaryMinusUint64MinInt64Boundary(t *testing.T) {
+	testBindUnaryMinusMinInt64Boundary(t)
+}
+
+func testBindUnaryMinusMinInt64Boundary(t *testing.T) {
+	t.Helper()
 	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 

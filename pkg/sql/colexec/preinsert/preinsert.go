@@ -413,7 +413,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 			return result, err
 		}
 		defer workBat.Clean(proc.Mp())
-		workBat.Shrink(selectedRows, false)
+		if err := workBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+			return result, err
+		}
 		workBat.SetRowCount(len(selectedRows))
 	}
 	if err = checkZeroTemporalInStrictMode(preInsert, workBat, proc); err != nil {
@@ -968,6 +970,15 @@ retryInsertValues:
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {
+				if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+					refreshed, refreshErr := proc.GetIncrService().ReloadForPKRetry(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn)
+					if refreshErr != nil {
+						return refreshErr
+					}
+					if !refreshed {
+						return moerr.NewInternalError(proc.Ctx, "AUTO_INCREMENT PK history is unavailable for transaction-private state; roll back and retry the transaction")
+					}
+				}
 				return err
 			}
 		}

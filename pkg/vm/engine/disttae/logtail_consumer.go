@@ -158,7 +158,7 @@ type PushClient struct {
 	}
 	// pauseC is the channel used to control whether the receiver is paused.
 	pauseC  chan bool
-	resumeC chan struct{}
+	resumeC chan chan struct{}
 
 	consumeErrC chan error
 	receiver    []*routineController
@@ -429,7 +429,6 @@ func (c *PushClient) init(
 	// lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
-	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
@@ -446,7 +445,7 @@ func (c *PushClient) init(
 		c.receiver = make([]*routineController, consumerNumber)
 		c.consumeErrC = make(chan error, consumerNumber)
 		c.pauseC = make(chan bool, 1)
-		c.resumeC = make(chan struct{})
+		c.resumeC = make(chan chan struct{})
 	}
 	c.initialized = true
 
@@ -767,11 +766,6 @@ func (c *PushClient) subscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Info(
-			fmt.Sprintf("%s-send-subscribe-ok", logTag),
-			zap.Uint64("table-id", tblId.TbId),
-			zap.Uint64("db-id", tblId.DbId),
-		)
 		return nil
 	}
 }
@@ -822,14 +816,26 @@ func (c *PushClient) pause(s bool) {
 	}
 }
 
-func (c *PushClient) resume() {
+// resume waits until the receiver has accepted this recovery. The connector is
+// the only caller; a wakeup must not be lost before the receiver starts waiting.
+func (c *PushClient) resume(ctx context.Context) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	paused := c.mu.paused
+	c.mu.Unlock()
+	if !paused {
+		return ctx.Err() == nil
+	}
+	ack := make(chan struct{})
 	select {
-	case c.resumeC <- struct{}{}:
-		c.mu.paused = false
-	default:
-		logutil.Info("logtail.consumer.not.in.pause.state")
+	case c.resumeC <- ack:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-ack:
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -940,7 +946,11 @@ func (c *PushClient) waitForResume(ctx context.Context, reconnect bool) bool {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-c.resumeC:
+		case ack := <-c.resumeC:
+			c.mu.Lock()
+			c.mu.paused = false
+			c.mu.Unlock()
+			close(ack)
 			return true
 		case <-firstReplayDone:
 			// First-connect retries own recovery until replay completes. After
@@ -1203,7 +1213,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 					continue
 				}
 
-				c.resume()
+				if !c.resume(ctx) {
+					return
+				}
 				continue
 			}
 			if err := c.waitTimestamp(ctx); err != nil {
@@ -1263,7 +1275,9 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		// After init, start up again.
 		c.startConsumers(ctx, e)
 
-		c.resume()
+		if !c.resume(ctx) {
+			return
+		}
 
 		c.dcaReset()
 		err = c.subSysTables(ctx)
@@ -1310,24 +1324,25 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uin
 	if ifShouldNotDistribute(dbID, tbID) {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
 	}
-	c.subscribed.rw.Lock()
-	defer c.subscribed.rw.Unlock()
-	k := tbID
-	ent, ok := c.subscribed.m[k]
-	if !ok || ent.state != Subscribed {
+	attempted, err := func() (bool, error) {
+		c.subscribed.rw.Lock()
+		defer c.subscribed.rw.Unlock()
+		ent, ok := c.subscribed.m[tbID]
+		if !ok || ent.state != Subscribed {
+			return false, nil
+		}
+		dbID = ent.dbID
+		ent.state = Unsubscribing
+		return true, c.subscriber.sendUnSubscribe(ctx, api.TableID{DbId: dbID, TbId: tbID})
+	}()
+	if !attempted {
 		logutil.Infof("%s table %d-%d is not subscribed yet", logTag, dbID, tbID)
-		return nil
-	}
-
-	dbID = ent.dbID
-	ent.state = Unsubscribing
-
-	if err := c.subscriber.sendUnSubscribe(ctx, api.TableID{DbId: dbID, TbId: tbID}); err != nil {
+	} else if err != nil {
 		logutil.Errorf("%s cannot unsubscribe table %d-%d, err: %v", logTag, dbID, tbID, err)
-		return err
+	} else {
+		logutil.Infof("%s send unsubscribe table %d-%d request succeed", logTag, dbID, tbID)
 	}
-	logutil.Infof("%s send unsubscribe table %d-%d request succeed", logTag, dbID, tbID)
-	return nil
+	return err
 }
 
 func (c *PushClient) doGCUnusedTable(ctx context.Context) {
@@ -1399,18 +1414,22 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	// retried after one GC cycle (20 min) instead of waiting full unsubscribeTimer (1 hour)
 	if len(failedJobs) > 0 {
 		backoffTs := time.Now().Add(-unsubscribeTimer + unsubscribeProcessTicker).UnixNano()
+		rolledBack := failedJobs[:0]
 		c.subscribed.rw.Lock()
 		for _, job := range failedJobs {
 			if ent, ok := c.subscribed.m[job.tId]; ok && ent.state == Unsubscribing {
 				ent.state = Subscribed
 				ent.lastTs.Store(backoffTs)
-				logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff ~20min)",
-					logTag,
-					job.dbID,
-					job.tId)
+				rolledBack = append(rolledBack, job)
 			}
 		}
 		c.subscribed.rw.Unlock()
+		for _, job := range rolledBack {
+			logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff ~20min)",
+				logTag,
+				job.dbID,
+				job.tId)
+		}
 	}
 }
 
@@ -1958,14 +1977,16 @@ func (c *PushClient) Close() error {
 }
 
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: SubRspTableNotExist,
-	}
-	ent.lastTs.Store(time.Now().UnixNano())
-	s.m[tblId] = ent
+	func() {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		ent := &subEntry{
+			dbID:  dbId,
+			state: SubRspTableNotExist,
+		}
+		ent.lastTs.Store(time.Now().UnixNano())
+		s.m[tblId] = ent
+	}()
 	logutil.Error(
 		"logtail.consumer.set.table.sub.not.exist",
 		zap.Uint64("db-id", dbId),
@@ -1980,14 +2001,16 @@ func (s *subscribedTable) clearTable(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: Subscribed,
-	}
-	ent.lastTs.Store(time.Now().UnixNano())
-	s.m[tblId] = ent
+	func() {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		ent := &subEntry{
+			dbID:  dbId,
+			state: Subscribed,
+		}
+		ent.lastTs.Store(time.Now().UnixNano())
+		s.m[tblId] = ent
+	}()
 	logutil.Info(
 		"logtail.consumer.set.table.subscribed",
 		zap.Uint64("db-id", dbId),
@@ -1996,28 +2019,32 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: SubRspReceived,
-	}
-	ent.lastTs.Store(time.Now().UnixNano())
-	s.m[tblId] = ent
+	service := func() string {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		ent := &subEntry{
+			dbID:  dbId,
+			state: SubRspReceived,
+		}
+		ent.lastTs.Store(time.Now().UnixNano())
+		s.m[tblId] = ent
+		return s.eng.service
+	}()
 	logutil.Info(
 		"logtail.consumer.set.table.sub.rsp.received",
-		zap.String("service", s.eng.service),
+		zap.String("service", service),
 		zap.Uint64("db-id", dbId),
 		zap.Uint64("tbl-id", tblId),
-		zap.Any("subscribed-table", s),
 	)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	s.eng.cleanMemoryTableWithTable(dbId, tblId)
-	delete(s.m, tblId)
+	func() {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		s.eng.cleanMemoryTableWithTable(dbId, tblId)
+		delete(s.m, tblId)
+	}()
 	logutil.Info(
 		"logtail.consumer.set.table.unsubscribe",
 		zap.Uint64("db-id", dbId),
@@ -2032,7 +2059,6 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Value
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
-	e                      *Engine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -2083,7 +2109,6 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 
 type logTailSubscriber struct {
 	sid           string
-	tnNodeID      int
 	transportMu   sync.Mutex
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
@@ -2169,8 +2194,6 @@ func (s *logTailSubscriber) init(
 	s.transportMu.Lock()
 	defer s.transportMu.Unlock()
 
-	// XXX we assume that we have only 1 tn now.
-	s.tnNodeID = 0
 	s.sid = sid
 
 	// clear the old status.

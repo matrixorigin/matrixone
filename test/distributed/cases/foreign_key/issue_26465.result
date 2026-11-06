@@ -32,7 +32,7 @@ insert into users values (1, 1, 1, 1, 1, 1, 1);
 alter table users change department_id_1 department_id_1 int comment 'primary department';
 alter table users add column copied_child_marker int;
 drop table departments;
-internal error: can not drop table 'departments' referenced by some foreign key constraint
+Cannot drop table 'departments' referenced by a foreign key constraint 'fk_users_department_1' on table 'users'.
 insert into users (id, department_id_1) values (2, 999);
 Cannot add or update a child row: a foreign key constraint fails
 insert into users (id, department_id_1) values (2, 1);
@@ -72,7 +72,7 @@ insert into candidates values (1, 1, 1, 1, 1, 1, 1);
 alter table candidates change job_id_1 job_id_1 int comment 'primary job';
 alter table candidates add column copied_child_marker int;
 drop table jobs;
-internal error: can not drop table 'jobs' referenced by some foreign key constraint
+Cannot drop table 'jobs' referenced by a foreign key constraint 'fk_candidates_job_1' on table 'candidates'.
 insert into candidates (id, job_id_1) values (2, 999);
 Cannot add or update a child row: a foreign key constraint fails
 insert into candidates (id, job_id_1, talent_pool_id_1, owner_id_1) values (2, 1, 1, 1);
