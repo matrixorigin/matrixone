@@ -431,6 +431,29 @@ func TestTruncateLog(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestTruncateLogRejectsFutureWithoutHidingLaterAppend(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		require.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		cmd := getTestUserEntry()
+		first, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		err = store.truncateLog(ctx, 1, first+100)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
+		second, err := store.append(ctx, 1, cmd)
+		require.NoError(t, err)
+		truncated, err := store.getTruncatedLsn(ctx, 1)
+		require.NoError(t, err)
+		assert.Zero(t, truncated)
+		entries, _, err := store.queryLog(ctx, 1, first, math.MaxUint64)
+		require.NoError(t, err)
+		require.NotEmpty(t, entries)
+		assert.Equal(t, second, entries[len(entries)-1].Lsn)
+		assert.Equal(t, cmd, entries[len(entries)-1].Data)
+	})
+}
+
 func TestGetTruncatedIndex(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)

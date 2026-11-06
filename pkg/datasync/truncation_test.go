@@ -24,6 +24,7 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTruncation_Create(t *testing.T) {
@@ -117,14 +118,18 @@ func TestTruncation_Start(t *testing.T) {
 			defer tr.Close()
 			tr.(*truncation).client.client = c.(logservice.StandbyClient)
 			trun := tr.(*truncation)
-			trun.syncedLSN.Store(10)
 
-			ctx := context.Background()
-			assert.NoError(t, trun.truncate(ctx))
-			assert.Equal(t, uint64(10), trun.lastTruncateLsn)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			lsn, err := c.Append(ctx, c.GetLogRecord(1))
+			require.NoError(t, err)
+			require.NotZero(t, lsn)
+			trun.syncedLSN.Store(uint64(lsn))
+			require.NoError(t, trun.truncate(ctx))
+			assert.Equal(t, uint64(lsn), trun.lastTruncateLsn)
 			truncated, err := trun.client.getTruncatedLsn(ctx)
 			assert.NoError(t, err)
-			assert.Equal(t, uint64(10), truncated)
+			assert.Equal(t, uint64(lsn), truncated)
 		}
 		logservice.RunClientTest(t, false, nil, fn)
 	})

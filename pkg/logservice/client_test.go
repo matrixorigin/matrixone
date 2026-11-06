@@ -603,6 +603,91 @@ func TestDroppingResponseProxyCleanupClosesLateDial(t *testing.T) {
 	}
 }
 
+func TestReadRetriesBlackholedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+
+		record := healthy.GetLogRecord(8)
+		copy(record.Data[12:], "read1234")
+		lsn, err := healthy.Append(ctx, record)
+		require.NoError(t, err)
+		_, _, err = throughProxy.Read(ctx, lsn, 1<<20)
+		require.NoError(t, err, "the established connection is healthy before isolation")
+
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+		started := time.Now()
+		records, _, err := throughProxy.Read(ctx, lsn, 1<<20)
+		require.NoError(t, err)
+		require.Less(t, time.Since(started), 3*defaultLogServiceReadAttemptTimeout)
+		require.NoError(t, ctx.Err())
+		found := false
+		for _, got := range records {
+			if got.Lsn == lsn {
+				require.Equal(t, record.Data, got.Data)
+				found = true
+			}
+		}
+		require.True(t, found, "the acknowledged record must be returned after failover")
+	})
+}
+
+func TestGetTruncatedLsnRetriesBlackholedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+
+		record := healthy.GetLogRecord(8)
+		lsn, err := healthy.Append(ctx, record)
+		require.NoError(t, err)
+		require.NoError(t, healthy.Truncate(ctx, lsn))
+		expected, err := healthy.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		initial, err := throughProxy.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		require.Equal(t, expected, initial, "the established connection is healthy before isolation")
+
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+		started := time.Now()
+		got, err := throughProxy.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		require.Equal(t, expected, got)
+		require.Less(t, time.Since(started), 3*defaultLogServiceReadAttemptTimeout)
+		require.NoError(t, ctx.Err())
+
+		// A short caller deadline must end a blackholed request without
+		// turning the child-attempt retry into an unbounded loop.
+		drop.Store(false)
+		cfg.ServiceAddresses = []string{address}
+		shortClient, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, shortClient.Close()) }()
+		_, err = shortClient.GetTruncatedLsn(ctx)
+		require.NoError(t, err)
+		drop.Store(true)
+		shortCtx, shortCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer shortCancel()
+		_, err = shortClient.GetTruncatedLsn(shortCtx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
 func TestAppendBlackholedResponseReturnsUnknownBeforeCallerDeadline(t *testing.T) {
 	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
 		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())

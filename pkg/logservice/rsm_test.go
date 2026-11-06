@@ -226,22 +226,36 @@ func TestWALRecoveryLeaseFence(t *testing.T) {
 func TestTruncatedIndexCanBeUpdated(t *testing.T) {
 	cmd := getSetTruncatedLsnCmd(200)
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	e := sm.Entry{Cmd: cmd}
+	e := sm.Entry{Index: 201, Cmd: cmd}
 	result, err := tsm.Update(e)
 	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 
 	cmd2 := getSetTruncatedLsnCmd(220)
-	e2 := sm.Entry{Cmd: cmd2}
+	e2 := sm.Entry{Index: 221, Cmd: cmd2}
 	result, err = tsm.Update(e2)
 	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 
 	cmd3 := getSetTruncatedLsnCmd(100)
-	e3 := sm.Entry{Cmd: cmd3}
+	e3 := sm.Entry{Index: 222, Cmd: cmd3}
 	result, err = tsm.Update(e3)
 	assert.Equal(t, sm.Result{Value: 220}, result)
 	assert.Nil(t, err)
+}
+
+func TestTruncateRejectsFutureAndCurrentEntry(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	for _, index := range []uint64{5, 6} {
+		result, err := tsm.Update(sm.Entry{Index: index, Cmd: getSetTruncatedLsnCmd(6)})
+		require.NoError(t, err)
+		assert.Equal(t, index, result.Value)
+		assert.Zero(t, tsm.state.TruncatedLsn)
+	}
+	result, err := tsm.Update(sm.Entry{Index: 7, Cmd: getSetTruncatedLsnCmd(4)})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(4), tsm.state.TruncatedLsn)
 }
 
 func TestStateMachineUserUpdate(t *testing.T) {
@@ -436,7 +450,7 @@ func TestRequiredLsnTermLookupFailureDoesNotApplyClaim(t *testing.T) {
 
 func TestWALTruncatePreservesCheckpointedDSN(t *testing.T) {
 	s := newStateMachine(1, 2).(*stateMachine)
-	index := uint64(1)
+	index := uint64(100)
 	apply := func(cmd []byte) sm.Result {
 		index++
 		result, err := s.Update(sm.Entry{Index: index, Cmd: cmd})
@@ -445,6 +459,7 @@ func TestWALTruncatePreservesCheckpointedDSN(t *testing.T) {
 	}
 	assert.NotZero(t, apply(getWALTruncateCmd(0, 0)).Value)
 	assert.NotZero(t, apply(getWALTruncateCmd(1, 0)).Value)
+	assert.NotZero(t, apply(getWALTruncateCmd(index+1, 7)).Value)
 	assert.Zero(t, apply(getWALTruncateCmd(10, 7)).Value)
 	assert.NotZero(t, apply(getWALTruncateCmd(9, 8)).Value)
 	assert.NotZero(t, apply(getWALTruncateCmd(11, 6)).Value)

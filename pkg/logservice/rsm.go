@@ -299,6 +299,12 @@ func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
 	if s.state.CheckpointedDSN != 0 {
 		return sm.Result{Value: s.state.TruncatedLsn}
 	}
+	// The truncate command itself occupies s.state.Index. Only entries that
+	// preceded it can be truncated; otherwise later acknowledged appends can
+	// fall below the persisted truncation watermark.
+	if lsn >= s.state.Index {
+		return sm.Result{Value: s.state.Index}
+	}
 	if lsn > s.state.TruncatedLsn {
 		s.state.TruncatedLsn = lsn
 		s.truncateLeaseHistory(lsn)
@@ -312,6 +318,10 @@ func (s *stateMachine) handleWALTruncate(cmd []byte) sm.Result {
 	dsn := binaryEnc.Uint64(cmd[headerSize+8:])
 	if psn == 0 || dsn == 0 || psn <= s.state.TruncatedLsn || dsn < s.state.CheckpointedDSN {
 		return sm.Result{Value: max(uint64(1), s.state.TruncatedLsn)}
+	}
+	// The new truncate command itself must remain above the truncated prefix.
+	if psn >= s.state.Index {
+		return sm.Result{Value: s.state.Index}
 	}
 	s.state.TruncatedLsn = psn
 	s.state.CheckpointedDSN = dsn

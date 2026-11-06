@@ -237,29 +237,51 @@ func (d *LogServiceDriver) truncateFromRemote(
 func (d *LogServiceDriver) getWALTruncateFromBackend(
 	ctx context.Context,
 ) (psn, checkpointedDSN uint64, err error) {
-	start := time.Now()
-	retryTimes := 0
-	client, err := d.clientPool.Get()
-	if err != nil {
-		return 0, 0, err
+	var (
+		client     *wrappedClient
+		retryTimes int
+		start      = time.Now()
+	)
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger("Wal-Get-Truncate", zap.Uint64("psn", psn),
+			zap.Uint64("checkpointed-dsn", checkpointedDSN),
+			zap.Int("retry-times", retryTimes), zap.Error(err),
+			zap.Duration("duration", time.Since(start)))
+	}()
+	if client, err = d.clientPool.Get(); err != nil {
+		return
 	}
 	defer client.Putback()
+	budgetCtx, cancel := context.WithTimeoutCause(
+		ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate)
+	defer cancel()
 	for {
-		attempt, cancel := context.WithTimeoutCause(
-			ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate)
-		psn, checkpointedDSN, err = client.wrapped.GetWALTruncate(attempt)
-		cancel()
-		if err == nil || ctx.Err() != nil || time.Since(start) >= d.config.MaxTimeout {
+		if budgetCtx.Err() != nil {
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
+		}
+		psn, checkpointedDSN, err = client.wrapped.GetWALTruncate(budgetCtx)
+		if err == nil {
 			return
 		}
 		retryTimes++
+		if budgetCtx.Err() != nil {
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
+		}
 		timer := time.NewTimer(d.config.RetryInterval(retryTimes))
 		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, 0, ctx.Err()
 		case <-timer.C:
+		case <-budgetCtx.Done():
+			timer.Stop()
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
 		}
+		timer.Stop()
 	}
 }
 
@@ -288,23 +310,33 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 		return
 	}
 	defer client.Putback()
+	budgetCtx, cancel := context.WithTimeoutCause(
+		ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate)
+	defer cancel()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
-			ctx,
-			d.config.MaxTimeout,
-			moerr.CauseGetLogserviceTruncate,
-		)
-		psn, err = client.wrapped.GetTruncatedLsn(ctx)
-		cancel()
+		if budgetCtx.Err() != nil {
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
+		}
+		psn, err = client.wrapped.GetTruncatedLsn(budgetCtx)
 		if err == nil {
 			break
 		}
 		retryTimes++
-		if time.Since(start) > d.config.MaxTimeout {
-			break
+		if budgetCtx.Err() != nil {
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
 		}
-		time.Sleep(d.config.RetryInterval(retryTimes))
+		timer := time.NewTimer(d.config.RetryInterval(retryTimes))
+		select {
+		case <-timer.C:
+		case <-budgetCtx.Done():
+			timer.Stop()
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
+		}
+		timer.Stop()
 	}
 	return
 }
