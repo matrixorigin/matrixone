@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Reuse the publisher data/subscriber fixture. Separate publications keep this
-// alias independent of the existing subscription and its teardown.
+// Reuse only the subscriber fixture. Both sources are initialized here so the
+// historical result cannot depend on which sibling subtests ran beforehand.
 func testHistoricalSubscriptionCachedAlias(t *testing.T, ctx context.Context, sys, subscriber *sql.DB) {
 	t.Helper()
 	exec := func(db *sql.DB, query string) {
@@ -32,6 +32,11 @@ func testHistoricalSubscriptionCachedAlias(t *testing.T, ctx context.Context, sy
 		_, err := db.ExecContext(ctx, query)
 		require.NoError(t, err, query)
 	}
+	exec(sys, "create database view_description_cache_source")
+	defer cleanupViewDescriptionSQL(t, sys, "drop database view_description_cache_source")
+	exec(sys, "create table view_description_cache_source.src (x varchar(8))")
+	exec(sys, "insert into view_description_cache_source.src values ('captured')")
+	exec(sys, "create view view_description_cache_source.v as select x from view_description_cache_source.src")
 	exec(sys, "create database view_description_cache_other")
 	defer cleanupViewDescriptionSQL(t, sys, "drop database view_description_cache_other")
 	exec(sys, "create table view_description_cache_other.src (x varchar(37))")
@@ -39,7 +44,7 @@ func testHistoricalSubscriptionCachedAlias(t *testing.T, ctx context.Context, sy
 	exec(sys, "create view view_description_cache_other.v as select x from view_description_cache_other.src")
 	exec(sys, "create publication view_description_cache_other_pub database view_description_cache_other account view_description_sub")
 	defer cleanupViewDescriptionSQL(t, sys, "drop publication view_description_cache_other_pub")
-	exec(sys, "create publication view_description_cache_pub database view_description_pub account view_description_sub")
+	exec(sys, "create publication view_description_cache_pub database view_description_cache_source account view_description_sub")
 	defer cleanupViewDescriptionSQL(t, sys, "drop publication view_description_cache_pub")
 	exec(subscriber, "create database subscribed_cache from sys publication view_description_cache_pub")
 	defer cleanupViewDescriptionSQL(t, subscriber, "drop database subscribed_cache")
@@ -72,7 +77,7 @@ func testHistoricalSubscriptionCachedAlias(t *testing.T, ctx context.Context, sy
 			err := query().Scan(&value)
 			if allowed {
 				require.NoError(t, err)
-				require.Equal(t, "new", value)
+				require.Equal(t, "captured", value)
 			} else {
 				require.ErrorContains(t, err, "not allowed to subscribe the publication view_description_cache_pub")
 			}
@@ -83,14 +88,14 @@ func testHistoricalSubscriptionCachedAlias(t *testing.T, ctx context.Context, sy
 				"{snapshot='view_description_cache_history'} where table_schema='subscribed_cache' and table_name='v'").Scan(&count, &width))
 		if allowed {
 			require.Equal(t, 1, count)
-			require.Equal(t, 120, width)
+			require.Equal(t, 8, width)
 			func() {
 				fresh, err := conn.PrepareContext(ctx, history)
 				require.NoError(t, err)
 				defer fresh.Close()
 				var value string
 				require.NoError(t, fresh.QueryRowContext(ctx).Scan(&value))
-				require.Equal(t, "new", value)
+				require.Equal(t, "captured", value)
 			}()
 		} else {
 			require.Zero(t, count)
