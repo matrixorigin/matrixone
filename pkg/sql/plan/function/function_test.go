@@ -412,6 +412,72 @@ func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
+func TestNumericCastNullContract(t *testing.T) {
+	inputs := []struct {
+		typ    types.T
+		values any
+	}{
+		{types.T_int8, []int8{0, 1, 0}}, {types.T_int16, []int16{0, 1, 0}},
+		{types.T_int32, []int32{0, 1, 0}}, {types.T_int64, []int64{0, 1, 0}},
+		{types.T_uint8, []uint8{0, 1, 0}}, {types.T_uint16, []uint16{0, 1, 0}},
+		{types.T_uint32, []uint32{0, 1, 0}}, {types.T_uint64, []uint64{0, 1, 0}},
+		{types.T_float32, []float32{0, 1, 0}}, {types.T_float64, []float64{0, 1, 0}},
+		{types.T_decimal64, []types.Decimal64{0, 1, 0}},
+		{types.T_decimal128, []types.Decimal128{{}, {B0_63: 1}, {}}},
+		{types.T_decimal256, nil},
+	}
+	typeOf := func(typ types.T) types.Type {
+		result := typ.ToType()
+		if typ.IsDecimal() {
+			result.Width, result.Scale = 18, 0
+		}
+		return result
+	}
+	targets := make([]types.Type, 0, len(inputs)+2)
+	for _, input := range inputs {
+		targets = append(targets, typeOf(input.typ))
+	}
+	targets = append(targets, types.New(types.T_float32, 10, 2), types.New(types.T_float64, 10, 2))
+	for _, source := range inputs {
+		for _, target := range targets {
+			t.Run(fmt.Sprintf("%s_to_%s_%d_%d", source.typ, target.Oid, target.Width, target.Scale), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+				var input *vector.Vector
+				if source.typ == types.T_decimal256 {
+					input = vector.NewVec(typeOf(source.typ))
+					t.Cleanup(func() { input.Free(proc.Mp()) })
+					require.NoError(t, vector.AppendFixedList(input, []types.Decimal256{{}, {B0_63: 1}, {}}, nil, proc.Mp()))
+				} else {
+					input = testutil.NewVector(3, typeOf(source.typ), proc.Mp(), false, source.values)
+					t.Cleanup(func() { input.Free(proc.Mp()) })
+				}
+				input.GetNulls().Add(2)
+				targetType := vector.NewVec(target)
+				t.Cleanup(func() { targetType.Free(proc.Mp()) })
+				result, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, 0), []*vector.Vector{input, targetType}, 3)
+				require.NoError(t, err)
+				t.Cleanup(func() { result.Free(proc.Mp()) })
+				require.Equal(t, 3, result.Length())
+				require.False(t, result.IsNull(0))
+				require.False(t, result.IsNull(1))
+				require.True(t, result.IsNull(2))
+			})
+		}
+	}
+	t.Run("narrowing_error", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+		input := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{300})
+		t.Cleanup(func() { input.Free(proc.Mp()) })
+		target := vector.NewVec(types.T_int8.ToType())
+		t.Cleanup(func() { target.Free(proc.Mp()) })
+		result, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, 0), []*vector.Vector{input, target}, 1)
+		require.Error(t, err, "nonnull proof must not turn conversion errors into success")
+		require.Nil(t, result)
+	})
+}
+
 func TestRandomBytesNullabilityContract(t *testing.T) {
 	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
 		t.Run(typ.String(), func(t *testing.T) {

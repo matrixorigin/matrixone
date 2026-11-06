@@ -632,6 +632,19 @@ func TestCreateTableAsSelect(t *testing.T) {
 }
 
 func TestCastPreservesNonNull(t *testing.T) {
+	numeric := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128, types.T_decimal256}
+	for _, from := range numeric {
+		for _, to := range numeric {
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(to)}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 0), ObjName: "cast"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(from)}}, {Typ: plan.Type{Id: int32(to)}}},
+			}}}
+			require.True(t, castPreservesNonNull(expr), "%v to %v", from, to)
+			require.False(t, isNonNullLiteralFallback(expr), "nonliteral numeric casts cannot prove a constant fallback")
+		}
+	}
 	for _, test := range []struct {
 		from types.T
 		to   types.T
@@ -688,6 +701,7 @@ func TestNonNullLiteralFallback(t *testing.T) {
 	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
 	fixedDouble := cast(literal(types.T_int64, false), types.T_float64)
 	fixedDouble.Typ.Width = 10
+	fixedDouble.GetF().Args[1].Typ.Width = 10
 	otherOverload := cast(literal(types.T_int64, false), types.T_float64)
 	otherOverload.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
 	missingTarget := cast(literal(types.T_int64, false), types.T_float64)
@@ -705,13 +719,13 @@ func TestNonNullLiteralFallback(t *testing.T) {
 		{"float widening", cast(literal(types.T_float32, false), types.T_float64), true},
 		{"integer widening", cast(literal(types.T_int32, false), types.T_int64), true},
 		{"nested widening", cast(cast(literal(types.T_int32, false), types.T_int64), types.T_float64), true},
-		{"integer narrowing", cast(literal(types.T_int64, false), types.T_int32), false},
-		{"sign change", cast(literal(types.T_int64, false), types.T_uint64), false},
+		{"integer narrowing is nonnull or error", cast(literal(types.T_int64, false), types.T_int32), true},
+		{"sign change is nonnull or error", cast(literal(types.T_int64, false), types.T_uint64), true},
 		{"string conversion", cast(literal(types.T_varchar, false), types.T_float64), false},
 		{"null conversion", cast(literal(types.T_int64, true), types.T_float64), false},
 		{"column annotation", column, false},
 		{"converted column", cast(column, types.T_float64), false},
-		{"fixed double", fixedDouble, false},
+		{"fixed double is nonnull or error", fixedDouble, true},
 		{"other cast overload", otherOverload, false},
 		{"missing cast target", missingTarget, false},
 	} {
@@ -768,6 +782,10 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
 		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
 		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull float fallback", "select ifnull(1/r.r_regionkey,cast(0 as float)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce float fallback", "select coalesce(1/r.r_regionkey,cast(0 as float)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull unsigned fallback", "select ifnull(1/r.r_regionkey,cast(0 as unsigned)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"coalesce unsigned fallback", "select coalesce(1/r.r_regionkey,cast(0 as unsigned)) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"ifnull decimal fallback", "select ifnull(1/r.r_regionkey,0.0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"coalesce decimal fallback", "select coalesce(1/r.r_regionkey,0.0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
 		{"ifnull decimal128 fallback", "select ifnull(1/r.r_regionkey,cast(0 as decimal(38,1))) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
@@ -836,6 +854,20 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 				require.Equal(t, !nullable, cols[i].Typ.NotNullable, "column %d type", i)
 			}
 		})
+	}
+}
+
+func TestCreateTableAsSelectDecimalFallback(t *testing.T) {
+	for _, decimal := range []types.T{types.T_decimal64, types.T_decimal128} {
+		for _, expr := range []string{"ifnull(r.r_regionkey,0)", "coalesce(r.r_regionkey,0.0)", "ifnull(r.r_regionkey,cast(0 as float))", "coalesce(r.r_regionkey,cast(0 as unsigned))"} {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["region"].Cols[0].Typ = plan.Type{Id: int32(decimal), Width: 18, Scale: 2, NotNullable: true}
+			p, err := buildSingleStmt(mock, t, "create table decimal_fallback as select "+expr+" as v from nation n left join region r on n.n_regionkey=r.r_regionkey")
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.True(t, col.Typ.NotNullable, "%v %s", decimal, expr)
+			require.False(t, col.Default.NullAbility, "%v %s", decimal, expr)
+		}
 	}
 }
 
