@@ -25,10 +25,11 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pbtask "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -313,10 +314,25 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.Equal(t, successIdentity, readIdentity(successRunID))
 	assertSuccess(successRunID, 1)
 
-	// Exercise the actual task-store stale batch through the executor. Legacy
-	// firings are unclaimed and must not enter their SQL body after upgrade.
-	execSQLRequire(t, ctx, db, "create task stale_cleanup as begin select 1; end")
+	// Use the registered runner: a nil executor result can also mean deferred.
+	// The other legacy firings cannot be allocated individually, so only batch
+	// deletion can remove them, including the second 128-row batch.
+	execSQLRequire(t, ctx, db, "create table stale_sink(v int)")
+	execSQLRequire(t, ctx, db, "create task stale_cleanup as begin insert into stale_sink values (1); end")
 	execSQLRequire(t, ctx, db, "alter task stale_cleanup suspend")
+	const cleanupLabel = "sql-task-cleanup-test"
+	func() {
+		hakeeper, err := logservice.NewCNHAKeeperClient(ctx, cn.GetServiceConfig().CN.UUID, cn.GetServiceConfig().HAKeeperClient)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, hakeeper.Close()) }()
+		state, err := hakeeper.GetClusterState(ctx)
+		require.NoError(t, err)
+		require.Len(t, state.CNState.Stores, 2)
+		require.Contains(t, state.CNState.Stores, successIdentity.runner)
+		for _, store := range state.CNState.Stores {
+			require.NotContains(t, store.Labels, cleanupLabel)
+		}
+	}()
 	taskService, ok := cn.RawService().(testutil.TaskServiceGetter).GetTaskService()
 	require.True(t, ok)
 	storage := taskService.GetStorage()
@@ -325,31 +341,34 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.Len(t, definitions, 1)
 	definition := definitions[0]
 	spec := &pbtask.SQLTaskContext{TaskId: definition.TaskID, TaskName: definition.TaskName, AccountId: definition.AccountID,
-		TriggerType: taskservice.SQLTaskTriggerScheduled, TriggerCount: 1, SQLBody: "select 1"}
+		TriggerType: taskservice.SQLTaskTriggerScheduled, TriggerCount: 1,
+		DatabaseName: definition.DatabaseName, SQLBody: definition.SQLBody}
 	parent := fmt.Sprintf("sql-task:%d", definition.TaskID)
 	firings := make([]pbtask.AsyncTask, 130)
 	for i := range firings {
 		metadata := taskservice.BuildSQLTaskMetadata(spec)
 		metadata.ID = fmt.Sprintf("%s:%d", parent, i+1)
-		firings[i] = pbtask.AsyncTask{Metadata: metadata, ParentTaskID: parent, Status: pbtask.TaskStatus_Running, TaskRunner: "stale-probe", Epoch: 1}
+		metadata.Options.Labels = map[string]string{cleanupLabel: "unavailable"}
+		firings[i] = pbtask.AsyncTask{Metadata: metadata, ParentTaskID: parent, Status: pbtask.TaskStatus_Created}
 	}
+	firings[0].Status, firings[0].TaskRunner, firings[0].Epoch = pbtask.TaskStatus_Running, successIdentity.runner, 1
+	firings[0].Metadata.Options.Labels = nil
 	added, err := storage.AddAsyncTask(ctx, firings...)
 	require.NoError(t, err)
 	require.Equal(t, len(firings), added)
-	children, err := storage.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, firings[0].Metadata.ID))
-	require.NoError(t, err)
-	require.Len(t, children, 1)
-	executor := taskservice.NewSQLTaskExecutor(func() ie.InternalExecutor {
-		t.Fatal("a stale firing must not execute SQL")
-		return nil
-	}, taskService, "stale-probe")
-	require.NoError(t, executor.TaskExecutor()(ctx, &children[0]))
-	children, err = storage.QueryAsyncTask(ctx, taskservice.WithTaskParentTaskIDCond(taskservice.EQ, parent))
-	require.NoError(t, err)
-	require.LessOrEqual(t, len(children), 1, "the batch must delete the other legacy firings")
-	for _, child := range children {
-		require.Equal(t, pbtask.TaskStatus_Completed, child.Status, "stale unclaimed firing remains after batch cleanup")
-	}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		children, err := storage.QueryAsyncTask(ctx, taskservice.WithTaskParentTaskIDCond(taskservice.EQ, parent))
+		require.NoError(c, err)
+		require.LessOrEqual(c, len(children), 1, "the batch must delete the other legacy firings")
+		for _, child := range children {
+			require.Equal(c, pbtask.TaskStatus_Completed, child.Status, "stale unclaimed firing remains after batch cleanup")
+		}
+	}, 20*time.Second, 50*time.Millisecond)
+	var staleEffects, staleRuns int
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from stale_sink").Scan(&staleEffects))
+	require.Zero(t, staleEffects, "a stale firing must not execute its SQL body")
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_task.sql_task_run where task_id=?", definition.TaskID).Scan(&staleRuns))
+	require.Zero(t, staleRuns, "a stale firing must not acquire a run")
 
 	// Each statement commits independently: the first attempt increments the
 	// counter, then hits a duplicate key. The configured retry must run, retain
