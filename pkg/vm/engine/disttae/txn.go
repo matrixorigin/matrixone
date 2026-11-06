@@ -2743,7 +2743,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	fs fileservice.FileService,
 	offset int,
 	pkCount *int,
-) error {
+) (err error) {
 
 	// Check if force flush is enabled
 	forceFlush := objectio.CNWorkspaceForceFlushInjected()
@@ -2826,7 +2826,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			err = s3Writer.CloseWithCleanup(ctx, err)
 		}
 	}()
 
@@ -2856,7 +2856,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			// counts them into the engine's live-orphan accounting now, and
 			// the next statement boundary's handoff — or the terminal one —
 			// moves them to the engine queue whose own drain deletes them.
-			files := s3Writer.PersistedNames()
+			files := s3Writer.AbandonAndRetainableNames()
 			s3Writer.Close()
 			s3Writer = nil
 			if len(files) > 0 {
@@ -2905,14 +2905,14 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl := tables[tbKey.tableKey]
 
-		tableDef := tbl.GetTableDef(txn.proc.Ctx)
+		tableDef := tbl.GetTableDef(ctx)
 		s3Writer = colexec.NewCNS3DataWriterForService(
 			txn.proc.GetService(), txn.proc.GetMPool(), fs, tableDef,
 			workspaceDumpWriteS3Threshold, false, txn.dumpSinkerCapacityOption(),
 		)
 
 		for _, bat = range mp[tbKey] {
-			if err = s3Writer.Write(txn.proc.Ctx, bat); err != nil {
+			if err = s3Writer.Write(ctx, bat); err != nil {
 				return false, err
 			}
 		}
@@ -2921,7 +2921,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return false, moerr.NewInternalErrorNoCtx(
 				"fault injection: insert dump sync failed")
 		}
-		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
+		if stats, err = s3Writer.Sync(ctx); err != nil {
 			return false, err
 		}
 
@@ -2953,10 +2953,9 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return false, err
 		}
 
-		s3Writer.Close()
-
+		closeErr := s3Writer.CloseWithCleanup(ctx, nil)
 		s3Writer = nil
-		return true, nil
+		return true, closeErr
 	}
 
 	published := make(map[int]bool)
@@ -3017,7 +3016,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 	ctx context.Context,
 	fs fileservice.FileService,
 	offset int,
-) error {
+) (err error) {
 
 	// See the comment in dumpInsertBatchLocked: tables must be resolved
 	// while txn.writes is still consistent, with the lock released.
@@ -3089,7 +3088,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			err = s3Writer.CloseWithCleanup(ctx, err)
 		}
 	}()
 
@@ -3122,7 +3121,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			// own drain deletes them. A recorded publication returns
 			// published=true even with a Close error, so legitimately
 			// recorded objects are never touched by this cleanup.
-			files := s3Writer.PersistedNames()
+			files := s3Writer.AbandonAndRetainableNames()
 			s3Writer.Close()
 			s3Writer = nil
 			if len(files) > 0 {
@@ -3171,7 +3170,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl := tables[tbKey.tableKey]
 
-		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
+		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriterForService(
 			txn.proc.GetService(), txn.proc.GetMPool(), fs,
 			plan2.ExprType2Type(&pkCol.Typ), workspaceDumpWriteS3Threshold,
@@ -3179,7 +3178,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {
-			if err = s3Writer.Write(txn.proc.Ctx, mp[tbKey][i]); err != nil {
+			if err = s3Writer.Write(ctx, mp[tbKey][i]); err != nil {
 				return false, err
 			}
 		}
@@ -3188,7 +3187,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return false, moerr.NewInternalErrorNoCtx(
 				"fault injection: delete dump sync failed")
 		}
-		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
+		if stats, err = s3Writer.Sync(ctx); err != nil {
 			return false, err
 		}
 
@@ -3221,7 +3220,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return false, err
 		}
 
-		closeErr := s3Writer.Close()
+		closeErr := s3Writer.CloseWithCleanup(ctx, nil)
 		s3Writer = nil
 		if objectio.CNDumpDeleteCloseFailedInjected() {
 			closeErr = moerr.NewInternalErrorNoCtx(
@@ -3823,8 +3822,10 @@ func (txn *Transaction) dumpSinkerCapacityOption() ioutil.SinkerOption {
 		txn.noteUnpublishedDumpReservation(name)
 		return nil
 	}
-	return ioutil.WithUncommittedCapacityHook(
-		ioutil.UncommittedCapacityHook(hook))
+	return func(sinker *ioutil.Sinker) {
+		ioutil.WithUncommittedCapacityHook(hook)(sinker)
+		ioutil.WithWorkspaceOwnedCleanup()(sinker)
+	}
 }
 
 // hasUnpublishedDumpReservation reports whether a per-object reservation
@@ -6048,6 +6049,12 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 
 	if !txn.op.Txn().IsRCIsolation() {
 		return nil
+	}
+
+	// Also retry validation after an earlier failed advance; a statement error
+	// must not allow COMMIT to use the already advanced read snapshot unchecked.
+	if err := txn.validateOptimisticWritesLocked(ctx); err != nil {
+		return err
 	}
 
 	if txn.transfer.pendingTransfer ||

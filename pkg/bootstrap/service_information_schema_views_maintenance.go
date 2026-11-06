@@ -32,6 +32,14 @@ import (
 
 const informationSchemaViewsMaintenancePageSize = 32
 
+// informationSchemaPartitionsMaintenanceEntry keeps the PARTITIONS
+// reconciliation on the same bounded page, cursor and transaction as VIEWS.
+// The indirection only exists so the pre-existing VIEWS scenario tests can
+// pin an already-current PARTITIONS entry and keep exercising exactly their
+// original subjects; production always reconciles the live PARTITIONS
+// definition against sysview's current DDL.
+var informationSchemaPartitionsMaintenanceEntry = versions.InformationSchemaPartitionsUpgradeEntry
+
 var errInformationSchemaViewsProtocolUnavailable = moerr.NewNotSupportedNoCtx(
 	"information schema views maintenance protocol is unavailable")
 
@@ -43,10 +51,12 @@ type informationSchemaViewsMaintenanceState struct {
 	accountCursor int32
 }
 
-// maintainInformationSchemaViews repairs only the system VIEWS definition for
-// every account, including tenants already at v4.0.6, v4.0.7, or the final
-// version. It processes one bounded page per invocation after the v126 gate;
-// the standalone repair does not alter any historical handler identity.
+// maintainInformationSchemaViews repairs the system VIEWS and PARTITIONS
+// definitions for every account, including tenants already at v4.0.6, v4.0.7,
+// or the final version. It processes one bounded page per invocation after the
+// v126 gate; the standalone repair does not alter any historical handler
+// identity, and the page cursor publishes only when every definition staged
+// on that page committed together.
 func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 	if !s.upgrade.informationSchemaViewsMaintenanceRunning.CompareAndSwap(false, true) {
 		return nil
@@ -88,6 +98,7 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 		}
 
 		candidateCursor := nextInformationSchemaViewsMaintenanceCursor(accountIDs[len(accountIDs)-1])
+		partitionsEntry := informationSchemaPartitionsMaintenanceEntry()
 		for _, accountID := range accountIDs {
 			exists, viewDefinition, err := v4_0_7.CheckInformationSchemaViewsDefinition(txn, uint32(accountID))
 			if err != nil {
@@ -101,11 +112,28 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 				}
 				return err
 			}
-			if exists && sysview.InformationSchemaViewDefinitionMatches(viewDefinition, sysview.InformationSchemaViewsDDL) {
+			viewsCurrent := exists && sysview.InformationSchemaViewDefinitionMatches(
+				viewDefinition, sysview.InformationSchemaViewsDDL)
+
+			// The same ready account can carry a current VIEWS definition next
+			// to a stale PARTITIONS one; a VIEWS match must never skip the
+			// unrepaired sibling. Reconcile both on this bounded page.
+			partitionsCurrent, err := partitionsEntry.CheckFunc(txn, uint32(accountID))
+			if err != nil {
+				gone, goneErr := informationSchemaViewsPartitionsAccountGone(txn, accountID, err)
+				if goneErr != nil {
+					return goneErr
+				}
+				if gone {
+					continue
+				}
+				return err
+			}
+			if viewsCurrent && partitionsCurrent {
 				continue
 			}
 
-			// Recheck immediately before the transactional entry. If a peer
+			// Recheck immediately before the transactional entries. If a peer
 			// disappears after this check, the DDL error must escape so the
 			// transaction rolls back rather than being mistaken for a gate miss.
 			if ready, err := informationSchemaViewsProtocolReady(txn); err != nil {
@@ -113,12 +141,28 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 			} else if !ready {
 				return errInformationSchemaViewsProtocolUnavailable
 			}
-			if err := v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(
-				txn, uint32(accountID)); err != nil {
-				if informationSchemaViewsAccountGone(accountID, err) {
-					continue
+			if !viewsCurrent {
+				if err := v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(
+					txn, uint32(accountID)); err != nil {
+					if informationSchemaViewsAccountGone(accountID, err) {
+						continue
+					}
+					return err
 				}
-				return err
+			}
+			// A real PARTITIONS DDL error rolls back the entire page and keeps
+			// the cursor, so the next pass retries every reconciliation in it.
+			if !partitionsCurrent {
+				if err := partitionsEntry.UpgradeAfterProtocolCheck(txn, uint32(accountID)); err != nil {
+					gone, goneErr := informationSchemaViewsPartitionsAccountGone(txn, accountID, err)
+					if goneErr != nil {
+						return goneErr
+					}
+					if gone {
+						continue
+					}
+					return err
+				}
 			}
 		}
 
@@ -147,6 +191,53 @@ func informationSchemaViewsAccountGone(accountID int32, err error) bool {
 	return uint32(accountID) != catalog.System_Account &&
 		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
 			moerr.IsMoErrCode(err, moerr.ErrBadDB))
+}
+
+// informationSchemaAccountDroppedInTxn positively confirms inside the page
+// transaction that the account no longer exists in mo_catalog.mo_account.
+// A typed ErrNoSuchTable/ErrBadDB alone cannot prove a tenant disappeared: a
+// live account can hit those codes through a missing dependency, and skipping
+// it would silently drop its PARTITIONS work while committing the staged
+// VIEWS replacement of the same page.
+func informationSchemaAccountDroppedInTxn(
+	txn executor.TxnExecutor,
+	accountID uint32,
+) (bool, error) {
+	sql := fmt.Sprintf(
+		"select account_id from mo_catalog.mo_account where account_id = %d",
+		accountID)
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+	found := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 && len(cols) > 0 {
+			found = true
+		}
+		return false
+	})
+	return !found, nil
+}
+
+// informationSchemaViewsPartitionsAccountGone upgrades the code-only
+// account-gone suspicion of the PARTITIONS branches into an in-transaction
+// fact: only an account confirmed absent may keep the historical skip; a
+// surviving tenant's typed error must roll the whole page back.
+func informationSchemaViewsPartitionsAccountGone(
+	txn executor.TxnExecutor,
+	accountID int32,
+	err error,
+) (bool, error) {
+	if !informationSchemaViewsAccountGone(accountID, err) {
+		return false, nil
+	}
+	dropped, probeErr := informationSchemaAccountDroppedInTxn(txn, uint32(accountID))
+	if probeErr != nil {
+		return false, probeErr
+	}
+	return dropped, nil
 }
 
 func informationSchemaViewsProtocolReady(txn executor.TxnExecutor) (bool, error) {
