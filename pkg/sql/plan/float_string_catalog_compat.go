@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +41,12 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 	}
 	if err := ctx.GetContext().Err(); err != nil {
 		return err
+	}
+	// This repair may fold stored DEFAULT expressions. A bind-only view probe
+	// needs the relation's column types, not rewritten execution expressions;
+	// the later ordinary compilation performs the repair as usual.
+	if defines.IsIndexMaintenanceViewBinding(ctx.GetContext()) {
+		return nil
 	}
 	var budget *tableDumpBindingBudget
 	var proofProc *process.Process

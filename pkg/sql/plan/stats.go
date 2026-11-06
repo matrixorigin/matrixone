@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2000,7 +2001,7 @@ func literalUint64ForStats(expr *plan.Expr, builder *QueryBuilder) (uint64, bool
 		return 0, false
 	}
 	value, ok := getLiteralUint64(expr)
-	if !ok && !containsDynamicParam(expr) {
+	if !ok && !containsDynamicParam(expr) && !defines.IsIndexMaintenanceViewBinding(builder.GetContext()) {
 		folded, err := ConstantFold(
 			batch.EmptyForConstFoldBatch,
 			DeepCopyExpr(expr),

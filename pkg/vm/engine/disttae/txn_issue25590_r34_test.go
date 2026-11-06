@@ -35,7 +35,7 @@ package disttae
 // persisted (the failure retains them and preserves the marks), the
 // failed admission's own boundary must hand the orphans to the
 // engine's queue, removing ONLY that fault plus the engine's
-// scheduled delete pass (no fault injection stays armed, no limit
+// delete pass (no fault injection stays armed, no limit
 // change) must let the SAME transaction's next admission complete the
 // retried pass and then COMMIT.
 
@@ -88,6 +88,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { gcPool.Release() })
 	require.NoError(t, e.ResetGCWorkerPool(gcPool))
+	t.Cleanup(issue25590FreezeUnpublishedDrainScheduling(t, e))
 
 	dbv := txn.databaseOps.existAndActive(genDatabaseKey(1, "db"))
 	require.NotNil(t, dbv)
@@ -245,7 +246,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	// The bound is pinned to EXACTLY the originals plus the two
 	// replacements, and NEVER changes again: the failed pass's retained
 	// replacements therefore fill it, and the recovery below must fit
-	// back into the same limit once the scheduled cleanup deleted them.
+	// back into the same limit once the engine cleanup deleted them.
 	const recoveryLimit = 2
 	recoveryAdmissionLimit := totalObjs + recoveryLimit
 	knobSaved := unpublishedPendingAdmissionLimit
@@ -302,11 +303,11 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.Equal(t, recoveryAdmissionLimit, unpublishedPendingAdmissionLimit,
 		"the capacity limit is retained exactly")
 
-	// The engine's scheduled delete pass retires the queued orphans
-	// (the ONLY cleanup drive: no transaction-side call anywhere), which
-	// is what restores admission capacity.
+	// The engine's delete pass retires the queued orphans (the ONLY
+	// cleanup drive: no transaction-side call anywhere), restoring
+	// admission capacity.
 	require.NoError(t, e.DrainUnpublishedPendingForTest(ctx),
-		"the engine's scheduled pass deletes the orphaned replacements")
+		"the engine's drain deletes the orphaned replacements")
 	for _, name := range orphanNames {
 		issue25590RequireGone(t, failFS, name,
 			"the orphaned replacement the failed pass left")
@@ -365,7 +366,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		"only the six unaffected originals re-published - the two superseded dirty originals' names left the workspace with the retired dump batches")
 	for _, name := range orphanNames {
 		require.False(t, namesNow[name],
-			"an orphaned replacement the scheduled pass deleted never re-entered the workspace")
+			"an orphaned replacement the engine drain deleted never re-entered the workspace")
 	}
 	for name := range freshNames {
 		require.NotContains(t, orphanNames, name,
@@ -402,7 +403,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	require.NoError(t, func() error {
 		_, cerr := txn.Commit(ctx)
 		return cerr
-	}(), "the recovered transaction commits - the failed admission and its orphaned replacements cost it nothing but the scheduled deletions")
+	}(), "the recovered transaction commits - the failed admission and its orphaned replacements cost it nothing but the cleanup deletions")
 	require.Zero(t, len(issue25590QueuedNames(e)),
 		"the commit-prepare handoff queues nothing recorded")
 	txn.FinalizeCommit(ctx)
@@ -425,7 +426,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		"the terminal published the payload's members and the settled deletes retired the two obsolete originals' units")
 	require.Zero(t, inFlight)
 	require.NoError(t, e.DrainUnpublishedPendingForTest(ctx),
-		"the final scheduled pass has no obligation left")
+		"the final engine drain has no obligation left")
 	for name := range freshNames {
 		issue25590RequireKept(t, failFS, name,
 			"a published replacement file survives the terminal")
