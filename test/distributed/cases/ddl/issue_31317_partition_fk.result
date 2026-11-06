@@ -1,0 +1,63 @@
+drop database if exists issue_31317;
+create database issue_31317;
+use issue_31317;
+create table parent_hash(a int primary key) partition by hash(a) partitions 2;
+create table parent_range(a int primary key) partition by range(a)
+(partition p0 values less than (10), partition p1 values less than maxvalue);
+create table parent_normal(a int primary key);
+create table child_normal(a int);
+create table child_hash(a int primary key) partition by hash(a) partitions 2;
+create table bad_parent(a int, foreign key(a) references parent_hash(a));
+Foreign keys are not yet supported in conjunction with partitioning
+create table bad_range(a int, foreign key(a) references parent_range(a));
+Foreign keys are not yet supported in conjunction with partitioning
+alter table child_normal add constraint fk_parent foreign key(a) references parent_hash(a);
+Foreign keys are not yet supported in conjunction with partitioning
+alter table child_normal add column extra int, add constraint fk_copy foreign key(a) references parent_hash(a);
+Foreign keys are not yet supported in conjunction with partitioning
+alter table child_hash add constraint fk_child foreign key(a) references parent_normal(a);
+Foreign keys are not yet supported in conjunction with partitioning
+create table bad_child(a int primary key, foreign key(a) references parent_normal(a)) partition by hash(a) partitions 2;
+Foreign keys are not yet supported in conjunction with partitioning
+select count(*) from information_schema.columns where table_schema='issue_31317' and table_name='child_normal' and column_name='extra';
+➤ count(*)[-5,64,0]  𝄀
+0
+show create table child_normal;
+➤ Table[12,12,0]  ¦  Create Table[12,54,0]  𝄀
+child_normal  ¦  CREATE TABLE `child_normal` (
+  `a` int DEFAULT NULL
+)
+show create table child_hash;
+➤ Table[12,10,0]  ¦  Create Table[12,106,0]  𝄀
+child_hash  ¦  CREATE TABLE `child_hash` (
+  `a` int NOT NULL,
+  PRIMARY KEY (`a`)
+) partition by hash (`a`) partitions 2
+set foreign_key_checks=0;
+create table bad_forward(a int primary key, foreign key(a) references missing_parent(a)) partition by hash(a) partitions 2;
+Foreign keys are not yet supported in conjunction with partitioning
+create table deferred_child(a int, foreign key(a) references deferred_parent(a));
+create table deferred_parent(a int primary key) partition by hash(a) partitions 2;
+Foreign keys are not yet supported in conjunction with partitioning
+show tables like 'deferred_parent';
+➤ Tables_in_issue_31317[12,5000,0]
+create table deferred_parent(a int primary key);
+set foreign_key_checks=1;
+create table good_child(a int, foreign key(a) references parent_normal(a));
+create table self_fk(id int primary key, parent int, foreign key(parent) references self_fk(id));
+insert into parent_normal values(1);
+insert into good_child values(1);
+insert into self_fk values(1,null),(2,1);
+insert into good_child values(999);
+Cannot add or update a child row: a foreign key constraint fails
+select * from good_child order by a;
+➤ a[4,32,0]  𝄀
+1
+select * from self_fk order by id;
+➤ id[4,32,0]  ¦  parent[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+drop database issue_31317;
