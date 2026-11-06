@@ -82,10 +82,8 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		plain, analyzed := explain("explain ", query), explain("explain analyze ", query)
 		require.Contains(t, analyzed, "Index Table Scan on events.idx_d", analyzed)
 		require.Contains(t, plain, "Index Table Scan on events.idx_d", plain)
-		idsWith := func(tb testing.TB, query string) map[int64]string {
+		readIDs := func(tb testing.TB, rows *sql.Rows) map[int64]string {
 			tb.Helper()
-			rows, err := conn.QueryContext(ctx, query)
-			require.NoError(tb, err)
 			defer rows.Close()
 			columns, err := rows.Columns()
 			require.NoError(tb, err)
@@ -104,6 +102,12 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 			}
 			require.NoError(tb, rows.Err())
 			return got
+		}
+		idsWith := func(tb testing.TB, query string) map[int64]string {
+			tb.Helper()
+			rows, err := conn.QueryContext(ctx, query)
+			require.NoError(tb, err)
+			return readIDs(tb, rows)
 		}
 		ids := func(query string) map[int64]string { return idsWith(t, query) }
 		// TIMESTAMP literals are folded in the session zone. A cached ordinary
@@ -242,12 +246,23 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		exec(fmt.Sprintf("set timestamp=%d", sparseClock))
 		exec("prepare temporal_prepared from 'select id,d from events where d > now(6)'")
 		require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), ids("execute temporal_prepared"))
+		binaryPrepared, err := conn.PrepareContext(ctx, "select id,d from events where d > now(6) and id >= ?")
+		require.NoError(t, err)
+		defer binaryPrepared.Close()
+		binaryIDs := func() map[int64]string {
+			t.Helper()
+			rows, err := binaryPrepared.QueryContext(ctx, int64(0))
+			require.NoError(t, err)
+			return readIDs(t, rows)
+		}
+		require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), binaryIDs())
 		exec("create table unrelated_ddl(id int)")
 		for _, clock := range []int64{sparseClock, denseClock, sparseClock} {
 			exec(fmt.Sprintf("set timestamp=%d", clock))
 			want := ids("select id,d from events ignore index(idx_d) where d > now(6)")
 			require.Equal(t, want, ids("execute temporal_prepared"))
 			require.Equal(t, want, ids("execute temporal_prepared"))
+			require.Equal(t, want, binaryIDs(), "binary prepared execution must retain clock and schema behavior")
 		}
 		exec("deallocate prepare temporal_prepared")
 		for _, zone := range []string{"+14:00", "-12:00", "+00:00"} {
@@ -288,6 +303,12 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 			require.NoError(t, rows.Err())
 			require.Contains(t, output.String(), "idx_d")
 		}()
+		readerPrepared, err := reader.PrepareContext(ctx, "select id,d from "+schema+".events where d > now(6) and id >= ?")
+		require.NoError(t, err)
+		defer readerPrepared.Close()
+		preparedRows, err := readerPrepared.QueryContext(ctx, int64(0))
+		require.NoError(t, err)
+		require.Equal(t, expected, readIDs(t, preparedRows))
 		exec("revoke select on table " + schema + ".events from " + role)
 		rows, err := reader.QueryContext(ctx, "explain select id,d from "+schema+".events where d > now(6)")
 		if rows != nil {
@@ -298,6 +319,15 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 			}
 		}
 		require.Error(t, err, "an unauthorized user must not receive an explain plan")
+		rows, err = readerPrepared.QueryContext(ctx, int64(0))
+		if rows != nil {
+			defer rows.Close()
+			if err == nil {
+				require.False(t, rows.Next(), "revocation must also reject an existing binary prepared handle")
+				err = rows.Err()
+			}
+		}
+		require.Error(t, err)
 		exec("drop index idx_d on events")
 		require.Equal(t, expected, ids(query), "a prior index choice must not survive index removal")
 	})
