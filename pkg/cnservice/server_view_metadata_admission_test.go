@@ -1665,6 +1665,18 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			failure := errors.New("derived view creation failed")
 			var s *service
 			var creates int
+			var created []string
+			viewName := func(sql string) string {
+				i := strings.Index(strings.ToUpper(sql), " VIEW ")
+				if i < 0 {
+					return sql
+				}
+				rest := sql[i+len(" VIEW "):]
+				if j := strings.Index(strings.ToUpper(rest), " AS "); j >= 0 {
+					rest = rest[:j]
+				}
+				return strings.TrimSpace(rest)
+			}
 			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			op.EXPECT().TxnOptions().DoAndReturn(func() txn.TxnOptions {
 				return txn.TxnOptions{CN: s.cfg.UUID}
@@ -1677,6 +1689,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
 					require.False(t, s.viewMetadataIngressReady.Load())
 					creates++
+					created = append(created, viewName(sql))
 					if fail {
 						return executor.Result{}, failure
 					}
@@ -1697,9 +1710,12 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 				require.Equal(t, serviceClosed, s.lifecycle)
 				require.False(t, s.viewMetadataIngressReady.Load())
 				require.Equal(t, 1, creates)
+				require.Equal(t, []string{"information_schema.TABLES"}, created, "only the TABLES publish fails; the PARTITIONS rail and trace views never run")
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, 5, creates, "TABLES plus the four trace views")
+				require.Equal(t, 6, creates, "TABLES, the PARTITIONS refresh rail, plus the four trace views")
+				require.Equal(t, "information_schema.TABLES", created[0], "the TABLES consumer publishes before the PARTITIONS refresh rail")
+				require.Equal(t, "information_schema.`PARTITIONS`", created[1], "the PARTITIONS refresh rail reconciles before the four trace views")
 				require.True(t, s.viewMetadataIngressReady.Load())
 			}
 		})

@@ -496,6 +496,16 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 				return err
 			}
 
+			// Same-version refresh rail for PARTITIONS: a cluster already at
+			// the current version keeps its persisted definition until this
+			// reconciliation replaces it; the definition check makes the
+			// converged state an idempotent no-op. Crossing tenants keep
+			// using the v4_0_7 tenant upgrade entry.
+			partitions := versions.InformationSchemaPartitionsUpgradeEntry()
+			if err := partitions.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {

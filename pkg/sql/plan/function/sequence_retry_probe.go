@@ -228,12 +228,18 @@ func SampleSequenceBaseline(ctx context.Context, proc *process.Process, id proce
 // default-deny envelope: an admission site can never observe, so it must
 // not renew).
 func RunSequenceRetryExpiryDecision(ctx context.Context, proc *process.Process, sessionDeadline time.Time) process.DecideOutcome {
+	if err := ctx.Err(); err != nil {
+		return process.DecideOutcome{Kind: process.DecideCancelled, Err: err}
+	}
 	retryState := proc.GetSequenceRetryState()
 	if retryState == nil {
 		return process.DecideOutcome{Kind: process.DecideProceed}
 	}
 	prober, err := newSeqProber(proc)
 	if err != nil {
+		if err := ctx.Err(); err != nil {
+			return process.DecideOutcome{Kind: process.DecideCancelled, Err: err}
+		}
 		return process.DecideOutcome{Kind: process.DecideExhausted, Terminal: err}
 	}
 	return retryState.DecideExpiry(ctx, prober, seqProbeBudgetDur, seqAutonomousBudgetDur, sessionDeadline)
