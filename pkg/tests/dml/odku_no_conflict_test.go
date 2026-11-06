@@ -35,33 +35,33 @@ func TestODKUWithoutConflict(t *testing.T) {
 		require.NoError(t, err)
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 		defer cancel()
-		open := func(user string) *sql.DB {
+		open := func(t *testing.T, user string) *sql.DB {
 			t.Helper()
 			db, e := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
 			require.NoError(t, e)
 			t.Cleanup(func() { require.NoError(t, db.Close()) })
 			return db
 		}
-		sys := open("dump")
+		sys := open(t, "dump")
 		conn, err := sys.Conn(ctx)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, conn.Close()) })
-		exec := func(q string) { t.Helper(); _, e := conn.ExecContext(ctx, q); require.NoError(t, e, q) }
+		exec := func(t *testing.T, q string) { t.Helper(); _, e := conn.ExecContext(ctx, q); require.NoError(t, e, q) }
 		constraintError := func(t *testing.T, err error, code uint16) {
 			t.Helper()
 			var mysqlError *mysqlDriver.MySQLError
 			require.ErrorAs(t, err, &mysqlError)
 			require.Equal(t, code, mysqlError.Number)
 		}
-		exec("create database odku_no_conflict")
+		exec(t, "create database odku_no_conflict")
 		t.Cleanup(func() { cleanupODKUSQL(t, conn, "drop database if exists odku_no_conflict") })
-		exec("use odku_no_conflict")
+		exec(t, "use odku_no_conflict")
 
 		t.Run("prepared parameters and insert constraints", func(t *testing.T) {
-			exec("create table t (v int not null,c int)")
-			exec("create table source(n int)")
-			exec("insert into source values(1),(2)")
-			exec("insert into t values(1,10) on duplicate key update c=1/0")
+			exec(t, "create table t (v int not null,c int)")
+			exec(t, "create table source(n int)")
+			exec(t, "insert into source values(1),(2)")
+			exec(t, "insert into t values(1,10) on duplicate key update c=1/0")
 			stmt, e := conn.PrepareContext(ctx, "insert into t values(?,?) on duplicate key update c=?")
 			require.NoError(t, e)
 			defer stmt.Close()
@@ -90,9 +90,9 @@ func TestODKUWithoutConflict(t *testing.T) {
 			require.Equal(t, 4, count)
 			require.Equal(t, 100, sum)
 
-			exec("create table parent(id int primary key)")
-			exec("insert into parent values(1)")
-			exec("create table nullable_uk(u int unique,v int not null,pid int, constraint positive check(v>0), foreign key(pid) references parent(id))")
+			exec(t, "create table parent(id int primary key)")
+			exec(t, "insert into parent values(1)")
+			exec(t, "create table nullable_uk(u int unique,v int not null,pid int, constraint positive check(v>0), foreign key(pid) references parent(id))")
 			stmt, e = conn.PrepareContext(ctx, "insert into nullable_uk(v,pid) values(?,?) on duplicate key update v=?")
 			require.NoError(t, e)
 			defer stmt.Close()
@@ -113,8 +113,8 @@ func TestODKUWithoutConflict(t *testing.T) {
 			require.Equal(t, 2, count)
 			require.Equal(t, 11, sum)
 
-			exec("create table live_unique(u int unique,v int)")
-			exec("insert into live_unique values(1,10)")
+			exec(t, "create table live_unique(u int unique,v int)")
+			exec(t, "insert into live_unique values(1,10)")
 			stmt, e = conn.PrepareContext(ctx, "insert into live_unique values(?,?) on duplicate key update v=values(v)")
 			require.NoError(t, e)
 			defer stmt.Close()
@@ -128,16 +128,43 @@ func TestODKUWithoutConflict(t *testing.T) {
 			require.Equal(t, 20, sum)
 		})
 
+		t.Run("internal prepared parameters with pruned columns", func(t *testing.T) {
+			exec(t, "create table internal_nokey(id int,v int)")
+			exec(t, "create table internal_key(id int primary key,v int)")
+			exec(t, "insert into internal_key values(1,5)")
+			internal := cn.RawService().(cnservice.Service).GetSQLExecutor()
+			// The unused middle column is pruned; the final RHS is dead without
+			// a key but evaluated when the keyed insert conflicts.
+			for _, tc := range []struct {
+				table  string
+				params []string
+				id, v  int
+			}{
+				{"internal_nokey", []string{"2", "999", "17", "73"}, 2, 17},
+				{"internal_key", []string{"1", "999", "17", "73"}, 1, 73},
+			} {
+				query := "insert into " + tc.table + " select q.a,q.c from (select ? a, ? b, ? c) q on duplicate key update v=?"
+				result, err := internal.Exec(ctx, query, executor.Options{}.WithDatabase("odku_no_conflict").WithForceRebuildPlan().WithStatementOption(executor.StatementOption{}.WithParams(tc.params)))
+				result.Close()
+				require.NoError(t, err, query)
+				var count, id, v int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*),min(id),min(v) from "+tc.table).Scan(&count, &id, &v))
+				require.Equal(t, 1, count)
+				require.Equal(t, tc.id, id)
+				require.Equal(t, tc.v, v)
+			}
+		})
+
 		t.Run("prepared validation dependencies", func(t *testing.T) {
-			exec("create table prepared_target(v int,c int)")
-			exec("create table prepared_source(n int,other int)")
-			exec("insert into prepared_source values(1,2)")
+			exec(t, "create table prepared_target(v int,c int)")
+			exec(t, "create table prepared_source(n int,other int)")
+			exec(t, "insert into prepared_source values(1,2)")
 			stmt, e := conn.PrepareContext(ctx, "insert into prepared_target values(?,?) on duplicate key update c=(select n from prepared_source)")
 			require.NoError(t, e)
 			defer stmt.Close()
 			_, e = stmt.ExecContext(ctx, 1, 10)
 			require.NoError(t, e)
-			exec("alter table prepared_source drop column n")
+			exec(t, "alter table prepared_source drop column n")
 			_, e = stmt.ExecContext(ctx, 2, 20)
 			require.Error(t, e, "a changed RHS schema must invalidate the prepared plan")
 			var count int
@@ -146,9 +173,9 @@ func TestODKUWithoutConflict(t *testing.T) {
 		})
 
 		t.Run("unreachable subqueries have no effects", func(t *testing.T) {
-			exec("create table dead(v int,s varchar(1024))")
-			exec("create table dead_source(n int)")
-			exec("insert into dead_source values(1),(2)")
+			exec(t, "create table dead(v int,s varchar(1024))")
+			exec(t, "create table dead_source(n int)")
+			exec(t, "insert into dead_source values(1),(2)")
 			const key = "CODEX_31979_NO_KEY_DEAD"
 			t.Cleanup(func() {
 				cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
@@ -169,9 +196,9 @@ func TestODKUWithoutConflict(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_feature_registry where feature_code='"+key+"'").Scan(&count))
 				require.Zero(t, count)
 			}
-			exec(`insert into dead values(1,'one') on duplicate key update s=mo_feature_registry_upsert('CODEX_31979_NO_KEY_DEAD','never','{"allowed_scope":[]}',true)`)
+			exec(t, `insert into dead values(1,'one') on duplicate key update s=mo_feature_registry_upsert('CODEX_31979_NO_KEY_DEAD','never','{"allowed_scope":[]}',true)`)
 			checkNoEffect()
-			exec(`insert into dead values(2,'two') on duplicate key update s=(select mo_feature_registry_upsert('CODEX_31979_NO_KEY_DEAD','never','{"allowed_scope":[]}',true) from dead_source)`)
+			exec(t, `insert into dead values(2,'two') on duplicate key update s=(select mo_feature_registry_upsert('CODEX_31979_NO_KEY_DEAD','never','{"allowed_scope":[]}',true) from dead_source)`)
 			checkNoEffect()
 			stmt, e := conn.PrepareContext(ctx, "insert into dead values(?,?) on duplicate key update s=if(? in (select ?),'yes','no')")
 			require.NoError(t, e)
@@ -187,14 +214,14 @@ func TestODKUWithoutConflict(t *testing.T) {
 			var max int
 			require.NoError(t, conn.QueryRowContext(ctx, "with recursive r(n) as (select 1 union all select n+1 from r where n<2) select max(n) from r").Scan(&max))
 			require.Equal(t, 2, max)
-			exec(`insert into dead values(4,'four') on duplicate key update s=(with recursive r(n,s) as (select 1,mo_feature_registry_upsert('CODEX_31979_NO_KEY_DEAD','never','{"allowed_scope":[]}',true) union all select n+1,s from r where n<2) select s from r limit 1)`)
+			exec(t, `insert into dead values(4,'four') on duplicate key update s=(with recursive r(n,s) as (select 1,mo_feature_registry_upsert('CODEX_31979_NO_KEY_DEAD','never','{"allowed_scope":[]}',true) union all select n+1,s from r where n<2) select s from r limit 1)`)
 			checkNoEffect()
 		})
 
 		t.Run("authorization survives optimization", func(t *testing.T) {
-			exec("create account odku_no_conflict_auth admin_name 'admin' identified by '111'")
+			exec(t, "create account odku_no_conflict_auth admin_name 'admin' identified by '111'")
 			t.Cleanup(func() { cleanupODKUSQL(t, conn, "drop account if exists odku_no_conflict_auth") })
-			admin := open("odku_no_conflict_auth#admin")
+			admin := open(t, "odku_no_conflict_auth#admin")
 			execAdmin := func(q string) { t.Helper(); _, e := admin.ExecContext(ctx, q); require.NoError(t, e, q) }
 			for _, q := range []string{
 				"create database app", "create table app.target(v int,c int)", "create table app.allowed(n int)",
@@ -204,7 +231,7 @@ func TestODKUWithoutConflict(t *testing.T) {
 			} {
 				execAdmin(q)
 			}
-			writerDB := open("odku_no_conflict_auth#u#writer")
+			writerDB := open(t, "odku_no_conflict_auth#u#writer")
 			writer, e := writerDB.Conn(ctx)
 			require.NoError(t, e)
 			t.Cleanup(func() { require.NoError(t, writer.Close()) })

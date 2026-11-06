@@ -722,3 +722,88 @@ func TestODKUFinalOutputFailureNeverPublishesPartialColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(input), out.Batch.RowCount(), "reset permits a clean successful attempt")
 }
+
+func TestODKUOutputBitmapAdmissionUsesSelectedRows(t *testing.T) {
+	const (
+		limit = uint64(16 << 20)
+		first = 8192
+	)
+	for _, tc := range []struct {
+		name       string
+		headroom   uint64
+		failSecond bool
+	}{
+		{name: "both batches fit", headroom: 768},
+		{name: "selected null still needs a bitmap", headroom: 16, failSecond: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, proc, child, account := odkuActionFixture(t, limit)
+			input := make([][9]int64, first+1)
+			wantIDs, wantValues := make([]int64, first), make([]int64, first)
+			for i := 0; i < first; i++ {
+				id := int64(i + 1)
+				input[i] = [9]int64{id, id * 10, 1, id, id, id, id, id * 10, 3}
+				wantIDs[i], wantValues[i] = id, 4
+			}
+			input[first] = [9]int64{1000001, 10000010, 1, first + 1}
+			source := odkuActionInput(t, proc, input)
+			for i := 0; i < first; i++ {
+				rowID := types.Rowid{0: 3, 1: byte(i), 2: byte(i >> 8)}
+				require.NoError(t, vector.SetFixedAtNoTypeCheck(source.Vecs[9], i, rowID))
+			}
+			child.WithBatchs([]*batch.Batch{source})
+			var filler []byte
+			t.Cleanup(func() {
+				if filler != nil {
+					proc.Mp().Free(filler)
+				}
+			})
+			child.WithEndOfDataCallback(func() {
+				// Isolate bitmap admission after actual actions have retained all
+				// originals and the final insert. Only the latter has NULL origins.
+				require.Equal(t, first+1, a.ctr.actionRows.images.RowCount())
+				for _, v := range a.ctr.actionRows.origins.Vecs {
+					require.False(t, v.IsNull(first-1))
+					require.True(t, v.IsNull(first))
+				}
+				for _, v := range a.ctr.buf.Vecs {
+					require.NoError(t, v.PreExtend(first, proc.Mp()))
+				}
+				var err error
+				filler, err = proc.Mp().AllocAccounted(int(limit-account.Snapshot().Used-tc.headroom), account, mpool.AllocationOwnerMin, preInsertUniqueAllocationSiteRetainedData)
+				require.NoError(t, err)
+			})
+			require.NoError(t, a.Prepare(proc))
+			out, err := a.Call(proc)
+			require.NoError(t, err)
+			require.NotNil(t, out.Batch)
+			require.Equal(t, first, out.Batch.RowCount())
+			require.Equal(t, wantIDs, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[0]))
+			require.Equal(t, wantIDs, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[4]))
+			require.Equal(t, wantValues, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[2]))
+
+			out, err = a.Call(proc)
+			if tc.failSecond {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), "%v", err)
+				require.Nil(t, out.Batch)
+				require.Zero(t, a.ctr.buf.RowCount(), "the failed batch is not published")
+				require.Equal(t, first, a.ctr.actions.finalRow)
+				_, err = a.Call(proc)
+				require.ErrorContains(t, err, "require Reset")
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, out.Batch)
+				require.Equal(t, 1, out.Batch.RowCount())
+				require.Equal(t, int64(1000001), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], 0))
+				for _, v := range out.Batch.Vecs[4:] {
+					require.True(t, v.IsNull(0))
+				}
+			}
+			proc.Mp().Free(filler)
+			filler = nil
+			a.Reset(proc, false, nil)
+			child.Free(proc, false, nil)
+			require.Zero(t, account.Snapshot().Used)
+		})
+	}
+}
