@@ -124,7 +124,7 @@ type writeErrorFS struct {
 func (fs *writeErrorFS) Write(context.Context, fileservice.IOVector) error { return fs.err }
 
 func TestS3WriterMemoryPressure(t *testing.T) {
-	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth"} {
+	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth", "wait after flush"} {
 		t.Run(mode, func(t *testing.T) {
 			_, ctrl, proc := prepareTestCtx(t, true)
 			t.Cleanup(proc.Free)
@@ -154,16 +154,26 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 			m := &admissionThrottler{capacity: 1 << 30}
 			w.memController.throttler = m
 			w.flushThreshold = 64 << 20
-			require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
-			require.Positive(t, m.reserved)
-			require.Equal(t, w.retainedBytes(), m.reserved, "charge actual current capacity, including free-list ownership")
-			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
-			for _, sinker := range first {
-				require.NotNil(t, sinker)
+			waiting := mode == "wait for capacity"
+			if !waiting {
+				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				require.Positive(t, m.reserved)
+				require.Equal(t, w.retainedBytes(), m.reserved)
 			}
+			first := append([]*colexec.CNS3Writer(nil), w.insertSinkers...)
+			if !waiting {
+				for _, sinker := range first {
+					require.NotNil(t, sinker)
+				}
+			}
+			beforeAcquires := m.acquires
 			beforeReleased := m.released
 			m.capacity = m.reserved // the next growth must flush the previous owner
 			if mode == "wait for capacity" {
+				m.capacity = 0
+				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
+			}
+			if mode == "wait after flush" {
 				m.capacity = 0
 				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
 			}
@@ -173,17 +183,26 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				proc.Ctx = ctx
 				cancel()
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), context.Canceled)
-				require.Equal(t, 1, m.acquires)
+				require.Equal(t, beforeAcquires, m.acquires)
 			} else if mode == "flush error" {
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), writeErr)
-				require.Equal(t, 2, m.acquires)
+				require.Equal(t, beforeAcquires+1, m.acquires)
 				require.Equal(t, beforeReleased, m.released, "failed flush retains its private vector owner")
 			} else {
 				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				if mode == "wait after flush" {
+					require.NotNil(t, w.metadataSpool, "earlier output must not prevent waiting for an independent release")
+					require.Equal(t, [2]*batch.Batch{}, w.metadata)
+				}
+				if waiting {
+					require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
+				}
 				for i, sinker := range w.insertSinkers {
 					require.NotSame(t, first[i], sinker)
 				}
-				require.Positive(t, w.metadataWritten, "first flush metadata is disk owned while Build continues")
+				if !waiting {
+					require.NotNil(t, w.metadataSpool, "first flush stays available for replay while Build continues")
+				}
 				rows := map[uint64]uint64{}
 				for {
 					require.NoError(t, w.flushTailAndWriteToOutput(proc, tc.op.OpAnalyzer))

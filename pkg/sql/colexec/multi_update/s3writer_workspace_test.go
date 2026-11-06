@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,17 +36,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMetadataSpoolPreservesDeleteBeforeInsert(t *testing.T) {
+func TestMetadataPreservesDeleteBeforeInsert(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	w := &s3WriterDelegate{updateCtxs: []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}}}}
+	w.memController.throttler = &admissionThrottler{capacity: 1 << 30}
 	defer w.free(proc)
 	src := batch.NewWithSize(1)
 	defer src.Clean(proc.Mp())
 	src.Vecs[0] = testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
 	src.SetRowCount(1)
 	for i, action := range []actionType{actionInsert, actionDelete, actionInsert, actionDelete} {
-		require.NoError(t, w.spoolFrame(proc, action, 0, uint64(i+1), "", src))
+		require.NoError(t, w.appendMetadata(proc, action, 0, uint64(i+1), "", src))
 	}
 	var actions []uint8
 	var rows []uint64
@@ -60,36 +61,6 @@ func TestMetadataSpoolPreservesDeleteBeforeInsert(t *testing.T) {
 	}
 	require.Equal(t, []uint8{uint8(actionDelete), uint8(actionDelete), uint8(actionInsert), uint8(actionInsert)}, actions)
 	require.Equal(t, []uint64{2, 4, 1, 3}, rows)
-}
-
-func TestMetadataSpoolRejectsFrameBeyondAdmittedOutput(t *testing.T) {
-	proc := testutil.NewProc(t)
-	defer proc.Free()
-	owner := rscthrottler.NewMemThrottler("metadata-frame-bound", 1, rscthrottler.WithConstLimit(1<<30))
-	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{
-		UnitBytes: 1 << 20,
-		Inputs:    []rscthrottler.InputSlotSpec{{Name: "csv", Count: 0, Bytes: 0}, {Name: "output", Count: 1, Bytes: 8 << 20}},
-		IOBytes:   1,
-	}})
-	require.NoError(t, err)
-	defer ws.Close()
-	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 1 << 20, OutputBytes: 8 << 20}
-	w := &s3WriterDelegate{}
-	defer w.free(proc)
-	w.metadataSpool, err = os.CreateTemp(t.TempDir(), "metadata-bound-*")
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(w.metadataSpool.Name()))
-	var header [9]byte
-	n := int64((8<<20)/4 + 1)
-	binary.LittleEndian.PutUint64(header[:8], uint64(n))
-	header[8] = byte(actionDelete)
-	_, err = w.metadataSpool.Write(header[:])
-	require.NoError(t, err)
-	w.metadataWritten = n + 9
-	require.NoError(t, w.metadataSpool.Truncate(w.metadataWritten))
-	require.ErrorContains(t, w.readMetadataFrame(proc), "exceeds admitted output capacity")
-	require.Nil(t, w.outputBat)
-	require.Zero(t, w.metadataPool().AllocatedBytes(), "oversized frame must be rejected before decode allocation")
 }
 
 func TestS3WriterZeroDataCreditsSpillsUsingWorkspace(t *testing.T) {
@@ -239,7 +210,7 @@ func checkS3WriterPipeline(t *testing.T, capacity int64, reset, resume bool) {
 	case <-ctx.Done():
 		t.Fatal(context.Cause(ctx))
 	}
-	require.Zero(t, w.metadataWritten)
+	require.Equal(t, [2]*batch.Batch{}, w.metadata)
 	inputRows := uint64(12)
 	if reset {
 		require.ErrorIs(t, w.reset(proc), context.Canceled)
@@ -276,7 +247,7 @@ func checkS3WriterPipeline(t *testing.T, capacity int64, reset, resume bool) {
 	require.False(t, credits.invalidRelease)
 }
 
-func TestUncommittedDeleteDedupSpoolsAcrossWindows(t *testing.T) {
+func TestUncommittedDeleteDedupPreservesRowsAcrossWindows(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	w := &s3WriterDelegate{deleteBlockMap: make([]map[types.Blockid]*deleteBlockData, 1), updateCtxs: []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}}}}
@@ -338,4 +309,135 @@ func TestDeleteKeySetKeepsStateOnDisk(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.NoError(t, s.close())
 	require.NoError(t, s.close())
+}
+
+func TestMetadataMemoryGrowthPreservesFramesOnCancel(t *testing.T) {
+	proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, InsertCols: []int{0}}}, false)
+	owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(8<<30))
+	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{
+		UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv"}, {Name: "output", Count: 1, Bytes: 32 << 10}}, IOBytes: 1,
+	}})
+	require.NoError(t, err)
+	t.Cleanup(ws.Close)
+	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 1, OutputBytes: 32 << 10}
+	source := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_text.ToType()})
+	t.Cleanup(func() { source.Clean(proc.Mp()) })
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(strings.Repeat("x", 2048)), false, proc.Mp()))
+	source.SetRowCount(1)
+	for i := range 8 {
+		require.NoError(t, w.appendMetadata(proc, actionInsert, 0, uint64(i+1), "", source))
+	}
+	require.Greater(t, w.outputLease.Capacity(), int64(32<<10), "cumulative backing grows the existing reservation")
+	require.LessOrEqual(t, 4*w.metadataPool().AllocatedBytes(), w.outputLease.Capacity())
+	before := w.metadataPool().AllocatedBytes()
+	parent := proc.Ctx
+	ctx, cancel := context.WithCancel(parent)
+	cancel()
+	proc.Ctx = ctx
+	require.ErrorIs(t, w.appendMetadata(proc, actionInsert, 0, 9, "", source), context.Canceled)
+	require.Equal(t, before, w.metadataPool().AllocatedBytes())
+	proc.Ctx = parent
+	for i := range 8 {
+		require.NoError(t, w.readMetadataFrame(proc))
+		require.Equal(t, []uint64{uint64(i + 1)}, vector.MustFixedColNoTypeCheck[uint64](w.outputBat.Vecs[2]))
+	}
+	require.NoError(t, w.readMetadataFrame(proc))
+	require.Nil(t, w.outputBat)
+	require.Equal(t, [2]*batch.Batch{}, w.metadata)
+	require.Zero(t, w.metadataPool().AllocatedBytes())
+	lease, err := ws.AcquireInput(parent, 1)
+	require.NoError(t, err)
+	lease.Release()
+}
+
+func TestLegacyDeleteMetadataStreamsAcrossWindows(t *testing.T) {
+	proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, DeleteCols: []int{0, 1}}}, false)
+	owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(256<<10), rscthrottler.WithMemorySampleForTesting(1<<30, 0))
+	w.memController.throttler = owner
+	w.deleteBlockMap = make([]map[types.Blockid]*deleteBlockData, 1)
+	source := batch.NewWithSchema(false, DeleteBatchAttrs, []types.Type{types.T_Rowid.ToType(), types.T_varchar.ToType()})
+	t.Cleanup(func() { source.Clean(proc.Mp()) })
+	var block types.Blockid
+	copy(block[:], colexec.TxnWorkspaceSegment[:])
+	key := strings.Repeat("x", 4096)
+	for i := range 128 {
+		source.CleanOnlyData()
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], types.NewRowid(&block, uint32(i)), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte(key), false, proc.Mp()))
+		source.SetRowCount(1)
+		bats, err := w.prepareDeleteBatches(proc, 0, []*batch.Batch{source}, false)
+		require.NoError(t, err)
+		require.Empty(t, bats)
+	}
+	for i := range 128 {
+		require.NoError(t, w.readMetadataFrame(proc))
+		require.NotNil(t, w.outputBat)
+		func() {
+			decoded := batch.NewOffHeapEmpty()
+			defer decoded.Clean(proc.Mp())
+			require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(w.outputBat.Vecs[4].GetBytesAt(0), proc.Mp()))
+			require.Equal(t, []types.Rowid{types.NewRowid(&block, uint32(i))}, vector.MustFixedColNoTypeCheck[types.Rowid](decoded.Vecs[0]))
+			require.Equal(t, key, string(decoded.Vecs[1].GetBytesAt(0)))
+		}()
+	}
+	require.NoError(t, w.readMetadataFrame(proc))
+	require.Nil(t, w.outputBat)
+	require.NoError(t, w.reset(proc))
+	require.Zero(t, w.metadataPool().AllocatedBytes())
+	require.Equal(t, int64(256<<10), owner.Available())
+}
+
+type observedWaitThrottler struct {
+	rscthrottler.RSCThrottler
+	rscthrottler.ContextThrottler
+	entered chan struct{}
+}
+
+func (m *observedWaitThrottler) AcquireContext(ctx context.Context, size int64) error {
+	close(m.entered)
+	return rscthrottler.AcquireContext(ctx, m.RSCThrottler, size)
+}
+
+func TestLegacyMetadataWaitsForIndependentRelease(t *testing.T) {
+	proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, InsertCols: []int{0}}}, false)
+	ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
+	t.Cleanup(cancel)
+	proc.Ctx = ctx
+	owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(1<<20), rscthrottler.WithMemorySampleForTesting(1<<30, 0))
+	m := &observedWaitThrottler{RSCThrottler: owner, ContextThrottler: owner.(rscthrottler.ContextThrottler), entered: make(chan struct{})}
+	w.memController.throttler = m
+	source := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_int64.ToType()})
+	t.Cleanup(func() { source.Clean(proc.Mp()) })
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, proc.Mp()))
+	source.SetRowCount(1)
+	require.NoError(t, w.appendMetadata(proc, actionInsert, 0, 1, "", source))
+	held := int64(1<<20 - 4096)
+	_, ok := owner.Acquire(held)
+	require.True(t, ok)
+	t.Cleanup(func() { owner.Release(held) })
+	done := make(chan struct{})
+	var result error
+	go func() {
+		defer close(done)
+		result = w.acquireMemory(proc, process.NewTempAnalyzer(), 8192, nil)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-m.entered:
+	case <-done:
+		require.NoError(t, result, "another writer can release the missing capacity")
+		t.Fatal("expected the cancellable wait path")
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	owner.Release(held)
+	held = 0
+	select {
+	case <-done:
+		require.NoError(t, result)
+	case <-ctx.Done():
+		t.Fatal(context.Cause(ctx))
+	}
+	require.NoError(t, w.free(proc))
+	require.Equal(t, int64(1<<20), owner.Available())
 }

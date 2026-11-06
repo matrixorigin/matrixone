@@ -15,11 +15,34 @@
 package colexec
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
+
+// GrowMetadataOutput admits retained metadata and new backing before allocation.
+// The existing four-copy allowance also covers encoding and output materialization.
+func GrowMetadataOutput(ctx context.Context, slot *rscthrottler.InputLease, retained, growth int64) error {
+	if slot == nil {
+		return nil
+	}
+	capacity, err := MetadataOutputCapacity(retained, growth)
+	if err != nil {
+		return err
+	}
+	return slot.TryGrow(ctx, capacity)
+}
+
+// MetadataOutputCapacity includes old/new backing, encoding and output copies.
+func MetadataOutputCapacity(retained, growth int64) (int64, error) {
+	if retained < 0 || growth < 0 || retained > math.MaxInt64/4 || growth > math.MaxInt64/4-retained {
+		return 0, moerr.NewInternalErrorNoCtx("metadata memory envelope overflow")
+	}
+	return 4 * (retained + growth), nil
+}
 
 // InsertMetadataOutputEnvelope bounds a complete flush's fixed object metadata,
 // independently of source-row width and of unrelated shared output-slot users.
