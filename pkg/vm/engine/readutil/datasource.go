@@ -298,7 +298,8 @@ func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colT
 		blocks[i].index = i
 		blockMeta := meta.GetBlockMeta(uint32(location.ID()))
 		if seqNums[col] <= blockMeta.GetMaxSeqnum() {
-			blocks[i].zm = blockMeta.ColumnMeta(seqNums[col]).ZoneMap()
+			// Detach the zonemap so this reader cannot pin the full object metadata.
+			blocks[i].zm = blockMeta.ColumnMeta(seqNums[col]).ZoneMap().Clone()
 		}
 	}
 	slices.SortFunc(blocks, func(a, b orderedRemoteBlock) int {

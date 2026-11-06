@@ -101,6 +101,32 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 		require.Nil(t, ds.orderedBlocks)
 	})
 
+	t.Run("zonemaps_detached_from_metadata", func(t *testing.T) {
+		blk := data.GetBlockInfo(0)
+		location := blk.MetaLocation()
+		meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		require.NoError(t, err)
+		// Require a cache hit so a second metadata allocation cannot make the
+		// alias check pass without detaching the reader's zonemaps.
+		ds := NewRemoteDataSource(ctx, orderedScanFailReadFS{
+			FileService: fs, err: errors.New("unexpected metadata reload"),
+		}, timestamp.Timestamp{}, data)
+		defer ds.Close()
+		ds.SetOrderBy(order(plan.OrderBySpec_DESC, false))
+		_, state, err := next(ds, ctx)
+		require.NoError(t, err)
+		require.Equal(t, engine.Persisted, state)
+		require.Len(t, ds.orderedBlocks, data.DataCnt())
+		for _, ordered := range ds.orderedBlocks {
+			blk := data.GetBlockInfo(ordered.index)
+			source := meta.MustDataMeta().GetBlockMeta(uint32(blk.MetaLocation().ID())).ColumnMeta(0).ZoneMap()
+			require.Equal(t, source, ordered.zm, "preserve initialized and unknown zonemaps")
+			require.Len(t, ordered.zm, objectio.ZoneMapSize)
+			require.NotSame(t, &source[0], &ordered.zm[0], "reader must not pin object metadata")
+			require.Equal(t, objectio.ZoneMapSize, cap(ordered.zm))
+		}
+	})
+
 	for _, tc := range []struct {
 		name     string
 		flag     plan.OrderBySpec_OrderByFlag
