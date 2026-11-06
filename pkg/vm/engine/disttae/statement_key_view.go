@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -72,7 +71,6 @@ type statementKeyTable struct {
 	attrs                                   []string
 	colTypes                                []types.Type
 	pk                                      int
-	physical                                bool
 	state                                   *logtailreplay.PartitionState
 	local                                   bool
 	entries                                 []Entry
@@ -124,7 +122,7 @@ func (tbl *txnTableDelegate) NewStatementKeyView(
 	}
 	// Relation/partition resolution can execute internal SQL. Do it before the
 	// atomic workspace capture and reject any snapshot change across that work.
-	for i, relation := range relations {
+	for _, relation := range relations {
 		if err = statementViewCause(ctx, v); err != nil {
 			return nil, err
 		}
@@ -136,7 +134,7 @@ func (tbl *txnTableDelegate) NewStatementKeyView(
 		if _, exists := v.tables[id]; exists {
 			continue
 		}
-		t := &statementKeyTable{relation: d, table: d.origin, def: d.GetTableDef(ctx), physical: i == 0,
+		t := &statementKeyTable{relation: d, table: d.origin, def: d.GetTableDef(ctx),
 			selections: make(map[*batch.Batch][]int64), cnDeletes: make(map[types.Blockid][]int64)}
 		t.local, err = d.isLocal()
 		if err != nil {
@@ -513,7 +511,7 @@ func (v *statementKeyView) Lookup(ctx context.Context, tableID uint64, key *vect
 			}
 		}
 		for i := 0; i < b.RowCount(); i++ {
-			if sameStatementKey(t.physical, b.Vecs[t.pk], i, queryKey, 0) {
+			if sameStatementKey(b.Vecs[t.pk], i, queryKey, 0) {
 				result, err = v.copyRow(t, b, i, nil)
 				return result, err
 			}
@@ -537,18 +535,9 @@ func closeStatementKeyReader(reader engine.Reader, primary error) error {
 	return primary
 }
 
-func sameStatementKey(physical bool, a *vector.Vector, ar int, b *vector.Vector, br int) bool {
+func sameStatementKey(a *vector.Vector, ar int, b *vector.Vector, br int) bool {
 	if a.IsNull(uint64(ar)) || b.IsNull(uint64(br)) {
 		return false
-	}
-	if !physical {
-		switch a.GetType().Oid {
-		case types.T_float32:
-			codec := keycodec.NewFloat32Codec(a.GetType().Scale)
-			return codec.CanonicalBits(vector.GetFixedAtNoTypeCheck[float32](a, ar)) == codec.CanonicalBits(vector.GetFixedAtNoTypeCheck[float32](b, br))
-		case types.T_float64:
-			return keycodec.CanonicalFloat64Bits(vector.GetFixedAtNoTypeCheck[float64](a, ar)) == keycodec.CanonicalFloat64Bits(vector.GetFixedAtNoTypeCheck[float64](b, br))
-		}
 	}
 	return bytes.Equal(a.GetRawBytesAt(ar), b.GetRawBytesAt(br))
 }
@@ -580,15 +569,6 @@ func statementKeyProbe(ctx context.Context, table *statementKeyTable, key *vecto
 		value := vector.GetFixedAtNoTypeCheck[float32](key, 0)
 		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
 			return nil, nil
-		}
-		// A scaled logical zero also matches nonzero raw values. Resolve
-		// its complete normalized class before the physical zero case.
-		if !table.physical && key.GetType().Scale > 0 {
-			lower, upper, ok := keycodec.NewFloat32Codec(key.GetType().Scale).FiniteEqualRange(value)
-			if !ok {
-				return nil, nil
-			}
-			return closedRange(types.EncodeFloat32(&lower), types.EncodeFloat32(&upper))
 		}
 		if value == 0 {
 			lower, upper := math.Float32frombits(1<<31), float32(0)
@@ -671,7 +651,7 @@ func (v *statementKeyView) lookupWorkspace(ctx context.Context, t *statementKeyT
 						}
 					}
 					offset := [1]int64{int64(id.GetRowOffset())}
-					if sameStatementKey(t.physical, pk, i, key, row) && len(t.tombstones.ApplyInMemTombstones(id.BorrowBlockID(), offset[:], nil)) != 0 {
+					if sameStatementKey(pk, i, key, row) && len(t.tombstones.ApplyInMemTombstones(id.BorrowBlockID(), offset[:], nil)) != 0 {
 						return v.copyRow(t, e.bat, i, t.columnPositions[entry])
 					}
 				}
@@ -689,13 +669,11 @@ func (v *statementKeyView) lookupIndex(t *statementKeyTable, key *vector.Vector,
 	if t.iterator == nil {
 		return nil, nil
 	}
-	if t.physical {
-		t.binaryKey.CleanOnlyData()
-		if err := vector.AppendBytes(t.binaryKey, key.GetRawBytesAt(row), false, v.proc.Mp()); err != nil {
-			return nil, err
-		}
-		key, row = t.binaryKey, 0
+	t.binaryKey.CleanOnlyData()
+	if err := vector.AppendBytes(t.binaryKey, key.GetRawBytesAt(row), false, v.proc.Mp()); err != nil {
+		return nil, err
 	}
+	key, row = t.binaryKey, 0
 	groups, valid, err := t.iterator.Find(row, 1, []*vector.Vector{key})
 	if err != nil {
 		return nil, err
@@ -757,20 +735,16 @@ func (v *statementKeyView) indexRow(ctx context.Context, t *statementKeyTable, k
 		if err != nil {
 			return err
 		}
-		if t.physical {
-			t.binaryKey, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varbinary.ToType(), v.vectorAllocation)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	if t.physical {
-		t.binaryKey.CleanOnlyData()
-		if err := vector.AppendBytes(t.binaryKey, keys.GetRawBytesAt(row), false, v.proc.Mp()); err != nil {
+		t.binaryKey, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_varbinary.ToType(), v.vectorAllocation)
+		if err != nil {
 			return err
 		}
-		keys, row = t.binaryKey, 0
 	}
+	t.binaryKey.CleanOnlyData()
+	if err := vector.AppendBytes(t.binaryKey, keys.GetRawBytesAt(row), false, v.proc.Mp()); err != nil {
+		return err
+	}
+	keys, row = t.binaryKey, 0
 	fresh, err := t.iterator.DetectDup([]*vector.Vector{keys}, row)
 	if err != nil {
 		return err

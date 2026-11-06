@@ -231,3 +231,24 @@ func TestODKUSingleSourceKeepsPhysicalOrdinal(t *testing.T) {
 		})
 	}
 }
+
+func TestODKUPhaseOrderPreservesExplicitAndGeneratedDependencies(t *testing.T) {
+	ref := func(pos int32) *plan.Expr { return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}} }
+	table := &plan.TableDef{Name2ColIndex: map[string]int32{"a": 0, "automatic": 1, "independent": 2, "dependent": 3, "chain": 4, "physical": 5}, Cols: []*plan.ColDef{
+		{Name: "a"}, {Name: "automatic"},
+		{Name: "independent", GeneratedCol: &plan.GeneratedCol{Expr: ref(0)}},
+		{Name: "dependent", GeneratedCol: &plan.GeneratedCol{Expr: ref(1)}},
+		{Name: "chain", GeneratedCol: &plan.GeneratedCol{Expr: ref(3)}},
+		{Name: "physical", Hidden: true},
+	}}
+	names := []string{"a", "a", "automatic", "independent", "dependent", "chain", "physical"}
+	exprs := make([]*plan.Expr, len(names))
+	for i := range exprs {
+		exprs[i] = ref(int32(i))
+	}
+	ordered, values, prefix, columns := orderODKUUpdatePhases(table, names, exprs, 2, 1, map[string]bool{"automatic": true})
+	require.Equal(t, []string{"a", "a", "independent", "automatic", "dependent", "chain", "physical"}, ordered)
+	require.Equal(t, 3, prefix)
+	require.Equal(t, []int32{0, 2}, columns)
+	require.Equal(t, []*plan.Expr{exprs[0], exprs[1], exprs[3], exprs[2], exprs[4], exprs[5], exprs[6]}, values)
+}

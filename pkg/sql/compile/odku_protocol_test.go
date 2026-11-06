@@ -20,10 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -36,19 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOrderedODKUProtocolRoundTripAndGate(t *testing.T) {
-	sid := "" // A process without a lock service resolves the default runtime.
-	var rt moruntime.Runtime
-	moruntime.RunTest(sid, func(r moruntime.Runtime) { rt = r })
-	oldVersion, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if existed {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12))
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12))
+func TestOrderedODKULayoutRoundTripAndValidation(t *testing.T) {
+	sid := ""
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, sid, mp)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
@@ -69,23 +56,10 @@ func TestOrderedODKUProtocolRoundTripAndGate(t *testing.T) {
 		require.NoError(t, e)
 		require.Equal(t, pre.PreInsertCtx, received.RootOp.(*preinsertunique.PreInsertUnique).PreInsertCtx)
 		received.release()
-		for _, version := range []any{int64(defines.MORPCVersion11), nil} {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			_, e = encodeScope(s)
-			require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported), "%v", e)
-			_, e = decodeScope(data, proc, false, nil)
-			require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported), "%v", e)
-		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12))
-		require.True(t, rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12)))
-		_, e = encodeScope(s)
-		require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported))
-		_, e = decodeScope(data, proc, false, nil)
-		require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported))
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12))
+
 		s.release()
 	}
-	// Ordinary unique-index insertion remains available at the old gate.
+	// Ordinary unique-index insertion retains its existing layout.
 	ordinary := preinsertunique.NewArgument()
 	ordinary.PreInsertCtx = &plan.PreInsertUkCtx{Columns: []int32{0}, PkColumn: 1}
 	s := newScope(Normal)
@@ -93,7 +67,6 @@ func TestOrderedODKUProtocolRoundTripAndGate(t *testing.T) {
 	s.NodeInfo.Mcpu = 1
 	s.RootOp = ordinary
 	defer s.release()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion11))
 	data, e := encodeScope(s)
 	require.NoError(t, e)
 	r, e := decodeScope(data, proc, false, nil)
@@ -137,7 +110,7 @@ func TestOrderedODKUProtocolRoundTripAndGate(t *testing.T) {
 			defer s.release()
 			_, e := encodeScope(s)
 			require.True(t, moerr.IsMoErrCode(e, tc.code), "%v", e)
-			// Bypass the new sender check to represent bytes from an old CN.
+			// Bypass sender validation to exercise malformed received metadata.
 			p, e := fillPipeline(s)
 			require.NoError(t, e)
 			data, e := p.Marshal()
@@ -150,7 +123,6 @@ func TestOrderedODKUProtocolRoundTripAndGate(t *testing.T) {
 		}()
 	}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion12))
 	p := &pipeline.Pipeline{Qry: &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{
 		{NodeType: plan.Node_FILTER, FilterIsBarrier: true},
 		{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, OnDuplicateAction: plan.Node_UPDATE},
@@ -193,6 +165,7 @@ func odkuProtocolLayout() *plan.PreInsertUkCtx {
 		SourceColumns: []*plan.Expr{col(0, 0), col(0, 1), col(0, 2), col(0, 3), col(0, 4)},
 		OldColumns:    []*plan.Expr{col(0, 5), col(0, 6), col(0, 7)}, InputColumns: []int32{0, 1, -1},
 		PkColumn: 0, RowIdColumn: 2, UpdateColumns: []int32{1}, UpdateExprs: []*plan.Expr{col(1, 1)},
+		ChangeCheckAssignmentCount: 1, ChangeCheckColumns: []int32{1},
 		InsertChecks: []*plan.Expr{truth}, InsertCheckConstraintCount: 1, UpdateChecks: []*plan.Expr{truth},
 		ActionFinalColumn: 3, SourceOrdinal: col(0, 2),
 		ForeignKeyChecks: []*plan.OdkuForeignKeyCheck{{Columns: []plan.ColRef{{RelPos: 0, ColPos: 1}}, Eligibility: col(1, 4), CheckUpdates: true}},

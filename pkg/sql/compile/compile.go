@@ -374,6 +374,7 @@ func (c *Compile) clear() {
 		delete(c.materializedSinkScanNodes, k)
 	}
 	c.odkuWriterSources = nil
+	c.odkuResult = nil
 	for k, source := range c.materializedSources {
 		source.Close()
 		delete(c.materializedSources, k)

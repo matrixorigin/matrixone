@@ -16,8 +16,6 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -29,19 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func requireOrderedExecutionProtocol(proc *process.Process) error {
-	if proc != nil && moruntime.ServiceRuntime(proc.GetService()) != nil {
-		v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
-		n, valid := v.(int64)
-		if ok && valid && n >= defines.MORPCVersion12 {
-			return nil
-		}
-	}
-	return moerr.NewNotSupportedNoCtx("ordered ODKU and filter barriers require 4.2 protocol version 12")
-}
-func requiresOrderedExecutionProtocol(n *plan.Node) bool {
-	return n != nil && (n.FilterIsBarrier || n.PreInsertUkCtx.GetOrderedOdku())
-}
 func validateODKUPlanNode(n *plan.Node) error {
 	if n != nil {
 		if err := preinsertunique.ValidateODKUContext(n.PreInsertUkCtx); err != nil {
@@ -58,17 +43,12 @@ func validateODKUPlanNode(n *plan.Node) error {
 	return nil
 }
 func validateODKUQueryProtocol(pn *plan.Plan, proc *process.Process) error {
-	needed := false
 	if q := pn.GetQuery(); q != nil {
 		for _, n := range q.Nodes {
 			if err := validateODKUPlanNode(n); err != nil {
 				return err
 			}
-			needed = needed || requiresOrderedExecutionProtocol(n)
 		}
-	}
-	if needed {
-		return requireOrderedExecutionProtocol(proc)
 	}
 	return nil
 }
@@ -77,7 +57,6 @@ func validateODKUScopeProtocol(s *Scope) error {
 	if s == nil {
 		return nil
 	}
-	needed := false
 	var visit func(vm.Operator) error
 	visit = func(op vm.Operator) error {
 		if op == nil {
@@ -88,7 +67,6 @@ func validateODKUScopeProtocol(s *Scope) error {
 			if err := preinsertunique.ValidateODKUContext(x.PreInsertCtx); err != nil {
 				return err
 			}
-			needed = needed || x.PreInsertCtx.GetOrderedOdku()
 		case *dedupjoin.DedupJoin:
 			if e := colexec.ValidateDedupAction(x.OnDuplicateAction); e != nil {
 				return e
@@ -118,11 +96,6 @@ func validateODKUScopeProtocol(s *Scope) error {
 		return err
 	}
 
-	if needed {
-		if e := requireOrderedExecutionProtocol(s.Proc); e != nil {
-			return e
-		}
-	}
 	for _, c := range s.PreScopes {
 		if e := validateODKUScopeProtocol(c); e != nil {
 			return e
@@ -154,11 +127,6 @@ func validateODKUPipelineProtocol(p *pipeline.Pipeline, proc *process.Process) e
 		}
 		if h := i.GetHashBuild(); h != nil && h.IsDedup {
 			if e := colexec.ValidateDedupAction(h.OnDuplicateAction); e != nil {
-				return e
-			}
-		}
-		if i.GetPreInsertUnique().GetPreInsertUkCtx().GetOrderedOdku() {
-			if e := requireOrderedExecutionProtocol(proc); e != nil {
 				return e
 			}
 		}

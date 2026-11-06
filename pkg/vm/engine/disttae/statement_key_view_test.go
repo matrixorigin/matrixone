@@ -51,46 +51,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStatementKeyProbeUsesPhysicalBitsAndLogicalScale(t *testing.T) {
+func TestStatementKeyProbePreservesPhysicalBits(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	typ := types.New(types.T_float32, 0, 2)
 	def := &plan.TableDef{Name: "keys", Name2ColIndex: map[string]int32{"k": 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "k"},
 		Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_float32), Scale: 2}, Primary: true}}}
-	for _, physical := range []bool{false, true} {
-		for _, value := range []float32{1.234, 0, math.Float32frombits(1 << 31), float32(math.Inf(1)), math.Float32frombits(0x7fa00001)} {
-			func() {
-				key := vector.NewVec(typ)
-				defer key.Free(proc.Mp())
-				require.NoError(t, vector.AppendFixed(key, value, false, proc.Mp()))
-				expr, err := statementKeyProbe(t.Context(), &statementKeyTable{pk: 0, physical: physical, def: def}, key)
-				require.NoError(t, err)
-				require.Equal(t, math.Float32bits(value), math.Float32bits(vector.GetFixedAtNoTypeCheck[float32](key, 0)), "constructing a candidate filter preserves the residual key")
-				if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-					require.Nil(t, expr)
-					return
-				}
-				filter, err := readutil.ConstructBasePKFilter(expr, def, proc.Mp())
-				require.NoError(t, err)
-				defer filter.Cleanup()
-				require.True(t, filter.Valid)
-				require.Equal(t, types.T_float32, filter.Oid)
-				if !physical {
-					require.Equal(t, function.BETWEEN, filter.Op)
-					lower, upper := types.DecodeFloat32(filter.LB), types.DecodeFloat32(filter.UB)
-					normalize := types.NewFloat32ScaleNormalizer(2).Normalize
-					require.Equal(t, normalize(value), normalize(lower))
-					require.Equal(t, normalize(value), normalize(upper))
-				} else if value == 0 {
-					require.Equal(t, function.BETWEEN, filter.Op)
-					require.Equal(t, uint32(1<<31), math.Float32bits(types.DecodeFloat32(filter.LB)))
-					require.Zero(t, math.Float32bits(types.DecodeFloat32(filter.UB)))
-				} else {
-					require.Equal(t, function.IN, filter.Op)
-					require.Equal(t, 1, filter.Vec.Length())
-				}
-			}()
-		}
+	for _, value := range []float32{1.234, 0, math.Float32frombits(1 << 31), float32(math.Inf(1)), math.Float32frombits(0x7fa00001)} {
+		func() {
+			key := vector.NewVec(typ)
+			defer key.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(key, value, false, proc.Mp()))
+			expr, err := statementKeyProbe(t.Context(), &statementKeyTable{pk: 0, def: def}, key)
+			require.NoError(t, err)
+			require.Equal(t, math.Float32bits(value), math.Float32bits(vector.GetFixedAtNoTypeCheck[float32](key, 0)))
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+				require.Nil(t, expr)
+				return
+			}
+			filter, err := readutil.ConstructBasePKFilter(expr, def, proc.Mp())
+			require.NoError(t, err)
+			defer filter.Cleanup()
+			require.True(t, filter.Valid)
+			require.Equal(t, types.T_float32, filter.Oid)
+			if value == 0 {
+				require.Equal(t, function.BETWEEN, filter.Op)
+				require.Equal(t, uint32(1<<31), math.Float32bits(types.DecodeFloat32(filter.LB)))
+				require.Zero(t, math.Float32bits(types.DecodeFloat32(filter.UB)))
+			} else {
+				require.Equal(t, function.IN, filter.Op)
+				require.Equal(t, 1, filter.Vec.Length())
+			}
+		}()
 	}
 }
 
@@ -128,8 +120,7 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 			delegate := &txnTableDelegate{origin: tbl, isLocal: func() (bool, error) { return false, nil }}
 			relations := []engine.Relation{delegate}
 			if !physical {
-				// The provider's first relation is the base table; subsequent relation
-				// keys use SQL unique-key equality, including FLOAT32 scale normalization.
+				// A hidden UNIQUE relation has its own physical primary key too.
 				base := &txnTable{accountId: 1, tableId: 43, tableName: "base", db: tbl.db, eng: txn.engine, createdInTxn: true, remoteWorkspace: true}
 				base.proc.Store(txn.proc)
 				base.tableDef = &plan.TableDef{TblId: 43, Name: "base", DbName: "db", Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk", Names: []string{"pk"}}, Name2ColIndex: map[string]int32{"pk": 0, catalog.Row_ID: 1},
@@ -142,6 +133,7 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 			failure := moerr.NewTxnNeedRetryNoCtx()
 			failRanges := false
 			ranges, builds := 0, 0
+			emitted := false
 			service.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, req shardservice.ReadRequest, _ shardservice.ReadOptions) error {
 				switch req.Method {
 				case shardservice.ReadRanges:
@@ -165,6 +157,7 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 					return nil
 				case shardservice.ReadBuildReader:
 					builds++
+					emitted = false
 					require.True(t, req.RequireSameCommit)
 					require.NotNil(t, req.Param.ReaderBuildParam.Expr)
 					data, err := readutil.UnmarshalRelationData(req.Param.ReaderBuildParam.RelData)
@@ -178,14 +171,16 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 					id := types.Uuid{1}
 					return req.Apply(types.EncodeUuid(&id))
 				case shardservice.ReadNext:
+					if emitted {
+						end, size := true, uint32(0)
+						return req.Apply(append(types.EncodeBool(&end), types.EncodeUint32(&size)...))
+					}
+					emitted = true
 					data := batch.NewWithSize(2)
 					defer data.Clean(txn.proc.Mp())
 					data.Vecs[0] = vector.NewVec(typ)
 					data.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
 					values := []float32{math.Float32frombits(1 << 31), 0, 1.231}
-					if !physical {
-						values = []float32{1.231}
-					}
 					for i, value := range values {
 						require.NoError(t, vector.AppendFixed(data.Vecs[0], value, false, txn.proc.Mp()))
 						require.NoError(t, vector.AppendFixed(data.Vecs[1], types.Rowid{0: byte(10 + i)}, false, txn.proc.Mp()))
@@ -248,8 +243,8 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 			values := []float32{0, math.Float32frombits(1 << 31), 1.231}
 			wantIDs := []byte{11, 10, 12}
 			if !physical {
-				values = []float32{1.234, 1.232}
-				wantIDs = []byte{10, 10}
+				values = []float32{0, math.Float32frombits(1 << 31), 1.231, 1.234, 1.232}
+				wantIDs = []byte{11, 10, 12, 0, 0}
 			}
 			var stableUsage uint64
 			for i, value := range values {
@@ -259,6 +254,10 @@ func TestStatementKeyViewRemoteRangesHaveReaderLifetime(t *testing.T) {
 					require.NoError(t, vector.AppendFixed(key, value, false, txn.proc.Mp()))
 					row, err := view.Lookup(t.Context(), 42, key, 0)
 					require.NoError(t, err)
+					if wantIDs[i] == 0 {
+						require.Nil(t, row, "SQL-equal scaled values have distinct physical identities")
+						return
+					}
 					require.NotNil(t, row)
 					defer row.Clean(txn.proc.Mp())
 					require.Equal(t, types.Rowid{0: wantIDs[i]}, vector.GetFixedAtNoTypeCheck[types.Rowid](row.Vecs[1], 0))
@@ -830,7 +829,7 @@ func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {
 			for _, row := range []int{1, 2} {
 				key, err := pk.CloneWindow(row, row+1, proc.Mp())
 				require.NoError(t, err)
-				expr, err := statementKeyProbe(t.Context(), &statementKeyTable{pk: 0, physical: true, def: def}, key)
+				expr, err := statementKeyProbe(t.Context(), &statementKeyTable{pk: 0, def: def}, key)
 				require.NoError(t, err)
 				base, err := readutil.ConstructBasePKFilter(expr, def, proc.Mp())
 				require.NoError(t, err)
@@ -846,9 +845,8 @@ func TestStatementKeyProbeZeroRangeReachesBothPackedRows(t *testing.T) {
 				}
 				require.NoError(t, iter.Close())
 				require.Equal(t, []types.Rowid{{0: 17, 23: 1}, {0: 17, 23: 2}}, got, "the actual packed iterator keeps both zero encodings")
-				require.True(t, sameStatementKey(true, key, 0, pk, row))
-				require.False(t, sameStatementKey(true, key, 0, pk, 3-row), "physical residual selects its original zero")
-				require.True(t, sameStatementKey(false, key, 0, pk, 3-row), "logical equality merges signed zero")
+				require.True(t, sameStatementKey(key, 0, pk, row))
+				require.False(t, sameStatementKey(key, 0, pk, 3-row), "physical residual selects its original zero")
 				base.Cleanup()
 				key.Free(proc.Mp())
 			}
@@ -937,7 +935,7 @@ func TestStatementKeyViewFiniteFloatProbeDoesNotRetainCommittedImages(t *testing
 			var usage uint64
 			for i, wanted := range []int{count / 2, count, count + 1} {
 				key := vector.NewVec(typ)
-				require.NoError(t, vector.AppendFixed(key, float32(wanted)+0.003, false, txn.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(key, float32(wanted)+0.001, false, txn.proc.Mp()))
 				row, err := view.Lookup(t.Context(), 42, key, 0)
 				key.Free(txn.proc.Mp())
 				require.NoError(t, err)

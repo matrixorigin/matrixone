@@ -47,6 +47,8 @@ type container struct {
 type odkuKeyIndex struct {
 	keyType   types.Type
 	key       [1]*vector.Vector
+	hashKey   [1]*vector.Vector
+	identity  *vector.Vector
 	index     hashmap.HashMap
 	iterator  hashmap.Iterator
 	fixedKeys *vector.Vector
@@ -61,6 +63,8 @@ type PreInsertUnique struct {
 	// scope/remote-reader quiescence, including before rollback or retry.
 	PriorDataView engine.StatementKeyView
 	LockKeys      func(*process.Process, int, *vector.Vector) error
+	// Compile binds an attempt-owned result slot; it survives operator Reset.
+	PublishAffectedRows func(uint64) error
 
 	packers            util.PackerList
 	allocationAccount  *mpool.AllocationAccount

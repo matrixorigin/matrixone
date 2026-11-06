@@ -17,6 +17,7 @@ package preinsertunique
 import (
 	"bytes"
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,6 +35,7 @@ import (
 // and original identities have exactly one owner, ctr.actionRows.
 type odkuActions struct {
 	assignments, keyExecs, priorKeyExecs []colexec.ExpressionExecutor
+	changeExecs                          []colexec.ExpressionExecutor
 	insertChecks, updateChecks           []odkueval.Check
 	fkChanges                            [][]colexec.ExpressionExecutor
 	incoming, current, old, nullImage    *batch.Batch
@@ -51,6 +53,8 @@ type odkuActions struct {
 	inputDone           bool
 	targetReady         bool
 	target              int64
+	logicalAffected     uint64
+	countPublished      bool
 }
 
 func odkuType(t plan.Type) types.Type {
@@ -150,6 +154,9 @@ func (preInsertUnique *PreInsertUnique) prepareODKUActions(proc *process.Process
 	preInsertUnique.ctr.acceptedKeys = make([]odkuKeyIndex, len(keys))
 	var err error
 	if a.assignments, err = hashbuild.NewExpressionExecutors(proc, c.UpdateExprs, preInsertUnique.allocationAccount); err != nil {
+		return err
+	}
+	if a.changeExecs, err = odkueval.CompileUpdateChanges(c.ChangeCheckColumns, left, proc, preInsertUnique.allocationAccount); err != nil {
 		return err
 	}
 	if !a.staticKeys {
@@ -459,6 +466,7 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 	}
 	copy(a.image.Vecs, a.inputImage.Vecs)
 	insert := owner < 0
+	changed := insert
 	if insert {
 		owner = int64(preInsertUnique.ctr.actionRows.images.RowCount())
 		if err := odkueval.EvaluateChecks(a.insertChecks, a.image, a.incoming, proc); err != nil {
@@ -492,8 +500,26 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 			}
 		}
 		copy(a.before.Vecs, a.image.Vecs)
-		if err := odkueval.EvaluateUpdate(a.assignments, c.UpdateColumns, a.updateChecks, a.image, a.incoming, proc); err != nil {
+		prefix := int(c.ChangeCheckAssignmentCount)
+		if err := odkueval.EvaluateUpdate(a.assignments[:prefix], c.UpdateColumns[:prefix], nil, a.image, a.incoming, proc); err != nil {
 			return err
+		}
+		var err error
+		changed, err = odkueval.UpdateChanged(a.changeExecs, a.before, a.image, proc)
+		if err != nil {
+			return err
+		}
+		remaining := prefix
+		if !changed {
+			remaining += int(c.AutoUpdateAssignmentCount)
+		}
+		if err := odkueval.EvaluateUpdate(a.assignments[remaining:], c.UpdateColumns[remaining:], a.updateChecks, a.image, a.incoming, proc); err != nil {
+			return err
+		}
+		if !changed {
+			// SQL-equal assignments can have different representations. A no-op
+			// retains the entire effective image for later actions and key lookup.
+			copy(a.image.Vecs, a.before.Vecs)
 		}
 		if err := odkueval.EvaluateFKChanges(c.ForeignKeyChecks, a.fkChanges, a.before, a.image, a.eligible, proc); err != nil {
 			return err
@@ -567,7 +593,35 @@ func (preInsertUnique *PreInsertUnique) applyODKUAction(proc *process.Process) e
 		a.lastFKEligibility.SetRowCount(preInsertUnique.ctr.actionRows.images.RowCount())
 	}
 	preInsertUnique.ctr.lastOrdinal = vector.GetFixedAtNoTypeCheck[int64](a.source.Vecs[c.SourceOrdinal.GetCol().ColPos], a.sourceRow)
+	weight := uint64(0)
+	if insert {
+		weight = 1
+	} else if changed {
+		weight = 2
+	}
+	if a.logicalAffected > math.MaxUint64-weight {
+		return moerr.NewInternalError(proc.Ctx, "ODKU affected row count overflow")
+	}
+	a.logicalAffected += weight
 	return nil
+}
+
+// Immutable columns are retained by construction. Compare the complete mutable
+// stored-column closure and raw PK against the immutable original, excluding
+// ordinals, RowIDs and FK/source metadata. SQL equality is insufficient here.
+func (preInsertUnique *PreInsertUnique) physicalODKUChange(row int) bool {
+	c, rows := preInsertUnique.PreInsertCtx.OdkuActions, preInsertUnique.ctr.actionRows
+	if rows.origins.Vecs[c.RowIdColumn].IsNull(uint64(row)) {
+		return true
+	}
+	for _, column := range c.UpdateColumns {
+		position := c.InputColumns[column]
+		if position < 0 || !sameODKUKey(rows.origins.Vecs[column], row, rows.images.Vecs[position], row) {
+			return true
+		}
+	}
+	position := c.InputColumns[c.PkColumn]
+	return position < 0 || !sameODKUKey(rows.origins.Vecs[c.PkColumn], row, rows.images.Vecs[position], row)
 }
 
 // odkuOutputVector maps the writer layout to the sole retained row owner.
@@ -597,6 +651,9 @@ func (preInsertUnique *PreInsertUnique) finalODKUOutputCount() int {
 		return count
 	}
 	for n := 0; n < count; n++ {
+		if c.PhysicalChangedColumn == 0 && !preInsertUnique.physicalODKUChange(a.finalRow+n) {
+			return n
+		}
 		remaining = max(0, remaining-fixed)
 		for col, v := range out.Vecs {
 			if !v.GetType().IsVarlen() || col == int(c.ActionFinalColumn) {
@@ -626,6 +683,14 @@ func (preInsertUnique *PreInsertUnique) appendODKUOutput(proc *process.Process, 
 		if i == int(c.ActionFinalColumn) {
 			if err := vector.AppendMultiFixed(dst, final, false, count, proc.Mp()); err != nil {
 				return err
+			}
+			continue
+		}
+		if c.PhysicalChangedColumn != 0 && i == int(c.PhysicalChangedColumn-1) {
+			for row := owner; row < owner+count; row++ {
+				if err := vector.AppendFixed(dst, final && preInsertUnique.physicalODKUChange(row), false, proc.Mp()); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -737,11 +802,23 @@ func (preInsertUnique *PreInsertUnique) callODKUActions(proc *process.Process) (
 			rows := preInsertUnique.ctr.actionRows
 			if rows == nil || a.finalRow == rows.images.RowCount() {
 				if preInsertUnique.ctr.buf.IsEmpty() {
+					if !a.countPublished {
+						if preInsertUnique.PublishAffectedRows != nil {
+							if err := preInsertUnique.PublishAffectedRows(a.logicalAffected); err != nil {
+								return vm.CancelResult, err
+							}
+						}
+						a.countPublished = true
+					}
 					result.Status = vm.ExecStop
 					return result, nil
 				}
 				result.Batch = preInsertUnique.ctr.buf
 				return result, nil
+			}
+			if c.PhysicalChangedColumn == 0 && !preInsertUnique.physicalODKUChange(a.finalRow) {
+				a.finalRow++
+				continue
 			}
 			count := preInsertUnique.finalODKUOutputCount()
 			if err := preInsertUnique.appendODKUOutput(proc, a.finalRow, count, true); err != nil {
@@ -757,7 +834,7 @@ func (preInsertUnique *PreInsertUnique) callODKUActions(proc *process.Process) (
 }
 
 func (a *odkuActions) free(proc *process.Process) {
-	for _, list := range [][]colexec.ExpressionExecutor{a.assignments, a.keyExecs, a.priorKeyExecs} {
+	for _, list := range [][]colexec.ExpressionExecutor{a.assignments, a.keyExecs, a.priorKeyExecs, a.changeExecs} {
 		for _, exec := range list {
 			if exec != nil {
 				exec.Free()
