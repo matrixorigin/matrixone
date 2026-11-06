@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -295,27 +294,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig must be a string constant")
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
-		if cfgstr == "" {
-			return moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig is empty")
-		}
-		if u.inited && cfgstr != u.admittedConfig {
-			return moerr.NewInvalidInput(proc.Ctx, "ivfpq_create: config changed during operator reuse")
-		}
-		var cfg vectorindex.IndexTableConfig
-		if err = sonic.Unmarshal([]byte(cfgstr), &cfg); err != nil {
-			return err
-		}
-		if cfg.SrcTable == "" {
-			return moerr.NewInvalidInput(proc.Ctx, "ivfpq_create: source is empty")
-		}
-		operands := []maintenanceOperand{
-			{catalog.Ivfpq_TblType_Metadata, cfg.MetadataTable},
-			{catalog.Ivfpq_TblType_Storage, cfg.IndexTable},
-		}
-		if cfg.IgnoredTable != "" {
-			operands = append(operands, maintenanceOperand{catalog.IndexIgnored_TblType, cfg.IgnoredTable})
-		}
-		policy, err := prepareIndexMaintenance(proc, tf, "ivfpq_create", cfg.DbName, cfg.SrcTable, operands...)
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "ivfpq_create", cfgstr, u.admittedConfig, u.inited, ivfpqrt.MaintenanceOperands)
 		if err != nil {
 			return err
 		}

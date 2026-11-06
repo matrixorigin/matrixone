@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	ivfflatruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 )
 
 // ValidateIndexMaintenance binds an owner-generated literal to the live group.
@@ -32,8 +33,7 @@ func (Hooks) ValidateIndexMaintenance(function string, args []string, spec *exec
 		return err
 	}
 
-	targets := map[string]string{catalog.SystemSI_IVFFLAT_TblType_Metadata: cfg.MetadataTable, catalog.SystemSI_IVFFLAT_TblType_Centroids: cfg.IndexTable}
-	return vectorindex.ValidateMaintenanceConfig(spec, function, cfg.DbName, cfg.SrcTable, targets)
+	return vectorindex.ValidateMaintenanceConfig(spec, function, cfg.DbName, cfg.SrcTable, ivfflatruntime.MaintenanceOperands(cfg))
 }
 
 func (Hooks) InitSQLMaintenanceFunction() string { return "ivf_create" }
@@ -44,9 +44,5 @@ func (Hooks) IndexMaintenanceRoles(function string, defs map[string]*plan.IndexD
 	if function != "ivf_create" {
 		return nil, moerr.NewInvalidInputNoCtx("unexpected index maintenance function")
 	}
-	roles, err := vectorindex.MaintenanceRoles(defs, catalog.SystemSI_IVFFLAT_TblType_Metadata, catalog.SystemSI_IVFFLAT_TblType_Centroids)
-	if err != nil {
-		return nil, err
-	}
-	return roles, nil
+	return vectorindex.MaintenanceRoles(defs, []string{catalog.SystemSI_IVFFLAT_TblType_Metadata, catalog.SystemSI_IVFFLAT_TblType_Centroids})
 }

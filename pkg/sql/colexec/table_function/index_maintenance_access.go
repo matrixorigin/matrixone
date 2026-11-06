@@ -19,17 +19,41 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type maintenanceOperand struct{ role, name string }
+type maintenanceOperand = vectorindex.MaintenanceOperand
+
+// admitVectorIndexMaintenance keeps vector operators' config and relation
+// checks identical while each operator owns its lifecycle and cleanup.
+func admitVectorIndexMaintenance(proc *process.Process, tf *TableFunction, function, config, previous string, initialized bool,
+	operands func(vectorindex.IndexTableConfig) []maintenanceOperand,
+) (vectorindex.IndexTableConfig, *executor.IndexRelationPolicy, error) {
+	var cfg vectorindex.IndexTableConfig
+	if config == "" {
+		return cfg, nil, moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig is empty")
+	}
+	if initialized && config != previous {
+		return cfg, nil, moerr.NewInvalidInput(proc.Ctx, function+": config changed during operator reuse")
+	}
+	if err := sonic.Unmarshal([]byte(config), &cfg); err != nil {
+		return cfg, nil, err
+	}
+	if cfg.SrcTable == "" {
+		return cfg, nil, moerr.NewInvalidInput(proc.Ctx, function+": source is empty")
+	}
+	policy, err := prepareIndexMaintenance(proc, tf, function, cfg.DbName, cfg.SrcTable, operands(cfg)...)
+	return cfg, policy, err
+}
 
 func prepareIndexMaintenance(proc *process.Process, tf *TableFunction, function, database, source string, operands ...maintenanceOperand) (*executor.IndexRelationPolicy, error) {
 	policy, views, err := admitIndexMaintenance(proc, tf, function, database, source, operands...)
@@ -112,25 +136,25 @@ func admitIndexMaintenance(proc *process.Process, tf *TableFunction, function, d
 	}
 	seen := make(map[string]bool, len(operands))
 	for _, operand := range operands {
-		if operand.role == "" || operand.name == "" || seen[operand.role] {
+		if operand.Role == "" || operand.Name == "" || seen[operand.Role] {
 			return nil, nil, moerr.NewInternalError(proc.Ctx, "invalid index maintenance operand")
 		}
-		seen[operand.role] = true
+		seen[operand.Role] = true
 		var target *executor.IndexMaintenanceTarget
 		if spec != nil {
 			for i := range spec.Targets {
-				if spec.Targets[i].Role == operand.role {
+				if spec.Targets[i].Role == operand.Role {
 					target = &spec.Targets[i]
 					break
 				}
 			}
-			if target == nil || !strings.EqualFold(target.Name, operand.name) {
+			if target == nil || !strings.EqualFold(target.Name, operand.Name) {
 				return nil, nil, moerr.NewInternalError(proc.Ctx, "index maintenance target does not match provenance")
 			}
-		} else if err = process.CheckIndexRelationAccess(userProc, operand.name, "", 0); err != nil {
+		} else if err = process.CheckIndexRelationAccess(userProc, operand.Name, "", 0); err != nil {
 			return nil, nil, err
 		}
-		rel, err := db.Relation(proc.Ctx, operand.name, nil)
+		rel, err := db.Relation(proc.Ctx, operand.Name, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -155,7 +179,7 @@ func admitIndexMaintenance(proc *process.Process, tf *TableFunction, function, d
 			return nil, nil, err
 		}
 		if strings.EqualFold(def.TableType, catalog.SystemViewRel) {
-			views = append(views, operand.name)
+			views = append(views, operand.Name)
 		}
 	}
 	return policy, views, nil

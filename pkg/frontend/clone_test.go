@@ -1412,16 +1412,12 @@ func Test_rewriteCloneCreateSQL_UsesLocalOnlyInformationSchemaMetadataViews(t *t
 			require.NotContains(t, got, tc.privateFunction)
 			require.NotContains(t, got, " reg_match ")
 			require.Contains(t, got, "regexp_like(")
-			if tc.name == "tables" {
-				require.Contains(t, got, "mo_is_physical_index(")
-			}
+			require.Contains(t, got, "mo_is_physical_index(")
 
 			clonedAgain, err := rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
 			require.NoError(t, err)
-			if tc.name == "tables" {
-				require.Contains(t, clonedAgain, "mo_is_physical_index(")
-				require.NotContains(t, clonedAgain, tc.privateFunction)
-			}
+			require.Contains(t, clonedAgain, "mo_is_physical_index(")
+			require.NotContains(t, clonedAgain, tc.privateFunction)
 		})
 	}
 }

@@ -15,11 +15,13 @@
 package table_function
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -57,6 +59,31 @@ func installOrdinaryMaintenanceRelations(t *testing.T, proc *process.Process) *i
 	return lookups
 }
 
+func checkVectorMaintenanceReuse(t *testing.T, tf *TableFunction, proc *process.Process, state tvfState, lookups *int, policy **executor.IndexRelationPolicy) {
+	t.Helper()
+	require.NotNil(t, *policy, "initial start must admit the configured relations")
+	before := *lookups
+	state.reset(tf, proc)
+	require.Nil(t, *policy, "reset must clear the previous admission")
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	require.NotNil(t, *policy, "same config must be re-admitted")
+	require.Greater(t, *lookups, before, "reset must re-admit the configured relations")
+	after := *lookups
+	// UnsafeGetStringAt aliases these bytes. Changing the original vector
+	// verifies the saved admission config is detached from that backing memory.
+	config := tf.ctr.argVecs[0].GetBytesAt(0)
+	field := []byte(`"src":"src"`)
+	pos := bytes.Index(config, field)
+	require.NotEqual(t, -1, pos)
+	copy(config[pos:pos+len(field)], []byte(`"src":"bad"`))
+	state.reset(tf, proc)
+	err := state.start(tf, proc, 0, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.ErrorContains(t, err, tf.FuncName+": config changed during operator reuse")
+	require.Nil(t, *policy, "rejected config must not retain admission")
+	require.Equal(t, after, *lookups, "changed config must be rejected before relation lookup")
+}
+
 func TestFulltext2MaintenanceAdmissionOncePerGeneration(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
@@ -85,8 +112,8 @@ func TestMaintenanceRejectsInheritedTrustedContext(t *testing.T) {
 	proc.Base.SessionInfo.Role = "accountadmin"
 	installOrdinaryMaintenanceRelations(t, proc)
 	_, _, err := admitIndexMaintenance(proc, &TableFunction{}, "fulltext2_compact", "db", "",
-		maintenanceOperand{catalog.FullText2Index_TblType_Storage, "__mo_index_secondary_123"},
-		maintenanceOperand{catalog.FullText2Index_TblType_Metadata, "ordinary"})
+		maintenanceOperand{Role: catalog.FullText2Index_TblType_Storage, Name: "__mo_index_secondary_123"},
+		maintenanceOperand{Role: catalog.FullText2Index_TblType_Metadata, Name: "ordinary"})
 	require.ErrorContains(t, err, "do not have privilege")
 	// The admission probe must not clear or change the caller's own context.
 	require.NoError(t, process.CheckIndexRelationAccess(proc, "__mo_index_secondary_123", "", 0))
@@ -137,7 +164,7 @@ func TestMaintenanceAttestationChecksRolesAndLiveIdentity(t *testing.T) {
 				store, meta = meta, store
 			}
 			policy, _, err := admitIndexMaintenance(proc, &TableFunction{IndexMaintenance: spec}, "fulltext2_create", "db", "",
-				maintenanceOperand{catalog.FullText2Index_TblType_Storage, store}, maintenanceOperand{catalog.FullText2Index_TblType_Metadata, meta})
+				maintenanceOperand{Role: catalog.FullText2Index_TblType_Storage, Name: store}, maintenanceOperand{Role: catalog.FullText2Index_TblType_Metadata, Name: meta})
 			if tc.wantErr {
 				require.Error(t, err)
 				return

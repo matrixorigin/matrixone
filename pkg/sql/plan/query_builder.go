@@ -13125,6 +13125,9 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
 	}
+	if err = protectHistoricalTableListing(builder.GetContext(), schema, table, viewData.Stmt, snapshot, viewStmt.AsSource); err != nil {
+		return 0, err
+	}
 
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
 		if err = rejectViewSchemaUnstableStar(state.request, viewStmt.AsSource); err != nil {

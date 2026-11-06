@@ -265,22 +265,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
-		if cfgstr == "" {
-			return moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig is empty")
-		}
-		if u.inited && cfgstr != u.admittedConfig {
-			return moerr.NewInvalidInput(proc.Ctx, "ivf_create: config changed during operator reuse")
-		}
-		var cfg vectorindex.IndexTableConfig
-		if err = sonic.Unmarshal([]byte(cfgstr), &cfg); err != nil {
-			return err
-		}
-		if cfg.SrcTable == "" {
-			return moerr.NewInvalidInput(proc.Ctx, "ivf_create: source is empty")
-		}
-		policy, err := prepareIndexMaintenance(proc, tf, "ivf_create", cfg.DbName, cfg.SrcTable,
-			maintenanceOperand{catalog.SystemSI_IVFFLAT_TblType_Metadata, cfg.MetadataTable},
-			maintenanceOperand{catalog.SystemSI_IVFFLAT_TblType_Centroids, cfg.IndexTable})
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "ivf_create", cfgstr, u.admittedConfig, u.inited, ivfflatrt.MaintenanceOperands)
 		if err != nil {
 			return err
 		}

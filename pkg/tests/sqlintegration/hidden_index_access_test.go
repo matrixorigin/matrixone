@@ -40,7 +40,7 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		defer cancel()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
-		defer cleanupSQLIntegration(t, cn, "drop user if exists index_show_reader", "drop role if exists index_show_role", "drop user if exists hidden_access_user", "drop user if exists hidden_access_connect_user", "drop role if exists hidden_access_role", "drop role if exists hidden_access_connect_role", "drop database if exists hidden_cross_dst", "drop database if exists hidden_access_db")
+		defer cleanupSQLIntegration(t, cn, "drop snapshot if exists hidden_access_snapshot", "drop user if exists index_show_reader", "drop role if exists index_show_role", "drop user if exists hidden_access_user", "drop user if exists hidden_access_connect_user", "drop role if exists hidden_access_role", "drop role if exists hidden_access_connect_role", "drop database if exists hidden_metadata_clone", "drop database if exists hidden_cross_dst", "drop database if exists hidden_access_db")
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		cleanups := make([]func(), 0, 4)
 		defer func() {
@@ -256,7 +256,6 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		require.Equal(t, 2, count(user, "hidden_access_db.copied"))
 		exec(user, "drop table hidden_access_db.copied")
 		exec(admin, "create snapshot hidden_access_snapshot for account")
-		defer exec(admin, "drop snapshot hidden_access_snapshot")
 		for _, hint := range []string{"", " {snapshot='hidden_access_snapshot'}"} {
 			func() {
 				exec(user, "create table hidden_access_db.cloned_base clone hidden_access_db.t"+hint)
@@ -359,7 +358,12 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			physicalRows := count(admin, original)
 			require.Positive(t, physicalRows)
 			exec(admin, "alter table "+original+" rename to renamed_child")
-			defer exec(admin, "alter table "+renamed+" rename to `"+child+"`")
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				_, err := admin.ExecContext(cleanupCtx, "alter table "+renamed+" rename to `"+child+"`")
+				require.NoError(t, err)
+			}()
 			require.Equal(t, physicalRows, count(admin, renamed))
 			// The diagnostic rename leaves docs' stored index name stale.
 			// Exercise listing admission with the child and a valid ordinary
@@ -370,6 +374,7 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 				"show full tables from hidden_access_db",
 				"select table_name,table_rows,data_length from information_schema.tables where table_schema='hidden_access_db'",
 				"select table_name,table_rows,data_length from information_schema.partitions where table_schema='hidden_access_db' and table_name in ('renamed_child','t')",
+				"select distinct table_name from information_schema.columns where table_schema='hidden_access_db' and table_name in ('renamed_child','t')",
 			} {
 				func() {
 					rows, err := user.QueryContext(ctx, query)
@@ -391,6 +396,16 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 					require.NoError(t, rows.Err(), query)
 					require.True(t, sawBase, query)
 				}()
+			}
+			exec(admin, "create database hidden_metadata_clone clone information_schema")
+			exec(admin, "grant select on view hidden_metadata_clone.columns to hidden_access_role")
+			for _, tc := range []struct {
+				table string
+				want  int
+			}{{"docs", 2}, {"renamed_child", 0}} {
+				var visible int
+				require.NoError(t, user.QueryRowContext(ctx, "select count(*) from hidden_metadata_clone.columns where table_schema='hidden_access_db' and table_name=?", tc.table).Scan(&visible))
+				require.Equal(t, tc.want, visible, tc.table)
 			}
 			func() {
 				rows, err := user.QueryContext(ctx, "select partition_name,table_rows,data_length from information_schema.partitions where table_schema='hidden_access_db' and table_name='partitioned' order by partition_ordinal_position")

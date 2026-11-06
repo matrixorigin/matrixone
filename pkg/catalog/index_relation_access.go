@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 )
 
+const PhysicalIndexPredicateFunction = "mo_is_physical_index"
+
 // NonIndexRelationSQLPredicate excludes physical index children from metadata
 // listings. It must not be used by clone or restore scans, which need children.
 func NonIndexRelationSQLPredicate(alias string) string {
@@ -29,8 +31,13 @@ func NonIndexRelationSQLPredicate(alias string) string {
 	if alias != "" {
 		prefix = alias + "."
 	}
-	return fmt.Sprintf("not mo_is_physical_index(coalesce(%s%s, ''), coalesce(%s%s, ''), coalesce(%s%s, ''))",
-		prefix, SystemRelAttr_Name, prefix, SystemRelAttr_Kind, prefix, SystemRelAttr_ExtraInfo)
+	return NonIndexRelationSQLPredicateForColumns(prefix+SystemRelAttr_Name, prefix+SystemRelAttr_Kind, prefix+SystemRelAttr_ExtraInfo)
+}
+
+// NonIndexRelationSQLPredicateForColumns accepts the catalog column expressions
+// of a metadata source, including subscription columns whose name is att_relname.
+func NonIndexRelationSQLPredicateForColumns(name, kind, extra string) string {
+	return fmt.Sprintf("not %s(coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''))", PhysicalIndexPredicateFunction, name, kind, extra)
 }
 
 // RequiresPrivilegedRelationAccess checks an explicit physical relation target.

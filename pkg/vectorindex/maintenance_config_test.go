@@ -17,6 +17,7 @@ package vectorindex
 import (
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -35,5 +36,37 @@ func TestDecodeMaintenanceConfig(t *testing.T) {
 		_, got := DecodeMaintenanceConfig(raw)
 		require.IsType(t, want, got)
 		require.EqualError(t, got, want.Error())
+	}
+}
+
+func TestValidateMaintenanceConfigOperands(t *testing.T) {
+	spec := &executor.IndexMaintenanceSpec{
+		Function: "build", Database: "db", DatabaseID: 1, BaseName: "source", BaseID: 2,
+		Targets: []executor.IndexMaintenanceTarget{
+			{Role: "metadata", Name: "meta", ID: 3},
+			{Role: "storage", Name: "store", ID: 4},
+		},
+	}
+	for _, tc := range []struct {
+		name     string
+		operands []MaintenanceOperand
+		wantErr  bool
+	}{
+		{"matching", []MaintenanceOperand{{Role: "metadata", Name: "META"}, {Role: "storage", Name: "store"}}, false},
+		{"missing", []MaintenanceOperand{{Role: "metadata", Name: "meta"}}, true},
+		{"duplicate", []MaintenanceOperand{{Role: "metadata", Name: "meta"}, {Role: "metadata", Name: "meta"}}, true},
+		{"empty role", []MaintenanceOperand{{Role: "", Name: "meta"}, {Role: "storage", Name: "store"}}, true},
+		{"empty name", []MaintenanceOperand{{Role: "metadata", Name: ""}, {Role: "storage", Name: "store"}}, true},
+		{"wrong role", []MaintenanceOperand{{Role: "other", Name: "meta"}, {Role: "storage", Name: "store"}}, true},
+		{"wrong name", []MaintenanceOperand{{Role: "metadata", Name: "other"}, {Role: "storage", Name: "store"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateMaintenanceConfig(spec, "build", "db", "source", tc.operands)
+			if tc.wantErr {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }

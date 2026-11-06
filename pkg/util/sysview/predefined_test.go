@@ -1031,3 +1031,29 @@ func TestInformationSchemaCurrentTablesOnlyAddsListingFilter(t *testing.T) {
 	}
 	require.NotContains(t, InformationSchemaTablesLocalCurrentDDL, "mo_subscription_tables()")
 }
+
+func TestInformationSchemaCurrentColumnsFiltersPhysicalIndexes(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	local := catalog.NonIndexRelationSQLPredicate("tbl")
+	subscription := catalog.NonIndexRelationSQLPredicateForColumns("mc.att_relname", "mc.relkind", "mc.extra_info")
+	subscriptionViews := catalog.NonIndexRelationSQLPredicate("mt")
+	require.Equal(t, 1, strings.Count(current, local))
+	require.Equal(t, 1, strings.Count(current, subscription))
+	require.Equal(t, 1, strings.Count(current, subscriptionViews))
+	// Filter the left side before describing local or published view columns.
+	require.Less(t, strings.Index(current, local), strings.Index(current, "cross apply mo_view_columns"))
+	require.Less(t, strings.Index(current, subscriptionViews), strings.Index(current, "cross apply mo_subscription_view_columns"))
+	require.NotContains(t, InformationSchemaColumnsV41DDL, "mo_is_physical_index")
+	require.NotContains(t, InformationSchemaColumnsV46DDL, "mo_is_physical_index")
+	require.NotContains(t, InformationSchemaColumnsV110DDL(), "mo_is_physical_index")
+	// Cloning must preserve the local-only V41 projection and its history,
+	// while applying the same physical-index filter as the current view.
+	localClone := InformationSchemaColumnsLocalCurrentDDL
+	require.Equal(t, 1, strings.Count(localClone, local))
+	require.Equal(t, InformationSchemaColumnsV41DDL, strings.Replace(localClone, " AND "+local, "", 1))
+	require.NotContains(t, localClone, "mo_subscription_columns()")
+	statements, err := mysql.Parse(context.Background(), current, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	statements[0].Free()
+}

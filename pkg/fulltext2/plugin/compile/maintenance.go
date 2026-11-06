@@ -47,9 +47,9 @@ func (Hooks) ValidateIndexMaintenance(function string, args []string, spec *exec
 	default:
 		return moerr.NewInvalidInputNoCtx("unexpected fulltext2 maintenance function")
 	}
-	return vectorindex.ValidateMaintenanceConfig(spec, function, db, source, map[string]string{
-		catalog.FullText2Index_TblType_Storage:  store,
-		catalog.FullText2Index_TblType_Metadata: meta,
+	return vectorindex.ValidateMaintenanceConfig(spec, function, db, source, []vectorindex.MaintenanceOperand{
+		{Role: catalog.FullText2Index_TblType_Storage, Name: store},
+		{Role: catalog.FullText2Index_TblType_Metadata, Name: meta},
 	})
 }
 func (Hooks) InitSQLMaintenanceFunction() string { return "" }
@@ -62,5 +62,5 @@ func (Hooks) IndexMaintenanceRoles(function string, defs map[string]*plan.IndexD
 	if function != "fulltext2_create" && function != "fulltext2_compact" {
 		return nil, moerr.NewInvalidInputNoCtx("unexpected index maintenance function")
 	}
-	return vectorindex.MaintenanceRoles(defs, catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata)
+	return vectorindex.MaintenanceRoles(defs, []string{catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata})
 }

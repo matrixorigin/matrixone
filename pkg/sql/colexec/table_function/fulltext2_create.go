@@ -140,8 +140,8 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 			return err
 		}
 		policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_create", cfg.DbName, "",
-			maintenanceOperand{catalog.FullText2Index_TblType_Storage, cfg.IndexTable},
-			maintenanceOperand{catalog.FullText2Index_TblType_Metadata, cfg.MetadataTable})
+			maintenanceOperand{Role: catalog.FullText2Index_TblType_Storage, Name: cfg.IndexTable},
+			maintenanceOperand{Role: catalog.FullText2Index_TblType_Metadata, Name: cfg.MetadataTable})
 		if err != nil {
 			return err
 		}

@@ -62,6 +62,24 @@ func TestIvfSampleSQLKeepsIdentifierData(t *testing.T) {
 	}
 }
 
+func TestIvfCreateReadmitsConfigAfterReset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	lookups := installOrdinaryMaintenanceRelations(t, proc)
+	oldRunSQL := ivf_runSql
+	t.Cleanup(func() { ivf_runSql = oldRunSQL })
+	ivf_runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) { return executor.Result{}, nil }
+	config, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`{"db":"db","src":"src","metadata":"meta","index":"store","part":"v"}`), 1, mp)
+	require.NoError(t, err)
+	defer config.Free(mp)
+	tf := &TableFunction{FuncName: "ivf_create", Params: []byte(`{"lists":"1","op_type":"vector_l2_ops"}`)}
+	tf.ctr.argVecs = []*vector.Vector{config}
+	state := &ivfCreateState{}
+	defer state.free(tf, proc, false, nil)
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	checkVectorMaintenanceReuse(t, tf, proc, state, lookups, &state.policy)
+}
+
 func TestIvfCreateStart_Error(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defaultTblCfg, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`{"db":"db", "src":"t", "index":"centroids", "metadata":"meta", "part":"v", "datasize":100000, "kmeans_train_percent":20}`), 1, proc.Mp())

@@ -112,8 +112,8 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 		}
 	}
 	policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_compact", u.tblcfg.DbName, "",
-		maintenanceOperand{catalog.FullText2Index_TblType_Storage, u.tblcfg.IndexTable},
-		maintenanceOperand{catalog.FullText2Index_TblType_Metadata, u.tblcfg.MetadataTable})
+		maintenanceOperand{Role: catalog.FullText2Index_TblType_Storage, Name: u.tblcfg.IndexTable},
+		maintenanceOperand{Role: catalog.FullText2Index_TblType_Metadata, Name: u.tblcfg.MetadataTable})
 	if err != nil {
 		return err
 	}

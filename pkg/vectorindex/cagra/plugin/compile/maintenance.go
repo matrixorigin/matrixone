@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 )
 
 // ValidateIndexMaintenance binds an owner-generated literal to the live group.
@@ -32,11 +33,7 @@ func (Hooks) ValidateIndexMaintenance(function string, args []string, spec *exec
 		return err
 	}
 
-	targets := map[string]string{catalog.Cagra_TblType_Metadata: cfg.MetadataTable, catalog.Cagra_TblType_Storage: cfg.IndexTable}
-	if cfg.IgnoredTable != "" {
-		targets[catalog.IndexIgnored_TblType] = cfg.IgnoredTable
-	}
-	return vectorindex.ValidateMaintenanceConfig(spec, function, cfg.DbName, cfg.SrcTable, targets)
+	return vectorindex.ValidateMaintenanceConfig(spec, function, cfg.DbName, cfg.SrcTable, cagraruntime.MaintenanceOperands(cfg))
 }
 
 func (Hooks) InitSQLMaintenanceFunction() string { return "cagra_create" }
@@ -47,12 +44,6 @@ func (Hooks) IndexMaintenanceRoles(function string, defs map[string]*plan.IndexD
 	if function != "cagra_create" {
 		return nil, moerr.NewInvalidInputNoCtx("unexpected index maintenance function")
 	}
-	roles, err := vectorindex.MaintenanceRoles(defs, catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage)
-	if err != nil {
-		return nil, err
-	}
-	if defs[catalog.IndexIgnored_TblType] != nil {
-		roles = append(roles, catalog.IndexIgnored_TblType)
-	}
-	return roles, nil
+	return vectorindex.MaintenanceRoles(defs,
+		[]string{catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage}, catalog.IndexIgnored_TblType)
 }

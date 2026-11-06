@@ -1667,7 +1667,7 @@ func rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName string, lowerCaseTa
 		case strings.EqualFold(string(createView.Name.ObjectName), "TABLES"):
 			localDDL = sysview.InformationSchemaTablesLocalCurrentDDL
 		case strings.EqualFold(string(createView.Name.ObjectName), "COLUMNS"):
-			localDDL = sysview.InformationSchemaColumnsV41DDL
+			localDDL = sysview.InformationSchemaColumnsLocalCurrentDDL
 		}
 		if localDDL != "" {
 			localStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, localDDL, lowerCaseTableNames)

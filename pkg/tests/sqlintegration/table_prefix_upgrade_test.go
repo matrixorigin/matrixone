@@ -17,8 +17,10 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -174,10 +177,10 @@ func TestTablePrefixMetadataUpgrade(t *testing.T) {
 		const corrected = "not startswith(tbl.relname, '__mo_index_')"
 		require.Equal(t, 2, strings.Count(sysview.InformationSchemaTablesV118DDL, corrected))
 		oldDDL := strings.ReplaceAll(sysview.InformationSchemaTablesV118DDL, corrected, "tbl.relname not like '__mo_index_%'")
-		installOldView := func(ddl string) {
+		installView := func(name, ddl string) {
 			t.Helper()
 			require.NoError(t, internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
-				for _, statement := range []string{"DROP VIEW IF EXISTS information_schema.TABLES;", ddl} {
+				for _, statement := range []string{"DROP VIEW IF EXISTS information_schema." + name, ddl} {
 					result, err := tx.Exec(statement, versions.UpgradeStatementOption(uint32(accountID)))
 					if err != nil {
 						return err
@@ -187,7 +190,7 @@ func TestTablePrefixMetadataUpgrade(t *testing.T) {
 				return nil
 			}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied()))
 		}
-		installOldView(oldDDL)
+		installView("TABLES", oldDDL)
 		require.Zero(t, count(), "historical view reproduces the defect")
 		entry := versions.InformationSchemaTablesUpgradeEntry()
 		owner := &tablesUpgradeExecutor{SQLExecutor: internal, failure: errors.New("injected view replacement failure")}
@@ -212,7 +215,36 @@ func TestTablePrefixMetadataUpgrade(t *testing.T) {
 		// A supported released deployment enters through the actual v4_0_7
 		// tenant handler. Failed replacement rolls back, and a fresh retry and
 		// a subsequent duplicate invocation leave one current definition.
-		installOldView(releasedV427TablesDDL)
+		installView("TABLES", releasedV427TablesDDL)
+		// The v4.2.8 COLUMNS source is unchanged from this captured v4.2.6
+		// release definition; exercise it through the pending tenant handler.
+		data, err := os.ReadFile("../../sql/plan/testdata/view_metadata_legacy_v4_2_6.json")
+		require.NoError(t, err)
+		var fixture struct {
+			Columns string `json:"system_columns_definition"`
+		}
+		require.NoError(t, json.Unmarshal(data, &fixture))
+		var releasedColumns struct{ Stmt string }
+		require.NoError(t, json.Unmarshal([]byte(fixture.Columns), &releasedColumns))
+		require.NotEmpty(t, releasedColumns.Stmt)
+		installView("COLUMNS", releasedColumns.Stmt)
+		columnsDefinition := func() string {
+			t.Helper()
+			var definition string
+			require.NoError(t, internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+				exists, actual, err := versions.CheckInformationSchemaViewDefinition(tx, uint32(accountID), "COLUMNS")
+				if err != nil {
+					return err
+				}
+				if !exists {
+					return errors.New("COLUMNS view is missing")
+				}
+				definition = actual
+				return nil
+			}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied()))
+			return definition
+		}
+		oldColumns := columnsDefinition()
 		require.Zero(t, count(), "the pinned release retains the old wildcard predicate")
 		releasedOwner := &tablesUpgradeExecutor{SQLExecutor: internal, failure: errors.New("injected released-view replacement failure")}
 		runTenantUpgrade := func(e *tablesUpgradeExecutor) error {
@@ -222,12 +254,94 @@ func TestTablePrefixMetadataUpgrade(t *testing.T) {
 		}
 		require.ErrorIs(t, runTenantUpgrade(releasedOwner), releasedOwner.failure)
 		require.Zero(t, count(), "the released view survives a failed transaction")
+		require.Equal(t, oldColumns, columnsDefinition(), "COLUMNS replacement must roll back with TABLES")
 		releasedOwner.failure = nil
 		require.NoError(t, runTenantUpgrade(releasedOwner))
 		require.Equal(t, 1, count())
+		require.True(t, sysview.InformationSchemaViewDefinitionMatches(columnsDefinition(), sysview.InformationSchemaColumnsDDL))
+		var visibleColumns int
+		require.NoError(t, restricted.QueryRowContext(ctx, "select count(*) from information_schema.columns where table_schema='prefix_upgrade' and table_name='demo_index_data'").Scan(&visibleColumns))
+		require.Equal(t, 2, visibleColumns)
 		require.Equal(t, 1, releasedOwner.creates)
 		require.NoError(t, runTenantUpgrade(releasedOwner))
 		require.Equal(t, 1, releasedOwner.creates)
 		require.Equal(t, []string{"demo_index_data"}, restrictedNames("select table_name from information_schema.tables where table_schema='prefix_upgrade'"))
+
+		t.Run("released_snapshot", func(t *testing.T) {
+			testReleasedTablesSnapshot(t, cn, db, internal)
+		})
 	})
+}
+
+func testReleasedTablesSnapshot(t *testing.T, cn embed.ServiceOperator, db *sql.DB, internal executor.SQLExecutor) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	defer cleanupSQLIntegration(t, cn,
+		"drop snapshot if exists prefix_current_snap", "drop snapshot if exists prefix_release_snap",
+		"drop user if exists prefix_snapshot_user", "drop role if exists prefix_snapshot_role",
+		"drop database if exists prefix_snapshot_db")
+	admin, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer admin.Close()
+	exec := func(statement string) {
+		t.Helper()
+		_, err := admin.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	for _, statement := range []string{
+		"create database prefix_snapshot_db",
+		"set experimental_fulltext_index=1",
+		"create table prefix_snapshot_db.docs(id bigint primary key,body text,fulltext index ft(body))",
+		"create role prefix_snapshot_role",
+		"create user prefix_snapshot_user identified by '111' default role prefix_snapshot_role",
+		"grant connect on account * to prefix_snapshot_role",
+		"grant all on database prefix_snapshot_db to prefix_snapshot_role",
+		"grant all on table prefix_snapshot_db.* to prefix_snapshot_role",
+	} {
+		exec(statement)
+	}
+	var child string
+	require.NoError(t, admin.QueryRowContext(ctx, "select distinct index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='prefix_snapshot_db' and relname='docs') and index_table_name is not null and index_table_name<>'' limit 1").Scan(&child))
+	exec("alter table prefix_snapshot_db." + sqlquote.Ident(child) + " rename to renamed_index")
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, err := admin.ExecContext(cleanupCtx, "alter table prefix_snapshot_db.renamed_index rename to "+sqlquote.Ident(child))
+		require.NoError(t, err)
+	}()
+	replace := func(ctx context.Context, ddl string) error {
+		return internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+			for _, statement := range []string{"DROP VIEW IF EXISTS information_schema.TABLES", ddl} {
+				result, err := tx.Exec(statement, versions.UpgradeStatementOption(0))
+				if err != nil {
+					return err
+				}
+				result.Close()
+			}
+			return nil
+		}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied())
+	}
+	require.NoError(t, replace(ctx, releasedV427TablesDDL))
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		require.NoError(t, replace(cleanupCtx, sysview.InformationSchemaTablesCurrentDDL))
+	}()
+	exec("create view prefix_snapshot_db.tables_view as select table_name from information_schema.tables where table_schema='prefix_snapshot_db'")
+	exec("grant select on view prefix_snapshot_db.tables_view to prefix_snapshot_role")
+	exec("create snapshot prefix_release_snap for account")
+	require.NoError(t, replace(ctx, sysview.InformationSchemaTablesCurrentDDL))
+	exec("create snapshot prefix_current_snap for account")
+	reader, err := sql.Open("mysql", fmt.Sprintf("sys#prefix_snapshot_user#prefix_snapshot_role:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	defer reader.Close()
+	for _, query := range []string{
+		"select table_name from information_schema.tables {snapshot='prefix_release_snap'} where table_schema='prefix_snapshot_db' and table_name in ('renamed_index','docs')",
+		"select table_name from prefix_snapshot_db.tables_view {snapshot='prefix_release_snap'} where table_name in ('renamed_index','docs')",
+		"select table_name from information_schema.tables {snapshot='prefix_current_snap'} where table_schema='prefix_snapshot_db' and table_name in ('renamed_index','docs')",
+	} {
+		rows, err := reader.QueryContext(ctx, query)
+		require.Equal(t, []string{"docs"}, readMetadataTableNames(t, rows, err), query)
+	}
 }

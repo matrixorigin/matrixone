@@ -4,27 +4,29 @@ MatrixOne's physical index relations are implementation details of their owning
 base table. [Issue #31436](https://github.com/matrixorigin/matrixone/issues/31436)
 and [PR #32032](https://github.com/matrixorigin/matrixone/pull/32032) address
 direct SQL and maintenance functions that otherwise expose those relations.
-The design was reviewed before implementation by `gpt-6.1-terra` at `max`
-reasoning. The rebased design revision is CI-D1 through CI-D3 plus the approved
-maintenance-TVF and no-evaluation amendments (2026-11-02).
 
 ## Boundary
 
 An authenticated sys/moadmin session may inspect a physical index relation.
-Other sessions cannot explicitly read, mutate, clone, or request metadata about
-one. Classification uses the requested and resolved names, relation kind, and
-durable index feature. Missing definitions fail closed. Server-authored index
-work is tied to its already-authorized base and exact generated relation, and
-does not confer access to a user expression, view, subquery, or stored routine.
+Other sessions cannot explicitly read, mutate, clone, or use table-specific
+metadata operations on one. Classification uses the requested and resolved
+names, relation kind, and durable index feature. Missing definitions fail closed.
+Server-authored index work is tied to its already-authorized base and exact
+generated relation, and does not confer access to a user expression, view,
+subquery, or stored routine.
 
 SHOW INDEX's generated metadata sources carry exact AST-node identities and
 their parent object. User-supplied WHERE expressions bind normally. Metadata
 listings exclude physical relations using their decoded feature as well as the
-legacy name and kind; the current persisted information-schema view is upgraded
-through the catalog owner. Clone source snapshots are resolved in the source
-account, while destination checks use the authorized destination account before
-mutation. Prepared cross-account clone validates its source during PREPARE and
-rechecks the destination at EXECUTE.
+legacy name and kind; current persisted information-schema views are upgraded
+through the catalog owner. Historical TABLES views bind a filtered catalog
+source without changing their stored definition. Clone source snapshots are
+resolved in the source account, while destination checks use the authorized
+destination account before mutation. Prepared cross-account clone validates its
+source during PREPARE and rechecks the destination at EXECUTE. New clones of
+system metadata views use the local listing policy. Existing user-owned views,
+including older clones, keep their definitions and grants and may expose catalog
+metadata; they do not grant direct access to index rows.
 
 ## Index maintenance functions
 
