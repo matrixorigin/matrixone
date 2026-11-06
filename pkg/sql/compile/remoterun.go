@@ -692,6 +692,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if isRemote {
 				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
 			}
+			s.DataSource.OrderBy = dsc.Node.OrderBy
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -1087,6 +1088,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopValueTag = t.TopValueTag
 		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1746,6 +1748,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		topArg.TopValueTag = opr.TopValueTag
 		if opr.TopOrderedOutput {
 			topArg.WithOrderedOutput()
 		}
