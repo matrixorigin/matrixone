@@ -33,7 +33,7 @@ drop view if exists v_utc_timestamp_fsp;
 create view v_utc_timestamp_fsp as
 select utc_timestamp(0) as value0, utc_timestamp(3) as value3, utc_timestamp(6) as value6;
 desc v_utc_timestamp_fsp;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 value0  ¦  datetime  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value3  ¦  datetime(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value6  ¦  datetime(6)  ¦  NO  ¦    ¦  null  ¦    ¦  

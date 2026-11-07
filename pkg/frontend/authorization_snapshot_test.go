@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/subscriptionmetadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +37,7 @@ func TestAuthorizationEpochOwnershipAndEnd(t *testing.T) {
 	exec := &ExecCtx{}
 	ctx, e := beginAuthorizationEpoch(parent, ses, exec)
 	require.Same(t, e, authorizationEpochFor(ctx, ses))
+	require.Same(t, e, ctx.Value(subscriptionmetadata.AuthorizationSnapshotKey{}))
 	require.Same(t, &e.prepared, rewritePolicyRequestFor(ctx, ses))
 	type marker struct{}
 	valueParent := context.WithValue(parent, marker{}, "request value")

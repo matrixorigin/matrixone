@@ -13876,10 +13876,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
-		// Published View SQL keeps its creation namespace. Only its implicit
-		// source lookup uses the subscriber name for catalog routing.
+		// Published View SQL keeps its creation namespace. Both qualified and
+		// implicit references to that source use the subscriber alias for the
+		// database probe; resolving a publisher spelling in the subscriber's
+		// catalog would incorrectly require a same-named local database.
 		catalogDatabase := schema
-		if tbl.SchemaName == "" && len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
+		if len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
 			view := ctx.viewPath[len(ctx.viewPath)-1]
 			if view.SubscriptionName != "" {
 				if sub := builder.compCtx.GetQueryingSubscription(); sub != nil &&
