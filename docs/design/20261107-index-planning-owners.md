@@ -102,7 +102,9 @@ Optional block observation tries the subscription and engine read locks in
 their existing order, and tries the subscriber's client lock. Cached column
 metadata uses the S3-FIFO owner's try-get operation. `Get` and `TryGet` share
 the locked lookup, admission, retention and frequency-update behavior; only
-acquisition of the index-shard mutex differs. A contended shard or absent entry
+acquisition of the index-shard mutex differs. Small public entry points select
+the lock mode in the same lookup frame, avoiding another call inside the
+ordinary locked path. A contended shard or absent entry
 returns no value, does not run admission, and leaves references and frequency
 unchanged. A successful lookup retains the value under that lock. The caller
 releases the retained value and any independent admission reservation. Admission
