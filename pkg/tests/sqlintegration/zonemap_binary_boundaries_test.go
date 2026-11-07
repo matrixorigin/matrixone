@@ -53,7 +53,7 @@ func TestBinaryZoneMapAmbiguousMax(t *testing.T) {
 			return "cast(x'" + strings.Repeat("ff", 30) + suffix + "' as varbinary(256))"
 		}
 		for _, table := range []string{"ordinary", "sorted_pk"} {
-			exec("insert into " + table + " values (1," + value("00") + "),(2," + value("01") + "),(3," + value("02") + ")")
+			exec("insert into " + table + " values (1," + value("00") + "),(2," + value("01") + "),(3," + value("02") + "),(5,cast(x'' as varbinary(256)))")
 			if table == "ordinary" {
 				exec("insert into ordinary values (4, null)")
 			}
@@ -102,13 +102,15 @@ func TestBinaryZoneMapAmbiguousMax(t *testing.T) {
 			name, predicate string
 			want            []int64
 		}{
-			{"lt", "b < " + value("01"), []int64{1}},
-			{"reverse lt", value("01") + " > b", []int64{1}},
+			{"lt", "b < " + value("01"), []int64{1, 5}},
+			{"reverse lt", value("01") + " > b", []int64{1, 5}},
 			{"gt", "b > " + value("01"), []int64{3}},
 			{"reverse gt", value("01") + " < b", []int64{3}},
-			{"le", "b <= " + value("01"), []int64{1, 2}},
+			{"le", "b <= " + value("01"), []int64{1, 2, 5}},
 			{"ge", "b >= " + value("01"), []int64{2, 3}},
 			{"eq", "b = " + value("01"), []int64{2}},
+			{"eq empty", "b = cast(x'' as varbinary(256))", []int64{5}},
+			{"eq null", "b = cast(null as varbinary(256))", nil},
 			{"eq low", "b = cast(x'61' as varbinary(256))", nil},
 			{"reverse eq low", "cast(x'61' as varbinary(256)) = b", nil},
 			{"eq high", "b = " + value("02"), []int64{3}},
@@ -125,7 +127,7 @@ func TestBinaryZoneMapAmbiguousMax(t *testing.T) {
 					require.Equal(t, tc.want, read(t, projection, true))
 					require.Equal(t, tc.want, read(t, filtered, false))
 					// The ordinary IN path does not currently push a block filter.
-					if table != "ordinary" || tc.name != "in" {
+					if tc.name != "eq null" && (table != "ordinary" || tc.name != "in") {
 						require.Contains(t, explain(t, filtered), "Block Filter Cond:")
 					}
 				})
