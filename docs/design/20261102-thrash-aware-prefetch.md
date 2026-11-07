@@ -2,8 +2,8 @@
 
 - Status: draft
 - Issue: #32033
-- Implementation PRs: #32034, #32040
-- Last updated: 2026-11-02
+- Implementation PRs: #32034, #32040, #32275
+- Last updated: 2026-11-06
 
 ## Problem
 
@@ -71,8 +71,9 @@ observes, with no configuration:
   evictions of its files falls below 0.1 after at least 4 evictions, or below 0.4 after at
   least 16.
 - **Turning off.** A table's signal turns off after a quiet period with no eviction of its
-  whole-object files. The period is 30 seconds, doubled up to 10 minutes each time the
-  signal turns on again soon after it turned off.
+  whole-object files, once another whole object fits in the disk cache beside the cached
+  files and the whole-object fills in progress. The period is 30 seconds, doubled up to
+  10 minutes each time the signal turns on again soon after it turned off.
 
 Two tables that evict each other's whole objects both look thrashed at first, and the one
 that switches first decides the outcome: once it reads ranges, the other often fits. The
@@ -86,12 +87,47 @@ objects, so the files still being evicted are used efficiently, and a signal tha
 off on efficiency would turn on and off repeatedly. Measured with one signal for the whole
 cache: an efficiency threshold pair of 0.4 and 0.6 still alternated three times in 100
 queries. A table that stops being evicted after it switches, such as an entries table that
-fits once the base table reads ranges, turns off and prefetches again; a table that keeps
-thrashing pays one round of whole-object downloads per quiet period, which doubles.
+fits once the base table reads ranges, turns off and prefetches again.
+
+The quiet period alone is not evidence that a table fits: while its signal is on, the
+table fills no whole object, so none of its files can be evicted, and its quiet period
+always runs out. Without the room condition, a table that still did not fit turned off
+after every pause or every phase of other work, such as a TPC-H round, and downloaded at
+least four more whole objects that were evicted unread before turning on again. The
+room condition keeps the signal on while the cache is full, and lets it turn off as soon
+as whole objects fit, for example after the cache grows or the other work's files age out.
 
 The signal is per table because tables in one cache need different answers. One signal
 for the whole cache switched the entries search to range reads too: warm p95 225 ms against
 60 ms per table, at 1 GB memory and 4 GB disk.
+
+### An object being downloaded is fetched once (decision)
+
+While the disk cache downloads a whole object, every read of that object takes the bytes
+the download has written instead of fetching them from object storage, including the
+read that started the download. A read returns as soon as its own bytes are written;
+the rest of the object keeps downloading in the background. Before, the read that
+started the download waited for the whole object, and other reads waited up to 200 ms
+for the whole object and then read their ranges from object storage anyway.
+
+- A read of bytes not yet written waits for them if the download will write them no
+  more than `disk-download-max-extra-wait` (default 200 ms) later than a range read
+  could fetch them, or if they are more than an eighth of what the download still
+  writes before them; otherwise it reads its range at once. The time to the bytes comes
+  from the download's rate, and the time of a range read from the latency and bandwidth
+  of the range reads observed. A wait that runs over is abandoned for a range read.
+- Larger values make fewer object storage requests and slower reads, 0 the fastest
+  reads. With local object storage, where a range read takes about 1 ms, values from
+  20 ms to 300 ms changed under 2% of the reads of downloading objects; on remote object
+  storage a range read costs 10 ms or more and the margin decides more reads.
+- A download that fails after a read got its bytes does not fail the read; it caches
+  nothing. Until the read that started a download returns, cancelling it cancels the
+  download. The downloads that continue after their reader returned are bounded; past
+  the bound a reader waits for its download.
+- Ranges read while their object is being downloaded are not cached separately; the
+  download caches the whole object.
+- The disk cache's synchronous update mode keeps the old behavior for the read that
+  starts a download: it returns once the object is cached.
 
 ## Rejected alternatives
 
@@ -112,6 +148,18 @@ for the whole cache switched the entries search to range reads too: warm p95 225
   evicted unused, so a cache that holds few of the objects downloads each of them whole
   before switching. Measured worse than one signal per cache when the cache is small:
   warm 271 ms against 149 ms at 0.5 GB memory and 1.5 GB disk.
+- **Decide by room alone.** A narrow read fills a whole object only when it fits, with no
+  per-table signal. It is the best after other work evicted the tables (filtered queries
+  after a TPC-H round 4.3–5.6 s per 100 against 7.8–8.6 s per table, at 1 GB memory and
+  4 GB disk), but every narrow table reads ranges once the cache is full, including an
+  entries table whose whole objects would be reused: warm filtered queries settled at
+  52–71 ms against 20 ms per table at 1 GB memory and 4 GB disk, and 134–171 ms against
+  44–50 ms at 0.5 GB memory and 1.5 GB disk.
+- **Room alone, except tables whose whole objects are mostly read.** Close to room alone
+  after a TPC-H round (7.0 s per 100), and equal to one signal per table warm at 1 GB
+  memory and 4 GB disk, but an entries table that cannot fit at 0.5 GB memory and 1.5 GB
+  disk still reads about 40% of each object before its eviction, keeps filling whole
+  objects and thrashes: 174–270 ms warm.
 - **Change the eviction policy.** Replaying the measured traces, the eviction policy moved
   S3 bytes by about 1.5× (LRU against S3-FIFO) while the fill unit moved them 13–20×. No
   policy keeps a 3 GB working set through a scan eight times the cache.
@@ -136,13 +184,34 @@ The two signal columns use 50 queries per batch; the others 100. At 1 / 4 GB onl
 table's signal turns on; at 0.5 / 1.5 GB both tables' signals do. TPC-H SF10 scans are not
 narrow and do not change.
 
+With the room condition and early return (#32275), same protocol, 50 queries per batch,
+then a 35 s pause and 50 more; milliseconds, average (p95):
+
+| Memory / disk | Before: cold | warm | after pause | After: cold | warm | after pause |
+|---|---|---|---|---|---|---|
+| 0.5 / 1.5 GB | 117 (311) | 46 (98) | 110 (602) | 107 (231) | 42 (77) | 41 (84) |
+| 1 / 4 GB | 92 (303) | 18 (42) | 52 (187) | 94 (301) | 18 (43) | 16 (37) |
+
+Alternating TPC-H SF10 rounds with 100 filtered queries at 1 GB memory and 4 GB disk, the
+filtered queries after a TPC-H round took 7.8–8.6 s per 100 (p95 about 575 ms), against
+8.2–17.8 s (p95 353–835 ms) before. Early return alone cut the p95 of the first filtered
+round from 898 ms to 455 ms.
+
+Reading downloading objects from their download, same alternating workload at 1 GB memory
+and 4 GB disk, medians of 4 runs: 5,054–4,135 object storage requests in the TPC-H rounds
+for a max extra wait of 50–200 ms, against 4,508 when other reads waited up to 200 ms for
+the whole object; filtered queries after a TPC-H round 5.7–6.8 s per 100 (p95 174–229 ms)
+against 9.5 s (p95 641 ms). Always waiting for the download made 3,373 requests in all but
+had the slowest first filtered round (p95 1,146 ms); never waiting made 11,193.
+
 ## Invariants
 
 - Query results do not depend on the narrow mark or the signals.
 - A read that is not narrow fills the disk cache exactly as before.
 - A narrow read never fills whole objects while its table's signal is on, and always
   caches the ranges it reads instead.
-- A table's signal turns off only after a period with no eviction of its whole-object files.
+- A table's signal turns off only after a period with no eviction of its whole-object files,
+  and only while another whole object fits in the disk cache.
 - The cache's record of tables and objects is bounded. A table idle for twice its quiet
   period may be forgotten; a table whose signal is on is kept, and a table the cache
   cannot record is treated as having no signal.

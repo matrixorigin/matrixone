@@ -2890,6 +2890,46 @@ func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
 	return string(payload), nil
 }
 
+// prepareCreateLikeSource validates and owns source metadata before any
+// destination planning. Prepared cross-account clones use the same source
+// checks without probing destination metadata in the caller's account.
+func prepareCreateLikeSource(
+	ctx CompilerContext, tableDef *TableDef, snapshot *Snapshot, sub *SubscriptionMeta, dbName, tblName string,
+) (*TableDef, bool, error) {
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, false, err
+	}
+	tableDef = DeepCopyTableDef(tableDef, true)
+	if sub == nil {
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, false, err
+		}
+	}
+	hadStructuredChecks := len(tableDef.Checks) > 0
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, false, err
+	}
+	recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+	if len(tableDef.Checks) > 0 {
+		if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+			return nil, false, err
+		}
+	}
+	if tableDef.TableType == catalog.SystemViewRel ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		tableDef.TableType == catalog.SystemSequenceRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return nil, false, err
+		}
+		if isIceberg {
+			return nil, false, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
+		}
+		return nil, false, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+	}
+	return tableDef, recoveredLegacyChecks, nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -2937,44 +2977,14 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if err := validateTableIndexDefinitions(tableDef); err != nil {
-			return nil, err
-		}
-		// Resolve and rewrite a private source definition. Resolve can return a
-		// cached TableDef, and the reconstruction below changes its table name.
-		tableDef = DeepCopyTableDef(tableDef, true)
 		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
 		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
 		// a local source definition and asks the normal CREATE planner to rebuild
 		// it. A subscription definition belongs to the publisher, whose catalog
 		// is not available through this compiler context.
-		if sub == nil {
-			if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
-				return nil, err
-			}
-		}
-		hadStructuredChecks := len(tableDef.Checks) > 0
-		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		tableDef, recoveredLegacyChecks, err := prepareCreateLikeSource(ctx, tableDef, snapshot, sub, dbName, tblName)
+		if err != nil {
 			return nil, err
-		}
-		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
-		if len(tableDef.Checks) > 0 {
-			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
-				return nil, err
-			}
-		}
-		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel ||
-			tableDef.TableType == catalog.SystemExternalRel ||
-			tableDef.TableType == catalog.SystemSequenceRel {
-			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
-			if err != nil {
-				return nil, err
-			}
-			if isIceberg {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
-			}
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
 		tableDef.Name = string(newTable.ObjectName)
@@ -3412,7 +3422,16 @@ func buildCreateTable(
 	if stmt.PartitionOption != nil {
 		// Foreign keys are not yet supported in conjunction with partitioning
 		// see: https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-14.html
-		if len(createTable.TableDef.Fkeys) > 0 {
+		//
+		// Fkeys covers references bound at plan time (including self
+		// references), UnresolvedFkParents covers forward references admitted
+		// under foreign_key_checks=0 while the parent table is still absent,
+		// and FksReferToMe covers deferred references registered by previously
+		// created children that would bind to this table once it exists. No
+		// foreign key may involve a partitioned relation in either direction.
+		if len(createTable.TableDef.Fkeys) > 0 ||
+			len(createTable.UnresolvedFkParents) > 0 ||
+			len(createTable.FksReferToMe) > 0 {
 			return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 		}
 
@@ -4713,7 +4732,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	skip := IsFkBannedDatabase(createTable.Database)
+	// Temporary destinations live in the session namespace and cannot own or
+	// receive foreign keys. Persistent same-name tables and forward references
+	// must not be resolved while constructing a temporary table.
+	skip := createTable.Temporary || IsFkBannedDatabase(createTable.Database)
 	if !skip {
 		// Existing relations are handled by the execution-time RelationExists
 		// check. Their reverse foreign keys belong to the existing definition and
@@ -7931,8 +7953,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				continue
 			}
 
-			// TODO ONLY Check
-			_, destination, err := ctx.Resolve(databaseName, newName, nil)
+			var destination *plan.TableDef
+			var err error
+			if tableDef.IsTemporary {
+				_, destination, err = resolveTemporaryTable(ctx, databaseName, newName, nil)
+			} else {
+				_, destination, err = ctx.Resolve(databaseName, newName, nil)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -8323,6 +8350,21 @@ type FkData struct {
 // but for fk self refer, it is different in not checking fk self refer instantly.
 // because it is not ready. It should be checked after the pk,uk has been ready.
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*FkData, error) {
+	// Foreign keys are not yet supported in conjunction with partitioning.
+	// Partitioning is a dual identity: the authored CREATE records the
+	// logical features.Partitioned flag on this definition before the FK
+	// pass, and a resolved relation fills TableDef.Partition and FeatureFlag
+	// from independent engine state — the engine dispatches the combined
+	// partition relation on that flag (disttae/cache/types.go
+	// IsPartitionTable), not on the pointer. Only the logical Partitioned
+	// bit is structural here; other FeatureFlag bits are not partitioning.
+	// tableDef is the planner-owned final child definition: ALTER routes
+	// pass the resolved relation for the direct and COPY-based paths alike,
+	// and CREATE arrives with the flag authored but partition defs not laid
+	// out yet.
+	if tableDef.Partition != nil || features.IsPartitioned(tableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
+	}
 	refer := def.Refer
 	catalogLayout, err := resolveForeignKeyCatalogLayout(ctx)
 	if err != nil {
@@ -8434,6 +8476,17 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	if parentTableDef.IsTemporary {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
+	}
+
+	// A resolved partitioned parent is the same structurally unsupported
+	// combination as a partitioned child: deferring this to execution would
+	// surface a recovered not-implemented panic instead of a SQL error.
+	// Partitioning is a dual identity (see the entry guard), so the resolved
+	// Partition pointer and the logical features.Partitioned flag both
+	// reject. The check is independent of foreign_key_checks=0; once the
+	// parent is resolved the combination is rejected.
+	if parentTableDef.Partition != nil || features.IsPartitioned(parentTableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 	}
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId
@@ -8771,6 +8824,16 @@ func BindForwardForeignKey(ctx context.Context, constraintName string,
 	if len(fkDefs) == 0 || childTableDef == nil || parentTableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "incomplete forward foreign key binding")
 	}
+	// Deferred rebinding must keep the structural boundary of fresh binding:
+	// neither side of a foreign key may be partitioned, including the
+	// execution-time rebinding of previously registered forward references.
+	// Partitioning is a dual identity (see getForeignKeyData): the pointer
+	// or the logical features.Partitioned flag on either side rejects, and
+	// other FeatureFlag bits are not partitioning.
+	if childTableDef.Partition != nil || features.IsPartitioned(childTableDef.FeatureFlag) ||
+		parentTableDef.Partition != nil || features.IsPartitioned(parentTableDef.FeatureFlag) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx)
+	}
 	fkData := FkData{
 		ParentTableName: parentTableDef.Name,
 		Def: &plan.ForeignKeyDef{
@@ -8911,7 +8974,8 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		// PITR's frontend owner reads persistent mo_tables, not session aliases.
+		objRef, tableDef, err := ctx.ResolveWithoutTemporaryAlias(string(stmt.DatabaseName), string(stmt.TableName), nil)
 		if err != nil {
 			return nil, err
 		}

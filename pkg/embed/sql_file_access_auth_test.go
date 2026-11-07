@@ -39,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
@@ -474,10 +476,118 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var mutationStore string
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name='mutation_ftidx' and algo_table_type='ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='mutation_documents') limit 1").Scan(&mutationStore))
 		tailSQL := fmt.Sprintf("select coalesce(max(chunk_id),-1) from `%s`.`%s` where index_id='cdc_tail' and tag=1", dbName, mutationStore)
+		var forbiddenTail int64
+		require.ErrorContains(t, tenant.QueryRow(tailSQL).Scan(&forbiddenTail), "privilege")
+		// Durable index progress is a privileged test observation; tenant SQL
+		// must not acquire direct access to the physical fulltext store.
+		var tailAccountID uint32
+		require.NoError(t, admin.QueryRow("select account_id from mo_catalog.mo_account where account_name='"+account+"'").Scan(&tailAccountID))
+		tailCtx, tailCancel := context.WithTimeout(defines.AttachAccountId(t.Context(), tailAccountID), 2*time.Minute)
+		defer tailCancel()
+		indexExec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+		indexOpts := executor.Options{}.WithAccountID(tailAccountID).WithWaitCommittedLogApplied()
+		t.Run("persisted maintenance view binds without evaluation", func(t *testing.T) {
+			previous := fault.Status()
+			defer func() {
+				if previous {
+					fault.Enable()
+				} else {
+					fault.Disable()
+				}
+			}()
+			mustExec(t, tenant, "create table index_probe_source (id bigint)")
+			t.Cleanup(func() { _, _ = tenant.Exec("drop table if exists index_probe_source") })
+			mustExec(t, tenant, "create view index_probe_view as select id from index_probe_source where cast(enable_fault_injection() as signed) = 0")
+			t.Cleanup(func() { _, _ = tenant.Exec("drop view if exists index_probe_view") })
+			fault.Disable()
+			binder, ok := indexExec.(executor.IndexViewBindingExecutor)
+			require.True(t, ok)
+			stmtOpts := executor.StatementOption{}.WithAccountID(tailAccountID).WithSessionIdentity(account, "accountadmin").WithSessionUser("admin")
+			txnOpts := executor.Options{}.WithAccountID(tailAccountID).WithDatabase(dbName).WithStatementOption(stmtOpts)
+			err := indexExec.ExecTxn(tailCtx, func(tx executor.TxnExecutor) error {
+				query := "select * from " + sqlquote.QualifiedIdent(dbName, "index_probe_view")
+				result, err := tx.Exec("explain "+query, stmtOpts)
+				result.Close()
+				if err != nil {
+					return err
+				}
+				if !fault.Status() {
+					return fmt.Errorf("ordinary planning did not evaluate the persisted view expression")
+				}
+				fault.Disable()
+				probeOpts := executor.Options{}.WithTxn(tx.Txn()).WithAccountID(tailAccountID).WithDatabase(dbName).
+					WithDisableIncrStatement().WithStatementOption(stmtOpts).
+					WithIndexRelationPolicy(&executor.IndexRelationPolicy{})
+				if err := binder.BindIndexMaintenanceView(tailCtx, query, probeOpts); err != nil {
+					return err
+				}
+				if fault.Status() {
+					return fmt.Errorf("binding the persisted view evaluated its expression")
+				}
+				result, err = tx.Exec("select 1", stmtOpts)
+				result.Close()
+				return err
+			}, txnOpts)
+			require.NoError(t, err)
+			require.False(t, fault.Status())
+		})
+		// The following reads inspect actual physical index relations owned by
+		// this fixture. Copy strings before closing the executor's result batches.
+		readPhysical := func(query string, dst ...any) error {
+			result, err := indexExec.Exec(tailCtx, query, indexOpts)
+			if err != nil {
+				return err
+			}
+			defer result.Close()
+			found := false
+			var scanErr error
+			result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows == 0 {
+					return true
+				}
+				found = true
+				if len(cols) != len(dst) {
+					scanErr = fmt.Errorf("physical observer: got %d columns, want %d", len(cols), len(dst))
+					return false
+				}
+				for i, out := range dst {
+					col := cols[i]
+					if col == nil || col.Length() == 0 || col.IsNull(0) {
+						scanErr = fmt.Errorf("physical observer: column %d is null or unavailable", i)
+						return false
+					}
+					switch value := out.(type) {
+					case *int64:
+						if col.GetType().Oid != types.T_int64 {
+							scanErr = fmt.Errorf("physical observer: column %d has type %v, want int64", i, col.GetType())
+							return false
+						}
+						*value = vector.GetFixedAtNoTypeCheck[int64](col, 0)
+					case *string:
+						if col.GetType().Oid != types.T_varchar {
+							scanErr = fmt.Errorf("physical observer: column %d has type %v, want varchar", i, col.GetType())
+							return false
+						}
+						*value = strings.Clone(col.GetStringAt(0))
+					default:
+						scanErr = fmt.Errorf("physical observer: unsupported destination %T", out)
+						return false
+					}
+				}
+				return false
+			})
+			if scanErr != nil {
+				return scanErr
+			}
+			if !found {
+				return sql.ErrNoRows
+			}
+			return nil
+		}
 		var beforeTail int64
-		require.Eventually(t, func() bool { return tenant.QueryRow(tailSQL).Scan(&beforeTail) == nil && beforeTail >= 0 }, 30*time.Second, 250*time.Millisecond)
+		require.Eventually(t, func() bool { return readPhysical(tailSQL, &beforeTail) == nil && beforeTail >= 0 }, 30*time.Second, 250*time.Millisecond)
 		mustExec(t, tenant, "update mutation_documents set fpath='stage://sql_file_access_stage/file-sample_100kB.docx' where id=4")
-		require.Eventually(t, func() bool { var now int64; return tenant.QueryRow(tailSQL).Scan(&now) == nil && now > beforeTail }, 30*time.Second, 250*time.Millisecond)
+		require.Eventually(t, func() bool { var now int64; return readPhysical(tailSQL, &now) == nil && now > beforeTail }, 30*time.Second, 250*time.Millisecond)
 		require.NoError(t, tenant.QueryRow("select id from mutation_documents where match(fpath) against('Nulla facilisi' in natural language mode)").Scan(&documentID))
 		require.Equal(t, int64(4), documentID)
 		require.ErrorIs(t, tenant.QueryRow("select id from mutation_documents where match(fpath) against('matrixone')").Scan(&documentID), sql.ErrNoRows)
@@ -498,10 +608,12 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_documents') limit 1").Scan(&store))
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_ftidx' and algo_table_type = 'ftv2_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_documents') limit 1").Scan(&meta))
 		require.Eventually(t, func() bool {
-			var n int
-			return tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s` where index_id = 'cdc_tail' and tag = 1", dbName, store)).Scan(&n) == nil && n > 0
+			var n int64
+			return readPhysical(fmt.Sprintf("select cast(count(*) as signed) from `%s`.`%s` where index_id = 'cdc_tail' and tag = 1", dbName, store), &n) == nil && n > 0
 		}, 30*time.Second, 250*time.Millisecond)
-		mustExec(t, tenant, fmt.Sprintf("select * from fulltext2_compact('%s', '%s', '%s', '1') as f", dbName, store, meta))
+		_, err = tenant.Exec(fmt.Sprintf("select * from fulltext2_compact('%s', '%s', '%s', '1') as f", dbName, store, meta))
+		require.ErrorContains(t, err, "privilege")
+		mustExec(t, tenant, "alter table build_documents alter reindex build_ftidx fulltext2 merge force_sync")
 		require.NoError(t, tenant.QueryRow("select id from build_documents where match(body) against('compaction')").Scan(&id))
 		require.Equal(t, int64(2), id)
 
@@ -515,7 +627,9 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var hnswMeta string
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_hidx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_vectors') limit 1").Scan(&hnswMeta))
 		var filesz int64
-		require.NoError(t, tenant.QueryRow(fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)).Scan(&filesz))
+		filesizeSQL := fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)
+		require.ErrorContains(t, tenant.QueryRow(filesizeSQL).Scan(&filesz), "privilege")
+		require.NoError(t, readPhysical(filesizeSQL, &filesz))
 		require.Greater(t, filesz, int64(0))
 
 		t.Run("HNSW loaded IDs remain data during persistence", func(t *testing.T) {
@@ -527,37 +641,36 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 			metaTable := sqlquote.QualifiedIdent(dbName, hnswMeta)
 			storeTable := sqlquote.QualifiedIdent(dbName, hnswStore)
 			var oldID, oldChecksum string
-			require.NoError(t, conn.QueryRowContext(t.Context(), "select index_id, checksum from "+metaTable).Scan(&oldID, &oldChecksum))
+			require.NoError(t, readPhysical("select index_id, checksum from "+metaTable, &oldID, &oldChecksum))
 			// The marker belongs to this fixture. Expression-looking metadata must
 			// remain literal data when a background storage writer persists it.
 			const literalID = "0' or save_file(cast('stage://sql_file_access_local_stage/hnsw-marker' as datalink),'x') or '0"
 			require.LessOrEqual(t, len(literalID), 128)
 			_, err = conn.ExecContext(t.Context(), "select save_file(cast('stage://sql_file_access_local_stage/hnsw-marker' as datalink),'x')")
 			require.ErrorContains(t, err, "only the sys account moadmin role")
-			_, err = conn.ExecContext(t.Context(), "begin")
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_, _ = conn.ExecContext(ctx, "rollback")
-			})
-			for _, table := range []string{metaTable, storeTable} {
-				_, err = conn.ExecContext(t.Context(), "update "+table+" set index_id="+sqlquote.String(literalID)+" where index_id="+sqlquote.String(oldID))
-				require.NoError(t, err)
-			}
-			_, err = conn.ExecContext(t.Context(), "commit")
-			require.NoError(t, err)
+			stmtOpts := executor.StatementOption{}.WithAccountID(tailAccountID).WithSessionIdentity(account, "accountadmin")
+			txnOpts := executor.Options{}.WithAccountID(tailAccountID).WithDatabase(dbName).WithStatementOption(stmtOpts)
+			require.NoError(t, indexExec.ExecTxn(tailCtx, func(tx executor.TxnExecutor) error {
+				for _, table := range []string{metaTable, storeTable} {
+					result, err := tx.Exec("update "+table+" set index_id="+sqlquote.String(literalID)+" where index_id="+sqlquote.String(oldID), stmtOpts)
+					if err != nil {
+						return err
+					}
+					result.Close()
+				}
+				return nil
+			}, txnOpts))
 			var storedID string
-			require.NoError(t, conn.QueryRowContext(t.Context(), "select index_id from "+metaTable).Scan(&storedID))
+			require.NoError(t, readPhysical("select index_id from "+metaTable, &storedID))
 			require.Equal(t, literalID, storedID)
 			_, err = conn.ExecContext(t.Context(), "insert into "+sqlquote.QualifiedIdent(dbName, "build_vectors")+" values (3, '[0,0,1]')")
 			require.NoError(t, err)
 			require.Eventually(t, func() bool {
 				var checksum string
-				return conn.QueryRowContext(t.Context(), "select checksum from "+metaTable+" where index_id="+sqlquote.String(literalID)).Scan(&checksum) == nil && checksum != oldChecksum
+				return readPhysical("select checksum from "+metaTable+" where index_id="+sqlquote.String(literalID), &checksum) == nil && checksum != oldChecksum
 			}, 30*time.Second, 250*time.Millisecond, "the loaded model must be modified and persisted by CDC")
-			var n int
-			require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from "+storeTable+" where index_id="+sqlquote.String(literalID)).Scan(&n))
+			var n int64
+			require.NoError(t, readPhysical("select cast(count(*) as signed) from "+storeTable+" where index_id="+sqlquote.String(literalID), &n))
 			require.Positive(t, n)
 			_, err = os.Stat(filepath.Join(dir, "hnsw-marker"))
 			require.ErrorIs(t, err, os.ErrNotExist)
@@ -571,22 +684,29 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 			marker := filepath.Join(dir, "metadata-marker.txt")
 			mustExec(t, tenant, "create table authority_paths (fpath datalink)")
 			t.Cleanup(func() { _, _ = tenant.Exec("drop table if exists authority_paths") })
+			mustExec(t, tenant, "create table authority_store (index_id varchar(128), chunk_id bigint, data longblob, tag bigint, primary key(index_id, chunk_id))")
+			t.Cleanup(func() { _, _ = tenant.Exec("drop table if exists authority_store") })
 			mustExec(t, tenant, fmt.Sprintf("insert into authority_paths values ('file://%s')", marker))
 			// Every metadata column is valid: a missing-column error must not
 			// conceal whether the view expression receives storage authority.
 			mustExec(t, tenant, "create view authority_meta as select cast(save_file(fpath, 'owned test marker') as varchar(128)) as index_id, cast(0 as bigint) as timestamp, cast('unused' as varchar(32)) as checksum, cast(0 as bigint) as filesize, cast(0 as bigint) as recency, cast(0 as bigint) as nrow, cast(0 as bigint) as build_ts from authority_paths")
 			t.Cleanup(func() { _, _ = tenant.Exec("drop view if exists authority_meta") })
-			counts := func() [2]int {
-				var n [2]int
-				require.NoError(t, tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, store)).Scan(&n[0]))
-				require.NoError(t, tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s`", dbName, meta)).Scan(&n[1]))
+			counts := func() [2]int64 {
+				var n [2]int64
+				require.NoError(t, readPhysical(fmt.Sprintf("select cast(count(*) as signed) from `%s`.`%s`", dbName, store), &n[0]))
+				require.NoError(t, readPhysical(fmt.Sprintf("select cast(count(*) as signed) from `%s`.`%s`", dbName, meta), &n[1]))
 				return n
 			}
 			before := counts()
 			_, err := tenant.Exec("select index_id from authority_meta")
 			require.ErrorContains(t, err, "only the sys account moadmin role")
 			_, err = tenant.Exec(fmt.Sprintf("select * from fulltext2_compact('%s', '%s', 'authority_meta', '1') as f", dbName, store))
+			require.ErrorContains(t, err, "privilege")
+			_, err = tenant.Exec(fmt.Sprintf("select * from fulltext2_compact('%s', 'authority_store', 'authority_meta', '1') as f", dbName))
 			require.ErrorContains(t, err, "only the sys account moadmin role")
+			var ordinaryCount int64
+			require.NoError(t, tenant.QueryRow("select count(*) from authority_store").Scan(&ordinaryCount))
+			require.Zero(t, ordinaryCount)
 			_, err = os.Stat(marker)
 			require.ErrorIs(t, err, os.ErrNotExist)
 			require.Equal(t, before, counts(), "refused compaction must leave genuine index storage unchanged")

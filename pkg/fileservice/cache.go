@@ -44,9 +44,16 @@ type CacheConfig struct {
 	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
-	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
-	RPC                  morpc.Config   `toml:"rpc"`
-	CheckOverlaps        bool           `toml:"check-overlaps"`
+	// DiskDownloadMaxExtraWait bounds how much later than a range read from object
+	// storage a read may get its bytes by waiting for the download of their object to
+	// the disk cache. A read waits only if the download will write its bytes within that
+	// margin, otherwise it reads its range at once. Larger values make fewer object
+	// storage requests and slower reads; 0 makes the fastest reads. Default
+	// DefaultDiskDownloadMaxExtraWait.
+	DiskDownloadMaxExtraWait *toml.Duration `toml:"disk-download-max-extra-wait"`
+	RemoteCacheEnabled       bool           `toml:"remote-cache-enabled"`
+	RPC                      morpc.Config   `toml:"rpc"`
+	CheckOverlaps            bool           `toml:"check-overlaps"`
 
 	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
 	// DiskCapacity; DisableCacheCapacity or less disables it. Default
@@ -172,7 +179,7 @@ func newFileServiceCaches(
 			cacheDataAllocator,
 			name,
 			config.MetricScope,
-			diskCacheOptions{},
+			diskCacheOptions{downloadMaxExtraWait: config.diskDownloadMaxExtraWait()},
 		)
 		if err != nil {
 			return caches, err
@@ -206,6 +213,16 @@ func checkIndexFileDiskPath(diskPath, indexPath string) error {
 		return moerr.NewInvalidInputNoCtxf("index-file-disk-path %q overlaps disk-path %q", indexPath, diskPath)
 	}
 	return nil
+}
+
+// DefaultDiskDownloadMaxExtraWait is the default DiskDownloadMaxExtraWait.
+const DefaultDiskDownloadMaxExtraWait = 200 * time.Millisecond
+
+func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
+	if c.DiskDownloadMaxExtraWait == nil {
+		return DefaultDiskDownloadMaxExtraWait
+	}
+	return c.DiskDownloadMaxExtraWait.Duration
 }
 
 // indexFileDiskCapacity returns the capacity of the index-file cache, 0 when the cache is

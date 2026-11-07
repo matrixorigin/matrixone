@@ -15,9 +15,14 @@
 package lrucache
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"math/rand"
+	"slices"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -47,7 +52,6 @@ func newRecorded(capacity int64) (*Cache[string, int], *recorder) {
 	r := &recorder{}
 	c := NewWithPrepareEvict(
 		fscache.ConstCapacity(capacity),
-		nil,
 		func(_ context.Context, key string, value int, size int64, _ uint64) {
 			r.add("set %s=%d/%d", key, value, size)
 		},
@@ -63,12 +67,24 @@ func newRecorded(capacity int64) (*Cache[string, int], *recorder) {
 	return c, r
 }
 
+// keys returns the keys from the most to the least recently used.
 func keys(c *Cache[string, int]) []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var out []string
-	for e := c.order.Front(); e != nil; e = e.Next() {
-		out = append(out, e.Value.(*item[string, int]).key)
+	var items []*item[string, int]
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.Lock()
+		for e := s.order.Front(); e != nil; e = e.Next() {
+			items = append(items, e.Value.(*item[string, int]))
+		}
+		s.mu.Unlock()
+	}
+	slices.SortFunc(items, func(a, b *item[string, int]) int { return cmp.Compare(b.stamp, a.stamp) })
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.key)
 	}
 	return out
 }
@@ -187,7 +203,7 @@ func TestEvictionCleanupRunsWhenACallbackPanics(t *testing.T) {
 	ctx := context.Background()
 	var finished []string
 	c := NewWithPrepareEvict(
-		fscache.ConstCapacity(30), nil, nil, nil,
+		fscache.ConstCapacity(30), nil, nil,
 		func(key string, _ int, _ int64, _ uint64) func() {
 			return func() { finished = append(finished, key) }
 		},
@@ -203,4 +219,205 @@ func TestEvictionCleanupRunsWhenACallbackPanics(t *testing.T) {
 	require.Panics(t, func() { c.ForceEvictWithWait(ctx, 30) })
 	require.ElementsMatch(t, []string{"a", "b", "c"}, finished)
 	require.Zero(t, c.Used())
+}
+
+func TestEvictionCallbacksMayUseTheCache(t *testing.T) {
+	ctx := context.Background()
+	var c *Cache[string, int]
+	c = NewWithPrepareEvict(
+		fscache.ConstCapacity(20), nil, nil,
+		func(key string, _ int, _ int64, _ uint64) func() {
+			require.False(t, c.Contains(key))
+			if key == "a" {
+				c.Set(ctx, "a", 0, 10)
+			}
+			return func() { c.Used() }
+		},
+		func(context.Context, string, int, int64, uint64) { c.Used() },
+	)
+	c.Set(ctx, "a", 0, 10)
+	c.Set(ctx, "b", 1, 10)
+	c.Delete(ctx, "a")
+	c.Set(ctx, "c", 2, 10)
+	require.True(t, c.Contains("a"))
+	require.False(t, c.Contains("b"))
+	require.True(t, c.Contains("c"))
+}
+
+// lruModel is a least-recently-used cache in one list, most recently used first.
+type lruModel struct {
+	capacity int64
+	keys     []string
+	sizes    map[string]int64
+	held     map[string]bool
+}
+
+func (m *lruModel) used() (n int64) {
+	for _, k := range m.keys {
+		n += m.sizes[k]
+	}
+	return n
+}
+
+func (m *lruModel) remove(k string) {
+	m.keys = slices.DeleteFunc(m.keys, func(x string) bool { return x == k })
+	delete(m.sizes, k)
+}
+
+func (m *lruModel) evict() {
+	for i := len(m.keys) - 1; i >= 0 && m.used() > m.capacity; i-- {
+		if k := m.keys[i]; !m.held[k] {
+			m.remove(k)
+		}
+	}
+}
+
+func (m *lruModel) set(k string, size int64, oldest bool) {
+	if _, ok := m.sizes[k]; ok {
+		return
+	}
+	m.sizes[k] = size
+	if oldest {
+		m.keys = append(m.keys, k)
+	} else {
+		m.keys = append([]string{k}, m.keys...)
+	}
+	m.evict()
+}
+
+func (m *lruModel) get(k string) {
+	if _, ok := m.sizes[k]; ok {
+		size := m.sizes[k]
+		m.remove(k)
+		m.sizes[k] = size
+		m.keys = append([]string{k}, m.keys...)
+	}
+}
+
+func TestMatchesSingleListModel(t *testing.T) {
+	ctx := context.Background()
+	m := &lruModel{capacity: 2000, sizes: map[string]int64{}, held: map[string]bool{}}
+	c := NewWithPrepareEvict[string, int](fscache.ConstCapacity(m.capacity), nil, nil, nil, nil)
+	c.SetEvictable(func(k string) bool { return !m.held[k] })
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 10000; i++ {
+		k := strconv.Itoa(r.Intn(300))
+		size := int64(1 + r.Intn(100))
+		switch op := r.Intn(20); {
+		case op < 8:
+			c.Get(ctx, k)
+			m.get(k)
+		case op < 9:
+			c.SetOldest(ctx, k, 0, size)
+			m.set(k, size, true)
+		case op < 10:
+			c.Delete(ctx, k)
+			m.remove(k)
+		case op < 11:
+			_, ok := m.sizes[k]
+			require.Equal(t, ok, c.Replace(ctx, k, 0, size))
+			if ok {
+				m.sizes[k] = size
+				m.evict()
+			}
+		case op < 12:
+			m.held[k] = !m.held[k]
+		default:
+			c.Set(ctx, k, 0, size)
+			m.set(k, size, false)
+		}
+		require.Equal(t, m.keys, keys(c), "op %d", i)
+		require.Equal(t, m.used(), c.Used(), "op %d", i)
+	}
+}
+
+func TestConcurrentAccounting(t *testing.T) {
+	ctx := context.Background()
+	var sets, prepared, finished, evicted atomic.Int64
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(5000),
+		func(context.Context, string, int, int64, uint64) { sets.Add(1) },
+		nil,
+		func(string, int, int64, uint64) func() {
+			prepared.Add(1)
+			return func() { finished.Add(1) }
+		},
+		func(context.Context, string, int, int64, uint64) { evicted.Add(1) },
+	)
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			r := rand.New(rand.NewSource(int64(g)))
+			for i := 0; i < 20000; i++ {
+				k := strconv.Itoa(r.Intn(500))
+				switch r.Intn(4) {
+				case 0:
+					c.Get(ctx, k)
+				case 1:
+					c.Delete(ctx, k)
+				default:
+					c.Set(ctx, k, 0, int64(1+r.Intn(100)))
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	present := keys(c)
+	var used int64
+	for i := range c.shards {
+		for e := c.shards[i].order.Front(); e != nil; e = e.Next() {
+			used += e.Value.(*item[string, int]).size
+		}
+	}
+	require.Equal(t, used, c.Used())
+	require.LessOrEqual(t, c.Used(), int64(5000))
+	require.Equal(t, prepared.Load(), finished.Load())
+	require.Equal(t, prepared.Load(), evicted.Load())
+	require.Equal(t, sets.Load()-evicted.Load(), int64(len(present)))
+}
+
+// keyInShard returns a key with prefix that lands in shard want.
+func keyInShard[V any](c *Cache[string, V], prefix string, want int) string {
+	for i := 0; ; i++ {
+		k := prefix + strconv.Itoa(i)
+		if c.shardOf(k) == &c.shards[want] {
+			return k
+		}
+	}
+}
+
+// A Get on the oldest item of the shard a scan picked, while the scan reads a later shard,
+// does not make eviction take that shard's next item over an older one elsewhere.
+func TestScanEvictsOldestAfterConcurrentGet(t *testing.T) {
+	ctx := context.Background()
+	var evicted []string
+	c := NewWithPrepareEvict[string, int](func() int64 { return 1 << 30 }, nil, nil, nil,
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) { evicted = append(evicted, key) })
+	held := keyInShard(c, "held", 12)
+	a1 := keyInShard(c, "a1-", 3)
+	b := keyInShard(c, "b-", 9)
+	a2 := keyInShard(c, "a2-", 3)
+	var armed atomic.Bool
+	c.SetEvictable(func(key string) bool {
+		if key == held {
+			return false
+		}
+		if key == b && armed.CompareAndSwap(true, false) {
+			done := make(chan struct{})
+			go func() {
+				c.Get(ctx, a1)
+				close(done)
+			}()
+			<-done
+		}
+		return true
+	})
+	for _, k := range []string{held, a1, b, a2} {
+		c.Set(ctx, k, 0, 1)
+	}
+	armed.Store(true)
+	c.EvictToTargetWithWait(ctx, 3)
+	require.Equal(t, []string{b}, evicted)
 }

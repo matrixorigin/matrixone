@@ -99,7 +99,22 @@ func (e *indexFileEngine) flush() {
 	e.flushTable("idx")
 }
 
+// flushTable persists the rows last written to table into a new storage object. A flush
+// started before the TN's dirty tree has the write flushes nothing, so it is repeated
+// until the table has another object.
 func (e *indexFileEngine) flushTable(table string) {
+	before := len(e.objectNames(table))
+	for deadline := time.Now().Add(time.Minute); ; {
+		e.flushTableOnce(table)
+		if len(e.objectNames(table)) > before {
+			return
+		}
+		require.True(e.t, time.Now().Before(deadline), "a flush of %s writes an object", table)
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (e *indexFileEngine) flushTableOnce(table string) {
 	op := e.txn()
 	db, err := e.de.Engine.Database(e.ctx, "ifdb", op)
 	require.NoError(e.t, err)
@@ -273,6 +288,12 @@ func (r *prefetchRecorder) seen(paths []string) bool {
 }
 
 func (e *indexFileEngine) objectPaths(table string) []string {
+	out := e.objectNames(table)
+	require.NotEmpty(e.t, out)
+	return out
+}
+
+func (e *indexFileEngine) objectNames(table string) []string {
 	res, err := e.exec.Exec(e.ctx,
 		"select distinct object_name from metadata_scan('ifdb."+table+"', '*') g",
 		executor.Options{}.WithDisableIncrStatement())
@@ -284,7 +305,6 @@ func (e *indexFileEngine) objectPaths(table string) []string {
 			out = append(out, bat.Vecs[0].GetStringAt(i))
 		}
 	}
-	require.NotEmpty(e.t, out)
 	return out
 }
 

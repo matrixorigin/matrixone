@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -692,6 +693,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if isRemote {
 				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
 			}
+			s.DataSource.OrderBy = dsc.Node.OrderBy
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -1082,6 +1084,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopValueTag = t.TopValueTag
 		in.TopOrderedOutput = t.OrderedOutput
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1128,13 +1131,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ConnectorIndex: idx,
 		}
 	case *table_function.TableFunction:
+		maintenance, err := encodeIndexMaintenanceSpec(t.IndexMaintenance)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.Attrs,
-			Rets:     t.Rets,
-			Args:     t.Args,
-			Params:   t.Params,
-			Name:     t.FuncName,
-			IsSingle: t.IsSingle,
+			Attrs:            t.Attrs,
+			Rets:             t.Rets,
+			Args:             t.Args,
+			Params:           t.Params,
+			Name:             t.FuncName,
+			IsSingle:         t.IsSingle,
+			IndexMaintenance: maintenance,
 		}
 		in.Limit = t.Limit
 
@@ -1325,13 +1333,18 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
+			maintenance, err := encodeIndexMaintenanceSpec(t.TableFunction.IndexMaintenance)
+			if err != nil {
+				return ctxId, nil, err
+			}
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:    t.TableFunction.Attrs,
-				Rets:     t.TableFunction.Rets,
-				Args:     t.TableFunction.Args,
-				Params:   t.TableFunction.Params,
-				Name:     t.TableFunction.FuncName,
-				IsSingle: t.TableFunction.IsSingle,
+				Attrs:            t.TableFunction.Attrs,
+				Rets:             t.TableFunction.Rets,
+				Args:             t.TableFunction.Args,
+				Params:           t.TableFunction.Params,
+				Name:             t.TableFunction.FuncName,
+				IsSingle:         t.TableFunction.IsSingle,
+				IndexMaintenance: maintenance,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1736,6 +1749,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		topArg := top.NewArgument().
 			WithLimit(opr.Limit).
 			WithFs(opr.OrderBy)
+		topArg.TopValueTag = opr.TopValueTag
 		if opr.TopOrderedOutput {
 			topArg.WithOrderedOutput()
 		}
@@ -1808,6 +1822,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.TableFunction:
+		maintenance, err := decodeIndexMaintenanceSpec(opr.TableFunction.GetIndexMaintenance())
+		if err != nil {
+			return nil, err
+		}
 		arg := table_function.NewArgument()
 		arg.Attrs = opr.TableFunction.Attrs
 		arg.Rets = opr.TableFunction.Rets
@@ -1815,6 +1833,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
+		arg.IndexMaintenance = maintenance
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1979,6 +1998,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
+		var maintenance *executor.IndexMaintenanceSpec
+		if opr.TableFunction != nil {
+			var err error
+			maintenance, err = decodeIndexMaintenanceSpec(opr.TableFunction.GetIndexMaintenance())
+			if err != nil {
+				return nil, err
+			}
+		}
 		arg := apply.NewArgument()
 		t := opr.GetApply()
 		arg.ApplyType = int(t.ApplyType)
@@ -1995,6 +2022,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+			arg.TableFunction.IndexMaintenance = maintenance
 		}
 		op = arg
 	case vm.MultiUpdate:
