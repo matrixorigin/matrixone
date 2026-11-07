@@ -553,7 +553,8 @@ func TestIntegerIndexCostObservation(t *testing.T) {
 				return builder.applyIndicesWithOrder(0, map[[2]int32]int{{scan.BindingTags[0], 0}: 1}, make(map[[2]int32]*pb.Expr), false)
 			}
 			if scenario == "resolver error" {
-				require.PanicsWithValue(t, compiler.resolveErr, func() { _, _ = run() })
+				_, err := run()
+				require.ErrorIs(t, err, compiler.resolveErr)
 				require.Zero(t, source.observed)
 				return
 			}

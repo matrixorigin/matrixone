@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -516,8 +517,6 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 	if builder.isViewSchemaMemoScan(nodeID) {
 		return nodeID, nil
 	}
-	var err error
-
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {
 		return nodeID, nil
 	}
@@ -530,10 +529,11 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 			!scanHasFullTextBooleanComposition(builder.qry.Nodes[childID]) {
 			continue
 		}
-		node.Children[i], err = builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
+		rewritten, err := builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
 		if err != nil {
 			return -1, err
 		}
+		node.Children[i] = rewritten
 	}
 	if err := builder.rewriteFullTextBooleanConsumers(node); err != nil {
 		return -1, err
@@ -2774,7 +2774,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 		return retID, nil
 	}
 
-	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx), nil
+	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx)
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
@@ -4916,26 +4916,6 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 	}, true
 }
 
-func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
-	// Functional indexes currently require a base-row residual evaluation.
-	if functionalIndexColumn(node.TableDef, idxDef) != nil {
-		return -1
-	}
-	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
-	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
-	if !ok {
-		return -1
-	}
-	if _, skip, _ := costCtx.score(idxDef, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly); skip {
-		return -1
-	}
-	id, err := builder.applyRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
-	if err != nil {
-		panic(err)
-	}
-	return id
-}
-
 func (builder *QueryBuilder) applyRegularIndexOnlyScan(idxDef *IndexDef, node *plan.Node, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot, match *regularIndexOnlyMatch) (int32, error) {
 	indexNode, err := builder.buildRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
 	if err != nil || indexNode == nil {
@@ -4946,6 +4926,26 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(idxDef *IndexDef, node *p
 		builder.qry.Nodes[id].Stats.ForceOneCN = true
 	}
 	return id, nil
+}
+
+// regularIndexPlanningError preserves a substantive error and the request's
+// cancellation cause when an error wraps the context's cancellation sentinel.
+func regularIndexPlanningError(ctx context.Context, err error) error {
+	if ctx == nil {
+		return err
+	}
+	cause := context.Cause(ctx)
+	if cause == nil {
+		return err
+	}
+	stop := ctx.Err()
+	if err == nil || err == stop {
+		return cause
+	}
+	if errors.Is(err, stop) && !errors.Is(err, cause) {
+		return errors.Join(err, cause)
+	}
+	return err
 }
 
 // buildRegularIndexColumnMap constructs a private physical index mapping. Each
@@ -4996,17 +4996,22 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	scanSnapshot *Snapshot, match *regularIndexOnlyMatch,
 ) (result *plan.Node, err error) {
 	necessary := match.observation != nil
+	defer func() {
+		if result == nil {
+			ctx := builder.compCtx.GetContext()
+			if necessary && ctx != nil {
+				if cause := context.Cause(ctx); cause != nil {
+					err = cause
+				}
+			} else if !necessary {
+				err = regularIndexPlanningError(ctx, err)
+			}
+		}
+	}()
 	var resolver CompilerContext
 	var hidden TableResolution
 	access := match.observation
 	if necessary {
-		defer func() {
-			if result == nil {
-				if cause := context.Cause(builder.GetContext()); cause != nil {
-					err = cause
-				}
-			}
-		}()
 		if access.budget <= 0 || access.scan != node || match.cost == nil || match.cost.node != node || idxColMap == nil || node.ObjRef == nil ||
 			node.TableDef == nil || node.Stats == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 || len(node.ProjectList) != 0 ||
 			node.NodeId < 0 || int(node.NodeId) >= len(builder.ctxByNode) || builder.qry.Nodes[node.NodeId] != node ||
@@ -5032,16 +5037,14 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 		idxObjRef, idxTableDef, err = builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	}
 	if err != nil {
-		if necessary {
-			return nil, err
-		}
-		panic(err)
+		return nil, err
 	}
-	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 {
+	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 ||
+		idxTableDef.Cols[0] == nil || idxTableDef.Cols[1] == nil {
 		if necessary {
 			return nil, nil
 		}
-		panic(moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata"))
+		return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata")
 	}
 	var hint *plan.Expr
 	if necessary {
@@ -5082,6 +5085,9 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 			leading, err = builder.replaceLeadingFilter(idxDef, node.FilterList, match.filterIdx, match.leadingEqual, idxTag, idxTableDef)
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
 			return nil, nil
 		} // Existing ordinary optional-binding behavior.
 	}
@@ -5096,10 +5102,7 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	}
 	mapping, ok, cause := buildRegularIndexColumnMap(mappingCtx, node, idxDef, idxTableDef, leadingColExpr, idxTag)
 	if cause != nil {
-		if necessary {
-			return nil, cause
-		}
-		panic(cause)
+		return nil, cause
 	}
 	if !ok {
 		return nil, nil
@@ -5130,6 +5133,9 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 		}
 		builder.genNewBindTag()
 	} else {
+		if cause := regularIndexPlanningError(builder.compCtx.GetContext(), nil); cause != nil {
+			return nil, cause
+		}
 		// Preserve existing remaps from the caller when rewriting ordinary filters.
 		for key, value := range mapping {
 			idxColMap[key] = value

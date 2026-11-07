@@ -96,14 +96,14 @@ func regularIndexMergeFiltersStable(node *plan.Node) bool {
 func (builder *QueryBuilder) applyRegularIndexMerge(
 	node *plan.Node, indexes []*IndexDef, refs map[[2]int32]int,
 	colMap map[[2]int32]*plan.Expr, base *encodedRegularIndexCostContext,
-) int32 {
+) (int32, error) {
 	if len(indexes) < 2 || !base.valid || IsDefaultStats(node.Stats) ||
 		!regularIndexMergeFiltersStable(node) {
-		return node.NodeId
+		return node.NodeId, regularIndexPlanningError(builder.compCtx.GetContext(), nil)
 	}
 	pk, ok := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	if !ok || pk < 0 || int(pk) >= len(node.TableDef.Cols) {
-		return node.NodeId
+		return node.NodeId, regularIndexPlanningError(builder.compCtx.GetContext(), nil)
 	}
 	var best *regularIndexMergeCandidate
 	for pos, filter := range node.FilterList {
@@ -176,7 +176,7 @@ func (builder *QueryBuilder) applyRegularIndexMerge(
 		}
 	}
 	if best == nil {
-		return node.NodeId
+		return node.NodeId, regularIndexPlanningError(builder.compCtx.GetContext(), nil)
 	}
 	return builder.buildRegularIndexMerge(node, pk, best, colMap)
 }
@@ -308,7 +308,7 @@ func regularIndexMergeSpans(expr *plan.Expr) float64 {
 
 func (builder *QueryBuilder) buildRegularIndexMerge(
 	node *plan.Node, pk int32, candidate *regularIndexMergeCandidate, colMap map[[2]int32]*plan.Expr,
-) int32 {
+) (int32, error) {
 	snapshot := node.ScanSnapshot
 	if snapshot == nil {
 		snapshot = &Snapshot{}
@@ -319,12 +319,15 @@ func (builder *QueryBuilder) buildRegularIndexMerge(
 		localMap := make(map[[2]int32]*plan.Expr)
 		scan, err := builder.buildRegularIndexOnlyScan(branch.index, branch.scan, localMap, snapshot, branch.match)
 		if err != nil {
-			panic(err)
+			return node.NodeId, regularIndexPlanningError(builder.compCtx.GetContext(), err)
 		}
 		if scan == nil {
-			return node.NodeId
+			return node.NodeId, regularIndexPlanningError(builder.compCtx.GetContext(), nil)
 		}
 		scans = append(scans, scan)
+	}
+	if err := regularIndexPlanningError(builder.compCtx.GetContext(), nil); err != nil {
+		return node.NodeId, err
 	}
 	ctx := builder.ctxByNode[node.NodeId]
 	pkType := node.TableDef.Cols[pk].Typ
@@ -372,7 +375,7 @@ func (builder *QueryBuilder) buildRegularIndexMerge(
 			GetColExpr(pkType, node.BindingTags[0], pk), pkExpr,
 		})
 		if err != nil {
-			panic(err)
+			return node.NodeId, regularIndexPlanningError(builder.compCtx.GetContext(), err)
 		}
 		root = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN, JoinType: plan.Node_INDEX, Children: []int32{node.NodeId, root},
@@ -380,5 +383,5 @@ func (builder *QueryBuilder) buildRegularIndexMerge(
 		}, ctx)
 		node.Limit, node.Offset = nil, nil
 	}
-	return root
+	return root, nil
 }

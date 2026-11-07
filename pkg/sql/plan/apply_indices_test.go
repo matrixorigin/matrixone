@@ -2975,7 +2975,7 @@ func TestCoveringMatcherDoesNotApplyBackfillCapacity(t *testing.T) {
 
 }
 
-func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
+func TestRegularIndexSelectorRejectsBroadEncodedEquality(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	bindTag := builder.genNewBindTag()
@@ -3033,7 +3033,7 @@ func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
 	leadingPos := []int32{0}
 	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1}, leadingPos, false))
 
-	idxNodeID := builder.tryIndexOnlyScan(
+	indexRoot := planSingleRegularIndex(t, builder,
 		idxDef,
 		builder.qry.Nodes[scanID],
 		map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1},
@@ -3041,7 +3041,37 @@ func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
 		&Snapshot{},
 	)
 
-	require.Equal(t, int32(-1), idxNodeID)
+	require.False(t, isCoveringIndexScan(indexRoot))
+}
+
+// planSingleRegularIndex registers the fixture's index and exercises the same
+// selector used by planning. The result may be a base scan, covering scan or join.
+func planSingleRegularIndex(t testing.TB, builder *QueryBuilder, index *planpb.IndexDef, node *planpb.Node,
+	refs map[[2]int32]int, mapping map[[2]int32]*planpb.Expr, snapshot *Snapshot,
+) *planpb.Node {
+	t.Helper()
+	registered := *index
+	registered.TableExist = true
+	node.TableDef.Indexes = []*planpb.IndexDef{&registered}
+	node.ScanSnapshot = snapshot
+	id, err := builder.applyIndicesForFiltersRegularIndex(node.NodeId, node, refs, mapping)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, id, int32(0))
+	return builder.qry.Nodes[id]
+}
+
+func isCoveringIndexScan(node *planpb.Node) bool {
+	return node.NodeType == planpb.Node_TABLE_SCAN && node.IndexScanInfo.IsIndexScan
+}
+
+func requireIndexBackfill(t testing.TB, builder *QueryBuilder, root *planpb.Node, name string) {
+	t.Helper()
+	require.Equal(t, planpb.Node_JOIN, root.NodeType)
+	require.Equal(t, planpb.Node_INDEX, root.JoinType)
+	require.Len(t, root.Children, 2)
+	indexScan := builder.qry.Nodes[root.Children[1]]
+	require.True(t, indexScan.IndexScanInfo.IsIndexScan)
+	require.Equal(t, name, indexScan.IndexScanInfo.IndexName)
 }
 
 type encodedIndexCostTestContext struct {
@@ -3226,7 +3256,7 @@ func newEncodedIndexCostTestCase(
 	return builder, scanID, idxDef, refCnt
 }
 
-func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
+func TestRegularIndexSelectorEncodedCostControls(t *testing.T) {
 	wideParts := []string{
 		"category",
 		"tenant_id",
@@ -3236,19 +3266,20 @@ func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
 	}
 	narrowParts := []string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
 	tests := []struct {
-		name       string
-		parts      []string
-		leadingSel float64
-		outcnt     float64
-		cost       float64
-		colRefs    map[int32]int
-		force      bool
-		wantIndex  bool
+		name         string
+		parts        []string
+		leadingSel   float64
+		outcnt       float64
+		cost         float64
+		colRefs      map[int32]int
+		force        bool
+		wantIndex    bool
+		wantBackfill bool
 	}{
 		{
 			name:  "selective encoded projection wins",
 			parts: wideParts, leadingSel: 0.001, outcnt: 800, cost: 800_000,
-			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true, wantBackfill: true,
 		},
 		{
 			name:  "broad encoded projection loses",
@@ -3268,12 +3299,12 @@ func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
 		{
 			name:  "one extraction consumer stays below crossover",
 			parts: wideParts, leadingSel: 0.05, outcnt: 40_000, cost: 800_000,
-			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true,
+			colRefs: map[int32]int{1: 1, 2: 1}, wantIndex: true, wantBackfill: true,
 		},
 		{
 			name:  "repeated extraction consumers cross",
 			parts: wideParts, leadingSel: 0.05, outcnt: 40_000, cost: 800_000,
-			colRefs: map[int32]int{1: 5, 2: 1},
+			colRefs: map[int32]int{1: 5, 2: 1}, wantBackfill: true,
 		},
 		{
 			name:  "small output limits downstream extraction",
@@ -3307,17 +3338,25 @@ func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
 			// The fixture allocates the first binding tag.
 			builder.qry.Nodes[scanID].FilterList[0].GetF().Args[0].GetCol().RelPos = builder.qry.Nodes[scanID].BindingTags[0]
 
-			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
-			if test.wantIndex {
-				require.NotEqual(t, int32(-1), idxNodeID)
+			node := builder.qry.Nodes[scanID]
+			cost := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+			match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, cost)
+			require.True(t, ok)
+			_, rejected, _ := cost.score(idxDef, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly)
+			require.Equal(t, test.wantIndex, !rejected, "covering candidate versus base")
+			indexRoot := planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			if test.wantBackfill {
+				requireIndexBackfill(t, builder, indexRoot, idxDef.IndexName)
+			} else if test.wantIndex {
+				require.True(t, isCoveringIndexScan(indexRoot))
 			} else {
-				require.Equal(t, int32(-1), idxNodeID)
+				require.Same(t, node, indexRoot)
 			}
 		})
 	}
 }
 
-func TestTryIndexOnlyScanUsesNullRejectingComparisonBounds(t *testing.T) {
+func TestRegularIndexSelectorUsesNullRejectingComparisonBounds(t *testing.T) {
 	parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
 	tests := []struct {
 		name             string
@@ -3389,11 +3428,11 @@ func TestTryIndexOnlyScanUsesNullRejectingComparisonBounds(t *testing.T) {
 					require.True(t, ok)
 					require.Equal(t, variant.wantResidual, len(match.residualLeadingPos) > 0)
 
-					idxNodeID := builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+					indexRoot := planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
 					if variant.wantIndex {
-						require.NotEqual(t, int32(-1), idxNodeID)
+						require.True(t, isCoveringIndexScan(indexRoot))
 					} else {
-						require.Equal(t, int32(-1), idxNodeID)
+						require.False(t, isCoveringIndexScan(indexRoot))
 					}
 				})
 			}
@@ -3488,7 +3527,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 		stats := NewStatsInfo()
 		stats.TableCnt = 800_000
 		ctx.statsCache.Set(encodedIndexCostUnitTableID, stats)
-		require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		require.False(t, isCoveringIndexScan(planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})))
 	})
 
 	t.Run("table threshold", func(t *testing.T) {
@@ -3502,11 +3541,11 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				builder, scanID, idxDef, colRefCnt := newBroadCase(t, test.tableCnt)
-				idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+				indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
 				if test.wantIndex {
-					require.NotEqual(t, int32(-1), idxNodeID)
+					require.True(t, isCoveringIndexScan(indexRoot))
 				} else {
-					require.Equal(t, int32(-1), idxNodeID)
+					require.False(t, isCoveringIndexScan(indexRoot))
 				}
 			})
 		}
@@ -3547,7 +3586,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			catalog.CPrimaryKeyColName: math.MaxUint64,
 		}
 		ctx.statsCache.Set(encodedIndexCostUnitTableID, stats)
-		require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+		require.False(t, isCoveringIndexScan(planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})))
 	})
 
 	t.Run("equal work rejects automatic index", func(t *testing.T) {
@@ -3773,7 +3812,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
 				useSpecified: true, use: map[string]struct{}{idxDef.IndexName: {}},
 			}}
-			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+			require.False(t, isCoveringIndexScan(planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})))
 		})
 		t.Run("IGNORE removes candidate", func(t *testing.T) {
 			builder, scanID, idxDef, _ := newBroadCase(t, 800_000)
@@ -3787,7 +3826,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			builder.indexHintsByScan[scanID] = &indexHintSet{scan: indexHintScopeSet{
 				forceSpecified: true, force: map[string]struct{}{idxDef.IndexName: {}},
 			}}
-			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+			require.True(t, isCoveringIndexScan(planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})))
 		})
 	})
 
@@ -3802,7 +3841,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			)
 			node := builder.qry.Nodes[scanID]
 			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
-			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+			require.False(t, isCoveringIndexScan(planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})))
 		})
 		t.Run("single-column unique index retains ordinary exemption", func(t *testing.T) {
 			filter := makeRangeFilterExpr(0, 0, "=", 7)
@@ -3815,7 +3854,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			idxDef.Unique = true
 			node := builder.qry.Nodes[scanID]
 			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
-			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+			require.True(t, isCoveringIndexScan(planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})))
 		})
 		t.Run("single-user-column non-unique index keeps selective win", func(t *testing.T) {
 			filter := makeRangeFilterExpr(0, 0, "=", 7)
@@ -3827,7 +3866,13 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			)
 			node := builder.qry.Nodes[scanID]
 			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
-			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+			cost := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
+			match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, cost)
+			require.True(t, ok)
+			_, rejected, _ := cost.score(idxDef, match.filterIdx, match.residualLeadingPos, encodedRegularIndexCostIndexOnly)
+			require.False(t, rejected, "covering access remains cheaper than the base scan")
+			root := planSingleRegularIndex(t, builder, idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			requireIndexBackfill(t, builder, root, idxDef.IndexName)
 		})
 	})
 }
@@ -5320,7 +5365,7 @@ func TestEncodedIndexCostDoesNotCapByteStringPrefixResidualFromPublicPlan(t *tes
 	require.False(t, planHasIndexJoin(queryPlan))
 }
 
-func TestTryIndexOnlyScanChargesResidualExtractionOnLeadingCandidates(t *testing.T) {
+func TestRegularIndexSelectorChargesResidualExtractionOnLeadingCandidates(t *testing.T) {
 	parts := []string{
 		"category",
 		"tenant_id",
@@ -5357,11 +5402,11 @@ func TestTryIndexOnlyScanChargesResidualExtractionOnLeadingCandidates(t *testing
 				filter.GetF().Args[0].GetCol().RelPos = bindTag
 			}
 
-			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{})
 			if test.wantIndex {
-				require.NotEqual(t, int32(-1), idxNodeID)
+				require.True(t, isCoveringIndexScan(indexRoot))
 			} else {
-				require.Equal(t, int32(-1), idxNodeID)
+				require.False(t, isCoveringIndexScan(indexRoot))
 			}
 		})
 	}
@@ -8483,7 +8528,7 @@ func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
 	))
 }
 
-func TestTryIndexOnlyScanRejectsLossyPrefixIndex(t *testing.T) {
+func TestRegularIndexSelectorRejectsLossyPrefixIndex(t *testing.T) {
 	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
 		catalog.IndexAlgoParamPrefixLengths: "status:4",
 	})
@@ -8531,11 +8576,11 @@ func TestTryIndexOnlyScanRejectsLossyPrefixIndex(t *testing.T) {
 			}
 			scanID := builder.appendNode(node, ctx)
 
-			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
 			if tt.wantIndexOnly {
-				require.NotEqual(t, int32(-1), idxNodeID)
+				require.True(t, isCoveringIndexScan(indexRoot))
 			} else {
-				require.Equal(t, int32(-1), idxNodeID)
+				require.False(t, isCoveringIndexScan(indexRoot))
 			}
 		})
 	}
@@ -8632,7 +8677,7 @@ func TestApplyIndicesForFiltersIgnoresVisibilityMetadata(t *testing.T) {
 	require.NotEqual(t, scanID, resultID)
 }
 
-func TestTryIndexOnlyScanUsesComparisonNullSemanticsAndMinimalResiduals(t *testing.T) {
+func TestRegularIndexSelectorUsesComparisonNullSemanticsAndMinimalResiduals(t *testing.T) {
 	tests := []struct {
 		name         string
 		makeFilter   func(relPos int32) *planpb.Expr
@@ -8731,10 +8776,10 @@ func TestTryIndexOnlyScanUsesComparisonNullSemanticsAndMinimalResiduals(t *testi
 			}
 			scanID := builder.appendNode(node, ctx)
 
-			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
-			require.NotEqual(t, int32(-1), idxNodeID)
+			indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.True(t, isCoveringIndexScan(indexRoot))
 
-			idxNode := builder.qry.Nodes[idxNodeID]
+			idxNode := indexRoot
 			require.Equal(t, 1, countExprFunctionCalls(idxNode.FilterList[:1], tt.lookupFunc))
 			require.Zero(t, countExprFunctionCalls(idxNode.FilterList[:1], "isnotnull"))
 			require.NotZero(t, countExprFunctionCalls(idxNode.FilterList[:1], "serial"))
@@ -8904,7 +8949,7 @@ func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
 	}
 }
 
-func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixPredicates(t *testing.T) {
+func TestRegularIndexSelectorPreservesVarcharResidualForPrefixPredicates(t *testing.T) {
 	tests := []struct {
 		name       string
 		makeFilter func(relPos int32) *planpb.Expr
@@ -8972,10 +9017,10 @@ func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixPredicates(t *testing.
 			}
 			scanID := builder.appendNode(node, ctx)
 
-			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
-			require.NotEqual(t, int32(-1), idxNodeID)
+			indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			require.True(t, isCoveringIndexScan(indexRoot))
 
-			idxNode := builder.qry.Nodes[idxNodeID]
+			idxNode := indexRoot
 			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
 			if tt.residual == "" {
 				require.Len(t, idxNode.FilterList, 1)
@@ -8987,7 +9032,7 @@ func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixPredicates(t *testing.
 	}
 }
 
-func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
+func TestRegularIndexSelectorHandlesByteStringPrefixLookups(t *testing.T) {
 	tests := []struct {
 		name       string
 		typ        types.T
@@ -9116,16 +9161,16 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 			}
 			scanID := builder.appendNode(node, ctx)
 
-			idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
+			indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
 			if tt.reject {
 				// A CHAR IN needle also matches padded stored values. A decoded
 				// residual cannot restore values rejected by a raw byte prefix.
-				require.Equal(t, int32(-1), idxNodeID)
+				require.Same(t, builder.qry.Nodes[scanID], indexRoot)
 				return
 			}
-			require.NotEqual(t, int32(-1), idxNodeID)
+			require.True(t, isCoveringIndexScan(indexRoot))
 
-			idxNode := builder.qry.Nodes[idxNodeID]
+			idxNode := indexRoot
 			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
 			if tt.residual == "" {
 				require.Len(t, idxNode.FilterList, 1)
@@ -9226,7 +9271,7 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
 }
 
-func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
+func TestRegularIndexSelectorCoalescesRangePair(t *testing.T) {
 	makeScan := func(t *testing.T, columnType planpb.Type, filters []*planpb.Expr) (*QueryBuilder, int32, *planpb.IndexDef) {
 		t.Helper()
 		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
@@ -9273,10 +9318,10 @@ func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
 		builder, scanID, idxDef := makeScan(t, planpb.Type{Id: int32(types.T_int64)}, filters)
 		bindTag := builder.qry.Nodes[scanID].BindingTags[0]
 
-		idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID],
+		indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID],
 			map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
-		require.NotEqual(t, int32(-1), idxNodeID)
-		indexScan := builder.qry.Nodes[idxNodeID]
+		require.True(t, isCoveringIndexScan(indexRoot))
+		indexScan := indexRoot
 		require.Len(t, indexScan.FilterList, 1)
 		require.Equal(t, "prefix_between", indexScan.FilterList[0].GetF().Func.ObjName)
 	})
@@ -9289,10 +9334,10 @@ func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
 		builder, scanID, idxDef := makeScan(t, planpb.Type{Id: int32(types.T_varbinary), Width: 8}, filters)
 		bindTag := builder.qry.Nodes[scanID].BindingTags[0]
 
-		idxNodeID := builder.tryIndexOnlyScan(idxDef, builder.qry.Nodes[scanID],
+		indexRoot := planSingleRegularIndex(t, builder, idxDef, builder.qry.Nodes[scanID],
 			map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{}, &Snapshot{})
-		require.NotEqual(t, int32(-1), idxNodeID)
-		indexScan := builder.qry.Nodes[idxNodeID]
+		require.True(t, isCoveringIndexScan(indexRoot))
+		indexScan := indexRoot
 		require.Len(t, indexScan.FilterList, 3)
 		require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
 		require.Equal(t, ">", indexScan.FilterList[1].GetF().Func.ObjName)

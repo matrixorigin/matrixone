@@ -298,9 +298,11 @@ func TestRegularIndexOnlyAliasedSinglePartMapping(t *testing.T) {
 		ctx.SetContext(cancelled)
 		original := GetColExpr(typ, tag, 2)
 		mapping := map[[2]int32]*planpb.Expr{{tag, 2}: original}
-		require.PanicsWithValue(t, cause, func() {
-			build(index, mapping)
+		scan, err := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+			filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
 		})
+		require.Nil(t, scan)
+		require.ErrorIs(t, err, cause)
 		require.Same(t, original, mapping[[2]int32{tag, 2}])
 	})
 
@@ -309,9 +311,11 @@ func TestRegularIndexOnlyAliasedSinglePartMapping(t *testing.T) {
 		defer cancel()
 		ctx.SetContext(expired)
 		mapping := make(map[[2]int32]*planpb.Expr)
-		require.PanicsWithValue(t, context.DeadlineExceeded, func() {
-			build(index, mapping)
+		scan, err := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+			filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
 		})
+		require.Nil(t, scan)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 		require.Empty(t, mapping)
 	})
 
@@ -351,12 +355,39 @@ func TestRegularIndexMergeConstructionFailure(t *testing.T) {
 		require.NotNil(t, branch)
 		candidate.branches = append(candidate.branches, branch)
 	}
+	for _, branch := range candidate.branches {
+		cancelCtx, cancel := context.WithCancelCause(context.Background())
+		ctx.SetContext(cancelCtx)
+		stop := errors.New("index merge stopped after resolution")
+		compiler := &controlledIndexResolver{
+			CompilerContext: ctx,
+			target:          branch.index.IndexTableName,
+			after:           func() { cancel(stop) },
+		}
+		builder.compCtx = compiler
+		original := proto.Clone(node)
+		nameCount := len(builder.nameByColRef)
+		mapping := map[[2]int32]*planpb.Expr{}
+		got, err := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+		require.Equal(t, id, got)
+		require.ErrorIs(t, err, stop)
+		require.Equal(t, 1, compiler.resolved)
+		require.Len(t, builder.qry.Nodes, 1, "no branch may be published on cancellation")
+		require.Len(t, builder.ctxByNode, 1)
+		require.Len(t, builder.nameByColRef, nameCount)
+		require.Empty(t, mapping)
+		require.Empty(t, cmp.Diff(original, node))
+		cancel(nil)
+		ctx.SetContext(context.Background())
+		builder.compCtx = ctx
+	}
 	indexType := ctx.tables["idx_hint_b"].Cols[0].Typ
 	ctx.tables["idx_hint_b"].Cols[0].Typ = planpb.Type{Id: int32(types.T_json)}
 	before := proto.Clone(node)
 	nameCount := len(builder.nameByColRef)
 	mapping := map[[2]int32]*planpb.Expr{}
-	got := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	got, err := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	require.NoError(t, err)
 	require.Equal(t, id, got)
 	require.Len(t, builder.qry.Nodes, 1, "第一分支不能提前发布")
 	require.Len(t, builder.ctxByNode, 1)
@@ -370,7 +401,8 @@ func TestRegularIndexMergeConstructionFailure(t *testing.T) {
 	for _, branch := range candidate.branches {
 		branch.scan.ScanSnapshot = node.ScanSnapshot
 	}
-	root := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	root, err := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	require.NoError(t, err)
 	require.NotEqual(t, id, root)
 	require.Same(t, node.Limit, builder.qry.Nodes[root].Limit)
 	published := 0
@@ -407,7 +439,8 @@ func TestRegularIndexMergeInvalidCost(t *testing.T) {
 		node.Stats = &planpb.Stats{TableCnt: 200000, Cost: cost, Outcnt: 401, Selectivity: 0.002005}
 		original := proto.Clone(node)
 		mapping := map[[2]int32]*planpb.Expr{}
-		got := builder.applyRegularIndexMerge(node, table.Indexes, refs, mapping, builder.newEncodedRegularIndexCostContext(node, refs))
+		got, err := builder.applyRegularIndexMerge(node, table.Indexes, refs, mapping, builder.newEncodedRegularIndexCostContext(node, refs))
+		require.NoError(t, err)
 		require.Equal(t, id, got)
 		require.Empty(t, cmp.Diff(original, node, cmpopts.EquateNaNs()))
 		require.Empty(t, mapping)
