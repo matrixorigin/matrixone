@@ -51,28 +51,6 @@ func finiteNonnegative(v float64) bool {
 	return v >= 0 && !math.IsInf(v, 0) && !math.IsNaN(v)
 }
 
-// estimateTemporalRange uses the ordinary uniform/NDV approximation. The
-// inverse range is correct independently; this estimate can be wrong under
-// skew or different block layouts and must never become an execution filter.
-func estimateTemporalRange(s engine.IndexCostStats, c types.TemporalCandidate, kind types.T) (float64, bool) {
-	if s.Kind != kind || (kind != types.T_datetime && kind != types.T_timestamp) ||
-		!finitePositive(s.Rows) || !finitePositive(s.NDV) || float64(s.Nulls) > s.Rows ||
-		math.IsNaN(s.Min) || math.IsNaN(s.Max) || math.IsInf(s.Min, 0) || math.IsInf(s.Max, 0) || s.Min > s.Max ||
-		c.Full || c.Empty || c.Lo > c.Hi {
-		return 0, false
-	}
-	var spans [4][2]float64
-	spans[0] = [2]float64{float64(c.Lo), float64(c.Hi)}
-	n := 1
-	if kind == types.T_datetime {
-		spans[1] = [2]float64{float64(c.Sentinel), float64(c.Sentinel)}
-		spans[2] = [2]float64{math.MinInt64, -2}
-		spans[3] = [2]float64{float64(int64(types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999)) + 1), math.MaxInt64}
-		n = 4
-	}
-	return estimateIndexRangeUnion(s, spans[:n])
-}
-
 // estimateIndexRangeUnion is a bounded uniform/NDV cost approximation, never
 // an executable filter. Exact literal rays and inverse necessary arms share it.
 func estimateIndexRangeUnion(s engine.IndexCostStats, ranges [][2]float64) (float64, bool) {
@@ -502,7 +480,7 @@ func (builder *QueryBuilder) indexObservationAllowed(scanID int32, finalized boo
 	original := builder.originalIndexScan
 	input := builder.planningInput
 	if !finalized || !original.safe || original.scanID != scanID || builder.isReusablePlan() || builder.sessionSelectLimitMayStopEarly ||
-		input == nil || !input.intent.MatchesProcess(builder.compCtx.GetProcess()) || !input.intent.Placement.AllowsPinnedLocalAccess() || GetForceScanOnMultiCN() {
+		input == nil || !ProcessAllowsIndexObservation(builder.compCtx.GetProcess()) || !input.intent.Placement.AllowsPinnedLocalAccess() || GetForceScanOnMultiCN() {
 		return false
 	}
 	return true
@@ -519,7 +497,7 @@ func (builder *QueryBuilder) observeIndexCost(scanID int32, cost *encodedRegular
 	}()
 	resolver := builder.borrowingCompiler()
 	if proc == nil || resolver == nil || cost == nil || !cost.valid || len(cost.node.TableDef.Indexes) > engine.MaxIndexPlanningDefinitions ||
-		!builder.planningInput.intent.Placement.AllowsLocalIndexPlacement() || !builder.planningInput.intent.MatchesProcess(proc) || GetForceScanOnMultiCN() {
+		!builder.planningInput.intent.Placement.AllowsLocalIndexPlacement() || GetForceScanOnMultiCN() {
 		return nil, nil
 	}
 	budget := engine.MaxIndexPlanningWork
@@ -534,7 +512,8 @@ func (builder *QueryBuilder) observeIndexCost(scanID int32, cost *encodedRegular
 	if !ok || atom.column.GetCol().ColPos < 0 || int(atom.column.GetCol().ColPos) >= len(scan.TableDef.Cols) {
 		return nil, nil
 	}
-	if atom.domain != indexComparisonInverse && (!makeTypeByPlan2Expr(atom.column).IsIntOrUint() || atom.domain != indexComparisonRaw || atom.bound.GetLit() == nil) {
+	if !atom.observationMatches(builder.planningInput.intent, proc) ||
+		atom.domain != indexComparisonInverse && (!makeTypeByPlan2Expr(atom.column).IsIntOrUint() || atom.domain != indexComparisonRaw || atom.bound.GetLit() == nil) {
 		return nil, nil
 	}
 	column := scan.TableDef.Cols[atom.column.GetCol().ColPos]
@@ -593,7 +572,7 @@ func (builder *QueryBuilder) observeIndexCost(scanID int32, cost *encodedRegular
 	}
 	baseWork := baseRows * (cost.baseWidth + float64(len(scan.FilterList))*regularIndexPredicateRowWork) / readers
 	if !finitePositive(baseWork) || budget <= 0 || builder.qry.Nodes[scanID] != scan || builder.borrowingCompiler() != resolver ||
-		!resolver.BorrowedTableStillCurrent(proc, borrow) || !builder.planningInput.intent.MatchesProcess(proc) {
+		!resolver.BorrowedTableStillCurrent(proc, borrow) || !atom.observationMatches(builder.planningInput.intent, proc) {
 		return nil, nil
 	}
 	return &indexCostObservation{provider: provider, full: full, borrow: borrow, scan: scan, comparison: atom, column: column.Name, budget: budget, baseWork: baseWork,
@@ -604,82 +583,27 @@ func indexComparisonSelectivity(ctx context.Context, stats engine.IndexCostStats
 	if stats.Kind != types.T(atom.column.Typ.Id) {
 		return 0, false, nil
 	}
-	if atom.domain == indexComparisonInverse {
-		if len(scalar.value) != 8 {
-			return 0, false, nil
-		}
-		bound := types.DecodeInt64(scalar.value)
-		candidate, err := types.BuildTemporalCandidate(ctx, stats.Kind, atom.scale, bound, false, atom.op, zone)
-		if err != nil {
-			return 0, false, err
-		}
-		sel, ok := estimateTemporalRange(stats, candidate, stats.Kind)
-		return sel, ok, nil
+	var spans [4][2]float64
+	count, ok, err := atom.costRanges(ctx, scalar, zone, &spans)
+	if err != nil || !ok {
+		return 0, false, err
 	}
-	value, ok := indexIntegerCostValue(scalar)
-	if !ok {
-		return 0, false, nil
-	}
-	lo, hi := math.Inf(-1), math.Inf(1)
-	switch atom.op {
-	case types.ComparisonEqual:
-		lo, hi = value, value
-	case types.ComparisonLess:
-		hi = value - 1
-	case types.ComparisonLessEqual:
-		hi = value
-	case types.ComparisonGreater:
-		lo = value + 1
-	case types.ComparisonGreaterEqual:
-		lo = value
-	default:
-		return 0, false, nil
-	}
-	sel, ok := estimateIndexRangeUnion(stats, [][2]float64{{lo, hi}})
+	sel, ok := estimateIndexRangeUnion(stats, spans[:count])
 	return sel, ok, nil
-}
-
-func indexIntegerCostValue(scalar indexCostScalar) (float64, bool) {
-	if scalar.null || !scalar.typ.IsIntOrUint() || len(scalar.value) != scalar.typ.Oid.FixedLength() {
-		return 0, false
-	}
-	var value int64
-	switch scalar.typ.Oid {
-	case types.T_uint8:
-		return float64(types.DecodeUint8(scalar.value)), true
-	case types.T_uint16:
-		return float64(types.DecodeUint16(scalar.value)), true
-	case types.T_uint32:
-		return float64(types.DecodeUint32(scalar.value)), true
-	case types.T_uint64:
-		v := types.DecodeUint64(scalar.value)
-		return float64(v), v < 1<<53
-	case types.T_int8:
-		value = int64(types.DecodeInt8(scalar.value))
-	case types.T_int16:
-		value = int64(types.DecodeInt16(scalar.value))
-	case types.T_int32:
-		value = int64(types.DecodeInt32(scalar.value))
-	case types.T_int64:
-		value = types.DecodeInt64(scalar.value)
-	default:
-		return 0, false
-	}
-	return float64(value), value > -(1<<53) && value < 1<<53
 }
 
 // Cost the necessary predicate's actual runtime topology without substituting
 // the observed scalar into the executable expression.
 func necessaryIndexPredicateWork(ctx context.Context, index *plan.IndexDef, access *indexCostObservation) (float64, bool, error) {
 	atom := access.comparison
-	if !prepayIndexRangeConstruction(ctx, atom.bound, &access.budget) {
+	if !atom.prepayNecessaryPredicate(ctx, &access.budget) {
 		return 0, false, context.Cause(ctx)
 	}
 	var physical *plan.Expr
 	if indexTableStoresSerializedKey(index) {
 		physical = GetColExpr(plan.Type{Id: int32(types.T_varchar)}, 0, 0)
 	}
-	hint, err := buildTemporalCandidate(ctx, atom.column, atom.bound, physical, atom.op, atom.scale)
+	hint, err := atom.necessaryPredicate(ctx, atom.column, physical)
 	if err != nil || hint == nil {
 		return 0, false, err
 	}
@@ -709,16 +633,4 @@ func indexPredicateStructure(root *plan.Expr, budget *int, ctx context.Context) 
 	}
 	ok := visit(root, 0)
 	return nodes, predicates, ok
-}
-
-// The fixed topology has at most seven bound endpoints. The
-// encoded form also copies endpoint trees into serial leaves. Reserve twice
-// those copies and their bounded wrapper nodes before any construction. The
-// subsequent walk independently charges inspection of the resulting tree.
-func prepayIndexRangeConstruction(ctx context.Context, bound *plan.Expr, budget *int) bool {
-	nodes := 0
-	if !indexCostExpressionFits(ctx, bound, 0, &nodes, budget) {
-		return false
-	}
-	return spendIndexCostWork(ctx, budget, 16*(nodes+64)+16*bound.ProtoSize()) && *budget > 0
 }

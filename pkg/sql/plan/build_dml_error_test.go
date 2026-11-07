@@ -30,9 +30,8 @@ type dmlResolveErrorCompilerContext struct {
 	err error
 }
 
-func (c *dmlResolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *dmlResolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, c.err
 }
 
@@ -41,14 +40,13 @@ type dmlUnsupportedOnceCompilerContext struct {
 	modernRejected bool
 }
 
-func (c *dmlUnsupportedOnceCompilerContext) Resolve(schemaName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *dmlUnsupportedOnceCompilerContext) Resolve(schemaName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if !c.modernRejected {
 		c.modernRejected = true
 		return nil, nil, moerr.NewUnsupportedDML(c.GetContext(), "force legacy planner")
 	}
-	return c.MockCompilerContext.Resolve(schemaName, tableName, snapshot)
+	return c.MockCompilerContext.Resolve(schemaName, tableName, snapshot, nil)
 }
 
 func TestDMLPlannerPropagatesNonMoResolveErrors(t *testing.T) {

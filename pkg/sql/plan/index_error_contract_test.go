@@ -100,21 +100,25 @@ func TestRegularIndexMergeDeclineReturnsCancellation(t *testing.T) {
 }
 
 func (c *controlledIndexResolver) ResolveIndexTableByRef(
-	ref *ObjectRef, name string, snapshot *Snapshot, output ...*TableResolution,
+	ref *ObjectRef, name string, snapshot *Snapshot, output *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	obj, table, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot, output...)
+	output.Reset()
+	obj, table, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot, output)
 	if name == c.target && err == nil && obj != nil && table != nil {
 		c.resolved++
 		if c.mutate != nil {
 			c.mutate(table)
+			output.Reset()
 		}
 		if c.after != nil {
 			c.after()
 		}
 		if c.failure != nil {
+			output.Reset()
 			return nil, nil, c.failure
 		}
 		if c.omit {
+			output.Reset()
 			return nil, nil, nil
 		}
 	}

@@ -332,7 +332,7 @@ func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*
 				return nil, err
 			}
 		}
-		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -532,7 +532,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		if temporaryTargets[tableName] {
 			objRef, tableDef, err = resolveTemporaryTable(ctx, databaseName, name, nil)
 		} else {
-			objRef, tableDef, err = resolveTable(databaseName, name, nil)
+			objRef, tableDef, err = resolveTable(databaseName, name, nil, nil)
 		}
 		if err != nil {
 			return nil, err
@@ -570,7 +570,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key table is missing its database")
 			}
 			databaseName := createTable.GetFkDbs()[i]
-			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -580,7 +580,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
 		}
 		for _, fk := range createTable.GetFksReferToMe() {
-			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil)
+			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -616,7 +616,7 @@ func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
 		if dependencySnapshot != nil {
 			snapshot = dependencySnapshot
 		}
-		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot, nil)
 		if err != nil {
 			return nil, err
 		}

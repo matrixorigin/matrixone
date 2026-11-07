@@ -117,8 +117,8 @@ type trackingResolveContext struct {
 	onResolve                func()
 }
 
-func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapshot, outputs ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	output := PrepareTableResolution(outputs...)
+func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapshot, output *TableResolution) (*ObjectRef, *TableDef, error) {
+	output.Reset()
 	c.resolves++
 	if output != nil {
 		c.borrowRequests++
@@ -126,7 +126,7 @@ func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapsh
 	if c.onResolve != nil {
 		c.onResolve()
 	}
-	return c.CompilerContext.Resolve(database, name, snapshot)
+	return c.CompilerContext.Resolve(database, name, snapshot, nil)
 }
 
 func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
@@ -172,7 +172,7 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 }
 
 func TestPlanningInputCompilerIdentityChanges(t *testing.T) {
-	for _, scenario := range []string{"initial rejection stays rejected", "owner changes during lookup", "process mismatch"} {
+	for _, scenario := range []string{"initial rejection stays rejected", "owner changes during lookup", "clock mismatch", "row limit mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture, _, _ := newIndexCostFixture(t)
 			scan := fixture.qry.Nodes[0]
@@ -191,15 +191,18 @@ func TestPlanningInputCompilerIdentityChanges(t *testing.T) {
 				compiler.onResolve = func() { input.owner = compiler }
 			case "owner changes during lookup":
 				compiler.onResolve = func() { input.owner = underlying }
-			case "process mismatch":
+			case "clock mismatch":
 				input.intent.UnixTime++
+			case "row limit mismatch":
+				compiler.GetProcess().Base.SessionInfo.ApplySQLSelectLimit = true
+				compiler.GetProcess().SetResolveVariableFunc(nil)
 			}
 			result, err := BuildPlan(compiler, root, false, input)
 			require.NoError(t, err)
 			require.False(t, input.claim(root))
 			require.Equal(t, 1, compiler.resolves)
 			expected := 0
-			if scenario == "owner changes during lookup" {
+			if scenario == "owner changes during lookup" || scenario == "clock mismatch" {
 				expected = 1
 			}
 			require.Equal(t, expected, compiler.borrowRequests)

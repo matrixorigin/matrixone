@@ -31,9 +31,10 @@ type ExecutionIntent struct {
 	UnixTime  int64
 }
 
-// MatchesProcess rejects changes to execution state used by candidate estimation.
-func (intent ExecutionIntent) MatchesProcess(proc *process.Process) bool {
-	if proc == nil || proc.Base == nil || intent.TimeZone != proc.GetSessionInfo().TimeZone || intent.UnixTime != proc.Base.UnixTime {
+// ProcessAllowsIndexObservation proves that an optional cost observation sees
+// the whole scan. It is independent of the observed comparison's domain.
+func ProcessAllowsIndexObservation(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
 		return false
 	}
 	if proc.Base.SessionInfo.ApplySQLSelectLimit {
@@ -48,6 +49,13 @@ func (intent ExecutionIntent) MatchesProcess(proc *process.Process) bool {
 		}
 	}
 	return true
+}
+
+// MatchesProcess checks the full execution snapshot required by a captured
+// physical access, including the common observation prerequisites.
+func (intent ExecutionIntent) MatchesProcess(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && intent.TimeZone == proc.GetSessionInfo().TimeZone &&
+		intent.UnixTime == proc.Base.UnixTime && ProcessAllowsIndexObservation(proc)
 }
 
 // PlanningInput is passed only through transparent root wrappers. Each

@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"context"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +30,14 @@ import (
 
 func TestTemporalRangeEstimateControls(t *testing.T) {
 	stats := engine.IndexCostStats{Rows: 1000, Min: 100, Max: 200, NDV: 100, Kind: types.T_timestamp}
+	estimate := func(candidate types.TemporalCandidate) float64 {
+		var spans [4][2]float64
+		count, ok := temporalIndexCostRanges(stats.Kind, candidate, &spans)
+		require.True(t, ok)
+		sel, ok := estimateIndexRangeUnion(stats, spans[:count])
+		require.True(t, ok)
+		return sel
+	}
 	for _, tc := range []struct {
 		name string
 		c    types.TemporalCandidate
@@ -39,24 +49,17 @@ func TestTemporalRangeEstimateControls(t *testing.T) {
 		{"outside", types.TemporalCandidate{Lo: 300, Hi: 400}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sel, ok := estimateTemporalRange(stats, tc.c, stats.Kind)
-			require.True(t, ok)
-			require.InDelta(t, tc.want, sel, 1e-12)
+			require.InDelta(t, tc.want, estimate(tc.c), 1e-12)
 		})
 	}
 	stats.Nulls = 250
-	sel, ok := estimateTemporalRange(stats, types.TemporalCandidate{Lo: 100, Hi: 200}, stats.Kind)
-	require.True(t, ok)
-	require.Equal(t, .75, sel)
+	require.Equal(t, .75, estimate(types.TemporalCandidate{Lo: 100, Hi: 200}))
 
 	stats.Kind, stats.Nulls = types.T_datetime, 0
-	sel, ok = estimateTemporalRange(stats, types.TemporalCandidate{Lo: 125, Hi: 175, Sentinel: 150}, stats.Kind)
-	require.True(t, ok)
-	require.Equal(t, .5, sel, "overlapping main and sentinel ranges count once")
+	require.Equal(t, .5, estimate(types.TemporalCandidate{Lo: 125, Hi: 175, Sentinel: 150}), "overlapping main and sentinel ranges count once")
 	previous := 1.
 	for lo := int64(100); lo <= 200; lo += 25 {
-		sel, ok = estimateTemporalRange(stats, types.TemporalCandidate{Lo: lo, Hi: 200, Sentinel: lo}, stats.Kind)
-		require.True(t, ok)
+		sel := estimate(types.TemporalCandidate{Lo: lo, Hi: 200, Sentinel: lo})
 		require.LessOrEqual(t, sel, previous, "shrinking a range cannot increase its estimate")
 		previous = sel
 	}
@@ -69,17 +72,23 @@ func TestTemporalRangeEstimateDeclinesUnusableEvidence(t *testing.T) {
 		func(s *engine.IndexCostStats) { s.NDV = math.NaN() },
 		func(s *engine.IndexCostStats) { s.Nulls = 1001 },
 		func(s *engine.IndexCostStats) { s.Min = 201 },
-		func(s *engine.IndexCostStats) { s.Kind = types.T_datetime },
 	} {
 		s := base
 		alter(&s)
-		_, ok := estimateTemporalRange(s, types.TemporalCandidate{Lo: 125, Hi: 175}, types.T_timestamp)
+		_, ok := estimateIndexRangeUnion(s, [][2]float64{{125, 175}})
 		require.False(t, ok)
 	}
+	var spans [4][2]float64
 	for _, c := range []types.TemporalCandidate{{Full: true}, {Empty: true}, {Lo: 200, Hi: 100}} {
-		_, ok := estimateTemporalRange(base, c, types.T_timestamp)
+		_, ok := temporalIndexCostRanges(types.T_timestamp, c, &spans)
 		require.False(t, ok)
 	}
+	_, ok := temporalIndexCostRanges(types.T_int64, types.TemporalCandidate{Lo: 125, Hi: 175}, &spans)
+	require.False(t, ok)
+	atom := indexComparison{column: &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}}
+	_, ok, err := indexComparisonSelectivity(context.Background(), base, atom, indexCostScalar{}, time.UTC)
+	require.NoError(t, err)
+	require.False(t, ok, "statistics for a different key type cannot price the comparison")
 }
 
 func TestEncodedIndexEstimateDoesNotInheritStaleOutputOrMutatePlan(t *testing.T) {

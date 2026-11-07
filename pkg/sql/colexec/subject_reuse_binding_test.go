@@ -36,10 +36,9 @@ type orLikeStringBindingContext struct {
 	columnType types.T
 }
 
-func (ctx *orLikeStringBindingContext) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
-
-	object, definition, err := ctx.MockCompilerContext.Resolve(db, table, snapshot)
+func (ctx *orLikeStringBindingContext) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	object, definition, err := ctx.MockCompilerContext.Resolve(db, table, snapshot, nil)
 	if err != nil || definition == nil {
 		return object, definition, err
 	}

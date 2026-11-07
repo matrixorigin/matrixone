@@ -77,7 +77,7 @@ func TestDropPlanForgetsOnlyConfirmedMissingTemporaryTable(t *testing.T) {
 					}
 					tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: planningSession, proc: proc}}
 					// A normal resolver read must never mutate session ownership.
-					_, _, _ = tcc.Resolve("mo_catalog", "stale", nil)
+					_, _, _ = tcc.Resolve("mo_catalog", "stale", nil, nil)
 					_, exists := ses.GetTempTable("mo_catalog", "stale")
 					require.True(t, exists)
 					stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "drop "+temporary+"table mo_catalog.stale", 1)
@@ -840,7 +840,7 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 		PubInfo:          &pbplan.PubInfo{TenantId: 42},
 	}
 
-	gotRef, gotDef, err := tcc.ResolveIndexTableByRef(ref, "__mo_index_secondary_events", nil)
+	gotRef, gotDef, err := tcc.ResolveIndexTableByRef(ref, "__mo_index_secondary_events", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, &plan2.ObjectRef{
 		SchemaName:       "publisher_db",
@@ -946,7 +946,7 @@ func TestResolveWithoutTemporaryAliasPreservesOwnership(t *testing.T) {
 		if skipAlias {
 			resolve = tcc.ResolveWithoutTemporaryAlias
 		}
-		obj, def, err := resolve("mo_catalog", "t", nil)
+		obj, def, err := resolve("mo_catalog", "t", nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, !skipAlias, def.IsTemporary)
 		require.Equal(t, !skipAlias, obj.NotLockMeta)
@@ -957,17 +957,17 @@ func TestResolveWithoutTemporaryAliasPreservesOwnership(t *testing.T) {
 			require.Equal(t, uint64(12), def.TblId)
 		}
 	}
-	obj, def, err := tcc.ResolveWithoutTemporaryAlias("mo_catalog", physical, nil)
+	obj, def, err := tcc.ResolveWithoutTemporaryAlias("mo_catalog", physical, nil, nil)
 	require.NoError(t, err)
 	require.True(t, def.IsTemporary)
 	require.True(t, obj.NotLockMeta)
-	obj, def, err = tcc.ResolveWithoutTemporaryAlias("mo_catalog", "foreign_physical", nil)
+	obj, def, err = tcc.ResolveWithoutTemporaryAlias("mo_catalog", "foreign_physical", nil, nil)
 	require.NoError(t, err)
 	require.Nil(t, obj)
 	require.Nil(t, def)
-	_, def, err = tcc.ResolveWithoutTemporaryAlias("mo_catalog", "__mo_tmp_ffeeddccbbaa99887766554433221100_mo_catalog_permanent", nil)
+	_, def, err = tcc.ResolveWithoutTemporaryAlias("mo_catalog", "__mo_tmp_ffeeddccbbaa99887766554433221100_mo_catalog_permanent", nil, nil)
 	require.NoError(t, err)
 	require.False(t, def.IsTemporary)
-	_, _, err = (&viewSchemaCompilerContext{TxnCompilerContext: tcc}).ResolveWithoutTemporaryAlias("mo_catalog", "t", nil)
+	_, _, err = (&viewSchemaCompilerContext{TxnCompilerContext: tcc}).ResolveWithoutTemporaryAlias("mo_catalog", "t", nil, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }

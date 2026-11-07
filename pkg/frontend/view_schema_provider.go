@@ -354,30 +354,28 @@ func (c *viewSchemaCompilerContext) CheckTimeStampValid(ts int64) (bool, error) 
 // ResolveViewSchemaRoot uses the caller's normal subscription lookup. Database
 // names in this entry-point namespace are not names in persisted publisher SQL.
 func (c *viewSchemaCompilerContext) ResolveViewSchemaRoot(database, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
-	return c.TxnCompilerContext.Resolve(database, table, snapshot)
+	return c.TxnCompilerContext.Resolve(database, table, snapshot, nil)
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *viewSchemaCompilerContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *viewSchemaCompilerContext) ResolveWithoutTemporaryAlias(_ string, _ string, _ *plan.Snapshot, borrowOutput *plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
 // Resolve keeps every View source lookup in the publisher's catalog domain,
 // including databases other than the publication database. Ordinary Resolve
 // only switches tenants when the database itself is a subscription.
-func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
+	borrowOutput.Reset()
 	sub := c.GetQueryingSubscription()
 	if sub == nil {
-		return c.TxnCompilerContext.Resolve(database, table, snapshot)
+		return c.TxnCompilerContext.Resolve(database, table, snapshot, nil)
 	}
 	previous := c.GetContext()
 	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
 	defer c.SetContext(previous)
-	return c.TxnCompilerContext.Resolve(database, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
+	return c.TxnCompilerContext.Resolve(database, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)), nil)
 }
 
 func (c *viewSchemaCompilerContext) ResolveById(id uint64, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
@@ -391,17 +389,16 @@ func (c *viewSchemaCompilerContext) ResolveById(id uint64, snapshot *plan.Snapsh
 	return c.TxnCompilerContext.ResolveById(id, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
 }
 
-func (c *viewSchemaCompilerContext) ResolveIndexTableByRef(ref *pb.ObjectRef, table string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *viewSchemaCompilerContext) ResolveIndexTableByRef(ref *pb.ObjectRef, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*pb.ObjectRef, *pb.TableDef, error) {
+	borrowOutput.Reset()
 	sub := c.GetQueryingSubscription()
 	if sub == nil {
-		return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, snapshot)
+		return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, snapshot, nil)
 	}
 	previous := c.GetContext()
 	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
 	defer c.SetContext(previous)
-	return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
+	return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)), nil)
 }
 
 func (c *viewSchemaCompilerContext) ResolveViewDependencyAccount(obj *pb.ObjectRef, def *pb.TableDef, snapshot *plan.Snapshot) (uint32, error) {

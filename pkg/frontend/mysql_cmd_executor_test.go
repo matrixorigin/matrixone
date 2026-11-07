@@ -12379,7 +12379,7 @@ func Test_checkModify(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		if schemaName == "err_db" {
 			return nil, nil, &moerr.Error{}
 		}
@@ -12464,7 +12464,7 @@ func Test_checkModify(t *testing.T) {
 
 func TestCheckModifyRebindsViewMetadataUdf(t *testing.T) {
 	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
-	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot, ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot, *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		t.Fatal("UDF-backed SHOW must rebind without relying on a table schema change")
 		return nil, nil, nil
 	})
@@ -12518,7 +12518,7 @@ func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 			changed, err := checkModify(queryPlan, func(
 				databaseName string,
 				tableName string,
-				gotSnapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution,
+				gotSnapshot *plan.Snapshot, borrowOutput *plan.TableResolution,
 			) (*plan.ObjectRef, *plan.TableDef, error) {
 				require.Equal(t, "test_db", databaseName)
 				require.Equal(t, "test_view", tableName)
@@ -12547,7 +12547,7 @@ func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 		changed, err := checkModify(subscriptionPlan, func(
 			databaseName string,
 			tableName string,
-			gotSnapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution,
+			gotSnapshot *plan.Snapshot, borrowOutput *plan.TableResolution,
 		) (*plan.ObjectRef, *plan.TableDef, error) {
 			require.Equal(t, "subscriber_alias", databaseName)
 			require.Equal(t, "scanless_view", tableName)
@@ -12996,7 +12996,7 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			ses.SetDatabaseName("tpch")
 			ses.GetTxnCompileCtx().SetDatabase("tpch")
 			defer ses.GetTxnCompileCtx().Close()
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 			stmts, err := mysql.Parse(ec.reqCtx, tc.sql, 1)
@@ -13266,7 +13266,7 @@ func TestTemporalCacheCancelledAfterDependencyCheckKeepsGeneration(t *testing.T)
 	ses.SetDatabaseName("tpch")
 	ses.GetTxnCompileCtx().SetDatabase("tpch")
 	defer ses.GetTxnCompileCtx().Close()
-	_, table, err := base.Resolve("tpch", "nation", nil)
+	_, table, err := base.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancelCause(ec.reqCtx)
 	defer cancel(nil)

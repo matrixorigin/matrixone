@@ -165,17 +165,17 @@ func WithIndexMaintenanceSources(ctx context.Context, stmt tree.Statement, spec 
 	return context.WithValue(ctx, indexMaintenanceSourcesKey{}, sources), nil
 }
 
-func resolveIndexMaintenanceSource(ctx CompilerContext, tbl *tree.TableName, database, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
+func resolveIndexMaintenanceSource(ctx CompilerContext, tbl *tree.TableName, database, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	var sources map[*tree.TableName]indexMaintenanceSource
 	if context := ctx.GetContext(); context != nil {
 		sources, _ = context.Value(indexMaintenanceSourcesKey{}).(map[*tree.TableName]indexMaintenanceSource)
 	}
 	source, ok := sources[tbl]
 	if !ok {
-		return ctx.Resolve(database, name, snapshot, borrowOutput...)
+		return ctx.Resolve(database, name, snapshot, borrowOutput)
 	}
-	obj, def, err := ctx.ResolveIndexTableByRef(source.base, name, snapshot)
+	obj, def, err := ctx.ResolveIndexTableByRef(source.base, name, snapshot, nil)
 	if err != nil {
 		return nil, nil, err
 	}

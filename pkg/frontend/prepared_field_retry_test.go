@@ -37,19 +37,18 @@ type fieldRetryTestCompiler struct {
 	*preparedStatsTestCompiler
 	resolveErr error
 	missing    bool
-	resolve    func(string, string, *plan.Snapshot, ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error)
+	resolve    func(string, string, *plan.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error)
 }
 
-func (c *fieldRetryTestCompiler) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
-
+func (c *fieldRetryTestCompiler) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if c.resolve != nil {
-		return c.resolve(db, table, snapshot)
+		return c.resolve(db, table, snapshot, nil)
 	}
 	if c.resolveErr != nil || c.missing {
 		return nil, nil, c.resolveErr
 	}
-	ref, def, err := c.preparedStatsTestCompiler.Resolve(db, table, snapshot)
+	ref, def, err := c.preparedStatsTestCompiler.Resolve(db, table, snapshot, nil)
 	if err == nil && ref != nil && def != nil {
 		ref = proto.Clone(ref).(*plan.ObjectRef)
 		ref.Db, ref.Obj, ref.Server = int64(def.DbId), int64(def.TblId), int64(def.Version)
@@ -61,7 +60,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 	for _, name := range []string{"unchanged", "version", "object", "database", "publication", "missing", "resolve error", "captured facts", "captured nested facts", "nil dependency", "without history"} {
 		t.Run(name, func(t *testing.T) {
 			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			table = plan2.DeepCopyTableDef(table, true)
 			table.DbId = 73
@@ -129,8 +128,8 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			case "database":
 				table.DbId++
 			case "publication":
-				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-					ref, def, err := ctx.preparedStatsTestCompiler.Resolve(db, name, snapshot)
+				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+					ref, def, err := ctx.preparedStatsTestCompiler.Resolve(db, name, snapshot, nil)
 					ref = proto.Clone(ref).(*plan.ObjectRef)
 					ref.PubInfo = &plan.PubInfo{TenantId: 72}
 					return ref, def, err
@@ -146,7 +145,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 				schemas[0].PubInfo.TenantId = 99
 				schemas[0].SubscriptionName = "mutated"
 				require.Equal(t, want, captured)
-				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+				ctx.resolve = func(db, name string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 					require.Equal(t, plan2.DbNameOfObjRef(want), db)
 					require.Equal(t, want.Snapshot, snapshot, "validation must use the captured snapshot, not mutable handle metadata")
 					return nil, nil, sentinel

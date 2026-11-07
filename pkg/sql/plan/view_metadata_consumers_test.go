@@ -34,7 +34,7 @@ type viewMetadataConsumerContext struct {
 
 func (c *viewMetadataConsumerContext) BuildTableDefByMoColumns(db, name string) (*TableDef, error) {
 	c.fastCalls++
-	_, def, err := c.MockCompilerContext.Resolve(db, name, nil)
+	_, def, err := c.MockCompilerContext.Resolve(db, name, nil, nil)
 	if err != nil || def == nil {
 		return def, err
 	}

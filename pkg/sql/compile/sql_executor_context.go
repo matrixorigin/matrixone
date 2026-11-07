@@ -167,7 +167,7 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	_, tableDef, err := c.Resolve(dbName, table, nil)
+	_, tableDef, err := c.Resolve(dbName, table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -599,14 +599,13 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 	if dbName == "" || tableName == "" {
 		return nil, nil, nil
 	}
-	return c.Resolve(dbName, tableName, snapshot)
+	return c.Resolve(dbName, tableName, snapshot, nil)
 }
 
-func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if delegate := c.resolveDelegate(); delegate != nil {
-		return delegate.ResolveIndexTableByRef(ref, tblName, snapshot)
+		return delegate.ResolveIndexTableByRef(ref, tblName, snapshot, nil)
 	}
 	obj, def, err := c.resolve(plan.DbNameOfObjRef(ref), tblName, snapshot, true)
 	if obj != nil && ref.NotLockMeta {
@@ -625,9 +624,8 @@ func (c *compilerContext) resolveDelegate() plan.CompilerContext {
 	return nil
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if err := c.checkIndexRelationName(tableName); err != nil {
 		return nil, nil, err
 	}
@@ -635,9 +633,8 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	return c.checkIndexRelationDefinition(tableName, obj, def, err)
 }
 
-func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if err := c.checkIndexRelationName(tableName); err != nil {
 		return nil, nil, err
 	}
@@ -679,7 +676,7 @@ func (c *compilerContext) ResolveTemporaryTable(dbName, tableName string, snapsh
 		}); ok {
 			obj, def, err = resolver.ResolveTemporaryTable(dbName, tableName, snapshot)
 		} else {
-			obj, def, err = delegate.Resolve(dbName, tableName, snapshot)
+			obj, def, err = delegate.Resolve(dbName, tableName, snapshot, nil)
 		}
 		// A temporary namespace miss is not an attempted relation access.
 		if err != nil || (obj == nil && def == nil) {
@@ -702,7 +699,7 @@ func (c *compilerContext) ResolveTemporaryTable(dbName, tableName string, snapsh
 			}
 		}
 	}
-	return c.Resolve(dbName, tableName, snapshot)
+	return c.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func (c *compilerContext) resolve(dbName string, tableName string, snapshot *plan.Snapshot, resolveTemporaryAlias bool) (*plan.ObjectRef, *plan.TableDef, error) {
@@ -712,9 +709,9 @@ func (c *compilerContext) resolve(dbName string, tableName string, snapshot *pla
 	// GetSubscriptionMeta and the actual catalog lookup.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		if !resolveTemporaryAlias {
-			return delegate.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot)
+			return delegate.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot, nil)
 		}
-		return delegate.Resolve(dbName, tableName, snapshot)
+		return delegate.Resolve(dbName, tableName, snapshot, nil)
 	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {

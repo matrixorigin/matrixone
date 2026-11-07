@@ -183,22 +183,20 @@ type renameNamespaceCompilerContext struct {
 	failure   error
 }
 
-func (c *renameNamespaceCompilerContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *renameNamespaceCompilerContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if def := c.temporary[name]; def != nil {
 		return &ObjectRef{SchemaName: db, ObjName: def.Name, Obj: int64(def.TblId)}, DeepCopyTableDef(def, true), nil
 	}
-	return c.MockCompilerContext.Resolve(db, name, snapshot)
+	return c.MockCompilerContext.Resolve(db, name, snapshot, nil)
 }
 
-func (c *renameNamespaceCompilerContext) ResolveWithoutTemporaryAlias(db, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *renameNamespaceCompilerContext) ResolveWithoutTemporaryAlias(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if name == c.failName {
 		return nil, nil, c.failure
 	}
-	return c.MockCompilerContext.ResolveWithoutTemporaryAlias(db, name, snapshot)
+	return c.MockCompilerContext.ResolveWithoutTemporaryAlias(db, name, snapshot, nil)
 }
 
 func TestBuildRenameTableIgnoresTemporaryAliases(t *testing.T) {
@@ -230,7 +228,7 @@ func TestBuildRenameTableIgnoresTemporaryAliases(t *testing.T) {
 			}
 			for _, name := range tc.temporary {
 				ctx.temporary[name] = &TableDef{Name: "physical_" + name, TblId: 99, IsTemporary: true, Cols: []*ColDef{{Name: "temp_column"}}}
-				_, def, err := ctx.Resolve("tpch", name, nil)
+				_, def, err := ctx.Resolve("tpch", name, nil, nil)
 				require.NoError(t, err)
 				require.Equal(t, uint64(99), def.TblId)
 			}
@@ -266,7 +264,7 @@ func TestViewBindingContextsRejectDDLResolution(t *testing.T) {
 		&viewDescriptionDependencyContext{CompilerContext: base},
 		&viewDependencyCaptureContext{CompilerContext: base},
 	} {
-		obj, def, err := ctx.ResolveWithoutTemporaryAlias("tpch", "nation", nil)
+		obj, def, err := ctx.ResolveWithoutTemporaryAlias("tpch", "nation", nil, nil)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%T: %v", ctx, err)
 		require.Nil(t, obj)
 		require.Nil(t, def)
@@ -4963,8 +4961,8 @@ func TestBuildAlterView(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -5060,8 +5058,8 @@ func TestBuildLockTables(t *testing.T) {
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -7096,7 +7094,6 @@ func TestBuildCreatePitr(t *testing.T) {
 		ctx.GetAccountNameFunc = func() string { return "sys" }
 		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
 		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
-		ctx.ResolveFunc = func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef) { return nil, nil }
 		stmt := baseStmt()
 		stmt.Level = tree.PITRLEVELTABLE
 		stmt.DatabaseName = "db1"
@@ -7111,16 +7108,16 @@ func TestBuildCreatePitr(t *testing.T) {
 		ctx.GetAccountNameFunc = func() string { return "sys" }
 		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
 		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
-		ctx.ResolveFunc = func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef) {
-			return &ObjectRef{}, &TableDef{TblId: 456}
-		}
+		key := mockQualifiedTableName("db1", "tb1")
+		ctx.objectsByQualifiedName = map[string]*ObjectRef{key: {}}
+		ctx.tablesByQualifiedName = map[string]*TableDef{key: {TblId: 456}}
 		stmt := baseStmt()
 		stmt.Level = tree.PITRLEVELTABLE
 		stmt.DatabaseName = "db1"
 		stmt.TableName = "tb1"
 		plan, err := buildCreatePitr(stmt, ctx)
-		assert.Error(t, err)
-		assert.Nil(t, plan)
+		require.NoError(t, err)
+		require.EqualValues(t, 456, plan.GetDdl().GetCreatePitr().GetTableId())
 	})
 }
 

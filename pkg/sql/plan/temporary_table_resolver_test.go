@@ -34,13 +34,13 @@ type temporaryDestinationTestContext struct {
 	persistentCalls int
 }
 
-func (c *temporaryDestinationTestContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
+func (c *temporaryDestinationTestContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if name == "destination" {
 		c.persistentCalls++
 		return nil, nil, c.persistentErr
 	}
-	return c.MockCompilerContext.Resolve(db, name, snapshot)
+	return c.MockCompilerContext.Resolve(db, name, snapshot, nil)
 }
 
 func (c *temporaryDestinationTestContext) ResolveTemporaryTable(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {

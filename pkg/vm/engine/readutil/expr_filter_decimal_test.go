@@ -43,17 +43,16 @@ type decimalZoneMapCompilerContext struct {
 func (c *decimalZoneMapCompilerContext) Resolve(
 	dbName string,
 	tableName string,
-	_ *plan2.Snapshot, borrowOutput ...*plan2.TableResolution,
+	_ *plan2.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
-
+	borrowOutput.Reset()
 	typ := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}
 	switch tableName {
 	case "decimal_scan64":
 		typ = plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
 	case "decimal_scan128":
 	default:
-		return c.MockCompilerContext.Resolve(dbName, tableName, nil)
+		return c.MockCompilerContext.Resolve(dbName, tableName, nil, nil)
 	}
 	return &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}, &plan.TableDef{
 		Name:          tableName,

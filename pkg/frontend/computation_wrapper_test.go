@@ -3929,7 +3929,7 @@ func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
 	} {
 		t.Run(predicate, func(t *testing.T) {
 			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			for _, col := range table.Cols {
 				if col.Name == "n_nationkey" {
@@ -5180,7 +5180,7 @@ func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.
 	resolveCalls := 0
 	resolve := func(
 		_, _ string,
-		_ *plan.Snapshot, borrowOutput ...*plan2.TableResolution,
+		_ *plan.Snapshot, borrowOutput *plan2.TableResolution,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		resolveCalls++
 		return nil, nil, assert.AnError
@@ -5211,7 +5211,7 @@ func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
 		def *plan.TableDef,
 		err error,
 	) preparedSchemaResolver {
-		return func(databaseName, tableName string, _ *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+		return func(databaseName, tableName string, _ *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 			require.Equal(t, "sub", databaseName)
 			require.Equal(t, "src", tableName)
 			return ref, def, err
@@ -5273,7 +5273,7 @@ func TestPreparedSubscriptionSchemaChangedUsesLogicalName(t *testing.T) {
 		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
 	}
 	changed, err := preparedSubscriptionSchemaChanged(func(
-		databaseName, tableName string, _ *plan.Snapshot, borrowOutput ...*plan2.TableResolution,
+		databaseName, tableName string, _ *plan.Snapshot, borrowOutput *plan2.TableResolution,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		require.Equal(t, "sub", databaseName)
 		require.Equal(t, "src", tableName)
@@ -5298,7 +5298,7 @@ func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
 	}
 	calls := 0
 	changed, err := preparedSubscriptionSchemaChanged(func(
-		databaseName, tableName string, gotSnapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution,
+		databaseName, tableName string, gotSnapshot *plan.Snapshot, borrowOutput *plan2.TableResolution,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		calls++
 		if calls == 1 {
@@ -5559,7 +5559,7 @@ func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, func(string, string, *plan.Snapshot, ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	retComp, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, func(string, string, *plan.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		return &plan.ObjectRef{
 				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
 				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
@@ -5580,7 +5580,7 @@ func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
 	}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{expected}
-	resolve := func(string, string, *plan.Snapshot, ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	resolve := func(string, string, *plan.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		return &plan.ObjectRef{
 				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
 				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
@@ -7142,10 +7142,9 @@ func (c *preparedStatsTestCompiler) StatsWithTableDef(_ *plan.ObjectRef, _ *plan
 	return c.stats, c.err
 }
 
-func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
-
-	obj, table, err := c.CompilerContext.Resolve(dbName, tableName, snapshot)
+func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	obj, table, err := c.CompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	if err == nil && c.table != nil && tableName == c.table.Name {
 		table = plan2.DeepCopyTableDef(c.table, true)
 	}
@@ -7211,7 +7210,7 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	prepared.compile = sentinel
 	// Keep the real session compiler/rebuild owner, replacing only storage
 	// observations so the distribution threshold needs no large physical data.
-	_, table, err := base.Resolve("tpch", "nation", nil)
+	_, table, err := base.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 	defer ses.GetTxnCompileCtx().Close()
@@ -7273,7 +7272,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 			base := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			if tc.params == 2 {
-				_, table, err := base.Resolve("tpch", "partsupp", nil)
+				_, table, err := base.Resolve("tpch", "partsupp", nil, nil)
 				require.NoError(t, err)
 				hidden := plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 				table.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"ps_partkey", "ps_suppkey"}, CompPkeyCol: hidden}
@@ -7296,7 +7295,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 			if tc.params == 2 {
 				tableName = "partsupp"
 			}
-			_, table, err := ctx.Resolve("tpch", tableName, nil)
+			_, table, err := ctx.Resolve("tpch", tableName, nil, nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 			for _, node := range prepared.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery().Nodes {
@@ -7377,7 +7376,7 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 			defer ses.GetTxnCompileCtx().Close()
 			ctx.proc = cw.proc
 			prepared.defaultDatabase = "tpch"
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(b, err)
 			installStatsAdmissionStorage(b, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 			prepared.params = vector.NewVec(types.T_text.ToType())

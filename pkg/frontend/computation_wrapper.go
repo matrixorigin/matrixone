@@ -1099,7 +1099,7 @@ func initExecuteStmtParamInSession(
 type preparedSchemaResolver func(
 	databaseName string,
 	tableName string,
-	snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution,
+	snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan.ObjectRef, *plan.TableDef, error)
 
 func binaryProtocolPrepareParamKind(
@@ -2343,6 +2343,7 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 		expected.GetSubscriptionName(),
 		expected.GetObjName(),
 		nil,
+		nil,
 	)
 	if err != nil {
 		return false, err
@@ -2360,6 +2361,7 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 			expected.GetSubscriptionName(),
 			expected.GetObjName(),
 			expected.GetSnapshot(),
+			nil,
 		)
 		if err != nil {
 			return false, err
@@ -3185,7 +3187,7 @@ func buildPlanForCompileRetry(
 	preparedRetry *preparedExecutionRetry,
 	intent *plan2.ExecutionIntent,
 ) (*plan2.Plan, error) {
-	if intent != nil && !intent.MatchesProcess(compilerContext.GetProcess()) {
+	if intent != nil && !plan2.ProcessAllowsIndexObservation(compilerContext.GetProcess()) {
 		intent = nil
 	}
 	originalContext := compilerContext.GetContext()

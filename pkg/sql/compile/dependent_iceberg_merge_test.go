@@ -46,11 +46,10 @@ import (
 
 type dependentMergeContext struct{ plan2.CompilerContext }
 
-func (c dependentMergeContext) Resolve(db, name string, snapshot *plan.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
-
+func (c dependentMergeContext) Resolve(db, name string, snapshot *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if name != "gold_orders" && name != "dim_orders" {
-		return c.CompilerContext.Resolve(db, name, snapshot)
+		return c.CompilerContext.Resolve(db, name, snapshot, nil)
 	}
 	td := &plan.TableDef{Name: name, DbName: db, DbId: 1, TblId: 2,
 		Cols: []*plan.ColDef{{Name: "id", Typ: types.T_int64.ToType().PlanType(), Default: &plan.Default{NullAbility: true}}}, Pkey: &plan.PrimaryKeyDef{}}

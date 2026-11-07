@@ -26,19 +26,12 @@ const maxBorrowedRelations = 64
 // The caller owns this output, while the engine/transaction owns its relation.
 type TableResolution struct{ Borrow *BorrowedTable }
 
-// PrepareTableResolution clears every supplied output before resolution. Only
-// a single non-nil output requests borrowing; invalid/multiple requests decline
-// borrowing without changing the ordinary descriptor or error contract.
-func PrepareTableResolution(outputs ...*TableResolution) *TableResolution {
-	for _, output := range outputs {
-		if output != nil {
-			output.Borrow = nil
-		}
+// Reset clears stale evidence before every resolution attempt. A nil output
+// means the caller does not request a borrowed relation.
+func (output *TableResolution) Reset() {
+	if output != nil {
+		output.Borrow = nil
 	}
-	if len(outputs) != 1 {
-		return nil
-	}
-	return outputs[0]
 }
 
 // BorrowedTable belongs to the ordinary resolver's transaction. It is valid

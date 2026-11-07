@@ -1588,7 +1588,7 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		return -1, -1, nil
 	}
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot, nil)
 	if err != nil {
 		return -1, -1, err
 	}
@@ -1664,7 +1664,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		snapshot = &Snapshot{}
 	}
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, snapshot, nil)
 	if err != nil {
 		return -1, err
 	}
@@ -5035,7 +5035,7 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 	if necessary {
 		idxObjRef, idxTableDef, err = resolver.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, &hidden)
 	} else {
-		idxObjRef, idxTableDef, err = builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+		idxObjRef, idxTableDef, err = builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -5247,7 +5247,7 @@ func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *pla
 	}
 
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -5560,7 +5560,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		return node.NodeId, -1
 	}
 	idxTag := builder.genNewBindTag()
-	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -5794,7 +5794,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			}
 		}
 
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 		if err != nil {
 			return -1, err
 		}

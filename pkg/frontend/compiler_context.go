@@ -727,7 +727,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	ses := tcc.GetSession()
 	physical, temporary := ses.GetTempTable(dbName, tableName)
-	obj, def, err := tcc.Resolve(dbName, tableName, nil)
+	obj, def, err := tcc.Resolve(dbName, tableName, nil, nil)
 	missing := func(err error) bool {
 		return moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB)
 	}
@@ -744,12 +744,14 @@ func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.
 	return obj, def, err
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolveUserRelation(dbName, tableName, snapshot, true, plan2.PrepareTableResolution(borrowOutput...))
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return tcc.resolveUserRelation(dbName, tableName, snapshot, true, borrowOutput)
 }
 
-func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolveUserRelation(dbName, tableName, snapshot, false, plan2.PrepareTableResolution(borrowOutput...))
+func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
+	return tcc.resolveUserRelation(dbName, tableName, snapshot, false, borrowOutput)
 }
 
 // ResolveTemporaryTable checks a destination in the session namespace only.
@@ -767,7 +769,7 @@ func (tcc *TxnCompilerContext) ResolveTemporaryTable(dbName, tableName string, s
 			return nil, nil, nil
 		}
 	}
-	return tcc.Resolve(dbName, tableName, snapshot)
+	return tcc.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, snapshot *plan2.Snapshot, temporaryAlias bool, result *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
@@ -795,8 +797,8 @@ func (tcc *TxnCompilerContext) resolveUserRelation(dbName, tableName string, sna
 
 // resolveForCatalogValidation checks a cached plan's object identity/version.
 // Its inputs include optimizer-generated index nodes and are not SQL targets.
-func (tcc *TxnCompilerContext) resolveForCatalogValidation(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
+func (tcc *TxnCompilerContext) resolveForCatalogValidation(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
 	return tcc.resolve(dbName, tableName, snapshot, true, nil)
 }
 
@@ -920,9 +922,10 @@ func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	ref *plan.ObjectRef,
 	tblName string,
-	snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution,
+	snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
-	return tcc.resolveIndexTableByRef(ref, tblName, snapshot, plan2.PrepareTableResolution(borrowOutput...))
+	borrowOutput.Reset()
+	return tcc.resolveIndexTableByRef(ref, tblName, snapshot, borrowOutput)
 }
 
 func (tcc *TxnCompilerContext) resolveIndexTableByRef(
