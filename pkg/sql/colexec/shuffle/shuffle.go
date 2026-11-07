@@ -108,6 +108,15 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		shuffle.ctr.directBatches = make(chan directHandoff)
 		shuffle.ctr.consumerDone = make(chan struct{})
 	}
+	if shuffle.LocalFilter != nil {
+		enabled, err := shuffle.LocalFilter.PrepareProbe(proc, max(1, int(shuffle.GetMaxParallel())))
+		if err != nil {
+			return err
+		}
+		if enabled {
+			shuffle.ctr.filterScratch = make([]uint8, 8192)
+		}
+	}
 	return nil
 }
 
@@ -362,6 +371,32 @@ func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
 			continue
 		}
 
+		// Optional filtering must not serialize probe scanning behind the
+		// build. Until the complete domain is ready, use ordinary routing.
+		if shuffle.LocalFilter != nil && shuffle.ctr.localBloom == nil && !shuffle.ctr.filterBypassed && shuffle.LocalFilter.Ready() {
+			filter, filterErr := shuffle.LocalFilter.Wait(proc.Ctx, shuffle.ctr.consumerDone)
+			if filterErr != nil {
+				select {
+				case <-shuffle.ctr.consumerDone:
+					return
+				default:
+				}
+				shuffle.failLocalProducer(proc, filterErr)
+				return
+			}
+			shuffle.ctr.localBloom = filter
+			shuffle.ctr.filterBypassed = filter == nil
+		}
+		if shuffle.ctr.localBloom != nil && !shuffle.ctr.filterBypassed {
+			handled, filterErr := shuffle.routeWithLocalFilter(bat, proc)
+			if filterErr != nil {
+				shuffle.failLocalProducer(proc, filterErr)
+				return
+			}
+			if handled {
+				continue
+			}
+		}
 		if shuffle.ctr.exprExec != nil {
 			bat, err = shuffle.evalAndShuffle(bat, proc)
 		} else if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {

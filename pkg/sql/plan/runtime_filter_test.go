@@ -1684,3 +1684,37 @@ func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestShuffleRuntimeFilterCandidateRespectsDisableHint(t *testing.T) {
+	for _, scenario := range []string{"selective", "disabled", "full-key-domain", "unknown-ndv"} {
+		t.Run(scenario, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(t, false)
+			probe := builder.qry.Nodes[0]
+			probe.TableDef.TblId = 41
+			ctx := &statsCacheCompilerContext{MockCompilerContext: builder.compCtx.(*MockCompilerContext), statsCache: NewStatsCache()}
+			if scenario != "unknown-ndv" {
+				ctx.statsCache.Set(41, &statspb.StatsInfo{NdvMap: map[string]float64{"id": 1000000}})
+			}
+			builder.compCtx = ctx
+			builder.tag2Table = map[int32]*TableDef{1: probe.TableDef}
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_INNER
+			join.Stats.HashmapStats.Shuffle = true
+			if scenario == "disabled" {
+				builder.optimizerHints = &OptimizerHints{runtimeFilter: 1}
+			}
+			if scenario == "full-key-domain" {
+				join.Stats.HashmapStats.HashmapSize = 1000000
+			}
+			builder.generateRuntimeFilters(2)
+			require.Len(t, join.RuntimeFilterBuildList, 1)
+			require.Len(t, join.RuntimeFilterProbeList, 1)
+			if scenario == "selective" {
+				require.NotNil(t, join.RuntimeFilterBuildList[0].BuildExpr)
+				require.NotNil(t, join.RuntimeFilterBuildList[0].ProbeType)
+			} else {
+				require.Nil(t, join.RuntimeFilterBuildList[0].BuildExpr)
+			}
+		})
+	}
+}

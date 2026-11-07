@@ -18,11 +18,13 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,6 +32,7 @@ import (
 var _ vm.Operator = new(Shuffle)
 
 type Shuffle struct {
+	LocalFilter        *runtimefilter.LocalShuffleFilter
 	ctr                container
 	CurrentShuffleIdx  int32
 	ShuffleColIdx      int32
@@ -88,6 +91,11 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
+	localBloom           *bloomfilter.CBloomFilter
+	filterScratch        []uint8
+	filterTested         int64
+	filterRejected       int64
+	filterBypassed       bool
 	ending               bool
 	sels                 [][]int32
 	buf                  *batch.Batch
@@ -151,6 +159,10 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 		shuffle.stopLocalProducer(pipelineFailed || err != nil, err)
 		if shuffle.ctr.held && shuffle.OpAnalyzer != nil {
 			stats := shuffle.OpAnalyzer.GetOpStats()
+			if shuffle.LocalFilter != nil {
+				stats.AddExtraStat("ShuffleRuntimeFilterTestedRows", shuffle.ctr.filterTested)
+				stats.AddExtraStat("ShuffleRuntimeFilterRejectedRows", shuffle.ctr.filterRejected)
+			}
 			stats.InputRows += shuffle.ctr.producerRows
 			stats.InputSize += shuffle.ctr.producerSize
 		}
@@ -188,6 +200,11 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingBucket = 0
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.runtimeFilterHandled = false
+	shuffle.ctr.localBloom = nil
+	shuffle.ctr.filterScratch = nil
+	shuffle.ctr.filterTested = 0
+	shuffle.ctr.filterRejected = 0
+	shuffle.ctr.filterBypassed = false
 	shuffle.ctr.stableStringHash = false
 	shuffle.ctr.held = false
 	shuffle.ctr.writingStopped = false

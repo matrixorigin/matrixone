@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -494,6 +495,11 @@ func (c *Compile) clear() {
 		source.Close()
 		delete(c.materializedSources, k)
 	}
+	for _, filter := range c.localShuffleFilters {
+		filter.Close()
+	}
+	c.localShuffleFilters = nil
+	c.localShuffleFilterBytes = 0
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -6918,6 +6924,10 @@ func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
 	reuse := !asofBuildLeft &&
 		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.shuffleStageNodes(leftscopes)) * int(node.Stats.Dop)
+	var localFilter *runtimefilter.LocalShuffleFilter
+	if !asofBuildLeft && !reuse {
+		localFilter = c.newLocalShuffleFilter(node, left, right, leftscopes, rightscopes)
+	}
 	for i := range probeScopes {
 		probeScopes[i].PreScopes = append(probeScopes[i].PreScopes, buildScopes[i])
 		if !reuse {
@@ -6930,6 +6940,13 @@ func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
 				// would create a self-dependency.
 				shuffleOpForProbe.RuntimeFilterSpec =
 					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
+			shuffleOpForProbe.LocalFilter = localFilter
+			if localFilter != nil {
+				// HashJoin owns join-map readiness. Optional membership must not
+				// turn its private complete-domain notification into a global
+				// barrier for otherwise ready probe partitions.
+				shuffleOpForProbe.RuntimeFilterSpec = nil
 			}
 			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			probeScopes[i].setRootOperator(shuffleOpForProbe)
@@ -6949,6 +6966,7 @@ func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
 
 	for i := range probeScopes {
 		buildOp := constructShuffleHashBuild(node, probeScopes[i].RootOp, c.proc)
+		buildOp.LocalFilter = localFilter
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		buildScopes[i].setRootOperator(buildOp)
 	}

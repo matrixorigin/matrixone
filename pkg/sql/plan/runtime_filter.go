@@ -499,6 +499,29 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 		rfTag := builder.genNewMsgTag()
 		node.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, nil, false))
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, 0, nil, false))
+		// Keep the dependency for every shuffle. Only advertise an optional
+		// local membership candidate when the disable hint and equality domain allow it.
+		if (builder.optimizerHints == nil || builder.optimizerHints.runtimeFilter == 0) &&
+			(node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_SEMI && !node.IsRightJoin) && len(node.OnList) == 1 {
+			if fn := node.OnList[0].GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "=" && len(fn.Args) == 2 &&
+				fn.Args[0].GetCol() != nil && fn.Args[1].GetCol() != nil && fn.Args[0].Typ.Id == fn.Args[1].Typ.Id {
+				// A small dimension table may still cover every probe key. Reuse
+				// the existing NDV cost test rather than treating row ratio as selectivity.
+				probeNDV := getExprNdv(fn.Args[0], builder)
+				buildSize := node.Stats.HashmapStats.HashmapSize
+				if probeNDV <= 1 || buildSize <= 0 || !(buildSize/probeNDV < 0.1) {
+					return
+				}
+				typ := types.T(fn.Args[0].Typ.Id)
+				switch typ {
+				case types.T_int16, types.T_int32, types.T_int64, types.T_uint16, types.T_uint32, types.T_uint64:
+					spec := node.RuntimeFilterBuildList[0]
+					spec.BuildExpr = DeepCopyExpr(fn.Args[1])
+					probeType := fn.Args[0].Typ
+					spec.ProbeType = &probeType
+				}
+			}
+		}
 		return
 	}
 
