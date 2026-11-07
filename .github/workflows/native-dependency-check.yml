@@ -36,7 +36,7 @@ jobs:
       matrix:
         os:
           - ubuntu-22.04
-          - macos-14
+          - macos-15
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
@@ -71,7 +71,7 @@ jobs:
       matrix:
         os:
           - ubuntu-22.04
-          - macos-14
+          - macos-15
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
