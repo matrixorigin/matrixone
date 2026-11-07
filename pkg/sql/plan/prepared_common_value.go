@@ -303,7 +303,7 @@ func bindPreparedCommonValueContextMarkers(ctx context.Context, markers, peers [
 		}
 		prefixArgs[i], prefixKinds[i] = true, param.PrepareParamKind
 	}
-	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", args, witnesses,
+	converted, _, err := preparedNumericPrefixArgs(ctx, state.proc, "coalesce", args, witnesses,
 		prefixArgs, prefixKinds, nil, nil, true)
 	if err != nil {
 		return nil, err

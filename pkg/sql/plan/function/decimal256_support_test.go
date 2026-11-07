@@ -63,6 +63,46 @@ func resolvedReturnType(t *testing.T, functionID int, inputs []types.Type) types
 	return fn.Overloads[result.idx].retType(finalTypes)
 }
 
+// TestMaxByDecimal256ValueArity pins the max_by/max_by_non_null registry
+// contract that issue 30938's widened products flow through: the aggregate
+// takes value, order and tie arguments, so a two-argument call - the generic
+// max_by(value, key) shape some engines expose - is rejected for every input
+// type (surfaced as moerr 20203), while the three-argument form admits a
+// widened DECIMAL256 value argument and returns that argument's type
+// unchanged.
+func TestMaxByDecimal256ValueArity(t *testing.T) {
+	dec256 := types.New(types.T_decimal256, 76, 0)
+	dec128 := types.New(types.T_decimal128, 38, 0)
+	intType := types.New(types.T_int32, 32, 0)
+
+	for _, id := range []int{MAX_BY, MAX_BY_NON_NULL} {
+		fn := allSupportedFunctions[id]
+
+		// A two-argument call is not an engine signature: it is rejected for
+		// widened decimal products, plain decimals and plain ints alike.
+		for _, inputs := range [][]types.Type{
+			{dec256, intType},
+			{dec128, intType},
+			{intType, intType},
+		} {
+			result := fn.checkFn(fn.Overloads, inputs)
+			require.Equal(t, failedAggParametersWrong, result.status,
+				"two-argument call must keep its checked rejection")
+		}
+
+		// Four arguments are rejected as well; exactly three are required.
+		result := fn.checkFn(fn.Overloads, []types.Type{dec256, intType, intType, intType})
+		require.Equal(t, failedAggParametersWrong, result.status)
+
+		// The three-argument form admits the widened DECIMAL256 product as
+		// its value argument and follows that first argument's type.
+		require.Equal(t, dec256,
+			resolvedReturnType(t, id, []types.Type{dec256, intType, intType}))
+		require.Equal(t, dec128,
+			resolvedReturnType(t, id, []types.Type{dec128, intType, intType}))
+	}
+}
+
 func TestDecimal256CompareFns(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decType := types.New(types.T_decimal256, 65, 2)
@@ -286,7 +326,9 @@ func TestDecimal256ArithmeticTypeResolution(t *testing.T) {
 
 	multiType := resolvedReturnType(t, MULTI, []types.Type{dec2, dec4})
 	require.Equal(t, types.T_decimal256, multiType.Oid)
-	require.Equal(t, int32(65), multiType.Width)
+	// Issue #30938: multiplication publishes the Decimal256 physical carrier
+	// precision instead of clamping to the 65-digit declaration limit.
+	require.Equal(t, int32(76), multiType.Width)
 	require.Equal(t, int32(6), multiType.Scale)
 
 	divType := resolvedReturnType(t, DIV, []types.Type{dec4, dec2})

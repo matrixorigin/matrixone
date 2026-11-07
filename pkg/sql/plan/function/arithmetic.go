@@ -98,11 +98,15 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
-// decimal256BatchArith enforces the declared DECIMAL precision after the
+// decimal256BatchArith enforces the published DECIMAL precision after the
 // physical Decimal256 kernel has completed. Decimal256's signed coefficient
-// can hold up to 76 digits, while SQL DECIMAL results are capped at 65; merely
-// clamping result metadata would otherwise let wider values escape into CTAS,
-// comparisons, and storage under a narrower type tag.
+// can hold up to 76 digits, while declared SQL DECIMAL results are capped at
+// 65; merely clamping result metadata would otherwise let wider values escape
+// into CTAS, comparisons, and storage under a narrower type tag. Wide
+// multiplication publishes up to 76 digits for expression results (issue
+// #30938), and a published width of 76 (or more) denotes the physical carrier
+// domain: its boundary is the kernel's own overflow, so the check below
+// defers to it.
 func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int,
 	arithFn func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error,

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -88,7 +89,8 @@ func TestPreparedMixedTextBinarySetWidth(t *testing.T) {
 		{"prepared CTAS", "create table prepared_binary_width as select cast('' as char(1)) as d union all select ? as d", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			prepared, err := runOneStmt(mock, t,
 				"prepare mixed_width from '"+strings.ReplaceAll(tc.sql, "'", "''")+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
@@ -120,7 +122,8 @@ func TestPreparedMixedTextBinarySetWidth(t *testing.T) {
 			if tc.ctas {
 				stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
 				require.NoError(t, err)
-				require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt))
+				retained, _ := mock.ctxt.GetProcess().ClaimDecimalBoundaryEvidence()
+				require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt, retained, function.DefaultDivPrecisionIncrement))
 				col := filled.GetDdl().GetCreateTable().TableDef.Cols[0]
 				require.Equal(t, types.T_varbinary, types.T(col.Typ.Id))
 				require.Equal(t, int32(10), col.Typ.Width)
@@ -171,7 +174,8 @@ func TestPreparedSeriesCTASColumnOrderAndExplicitType(t *testing.T) {
 		{"explicit override", "create table gs_explicit (result varchar(40)) as select result from generate_series(?,?,?) g", 0, 40, types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare gs_ctas from '"+tc.sql+"'")
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			prepared, err := runOneStmt(mock, t, "prepare gs_ctas from '"+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			values := []any{
@@ -184,7 +188,8 @@ func TestPreparedSeriesCTASColumnOrderAndExplicitType(t *testing.T) {
 			require.True(t, changed)
 			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
 			require.NoError(t, err)
-			require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt))
+			retained, _ := mock.ctxt.GetProcess().ClaimDecimalBoundaryEvidence()
+			require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt, retained, function.DefaultDivPrecisionIncrement))
 			target := filled.GetDdl().GetCreateTable().TableDef.Cols[tc.resultOrdinal]
 			require.Equal(t, "result", target.Name)
 			require.Equal(t, types.T_varchar, types.T(target.Typ.Id))

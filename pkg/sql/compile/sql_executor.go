@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -628,6 +629,10 @@ func (exec *txnExecutor) exec(
 	applyExecutorLockWaitTimeout(proc, exec.opts)
 
 	prepared := false
+	// divIncrement is the attached session's div_precision_increment, recovered
+	// once the prepared flow is known to need it (issue #30938, design decision
+	// log entry 88 (iv)(d)); the retry-rebuild closure below captures it.
+	divIncrement := function.DefaultDivPrecisionIncrement
 	if statementOption.HasParams() {
 		vec, err := statementOption.Params(exec.s.mp)
 		if err != nil {
@@ -718,7 +723,8 @@ func (exec *txnExecutor) exec(
 		if err != nil {
 			return executor.Result{}, err
 		}
-		pn, err = specializeInternalPreparedPlan(exec.ctx, pn, statementOption.PreparedParamValues())
+		divIncrement = internalSessionDivPrecisionIncrement(proc)
+		pn, err = specializeInternalPreparedPlan(exec.ctx, proc, pn, statementOption.PreparedParamValues(), divIncrement)
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -751,7 +757,7 @@ func (exec *txnExecutor) exec(
 			if err != nil {
 				return pn, err
 			}
-			return specializeInternalPreparedPlan(ctx, pn, statementOption.PreparedParamValues())
+			return specializeInternalPreparedPlan(ctx, proc, pn, statementOption.PreparedParamValues(), divIncrement)
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
@@ -979,8 +985,20 @@ func publishInternalExecutorStreamResult(
 // The internal executor reparses CTAS population SQL. Apply the same prepared
 // specialization used by the frontend after each plan build, including retry
 // rebuilds, so parameter source domains survive that reparse.
+//
+// The fill rides the executor's own per-execution process under an entered
+// decimal-boundary generation (issue #30938, design decision log entry 88
+// (iv)): the internal route is the fourth execute-time fill window, and its
+// provenance-witness and b#-channel reads behave exactly as on the frontend
+// routes only with the process threaded and the generation entered. The
+// release rides defer so the field lifecycle holds on success, error and
+// panic unwind alike; rebound entries die with the generation at release, so
+// no ledger crosses the route boundary (the inferred-column carrier was
+// already refreshed on the frontend's first plan). divIncrement is the
+// attached session's div_precision_increment, consumed by parent-domain
+// recovery exactly as on the frontend routes.
 func specializeInternalPreparedPlan(
-	ctx context.Context, pn *plan.Plan, values []executor.ParamValue,
+	ctx context.Context, proc *process.Process, pn *plan.Plan, values []executor.ParamValue, divIncrement int32,
 ) (*plan.Plan, error) {
 	if len(values) == 0 {
 		return pn, nil
@@ -989,8 +1007,10 @@ func specializeInternalPreparedPlan(
 	for i := range values {
 		params[i] = values[i]
 	}
-	specialized, changed, err := plan.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
-		ctx, pn, params)
+	releaseBoundary := process.EnterDecimalBoundaryGeneration(proc)
+	defer releaseBoundary()
+	specialized, changed, err := plan.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWritesAndProcess(
+		ctx, proc, pn, params, divIncrement)
 	if err != nil {
 		return nil, err
 	}
@@ -998,6 +1018,36 @@ func specializeInternalPreparedPlan(
 		return specialized, nil
 	}
 	return pn, nil
+}
+
+// internalSessionDivPrecisionIncrement recovers div_precision_increment from
+// the internal executor's attached session (issue #30938, design decision log
+// entry 88 (iv)(d)). It mirrors sessionDivPrecisionIncrement
+// (pkg/frontend/session.go) through the established minimal-interface idiom
+// (the GetSessId assertion above) without importing pkg/frontend - an import
+// cycle. Any incapability - absent process, absent session, missing
+// capability, read error or a non-int64 value - degrades to
+// function.DefaultDivPrecisionIncrement exactly as the frontend's nil-session
+// guard does, so a session-less background execution keeps the engine default.
+func internalSessionDivPrecisionIncrement(proc *process.Process) int32 {
+	if proc == nil || proc.Session == nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	session, ok := proc.Session.(interface {
+		GetSessionSysVar(string) (interface{}, error)
+	})
+	if !ok {
+		return function.DefaultDivPrecisionIncrement
+	}
+	value, err := session.GetSessionSysVar("div_precision_increment")
+	if err != nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	increment, ok := value.(int64)
+	if !ok {
+		return function.DefaultDivPrecisionIncrement
+	}
+	return int32(increment)
 }
 
 func (exec *txnExecutor) LockTable(table string) error {

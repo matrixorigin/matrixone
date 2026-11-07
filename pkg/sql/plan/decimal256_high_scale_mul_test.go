@@ -32,7 +32,10 @@ func TestDecimal256HighScaleMultiplicationPublicPath(t *testing.T) {
 	require.NoError(t, err)
 	expr := stmt.GetQuery().Nodes[1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
-	require.Equal(t, int32(65), expr.Typ.Width)
+	// Issue #30938: the declared operand domains sum past the 65-digit
+	// declaration limit, so the product publishes the Decimal256 physical
+	// carrier width (76). The rounded value still fits that domain.
+	require.Equal(t, int32(76), expr.Typ.Width)
 	require.Equal(t, int32(65), expr.Typ.Scale)
 
 	proc := newPlanTestProcess(t)

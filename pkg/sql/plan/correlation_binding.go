@@ -135,6 +135,12 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 	if err := builder.assignCorrelationStages(); err != nil {
 		return nil, err
 	}
+	// Decimal aggregate argument-domain reconciliation (issue #30938,
+	// design §5, F-DEPENDENT-EXIT): reconcile the dependent plan's AVG/SUM
+	// argument seams before the finalize below re-syncs its references.
+	if _, err := reconcileDecimalAggregateDomains(builder.compCtx.GetProcess(), q, resolveDivPrecisionIncrement(builder.compCtx)); err != nil {
+		return nil, err
+	}
 	// Remapping resolves aggregate/window output nullability and physical
 	// widths. Freeze call and comparison contracts from those actual outputs.
 	if _, err := refreshPreparedPlanProjectionTypes(builder.GetContext(),

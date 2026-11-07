@@ -47,6 +47,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -59,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -226,6 +228,15 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
+	// Statement-local decimal boundary generation (issue #30938, decision
+	// log 60): the standalone view-inference owner — the runtime view-columns
+	// table function, SHOW view metadata, standalone schema inference and
+	// persisted-environment regeneration all reach this entry through
+	// NEITHER BuildPlan NOR Optimize. The generation holds through the
+	// funnel, the validators and the view column record assembly so the
+	// storage-envelope evaluation below reads this generation's recorded
+	// decision evidence.
+	defer process.EnterDecimalBoundaryGeneration(ctx.GetProcess())()
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
@@ -327,6 +338,15 @@ func inferViewColumns(
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
+	// The view column iteration shares one statement-scoped storage
+	// domain (design §4.3, F-MEMOIZED-WALK): every producer slot is
+	// evaluated at most once across the whole column list, and the
+	// division mirror applies the session div_precision_increment this
+	// statement's publication consumed (design §4.1 divide bullet).
+	viewBoundaryDomain := newCtasStorageBoundaryDomain(ctx.GetProcess(), nil, query)
+	viewBoundaryDomain.divPrecisionIncrement = resolveDivPrecisionIncrement(ctx)
+	viewBoundaryDomain.legacyPrecision = function.LegacyDecimalIntermediatePrecision(ctx.GetContext())
+	viewMainNode := resultColumnNode(query)
 	cols := make([]*plan.ColDef, len(projectList))
 	var integerValues []function.IntegerLogicalPrecision
 	if query.IntegerPrecision != nil {
@@ -359,6 +379,16 @@ func inferViewColumns(
 			adjusted := integerSchemaType(*typ, g, g.Outputs[idx], true, integerValues)
 			typ = &adjusted
 		}
+		// View column records persist the same envelope-derived declared
+		// tags CTAS persists (issue #30938, design I2): authorship, runtime
+		// description and legacy replay all assemble through this loop
+		// inside the generation inferViewColumns owns, so the ledger the
+		// boundary consults is this generation's own completed evidence.
+		boundedViewTyp, berr := viewBoundaryDomain.storageBoundary(*typ, expr, viewMainNode)
+		if berr != nil {
+			return nil, berr
+		}
+		typ = &boundedViewTyp
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
 			provenance := outputColumnProvenance[idx]
@@ -1557,10 +1587,1699 @@ func ctasTemporalSchemaType(typ plan.Type) plan.Type {
 	return typ
 }
 
+// decimalMulStorageTransparentFunctions never widen the integer capacity of
+// their DECIMAL inputs: every result value is one of the argument values (or
+// its sign/scale-preserving form), so a multiplication carrier width reaches
+// the projection type through them unchanged. max/min qualify as aggregates:
+// their result is a subset of the argument's values. Rounding functions also
+// preserve value domains but re-derive precision from the digits argument, so
+// they are handled by roundingEnvelope instead of combining argument
+// envelopes here.
+var decimalMulStorageTransparentFunctions = map[string]struct{}{
+	"abs":         {},
+	"unary_plus":  {},
+	"unary_minus": {},
+	"coalesce":    {},
+	"case":        {},
+	"iff":         {},
+	// "if" binds to the same IFF overload id but keeps its authored
+	// ObjName; controlFlowValueIndexes excludes its predicate argument from
+	// the envelope merge (issue #30938 review round 8).
+	"if":       {},
+	"ifnull":   {},
+	"greatest": {},
+	"least":    {},
+	"max":      {},
+	"min":      {},
+}
+
+// decimalMulStorageValueArgFunctions select a value from exactly one
+// argument: any_value and the max_by family return their first argument's
+// values (all register ReturnFirstArgType, issue #30938 review round 5), so
+// the envelope derives from that argument only. Combining the ordering
+// arguments would wrongly widen the domain with their scale/integral
+// capacity.
+var decimalMulStorageValueArgFunctions = map[string]int{
+	"any_value":       0,
+	"max_by":          0,
+	"max_by_non_null": 0,
+	// name_const returns its second argument's value; the first argument
+	// is a non-value label literal (validateNameConstArgs requires the
+	// literal and the retType returns parameters[1]), so the label's
+	// digits never enter the storage domain (issue #30938 pre-PR review
+	// 1793732446352).
+	"name_const": 1,
+	// The value-window kernels first_value/last_value/nth_value return
+	// rows of their value argument unchanged (issue #30938 review
+	// round 6). lag/lead merge an optional default branch and live in a
+	// dedicated envelopeOwned branch below.
+	"first_value": 0,
+	"last_value":  0,
+	"nth_value":   0,
+}
+
+// decimalStorageEnvelope is an exact-numeric domain expressed the way the
+// type system combines DECIMAL branches: maximum integral-capacity plus
+// maximum scale, mirroring setSafeDecimalWidthAndScaleFromSource so the
+// storage boundary preserves the same envelope a base plan (with the
+// multiplication width capped at 65) would have published.
+type decimalStorageEnvelope struct {
+	integral int32
+	scale    int32
+}
+
+func combineDecimalStorageEnvelope(a, b decimalStorageEnvelope) decimalStorageEnvelope {
+	if b.integral > a.integral {
+		a.integral = b.integral
+	}
+	if b.scale > a.scale {
+		a.scale = b.scale
+	}
+	return a
+}
+
+// decimalTypedEnvelope converts a type into an envelope. The width zero/one
+// default forms carry no meaningful domain. Integer-family types carry
+// their exact digit domain, mirroring preparedIntegerIntegralWidth (issue
+// #30938 review round 7): a binder alignment cast looked through onto an
+// integer operand must not discard the integer's integral capacity (for
+// example, coalesce(d DECIMAL(65,50), i BIGINT) keeps the merged (69,50)
+// base inference and admits the BIGINT branch).
+func decimalTypedEnvelope(typ plan.Type) decimalStorageEnvelope {
+	if integral := preparedIntegerIntegralWidth(types.T(typ.Id)); integral > 0 {
+		return decimalStorageEnvelope{integral: integral}
+	}
+	if !types.T(typ.Id).IsDecimal() || typ.Width <= 0 {
+		return decimalStorageEnvelope{}
+	}
+	integral := typ.Width - typ.Scale
+	if integral < 0 {
+		integral = 0
+	}
+	return decimalStorageEnvelope{integral: integral, scale: max(typ.Scale, 0)}
+}
+
+// decimalLiteralEnvelope derives a numeric literal's domain from its own
+// value: a binder-generated alignment cast may widen the literal's published
+// target beyond what its digits need (coalesce(a*b, 0) aligns 0 to the
+// (76,0) carrier), while a genuinely wide literal still derives its exact
+// digits (issue #30938 review round 3).
+func decimalLiteralEnvelope(expr *plan.Expr) decimalStorageEnvelope {
+	lit := expr.GetLit()
+	if lit == nil {
+		return decimalStorageEnvelope{}
+	}
+	switch v := lit.GetValue().(type) {
+	case *plan.Literal_I64Val:
+		x := v.I64Val
+		if x < 0 {
+			x = -x
+		}
+		return decimalStorageEnvelope{integral: int32(len(strconv.FormatInt(x, 10)))}
+	case *plan.Literal_U64Val:
+		return decimalStorageEnvelope{integral: int32(len(strconv.FormatUint(v.U64Val, 10)))}
+	case *plan.Literal_Sval:
+		return decimalStringLiteralEnvelope(v.Sval)
+	default:
+		return decimalTypedEnvelope(expr.Typ)
+	}
+}
+
+// decimalStringLiteralEnvelope counts the integral and fractional digits of
+// a decimal textual form, ignoring sign and leading zeros. Any shape that is
+// not plain numeric text yields no domain rather than a guessed one.
+func decimalStringLiteralEnvelope(s string) decimalStorageEnvelope {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "+") || strings.HasPrefix(s, "-") {
+		s = s[1:]
+	}
+	integralPart := s
+	fracPart := ""
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		integralPart, fracPart = s[:i], s[i+1:]
+	}
+	for _, r := range integralPart + fracPart {
+		if r < '0' || r > '9' {
+			return decimalStorageEnvelope{}
+		}
+	}
+	integral := int32(len(strings.TrimLeft(integralPart, "0")))
+	scale := int32(len(fracPart))
+	return decimalStorageEnvelope{integral: integral, scale: scale}
+}
+
+// ctasStorageDomain computes storage envelopes for one query, resolving
+// relational output references (aggregate, distinct and set-operation
+// outputs) through the plan DAG below the main projection node, so a bare
+// ColRef cannot smuggle a multiplication carrier width into a persisted
+// column (issue #30938 review round 3).
+// ctasSlotMemo is one statement-scoped memo entry: the combined envelope
+// resolved for a producer slot, or an unresolved marker when the slot's
+// shape kept its authored type (design §4.3: each slot is evaluated at
+// most once per statement, and an unresolved resolution is final too).
+type ctasSlotMemo struct {
+	env      decimalStorageEnvelope
+	resolved bool
+}
+
+type ctasStorageDomain struct {
+	nodes map[int32]*plan.Node
+	// steps maps a query step to its root node id; CTE readers
+	// (SINK_SCAN/RECURSIVE_SCAN/RECURSIVE_CTE) reach their producers only
+	// through it (issue #30938 review round 9).
+	steps []int32
+	// memo is the statement-scoped one-shot memo of design §4.3
+	// (F-MEMOIZED-WALK, decision log 74 (v)): every producer slot's
+	// envelope is computed at most once per statement and shared across
+	// every output column of the boundary's fixed column iteration. A
+	// slot referenced again — a shared producer diamond or SELECT x, x —
+	// reads the completed value. The map is nil until the first
+	// slot-keyed evaluation so envelope-only statements allocate nothing.
+	memo map[[2]int32]ctasSlotMemo
+	// evaluating marks the slots currently being evaluated on this path.
+	// A recursive back-reference closing on a slot already in progress
+	// contributes the neutral envelope: the recursive cycle closes on the
+	// anchor seed in one step (design §4.3, F-MEMOIZED-WALK).
+	evaluating map[[2]int32]struct{}
+	// evalCount counts actual slot evaluations (memo misses) for the §9
+	// determinism hook (design §4.3, cell (xxi) (e)): shared producer
+	// diamonds count once regardless of fan-out, and anchor-seeded
+	// recursive unions evaluate zero recursive-member slots.
+	evalCount int
+	// divPrecisionIncrement is the session div_precision_increment value
+	// the publication consumed, applied verbatim by the division envelope
+	// mirror (design §4.1 divide bullet): the statement-time callers set
+	// it from the compiler context, the prepared-CTAS execute refresh
+	// receives the execute session's value, and the constructor seeds the
+	// binder default (function.DefaultDivPrecisionIncrement).
+	divPrecisionIncrement int32
+	// legacyPrecision is the legacy intermediate-precision flag the
+	// publication consumed, applied verbatim by the rounding mirror's
+	// re-invoked refineDecimalRoundingReturnType (issue #30938 review
+	// round 11): statement-time callers read it from the compiler context
+	// exactly like the parent's own call site (base_binder.go:8736), the
+	// prepared-CTAS execute refresh from the execute request context, and
+	// the reconcile pass from the process context. The zero value is the
+	// released-era-disabled false, matching the parent's fallback.
+	legacyPrecision bool
+	// ledgerOf resolves one content-keyed decimal coercive decision for the
+	// <=65-cast ownership rule (issue #30938, design decision log 62): the
+	// live generation's registry read-only for statement-time evaluation,
+	// or the retained ledger a prepared-CTAS execute carried from its plan
+	// generation. A nil ledger degrades every ownership question to its
+	// conservative declared-envelope answer.
+	ledgerOf func(key string) (any, bool)
+	// corrSpec is the query's bound correlation descriptor, when the
+	// statement carries one: dependent calls and correlation slots resolve
+	// their envelopes through it (design §4.1, revision 8
+	// F-DEPENDENT-ENVELOPE; issue #30938 review round 11, F4). A nil
+	// descriptor degrades both shapes to their authored types.
+	corrSpec *plan.CorrelationSpec
+	// ordered holds the query nodes in slice order so the correlation
+	// occurrence index is built deterministically (the map above iterates
+	// in no defined order).
+	ordered []*plan.Node
+	// corrOcc indexes the first DependentExpr occurrence of each program
+	// in statement node order, lazily on the first correlation-slot
+	// resolution. Every occurrence of one program captures type-identical
+	// expressions (ValidateCorrelation's input equalities), and the
+	// memoized one-shot walk evaluates each program output at most once,
+	// so the first occurrence's capture list is the resolution channel
+	// (design §4.1: the slot evaluates exactly once).
+	corrOcc map[uint32]corrOccurrence
+	// corrSlotMemo memoizes each resolved correlation slot by
+	// (ProgramId, Ordinal) in the same one-shot spirit as the relational
+	// slot memo: the capture edge is fixed per statement, so a slot
+	// evaluates exactly once.
+	corrSlotMemo map[[2]uint32]ctasSlotMemo
+}
+
+// corrOccurrence records one dependent call's capture list and the node
+// owning the call, the positional edge a correlation slot resolves through
+// (design §4.1, revision 8 F-DEPENDENT-ENVELOPE).
+type corrOccurrence struct {
+	call  *plan.DependentExpr
+	owner *plan.Node
+}
+
+func newCtasStorageDomain(query *Query) *ctasStorageDomain {
+	d := &ctasStorageDomain{
+		steps: query.Steps,
+		// The binder default stands until a caller sets the session value
+		// its publication consumed (design §4.1 divide bullet).
+		divPrecisionIncrement: function.DefaultDivPrecisionIncrement,
+		corrSpec:              query.Correlation,
+	}
+	for _, n := range query.Nodes {
+		if n != nil {
+			if d.nodes == nil {
+				d.nodes = make(map[int32]*plan.Node)
+			}
+			if _, ok := d.nodes[n.NodeId]; !ok {
+				d.nodes[n.NodeId] = n
+				d.ordered = append(d.ordered, n)
+			}
+		}
+	}
+	return d
+}
+
+func (d *ctasStorageDomain) node(id int32) *plan.Node {
+	if d == nil || d.nodes == nil {
+		return nil
+	}
+	return d.nodes[id]
+}
+
+// stepProducer resolves one source step of a CTE reader to the node whose
+// projection the reader mirrors: query steps wrap those roots in a SINK
+// whose single child is the produced subquery root (issue #30938 review
+// round 9).
+func (d *ctasStorageDomain) stepProducer(step int32) *plan.Node {
+	if step < 0 || int(step) >= len(d.steps) {
+		return nil
+	}
+	node := d.node(d.steps[step])
+	if node == nil {
+		return nil
+	}
+	if node.NodeType == plan.Node_SINK {
+		if len(node.Children) == 0 {
+			return nil
+		}
+		return d.node(node.Children[0])
+	}
+	return node
+}
+
+// envelope returns the integer/scale domain the expression carries without
+// relying on the multiplication physical carrier width. Multiplication
+// contributes its base-published envelope (min(w1+w2,65) precision kept with
+// the result scale); binder-generated casts wider than the declared 65-digit
+// SQL domain (never user-authorable) are looked through, implicit literal
+// coercions derive from the literal's own digits, relational output columns
+// resolve through the plan DAG, and width-transparent branches combine via
+// the integer-capacity/scale envelope. Unrecognized and unresolved shapes
+// keep their authored type so pre-existing behavior is preserved.
+func (d *ctasStorageDomain) envelope(expr *plan.Expr) decimalStorageEnvelope {
+	return d.envelopeOwned(expr, nil)
+}
+
+// envelopeOwned evaluates the envelope in the relational context of owner.
+// Column references resolve through the relational nodes feeding owner
+// (issue #30938 review round 4): an aggregate surfaced inside a scalar
+// wrapper - abs(max(product)), coalesce(max(product), 0) - is traced back to
+// the aggregate's producer expression instead of trusting the published
+// column type. Owner-less evaluation keeps column references at their
+// authored types.
+func (d *ctasStorageDomain) envelopeOwned(expr *plan.Expr, owner *plan.Node) decimalStorageEnvelope {
+	if expr == nil {
+		return decimalStorageEnvelope{}
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		return decimalLiteralEnvelope(expr)
+	case *plan.Expr_Col:
+		col := expr.GetCol()
+		if col == nil || owner == nil {
+			return decimalTypedEnvelope(expr.Typ)
+		}
+		idx := col.ColPos
+		for _, childId := range owner.Children {
+			child := d.node(childId)
+			if child == nil {
+				continue
+			}
+			if env, resolved, tookPart := d.slotEnvelope(child, idx, expr, owner); tookPart {
+				if !resolved {
+					// Unresolved reference: keep the authored column type.
+					return decimalTypedEnvelope(expr.Typ)
+				}
+				return env
+			}
+		}
+		return decimalTypedEnvelope(expr.Typ)
+	case *plan.Expr_P:
+		return decimalTypedEnvelope(expr.Typ)
+	case *plan.Expr_W:
+		// A window result derives from its window function call; resolve
+		// that call in the owning WINDOW node's context where its argument
+		// references resolve into the node's input.
+		winFunc := e.W.GetWindowFunc()
+		if winFunc == nil {
+			return decimalTypedEnvelope(expr.Typ)
+		}
+		return d.envelopeOwned(winFunc, owner)
+	case *plan.Expr_F:
+		name := e.F.Func.GetObjName()
+		if name == "*" && types.T(expr.Typ.Id).IsDecimal() {
+			// Mirror the parent's per-carrier-family decimalMultiplyReturnType
+			// over decimalMultiplyDomain operand domains (design §4.1
+			// multiplication bullet, revision 38 F-NARROW-CARRIER-ENVELOPE;
+			// decision log 84 (iii)). The node's own result oid identifies
+			// the parent's carrier route - the coercion and promotion rules
+			// (decimalArithmeticInputs, keepCheckedD128 included) are
+			// unchanged by the widening, so a DECIMAL128 result is the
+			// parent's narrow route capped at 38 and a DECIMAL256 result is
+			// the parent's decimal256 carrier capped at 65; only the widened
+			// publication lifts the decimal256 cap to 76. Each operand
+			// contributes its reconstructed parent domain width
+			// (decimalMultiplyEnvelopeDomain), never the published width of
+			// a widened seam.
+			if len(e.F.Args) != 2 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			leftWidth, leftOK := d.decimalMultiplyEnvelopeDomain(e.F.Args[0], owner)
+			rightWidth, rightOK := d.decimalMultiplyEnvelopeDomain(e.F.Args[1], owner)
+			if !leftOK || !rightOK {
+				// Unknown operand domain: the parent's retType retains the
+				// route's carrier envelope, which the widened publication
+				// keeps capped at 65 verbatim, so the typed envelope of the
+				// published type is already the parent's.
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			cap := int32(38)
+			if types.T(expr.Typ.Id) == types.T_decimal256 {
+				cap = 65
+			}
+			base := min(leftWidth+rightWidth, cap)
+			scale := max(expr.Typ.Scale, 0)
+			integral := base - scale
+			if integral < 0 {
+				integral = 0
+			}
+			return decimalStorageEnvelope{integral: integral, scale: scale}
+		}
+		if name == "cast" {
+			if !types.T(expr.Typ.Id).IsDecimal() {
+				return decimalStorageEnvelope{}
+			}
+			if expr.Typ.Width <= 65 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			// A >65 target is binder-generated: it cannot be authored in SQL.
+			if _, isLit := e.F.Args[0].Expr.(*plan.Expr_Lit); isLit {
+				return decimalLiteralEnvelope(e.F.Args[0])
+			}
+			return d.envelopeOwned(e.F.Args[0], owner)
+		}
+		if name == "round" || name == "truncate" || name == "floor" || name == "ceil" || name == "ceiling" {
+			return d.roundingEnvelope(name, e.F, owner)
+		}
+		if name == "+" || name == "-" {
+			// Re-invoke decimalAddSubReturnType over the operands'
+			// parent-side types (design §4.1 add/subtract bullet, revision
+			// 40 F-OUTPUT-DIVERGENCE-PROVENANCE; decision log 86 (i)): the
+			// publication itself is the typing source - the fixed
+			// DECIMAL64(18, s) d64+d64 shortcut, the general
+			// min(maxIntegerDigits + scale + 1, 65) rule and the oid
+			// promotion all fire exactly as the parent's - so a widened
+			// operand derives the parent's own below-cap type instead of
+			// inheriting the clamp of the published type, and a tree
+			// sitting above a fixed-domain barrier or an absorbing shortcut
+			// keeps its published (parent-identical) envelope.
+			if len(e.F.Args) != 2 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			left, leftOK := d.parentSideOperandType(e.F.Args[0], owner)
+			right, rightOK := d.parentSideOperandType(e.F.Args[1], owner)
+			if !leftOK || !rightOK {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			parent := function.DecimalAddSubPublication([]types.Type{left, right})
+			if !parent.Oid.IsDecimal() || parent.Width <= 0 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			return decimalTypedEnvelope(plan.Type{Id: int32(parent.Oid), Width: parent.Width, Scale: parent.Scale})
+		}
+		if name == "/" {
+			// Mirror decimalDivisionReturnType rule-for-rule over the
+			// operands' recovered original domains (design §4.1 divide
+			// bullet, revision 5 F-CAPPED-CONSUMERS; decision log 74
+			// (iii)): precision leftPrecision + rightScale + increment,
+			// scale leftScale + increment, the 65/30 caps and the
+			// precision < scale lift applied verbatim, with increment the
+			// same session div_precision_increment value the publication
+			// consumed. The typing owner derives from the ORIGINAL
+			// operands through exactDivisionOperandType - the implicit
+			// alignment casts describe storage, not SQL precision - so
+			// each operand recovers its original domain through
+			// decimalDivisionStorageOperandDomain; an operand whose
+			// original domain is unrecoverable keeps the authored type,
+			// exactly the parent's non-exact pass-through.
+			if len(e.F.Args) != 2 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			leftPrecision, leftScale, lok := d.decimalDivisionStorageOperandDomain(expr, 0, owner)
+			_, rightScale, rok := d.decimalDivisionStorageOperandDomain(expr, 1, owner)
+			if !lok || !rok {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			// clampDivPrecisionIncrement verbatim
+			// (decimal_division.go:55-63): a negative value clamps to 0,
+			// a value above 30 clamps to 30; 0 itself is a legitimate
+			// session setting, so only the constructor's default
+			// distinguishes an unset field.
+			increment := d.divPrecisionIncrement
+			if increment < 0 {
+				increment = 0
+			}
+			if increment > 30 {
+				increment = 30
+			}
+			precision := leftPrecision + rightScale + increment
+			if precision > 65 {
+				precision = 65
+			}
+			scale := leftScale + increment
+			if scale > 30 {
+				scale = 30
+			}
+			if precision < scale {
+				precision = scale
+			}
+			return decimalStorageEnvelope{integral: precision - scale, scale: scale}
+		}
+		if name == "mod" || name == "%" {
+			// Mirror DecimalModReturnType rule-for-rule over the
+			// reconstructed parent operand domains (design §4.1 mod bullet,
+			// revision 29 F-MOD-STORAGE-ENVELOPE; decision log 75 (ii)):
+			// result precision max(w1, w2) and result scale max(s1, s2).
+			// The typing owner derives from the ORIGINAL operands - the
+			// implicit alignment casts describe storage, not SQL precision -
+			// so each operand recovers its original domain through
+			// decimalModStorageOperandDomain: integer operands contribute
+			// their exact digit domains (integerDecimalDigits with the
+			// mediumint override) and decimal operands their envelope width
+			// integral + scale. The owner's non-decimal pass-through
+			// applies verbatim: temporal, approximate, string, BIT and
+			// unknown operands keep the selected type, hence their authored
+			// typed envelopes, as does the neither-operand-decimal case.
+			if len(e.F.Args) != 2 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			leftWidth, leftScale, leftDecimal, lok := d.decimalModStorageOperandDomain(expr, 0, owner)
+			rightWidth, rightScale, rightDecimal, rok := d.decimalModStorageOperandDomain(expr, 1, owner)
+			if !lok || !rok || (!leftDecimal && !rightDecimal) {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			precision := max(leftWidth, rightWidth)
+			scale := max(leftScale, rightScale)
+			return decimalStorageEnvelope{integral: precision - scale, scale: scale}
+		}
+		if name == "percentile_disc" {
+			// percentile_disc returns its ORDER BY value argument verbatim
+			// (PercentileDiscReturnType, ordered_percentile.go): the plan
+			// args carry the value expression first with the fraction
+			// appended after (design §4.2 value-arg inventory; decision log
+			// 74 (iii)), so the envelope derives from the value argument.
+			if len(e.F.Args) > 0 {
+				return d.envelopeOwned(e.F.Args[0], owner)
+			}
+			return decimalTypedEnvelope(expr.Typ)
+		}
+		if name == "lag" || name == "lead" {
+			// lag/lead return the value argument, or the default when the
+			// offset steps outside the frame; reconcileLagLeadDefaultType
+			// merges both type domains into the published result, so the
+			// storage envelope combines the value and default branches
+			// alike (issue #30938 review round 6). The combination is the
+			// reconcile's own maximum-integral/maximum-scale derivation
+			// over the parent-published domains, so a merge the reconcile
+			// binds persists its reconcile-derived tag exactly — including
+			// the expansion band's above-65 derivations, whose admission
+			// fence is the binding-locus protocol raise, never a truncated
+			// schema (design §4.1, decision log 82). A matching or NULL
+			// default extends nothing and keeps the pre-existing parent
+			// domain; admission checks the selected values, including
+			// out-of-frame defaults (issue #30938 review round 7). Without
+			// a default branch the expression publishes its value
+			// argument's own pre-existing domain and stays unconstrained
+			// here.
+			if len(e.F.Args) == 0 {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			bound := d.envelopeOwned(e.F.Args[0], owner)
+			if len(e.F.Args) >= 3 {
+				bound = combineDecimalStorageEnvelope(bound, d.envelopeOwned(e.F.Args[2], owner))
+			}
+			return bound
+		}
+		if argIdx, selects := decimalMulStorageValueArgFunctions[name]; selects {
+			if argIdx < len(e.F.Args) {
+				return d.envelopeOwned(e.F.Args[argIdx], owner)
+			}
+			return decimalTypedEnvelope(expr.Typ)
+		}
+		if _, transparent := decimalMulStorageTransparentFunctions[name]; transparent {
+			bound := decimalStorageEnvelope{}
+			if valueIdx := controlFlowValueIndexes(name, len(e.F.Args)); len(valueIdx) > 0 {
+				// Conditional control arguments (CASE WHEN clauses, the IF
+				// predicate) never produce result values; only the
+				// result-producing branches contribute to the storage
+				// envelope (issue #30938 review round 8). coalesce lists
+				// every argument as a value branch, so its merge is
+				// unchanged.
+				for _, idx := range valueIdx {
+					if idx >= 0 && idx < len(e.F.Args) {
+						bound = combineDecimalStorageEnvelope(bound, d.transparentOperandEnvelope(expr, idx, owner))
+					}
+				}
+				return bound
+			}
+			for idx := range e.F.Args {
+				bound = combineDecimalStorageEnvelope(bound, d.transparentOperandEnvelope(expr, idx, owner))
+			}
+			return bound
+		}
+		return decimalTypedEnvelope(expr.Typ)
+	case *plan.Expr_Dependent:
+		return d.dependentCallEnvelope(e.Dependent, expr, owner)
+	case *plan.Expr_Slot:
+		return d.correlationSlotEnvelope(e.Slot, expr)
+	default:
+		// Folded scalar vectors carry no expression shape: constant
+		// folding declines to materialize only trees that still need
+		// multiplication provenance (rule.MaterializeDecimal256Constant),
+		// so any folded decimal scalar visible here holds a genuine
+		// value domain and keeps its authored type (issue #30938 review
+		// round 9).
+		return decimalTypedEnvelope(expr.Typ)
+	}
+}
+
+// dependentCallEnvelope resolves one dependent call's envelope through the
+// CALLEE program's root output (design §4.1, revision 8
+// F-DEPENDENT-ENVELOPE; issue #30938 review round 11, F4): the program's
+// root-node producer slot 0 is envelope-evaluated by the same rules,
+// recursively, memoized in the same statement-local (NodeId, slot) space,
+// and the call takes that envelope. Only a scalar decimal call resolves;
+// quantified and existential reducers publish boolean results and keep
+// their authored type, as does any shape the descriptor cannot resolve.
+func (d *ctasStorageDomain) dependentCallEnvelope(call *plan.DependentExpr, expr *plan.Expr, owner *plan.Node) decimalStorageEnvelope {
+	if call == nil || d.corrSpec == nil || !types.T(expr.Typ.Id).IsDecimal() {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	pid := call.ProgramId
+	if pid == 0 || int(pid) > len(d.corrSpec.Programs) {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	program := d.corrSpec.Programs[pid-1]
+	if program == nil || len(program.OutputTypes) != 1 {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	root := d.node(program.RootNode)
+	if root == nil {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	env, resolved, tookPart := d.slotEnvelope(root, 0, expr, owner)
+	if !tookPart || !resolved {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	return env
+}
+
+// correlationSlotEnvelope resolves one correlation slot's envelope through
+// the caller-side CAPTURED expression at the slot's ordinal (design §4.1,
+// revision 8 F-DEPENDENT-ENVELOPE; issue #30938 review round 11, F4): the
+// capture is a positional edge from the slot to the caller expression the
+// binder captured, evaluated by the same rules in the capturing
+// occurrence's owning context. The first occurrence of the slot's program
+// in statement node order supplies the capture list; the memoized
+// (ProgramId, Ordinal) entry then serves every later use, so the slot
+// evaluates exactly once. An unresolved capture keeps the authored slot
+// type.
+func (d *ctasStorageDomain) correlationSlotEnvelope(slot *plan.CorrelationSlot, expr *plan.Expr) decimalStorageEnvelope {
+	if slot == nil {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	key := [2]uint32{slot.ProgramId, slot.Ordinal}
+	if d.corrSlotMemo != nil {
+		if m, ok := d.corrSlotMemo[key]; ok {
+			if !m.resolved {
+				return decimalTypedEnvelope(expr.Typ)
+			}
+			return m.env
+		}
+	}
+	resolved := false
+	env := decimalStorageEnvelope{}
+	if occ, ok := d.correlationOccurrence(slot.ProgramId); ok &&
+		occ.call != nil && int(slot.Ordinal) < len(occ.call.Inputs) {
+		if capture := occ.call.Inputs[slot.Ordinal]; capture != nil {
+			env = d.envelopeOwned(capture, occ.owner)
+			resolved = true
+		}
+	}
+	if d.corrSlotMemo == nil {
+		d.corrSlotMemo = make(map[[2]uint32]ctasSlotMemo)
+	}
+	d.corrSlotMemo[key] = ctasSlotMemo{env: env, resolved: resolved}
+	if !resolved {
+		return decimalTypedEnvelope(expr.Typ)
+	}
+	return env
+}
+
+// correlationOccurrence returns the first DependentExpr occurrence of one
+// program in statement node order, building the index lazily on first use.
+// The walk visits every query node's expression trees, caller regions and
+// callee regions alike, so nested occurrences are indexed too.
+func (d *ctasStorageDomain) correlationOccurrence(pid uint32) (corrOccurrence, bool) {
+	if d.corrSpec == nil || pid == 0 || int(pid) > len(d.corrSpec.Programs) {
+		return corrOccurrence{}, false
+	}
+	if d.corrOcc == nil {
+		d.corrOcc = make(map[uint32]corrOccurrence)
+		for _, n := range d.ordered {
+			if n == nil {
+				continue
+			}
+			owner := n
+			_ = plan.VisitExpressionsInOwner(n, func(root *plan.Expr) error {
+				return plan.VisitExprTree(root, func(e *plan.Expr) error {
+					if dep := e.GetDependent(); dep != nil {
+						if _, seen := d.corrOcc[dep.ProgramId]; !seen {
+							d.corrOcc[dep.ProgramId] = corrOccurrence{call: dep, owner: owner}
+						}
+					}
+					return nil
+				})
+			})
+		}
+	}
+	occ, ok := d.corrOcc[pid]
+	return occ, ok
+}
+
+// slotEnvelope is the memoized one-shot slot evaluation of design §4.3
+// (F-MEMOIZED-WALK, decision log 74 (v)): the envelope of one referenced
+// producer slot (child, idx) is computed at most once per statement, the
+// completed value serves every later reference across all output columns,
+// and a slot re-requested while still being evaluated contributes the
+// neutral envelope (the recursive cycle closes on the anchor seed).
+// resolved reports that resolution produced an envelope (false keeps the
+// reference's authored type); tookPart reports that the child node type
+// participates in relational resolution at all.
+// decimalMultiplyEnvelopeDomain reconstructs the parent domain width one
+// multiplication operand contributes to the parent's decimalMultiplyReturnType
+// (design §4.1 multiplication bullet, revision 38 F-NARROW-CARRIER-ENVELOPE;
+// decision log 84 (iii)). It mirrors the parent's decimalMultiplyDomain over
+// the operand's PARENT type: a widened-multiplication seam contributes its
+// reconstructed envelope width with the shared coefficient adjustments
+// applied according to the recovered carrier - the parent publication of a
+// divergent seam retains the published carrier oid (parentSideOperandType),
+// so the legacy DECIMAL64 18->19 and released DECIMAL128 38->39
+// coefficients fire only on their own carrier and a width-38 envelope
+// reached on the decimal256 carrier contributes 38 (issue #30938 review
+// round 13, F2) - while an unseamed operand contributes its own domain
+// exactly as the parent's decimalMultiplyDomain derives it - declared width
+// (carrier capacity when undeclared), the legacy DECIMAL64 18->19
+// signed-coefficient and released DECIMAL128 38->39 adjustments, integer
+// integral widths (integerDecimalDigits, value-identical with the
+// publication's integerIntegralWidth), BIT 20 and BOOL 1.
+func (d *ctasStorageDomain) decimalMultiplyEnvelopeDomain(arg *plan.Expr, owner *plan.Node) (int32, bool) {
+	env := d.envelopeOwned(arg, owner)
+	if env.integral == 0 && env.scale == 0 {
+		return 0, false
+	}
+	if env != decimalTypedEnvelope(arg.Typ) {
+		// The parent publication of a divergent seam keeps the published
+		// carrier oid (parentSideOperandType), so the shared coefficient
+		// adjustments apply according to that recovered carrier (issue
+		// #30938 review round 13, F2): a width-38 envelope reached on the
+		// decimal256 carrier (a width-reducing wrapper over a widened
+		// product) contributes 38, and only the released DECIMAL128
+		// coefficient lifts 38 to 39.
+		width := env.integral + env.scale
+		switch types.T(arg.Typ.Id) {
+		case types.T_decimal64:
+			if width == 18 {
+				width = 19
+			}
+		case types.T_decimal128:
+			if width == 38 {
+				width = 39
+			}
+		}
+		return width, true
+	}
+	t := types.T(arg.Typ.Id)
+	switch {
+	case t.IsDecimal():
+		width := arg.Typ.Width
+		if width <= 0 {
+			width = d.typedTypeWidth(arg.Typ)
+		}
+		if width <= 0 {
+			return 0, false
+		}
+		if t == types.T_decimal64 && width == 18 {
+			width = 19
+		} else if t == types.T_decimal128 && width == 38 {
+			width = 39
+		}
+		return width, true
+	case t.IsInteger():
+		return integerDecimalDigits(t), true
+	case t == types.T_bit:
+		return 20, true
+	case t == types.T_bool:
+		return 1, true
+	}
+	return 0, false
+}
+
+// parentSideOperandType recovers one operand's parent-side type for a
+// re-invoked publication (design §4.1 meta-rule, revision 40
+// F-OUTPUT-DIVERGENCE-PROVENANCE; decision log 86 (i)): the operand's
+// envelope, evaluated in the same owning context, is its parent-side
+// domain. An operand whose envelope equals its typed envelope carries no
+// divergence below it - a leaf, a fixed-domain barrier or a seam-free
+// subtree - so its published type IS the parent-side type and keeps the
+// published carrier and scale semantics verbatim. A divergent envelope
+// arises only through a widened multiplication seam, whose parent
+// publication retains the published carrier oid (the widening lifts only
+// the decimal256 precision cap), so the parent-side type is the envelope
+// domain expressed on the published carrier. A neutral envelope reports
+// ok=false exactly as the retired mirror's neutral fallback did, so an
+// unrecognized shape keeps the node's authored type.
+func (d *ctasStorageDomain) parentSideOperandType(arg *plan.Expr, owner *plan.Node) (types.Type, bool) {
+	env := d.envelopeOwned(arg, owner)
+	typed := decimalTypedEnvelope(arg.Typ)
+	if env == typed {
+		if typed.integral == 0 && typed.scale == 0 {
+			return types.Type{}, false
+		}
+		return types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale), true
+	}
+	if env.integral == 0 && env.scale == 0 {
+		return types.Type{}, false
+	}
+	width := env.integral + env.scale
+	if width <= 0 || !types.T(arg.Typ.Id).IsDecimal() {
+		return types.Type{}, false
+	}
+	return types.New(types.T(arg.Typ.Id), width, env.scale), true
+}
+
+func (d *ctasStorageDomain) slotEnvelope(child *plan.Node, idx int32, expr *plan.Expr, owner *plan.Node) (env decimalStorageEnvelope, resolved bool, tookPart bool) {
+	key := [2]int32{child.NodeId, idx}
+	if d.memo != nil {
+		if m, ok := d.memo[key]; ok {
+			return m.env, m.resolved, true
+		}
+	}
+	outs, participated := d.resolveChildRelationalOutput(child, int(idx), expr, owner)
+	if !participated {
+		return decimalStorageEnvelope{}, false, false
+	}
+	if len(outs) == 1 && outs[0].expr == expr {
+		// Unresolved reference: keep the authored type.
+		d.setSlotMemo(key, ctasSlotMemo{resolved: false})
+		return decimalStorageEnvelope{}, false, true
+	}
+	if d.evaluating == nil {
+		d.evaluating = make(map[[2]int32]struct{})
+	}
+	if _, in := d.evaluating[key]; in {
+		return decimalStorageEnvelope{}, true, true
+	}
+	d.evaluating[key] = struct{}{}
+	d.evalCount++
+	bound := decimalStorageEnvelope{}
+	for _, out := range outs {
+		if out.expr == expr {
+			// A partially unresolved contributor keeps the authored type.
+			bound = combineDecimalStorageEnvelope(bound, decimalTypedEnvelope(expr.Typ))
+			continue
+		}
+		bound = combineDecimalStorageEnvelope(bound, d.envelopeOwned(out.expr, out.owner))
+	}
+	delete(d.evaluating, key)
+	d.setSlotMemo(key, ctasSlotMemo{env: bound, resolved: true})
+	return bound, true, true
+}
+
+func (d *ctasStorageDomain) setSlotMemo(key [2]int32, memo ctasSlotMemo) {
+	if d.memo == nil {
+		d.memo = make(map[[2]int32]ctasSlotMemo)
+	}
+	d.memo[key] = memo
+}
+
+// transparentOperandEnvelope evaluates one value-branch operand of a
+// width-transparent family. A <=65-target decimal alignment cast at the
+// branch position verified decision-owned through the generation's decision
+// ledger is looked through to its operand's reconstructed parent envelope
+// (issue #30938, design decision log 62); every other operand evaluates
+// through the ordinary envelope walk. The binder's canonical cast carries
+// the operand plus a target-type argument (base_binder.go's
+// appendCastBeforeExprWithOverload), so both the one-argument form and the
+// operand+target form are recognized; decision ownership, never the shape
+// alone, decides the look-through.
+func (d *ctasStorageDomain) transparentOperandEnvelope(expr *plan.Expr, idx int, owner *plan.Node) decimalStorageEnvelope {
+	arg := expr.GetF().Args[idx]
+	if source := d.decisionOwnedCastSource(expr, arg, idx); source != nil {
+		return d.envelopeOwned(source, owner)
+	}
+	return d.envelopeOwned(arg, owner)
+}
+
+// decisionOwnedCastSource returns the source expression of arg when arg is a
+// <=65-target decimal CAST verified decision-owned through the generation's
+// decision ledger (the mark of a binder-inserted alignment cast, design
+// revision 16 F-BOUNDARY-ALIGNMENT-DOMAINS), and nil otherwise. A
+// SQL-authored cast, a decision-foreign cast and a ledger miss all answer
+// nil so the cast keeps its declared typed envelope.
+func (d *ctasStorageDomain) decisionOwnedCastSource(expr, arg *plan.Expr, idx int) *plan.Expr {
+	cast := arg.GetF()
+	if cast == nil || cast.Func == nil || len(cast.Args) < 1 ||
+		!(len(cast.Args) == 1 || (len(cast.Args) == 2 && cast.Args[1].GetT() != nil)) ||
+		!types.T(arg.Typ.Id).IsDecimal() || arg.Typ.Width <= 0 || arg.Typ.Width > 65 {
+		return nil
+	}
+	if id, _ := function.DecodeOverloadID(cast.Func.GetObj()); id != function.CAST {
+		return nil
+	}
+	if !d.decisionOwnedCastOperand(expr, arg, idx) {
+		return nil
+	}
+	return cast.Args[0]
+}
+
+// decimalModStorageOperandDomain recovers one MOD operand's original domain
+// for the storage-envelope mirror (design §4.1 mod bullet, revision 29
+// F-MOD-STORAGE-ENVELOPE): DecimalModReturnType derives result metadata from
+// the ORIGINAL operands because the implicit alignment casts describe
+// storage, not the operands' SQL precision, so a ledger-verified
+// decision-owned <=65 alignment cast is looked through to its source. An
+// integer source contributes its exact digit domain (integerDecimalDigits
+// with the mediumint override, mirrored verbatim); a decimal source
+// contributes its reconstructed envelope width integral + scale. ok is
+// false when the source is temporal, approximate, string, BIT or unknown
+// (the owner's non-decimal pass-through keeps the selected type) or when a
+// decimal source's envelope is unresolvable; both keep the authored type.
+func (d *ctasStorageDomain) decimalModStorageOperandDomain(expr *plan.Expr, idx int, owner *plan.Node) (width, scale int32, decimal, ok bool) {
+	arg := expr.GetF().Args[idx]
+	operand := arg
+	if source := d.decisionOwnedCastSource(expr, arg, idx); source != nil {
+		operand = source
+	}
+	t := types.T(operand.Typ.Id)
+	if t.IsInteger() {
+		// integerDecimalDigits (numeric_resolver.go:170) verbatim.
+		switch t {
+		case types.T_int8, types.T_uint8:
+			width = 3
+		case types.T_int16, types.T_uint16:
+			width = 5
+		case types.T_int32, types.T_uint32:
+			width = 10
+		case types.T_int64:
+			width = 19
+		case types.T_uint64:
+			width = 20
+		default:
+			return 0, 0, false, false
+		}
+		if operand.Typ.Width == 24 && (t == types.T_int32 || t == types.T_uint32) {
+			// IsMediumInt (types.go:708): Width 24 carries the narrower
+			// logical domain through plan types.
+			width = 7
+			if t == types.T_uint32 {
+				width = 8
+			}
+		}
+		return width, 0, false, true
+	}
+	if !t.IsDecimal() {
+		return 0, 0, false, false
+	}
+	if operand == arg && arg.GetLit() != nil {
+		// A bare decimal literal at this position carries no recoverable
+		// original domain: the implicit <=65 alignment cast that produced
+		// it folded away (constant_fold re-homes the value into a decimal
+		// literal typed by the erased cast's declared target), and the
+		// fold changed the decision content, so the generation's decision
+		// ledger is keyed by the pre-fold tree and unreachable here. The
+		// literal's declared width describes the erased alignment target,
+		// not the operand the parent consumed - mod(d, 2) would otherwise
+		// contribute 38 instead of the parent's refined digit width. The
+		// parent's publication for such a provenance-free operand already
+		// encodes the original domain, so decline and keep the authored
+		// type (issue #30938, design decision log 75 (ii), invariant I2).
+		return 0, 0, true, false
+	}
+	env := d.envelopeOwned(operand, owner)
+	if env.integral == 0 && env.scale == 0 {
+		return 0, 0, true, false
+	}
+	return env.integral + env.scale, env.scale, true, true
+}
+
+// decimalDivisionStorageOperandDomain recovers one divide operand's original
+// domain for the storage-envelope mirror (design §4.1 divide bullet, revision
+// 5 F-CAPPED-CONSUMERS; decision log 74 (iii)): decimalDivisionReturnType
+// derives result metadata from the ORIGINAL operand types through
+// exactDivisionOperandType (decimal_division.go:64) because the implicit
+// alignment casts describe storage, not the operands' SQL precision, so a
+// ledger-verified decision-owned <=65 alignment cast is looked through to its
+// source. The exactness set mirrors the parent's verbatim: an integer source
+// contributes integerDecimalDigits (numeric_resolver.go:170, no mediumint
+// override, matching the parent), BIT 20, BOOL 1, a temporal source its
+// packed-calendar domain when the aligned type is decimal, an ANY source the
+// aligned decimal domain, and a decimal source its reconstructed envelope
+// width integral + scale. A bare decimal literal carries no recoverable
+// original domain - its implicit alignment cast folded away and the fold
+// moved the decision content beyond the ledger's reach, so its declared width
+// describes the erased alignment target rather than the operand the parent
+// consumed - and declines, keeping the authored type exactly as the parent's
+// non-exact pass-through keeps the selected type (issue #30938, design
+// decision log 75 (ii), invariant I2).
+func (d *ctasStorageDomain) decimalDivisionStorageOperandDomain(expr *plan.Expr, idx int, owner *plan.Node) (precision, scale int32, ok bool) {
+	arg := expr.GetF().Args[idx]
+	operand := arg
+	if source := d.decisionOwnedCastSource(expr, arg, idx); source != nil {
+		operand = source
+	}
+	t := types.T(operand.Typ.Id)
+	if t.IsInteger() {
+		// integerDecimalDigits (numeric_resolver.go:170) verbatim.
+		switch t {
+		case types.T_int8, types.T_uint8:
+			precision = 3
+		case types.T_int16, types.T_uint16:
+			precision = 5
+		case types.T_int32, types.T_uint32:
+			precision = 10
+		case types.T_int64:
+			precision = 19
+		case types.T_uint64:
+			precision = 20
+		default:
+			return 0, 0, false
+		}
+		return precision, 0, true
+	}
+	if t == types.T_bit {
+		return 20, 0, true
+	}
+	if t == types.T_bool {
+		// TRUE/FALSE divide as 1/0: exactly one integral digit, scale
+		// zero (exactDivisionOperandType verbatim).
+		return 1, 0, true
+	}
+	if t.IsDateRelate() && types.T(arg.Typ.Id).IsDecimal() {
+		// Temporal decimals contain packed calendar fields, not an
+		// arbitrary value spanning the storage width of the implicit
+		// decimal cast (exactDivisionOperandType verbatim).
+		s := max(operand.Typ.Scale, 0)
+		switch t {
+		case types.T_date:
+			return 8, 0, true
+		case types.T_year:
+			return 4, 0, true
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			return 14 + s, s, true
+		}
+		return 0, 0, false
+	}
+	if t == types.T_any && types.T(arg.Typ.Id).IsDecimal() {
+		precision = arg.Typ.Width
+		if precision <= 0 {
+			precision = types.DecimalMaxPrecision(types.T(arg.Typ.Id))
+		}
+		return precision, max(arg.Typ.Scale, 0), true
+	}
+	if !t.IsDecimal() {
+		return 0, 0, false
+	}
+	if operand == arg && arg.GetLit() != nil {
+		return 0, 0, false
+	}
+	env := d.envelopeOwned(operand, owner)
+	if env.integral == 0 && env.scale == 0 {
+		return 0, 0, false
+	}
+	return env.integral + env.scale, env.scale, true
+}
+
+// decisionOwnedCastOperand reports whether the <=65-target decimal cast at
+// argument position idx of the merge-family decision expr is verified
+// decision-owned through the generation's decision ledger (issue #30938,
+// design decision log 62): the ledger entry recorded for this exact decision
+// content shows the binder consumed the cast's operand's own published type
+// at this position and aligned it to the cast's declared target — the mark
+// of a binder-inserted alignment cast. A SQL-authored cast consumed its own
+// declared type, so it answers decision-foreign and keeps its declared typed
+// envelope, as does any ledger miss or content mismatch.
+func (d *ctasStorageDomain) decisionOwnedCastOperand(expr, arg *plan.Expr, idx int) bool {
+	if d.ledgerOf == nil {
+		return false
+	}
+	payload, ok := d.ledgerOf(rule.DecimalBoundaryDecisionLedgerKey(expr))
+	if !ok {
+		return false
+	}
+	entry, ok := payload.(*rule.DecimalBoundaryDecisionEntry)
+	if !ok || entry == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || entry.Overload != fn.Func.GetObj() ||
+		entry.ArgCount != len(fn.Args) || idx < 0 || idx >= len(entry.PreTypes) ||
+		idx >= len(entry.AlignedTypes) {
+		return false
+	}
+	if !decimalBoundaryPlanTypesEqual(&entry.AlignedTypes[idx], &arg.Typ) {
+		return false
+	}
+	return decimalBoundaryPlanTypesEqual(&entry.PreTypes[idx], &fn.Args[idx].GetF().Args[0].Typ)
+}
+
+// decimalBoundaryPlanTypesEqual compares the type components the decision
+// ledger encodes: family, declared width and scale (issue #30938, design
+// decision log 52).
+func decimalBoundaryPlanTypesEqual(a, b *plan.Type) bool {
+	return a != nil && b != nil && a.Id == b.Id && a.Width == b.Width && a.Scale == b.Scale
+}
+
+func (d *ctasStorageDomain) typedTypeWidth(typ plan.Type) int32 {
+	t := types.T(typ.Id)
+	switch t {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 76
+	}
+	return 0
+}
+
+// roundingEnvelope re-invokes the parent's own refineDecimalRoundingReturnType
+// over the first argument's recovered parent-side type (design §4.1 meta-rule,
+// revision 40 F-OUTPUT-DIVERGENCE-PROVENANCE; issue #30938 review round 11):
+// the publication itself is the typing source, so the omitted-digits rule
+// (digits 0), the negative-digits position capacity of the floor/ceil family,
+// the non-legacy negative-digits round carry, the runtime-digits widening and
+// the legacy-precision variants all fire exactly as the parent's - the retired
+// hand mirror recomputed only the constant nonnegative-digits branch and
+// regressed every other shape against the published type. A non-decimal or
+// unresolvable argument keeps the authored type, exactly the parent's
+// non-decimal pass-through.
+func (d *ctasStorageDomain) roundingEnvelope(name string, f *plan.Function, owner *plan.Node) decimalStorageEnvelope {
+	if len(f.Args) == 0 {
+		return decimalStorageEnvelope{}
+	}
+	input, ok := d.parentSideOperandType(f.Args[0], owner)
+	if !ok || !input.Oid.IsDecimal() {
+		return decimalTypedEnvelope(f.Args[0].Typ)
+	}
+	returnType := input
+	refineDecimalRoundingReturnType(name, f.Args, []types.Type{input}, &returnType, d.legacyPrecision)
+	if !returnType.Oid.IsDecimal() || returnType.Width <= 0 {
+		return decimalTypedEnvelope(f.Args[0].Typ)
+	}
+	return decimalTypedEnvelope(plan.Type{Id: int32(returnType.Oid), Width: returnType.Width, Scale: returnType.Scale})
+}
+
+// ownedExpr pairs an expression with the plan node in whose relational
+// context its column references resolve: contributors produced by a child
+// node may themselves reference that child's outputs.
+type ownedExpr struct {
+	expr  *plan.Expr
+	owner *plan.Node
+}
+
+// resolveRelationalOutput follows a column reference through the relational
+// nodes feeding its owner: project, sort, partition, filter and fill
+// mirrors, aggregates (through their projected output slots), window and
+// time-window outputs (passthrough mirrors and the function result through
+// the authoritative window layouts), join outputs (through the
+// side-selected child projection), set-operation branches, sampled
+// outputs, and CTE producers through their source steps. The
+// returned contributors are evaluated in the owning node's context; a shape
+// that cannot be resolved returns the reference unchanged so the envelope
+// keeps its authored type and behavior only ever refines the shapes it can
+// prove.
+func (d *ctasStorageDomain) resolveRelationalOutput(expr *plan.Expr, owner *plan.Node) []ownedExpr {
+	col := expr.GetCol()
+	if col == nil || owner == nil {
+		return []ownedExpr{{expr, owner}}
+	}
+	idx := int(col.ColPos)
+	if owner.NodeType == plan.Node_JOIN || owner.NodeType == plan.Node_APPLY {
+		// An expression anchored on a join or apply node (its OnList)
+		// addresses the owner's inputs directly: RelPos selects the side
+		// (0 left, 1 right, matching Children order) and ColPos the
+		// projection slot — query_builder's join/apply remap, and the same
+		// indexing the projection-refresh owner's resolveColumnType
+		// closure implements (design decision log 69 (iv): "JOIN/APPLY
+		// and the generic fallback -> childProjectLists[relPos][colPos]").
+		// The generic loop below would resolve a right-side reference
+		// through the LEFT child's projection instead (issue #30938
+		// review round 18, F1); an out-of-range side or an unresolved
+		// slot keeps the authored type (the documented decline contract).
+		side := int(col.RelPos)
+		if side < 0 || side >= len(owner.Children) {
+			return []ownedExpr{{expr, owner}}
+		}
+		if child := d.node(owner.Children[side]); child != nil {
+			if outs, resolved := d.resolveChildRelationalOutput(child, idx, expr, owner); resolved {
+				return outs
+			}
+		}
+		return []ownedExpr{{expr, owner}}
+	}
+	for _, childId := range owner.Children {
+		child := d.node(childId)
+		if child == nil {
+			continue
+		}
+		if outs, resolved := d.resolveChildRelationalOutput(child, idx, expr, owner); resolved {
+			return outs
+		}
+	}
+	return []ownedExpr{{expr, owner}}
+}
+
+// resolveChildRelationalOutput resolves one output slot of a child node
+// into its producer expressions, reporting whether the child type took part
+// in resolution at all. Join mirrors reuse it for their side-selected
+// target so aggregate slot mappings, window layouts and nested joins
+// interpret a referenced slot exactly like the main resolution loop.
+func (d *ctasStorageDomain) resolveChildRelationalOutput(child *plan.Node, idx int, expr *plan.Expr, owner *plan.Node) ([]ownedExpr, bool) {
+	switch child.NodeType {
+	case plan.Node_PROJECT, plan.Node_SORT, plan.Node_PARTITION, plan.Node_FILTER, plan.Node_FILL:
+		// Sort and partition mirror their child projections through
+		// their own ProjectList exactly like a project (issue #30938
+		// review round 5). A predicate that cannot cross a LIMIT leaves
+		// a FILTER node above the subquery; its outputs are identity
+		// mirrors of the child projection, resolved the same way (issue
+		// #30938 review round 7). FILL mirrors the child TIME_WINDOW
+		// projection positionally (query_builder emits ColRelPos 0 slots
+		// over the child projection), resolved the same way (issue #30938
+		// review round 9).
+		if idx >= 0 && idx < len(child.ProjectList) {
+			return d.resolveRelationalOutput(child.ProjectList[idx], child), true
+		}
+	case plan.Node_AGG:
+		if idx >= 0 && idx < len(child.ProjectList) {
+			return aggOutputContributor(child, idx), true
+		}
+		// Layouts without a projection list map aggregate outputs
+		// positionally: grouping keys first, then aggregates.
+		if idx >= 0 && idx < len(child.GroupBy) {
+			return []ownedExpr{{child.GroupBy[idx], child}}, true
+		}
+		j := idx - len(child.GroupBy)
+		if j >= 0 && j < len(child.AggList) {
+			return []ownedExpr{{child.AggList[j], child}}, true
+		}
+		return []ownedExpr{{expr, owner}}, true
+	case plan.Node_SAMPLE:
+		// build_sample keeps sampled expressions in AggList and query_builder
+		// surfaces them through self-referencing output slots: grouping keys
+		// (RelPos -1) and sampled columns (RelPos -2) follow the aggregate
+		// slot mapping, while forwarded child columns (RelPos 0) mirror the
+		// child projection at ColPos - len(GroupBy) - len(AggList) (issue
+		// #30938 review round 8).
+		if idx < 0 || idx >= len(child.ProjectList) {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		item := child.ProjectList[idx]
+		icol := item.GetCol()
+		if icol == nil {
+			return []ownedExpr{{item, nil}}, true
+		}
+		switch icol.RelPos {
+		case -1:
+			if p := int(icol.ColPos); p >= 0 && p < len(child.GroupBy) {
+				return []ownedExpr{{child.GroupBy[p], child}}, true
+			}
+		case -2:
+			if j := int(icol.ColPos) - len(child.GroupBy); j >= 0 && j < len(child.AggList) {
+				return []ownedExpr{{child.AggList[j], child}}, true
+			}
+		case 0:
+			j := int(icol.ColPos) - len(child.GroupBy) - len(child.AggList)
+			if j >= 0 && len(child.Children) > 0 {
+				if tgt := d.node(child.Children[0]); tgt != nil {
+					if outs, resolved := d.resolveChildRelationalOutput(tgt, j, expr, owner); resolved {
+						return outs, true
+					}
+				}
+			}
+		}
+		return []ownedExpr{{item, nil}}, true
+	case plan.Node_WINDOW:
+		if idx < 0 || idx >= len(child.ProjectList) {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		item := child.ProjectList[idx]
+		icol := item.GetCol()
+		if icol == nil {
+			return []ownedExpr{{item, nil}}, true
+		}
+		if icol.RelPos == -1 {
+			// Window result slot: the producer is the window function
+			// itself. Exactly one win spec is planned per WINDOW node;
+			// an ambiguous layout keeps the authored type (issue
+			// #30938 review round 5).
+			if len(child.WinSpecList) == 1 {
+				return []ownedExpr{{child.WinSpecList[0], child}}, true
+			}
+			return []ownedExpr{{item, nil}}, true
+		}
+		// Passthrough windows mirror the WINDOW child's outputs.
+		return d.resolveRelationalOutput(item, child), true
+	case plan.Node_TIME_WINDOW:
+		// Time-window outputs are self-references (RelPos -1) addressed
+		// through the same layout the operator is built from: aggregates
+		// first (AggList order), then the shared _wstart/_wend boundary
+		// slots, then partition keys. BuildTimeWindowLayout is the single
+		// source of truth for that addressing (issue #30938 review round
+		// 9). Aggregate slots resolve to their aggregate expression in the
+		// node's context; boundary and partition slots are typed
+		// producers, and an unexpected shape keeps the authored type.
+		if idx < 0 || idx >= len(child.ProjectList) {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		item := child.ProjectList[idx]
+		slot := -1
+		if icol := item.GetCol(); icol != nil && icol.RelPos == -1 {
+			slot = int(icol.ColPos)
+		}
+		if slot < 0 {
+			return []ownedExpr{{item, nil}}, true
+		}
+		layout := BuildTimeWindowLayout(child)
+		if slot == int(layout.WStartSlot) || slot == int(layout.WEndSlot) {
+			return []ownedExpr{{item, nil}}, true
+		}
+		for p, pslot := range layout.PartitionSlot {
+			if int(pslot) == slot && p < len(child.TimeWindowPartitionBy) {
+				return []ownedExpr{{child.TimeWindowPartitionBy[p], child}}, true
+			}
+		}
+		for k, kslot := range layout.Slot {
+			if int(kslot) == slot && k < len(child.AggList) {
+				if isBoundary, _ := isTimeWindowBoundary(child.AggList[k]); isBoundary {
+					return []ownedExpr{{item, nil}}, true
+				}
+				return []ownedExpr{{child.AggList[k], child}}, true
+			}
+		}
+		return []ownedExpr{{item, nil}}, true
+	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
+		// CTE readers publish positional projections whose producers sit
+		// outside the physical child chain: SourceStep indexes the query
+		// steps, whose nodes wrap the anchor root and the recursive member
+		// roots in SINKs (query_builder appendCTEScanNode /
+		// build_dml_util appendSinkScanNode). Anchor-only recursive seeding
+		// (design §4.3, F-MEMOIZED-WALK, decision log 74 (v)): the parent
+		// types recursive CTE columns from the anchor member and coerces
+		// every recursive member to the anchor's projection types, so the
+		// union slot's envelope IS the anchor slot's envelope and no
+		// recursive-member slot is envelope-evaluated for the persisted
+		// schema at all — a RECURSIVE_CTE union resolves only its first
+		// (anchor) source step, and a RECURSIVE_SCAN back-reference closes
+		// on that same anchor seed through the union in one step. A source
+		// that cannot be resolved at all keeps the authored type for that
+		// branch.
+		if len(child.SourceStep) == 0 {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		sourceSteps := child.SourceStep
+		if child.NodeType == plan.Node_RECURSIVE_CTE {
+			sourceSteps = child.SourceStep[:1]
+		}
+		outs := make([]ownedExpr, 0, len(sourceSteps))
+		unresolved := false
+		for _, sourceStep := range sourceSteps {
+			producer := d.stepProducer(sourceStep)
+			if producer == nil {
+				unresolved = true
+				continue
+			}
+			srcOuts, resolved := d.resolveChildRelationalOutput(producer, idx, expr, owner)
+			if !resolved {
+				unresolved = true
+				continue
+			}
+			outs = append(outs, srcOuts...)
+		}
+		if len(outs) == 0 && unresolved {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		return outs, true
+	case plan.Node_JOIN:
+		// Join output slots reference the chosen child's projected
+		// columns: RelPos selects the side (0 left, 1 right, matching
+		// Children order) and ColPos its projection slot
+		// (query_builder joins, issue #30938 review round 6). A
+		// MARK-join marker column (RelPos -1) and unexpected shapes
+		// keep the authored type.
+		if idx < 0 || idx >= len(child.ProjectList) {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		item := child.ProjectList[idx]
+		icol := item.GetCol()
+		if icol == nil {
+			return []ownedExpr{{item, nil}}, true
+		}
+		side := int(icol.RelPos)
+		if side < 0 || side >= len(child.Children) {
+			return []ownedExpr{{item, nil}}, true
+		}
+		tgt := d.node(child.Children[side])
+		if tgt == nil {
+			return []ownedExpr{{expr, owner}}, true
+		}
+		if p := int(icol.ColPos); p >= 0 {
+			if outs, resolved := d.resolveChildRelationalOutput(tgt, p, expr, owner); resolved {
+				return outs, true
+			}
+		}
+		return []ownedExpr{{item, nil}}, true
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		if len(child.Children) == 0 {
+			return nil, false
+		}
+		outs := make([]ownedExpr, 0, len(child.Children))
+		for _, branchId := range child.Children {
+			branch := d.node(branchId)
+			if branch == nil || idx < 0 || idx >= len(branch.ProjectList) {
+				outs = append(outs, ownedExpr{expr, owner}) // unresolved branch keeps the authored type
+				continue
+			}
+			outs = append(outs, d.resolveRelationalOutput(branch.ProjectList[idx], branch)...)
+		}
+		return outs, true
+	}
+	return nil, false
+}
+
+// decimalBoundaryLineageView is the execute-time plan-producer lineage view
+// (issue #30938, design decision log entries 69-71): constructed once per
+// prepared fill-and-refresh window over the filled plan's query through the
+// same constructor the storage boundary uses, it delegates producer
+// resolution read-only to the storage-domain resolver so a decimal column
+// reference whose binder channels miss can still reach its producing
+// expression across relational and source-step edges.
+type decimalBoundaryLineageView struct {
+	query *Query
+	d     *ctasStorageDomain
+	// setOpBranches indexes the direct branch children of the query's
+	// set-operation nodes: only a contributor seated on such a branch slot
+	// passes the engine-inserted alignment-coercion recovery (design
+	// decision log entry 72).
+	setOpBranches map[int32]struct{}
+	// owner is the plan node in whose relational context the reference
+	// currently resolves; child evaluations scope it to the producing node.
+	owner *plan.Node
+	depth int
+}
+
+// maxDecimalBoundaryLineageDepth bounds producer-relative re-entry through
+// the lineage view (design decision log entry 69 (iv)'s depth guard).
+const maxDecimalBoundaryLineageDepth = 16
+
+func newDecimalBoundaryLineageView(query *Query) *decimalBoundaryLineageView {
+	view := &decimalBoundaryLineageView{
+		query: query,
+		d:     newCtasStorageDomain(query),
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		switch node.NodeType {
+		case plan.Node_UNION, plan.Node_UNION_ALL,
+			plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL:
+			for _, branchID := range node.Children {
+				if view.setOpBranches == nil {
+					view.setOpBranches = make(map[int32]struct{})
+				}
+				view.setOpBranches[branchID] = struct{}{}
+			}
+		}
+	}
+	return view
+}
+
+// decimalBoundaryLineageUnwrapContributor recovers an engine-inserted
+// set-operation alignment coercion's source before contributor evaluation
+// (design decision log entry 72 (iii)): the predicate fires only for a
+// contributor seated on a set-operation branch PROJECT slot carrying the
+// engine's plain two-argument cast (overload 0 or 3, not syntax-flagged);
+// SQL-authored casts keep their fixed targets.
+func decimalBoundaryLineageUnwrapContributor(view *decimalBoundaryLineageView, out ownedExpr) *plan.Expr {
+	expr := out.expr
+	owner := out.owner
+	if expr == nil || owner == nil || owner.NodeType != plan.Node_PROJECT {
+		return expr
+	}
+	if _, isBranch := view.setOpBranches[owner.NodeId]; !isBranch {
+		return expr
+	}
+	slot := -1
+	for i, item := range owner.ProjectList {
+		if item == expr {
+			slot = i
+			break
+		}
+	}
+	if slot < 0 {
+		return expr
+	}
+	return unwrapPreparedSetOperationCoercion(view.query, owner.NodeId, slot, expr.Typ, expr)
+}
+
+// decimalBoundaryLineageEvalProducer evaluates one resolved producing
+// expression under the child view scoped to its producing node (design
+// decision log entry 70 (iv)): the operand recursion into the call and
+// aggregate resolvers handles the producing shape, and a resolved
+// producer-relative column reference re-enters the lineage step through the
+// operand resolver's Col case under the depth guard.
+func decimalBoundaryLineageEvalProducer(
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	view *decimalBoundaryLineageView,
+	expr *plan.Expr,
+	owner *plan.Node,
+) (types.Type, bool, bool) {
+	if view.depth+1 >= maxDecimalBoundaryLineageDepth {
+		return types.Type{}, false, false
+	}
+	childScope := &decimalBoundaryScope{
+		bctx:                     scope.bctx,
+		builder:                  scope.builder,
+		divPrecisionIncrement:    scope.divPrecisionIncrement,
+		hasDivPrecisionIncrement: scope.hasDivPrecisionIncrement,
+		lineage: &decimalBoundaryLineageView{
+			query:         view.query,
+			d:             view.d,
+			setOpBranches: view.setOpBranches,
+			owner:         owner,
+			depth:         view.depth + 1,
+		},
+	}
+	return decimalBoundaryOperandParentDomain(proc, childScope, expr)
+}
+
+// decimalBoundaryLineageParentDomain resolves one decimal column reference
+// through the scope's lineage view (design decision log entries 69 (iv),
+// 70 (iv) and 71 (iii)): the delegated resolver follows the reference to its
+// producing expressions; a single producer recurses through the operand
+// resolvers, and a set-operation multi-producer result resolves each branch
+// contributor (entries 71-72's unwrap-then-combine) and combines the
+// per-branch parent domains through the parent's own merge contract.
+// handled=false keeps the resolver's surface fallback for a reference that
+// reaches no producer (a scan leaf resolves to itself); every genuinely
+// unresolvable shape reports handled=true with ok=false so the retry
+// declines exactly as before — never a fabricated lineage.
+func decimalBoundaryLineageParentDomain(
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	expr *plan.Expr,
+) (types.Type, bool, bool, bool) {
+	view := scope.lineage
+	if view == nil || view.d == nil || view.owner == nil {
+		return types.Type{}, false, false, false
+	}
+	if view.depth >= maxDecimalBoundaryLineageDepth {
+		return types.Type{}, false, false, true
+	}
+	outs := view.d.resolveRelationalOutput(expr, view.owner)
+	if len(outs) == 0 {
+		return types.Type{}, false, false, true
+	}
+	if len(outs) == 1 {
+		if outs[0].expr == expr {
+			// No producer edge claimed the reference (a base scan leaf):
+			// keep the surface fallback.
+			return types.Type{}, false, false, false
+		}
+		parent, prov, ok := decimalBoundaryLineageEvalProducer(
+			proc, scope, view, outs[0].expr, outs[0].owner)
+		return parent, prov, ok, true
+	}
+	parents := make([]types.Type, len(outs))
+	provenance := false
+	for i, out := range outs {
+		if out.expr == expr {
+			// A branch the delegated resolver could not resolve retains the
+			// reference unchanged; that is the authored-type fallback, so the
+			// whole resolution declines.
+			return types.Type{}, false, false, true
+		}
+		contributor := decimalBoundaryLineageUnwrapContributor(view, out)
+		parent, prov, ok := decimalBoundaryLineageEvalProducer(
+			proc, scope, view, contributor, out.owner)
+		if !ok {
+			return types.Type{}, false, false, true
+		}
+		parents[i] = parent
+		provenance = provenance || prov
+	}
+	parent, ok := decimalBoundaryParentMerge(parents)
+	if !ok {
+		return types.Type{}, false, false, true
+	}
+	return parent, provenance, true, true
+}
+
+// aggOutputContributor locates the producer of an AGG output slot through
+// the node's own projection: query_builder prunes undemanded grouping keys
+// and aggregates from AGG.ProjectList, emitting self-references RelPos -1 for
+// a GroupBy position and RelPos -2 for a logical GroupBy-then-AggList slot
+// (issue #30938 review round 4). An unexpected shape keeps the projected
+// item's authored type instead of guessing a producer.
+func aggOutputContributor(agg *plan.Node, idx int) []ownedExpr {
+	item := agg.ProjectList[idx]
+	col := item.GetCol()
+	if col == nil {
+		return []ownedExpr{{item, nil}}
+	}
+	p := int(col.ColPos)
+	switch col.RelPos {
+	case -1:
+		if p >= 0 && p < len(agg.GroupBy) {
+			return []ownedExpr{{agg.GroupBy[p], agg}}
+		}
+	case -2:
+		if j := p - len(agg.GroupBy); j >= 0 && j < len(agg.AggList) {
+			return []ownedExpr{{agg.AggList[j], agg}}
+		}
+	}
+	return []ownedExpr{{item, nil}}
+}
+
+// newCtasStorageBoundaryDomain builds the statement-scoped evaluator one
+// statement shares across its output columns (design §4.3): the ledger
+// channel resolves to the retained carrier a prepared execute forwarded,
+// else to the live process registry, and the query DAG indexes by node id.
+// The caller sets divPrecisionIncrement to the session value its
+// publication consumed before evaluating division mirrors.
+func newCtasStorageBoundaryDomain(proc *process.Process, retained map[string]any, query *Query) *ctasStorageDomain {
+	var ledgerOf func(key string) (any, bool)
+	if retained != nil {
+		ledger := retained
+		ledgerOf = func(key string) (any, bool) {
+			entry, ok := ledger[key]
+			return entry, ok
+		}
+	} else if proc != nil {
+		ledgerOf = proc.DecimalBoundaryDecision
+	}
+	if query != nil {
+		d := newCtasStorageDomain(query)
+		d.ledgerOf = ledgerOf
+		return d
+	}
+	return &ctasStorageDomain{
+		ledgerOf:              ledgerOf,
+		divPrecisionIncrement: function.DefaultDivPrecisionIncrement,
+	}
+}
+
+// storageBoundary runs the declared-domain boundary for one output column
+// on the shared statement domain: the memoized envelope replaces the
+// published type when they differ, and a neutral envelope keeps the
+// authored type.
+func (d *ctasStorageDomain) storageBoundary(typ plan.Type, expr *plan.Expr, mainNode *plan.Node) (plan.Type, error) {
+	if !types.T(typ.Id).IsDecimal() || expr == nil {
+		return typ, nil
+	}
+	var bound decimalStorageEnvelope
+	if mainNode != nil {
+		bound = d.envelopeOwned(expr, mainNode)
+	} else {
+		bound = d.envelope(expr)
+	}
+	if bound.integral == 0 && bound.scale == 0 {
+		// The neutral element carries no domain information (width zero/one
+		// default forms and unrecognized shapes); keep the authored type.
+		return typ, nil
+	}
+	if width := bound.integral + bound.scale; width != typ.Width || bound.scale != typ.Scale {
+		typ.Width = width
+		typ.Scale = bound.scale
+	}
+	return typ, nil
+}
+
+// resultColumnNode returns the plan node backing GetResultColumnsFromPlan,
+// or nil when the query layout does not match that projection form.
+func resultColumnNode(query *Query) *plan.Node {
+	if query == nil || query.Steps == nil {
+		return nil
+	}
+	step := int(query.MainOutputStep())
+	if query.HasReturning {
+		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+			return nil
+		}
+		step = int(query.ReturningStep)
+	}
+	if step < 0 || step >= len(query.Steps) {
+		return nil
+	}
+	lastNode := query.Nodes[query.Steps[step]]
+	if lastNode == nil || (query.HasReturning && len(query.Headings) != len(lastNode.ProjectList)) {
+		return nil
+	}
+	return lastNode
+}
+
+// resultColumnSourceExprs returns the projection expressions backing
+// GetResultColumnsFromPlan in the same order, or nil when the query layout
+// does not match that projection form.
+func resultColumnSourceExprs(query *Query) []*plan.Expr {
+	lastNode := resultColumnNode(query)
+	if lastNode == nil {
+		return nil
+	}
+	return lastNode.ProjectList
+}
+
 // RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
 // with the execute-time query. Explicit column definitions remain the user's
-// schema contract even when a parameter changes the source domain.
-func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, stmt tree.Statement) error {
+// schema contract even when a parameter changes the source domain. retained
+// is the statement-generation decision ledger the execute carried from the
+// plan generation it specializes (issue #30938, design decision log 63-66):
+// the storage-boundary evaluation below consumes it read-only under the
+// <=65-cast ownership rule, and a nil carrier conservatively preserves every
+// declared alignment-cast envelope. divIncrement is the execute session's
+// div_precision_increment, the value the refreshed publication consumed
+// (design §4.1 divide bullet).
+func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, stmt tree.Statement, retained map[string]any, divIncrement int32) error {
 	ctas, ok := stmt.(*tree.CreateTable)
 	if !ok || !ctas.IsAsSelect || p == nil || original == nil || original.GetDdl() == nil ||
 		original.GetDdl().Query == nil || p.GetDdl() == nil ||
@@ -1607,6 +3326,15 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 	if g != nil {
 		integerValues = evaluateIntegerPrecision(g)
 	}
+	runtimeMainNode := resultColumnNode(p.GetDdl().Query)
+	runtimeSourceExprs := resultColumnSourceExprs(p.GetDdl().Query)
+	// The execute-time refresh shares one statement-scoped storage domain
+	// across the refreshed columns (design §4.3, F-MEMOIZED-WALK), and its
+	// division mirror applies the execute session's div_precision_increment
+	// the refreshed publication consumed (design §4.1 divide bullet).
+	refreshBoundaryDomain := newCtasStorageBoundaryDomain(nil, retained, p.GetDdl().Query)
+	refreshBoundaryDomain.divPrecisionIncrement = divIncrement
+	refreshBoundaryDomain.legacyPrecision = function.LegacyDecimalIntermediatePrecision(ctx)
 	for i, source := range runtimeColumns {
 		if source == nil || originalColumns[i] == nil ||
 			!strings.EqualFold(source.Name, originalColumns[i].Name) {
@@ -1630,7 +3358,18 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 			return moerr.NewNotSupportedf(ctx,
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
-		target.Typ = ctasTemporalSchemaType(source.Typ)
+		// The execute-time type refreshes through the same storage boundary
+		// as the initial CTAS binding: a parameter-specialized wide
+		// multiplication result keeps the declared domain (issue #30938).
+		var sourceExpr *plan.Expr
+		if runtimeSourceExprs != nil && i < len(runtimeSourceExprs) {
+			sourceExpr = runtimeSourceExprs[i]
+		}
+		boundedTyp, berr := refreshBoundaryDomain.storageBoundary(source.Typ, sourceExpr, runtimeMainNode)
+		if berr != nil {
+			return berr
+		}
+		target.Typ = ctasTemporalSchemaType(boundedTyp)
 		if g != nil && i < len(g.Outputs) {
 			target.Typ = integerSchemaType(target.Typ, g, g.Outputs[i], false, integerValues)
 		}
@@ -1678,6 +3417,15 @@ func genAsSelectCols(
 	}
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
+	// One statement-scoped storage domain serves the whole CTAS column
+	// iteration (design §4.3, F-MEMOIZED-WALK): producer slots evaluate
+	// at most once per statement, and the division mirror applies the
+	// session div_precision_increment this statement's publication
+	// consumed (design §4.1 divide bullet).
+	ctasBoundaryDomain := newCtasStorageBoundaryDomain(ctx.GetProcess(), nil, query)
+	ctasBoundaryDomain.divPrecisionIncrement = resolveDivPrecisionIncrement(ctx)
+	ctasBoundaryDomain.legacyPrecision = function.LegacyDecimalIntermediatePrecision(ctx.GetContext())
+	ctasMainNode := resultColumnNode(query)
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	var integerValues []function.IntegerLogicalPrecision
 	if query.IntegerPrecision != nil {
@@ -1705,6 +3453,16 @@ func genAsSelectCols(
 			typ = integerSchemaType(typ, g, g.Outputs[i], false, integerValues)
 		}
 
+		// A persisted CTAS column keeps the declared domain its storage
+		// envelope derives when the widening seam changed the expression's
+		// published type (issue #30938); other wide inference, such as
+		// wide literals, keeps its bound precision. The insert admission
+		// check still rejects values that do not fit.
+		boundedTyp, berr := ctasBoundaryDomain.storageBoundary(typ, expr, ctasMainNode)
+		if berr != nil {
+			return nil, nil, 0, berr
+		}
+		typ = boundedTyp
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -9845,4 +11603,1535 @@ func decimalDivSchemaType(typ plan.Type, provenance OutputColumnProvenance) plan
 	}
 	typ.Scale = -1
 	return typ
+}
+
+// ---------------------------------------------------------------------------
+// Decimal aggregate argument-domain reconciliation (issue #30938, design §5)
+// ---------------------------------------------------------------------------
+//
+// The domain-arithmetic decimal aggregates AVG and SUM derive their result
+// type and capacity from the ARGUMENT type the plan hands the executor, and
+// the executor re-derives the same result type from the argument
+// independently. The widening seam publishes multiplication results up to
+// (76,s); per source, however, the parent's typing admitted each operand
+// family only in its own pre-change domain. This finalization pass runs at
+// both createQuery exits, after flattening and the per-step rewrites, and
+// binds every AVG/SUM argument to the domain the parent would have bound:
+// every divergent decimal subexpression inside the argument receives a cast
+// to its own storage envelope (innermost first), coercive binding decisions
+// replay snapshot-first from the statement-local decision ledger, the
+// argument head is rebound when it still differs from the envelope after
+// the replay, and the call's result type is re-derived through the same
+// registration the executor uses. Materialized shared producers are crossed
+// by envelope-shadow columns on row-preserving paths and by in-place seam
+// casts below the first row-changing operator on row-changing interiors.
+// Statements without widened decimal multiplication provenance skip
+// structurally (one registry gate), so statements the parent bound pay
+// nothing here.
+
+type decimalAggDomainPass struct {
+	ctx      context.Context
+	proc     *process.Process
+	query    *Query
+	d        *ctasStorageDomain
+	inserted map[*plan.Expr]struct{}
+	entries  map[string]*rule.DecimalBoundaryDecisionEntry
+	shadows  map[[2]int32]*decimalShadowExport
+	scansBy  map[int32][]*plan.Node
+	admitted map[*plan.Expr]struct{}
+	// rowChange marks the nodes whose evaluation changes row identity
+	// (grouped aggregation, set operations, window and time-window
+	// operators): seams inside their interiors admit below the first such
+	// operator (design §5, F-ROW-CHANGING-BOUNDARY).
+	rowChange map[int32]bool
+	// valueSelecting is set while admitAggCallInterior admits one
+	// value-selecting aggregate's argument subtree: the admission is
+	// confined to the reader's own interior and never crosses a
+	// materialized shared producer, whose export the value-selecting
+	// reader keeps carrier-exact (design §5 two-reader contract; issue
+	// #30938 review round 11, F3).
+	valueSelecting bool
+	// depInFlight marks the correlation programs whose result producers
+	// admitDependentResult is currently resolving: a degenerate program
+	// whose root slot resolves back into a call of itself closes on the
+	// guard instead of recursing without bound (issue #30938 review
+	// round 12, F3).
+	depInFlight map[uint32]bool
+}
+
+// decimalShadowHop records one projection-chain hop between an admitting
+// reference and its resolved producer export (design §5 shadow rebind).
+// Positions are post-remap node/slot identities: pos is the node's local
+// projection slot, and childOrdinal is the child position the hop's parent
+// uses to reach this hop's node (the admitting owner for the first hop).
+type decimalShadowHop struct {
+	node         *plan.Node
+	pos          int32
+	childOrdinal int32
+}
+
+// decimalShadowExport records one materialized producer's envelope-shadow
+// column in post-remap positions: the shadow's slot at the producer root,
+// its export slot at the step's SINK, and each reader scan's local export
+// slot (readers compact independently, so scan-local positions differ).
+type decimalShadowExport struct {
+	producerPos int32
+	sinkPos     int32
+	scanPos     map[int32]int32
+}
+
+// reconcileDecimalAggregateDomains is the pass entry invoked at both
+// createQuery exits (design §5, F-DEPENDENT-EXIT). It runs only when the
+// statement's decision ledger carries widened-multiplication provenance;
+// the boolean reports that gate so the caller runs its downstream re-sync
+// finalization only for a reconciled statement. divIncrement is the session
+// div_precision_increment the statement's publication consumed, applied
+// verbatim by the division envelope mirror (design §4.1 divide bullet) -
+// the reconcile's default-seeded domain previously diverged from the
+// publication whenever the session setting differed from the binder
+// default (issue #30938 review round 11).
+func reconcileDecimalAggregateDomains(proc *process.Process, qry *Query, divIncrement int32) (bool, error) {
+	if proc == nil || qry == nil {
+		return false, nil
+	}
+	registry := proc.DecimalBoundaryDecisions()
+	provenance := proc.DecimalBoundaryBarrierActive()
+	entries := make(map[string]*rule.DecimalBoundaryDecisionEntry, len(registry))
+	for key, payload := range registry {
+		entry, _ := payload.(*rule.DecimalBoundaryDecisionEntry)
+		if entry == nil {
+			continue
+		}
+		entries[key] = entry
+		if entry.Provenance {
+			provenance = true
+		}
+	}
+	if !provenance {
+		return false, nil
+	}
+	p := &decimalAggDomainPass{
+		ctx:         context.Background(),
+		proc:        proc,
+		query:       qry,
+		inserted:    make(map[*plan.Expr]struct{}),
+		entries:     entries,
+		shadows:     make(map[[2]int32]*decimalShadowExport),
+		scansBy:     make(map[int32][]*plan.Node),
+		admitted:    make(map[*plan.Expr]struct{}),
+		rowChange:   make(map[int32]bool),
+		depInFlight: make(map[uint32]bool),
+	}
+	if proc.Ctx != nil {
+		p.ctx = proc.Ctx
+	}
+	// The pass re-resolves recorded calls (replayDecision's snapshot and
+	// regenerated overloads run GetFunctionByName on p.ctx) and must
+	// republish exactly what the statement's binding published. The binding
+	// context carried the session div_precision_increment, while proc.Ctx
+	// does not: without this planting, a non-default session setting makes
+	// every replayed division revert to the default increment, and the
+	// re-typed quotient then falsely diverges from its envelope (issue
+	// #30938 review round 11, F2).
+	p.ctx = function.WithDivPrecisionIncrement(p.ctx, divIncrement)
+	d := newCtasStorageDomain(qry)
+	d.ledgerOf = proc.DecimalBoundaryDecision
+	d.divPrecisionIncrement = divIncrement
+	d.legacyPrecision = function.LegacyDecimalIntermediatePrecision(proc.Ctx)
+	p.d = d
+	for _, n := range qry.Nodes {
+		if n == nil {
+			continue
+		}
+		switch n.NodeType {
+		case plan.Node_AGG:
+			if len(n.GroupBy) > 0 {
+				p.rowChange[n.NodeId] = true
+			}
+		case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT,
+			plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL,
+			plan.Node_WINDOW, plan.Node_TIME_WINDOW:
+			p.rowChange[n.NodeId] = true
+		}
+	}
+	for _, n := range qry.Nodes {
+		if n != nil && n.NodeType == plan.Node_SINK_SCAN && len(n.SourceStep) == 1 {
+			p.scansBy[n.SourceStep[0]] = append(p.scansBy[n.SourceStep[0]], n)
+		}
+	}
+	visited := make(map[int32]bool, len(qry.Nodes))
+	var walk func(id int32) error
+	walk = func(id int32) error {
+		node := p.nodeByID(id)
+		if node == nil || visited[node.NodeId] {
+			return nil
+		}
+		visited[node.NodeId] = true
+		for _, child := range node.Children {
+			if err := walk(child); err != nil {
+				return err
+			}
+		}
+		for _, step := range node.SourceStep {
+			if step >= 0 && int(step) < len(qry.Steps) {
+				if err := walk(qry.Steps[step]); err != nil {
+					return err
+				}
+			}
+		}
+		return p.reconcileNode(node)
+	}
+	for _, rootID := range qry.Steps {
+		if err := walk(rootID); err != nil {
+			return false, err
+		}
+	}
+	if corr := qry.Correlation; corr != nil {
+		for _, program := range corr.Programs {
+			if program == nil {
+				continue
+			}
+			if err := walk(program.RootNode); err != nil {
+				return false, err
+			}
+		}
+	}
+	return true, nil
+}
+
+func (p *decimalAggDomainPass) nodeByID(id int32) *plan.Node {
+	if id < 0 || int(id) >= len(p.query.Nodes) {
+		return nil
+	}
+	return p.query.Nodes[id]
+}
+
+// reconcileNode binds the AVG/SUM calls of one finalized node position,
+// children before their consumers (design §5 finalization order).
+func (p *decimalAggDomainPass) reconcileNode(node *plan.Node) error {
+	switch node.NodeType {
+	case plan.Node_AGG:
+		for i := range node.AggList {
+			if err := p.reconcileAggCall(node.AggList[i], node); err != nil {
+				return err
+			}
+		}
+	case plan.Node_TIME_WINDOW:
+		// TIME_WINDOW producers finalize through the same AggList channel
+		// as plain aggregates; _wstart/_wend carriers are boundary column
+		// references, never aggregate calls (design §5,
+		// F-TIME-WINDOW-FINALIZATION).
+		layout := BuildTimeWindowLayout(node)
+		var changed map[int32]int
+		for i := range node.AggList {
+			if isBoundary, _ := isTimeWindowBoundary(node.AggList[i]); isBoundary {
+				continue
+			}
+			before := node.AggList[i].Typ
+			if err := p.reconcileAggCall(node.AggList[i], node); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(before, node.AggList[i].Typ) && i < len(layout.Slot) {
+				if changed == nil {
+					changed = make(map[int32]int)
+				}
+				changed[layout.Slot[i]] = i
+			}
+		}
+		// Propagate each reconciliation to the node's own output references
+		// here, where the change is known. The generic projection refresh
+		// deliberately resolves no TIME_WINDOW self-references: the dependent
+		// route carries stale-but-coherent references whose physical frames
+		// read the aggregate list, and re-resolving them without an admission
+		// change leaks through shared expression objects into dependent
+		// capture instructions. Downstream consumers observe this synced
+		// project list through the refresh's ordinary child-to-parent
+		// cascade (design §5, F-TIME-WINDOW-FINALIZATION).
+		if len(changed) > 0 {
+			for _, projExpr := range node.ProjectList {
+				col := projExpr.GetCol()
+				if col == nil || col.RelPos != -1 {
+					continue
+				}
+				k, ok := changed[col.ColPos]
+				if !ok {
+					continue
+				}
+				if !reflect.DeepEqual(projExpr.Typ, node.AggList[k].Typ) {
+					projExpr.Typ = node.AggList[k].Typ
+				}
+			}
+		}
+	case plan.Node_WINDOW:
+		for _, win := range node.WinSpecList {
+			if win == nil || win.GetW() == nil || win.GetW().WindowFunc == nil {
+				continue
+			}
+			if err := p.reconcileAggCall(win.GetW().WindowFunc, node); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// reconcileAggCall admits every divergent decimal seam of one AVG/SUM call's
+// argument, replays the argument's coercive binding decisions, rebinds the
+// argument head to its envelope, and re-derives the call's result type
+// through the same registration the executor constructs from (design §5).
+// A value-selecting aggregate or window call (MAX/MIN, ANY_VALUE,
+// FIRST_VALUE/LAST_VALUE/NTH_VALUE, MAX_BY and every other call AVG/SUM
+// does not rebind) reconciles nothing here: it publishes its argument's
+// recorded type and returns input rows carrier-exact, so its argument
+// admits no cast even where the envelope diverges from the publication
+// (design §5 §9 value-selecting row). Interior admission below the selector
+// fires only when an admitted AVG/SUM reader resolves across the
+// row-changing operator through admitSelfReference, so a violating row is
+// still checked before the selector can discard it (design §5,
+// F-ROW-CHANGING-BOUNDARY; issue #30938 review round 11, F3).
+func (p *decimalAggDomainPass) reconcileAggCall(call *plan.Expr, owner *plan.Node) error {
+	fn := call.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return nil
+	}
+	name := fn.Func.GetObjName()
+	if name != "avg" && name != "sum" {
+		return nil
+	}
+	arg := fn.Args[0]
+	if arg == nil || !types.T(arg.Typ.Id).IsDecimal() {
+		return nil
+	}
+	admitted, err := p.admit(arg, owner)
+	if err != nil {
+		return err
+	}
+	fn.Args[0] = admitted
+	env := p.envelopeOf(admitted, owner)
+	if !p.envelopeNeutral(env) && p.envelopeDivergent(env, &admitted.Typ) {
+		wrapped, err := p.envCast(admitted, env)
+		if err != nil {
+			return err
+		}
+		admitted = wrapped
+		fn.Args[0] = admitted
+	}
+	argTypes := []types.Type{makeTypeByPlan2Expr(admitted)}
+	var result types.Type
+	if name == "avg" {
+		result = aggexec.AvgReturnType(argTypes)
+	} else {
+		result = aggexec.SumReturnType(argTypes)
+	}
+	rebound := makePlan2Type(&result)
+	rebound.NotNullable = call.Typ.NotNullable
+	call.Typ = rebound
+	return nil
+}
+
+func (p *decimalAggDomainPass) envelopeOf(expr *plan.Expr, owner *plan.Node) decimalStorageEnvelope {
+	return p.d.envelopeOwned(expr, owner)
+}
+
+func (p *decimalAggDomainPass) envelopeNeutral(env decimalStorageEnvelope) bool {
+	return env.integral == 0 && env.scale == 0
+}
+
+func (p *decimalAggDomainPass) envelopeDivergent(env decimalStorageEnvelope, typ *plan.Type) bool {
+	return env.integral+env.scale != typ.Width || env.scale != typ.Scale
+}
+
+// envCast wraps expr in the same ordinary cast machinery COALESCE alignment
+// and the recursive-member coercions use (design §5: no annotation channel).
+func (p *decimalAggDomainPass) envCast(expr *plan.Expr, env decimalStorageEnvelope) (*plan.Expr, error) {
+	width := env.integral + env.scale
+	id := int32(types.T_decimal64)
+	switch {
+	case width > 38:
+		id = int32(types.T_decimal256)
+	case width > 18:
+		id = int32(types.T_decimal128)
+	}
+	target := plan.Type{Id: id, Width: width, Scale: env.scale, NotNullable: expr.Typ.NotNullable}
+	castExpr, err := appendCastBeforeExpr(p.ctx, expr, target)
+	if err != nil {
+		return nil, err
+	}
+	p.inserted[castExpr] = struct{}{}
+	return castExpr, nil
+}
+
+// admit walks an argument subtree post-order, replaying coercive decisions
+// and casting every divergent decimal subexpression to its own envelope,
+// innermost first (design §5, F-PRODUCT-ADMISSION head-independent).
+func (p *decimalAggDomainPass) admit(expr *plan.Expr, owner *plan.Node) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if _, ok := p.inserted[expr]; ok {
+		return expr, nil
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		for i := range fn.Args {
+			arg, err := p.admit(fn.Args[i], owner)
+			if err != nil {
+				return nil, err
+			}
+			fn.Args[i] = arg
+		}
+		if err := p.replayDecision(expr); err != nil {
+			return nil, err
+		}
+	} else if expr.GetCol() != nil {
+		seamed, err := p.admitColumnRef(expr, owner)
+		if err != nil {
+			return nil, err
+		}
+		if seamed != expr {
+			return seamed, nil
+		}
+	} else if dep := expr.GetDependent(); dep != nil {
+		// Caller-side captured expressions finalize at their own position
+		// in the caller's trees (design §5 fact 13, revision 8
+		// F-INPUT-REFRESH; issue #30938 review round 11, F4): each capture
+		// and each comparison lhs admits like any caller expression. Where
+		// admission retypes a capture head, the projection refresh's
+		// correlation channel re-derives the program's InputTypes, the
+		// callee's slot types, the OutputTypes and this call's result type
+		// in producer order (refreshPreparedCorrelationExpr), so
+		// ValidateCorrelation's equalities hold on the finalized plan by
+		// construction. The comparison consumes materialized tuples and
+		// refreshes through the same channel, so it is not walked here.
+		// The call's own head then admits against the dependent-call
+		// envelope below.
+		for i := range dep.Inputs {
+			admitted, err := p.admit(dep.Inputs[i], owner)
+			if err != nil {
+				return nil, err
+			}
+			dep.Inputs[i] = admitted
+		}
+		for i := range dep.Lhs {
+			admitted, err := p.admit(dep.Lhs[i], owner)
+			if err != nil {
+				return nil, err
+			}
+			dep.Lhs[i] = admitted
+		}
+		// The admission demand also propagates INTO the callee below its
+		// row-changing operators (issue #30938 review round 12, F3): a
+		// value-selecting aggregate or regrouping inside the callee must
+		// not discard a row the parent rejected at computation before the
+		// seam fails. The caller-side head cast below still checks the
+		// single returned value against the dependent-call envelope.
+		if err := p.admitDependentResult(dep, expr, owner); err != nil {
+			return nil, err
+		}
+	}
+	if types.T(expr.Typ.Id).IsDecimal() {
+		// A retained binder-inserted alignment cast admits through its
+		// owning decision's replay: the regenerated layer subsumes any
+		// divergence of its own declared envelope, and wrapping it here
+		// would make the decision's recovered operand structure
+		// decision-foreign (design §5 facts 12 and 17).
+		if expr.GetF() != nil && implicitDecimalAlignCast(expr) != nil {
+			return expr, nil
+		}
+		env := p.envelopeOf(expr, owner)
+		if !p.envelopeNeutral(env) && p.envelopeDivergent(env, &expr.Typ) {
+			return p.envCast(expr, env)
+		}
+	}
+	return expr, nil
+}
+
+// admitColumnRef handles a decimal column reference whose envelope diverges
+// from its published type. On a plain chain the reference is cast in place;
+// across a materialized shared producer a row-preserving path emits (or
+// reuses) the producer's envelope-shadow column and the reference rebinds
+// directly to the exported shadow slot (design §5, F-PRODUCER-BOUNDARY,
+// F-ROW-CHANGING-BOUNDARY); across a row-changing interior the seam takes
+// its in-tree admission below the first such operator and the reference
+// keeps its ordinary in-tree envelope cast.
+func (p *decimalAggDomainPass) admitColumnRef(expr *plan.Expr, owner *plan.Node) (*plan.Expr, error) {
+	env := p.envelopeOf(expr, owner)
+	if p.envelopeNeutral(env) {
+		return expr, nil
+	}
+	col := expr.GetCol()
+	// Post-remap a column reference names one of the owner's children by
+	// ordinal and that child's local projection slot; the walk follows the
+	// projection chain by those node/slot identities (design §5,
+	// F-SEAM-RESOLUTION).
+	var hops []decimalShadowHop
+	rowChanging := false
+	childOrdinal := col.RelPos
+	var cur *plan.Node
+	if childOrdinal >= 0 && int(childOrdinal) < len(owner.Children) {
+		cur = p.nodeByID(owner.Children[childOrdinal])
+	}
+	curPos := col.ColPos
+	var scan *plan.Node
+	for cur != nil {
+		hops = append(hops, decimalShadowHop{node: cur, pos: curPos, childOrdinal: childOrdinal})
+		if p.rowChange[cur.NodeId] {
+			rowChanging = true
+			break
+		}
+		if cur.NodeType == plan.Node_SINK_SCAN {
+			scan = cur
+			break
+		}
+		if curPos < 0 || int(curPos) >= len(cur.ProjectList) || cur.ProjectList[curPos] == nil {
+			break
+		}
+		entry := cur.ProjectList[curPos]
+		entryCol := entry.GetCol()
+		if entryCol == nil {
+			break
+		}
+		if entryCol.RelPos < 0 || int(entryCol.RelPos) >= len(cur.Children) {
+			break
+		}
+		next := p.nodeByID(cur.Children[entryCol.RelPos])
+		if next == nil || next == cur {
+			break
+		}
+		childOrdinal = entryCol.RelPos
+		cur, curPos = next, entryCol.ColPos
+	}
+	if scan != nil && !rowChanging {
+		if p.valueSelecting {
+			// A value-selecting aggregate imposes no admission demand
+			// across a materialized shared producer: the materialization
+			// already delivered the seam's rows, so the reader keeps the
+			// original export carrier-exact and no shadow replica exists
+			// for it (design §5 two-reader contract; issue #30938 review
+			// round 11, F3 scope).
+			return expr, nil
+		}
+		shadow, err := p.ensureShadowColumn(scan, curPos)
+		if err != nil {
+			return nil, err
+		}
+		if shadow != nil {
+			return p.rebindThroughShadow(expr, hops, shadow)
+		}
+	}
+	// Inline, non-materialized, or row-changing paths admit the producing
+	// expression's seams in place (demand-exact; the parent rejected those
+	// values at the same locus). Admission is independent of head-type
+	// divergence (design §5, F-HEAD-GATE removal): the head cast is kept
+	// only where the head's own envelope diverges.
+	if len(hops) > 0 {
+		if err := p.admitProducerSlot(hops[0].node, hops[0].pos, make(map[[2]int32]bool)); err != nil {
+			return nil, err
+		}
+	}
+	if p.envelopeDivergent(env, &expr.Typ) {
+		return p.envCast(expr, env)
+	}
+	return expr, nil
+}
+
+// ensureShadowColumn emits one statement-local envelope-shadow column for
+// (producer, referenced exported slot): the structural replica of the slot's
+// producing expression with each divergent seam cast in place and its
+// coercive decisions replayed from the ledger, appended as one ordinary
+// projection slot at the producer root, mirrored through the SINK and every
+// SINK_SCAN of the producer step. One shadow serves every admitted consumer
+// of that slot. It returns the shadow's export record, or nil when the
+// slot's producing expression has no divergent seam to admit (the caller
+// then casts in tree). All positions are resolved through the post-remap
+// layout: a scan entry's ColPos names its SINK export slot, and a SINK
+// entry's ColPos names the producer root's local slot.
+// decimalShadowReplaySafe reports whether re-evaluating expr row for row is
+// positively proven to duplicate no observable effect and no client-visible
+// diagnostic (design §5, decision log 77 (i) F-REPLAY-SAFETY-POSITIVE-PROOF
+// and 78 (i) F-DIAGNOSTIC-REPLAY): every function call is a decimal
+// arithmetic operator (an error-only kernel - the whole-file warning-sink
+// sweep of arithmetic.go and arith_decimal_fast.go finds no diagnostic
+// append), a cast whose argument and result types are both decimal (the one
+// conversion family whose func_cast.go paths append no diagnostic; the
+// blanket plain-cast exemption is withdrawn), or the per-overload audited
+// curated value function coalesce (CoalesceGeneral, func_binary.go, a pure
+// selector over already-evaluated arms that never reaches a warning sink) -
+// and every value-position leaf is a literal or a column reference. A
+// binder-produced cast's trailing Expr_T target descriptor is validated as
+// metadata, not as a leaf (revision 34, F-CAST-DESCRIPTOR-LEAVES), while the
+// cast's value argument recurses the rule. Volatile, real-time,
+// INTERNAL-class, unlisted (llm_chat) and curated-but-unaudited (unhex)
+// calls, and every other expression form or leaf, are UNPROVEN: their slots
+// take the in-place single-evaluation channel.
+func decimalShadowReplaySafe(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_Col:
+		return true
+	case *plan.Expr_F:
+		fn := node.F
+		if fn == nil || fn.Func == nil {
+			return false
+		}
+		switch fn.Func.GetObjName() {
+		case "*", "+", "-", "/":
+			// Decimal arithmetic operators: error-only kernels appending no
+			// diagnostic.
+		case "cast":
+			// Only the decimal-to-decimal conversion family appends no
+			// diagnostic; every other conversion domain is unproven.
+			if len(fn.Args) == 0 || !types.T(fn.Args[0].Typ.Id).IsDecimal() ||
+				!types.T(expr.Typ.Id).IsDecimal() {
+				return false
+			}
+		case "coalesce":
+			// The one audited curated member.
+		default:
+			return false
+		}
+		for _, arg := range fn.Args {
+			if arg.GetT() != nil {
+				// A binder-produced target descriptor is metadata, not a
+				// value leaf.
+				continue
+			}
+			if !decimalShadowReplaySafe(arg) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (p *decimalAggDomainPass) ensureShadowColumn(scan *plan.Node, slot int32) (*decimalShadowExport, error) {
+	if len(scan.SourceStep) != 1 {
+		return nil, nil
+	}
+	step := scan.SourceStep[0]
+	if step < 0 || int(step) >= len(p.query.Steps) {
+		return nil, nil
+	}
+	sink := p.nodeByID(p.query.Steps[step])
+	if sink == nil || sink.NodeType != plan.Node_SINK || len(sink.Children) != 1 {
+		return nil, nil
+	}
+	root := p.nodeByID(sink.Children[0])
+	if root == nil || slot < 0 || int(slot) >= len(scan.ProjectList) {
+		return nil, nil
+	}
+	// Translate the scan-local slot to the producer root's local slot
+	// through the post-remap export chain (scan -> SINK -> producer root).
+	sinkPos := slot
+	if c := scan.ProjectList[slot].GetCol(); c != nil {
+		sinkPos = c.ColPos
+	}
+	rootPos := sinkPos
+	if sinkPos >= 0 && int(sinkPos) < len(sink.ProjectList) {
+		if c := sink.ProjectList[sinkPos].GetCol(); c != nil {
+			rootPos = c.ColPos
+		}
+	}
+	if rootPos < 0 || int(rootPos) >= len(root.ProjectList) {
+		return nil, nil
+	}
+	key := [2]int32{sink.NodeId, rootPos}
+	if shadow, ok := p.shadows[key]; ok {
+		return shadow, nil
+	}
+	// The final SINK/SINK_SCAN column pruning can leave bare column mirrors
+	// between the SINK and the projection holding the slot's producing
+	// expression. Resolve through those mirrors by the same post-remap
+	// node/slot identities the consumer-side walk uses (design §5,
+	// F-SEAM-RESOLUTION), row-preserving hops only, so the shadow replicates
+	// the producing expression itself instead of a mirror reference to it.
+	producerNode, producerPos := root, rootPos
+	var mirrors []*plan.Node
+	var mirrorOrdinals []int32
+	for producerPos >= 0 && int(producerPos) < len(producerNode.ProjectList) {
+		entry := producerNode.ProjectList[producerPos]
+		c := entry.GetCol()
+		if c == nil {
+			break
+		}
+		if c.RelPos < 0 || int(c.RelPos) >= len(producerNode.Children) {
+			break
+		}
+		next := p.nodeByID(producerNode.Children[c.RelPos])
+		if next == nil || next == producerNode || p.rowChange[next.NodeId] {
+			break
+		}
+		if c.ColPos < 0 || int(c.ColPos) >= len(next.ProjectList) {
+			break
+		}
+		mirrors = append(mirrors, producerNode)
+		mirrorOrdinals = append(mirrorOrdinals, c.RelPos)
+		producerNode, producerPos = next, c.ColPos
+	}
+	producer := producerNode.ProjectList[producerPos]
+	if producer == nil {
+		return nil, nil
+	}
+	if producer.GetCol() != nil {
+		// The chain ends at an unfollowable column reference (a leaf or a
+		// row-changing boundary): keep the pre-existing resolution semantics
+		// for the exported slot at the producer root.
+		producerNode, producerPos = root, rootPos
+		mirrors, mirrorOrdinals = nil, nil
+		producer = producerNode.ProjectList[producerPos]
+	}
+	// The shadow replicates the slot's producing expression for one
+	// independent evaluation, so the channel requires POSITIVE replay-safety
+	// AND diagnostic-freedom proof over every node of that expression
+	// (design §5, decision log 77 (i) F-REPLAY-SAFETY-POSITIVE-PROOF and
+	// 78 (i) F-DIAGNOSTIC-REPLAY). An unproven expression takes the
+	// in-place single-evaluation channel (the caller casts in tree), never
+	// a replica that could duplicate an external effect or a client-visible
+	// diagnostic.
+	if !decimalShadowReplaySafe(producer) {
+		return nil, nil
+	}
+	replica := DeepCopyExpr(producer)
+	admitted, err := p.admit(replica, producerNode)
+	if err != nil {
+		return nil, err
+	}
+	// admit splices seam casts into the replica's arguments in place, so
+	// the root pointer alone cannot report whether any seam accepted
+	// admission; compare against the untouched producing expression.
+	// Decision replays regenerate bitwise-identical layers by contract, so
+	// a replay-only pass still compares equal here.
+	if proto.Equal(admitted, producer) {
+		// No seam accepted admission in the replica; the caller casts in
+		// tree with the merged envelope.
+		return nil, nil
+	}
+	shadow := &decimalShadowExport{
+		sinkPos: int32(len(sink.ProjectList)),
+		scanPos: make(map[int32]int32),
+	}
+	// The admitted replica appends at the producing node and mirrors back up
+	// the chain, so the SINK export names the producer root's local slot.
+	producerNode.ProjectList = append(producerNode.ProjectList, admitted)
+	upPos := int32(len(producerNode.ProjectList)) - 1
+	for i := len(mirrors) - 1; i >= 0; i-- {
+		mirror := mirrors[i]
+		mirror.ProjectList = append(mirror.ProjectList, &plan.Expr{
+			Typ:  admitted.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: mirrorOrdinals[i], ColPos: upPos}},
+		})
+		upPos = int32(len(mirror.ProjectList)) - 1
+	}
+	shadow.producerPos = upPos
+	sink.ProjectList = append(sink.ProjectList, &plan.Expr{
+		Typ:  admitted.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: shadow.producerPos}},
+	})
+	for _, reader := range p.scansBy[step] {
+		shadow.scanPos[reader.NodeId] = int32(len(reader.ProjectList))
+		reader.ProjectList = append(reader.ProjectList, &plan.Expr{
+			Typ:  admitted.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: shadow.sinkPos}},
+		})
+	}
+	p.shadows[key] = shadow
+	return shadow, nil
+}
+
+// rebindThroughShadow rewrites the admitting reference and every mirror
+// along its projection chain to read the exported shadow slot, appending
+// one ordinary mirror column per hop so sibling readers of every position
+// stay carrier-exact (design §5: the admitting consumer's shadow-slot
+// reference rebinds directly; the original column is untouched). Each
+// mirror reads the next hop down through that hop's recorded child
+// ordinal, and the scan hop reads its own local export of the shadow.
+func (p *decimalAggDomainPass) rebindThroughShadow(expr *plan.Expr, hops []decimalShadowHop, shadow *decimalShadowExport) (*plan.Expr, error) {
+	col := expr.GetCol()
+	if col == nil || len(hops) == 0 || shadow == nil {
+		return nil, moerr.NewInternalError(p.ctx, "invalid decimal boundary shadow rebind")
+	}
+	nextPos := int32(-1)
+	for i := len(hops) - 1; i >= 0; i-- {
+		h := hops[i]
+		if h.node.NodeType == plan.Node_SINK_SCAN {
+			// The scan already exports the shadow slot at its own local
+			// position.
+			scanPos, ok := shadow.scanPos[h.node.NodeId]
+			if !ok {
+				return nil, moerr.NewInternalError(p.ctx, "invalid decimal boundary shadow hop")
+			}
+			nextPos = scanPos
+			continue
+		}
+		if i+1 >= len(hops) || nextPos < 0 {
+			return nil, moerr.NewInternalError(p.ctx, "invalid decimal boundary shadow hop")
+		}
+		mirrorPos := int32(len(h.node.ProjectList))
+		h.node.ProjectList = append(h.node.ProjectList, &plan.Expr{
+			Typ:  expr.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: hops[i+1].childOrdinal, ColPos: nextPos}},
+		})
+		nextPos = mirrorPos
+	}
+	expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: hops[0].childOrdinal,
+		ColPos: nextPos,
+		Name:   col.Name,
+	}}
+	return expr, nil
+}
+
+// admitProducerSlot admits the divergent seams of the expression producing
+// one column, wherever the resolution lands: inline producers receive the
+// admission in place, set-operation branches recurse per branch, and row-
+// changing interiors place the admission below the first such operator
+// (design §5 taxonomy). Pruning-settled plans keep every sibling export.
+func (p *decimalAggDomainPass) admitProducerSlot(node *plan.Node, pos int32, seen map[[2]int32]bool) error {
+	if node == nil || pos < 0 || int(pos) >= len(node.ProjectList) {
+		return nil
+	}
+	key := [2]int32{node.NodeId, pos}
+	if seen[key] {
+		return nil
+	}
+	seen[key] = true
+	entry := node.ProjectList[pos]
+	if entry == nil {
+		return nil
+	}
+	if isSetOperation(node.NodeType) {
+		for _, childID := range node.Children {
+			child := p.nodeByID(childID)
+			if child == nil || int(pos) >= len(child.ProjectList) {
+				continue
+			}
+			var innerCol *plan.ColRef
+			if e := child.ProjectList[pos]; e != nil && e.GetCol() != nil {
+				innerCol = e.GetCol()
+			}
+			if innerCol != nil {
+				// Post-remap the branch export names one of the branch's
+				// own children by ordinal and local slot.
+				if innerCol.RelPos < 0 || int(innerCol.RelPos) >= len(child.Children) {
+					continue
+				}
+				if err := p.admitProducerSlot(p.nodeByID(child.Children[innerCol.RelPos]), innerCol.ColPos, seen); err != nil {
+					return err
+				}
+			} else {
+				if _, err := p.admitExisting(child.ProjectList[pos], child); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if node.NodeType == plan.Node_SINK && len(node.Children) == 1 {
+		child := p.nodeByID(node.Children[0])
+		// Post-remap a SINK export names its single child's local slot.
+		childPos := pos
+		if c := entry.GetCol(); c != nil {
+			childPos = c.ColPos
+		}
+		if child != nil && childPos >= 0 && int(childPos) < len(child.ProjectList) {
+			if _, err := p.admitExisting(child.ProjectList[childPos], child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if node.NodeType == plan.Node_SINK_SCAN && len(node.SourceStep) == 1 {
+		step := node.SourceStep[0]
+		if step >= 0 && int(step) < len(p.query.Steps) {
+			sink := p.nodeByID(p.query.Steps[step])
+			if sink != nil && len(sink.Children) == 1 {
+				child := p.nodeByID(sink.Children[0])
+				// Post-remap the scan export names its SINK's export slot,
+				// and the SINK export names the producer root's local slot.
+				sinkPos := pos
+				if c := entry.GetCol(); c != nil {
+					sinkPos = c.ColPos
+				}
+				if sinkPos >= 0 && int(sinkPos) < len(sink.ProjectList) {
+					childPos := sinkPos
+					if c := sink.ProjectList[sinkPos].GetCol(); c != nil {
+						childPos = c.ColPos
+					}
+					if child != nil && childPos >= 0 && int(childPos) < len(child.ProjectList) {
+						if _, err := p.admitExisting(child.ProjectList[childPos], child); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if c := entry.GetCol(); c != nil {
+		if c.RelPos < 0 {
+			// A self-reference names one of the node's own operator
+			// outputs: resolve it through the node's authoritative
+			// producer mapping and admit the resolved expression's seams
+			// in place, below the row-changing operator (design §5,
+			// F-ROW-CHANGING-BOUNDARY; issue #30938 review round 11).
+			return p.admitSelfReference(node, c)
+		}
+		if int(c.RelPos) >= len(node.Children) {
+			return nil
+		}
+		if err := p.admitProducerSlot(p.nodeByID(node.Children[c.RelPos]), c.ColPos, seen); err != nil {
+			return err
+		}
+		return nil
+	}
+	_, err := p.admitExisting(entry, node)
+	return err
+}
+
+// admitSelfReference resolves one self-referencing projection entry (RelPos
+// -1/-2) through the same authoritative producer mappings
+// resolveChildRelationalOutput applies (issue #30938 review round 11, F3):
+// an aggregate or sampled slot names its AggList call, a grouping slot its
+// GroupBy expression, a single-spec window result its window function, and
+// a time-window slot its BuildTimeWindowLayout-mapped aggregate or
+// partition expression. The resolved producer's divergent decimal seams are
+// admitted in place below the operator, so a value-selecting aggregate
+// (MAX/MIN) cannot discard a row the parent rejected at computation before
+// the seam fails. Aggregate and window calls receive interior-only
+// admission: their published result types are intentionally not re-derived
+// here (consumers re-derive through their own envelope casts, and AVG/SUM
+// keep reconcileAggCall's rebind). Unresolved shapes keep the authored
+// state, exactly the envelope side's conservative fallback.
+func (p *decimalAggDomainPass) admitSelfReference(node *plan.Node, c *plan.ColRef) error {
+	pos := int(c.ColPos)
+	switch node.NodeType {
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		switch c.RelPos {
+		case -1:
+			if pos >= 0 && pos < len(node.GroupBy) {
+				admitted, err := p.admit(node.GroupBy[pos], node)
+				if err != nil {
+					return err
+				}
+				node.GroupBy[pos] = admitted
+			}
+		case -2:
+			if j := pos - len(node.GroupBy); j >= 0 && j < len(node.AggList) {
+				return p.admitAggCallInterior(node.AggList[j], node)
+			}
+		}
+	case plan.Node_WINDOW:
+		if c.RelPos == -1 && len(node.WinSpecList) == 1 {
+			win := node.WinSpecList[0].GetW()
+			if win != nil && win.WindowFunc != nil {
+				return p.admitAggCallInterior(win.WindowFunc, node)
+			}
+		}
+	case plan.Node_TIME_WINDOW:
+		if c.RelPos == -1 {
+			layout := BuildTimeWindowLayout(node)
+			for k, kslot := range layout.Slot {
+				if int(kslot) == pos && k < len(node.AggList) {
+					if isBoundary, _ := isTimeWindowBoundary(node.AggList[k]); isBoundary {
+						return nil
+					}
+					return p.admitAggCallInterior(node.AggList[k], node)
+				}
+			}
+			for pi, pslot := range layout.PartitionSlot {
+				if int(pslot) == pos && pi < len(node.TimeWindowPartitionBy) {
+					admitted, err := p.admit(node.TimeWindowPartitionBy[pi], node)
+					if err != nil {
+						return err
+					}
+					node.TimeWindowPartitionBy[pi] = admitted
+					return nil
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// admitAggCallInterior admits every divergent decimal seam inside one
+// value-selecting aggregate or window call's argument subtree in place
+// (design §5, F-ROW-CHANGING-BOUNDARY; issue #30938 review round 11, F3).
+// The call's own published type is left untouched: MAX/MIN propagate their
+// argument's value domain, and consumers observe the divergence through
+// their ordinary envelope casts. The admission is a row filter at the
+// source seam, never a re-typing: the interior cast narrows which values
+// the selector may discard, while the call's published head stays the
+// recorded one so downstream coercive decisions replay over the domain the
+// binder published (a narrowed head would rewrite retried merge decisions
+// and degrade sibling merges off their decimal family).
+func (p *decimalAggDomainPass) admitAggCallInterior(call *plan.Expr, owner *plan.Node) error {
+	fn := call.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil
+	}
+	saved := p.valueSelecting
+	p.valueSelecting = true
+	defer func() { p.valueSelecting = saved }()
+	for i := range fn.Args {
+		arg, err := p.admit(fn.Args[i], owner)
+		if err != nil {
+			return err
+		}
+		fn.Args[i] = arg
+	}
+	// replayDecision keeps the recorded head whenever the post-admission
+	// operands no longer reproduce the recorded publication, so the
+	// selector's published type is left untouched by the interior filter.
+	return p.replayDecision(call)
+}
+
+// admitDependentResult carries AVG/SUM admission demand through one scalar
+// dependent call's result edge (design §5, F-ROW-CHANGING-BOUNDARY, and the
+// revision 8 F-DEPENDENT-ENVELOPE resolution channel; issue #30938 review
+// round 12, F3): the callee program's root output slot 0 resolves through
+// the same authoritative producer channel the dependent-call envelope uses,
+// and each resolved producer admits by its shape - an aggregate or window
+// interior below its operator, a grouping expression with its explicit
+// write-back, anything else through the ordinary post-order walk with a
+// producer-slot write-back. Only a scalar decimal call resolves: quantified
+// and existential reducers publish non-decimal heads, and any shape the
+// descriptor cannot resolve keeps the authored state, exactly the envelope
+// side's conservative fallback. AVG/SUM heads are left to the pass's own
+// callee walk (reconcileNode visits every program root), so the demand
+// never double-rebinds a head reconcileAggCall owns.
+func (p *decimalAggDomainPass) admitDependentResult(dep *plan.DependentExpr, expr *plan.Expr, owner *plan.Node) error {
+	if dep == nil || p.d.corrSpec == nil || !types.T(expr.Typ.Id).IsDecimal() {
+		return nil
+	}
+	pid := dep.ProgramId
+	if pid == 0 || int(pid) > len(p.d.corrSpec.Programs) || p.depInFlight[pid] {
+		return nil
+	}
+	program := p.d.corrSpec.Programs[pid-1]
+	if program == nil || len(program.OutputTypes) != 1 ||
+		!types.T(program.OutputTypes[0].Id).IsDecimal() {
+		return nil
+	}
+	root := p.nodeByID(program.RootNode)
+	if root == nil {
+		return nil
+	}
+	outs, resolved := p.d.resolveChildRelationalOutput(root, 0, expr, owner)
+	if !resolved {
+		return nil
+	}
+	p.depInFlight[pid] = true
+	defer delete(p.depInFlight, pid)
+	for _, out := range outs {
+		if out.expr == nil || out.owner == nil || out.expr == expr {
+			continue
+		}
+		if _, done := p.admitted[out.expr]; done {
+			continue
+		}
+		p.admitted[out.expr] = struct{}{}
+		if err := p.admitDependentProducer(out.expr, out.owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// admitDependentProducer admits one resolved callee-root producer by its
+// shape (issue #30938 review round 12, F3): an AVG/SUM head reconciles
+// through the pass's own callee walk and is skipped here; any other
+// aggregate or window call receives interior-only admission below its
+// operator, so a violating row is checked before a value-selecting call
+// can discard it while the call's published head stays the recorded one;
+// a grouping expression admits with its explicit write-back, the
+// regrouping parity of admitSelfReference's RelPos -1 slot; every other
+// producer (a plain projection, a nested dependent call, a set-operation
+// branch export) admits through the ordinary post-order walk with a
+// producer-slot write-back, whose nested dependent branch carries the
+// demand one program deeper.
+func (p *decimalAggDomainPass) admitDependentProducer(expr *plan.Expr, owner *plan.Node) error {
+	if owner.NodeType == plan.Node_AGG || owner.NodeType == plan.Node_SAMPLE ||
+		owner.NodeType == plan.Node_TIME_WINDOW {
+		for _, call := range owner.AggList {
+			if call != expr {
+				continue
+			}
+			if fn := call.GetF(); fn != nil && fn.Func != nil {
+				if name := fn.Func.GetObjName(); name == "avg" || name == "sum" {
+					return nil
+				}
+			}
+			return p.admitAggCallInterior(call, owner)
+		}
+		for pos, groupExpr := range owner.GroupBy {
+			if groupExpr == expr {
+				admitted, err := p.admit(groupExpr, owner)
+				if err != nil {
+					return err
+				}
+				owner.GroupBy[pos] = admitted
+				return nil
+			}
+		}
+	}
+	if w := expr.GetW(); w != nil && w.WindowFunc != nil {
+		return p.admitAggCallInterior(w.WindowFunc, owner)
+	}
+	admitted, err := p.admit(expr, owner)
+	if err != nil {
+		return err
+	}
+	_, err = p.replaceExpression(owner, expr, admitted)
+	return err
+}
+
+// admitExisting admits one producing expression exactly once in place
+// (statement-local idempotence for shared slots read by several admitted
+// consumers).
+func (p *decimalAggDomainPass) admitExisting(expr *plan.Expr, owner *plan.Node) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if _, done := p.admitted[expr]; done {
+		return expr, nil
+	}
+	p.admitted[expr] = struct{}{}
+	admitted, err := p.admit(expr, owner)
+	if err != nil {
+		return nil, err
+	}
+	return p.replaceExpression(owner, expr, admitted)
+}
+
+// replaceExpression swaps one producing expression for its admitted form
+// inside its owner's projection, grouping or time-window partition list:
+// the producer-resolution channel hands back expressions seated in any of
+// those slots (issue #30938 review round 12, F3).
+func (p *decimalAggDomainPass) replaceExpression(owner *plan.Node, old, admitted *plan.Expr) (*plan.Expr, error) {
+	if admitted == old {
+		return old, nil
+	}
+	for i, e := range owner.ProjectList {
+		if e == old {
+			owner.ProjectList[i] = admitted
+			return admitted, nil
+		}
+	}
+	for i, e := range owner.GroupBy {
+		if e == old {
+			owner.GroupBy[i] = admitted
+			return admitted, nil
+		}
+	}
+	for i, e := range owner.TimeWindowPartitionBy {
+		if e == old {
+			owner.TimeWindowPartitionBy[i] = admitted
+			return admitted, nil
+		}
+	}
+	return admitted, nil
+}
+
+// replayDecision regenerates one coercive binding decision's owned
+// alignment layer (design §5 facts 12 and 17): each position's
+// pre-coercion operand is recovered through the pass-inserted admission
+// layer and the retained alignment layer, the recovered domains are
+// verified against the ledger entry, the ORIGINAL layer is re-derived over
+// the recorded snapshot domains and compared bitwise against the retained
+// layer, and the decision's registered check re-invoked over the final
+// operand types regenerates exactly the decision-owned casts. Folded
+// positions are owned positionally where their artifact's type equals the
+// recorded aligned type; decision-foreign structures (including
+// SQL-authored casts) are preserved bitwise, and two recorded decisions
+// matching one observable state while differing in a folded position's
+// recorded domain raise a checked planning failure.
+func (p *decimalAggDomainPass) replayDecision(expr *plan.Expr) error {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil
+	}
+	argc := len(fn.Args)
+	if argc == 0 {
+		return nil
+	}
+	entry, err := p.lookupDecisionEntry(expr)
+	if err != nil || entry == nil {
+		return err
+	}
+	type operand struct {
+		below  *plan.Expr
+		verif  *plan.Expr
+		align  *plan.Expr
+		folded bool
+	}
+	ops := make([]operand, argc)
+	for i := 0; i < argc; i++ {
+		arg := fn.Args[i]
+		if arg == nil {
+			return nil
+		}
+		op := operand{}
+		candidate := arg
+		if _, inserted := p.inserted[candidate]; !inserted && isDecisionCastLayer(candidate) {
+			op.align = candidate
+			candidate = candidate.GetF().Args[0]
+			if candidate == nil {
+				return nil
+			}
+		}
+		op.below = candidate
+		op.verif = p.stripInserted(candidate)
+		if op.verif == nil {
+			return nil
+		}
+		if op.align == nil {
+			switch op.verif.Expr.(type) {
+			case *plan.Expr_Lit, *plan.Expr_Vec:
+				op.folded = true
+			}
+		}
+		ops[i] = op
+	}
+	// Verify the recovered positions against the recorded domains: folded
+	// positions are owned positionally where the artifact's type equals the
+	// recorded aligned type; expression positions reproduce the recorded
+	// pre-coercion domain behind any alignment layer, and the retained
+	// layer's own type equals the recorded aligned target (base_binder.go's
+	// alignment loop records an uncast position's pre type verbatim).
+	for i := range ops {
+		if ops[i].folded {
+			if !decimalBoundaryPlanTypesEqual(&ops[i].below.Typ, &entry.AlignedTypes[i]) {
+				return nil
+			}
+			continue
+		}
+		if !decimalBoundaryPlanTypesEqual(&ops[i].verif.Typ, &entry.PreTypes[i]) {
+			return nil
+		}
+		if ops[i].align != nil {
+			if !decimalBoundaryPlanTypesEqual(&ops[i].align.Typ, &entry.AlignedTypes[i]) {
+				return nil
+			}
+		} else if !decimalBoundaryPlanTypesEqual(&entry.PreTypes[i], &entry.AlignedTypes[i]) {
+			return nil
+		}
+	}
+	// Verify the retained alignment layer against the ORIGINAL coercion
+	// re-derived over the recorded snapshot domains: any position the
+	// re-derived layer would align must carry exactly the recorded target,
+	// and any position the binder's same-family skip leaves uncast must
+	// stand uncast.
+	snapshotTypes := make([]types.Type, argc)
+	for i := range ops {
+		snapshotTypes[i] = makeTypeByPlan2Type(entry.PreTypes[i])
+	}
+	snapshot, err := function.GetFunctionByName(p.ctx, entry.Name, snapshotTypes)
+	if err != nil {
+		return nil
+	}
+	targets, shouldCast := snapshot.ShouldDoImplicitTypeCast()
+	for i := range ops {
+		if ops[i].folded {
+			continue
+		}
+		expected := entry.PreTypes[i]
+		if shouldCast && i < len(targets) {
+			expected = makePlan2Type(&targets[i])
+		}
+		expectCast := !decimalAlignmentSkipped(&entry.PreTypes[i], &expected)
+		if expectCast != (ops[i].align != nil) {
+			return nil
+		}
+		if expectCast && !decimalBoundaryPlanTypesEqual(&expected, &entry.AlignedTypes[i]) {
+			return nil
+		}
+	}
+	// Regenerate the owned alignment layer over the final operand types:
+	// folded artifacts re-consume their recorded pre-coercion domain; every
+	// other position re-consumes its post-admission type, including the
+	// pass-inserted admission wrapper (design §5 fact 12).
+	finalTypes := make([]types.Type, argc)
+	for i := range ops {
+		if ops[i].folded {
+			finalTypes[i] = snapshotTypes[i]
+		} else {
+			finalTypes[i] = makeTypeByPlan2Expr(ops[i].below)
+		}
+	}
+	regenerated, err := function.GetFunctionByName(p.ctx, entry.Name, finalTypes)
+	if err != nil {
+		return nil
+	}
+	finalTargets, finalShouldCast := regenerated.ShouldDoImplicitTypeCast()
+	for i := range ops {
+		op := &ops[i]
+		operand := op.below
+		// regeneratedTarget computes the regenerated overload's alignment
+		// target for this position over the operand's current type.
+		regeneratedTarget := func(operand *plan.Expr) plan.Type {
+			target := operand.Typ
+			if finalShouldCast && i < len(finalTargets) {
+				candidate := makePlan2Type(&finalTargets[i])
+				if types.T(candidate.Id).IsDecimal() &&
+					!decimalAlignmentSkipped(&operand.Typ, &candidate) {
+					candidate.NotNullable = operand.Typ.NotNullable
+					target = candidate
+				}
+			}
+			return target
+		}
+		if op.folded && !decimalBoundaryPlanTypesEqual(&operand.Typ, &entry.PreTypes[i]) {
+			// A folded artifact re-consumes its recorded pre-coercion
+			// domain only when the regenerated alignment moves the
+			// position (a divergent sibling changed the overload's
+			// target). When the regenerated target equals the artifact's
+			// own type the position already carries exactly what the
+			// regenerated overload wants, and the replay leaves it
+			// bitwise untouched (design §5 fact 12, the no-divergence
+			// replay reproduces the original layer bitwise).
+			if target := regeneratedTarget(operand); !decimalBoundaryPlanTypesEqual(&target, &operand.Typ) {
+				rebased, rerr := appendCastBeforeExpr(p.ctx, operand, entry.PreTypes[i])
+				if rerr != nil {
+					return rerr
+				}
+				p.inserted[rebased] = struct{}{}
+				operand = rebased
+			}
+		}
+		target := regeneratedTarget(operand)
+		if decimalBoundaryPlanTypesEqual(&target, &operand.Typ) {
+			fn.Args[i] = operand
+			continue
+		}
+		wrapped, werr := appendCastBeforeExpr(p.ctx, operand, target)
+		if werr != nil {
+			return werr
+		}
+		p.inserted[wrapped] = struct{}{}
+		fn.Args[i] = wrapped
+	}
+	// The regenerated overload republishes the call only where it
+	// reproduces the recorded result domain. A post-admission operand can
+	// narrow a value-propagating call's regenerated result below the
+	// recorded publication: an interior admission cast is a row filter at
+	// the source seam, never a re-typing of the selector's output (design
+	// §5, F-ROW-CHANGING-BOUNDARY). The recorded head then stands, so
+	// downstream coercive decisions replay over the domain the binder
+	// published and sibling merges stay on their decimal family (issue
+	// #30938 review round 11, F3).
+	resultType := regenerated.GetReturnType()
+	rebound := makePlan2Type(&resultType)
+	if decimalBoundaryPlanTypesEqual(&rebound, &entry.ResultType) {
+		rebound.NotNullable = expr.Typ.NotNullable
+		expr.Typ = rebound
+	}
+	return nil
+}
+
+// lookupDecisionEntry resolves the recorded decision entry for one call
+// node. The fast path recomputes the entry's content key from the
+// recovered operand structure. A position folded after recording collapses
+// the node's observable state, so the lookup then scans the statement's
+// entries by decision identity and per-position recorded domains: exactly
+// one compatible entry replays, none leaves the node decision-foreign, and
+// two differing recorded payloads matching one observable state raise the
+// checked planning failure of design §5 fact 17.
+func (p *decimalAggDomainPass) lookupDecisionEntry(expr *plan.Expr) (*rule.DecimalBoundaryDecisionEntry, error) {
+	fn := expr.GetF()
+	argc := len(fn.Args)
+	if !p.hasFoldedTopPosition(fn) {
+		entry := p.entries[p.recoveredLedgerKey(expr)]
+		if entry == nil || entry.Overload != fn.Func.GetObj() || entry.ArgCount != argc ||
+			len(entry.PreTypes) != argc || len(entry.AlignedTypes) != argc {
+			return nil, nil
+		}
+		return entry, nil
+	}
+	var match *rule.DecimalBoundaryDecisionEntry
+	for _, candidate := range p.entries {
+		if candidate == nil || candidate.Overload != fn.Func.GetObj() ||
+			candidate.ArgCount != argc || len(candidate.PreTypes) != argc ||
+			len(candidate.AlignedTypes) != argc {
+			continue
+		}
+		compatible := true
+		for i := range fn.Args {
+			if !p.decisionPositionCompatible(fn.Args[i], &candidate.PreTypes[i], &candidate.AlignedTypes[i]) {
+				compatible = false
+				break
+			}
+		}
+		if !compatible {
+			continue
+		}
+		if match == nil || decimalBoundaryEntriesEquivalent(match, candidate) {
+			match = candidate
+			continue
+		}
+		return nil, moerr.NewInternalError(p.ctx,
+			"decimal boundary decision recovery matched two recorded decisions to one observable state")
+	}
+	return match, nil
+}
+
+// hasFoldedTopPosition reports whether any argument position of fn
+// presents a post-recording folded artifact (a constant or vector whose
+// alignment layer folded away), which collapses the node's observable
+// content key.
+func (p *decimalAggDomainPass) hasFoldedTopPosition(fn *plan.Function) bool {
+	for i := range fn.Args {
+		arg := fn.Args[i]
+		if arg == nil {
+			continue
+		}
+		if _, inserted := p.inserted[arg]; !inserted && isDecisionCastLayer(arg) {
+			continue
+		}
+		core := p.stripInserted(arg)
+		if core == nil {
+			continue
+		}
+		switch core.Expr.(type) {
+		case *plan.Expr_Lit, *plan.Expr_Vec:
+			return true
+		}
+	}
+	return false
+}
+
+// decisionPositionCompatible reports whether one argument position can
+// replay against the recorded pre-coercion and aligned domains: a retained
+// cast layer reproduces the aligned target with the recorded pre domain
+// below it, a folded artifact equals the aligned target, and an uncast
+// expression position stands at the recorded skip invariant.
+func (p *decimalAggDomainPass) decisionPositionCompatible(arg *plan.Expr, pre, aligned *plan.Type) bool {
+	if arg == nil {
+		return false
+	}
+	candidate := arg
+	if _, inserted := p.inserted[candidate]; !inserted && isDecisionCastLayer(candidate) {
+		below := p.stripInserted(candidate.GetF().Args[0])
+		return below != nil && decimalBoundaryPlanTypesEqual(&below.Typ, pre) &&
+			decimalBoundaryPlanTypesEqual(&candidate.Typ, aligned)
+	}
+	core := p.stripInserted(candidate)
+	if core == nil {
+		return false
+	}
+	switch core.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_Vec:
+		return decimalBoundaryPlanTypesEqual(&core.Typ, aligned)
+	}
+	return decimalBoundaryPlanTypesEqual(&core.Typ, pre) &&
+		decimalBoundaryPlanTypesEqual(&core.Typ, aligned)
+}
+
+// recoveredLedgerKey recomputes a decision node's ledger content key from
+// its recovered operand structure: a pass-inserted top layer unwraps to
+// the operand it admits, so admission cannot move the decision away from
+// its recorded key (design §5 fact 17 content stability).
+func (p *decimalAggDomainPass) recoveredLedgerKey(expr *plan.Expr) string {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return ""
+	}
+	args := make([]*plan.Expr, len(fn.Args))
+	for i := range fn.Args {
+		args[i] = fn.Args[i]
+		if args[i] == nil {
+			continue
+		}
+		if _, inserted := p.inserted[args[i]]; inserted {
+			if core := p.stripInserted(args[i]); core != nil {
+				args[i] = core
+			}
+		}
+	}
+	recovered := &plan.Expr{
+		Typ:  expr.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{Func: fn.Func, Args: args}},
+	}
+	return rule.DecimalBoundaryDecisionLedgerKey(recovered)
+}
+
+// stripInserted unwraps a chain of pass-inserted casts to the admitted
+// operand they enclose. It returns nil when a pass-inserted wrapper has no
+// operand instead of unwrapping a retained layer.
+func (p *decimalAggDomainPass) stripInserted(expr *plan.Expr) *plan.Expr {
+	for expr != nil {
+		if _, inserted := p.inserted[expr]; !inserted {
+			return expr
+		}
+		fn := expr.GetF()
+		if fn == nil || len(fn.Args) == 0 {
+			return nil
+		}
+		expr = fn.Args[0]
+	}
+	return nil
+}
+
+// isDecisionCastLayer reports whether expr presents the physical shape of
+// one cast argument layer (a two-argument cast overload), explicit or
+// implicit: the ledger's observed-type encoding looks through either, and
+// the recorded-domain verification classifies ownership.
+func isDecisionCastLayer(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	return id == function.CAST
+}
+
+// decimalBoundaryEntriesEquivalent reports whether two recorded decisions
+// are replay-identical: matching observable content with matching recorded
+// domains. The provenance lineage flag is load-bearing only for the
+// statement-level gate, so twin payloads differing solely there stay
+// interchangeable.
+func decimalBoundaryEntriesEquivalent(a, b *rule.DecimalBoundaryDecisionEntry) bool {
+	if a == nil || b == nil || a.Overload != b.Overload || a.Name != b.Name ||
+		a.ArgCount != b.ArgCount || a.Retried != b.Retried ||
+		len(a.PreTypes) != len(b.PreTypes) || len(a.AlignedTypes) != len(b.AlignedTypes) {
+		return false
+	}
+	if !decimalBoundaryPlanTypesEqual(&a.ResultType, &b.ResultType) {
+		return false
+	}
+	for i := range a.PreTypes {
+		if !decimalBoundaryPlanTypesEqual(&a.PreTypes[i], &b.PreTypes[i]) {
+			return false
+		}
+	}
+	for i := range a.AlignedTypes {
+		if !decimalBoundaryPlanTypesEqual(&a.AlignedTypes[i], &b.AlignedTypes[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// decimalAlignmentSkipped mirrors the binder alignment loop's same-family
+// skip: a decimal argument already at the target family and scale is left
+// physically untouched while the family still converges on the target
+// (base_binder.go's alignment loop).
+func decimalAlignmentSkipped(pre, target *plan.Type) bool {
+	return pre != nil && target != nil && pre.Id == target.Id &&
+		types.T(pre.Id).IsDecimal() && pre.Scale == target.Scale
+}
+
+// implicitDecimalAlignCast matches exactly the binder-inserted alignment
+// casts: overload-0 cast nodes without syntax-explicit provenance (design
+// §5 fact 12, the binder's own implicitness test).
+func implicitDecimalAlignCast(arg *plan.Expr) *plan.Expr {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || len(fn.Args) != 2 {
+		return nil
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if id != function.CAST {
+		return nil
+	}
+	return arg
 }

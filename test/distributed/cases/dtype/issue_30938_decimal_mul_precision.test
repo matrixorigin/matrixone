@@ -1,0 +1,938 @@
+-- @suite
+-- @case
+-- @desc: issue 30938: DECIMAL multiplication publishes the Decimal256 physical carrier precision (76 digits) for expression results, matching MySQL's intermediate-result width; declared and persisted domains stay at 65 digits
+-- @label:bvt
+
+drop database if exists issue_30938_decimal_mul;
+create database issue_30938_decimal_mul;
+use issue_30938_decimal_mul;
+
+-- the exact expressions from the issue report
+select 99999999999999999999999999999999999999 * 99999999999999999999999999999999999999;
+select cast(repeat('9',65) as decimal(65,0)) * 2;
+
+-- a 66-digit product with mixed declared widths stays exact
+select cast(repeat('9',38) as decimal(38,0)) * cast(repeat('9',28) as decimal(38,0));
+-- the declared 65-digit boundary is unchanged for products inside it
+select cast(repeat('9',38) as decimal(38,0)) * cast(repeat('9',27) as decimal(38,0));
+-- sign and NULL propagation through the carrier domain
+select cast('-99999999999999999999999999999999999999' as decimal(38,0)) * cast('99999999999999999999999999999999999999' as decimal(38,0));
+select cast(null as decimal(38,0)) * cast('99999999999999999999999999999999999999' as decimal(38,0));
+-- a scaled product whose coefficient needs 76 digits now succeeds
+select cast('111111111111111111111111111111111111.11' as decimal(38,2)) * cast('111111111111111111111111111111111111.11' as decimal(38,2));
+
+-- column operands publish the same carrier domain
+create table wide_operands(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into wide_operands values (1, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, -99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (3, 99999999999999999999999999999999999999, null);
+select a * b as product from wide_operands order by id;
+
+-- CTAS keeps the declared domain and its insert admission rejects wider products
+create table wide_product as select a * b as product from wide_operands;
+show create table wide_product;
+select product from wide_product order by product;
+
+-- a plain select cast into a narrower declared domain clips to the domain
+-- endpoint, matching MySQL's non-strict cast semantics
+select cast(a * b as decimal(65,0)) from wide_operands where id = 1;
+
+-- persisted declared columns still reject wider products
+create table declared_target(d decimal(65,0));
+insert into declared_target select a * b from wide_operands where id = 1;
+
+-- products that fit inside the declared domain persist exactly
+create table small_operands(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into small_operands values (1, 99999999999999999999, 99999999999999999999);
+create table small_product as select a * b as product from small_operands;
+show create table small_product;
+select product from small_product;
+
+-- transparent wrappers over a carrier product keep the declared domain too
+create table cond_product as select coalesce(a * b, a) as product from small_operands;
+show create table cond_product;
+select product from cond_product;
+create table neg_product as select -(a * b) as product from small_operands;
+show create table neg_product;
+select product from neg_product;
+create table case_product as select case when id > 0 then a * b else a end as product from small_operands;
+show create table case_product;
+select product from case_product;
+
+-- wide inference that does not come from multiplication keeps its bound precision:
+-- plain literals may bind through DECIMAL256 (up to 76 digits, fractional too)
+create table wide_literal_keeper as select 999999999999999999999999999999999999999999999999999999999999999999 as product;
+select * from wide_literal_keeper;
+create table high_scale_literal_keeper as select 0.0000000000000000000000000000000000000000000000000000000000000000000000000001 as product;
+select * from high_scale_literal_keeper;
+-- a conditional dominated by a wide literal keeps that literal's domain
+create table cond_literal_dominant as select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999) as product from small_operands;
+select product from cond_literal_dominant;
+
+-- prepared CTAS applies the same storage boundary after parameter specialization:
+-- an oversized product is rejected by insert admission, an in-range product persists
+set @wide = 99999999999999999999999999999999999999;
+set @narrow = 99999999999999999999999999;
+prepare pmul from "create table prepared_product as select ? * cast(99999999999999999999999999999999999999 as decimal(38,0)) as product";
+execute pmul using @wide;
+execute pmul using @narrow;
+show create table prepared_product;
+select product from prepared_product;
+
+-- relational outputs over a carrier product resolve to the multiplication
+-- storage domain: aggregates, distinct and set-operation branches cannot
+-- smuggle the physical carrier width into a persisted column
+create table agg_product as select max(a * b) as product from small_operands;
+show create table agg_product;
+select product from agg_product;
+create table agg_product_wide as select max(a * b) as product from wide_operands;
+create table distinct_product as select distinct a * b as product from small_operands;
+show create table distinct_product;
+select product from distinct_product;
+create table union_product as select a * b as product from small_operands union all select 99999999999999999999;
+show create table union_product;
+select product from union_product order by product;
+create table union_product_wide as select a * b as product from wide_operands union all select 1;
+
+-- an implicit literal coercion keeps its own digit domain instead of
+-- inheriting the carrier width: an in-range product persists at the declared
+-- domain while an oversized product is still rejected
+create table coalesce_zero_product as select coalesce(a * b, 0) as product from small_operands;
+show create table coalesce_zero_product;
+select product from coalesce_zero_product;
+create table coalesce_zero_wide as select coalesce(a * b, 0) as product from wide_operands;
+
+-- combining different scales preserves the integer-capacity envelope: a NULL
+-- row selects the 66-digit alternative and the widened domain admits it
+create table mixed_scale_operands(id int primary key, a decimal(65,4));
+insert into mixed_scale_operands values (1, null), (2, 123.2500);
+create table mixed_scale_coalesce as select coalesce(a, 999999999999999999999999999999999999999999999999999999999999999999) as product from mixed_scale_operands;
+select product from mixed_scale_coalesce order by product;
+
+-- a scaled product dominated by a wide literal keeps the combined base
+-- envelope {60 integral, 15 scale}, exactly the width base inference bound
+create table scaled_operands(id int primary key, a decimal(38,15), b decimal(38,15));
+insert into scaled_operands values (1, 99999999999999999999.5, 99999999999999999999.5);
+create table scaled_dominant as select coalesce(a * b, 999999999999999999999999999999999999999999999999999999999999) as product from scaled_operands;
+select product from scaled_dominant;
+
+-- an omitted grouping key must not shift aggregate provenance: the wide
+-- literal keeps its bound precision while a grouped carrier product clamps
+create table agg_grouped_literal as select max(999999999999999999999999999999999999999999999999999999999999999999) as product from small_operands group by id;
+select product from agg_grouped_literal;
+create table agg_grouped_product as select max(a * b) as product from small_operands group by id;
+show create table agg_grouped_product;
+select product from agg_grouped_product;
+create table agg_grouped_wide as select max(a * b) as product from wide_operands group by id;
+
+-- scalar wrappers over aggregates resolve the multiplication source too:
+-- in-range products persist at the declared domain, oversized ones fail
+create table abs_agg_product as select abs(max(a * b)) as product from small_operands;
+show create table abs_agg_product;
+select product from abs_agg_product;
+create table abs_agg_wide as select abs(max(a * b)) as product from wide_operands;
+create table coalesce_agg_product as select coalesce(max(a * b), 0) as product from small_operands;
+show create table coalesce_agg_product;
+select product from coalesce_agg_product;
+create table coalesce_agg_wide as select coalesce(max(a * b), 0) as product from wide_operands;
+
+-- ordering and window outputs mirror relational provenance: in-range
+-- products persist at the declared domain, oversized ones fail admission;
+-- genuine wide literal domains stay untouched
+create table order_product as select a * b as product from small_operands order by product;
+show create table order_product;
+select product from order_product;
+create table order_product_wide as select a * b as product from wide_operands order by product;
+create table order_lit as select 999999999999999999999999999999999999999999999999999999999999999999 as product from small_operands order by product;
+select product from order_lit;
+create table win_product as select max(a * b) over () as product from small_operands;
+show create table win_product;
+select distinct product from win_product;
+create table win_product_wide as select max(a * b) over () as product from wide_operands;
+create table win_part_product as select max(a * b) over (partition by id) as product from small_operands;
+show create table win_part_product;
+select product from win_part_product;
+create table win_part_wide as select max(a * b) over (partition by id) as product from wide_operands;
+create table win_lit as select max(999999999999999999999999999999999999999999999999999999999999999999) over () as product from small_operands;
+select distinct product from win_lit;
+create table anyval_product as select any_value(a * b) as product from small_operands;
+show create table anyval_product;
+select product from anyval_product;
+create table anyval_wide as select any_value(a * b) as product from wide_operands;
+create table maxby_product as select max_by(a * b, id, id) as product from small_operands;
+show create table maxby_product;
+select product from maxby_product;
+create table maxby_wide as select max_by(a * b, id, id) as product from wide_operands;
+create table maxbynn_product as select max_by_non_null(a * b, id, id) as product from small_operands;
+show create table maxbynn_product;
+create table maxbynn_wide as select max_by_non_null(a * b, id, id) as product from wide_operands;
+
+-- value-selecting aggregates return the exact widened product directly
+-- through the engine's max_by(value, order, tie) and max_by_non_null(value,
+-- order, tie) signatures; the winning row (maximum id) carries a NULL
+-- product, and max_by_non_null skips it to the signed 76-digit product
+select max_by(a * b, id, id) as product from small_operands;
+select max_by(a * b, id, id) as product from wide_operands;
+select max_by_non_null(a * b, id, id) as product from wide_operands;
+select id, max_by(a * b, id, id) as product from wide_operands group by id order by id;
+-- the engine's max_by family takes value, order and tie arguments: a
+-- two-argument call is not an engine signature and keeps its pre-existing
+-- checked rejection instead of being treated as max_by(value, key)
+select max_by(a * b, id) from wide_operands;
+
+-- rounding compares digits in int64 before narrowing: huge constant digits
+-- keep the input domain so the admitted value round-trips losslessly
+create table rounded_2p32 as select round(product, 4294967296) as product from mixed_scale_coalesce;
+select product from rounded_2p32;
+create table rounded_2p31 as select round(product, 2147483648) as product from mixed_scale_coalesce;
+select product from rounded_2p31;
+create table truncated_2p32 as select truncate(product, 4294967296) as product from mixed_scale_coalesce;
+select product from truncated_2p32;
+
+-- value-window functions follow their value argument through the storage
+-- boundary; lag/lead with an explicit default reconcile both branches
+-- against the 76-digit expression domain while persisted columns keep the
+-- declared admission domain
+select lag(a * b, 1, 0) over (order by id) as product from small_operands;
+select lead(a * b, 1, 0) over (order by id) as product from small_operands;
+create table lag_def_product as select lag(a * b, 1, 0) over (order by id) as product from small_operands;
+show create table lag_def_product;
+select product from lag_def_product;
+create table lag_def_wide as select lag(a * b, 1, 0) over (order by id) as product from wide_operands;
+create table lead_def_wide as select lead(a * b, 1, 0) over (order by id) as product from wide_operands;
+create table lag_def_lit as select lag(1, 0, 999999999999999999999999999999999999999999999999999999999999999999) over () as product from small_operands;
+select product from lag_def_lit;
+create table fv_product as select first_value(a * b) over (order by id) as product from small_operands;
+show create table fv_product;
+select product from fv_product;
+create table fv_wide as select first_value(a * b) over (order by id) as product from wide_operands;
+create table lv_product as select last_value(a * b) over (order by id rows between unbounded preceding and unbounded following) as product from small_operands;
+show create table lv_product;
+select product from lv_product;
+create table lv_wide as select last_value(a * b) over (order by id desc rows between unbounded preceding and unbounded following) as product from wide_operands;
+create table nv_product as select nth_value(a * b, 1) over (order by id rows between unbounded preceding and unbounded following) as product from small_operands;
+show create table nv_product;
+select product from nv_product;
+create table nv_wide as select nth_value(a * b, 2) over (order by id rows between unbounded preceding and unbounded following) as product from wide_operands;
+create table winlag_product as select lag(a * b) over (order by id) as product from small_operands;
+show create table winlag_product;
+select product from winlag_product;
+create table winlag_wide as select lag(a * b) over (order by id) as product from wide_operands;
+create table winlead_product as select lead(a * b) over (order by id) as product from small_operands;
+show create table winlead_product;
+select product from winlead_product;
+create table winlead_wide as select lead(a * b) over (order by id) as product from wide_operands;
+create table fv_lit as select first_value(999999999999999999999999999999999999999999999999999999999999999999) over () as product from small_operands;
+select distinct product from fv_lit;
+create table join_product as select d.product from (select max(a * b) as product from small_operands group by id % 2) d cross join small_operands r;
+show create table join_product;
+select distinct product from join_product;
+create table join_wide as select d.product from (select max(a * b) as product from wide_operands group by id % 2) d cross join small_operands r;
+create table join_lit as select d.product from (select max(999999999999999999999999999999999999999999999999999999999999999999) as product from small_operands group by id % 2) d cross join small_operands r;
+select distinct product from join_lit;
+
+-- beyond the physical carrier, multiplication still raises the kernel overflow
+select cast(repeat('9',65) as decimal(65,0)) * cast(repeat('9',65) as decimal(65,0));
+select cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0)) * cast(repeat('9',65) as decimal(65,0));
+
+-- review round 7, finding F1: integer branches keep their exact digit domain
+-- through binder alignment casts (no multiplication involved)
+create table int_branches(id int primary key, d decimal(65,50), i bigint, u bigint unsigned);
+insert into int_branches values (1, null, 9223372036854775807, 18446744073709551615), (2, 1.5, -9223372036854775808, null);
+create table coalesce_int_domain as select coalesce(d, i) as v from int_branches;
+select v from coalesce_int_domain;
+create table coalesce_uint_domain as select coalesce(d, u) as v from int_branches;
+select v from coalesce_uint_domain;
+
+-- review round 7, finding F2: FILTER outputs across a LIMIT barrier resolve
+-- to their producer; the wide product is rejected at admission
+create table f2_lim_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into f2_lim_src values (1, 99999999999999999999, 99999999999999999999), (2, 2, 3), (3, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f2_limit_product as select p from (select a * b as p from f2_lim_src limit 1) d where p > 0;
+show create table f2_limit_product;
+select p from f2_limit_product;
+create table f2_limit_offset as select p from (select a * b as p from f2_lim_src limit 1 offset 1) d where p > 0;
+show create table f2_limit_offset;
+select p from f2_limit_offset;
+create table f2_limit_wide as select p from (select a * b as p from f2_lim_src limit 1 offset 2) d where p > 0;
+create table f2_limit_lit as select p from (select 999999999999999999999999999999999999999999999999999999999999999999 as p from f2_lim_src limit 1) d where p > 0;
+select p from f2_limit_lit;
+
+-- review round 8, finding F1: constant folding materializes decimal256
+-- scalars before CTAS inference; the folded multiplication carrier keeps the
+-- multiplication storage domain, so a fitting folded product persists a
+-- declarable type and an oversized folded product fails insert admission
+create table f1_fold_fit as select cast(2 as decimal(65,0)) * cast(3 as decimal(65,0)) as p;
+show create table f1_fold_fit;
+select p from f1_fold_fit;
+create table f1_fold_over as select cast(99999999999999999999999999999999999999 as decimal(65,0)) * cast(99999999999999999999999999999999999999 as decimal(65,0)) as p;
+-- genuine wide literals keep their bound precision, including signed forms
+create table f1_neg_lit as select -999999999999999999999999999999999999999999999999999999999999999999 as p;
+select p from f1_neg_lit;
+
+-- review round 8, finding F2: conditional control arguments contribute no
+-- storage domain; high-scale CASE/IF value branches persist a declarable
+-- type and exact values
+create table f2_hs(id int primary key, a decimal(65,65), b decimal(65,65));
+insert into f2_hs values (1, 0.1, 0.01), (2, -0.01, 0.1), (-3, 0.01, 0.1);
+create table f2_case_hs as select case when id > 0 then a * b else a end as p from f2_hs;
+show create table f2_case_hs;
+select p from f2_case_hs order by p;
+create table f2_if_hs as select if(id > 0, a * b, a) as p from f2_hs;
+show create table f2_if_hs;
+select p from f2_if_hs order by p;
+
+-- review round 8, finding F3: matching wide LAG/LEAD defaults introduce no
+-- reconciliation widening, so the parent-supported domain persists; a NULL
+-- default adds no domain either
+create table f3_wide_match as select lag(999999999999999999999999999999999999999999999999999999999999999999, 0, 999999999999999999999999999999999999999999999999999999999999999999) over () as v;
+select v from f3_wide_match;
+create table f3_null_def as select lag(999999999999999999999999999999999999999999999999999999999999999999, 0, null) over () as v;
+select v from f3_null_def;
+
+-- review round 8, finding F4 (repaired envelope): a window merge whose
+-- parent-domain derivation the pre-change engine rejects at plan time is the
+-- 66-76 expansion band; the changed engine persists the reconcile-derived
+-- tag exactly — here the provenance-free scale-70 merge persists
+-- decimal(70,70) — whether the default is selected or unselected
+create table f4_sel as select lag(cast(0.1 as decimal(65,65)), 0, 0.0000000000000000000000000000000000000000000000000000000000000000000001) over () as v;
+desc f4_sel;
+select v from f4_sel;
+create table f4_unsel as select x, lag(cast(0.1 as decimal(65,65)), 1, 0.0000000000000000000000000000000000000000000000000000000000000000000001) over (order by x) as v from (select 1 as x union all select 2) t;
+desc f4_unsel;
+select x, v from f4_unsel order by x;
+
+-- design revision 41, section 9 I9: the with-default band witnesses return
+-- exact values and persist plain catalog records in the parent's above-65
+-- form; the gate-disappearance witness persists (76,0); the above-bound
+-- control keeps the checked rejection with the base-identical text
+create table band_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into band_src values (1, 1, 1), (2, 2, 3);
+create table band_66_1 as select lag(a * b, 1, cast(0 as decimal(65,1))) over (order by id) as v from band_src;
+desc band_66_1;
+select v from band_66_1 order by v;
+create table band_75_10 as select lead(a * b, 1, cast(0 as decimal(30,10))) over (order by id) as v from band_src;
+desc band_75_10;
+select v from band_75_10 order by v;
+create table band_76_0 as select lag(a * b, 0, 9999999999999999999999999999999999999999999999999999999999999999999999999999) over () as v from band_src;
+desc band_76_0;
+select v from band_76_0 order by v;
+select lag(a * b, 1, cast(0 as decimal(65,20))) over (order by id) as v from band_src;
+
+-- review round 8, finding F5: SAMPLE resolves its sampled producer through
+-- the storage boundary; 100-percent sampling is deterministic
+create table f5_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into f5_src values (1, 2, 3);
+create table f5_fit as select sample(a * b, 100 percent) as p from f5_src;
+show create table f5_fit;
+select p from f5_fit;
+insert into f5_src values (2, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f5_over as select sample(a * b, 100 percent) as p from f5_src;
+create table f5_lit as select sample(999999999999999999999999999999999999999999999999999999999999999999, 100 percent) as p from f5_src;
+select p from f5_lit;
+
+-- review round 9, finding F1: constant folding must not erase
+-- non-multiplication provenance; a folded selector returning a genuine wide
+-- literal keeps its (66,0) domain, and folded multiplication beneath a
+-- dominating wide literal branch keeps the wide domain
+create table f6_fold_genuine as select +if(false, cast(1 as decimal(65,0)), 999999999999999999999999999999999999999999999999999999999999999999) as p;
+select p from f6_fold_genuine;
+create table f6_fold_dom as select +if(true, 999999999999999999999999999999999999999999999999999999999999999999, cast(2 as decimal(65,0)) * cast(3 as decimal(65,0))) as p;
+select p from f6_fold_dom;
+
+-- review round 9, finding F2: time-window outputs resolve their producers
+-- through the authoritative window layout; a fitting product persists a
+-- declarable type, an oversized product fails insert admission, a FILL
+-- projection resolves the same way, and a genuine wide literal keeps its
+-- domain
+create table f6_tw_src(ts timestamp, a decimal(38,0), b decimal(38,0));
+insert into f6_tw_src values ('2024-01-01 00:00:00', 2, 3);
+create table f6_tw_fit as select max(a * b) as p from f6_tw_src interval(ts, 1, minute);
+show create table f6_tw_fit;
+select p from f6_tw_fit;
+create table f6_tw_fill as select max(a * b) as p from f6_tw_src where ts > '2023-12-31 23:55:00' and ts < '2024-01-01 00:10:00' interval(ts, 2, minute) sliding(1, minute) fill(prev);
+show create table f6_tw_fill;
+select p from f6_tw_fill;
+insert into f6_tw_src values ('2024-01-01 00:00:00', 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f6_tw_over as select max(a * b) as p from f6_tw_src interval(ts, 1, minute);
+create table f6_tw_lit as select max(999999999999999999999999999999999999999999999999999999999999999999) as p from f6_tw_src interval(ts, 1, minute);
+select p from f6_tw_lit;
+
+-- review round 9, finding F3: CTE readers resolve their source-step
+-- producers with bounded cycle handling; the recursive anchor's storage
+-- domain persists, an oversized recursive product fails insert admission, a
+-- shared second reader resolves the same producer, and a genuine wide
+-- anchor keeps its non-carrier domain
+create table f6_cte_src(a decimal(38,0), b decimal(38,0));
+insert into f6_cte_src values (2, 3);
+create table f6_cte_rec as with recursive r(n, p) as (select 1, a * b from f6_cte_src union all select n + 1, p from r where n < 2) select p from r;
+show create table f6_cte_rec;
+select p from f6_cte_rec order by p;
+create table f6_cte_shared as with recursive r(n, p) as (select 1, a * b from f6_cte_src union all select n + 1, p from r where n < 2) select a.p as p from r a join r b on a.n = b.n;
+show create table f6_cte_shared;
+select p from f6_cte_shared order by p;
+create table f6_cte_lit as with recursive r(n, p) as (select 1, 999999999999999999999999999999999999999999999999999999999999999999 from f6_cte_src union all select n + 1, p from r where n < 2) select p from r;
+select p from f6_cte_lit order by p;
+insert into f6_cte_src values (99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f6_cte_over as with recursive r(n, p) as (select 1, a * b from f6_cte_src union all select n + 1, p from r where n < 2) select p from r;
+
+-- review round 10, finding F1: recursive-CTE member expressions wrapping
+-- the recursive column must terminate planner envelope evaluation; the
+-- anchor's declared domain persists with exact values, and oversized
+-- recursive products fail insert admission
+create table f7_cte_src(a decimal(38,0), b decimal(38,0));
+insert into f7_cte_src values (2, 3);
+create table f7_cte_abs as with recursive r(n, p) as (select 1, a * b from f7_cte_src union all select n + 1, abs(p) from r where n < 2) select p from r;
+show create table f7_cte_abs;
+select p from f7_cte_abs order by p;
+create table f7_cte_coal as with recursive r(n, p) as (select 1, a * b from f7_cte_src union all select n + 1, coalesce(p, 0) from r where n < 2) select p from r;
+show create table f7_cte_coal;
+select p from f7_cte_coal order by p;
+insert into f7_cte_src values (99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f7_cte_abs_over as with recursive r(n, p) as (select 1, a * b from f7_cte_src union all select n + 1, abs(p) from r where n < 2) select p from r;
+
+-- review round 10, finding F2: AVG over a widened multiplication carrier
+-- keeps the integer capacity the declared domain always had; ordinary and
+-- window averages return the exact 64-digit single-row product, the
+-- multi-row and NULL controls stay exact, scaled input keeps its product
+-- scale, a small average prints without forced fractional digits as on
+-- the parent, and an oversized average remains a checked capacity
+-- rejection
+create table f7_avg_src(a decimal(38,0), b decimal(38,0));
+insert into f7_avg_src values (99999999999999999999999999999998, 99999999999999999999999999999999);
+select avg(a * b) from f7_avg_src;
+select avg(a * b) over () from f7_avg_src;
+create table f7_avg_fit as select avg(a * b) as p from f7_avg_src;
+show create table f7_avg_fit;
+select p from f7_avg_fit;
+create table f7_avg_win as select avg(a * b) over () as p from f7_avg_src;
+show create table f7_avg_win;
+select p from f7_avg_win;
+insert into f7_avg_src values (null, null);
+insert into f7_avg_src values (1, 2);
+select avg(a * b) from f7_avg_src;
+create table f7_avg_s(a decimal(38,2), b decimal(38,2));
+insert into f7_avg_s values (999999999999999999999999999999.99, 999999999999999999999999999999.99);
+select avg(a * b) from f7_avg_s;
+create table f7_avg_s_fit as select avg(a * b) as p from f7_avg_s;
+show create table f7_avg_s_fit;
+select p from f7_avg_s_fit;
+create table f7_avg_n(a decimal(38,0), b decimal(38,0));
+insert into f7_avg_n values (2, 3), (null, 4);
+select avg(a * b) from f7_avg_n;
+create table f7_avg_o(a decimal(38,0), b decimal(38,0));
+insert into f7_avg_o values (99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+select avg(a * b) from f7_avg_o;
+create table f7_avg_o_ctas as select avg(a * b) as p from f7_avg_o;
+
+-- prepared CTAS whose widening introduces decision-owned <=65 alignment casts
+-- (design decision log 66 (iv)): the live protocol's database-defaults
+-- formation rebuilds every EXECUTE, and each execute consumes its own rebuild
+-- generation's retained evidence, persisting the parent's envelope-derived
+-- tag DECIMAL(53,0) on every run
+create table bd_src(a decimal(38,10), b decimal(38,10), d decimal(39,1));
+insert into bd_src values (1, 2, 3), (4, 5, 6), (null, 7, 8);
+set @bd_zero = 0;
+prepare bd_p from "create table bd_prepared as select truncate(coalesce(truncate(a * b, 0), d), ?) as v from bd_src";
+execute bd_p using @bd_zero;
+show create table bd_prepared;
+select v from bd_prepared order by v;
+-- an intervening catalog change is subsumed by the same unconditional rebuild
+alter table bd_src add column pad int;
+drop table bd_prepared;
+execute bd_p using @bd_zero;
+show create table bd_prepared;
+select v from bd_prepared order by v;
+-- a quiescent execute rebuilds again and persists the same tag
+drop table bd_prepared;
+execute bd_p using @bd_zero;
+show create table bd_prepared;
+
+-- the authored explicit cast stays decision-foreign: the declared arm width
+-- governs, persisting the author's envelope-derived tag DECIMAL(64,0)
+prepare bd_x from "create table bd_explicit as select truncate(coalesce(truncate(a * b, 0), cast(d as decimal(65,1))), ?) as v from bd_src";
+execute bd_x using @bd_zero;
+show create table bd_explicit;
+select v from bd_explicit order by v;
+
+-- the no-parameter control never reaches the refresh: the outer TRUNCATE
+-- refines during the plain build and persists the envelope-derived tag once
+create table bd_noparam as select truncate(coalesce(truncate(a * b, 0), d), 0) as v from bd_src;
+show create table bd_noparam;
+select v from bd_noparam order by v;
+
+-- design revision 27 cell (xx): a widened product arm whose common type with
+-- a scaled sibling overflows the carrier metadata must converge through the
+-- set-operation common-type owner's provenance retry to the parent's own
+-- common type, in both branch orders and at every execute locus
+create table xx_src (a decimal(38,0), b decimal(38,0), d decimal(65,1));
+insert into xx_src values (1, 1, 1);
+select a * b as v from xx_src union all select d from xx_src order by v;
+select d as v from xx_src union all select a * b from xx_src order by v;
+create table xx_ctas_first as select a * b as v from xx_src union all select d from xx_src;
+desc xx_ctas_first;
+select v from xx_ctas_first order by v;
+create table xx_ctas_second as select d as v from xx_src union all select a * b from xx_src;
+desc xx_ctas_second;
+select v from xx_ctas_second order by v;
+
+-- prepared set arm: a widened-product arm unioned with a parameter typed
+-- (65,1) converges at execute, and the cached route persists the parent's
+-- (66,1) again
+set @xx_arm = cast(1 as decimal(65,1));
+prepare xx_union from "create table xx_prepared as select a * b as v from xx_src union all select ?";
+execute xx_union using @xx_arm;
+desc xx_prepared;
+select v from xx_prepared order by v;
+drop table xx_prepared;
+execute xx_union using @xx_arm;
+desc xx_prepared;
+select v from xx_prepared order by v;
+
+-- authored-cast control: the SQL-authored target is unchanged by the retry
+create table xx_authored as select cast(a * b as decimal(65,0)) as v from xx_src union all select d from xx_src;
+desc xx_authored;
+select v from xx_authored order by v;
+
+-- genuine-wide control: a 77-width common without multiplication provenance
+-- keeps the pre-existing checked rejection
+select 9999999999999999999999999999999999999999999999999999999999999999999999999999 as v union all select 9.9;
+
+-- TIME_WINDOW route: FROM t INTERVAL(ts, N, unit) tiles rows by the time
+-- column (sliding(...) overlaps windows); widened products stay
+-- carrier-exact through the window aggregate and through a value merge over
+-- the pending window output, matching the plain route
+create table tw_operands(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0));
+insert into tw_operands values (1, '2026-01-01 00:00:00', 10000000000000000000000000000000, 10000000000000000000000000000000), (2, '2026-01-01 00:01:00', 10000000000000000000000000000000, 10000000000000000000000000000000);
+select max(a * b) as product from tw_operands interval(ts, 1, minute);
+select _wstart, max(a * b) as product from tw_operands interval(ts, 1, minute) order by _wstart;
+select avg(a * b) as product from tw_operands interval(ts, 1, minute);
+select max(a * b) as product from tw_operands interval(ts, 2, minute) sliding(1, minute);
+create table tw_wide(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0));
+insert into tw_wide values (1, '2026-01-01 00:00:00', 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, '2026-01-01 00:01:00', 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+select max(a * b) as product from tw_wide interval(ts, 1, minute);
+select coalesce(max(a * b), 0) as product from tw_wide interval(ts, 1, minute);
+-- the GROUP BY TIME_WINDOW(...) function form is not an interface of this
+-- engine: both sides keep its checked rejection
+select max(a * b) as product from tw_wide group by time_window(ts,1,'minute');
+
+-- review round 14 (design decision 61): a value merge over a TIME_WINDOW
+-- pending aggregate output recovers the producer's parent domain through
+-- timeTag - the widened (76,0) window MAX merged with a scaled fixed cast
+-- overflows the carrier on the surface, and the retried merge converges
+-- the parent's (66,1) with the value surviving the alignment cast exactly;
+-- the parent engine (multiplication capped at (65,0)) binds the same
+-- (66,1), so both engines return identical rows for these witnesses
+create table tw_unit(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0));
+insert into tw_unit values (1, '2026-01-01 00:00:00', 1, 1), (2, '2026-01-01 00:01:00', 1, 1);
+select coalesce(max(a * b), cast(0 as decimal(65,1))) as product from tw_unit interval(ts, 1, minute);
+select coalesce(max(a * b), cast(1 as decimal(65,1))) as product from tw_operands interval(ts, 1, minute);
+select max(a * b) as product from tw_operands having coalesce(max(a * b), cast(1 as decimal(65,1))) > 0 interval(ts, 1, minute);
+-- controls: plain window aggregation and the unscaled zero default never
+-- engage the recovery and keep their widened publications (the base engine
+-- publishes the 65-capped tag for the same statements)
+select max(a * b) as product from tw_unit interval(ts, 1, minute);
+select coalesce(max(a * b), 0) as product from tw_unit interval(ts, 1, minute);
+
+-- (xxi) (c) width-sensitive MOD chains over widened products persist the
+-- parent's own MOD-derived tags at the storage boundary (the shared typing
+-- owner's max-operand-width/scale rule evaluated over the parent's operand
+-- domains), never the widened published heads; values stay parent-identical
+create table modw_src(id int primary key, a decimal(38,10), b decimal(38,10), d decimal(39,0));
+insert into modw_src values (1, 3.5, 2, 7), (2, 2.5, 2, 7);
+create table modw_ctas as select truncate(a * b, 0) % d as m from modw_src;
+show create table modw_ctas;
+select m from modw_ctas order by m;
+create view modw_view as select truncate(a * b, 0) % d as m from modw_src;
+show create view modw_view;
+select m from modw_view order by m;
+select column_name, column_type from information_schema.columns where table_schema = 'issue_30938_decimal_mul' and table_name in ('modw_ctas', 'modw_view') order by table_name;
+create table modg_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into modg_src values (1, 7, 3, 7), (2, 8, 3, 7);
+create table modg_ctas as select (a * b) % d as m from modg_src;
+show create table modg_ctas;
+select m from modg_ctas order by m;
+
+-- (xxi) (a) statement-time set-operation parity: a MOD branch resolves
+-- through the engine's shared typing rules exactly like the plain product
+-- branch, so both shapes persist the parent's (66,1) with parent values
+create table modu_s1(id int primary key, a decimal(38,0), b decimal(38,0));
+create table modu_s2(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into modu_s1 values (1, 1, 1);
+insert into modu_s2 values (1, 1, 1);
+create table modu_plain as select coalesce(u.v, cast(0.5 as decimal(20,1))) as w from (select a * b as v from modu_s1 union all select a * b as v from modu_s2) u;
+show create table modu_plain;
+select w from modu_plain order by w;
+create table modu_mod as select coalesce(u.v, cast(0.5 as decimal(20,1))) as w from (select a * b as v from modu_s1 union all select (a * b) % 1 as v from modu_s2) u;
+show create table modu_mod;
+select w from modu_mod order by w;
+
+-- (xxi) (b) the materialized two-reader contract: an AVG reader of a shared
+-- producer admits the product seam in the parent's (65,0) domain, so
+-- cancelling +/-10^65 product values keep the pre-change checked
+-- invalid-input family (never a silent 0), while value-selecting readers of
+-- the same producer stay carrier-exact and pay nothing
+create table tr_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into tr_src values (1, 100000000000000000000000000000000, 1000000000000000000000000000000000), (2, -100000000000000000000000000000000, 1000000000000000000000000000000000);
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_src) select (select avg(v) from c) av, (select max(v) from c) mx;
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_src) select (select max(v) from c) mx;
+create table tr_fit(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into tr_fit values (1, 10000000000000000000000000000000, 10000000000000000000000000000000), (2, 10000000000000000000000000000000, 20000000000000000000000000000000);
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_fit) select (select avg(v) from c) av, (select max(v) from c) mx;
+-- a genuinely fitting two-reference statement keeps the parent's exact
+-- values and metadata on both readers (parent parity, live-confirmed)
+create table tr_ok(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into tr_ok values (1, 1000000000000000000000000000000, 1000000000000000000000000000000), (2, 1000000000000000000000000000000, 2000000000000000000000000000000);
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_ok) select (select avg(v) from c) av, (select max(v) from c) mx;
+-- short-circuit demand: rows whose product arm is never selected admit
+-- nothing and raise nothing, exactly the parent's evaluation demand
+create table tr_sc(id int primary key, x decimal(38,0), a decimal(38,0), b decimal(38,0));
+insert into tr_sc values (1, 6, 100000000000000000000000000000000, 1000000000000000000000000000000000), (2, null, 2, 3);
+with c as (select coalesce(x, a * b) as v, uuid() as r from tr_sc) select (select avg(v) from c) av;
+
+-- (xxi) (d) the TIME_WINDOW metadata family: the window AVG header publishes
+-- the parent's (65,0), AVG(a*b)/3 keeps the parent's division scale-4 value
+-- and metadata, and the CTAS and prepared routes persist the same parent tag
+select avg(a * b) / 3 from modu_s1;
+create table tw_avg_ctas as select avg(a * b) as product from tw_operands interval(ts, 1, minute);
+show create table tw_avg_ctas;
+select product from tw_avg_ctas order by product;
+prepare tw_avg_p from "create table tw_avg_prep as select avg(a * b) as product from tw_operands interval(ts, 1, minute)";
+execute tw_avg_p;
+show create table tw_avg_prep;
+select product from tw_avg_prep order by product;
+
+-- (xxii) review round 11, F1: the storage-boundary envelope re-invokes the
+-- parent's own rounding publication rule, so rounded widened products persist
+-- exactly the parent's derived domains (1-arg over scaled inputs and the
+-- negative-digits forms included)
+create table r11r_src(id int primary key, a decimal(38,10), b decimal(38,10));
+insert into r11r_src values (1, 1.5, 2.25), (2, -3.5, 4);
+create table r11r_round_ctas as select round(a * b) as v from r11r_src;
+show create table r11r_round_ctas;
+select v from r11r_round_ctas order by v;
+create table r11r_trunc_ctas as select truncate(a * b, 0) as v from r11r_src;
+show create table r11r_trunc_ctas;
+select v from r11r_trunc_ctas order by v;
+create view r11r_ceil_view as select ceil(a * b, -12) as v from r11r_src;
+show create view r11r_ceil_view;
+select v from r11r_ceil_view order by v;
+create view r11r_floor_view as select floor(a * b, -12) as v from r11r_src;
+show create view r11r_floor_view;
+select v from r11r_floor_view order by v;
+
+-- (xxii) F2: the aggregate reconciliation consumes the session
+-- div_precision_increment, so a widened-product quotient keeps the session
+-- scale on the plain, CTAS and prepared routes (a pre-fix replay reverted
+-- the quotient to the default increment and truncated the value's scale)
+create table r11d_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11d_src values (1, 1, 1, 3);
+set session div_precision_increment = 10;
+select avg((a * b) / d) as v from r11d_src;
+create table r11d_ctas as select avg((a * b) / d) as v from r11d_src;
+show create table r11d_ctas;
+select v from r11d_ctas;
+prepare r11d_p from "select avg((a * b) / d) as v from r11d_src";
+execute r11d_p;
+set session div_precision_increment = 0;
+select avg((a * b) / d) as v from r11d_src;
+set session div_precision_increment = 4;
+
+-- (xxii) F3: bare grouped and windowed value selectors return their input
+-- rows carrier-exact (design §5 §9 value-selecting row): MAX discards the
+-- negative outlier by ordinary selector semantics, MIN returns it exactly,
+-- and no admission cast rejects the carrier-fitting widened product. An
+-- AVG/SUM reader resolving across the selector still forces the source-seam
+-- admission, so the same group errors below MAX/MIN instead of letting the
+-- selector discard the violating row first (never a silent 1)
+create table r11g_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11g_src values (1, -10000000000000000000000000000000000, 10000000000000000000000000000000, 1), (2, 1, 1, 1);
+select max(a * b) as v from r11g_src group by d;
+select min(a * b) as v from r11g_src group by d;
+select max(a * b) over (partition by d) as w from r11g_src;
+select sum(v) from (select max(a * b) as v from r11g_src group by d) q;
+select sum(v) from (select min(a * b) as v from r11g_src group by d) q;
+select sum(w) from (select max(a * b) over (partition by d) as w from r11g_src) q;
+create table r11g_fit(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11g_fit values (1, 10000000000000000000000000000000, 10000000000000000000000000000000, 2), (2, 1, 1, 2);
+select max(a * b) as v from r11g_fit group by d;
+select sum(v) from (select max(a * b) as v from r11g_fit group by d) q;
+
+-- (xxii) challenge round 8 value-selecting cases: exact 76- and 74-digit
+-- products round-trip carrier-exact through MIN/MAX/ANY_VALUE, the value
+-- windows FIRST_VALUE/LAST_VALUE/NTH_VALUE, and a filtered whole-relation
+-- window MAX
+create table r11vs_src(k int primary key, a decimal(38,0), b decimal(38,0));
+insert into r11vs_src values (1, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, 9999999999999999999999999999999999999, 9999999999999999999999999999999999999);
+select min(a * b), max(a * b), any_value(a * b) from r11vs_src;
+select first_value(a * b) over (order by k) as fv, last_value(a * b) over (order by k rows between unbounded preceding and unbounded following) as lv, nth_value(a * b, 1) over (order by k) as nv from r11vs_src order by k limit 1;
+create table r11vs_null(k int primary key, a decimal(38,0), b decimal(38,0));
+insert into r11vs_null values (1, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, null, null);
+select max(a * b) over () as w from r11vs_null where k = 1;
+
+-- (xxii) F4: a dependent scalar call admits against the reconstructed parent
+-- envelope: the fitting depth-two product keeps the parent's exact value and
+-- persists the parent's (65,0), and the above-domain dependent product is
+-- rejected by the same checked family
+create table r11i_src(id int primary key, i int);
+insert into r11i_src values (1, 5);
+create table r11w_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11w_src values (1, 10000000000000000000000000000000, 10000000000000000000000000000000, 100);
+select avg((select (select a * b from r11w_src where r11w_src.d > r11i_src.i limit 1) from r11w_src as w2 limit 1)) as v from r11i_src;
+create table r11dep_ctas as select (select (select a * b from r11w_src where r11w_src.d > r11i_src.i limit 1) from r11w_src as w2 limit 1) as v from r11i_src;
+show create table r11dep_ctas;
+select v from r11dep_ctas;
+create table r11w_big(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11w_big values (1, 100000000000000000000000000000000, 1000000000000000000000000000000000, 100);
+select avg((select (select a * b from r11w_big where r11w_big.d > r11i_src.i limit 1) from r11w_big as w2 limit 1)) as v from r11i_src;
+
+-- (xxiii) review round 12 F1: widened-multiplication provenance follows the
+-- authoritative operand domains, so the coefficient-adjusted pair
+-- DECIMAL(38,0) x DECIMAL(27,0) (domains 39+27=66) and the
+-- decimal-times-integer pair DECIMAL(47,0) x BIGINT (domains 47+19=66)
+-- resolve their parent domains through the derived-table channel and the
+-- outer value merge binds the parent's DECIMAL(76,11) instead of failing
+-- the statement; the boundary pair DECIMAL(18,0) x DECIMAL(47,0) (domains
+-- 18+47=65) and the narrow DECIMAL(18,0) x BIGINT route publish
+-- identically on both engines
+create table r12coef(id int primary key, a decimal(38,0), c decimal(27,0));
+insert into r12coef values (1, 99999999999999999999999999999999999999, 999999999999999999999999999);
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * c as v from r12coef) q;
+select a * c as v from r12coef;
+create table r12coef_ctas as select a * c as v from r12coef;
+show create table r12coef_ctas;
+select v from r12coef_ctas;
+create table r12int(id int primary key, a decimal(47,0), bi bigint);
+insert into r12int values (1, 99999999999999999999999999999999999999999999999, 9223372036854775807), (2, 99999999999999999999999999999999999999999999999, 2);
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * bi as v from r12int) q;
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * bi as v from r12int where id = 2) q;
+create table r12pair(id int primary key, a decimal(18,0), c decimal(47,0), bi bigint);
+insert into r12pair values (1, 999999999999999999, 99999999999999999999999999999999999999999999999, 1000000000);
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * c as v from r12pair) q;
+select a * bi as v from r12pair;
+
+-- (xxiii) review round 12 F2: after a retried set-operation common each
+-- branch aligns its live export to the retried target in either branch
+-- order: the fitting product returns exactly with the retried (66,1)
+-- metadata, the prepared route agrees, and the oversized product is
+-- rejected at the branch alignment cast with the parent's checked
+-- out-of-range family instead of flowing unadmitted
+create table r12set(id int primary key, a decimal(38,0), b decimal(38,1), c decimal(38,0));
+insert into r12set values (1, 10000000000000000000000000000000, 10000000000000000000000000000000.0, 10000000000000000000000000000000);
+select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set union all select a * c as v from r12set;
+select a * c as v from r12set union all select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set;
+create table r12set_ctas as select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set union all select a * c as v from r12set;
+show create table r12set_ctas;
+select v from r12set_ctas;
+prepare r12set_p from "select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set union all select a * c as v from r12set";
+execute r12set_p;
+create table r12set_big(id int primary key, a decimal(38,0), b decimal(38,1), c decimal(38,0));
+insert into r12set_big values (1, 99999999999999999999999999999999999999, 9999999999999999999999999999999999999.9, 99999999999999999999999999999999999999);
+-- the oversized rejection below is confined to the second branch: with both
+-- branches erroring, parallel union pipelines race to surface the first
+-- failing alignment cast and the named value alternates run to run between
+-- the a*b product (scale 1) and the a*c product (scale 0); the plan-time
+-- common derivation is filter-independent, so the zero-row first branch
+-- keeps the reviewed (66,1) retry shape and pins the deterministic rejection.
+select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set_big where id = 2 union all select a * c as v from r12set_big;
+
+-- (xxiii) review round 12 F3: AVG/SUM admission propagates through
+-- dependent-program result edges, so the depth-two negative-outlier
+-- MAX/MIN errors at the source seam with the checked invalid-input family
+-- instead of discarding the violating row and silently returning the
+-- survivor; the fitting depth-two shape returns the parent's exact value,
+-- and the bare dependent selector keeps its carrier-exact row
+select sum((select (select max(a * b) from r11g_src where r11g_src.d < r11i_src.i) from r11g_src as w2 limit 1)) from r11i_src;
+select sum((select (select min(a * b) from r11g_src where r11g_src.d < r11i_src.i) from r11g_src as w2 limit 1)) from r11i_src;
+select sum((select (select max(a * b) from r11g_fit where r11g_fit.d < r11i_src.i) from r11g_fit as w2 limit 1)) from r11i_src;
+select (select (select max(a * b) from r11g_src where r11g_src.d < r11i_src.i) from r11g_src as w2 limit 1) as v from r11i_src;
+
+-- (xxiv) review round 13 F1: prepared domain recovery consumes the
+-- session div_precision_increment, so at increment 10 the retried merge
+-- over the quotient arm publishes the parent's own DECIMAL(75,10) and
+-- the quotient keeps its ten fractional digits; the cached re-execute
+-- agrees, a string-assigned user variable follows the same recovery,
+-- the prepared set-operation retry binds and persists the same common,
+-- and the default increment keeps the parent's DECIMAL(69,4). A merge
+-- whose wide arm has no multiplication provenance (a nested coalesce
+-- carrying a genuine 76-digit literal) and a merge whose parent
+-- common itself exceeds the carrier (a DECIMAL(65,65) column peer)
+-- keep the checked rejection on every engine; both arms ride
+-- non-foldable forms because the prepare-time provisional merge
+-- re-types a pure literal arm as TEXT, pre-existing marker inference
+-- that keeps such a merge outside the execute-time exact path.
+-- The decimal-param arm rides a prepared SELECT: a prepared CREATE
+-- TABLE AS whose select carries a decimal parameter crashes every
+-- engine (clean base included) in the storage append path, a
+-- pre-existing defect outside this issue's scope, so only the
+-- bigint-param union shape below persists through a prepared CTAS.
+create table r13div(id int primary key, a decimal(38,0), b decimal(38,0), c decimal(38,0), d decimal(38,0), h decimal(65,65));
+insert into r13div values (1, NULL, 1, 1, 1, 0.5);
+set div_precision_increment = 10;
+set @r13_half = 0.5;
+prepare r13div_p from "select coalesce(a * b, (c * d) / cast(3 as decimal(1,0)), ?) as v from r13div";
+execute r13div_p using @r13_half;
+execute r13div_p using @r13_half;
+set @r13_half_s = '0.5';
+execute r13div_p using @r13_half_s;
+prepare r13div_w from "select coalesce(coalesce(9999999999999999999999999999999999999999999999999999999999999999999999999999, a), (c * d) / cast(3 as decimal(1,0)), ?) as v from r13div";
+execute r13div_w using @r13_half_s;
+prepare r13div_o from "select coalesce(a * b, h, ?) as v from r13div";
+execute r13div_o using @r13_half_s;
+set @r13_three = 3;
+prepare r13div_u from "create table r13uout as select a * b as v from r13div union all select (c * d) / ? from r13div";
+execute r13div_u using @r13_three;
+desc r13uout;
+select v from r13uout order by v;
+drop table r13uout;
+set div_precision_increment = 4;
+prepare r13div_d from "select coalesce(a * b, (c * d) / cast(3 as decimal(1,0)), ?) as v from r13div";
+execute r13div_d using @r13_half;
+
+-- (xxiv) review round 13 F2: the multiplication storage boundary applies
+-- the shared coefficient adjustments according to the recovered carrier,
+-- so a width-reducing wrapper whose parent publication reaches width 38
+-- on the decimal256 carrier (TRUNCATE over a DECIMAL(38,27) product)
+-- persists the parent's DECIMAL(39,0) through CTAS, view and prepared
+-- routes, and the adjacent widths 37 and 39 keep the parent's
+-- DECIMAL(38,0) and DECIMAL(40,0)
+create table r13t38(id int primary key, a decimal(38,27), b decimal(38,27), c decimal(1,0));
+insert into r13t38 values (1, 99999999999.999999999999999999999999999, 1.000000000000000000000000000, 2);
+create table r13f2 as select truncate(a * b, 0) * c as v from r13t38;
+desc r13f2;
+select v from r13f2;
+create view r13f2v as select truncate(a * b, 0) * c as v from r13t38;
+desc r13f2v;
+select v from r13f2v;
+prepare r13f2_p from "create table r13f2p as select truncate(a * b, 0) * c as v from r13t38";
+execute r13f2_p;
+desc r13f2p;
+select v from r13f2p;
+drop table r13f2p;
+create table r13t37(id int primary key, a decimal(38,28), b decimal(38,28), c decimal(1,0));
+insert into r13t37 values (1, 9999999999.9999999999999999999999999999, 1.0000000000000000000000000000, 2);
+create table r13f2_37 as select truncate(a * b, 0) * c as v from r13t37;
+desc r13f2_37;
+select v from r13f2_37;
+create table r13t39(id int primary key, a decimal(38,26), b decimal(38,26), c decimal(1,0));
+insert into r13t39 values (1, 999999999999.99999999999999999999999999, 1.00000000000000000000000000, 2);
+create table r13f2_39 as select truncate(a * b, 0) * c as v from r13t39;
+desc r13f2_39;
+select v from r13f2_39;
+
+-- review round 15 (F1): a sliding TIME_WINDOW value merge over the mixed
+-- MAX/AVG pending outputs recovers the avg_tw_result cache's own parent
+-- domain, so the retried merge binds the parent's DECIMAL(73,8) with exact
+-- values above 2^53 and NULL selection at scale 8; the parent engine binds
+-- the same (73,8), so both engines return identical rows for these forms
+create table twr15(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0), c decimal(10,2));
+insert into twr15 values (1, '2026-01-01 00:00:00', 9007199254740993, 1, 12.34), (2, '2026-01-01 00:00:30', 9007199254740993, 1, 12.34), (3, '2026-01-01 00:01:00', 9007199254740993, 1, 12.34), (4, '2026-01-01 00:01:30', 9007199254740993, 1, 12.34);
+select coalesce(max(a * b), avg(c)) as product from twr15 interval(ts, 2, minute) sliding(1, minute);
+create table twr15n(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0), c decimal(10,2));
+insert into twr15n values (1, '2026-01-01 00:00:00', NULL, NULL, 56.78), (2, '2026-01-01 00:00:30', NULL, NULL, 56.78), (3, '2026-01-01 00:01:00', NULL, NULL, 56.78), (4, '2026-01-01 00:01:30', NULL, NULL, 56.78);
+select coalesce(max(a * b), avg(c)) as product from twr15n interval(ts, 2, minute) sliding(1, minute);
+-- controls: the non-sliding route keeps the ordinary AVG rule's parent
+-- merge (71,6) (a same-name retained twin resolves through one rule
+-- application), and the plain route binds the same (71,6) on both engines
+select coalesce(max(a * b), avg(c)) as product from twr15 interval(ts, 2, minute);
+select coalesce(max(a * b), avg(c)) as product from twr15;
+
+-- review round 16 (F1): a window over a grouped aggregate is not a
+-- retained TIME_WINDOW twin, so AVG(AVG(c)) OVER () applies the
+-- aggregate rule once per level and the retried merge binds the parent's
+-- DECIMAL(75,10) with the exact outer-average value 0.6666665000 (the
+-- twin shortcut's DECIMAL(71,6) surface would print 0.666667); (F2): an
+-- add/subtract chain inside a value merge recovers the authoritative
+-- typing owner's publication, so the three-arm merge binds the parent's
+-- DECIMAL(75,65) instead of re-arming the checked binding error; the
+-- parent engine binds the same tags, so both engines return identical
+-- rows for these forms
+create table twg16(g int, a decimal(38,0), b decimal(38,0), c decimal(10,2));
+insert into twg16 values (1, NULL, 1, 0), (1, NULL, 1, 0), (1, NULL, 1, 1), (2, NULL, 1, 1);
+select coalesce(max(max(a * b)) over (), avg(avg(c)) over ()) as product from twg16 group by g order by g;
+create table tmix16(a decimal(65,55), b decimal(20,0), x decimal(25,25), y decimal(25,25), z decimal(5,5));
+insert into tmix16 values (1, 1, 0.5, 0.25, 0.5), (NULL, 1, 0.5, 0.25, 0.5);
+select coalesce(a * b, (x + y) * z, cast(0 as decimal(65,65))) as product from tmix16 order by product;
+
+-- review round 17 (F1): twin value merges whose defaults differ only
+-- inside SQL-authored fixed-domain casts keep distinct decision-ledger
+-- content keys, so each column's decision replays against its own record
+-- and the persisted schema stays parent-identical in both column orders —
+-- DECIMAL(36,0) over the (34,0) default and DECIMAL(37,0) over the (37,0)
+-- default, never the first-recorded merge's (47,0) alignment envelope;
+-- (F2): a scalar export over a shared producer resolves its column
+-- operands through the producer lineage, so the reservation charges the
+-- shadow the finalization emits; the parent engine binds the same tags
+-- and returns the same rows for every statement in this block
+create table r17t1(a decimal(38,30), b decimal(38,30), d decimal(1,0));
+insert into r17t1 values (9, 9, 9);
+create table r17ct1 as select coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c2 from r17t1;
+desc r17ct1;
+select c1, c2 from r17ct1;
+create table r17ct2 as select coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c2 from r17t1;
+desc r17ct2;
+select c1, c2 from r17ct2;
+create view r17v1 as select coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c2 from r17t1;
+desc r17v1;
+select c1, c2 from r17v1;
+prepare r17p1 from "create table r17pt1 as select coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c2 from r17t1";
+execute r17p1;
+desc r17pt1;
+select c1, c2 from r17pt1;
+create table r17t2(a decimal(38,0), b decimal(38,0));
+insert into r17t2 values (10, 10), (20, 20), (1, 1);
+with c as (select coalesce(d.v, d.v) as v from (select a * b as v from r17t2 where a > 5) d) select sum(v) from c union all select sum(v) from c;
+
+-- review round 18 (F1): a JOIN output reference resolves its provenance
+-- through the owner child at the reference's own ordinal, so the JOIN ON
+-- value merges below recover each side's parent domain in both input
+-- orders; (F2): a replay-safe scalar export over a shared producer
+-- reaches the widened product through the intermediate ABS projection,
+-- so the reservation charges the shadow the finalization emits; the
+-- internal executor's prepared-CTAS follow-up reparse fills under its
+-- own entered generation with the executor's process and the session's
+-- div precision increment, so both prepared executes below reach the
+-- parent engine's own checked outcome — ERROR 20301 naming
+-- Decimal256(76,30) in both input orders — instead of the planner
+-- decline the process-less fill raised, and the created tables never
+-- materialize; the F2 witness binds the parent's tags and returns
+-- byte-identical rows on both engines
+create table r18t1(a decimal(38,30), b decimal(38,30));
+insert into r18t1 values (10000, 10000);
+create table r18t2(c decimal(38,0), d decimal(38,0));
+insert into r18t2 values (1000000000000000000000000000000, 1000000000000000000000000000000);
+set @r18_half = cast(0.5 as decimal(20,1));
+prepare r18p1 from "create table r18pt1 as select x.v as lv, y.v as rv from (select a * b as v from r18t1 limit 100) x join (select c * d as v from r18t2 limit 100) y on coalesce(y.v, ?) = x.v";
+execute r18p1 using @r18_half;
+desc r18pt1;
+select lv, rv from r18pt1;
+prepare r18p2 from "create table r18pt2 as select x.v as lv, y.v as rv from (select c * d as v from r18t2 limit 100) x join (select a * b as v from r18t1 limit 100) y on coalesce(x.v, ?) = y.v";
+execute r18p2 using @r18_half;
+desc r18pt2;
+select lv, rv from r18pt2;
+create table r18t3(a decimal(38,0), b decimal(38,0));
+insert into r18t3 values (2, 3), (4, 5), (6, 7), (8, 9), (10, 11), (12, 1);
+with c as (select coalesce(e.v, e.v) as v from (select abs(d.v) as v from (select a * b as v from r18t3 where a > 5) d limit 100) e) select sum(v) from c union all select sum(v) from c;
+
+-- pre-PR review 1793732446352: NAME_CONST's first argument is a
+-- non-value label literal, so only the value argument determines the
+-- persisted precision and scale — a nine-digit numeric or numeric-looking
+-- label over a DECIMAL(4,2) value persists DECIMAL(4,2), a wider
+-- DECIMAL(8,2) value persists its own tag, and CTAS and view records
+-- agree; the parent engine binds the same tags and returns the same rows
+-- for every statement in this block
+create table nconst1 as select name_const(123456789, 12.34) as v;
+desc nconst1;
+select v from nconst1;
+create table nconst2 as select name_const('999999999', 12.34) as v;
+desc nconst2;
+select v from nconst2;
+create view nconstv1 as select name_const(123456789, 12.34) as v;
+desc nconstv1;
+select v from nconstv1;
+create table nconst3 as select name_const(999999999, 123456.78) as v;
+desc nconst3;
+select v from nconst3;
+create table nconst4 as select name_const(123456789, -12.34) as v;
+desc nconst4;
+select v from nconst4;
+
+drop database issue_30938_decimal_mul;

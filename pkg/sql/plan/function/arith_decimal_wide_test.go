@@ -92,47 +92,64 @@ func expectedD256ScaleDownWideTest(x, y types.Decimal256, scaleDown int32) (type
 		}
 		product = quotient
 	}
+	// Issue #30938: the scaled fallback admits every rounded coefficient the
+	// signed 256-bit carrier holds, for either sign; only a magnitude of
+	// 2^255 is rejected (docs/design/20261029-decimal-multiplication-storage-boundary.md).
 	absolute := new(big.Int).Abs(new(big.Int).Set(product))
-	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil)
-	if absolute.Cmp(limit) > 0 || (absolute.Cmp(limit) == 0 && product.Sign() >= 0) {
+	if absolute.Cmp(new(big.Int).Lsh(big.NewInt(1), 255)) >= 0 {
 		return types.Decimal256{}, false
 	}
 	return decimal256FromBigWideTest(product), true
 }
 
-func TestD256MulScaledFallbackEnforcesDeclaredWidth(t *testing.T) {
+func TestD256MulScaledFallbackAdmitsCarrierFittingWidths(t *testing.T) {
+	// Issue #30938: a product exceeding the declared DECIMAL(65, s) domain
+	// but fitting the 256-bit physical carrier is accepted: 10^40 x 10^40 at
+	// scales 11 and 11 publishes scale 12, i.e. scaleDown 10 and coefficient
+	// 10^70, exactly and unchanged by the retry-free kernel path.
 	coefficient := "1" + strings.Repeat("0", 39)
 	x, _ := parseD256WideTest(t, coefficient)
 	y, _ := parseD256WideTest(t, coefficient)
+	want, ok := expectedD256ScaleDownWideTest(x, y, 10)
+	require.True(t, ok)
 
 	for _, tc := range []struct {
 		name string
 		left types.Decimal256
+		want types.Decimal256
 	}{
-		{name: "positive", left: x},
-		{name: "negative", left: x.Minus()},
+		{name: "positive", left: x, want: want},
+		{name: "negative", left: x.Minus(), want: want.Minus()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := []types.Decimal256{{B0_63: 42}}
-			require.Error(t, d256Mul(
+			require.NoError(t, d256Mul(
 				[]types.Decimal256{tc.left}, []types.Decimal256{y}, result, 11, 11, nulls.NewWithSize(1), decimalRangeUnknown, decimalRangeUnknown))
-			require.Equal(t, types.Decimal256{B0_63: 42}, result[0])
+			require.Equal(t, tc.want, result[0])
 		})
 	}
 }
 
-func TestD256MulScaledFallbackHonorsNegativeWidthBoundary(t *testing.T) {
+func TestD256MulScaledFallbackAdmitsDeclaredBoundaryValues(t *testing.T) {
+	// Issue #30938: the former 10^65 declared-width gate is gone on the
+	// scaled fallback; a rounded magnitude of 10^65 is accepted for both
+	// signs, and rejection starts only at the 2^255 carrier limit.
 	coefficient := "1" + strings.Repeat("0", 66)
 	positive, _ := parseD256WideTest(t, coefficient)
 	one, _ := parseD256WideTest(t, "1")
 	negative := positive.Minus()
-	want, _ := parseD256WideTest(t, "1"+strings.Repeat("0", 65))
-	want = want.Minus()
 
 	var got types.Decimal256
-	require.False(t, d256MulScaledFallback(&positive, &one, 1, &got))
+	wantPositive, ok := expectedD256ScaleDownWideTest(positive, one, 1)
+	require.True(t, ok)
+	require.True(t, d256MulScaledFallback(&positive, &one, 1, &got))
+	require.Equal(t, wantPositive, got)
+
+	got = types.Decimal256{}
+	wantNegative, ok := expectedD256ScaleDownWideTest(negative, one, 1)
+	require.True(t, ok)
 	require.True(t, d256MulScaledFallback(&negative, &one, 1, &got))
-	require.Equal(t, want, got)
+	require.Equal(t, wantNegative, got)
 }
 
 func TestD256MulScaledRawOverflow(t *testing.T) {

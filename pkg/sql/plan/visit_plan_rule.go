@@ -32,6 +32,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
@@ -533,6 +534,12 @@ type ResetParamRefRule struct {
 	// protocol's actual numeric category.
 	paramKinds  []vector.PrepareParamKind
 	paramValues []any
+	// proc is the execute scope's process (issue #30938, design decision
+	// log entry 68 (iv)): execute-time rebinding passes it to the function
+	// binder so rebound coercive decisions record into the execute-scope
+	// registry. A nil process (test mocks and channels without an execute
+	// scope) keeps the pre-existing no-op behavior.
+	proc *process.Process
 }
 
 // PreparedPlanNeedsNumericPrefixSpecialization reports whether a prepared plan
@@ -2392,7 +2399,15 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 	return expr, false, nil
 }
 
-func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
+func (rule *ResetParamRefRule) MatchNode(node *Node) bool {
+	// Anchor the lineage view to the node whose expressions are about to be
+	// rebound (issue #30938, design decision log 69 (iv)): the walker
+	// invokes MatchNode immediately before exploring this node's
+	// expressions, and this rule never applies at node level, so the anchor
+	// moves with the walk without changing traversal.
+	if scope := decimalBoundaryBindScope(rule.ctx); scope != nil && scope.lineage != nil {
+		scope.lineage.owner = node
+	}
 	return false
 }
 
@@ -3786,7 +3801,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		if contextualArgs, changed, contextualErr := preparedNumericPrefixArgs(
-			rule.ctx, exprImpl.F.Func.GetObjName(), boundArgs, boundArgs,
+			rule.ctx, rule.proc, exprImpl.F.Func.GetObjName(), boundArgs, boundArgs,
 			numericPrefixArgs, numericPrefixKinds, numericPrefixListArgs, numericPrefixListKinds,
 			fixedDecimalCommonValue,
 		); contextualErr != nil {
@@ -3939,6 +3954,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
 					rule.ctx,
+					rule.proc,
 					originalBoundExpr,
 					exprImpl.F.Func.GetObjName(),
 					boundArgs,
@@ -4349,6 +4365,7 @@ func preparedComparisonTextLosesDoublePrecision(prefix string, numeric float64) 
 
 func preparedNumericPrefixArgs(
 	ctx context.Context,
+	proc *process.Process,
 	name string,
 	args, witnesses []*plan.Expr,
 	prefixArgs []bool,
@@ -4418,7 +4435,7 @@ func preparedNumericPrefixArgs(
 		changed = changed || castChanged
 	}
 	normalized, commonTypeChanged, err := normalizePreparedNumericCommonArgs(
-		ctx, name, sources, args, witnesses, prefixArgs, fixedDecimalCommonValue)
+		ctx, proc, name, sources, args, witnesses, prefixArgs, fixedDecimalCommonValue)
 	if err != nil {
 		return nil, false, err
 	}
@@ -4512,6 +4529,7 @@ func preparedNumericCommonOperandType(oid types.T) bool {
 
 func normalizePreparedNumericCommonArgs(
 	ctx context.Context,
+	proc *process.Process,
 	name string,
 	args []*plan.Expr,
 	sourceArgs, witnessArgs []*plan.Expr,
@@ -4539,7 +4557,7 @@ func normalizePreparedNumericCommonArgs(
 	}
 	changed := false
 	if fixedDecimalCommonValue && target.Oid.IsFloat() {
-		exactTarget, exactOK, err := preparedFixedDecimalCommonType(ctx, operands, witnessArgs, prefixArgs)
+		exactTarget, exactOK, err := preparedFixedDecimalCommonType(ctx, proc, operands, witnessArgs, prefixArgs)
 		if err != nil {
 			return nil, false, err
 		}
@@ -4589,11 +4607,44 @@ func normalizePreparedNumericCommonArgs(
 // Only an eligible text marker may lose fractional digits when the exact
 // common type exceeds Decimal256. A fixed peer keeps its own scale; an actual
 // FLOAT operand continues to select the normal approximate domain.
+//
+// An overflow over widened-multiplication surfaces retries once over the
+// operands' parent-published domains (issue #30938, design decision log
+// 56's outcome contract): the merge then binds exactly the common the
+// pre-change engine converged for the same statement, and each arm keeps
+// its alignment cast into that domain, so an out-of-domain value raises
+// the parent's checked out-of-range cast family at evaluation. A merge
+// whose parent domains still exceed the carrier re-arms the identical
+// checked rejection.
 func preparedFixedDecimalCommonType(
 	ctx context.Context,
+	proc *process.Process,
 	operands, originalArgs []*plan.Expr,
 	prefixArgs []bool,
 ) (types.Type, bool, error) {
+	target, exact, fits := preparedFixedDecimalCommonWidth(operands, originalArgs, prefixArgs, nil)
+	if !exact || fits {
+		return target, exact, nil
+	}
+	if domains, ok := preparedFixedDecimalParentDomains(ctx, proc, operands); ok {
+		if parentTarget, parentExact, parentFits := preparedFixedDecimalCommonWidth(
+			operands, originalArgs, prefixArgs, domains); parentExact && parentFits {
+			return parentTarget, true, nil
+		}
+	}
+	return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
+}
+
+// preparedFixedDecimalCommonWidth computes the exact common type over the
+// operand surfaces, substituting domains[i] for a decimal operand's surface
+// when the parent-domain retry supplies one. The result triple reports the
+// converged type, whether the merge has an exact common at all, and whether
+// that common fits the carrier.
+func preparedFixedDecimalCommonWidth(
+	operands, originalArgs []*plan.Expr,
+	prefixArgs []bool,
+	domains []types.Type,
+) (types.Type, bool, bool) {
 	maxIntegral, maxScale, fixedScale := int32(0), int32(0), int32(0)
 	type textShape struct {
 		integral    int32
@@ -4609,12 +4660,12 @@ func preparedFixedDecimalCommonType(
 		switch {
 		case typ.Oid.IsFloat():
 			if !eligibleText {
-				return types.Type{}, false, nil
+				return types.Type{}, false, true
 			}
 			original := unwrapPreparedImplicitCast(originalArgs[i], true)
 			literal := original.GetLit()
 			if literal == nil {
-				return types.Type{}, false, nil
+				return types.Type{}, false, true
 			}
 			integral, scale, coefficient, exponent, bounded := preparedNumericPrefixWidths(literal.GetSval())
 			if !bounded {
@@ -4633,6 +4684,9 @@ func preparedFixedDecimalCommonType(
 			maxIntegral = max(maxIntegral, int32(min(integral, int64(types.T_decimal256.ToType().Width)+1)))
 			maxScale = max(maxScale, int32(min(scale, int64(types.T_decimal256.ToType().Width)+1)))
 		case typ.Oid.IsDecimal():
+			if domains != nil && domains[i].Oid.IsDecimal() {
+				typ = domains[i]
+			}
 			width := typ.Width
 			if width <= 0 {
 				width = typ.Oid.ToType().Width
@@ -4646,12 +4700,12 @@ func preparedFixedDecimalCommonType(
 		case typ.Oid.IsInteger(), typ.Oid == types.T_bit, typ.Oid == types.T_bool, typ.Oid == types.T_year:
 			maxIntegral = max(maxIntegral, preparedIntegerIntegralWidth(typ.Oid))
 		default:
-			return types.Type{}, false, nil
+			return types.Type{}, false, true
 		}
 	}
 	maxWidth := types.T_decimal256.ToType().Width
 	if maxIntegral > maxWidth || maxWidth-maxIntegral < fixedScale {
-		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
+		return types.Type{}, true, false
 	}
 	scale := min(maxScale, maxWidth-maxIntegral)
 	if scale < maxScale {
@@ -4660,7 +4714,7 @@ func preparedFixedDecimalCommonType(
 				preparedNumericPrefixIntegralCarry(shape.coefficient, shape.exponent, scale) {
 				maxIntegral++
 				if maxWidth-maxIntegral < fixedScale {
-					return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
+					return types.Type{}, true, false
 				}
 				scale = min(maxScale, maxWidth-maxIntegral)
 				break
@@ -4670,12 +4724,66 @@ func preparedFixedDecimalCommonType(
 	width := max(maxIntegral+scale, int32(1))
 	switch {
 	case width <= types.T_decimal64.ToType().Width:
-		return types.New(types.T_decimal64, width, scale), true, nil
+		return types.New(types.T_decimal64, width, scale), true, true
 	case width <= types.T_decimal128.ToType().Width:
-		return types.New(types.T_decimal128, width, scale), true, nil
+		return types.New(types.T_decimal128, width, scale), true, true
 	default:
-		return types.New(types.T_decimal256, width, scale), true, nil
+		return types.New(types.T_decimal256, width, scale), true, true
 	}
+}
+
+// preparedFixedDecimalParentDomains resolves each decimal operand's
+// parent-published domain for the exact-common retry (issue #30938, design
+// decision log 56). The retry converges only a merge whose own surfaces
+// widened past the parent's 65-digit cap: every decimal-surface operand
+// must resolve through the boundary channel and at least one must carry
+// widened-multiplication provenance, so a genuine wide operand without
+// that lineage keeps the checked rejection on every engine. Non-decimal
+// operands keep their surface domain (the width loop substitutes only
+// decimal entries). A missing process or resolution scope declines:
+// without the statement's own channels the retry cannot distinguish
+// widened provenance from a genuine wide operand.
+func preparedFixedDecimalParentDomains(
+	ctx context.Context,
+	proc *process.Process,
+	operands []*plan.Expr,
+) ([]types.Type, bool) {
+	if proc == nil {
+		return nil, false
+	}
+	scope := decimalBoundaryBindScope(ctx)
+	if scope == nil {
+		if state := preparedBindingState(ctx); state != nil && state.hasDivPrecisionIncrement {
+			scope = &decimalBoundaryScope{
+				divPrecisionIncrement:    state.divPrecisionIncrement,
+				hasDivPrecisionIncrement: true,
+			}
+		}
+	}
+	if scope == nil {
+		return nil, false
+	}
+	domains := make([]types.Type, len(operands))
+	provenance := false
+	for i, operand := range operands {
+		if operand == nil || operand.GetList() != nil {
+			return nil, false
+		}
+		surface := makeTypeByPlan2Expr(operand)
+		if !surface.Oid.IsDecimal() {
+			continue
+		}
+		parent, prov, ok := decimalBoundaryOperandParentDomain(proc, scope, operand)
+		if !ok || !parent.Oid.IsDecimal() {
+			return nil, false
+		}
+		domains[i] = parent
+		provenance = provenance || prov
+	}
+	if !provenance {
+		return nil, false
+	}
+	return domains, true
 }
 
 func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {

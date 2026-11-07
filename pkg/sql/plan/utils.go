@@ -1997,6 +1997,14 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
+	// The decision barrier pins recorded provenance-bearing coercive
+	// decisions' operand syntax against this engine's recursion and rewrite
+	// exactly as at foldExpr (issue #30938, design decision log 55); the
+	// empty-set fast path keeps provenance-free statements base-identical.
+	if rule.DecimalBoundaryBarrierHit(proc, expr) {
+		return expr, nil
+	}
+
 	overloadID := fn.Func.GetObj()
 	functionID, _ := function.DecodeOverloadID(overloadID)
 	if preservePreparedExactSource && rule.IsNullIntegerArgumentCast(expr) {
@@ -2079,6 +2087,13 @@ func constantFoldWithPreparedExactSource(
 	// Catalog proof can pre-fold independent children once while retaining
 	// session-dependent islands for a later, private witness evaluation.
 	if preserved, _ := proc.Ctx.Value(legacyFloatSessionFoldKey{}).(map[*plan.Expr]bool); preserved[expr] {
+		return expr, nil
+	}
+
+	// Widened-multiplication provenance keeps its executable shape across
+	// this engine's destructive folds as well (issue #30938, design decision
+	// log 54); constant trees without provenance fold unchanged.
+	if rule.CarriesWideDecimalMultiplicationProvenance(expr) {
 		return expr, nil
 	}
 
@@ -4726,7 +4741,7 @@ func FillValuesOfParamsInPlanWithSpecializationAtPositions(
 		}
 	}
 	return fillValuesOfParamsInPlanWithSpecializationSelected(
-		ctx, preparePlan, paramVals, false, selected)
+		ctx, nil, preparePlan, paramVals, false, selected, function.DefaultDivPrecisionIncrement)
 }
 
 // FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time
@@ -4756,6 +4771,51 @@ func FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
 	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, true)
 }
 
+// FillValuesOfParamsInPlanWithSpecializationAndProcess performs the same
+// execute-time overload/result-type specialization as
+// FillValuesOfParamsInPlanWithSpecialization while threading the execute
+// scope's process to the rebinding rule (issue #30938, design decision log
+// entry 68 (iv)): rebound coercive decisions record into the execute-scope
+// registry installed around the fill, and a prepared plan carrying widened
+// decimal provenance gains the plan-producer lineage view of entries 69-72
+// for resolution during rebinding. divIncrement is the execute session's
+// div_precision_increment, installed on the lineage scope so parent-domain
+// recovery consumes the statement's own setting (review round 13, F1). A
+// nil process keeps the pre-existing no-op behavior.
+func FillValuesOfParamsInPlanWithSpecializationAndProcess(
+	ctx context.Context,
+	proc *process.Process,
+	preparePlan *Plan,
+	paramVals []any,
+	divIncrement int32,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecializationSelected(
+		ctx, proc, preparePlan, paramVals, false, nil, divIncrement)
+}
+
+// FillValuesOfParamsInPlanWithSpecializationPreservingDMLWritesAndProcess
+// performs the same execute-time overload/result-type specialization as
+// FillValuesOfParamsInPlanWithSpecializationAndProcess while preserving the
+// outer expressions consumed positionally by INSERT/UPDATE/DELETE/MERGE
+// writers (issue #30938, design decision log entry 88 (iv)(b)): the internal
+// executor's CTAS follow-up reparse is an INSERT ... SELECT whose write
+// roots the fill must not rewrite, while the threaded process installs the
+// plan-producer lineage view for a widened-provenance plan and rebound
+// decisions record into the generation the caller entered around the fill.
+// divIncrement is the execute session's div_precision_increment, consumed by
+// parent-domain recovery exactly as on the frontend routes. A nil process
+// keeps the pre-existing no-op behavior of the preserving variant.
+func FillValuesOfParamsInPlanWithSpecializationPreservingDMLWritesAndProcess(
+	ctx context.Context,
+	proc *process.Process,
+	preparePlan *Plan,
+	paramVals []any,
+	divIncrement int32,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecializationSelected(
+		ctx, proc, preparePlan, paramVals, true, nil, divIncrement)
+}
+
 func fillValuesOfParamsInPlanWithSpecialization(
 	ctx context.Context,
 	preparePlan *Plan,
@@ -4763,15 +4823,18 @@ func fillValuesOfParamsInPlanWithSpecialization(
 	preserveDMLWrites bool,
 ) (*Plan, bool, error) {
 	return fillValuesOfParamsInPlanWithSpecializationSelected(
-		ctx, preparePlan, paramVals, preserveDMLWrites, nil)
+		ctx, nil, preparePlan, paramVals, preserveDMLWrites, nil,
+		function.DefaultDivPrecisionIncrement)
 }
 
 func fillValuesOfParamsInPlanWithSpecializationSelected(
 	ctx context.Context,
+	proc *process.Process,
 	preparePlan *Plan,
 	paramVals []any,
 	preserveDMLWrites bool,
 	selected []bool,
+	divIncrement int32,
 ) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
@@ -4806,7 +4869,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 		if pp.Ddl.Query != nil {
 			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
 			specialized, err := replaceParamValsWithSelection(
-				ctx, queryPlan, effectiveParamVals, false, selected)
+				ctx, proc, queryPlan, effectiveParamVals, false, selected, divIncrement)
 			if err != nil {
 				return nil, false, err
 			}
@@ -4816,7 +4879,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 
 	case *plan.Plan_Query, *plan.Plan_Dcl:
 		specialized, err := replaceParamValsWithSelection(
-			ctx, copied, effectiveParamVals, preserveDMLWrites, selected)
+			ctx, proc, copied, effectiveParamVals, preserveDMLWrites, selected, divIncrement)
 		if err != nil {
 			return nil, false, err
 		}
@@ -6715,15 +6778,18 @@ func replaceParamVals(
 	preserveDMLWriteArgs ...bool,
 ) (bool, error) {
 	preserveDMLWrites := len(preserveDMLWriteArgs) > 0 && preserveDMLWriteArgs[0]
-	return replaceParamValsWithSelection(ctx, plan0, paramVals, preserveDMLWrites, nil)
+	return replaceParamValsWithSelection(ctx, nil, plan0, paramVals, preserveDMLWrites, nil,
+		function.DefaultDivPrecisionIncrement)
 }
 
 func replaceParamValsWithSelection(
 	ctx context.Context,
+	proc *process.Process,
 	plan0 *Plan,
 	paramVals []any,
 	preserveDMLWrites bool,
 	selected []bool,
+	divIncrement int32,
 ) (bool, error) {
 	originalSetOperationTypes := snapshotPreparedSetOperationOutputTypes(plan0.GetQuery())
 	originalSetOperationInputTypes := snapshotPreparedSetOperationInputTypes(
@@ -6851,9 +6917,21 @@ func replaceParamValsWithSelection(
 	}
 
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.proc = proc
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
 	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
 	paramRule.setPreparedPlan(plan0)
+	// Execute-time plan-producer lineage view (issue #30938, design decision
+	// log entries 69-72): a prepared plan carrying widened decimal
+	// provenance resolves rebound operands through the plan's own relational
+	// edges read-only. The view rides the rule's context, so the fill walk
+	// below and the projection refresh after it resolve through the same
+	// window; a provenance-free plan attaches nothing and its fill behaves
+	// byte-identically.
+	if proc != nil && preparedPlanCarriesWidenedDecimal(plan0.GetQuery()) {
+		ctx = withDecimalBoundaryLineageScope(ctx, plan0.GetQuery(), divIncrement)
+		paramRule.ctx = ctx
+	}
 	// Keep the original execute-time values and protocol categories on the
 	// rebinding rule.  The plan parameters above intentionally use their
 	// prepare-time transport literals; overloaded functions such as ABS need
@@ -6955,6 +7033,92 @@ func replaceParamValsWithSelection(
 	// so the final visible ColDef agrees with the rewritten source expression.
 	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
 	return paramRule.specialized || projectionSpecialized || directResultSpecialized || seriesSpecialized, nil
+}
+
+// preparedPlanCarriesWidenedDecimal reports whether any expression published
+// inside the prepared plan carries a decimal type wider than the pre-change
+// engine's 65-digit publication cap (issue #30938, design decision log 69
+// (iv) and 70 (iv)): only such a plan can reach the execute-time retry with
+// widened-multiplication provenance, so only it gains the plan-producer
+// lineage view. The scan is O(plan expressions) and reads metadata only.
+func preparedPlanCarriesWidenedDecimal(query *plan.Query) bool {
+	if query == nil {
+		return false
+	}
+	var widened func(expr *plan.Expr) bool
+	widened = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if typ := expr.Typ; types.T(typ.Id).IsDecimal() && typ.Width > 65 {
+			return true
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_F:
+			if e.F != nil {
+				for _, arg := range e.F.Args {
+					if widened(arg) {
+						return true
+					}
+				}
+			}
+		case *plan.Expr_W:
+			if e.W != nil && e.W.WindowFunc != nil {
+				if widened(e.W.WindowFunc) {
+					return true
+				}
+			}
+			if e.W != nil {
+				for _, arg := range e.W.PartitionBy {
+					if widened(arg) {
+						return true
+					}
+				}
+				for _, order := range e.W.OrderBy {
+					if order != nil && widened(order.Expr) {
+						return true
+					}
+				}
+			}
+		case *plan.Expr_List:
+			if e.List != nil {
+				for _, item := range e.List.List {
+					if widened(item) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	exprLists := func(lists ...[]*plan.Expr) bool {
+		for _, list := range lists {
+			for _, expr := range list {
+				if widened(expr) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		if exprLists(node.ProjectList, node.AggList, node.GroupBy, node.FilterList,
+			node.OnList, node.WinSpecList, node.TimeWindowPartitionBy) {
+			return true
+		}
+		for _, order := range node.OrderBy {
+			if order != nil && widened(order.Expr) {
+				return true
+			}
+		}
+		if widened(node.Limit) || widened(node.Offset) {
+			return true
+		}
+	}
+	return false
 }
 
 func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {
@@ -7417,7 +7581,14 @@ func refreshPreparedPlanProjectionExprType(
 			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
 		}
 		if rebound == nil && err == nil {
-			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+			// Forward the execute scope's process (issue #30938, design entry
+			// 68 (iv)) so rebound coercive decisions record into its registry;
+			// a nil rule (test helpers) keeps the pre-existing no-op behavior.
+			var rebindProc *process.Process
+			if paramRule != nil {
+				rebindProc = paramRule.proc
+			}
+			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, rebindProc, expr, functionName, rebindArgs, nil)
 		}
 		if err != nil {
 			return false, err
@@ -7706,12 +7877,16 @@ func unwrapPreparedSetOperationCoercion(
 
 func preparedSetOperationCommonType(
 	ctx context.Context,
+	proc *process.Process,
+	query *plan.Query,
+	node *plan.Node,
 	currentOutputType plan.Type,
 	branchExprs []*plan.Expr,
 	pureNullBranches []bool,
 ) (types.Type, bool, error) {
 	argTypes := make([]types.Type, 0, len(branchExprs))
 	argExprs := make([]*plan.Expr, 0, len(branchExprs))
+	argBranchIdx := make([]int, 0, len(branchExprs))
 	hasDecimalInput := false
 	for branchIdx, expr := range branchExprs {
 		if expr == nil || branchIdx < len(pureNullBranches) && pureNullBranches[branchIdx] {
@@ -7723,6 +7898,7 @@ func preparedSetOperationCommonType(
 		}
 		argTypes = append(argTypes, typ)
 		argExprs = append(argExprs, expr)
+		argBranchIdx = append(argBranchIdx, branchIdx)
 		hasDecimalInput = hasDecimalInput || typ.Oid.IsDecimal()
 	}
 	if len(argTypes) == 0 {
@@ -7761,8 +7937,61 @@ func preparedSetOperationCommonType(
 	}
 
 	coalesce, err := function.GetFunctionByName(ctx, "coalesce", argTypes)
+	retriedCommon := false
+	var retryFuncID int64
 	if err != nil {
-		return types.Type{}, false, err
+		// One retry at this owner's own failure (issue #30938, design
+		// decision log entry 73 (iii)): run the shared source-domain
+		// resolver over the per-branch source expressions under each
+		// branch's own child node and retry the identical lookup once over
+		// the resolved parent-published vector. A branch without
+		// widened-multiplication provenance, an unresolvable branch and a
+		// still-overflowing retried combination all re-arm this owner's
+		// original outcome byte-identically. The execute route carries no
+		// live binder, so the resolver runs on the lineage view alone.
+		branchNodes := make([]*plan.Node, len(argExprs))
+		nodesOK := query != nil && node != nil
+		for i, br := range argBranchIdx {
+			if !nodesOK || br >= len(node.Children) {
+				nodesOK = false
+				break
+			}
+			childID := node.Children[br]
+			if childID < 0 || int(childID) >= len(query.Nodes) {
+				nodesOK = false
+				break
+			}
+			branchNodes[i] = query.Nodes[childID]
+		}
+		var parents []types.Type
+		retried := false
+		if nodesOK {
+			// The execute route carries no live builder; the lineage scope
+			// installed around the fill carries the statement's
+			// div_precision_increment (issue #30938 review round 13, F1).
+			divIncrement := function.DefaultDivPrecisionIncrement
+			if scope := decimalBoundaryBindScope(ctx); scope != nil {
+				divIncrement = scope.parentDivPrecisionIncrement()
+			}
+			parents, retried = decimalBoundarySetOperationParentDomains(
+				proc, query, nil, divIncrement, branchNodes, nil, argExprs)
+		}
+		if !retried {
+			return types.Type{}, false, err
+		}
+		for i, expr := range argExprs {
+			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
+				parents[i] = exact
+			}
+		}
+		retryGet, retryErr := function.GetFunctionByName(ctx, "coalesce", parents)
+		if retryErr != nil {
+			return types.Type{}, false, err
+		}
+		argTypes = parents
+		coalesce = retryGet
+		retriedCommon = true
+		retryFuncID = retryGet.GetEncodedOverloadID()
 	}
 	castTypes, _ := coalesce.ShouldDoImplicitTypeCast()
 	targetType := argTypes[0]
@@ -7800,6 +8029,20 @@ func preparedSetOperationCommonType(
 				targetType.Width = typ.Width
 			}
 		}
+	}
+	if retriedCommon {
+		// The retried binding records the content-keyed decision the base
+		// binder would have recorded over parent-typed exports (entry 73
+		// (iii)): each position's aligned type is the retried merge's cast
+		// target, or the parent domain where the position aligns uncast.
+		aligned := append([]types.Type(nil), argTypes...)
+		for i, castType := range castTypes {
+			if i < len(aligned) && castType.Oid != types.T_any && !aligned[i].Eq(castType) {
+				aligned[i] = castType
+			}
+		}
+		recordSynthesizedSetOperationRetryDecision(
+			proc, retryFuncID, argTypes, aligned, targetType)
 	}
 	return targetType, true, nil
 }
@@ -8137,8 +8380,12 @@ func reconcilePreparedSetOperationInputs(
 				pureNullBranches[branchIdx] = pureNullColumns[branchIdx][colPos]
 			}
 		}
+		var commonProc *process.Process
+		if paramRule != nil {
+			commonProc = paramRule.proc
+		}
 		targetType, ok, err := preparedSetOperationCommonType(
-			ctx, currentOutputType, branchExprs, pureNullBranches,
+			ctx, commonProc, query, node, currentOutputType, branchExprs, pureNullBranches,
 		)
 		if err != nil {
 			return false, inputTypeChanged, err
@@ -8452,8 +8699,86 @@ func refreshPreparedPlanProjectionTypes(
 				return err
 			}
 		case plan.Node_WINDOW:
-			if err := refreshExprList(node.WinSpecList); err != nil {
-				return err
+			// A window spec's PartitionBy expression objects are shared with
+			// the preceding PARTITION/SORT node's OrderBy for the physical
+			// partition pass, and their column references keep that child's
+			// input coordinates: appendWindowNode installs the shared
+			// pointer, remapAllColRefs remaps it through the OrderBy view,
+			// and remapColRefForExpr's Expr_W case deliberately skips it.
+			// Resolving those references under this node's child-projection
+			// view (where child position 0 can be a different column after
+			// projection pruning) would overwrite the shared object's type
+			// with a sibling column's type; the owner's own OrderBy refresh
+			// below (Node_SORT / Node_PARTITION case) re-syncs the same
+			// objects under the correct view. Refresh only the spec-internal
+			// expressions this node's view owns (issue #30938).
+			externallyOwned := make(map[*plan.Expr]struct{})
+			for _, childID := range node.Children {
+				if childID < 0 || int(childID) >= len(query.Nodes) {
+					continue
+				}
+				child := query.Nodes[childID]
+				if child == nil || (child.NodeType != plan.Node_PARTITION &&
+					child.NodeType != plan.Node_SORT) {
+					continue
+				}
+				for _, orderBy := range child.OrderBy {
+					if orderBy != nil && orderBy.Expr != nil {
+						externallyOwned[orderBy.Expr] = struct{}{}
+					}
+				}
+			}
+			for _, specExpr := range node.WinSpecList {
+				if specExpr == nil {
+					continue
+				}
+				spec := specExpr.GetW()
+				if spec == nil {
+					if err := refreshExpr(specExpr); err != nil {
+						return err
+					}
+					continue
+				}
+				if spec.WindowFunc != nil {
+					if err := refreshExpr(spec.WindowFunc); err != nil {
+						return err
+					}
+					if !reflect.DeepEqual(specExpr.Typ, spec.WindowFunc.Typ) {
+						specExpr.Typ = spec.WindowFunc.Typ
+						specialized = true
+					}
+				}
+				for _, partitionExpr := range spec.PartitionBy {
+					if partitionExpr == nil {
+						continue
+					}
+					if _, owned := externallyOwned[partitionExpr]; owned {
+						continue
+					}
+					if err := refreshExpr(partitionExpr); err != nil {
+						return err
+					}
+				}
+				for _, order := range spec.OrderBy {
+					if order == nil {
+						continue
+					}
+					if err := refreshExpr(order.Expr); err != nil {
+						return err
+					}
+				}
+				if spec.Frame != nil {
+					if spec.Frame.Start != nil {
+						if err := refreshExpr(spec.Frame.Start.Val); err != nil {
+							return err
+						}
+					}
+					if spec.Frame.End != nil {
+						if err := refreshExpr(spec.Frame.End.Val); err != nil {
+							return err
+						}
+					}
+				}
 			}
 		}
 		if err := refreshExprList(node.ProjectList); err != nil {

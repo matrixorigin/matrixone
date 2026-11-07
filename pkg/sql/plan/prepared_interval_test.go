@@ -353,7 +353,7 @@ func TestPreparedTimeCompoundIntegerRebindKeepsRawUnit(t *testing.T) {
 	original := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{ObjName: "date_add"}, Args: []*planpb.Expr{base, marker, unit},
 	}}}
-	bound, err := bindPreparedFuncExprImplByPlanExpr(ctx, original, "date_add",
+	bound, err := bindPreparedFuncExprImplByPlanExpr(ctx, nil, original, "date_add",
 		[]*planpb.Expr{base, makePlan2Int64ConstExprWithType(1), unit}, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_varchar), bound.GetF().Args[1].Typ.Id)
