@@ -130,7 +130,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if err != nil {
 		return nil, err
 	}
-	builder.collectOriginalTemporalOwner(rootId)
+	builder.collectOriginalIndexOwner(rootId)
 	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}

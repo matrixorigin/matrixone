@@ -25,19 +25,14 @@ type temporalRange struct {
 	min, max types.Timestamp
 }
 
-// MakeMixedTemporalMatcher returns the zone-map test used for mixed
+// makeMixedTemporalMatcher returns the zone-map test used for mixed
 // DATETIME/TIMESTAMP predicates. An unknown result must retain the block.
 // The bound is the encoded scalar value in its SQL type; it is never a
 // candidate index boundary. Scale is the TIMESTAMP precision used by the SQL
 // comparison, which need not equal the DATETIME zone-map scale.
-func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.T, scale int32, zone *time.Location, op string) (func(ZM) ZoneMapMatch, bool) {
+func makeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.T, scale int32, zone *time.Location, op types.ComparisonOp) (func(ZM) ZoneMapMatch, bool) {
 	if zone == nil || scale < 0 || scale > 6 || len(value) != 8 ||
 		!((columnType == types.T_datetime && valueType == types.T_timestamp) || (columnType == types.T_timestamp && valueType == types.T_datetime)) {
-		return nil, false
-	}
-	switch op {
-	case "=", "<", "<=", ">", ">=":
-	default:
 		return nil, false
 	}
 	var scalar types.Timestamp
@@ -103,15 +98,15 @@ func MakeMixedTemporalMatcher(columnType types.T, value []byte, valueType types.
 			}
 		}
 		switch op {
-		case "=":
+		case types.ComparisonEqual:
 			return ZoneMapMatch{Match: values.max >= bound.min && values.min <= bound.max, Known: true}
-		case "<":
+		case types.ComparisonLess:
 			return ZoneMapMatch{Match: values.min < bound.max, Known: true}
-		case "<=":
+		case types.ComparisonLessEqual:
 			return ZoneMapMatch{Match: values.min <= bound.max, Known: true}
-		case ">":
+		case types.ComparisonGreater:
 			return ZoneMapMatch{Match: values.max > bound.min, Known: true}
-		case ">=":
+		case types.ComparisonGreaterEqual:
 			return ZoneMapMatch{Match: values.max >= bound.min, Known: true}
 		default:
 			return ZoneMapMatch{}

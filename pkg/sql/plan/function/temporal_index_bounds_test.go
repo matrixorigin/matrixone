@@ -40,7 +40,7 @@ func TestTemporalBoundRuntimeValues(t *testing.T) {
 		t.Cleanup(func() { v.Free(proc.Mp()) })
 		return v
 	}
-	op, scale := control(int32(types.TemporalEqual)), control(3)
+	op, scale := control(int32(types.ComparisonEqual)), control(3)
 	out := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	t.Cleanup(out.Free)
 	eval := func(op, scale, selector *vector.Vector) []types.Datetime {

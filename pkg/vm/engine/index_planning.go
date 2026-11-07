@@ -50,17 +50,17 @@ type IndexPairCheck struct {
 	HiddenRead                     client.CatalogReadStamp
 }
 
-// TemporalBlockInputRequest observes the original reader predicate, not the
+// IndexBlockInputRequest observes the original reader predicate, not the
 // wider necessary index range. All inputs belong to one planning attempt.
-type TemporalBlockInputRequest struct {
-	Column    string
-	Observed  *statsinfo.StatsInfo
-	Stats     IndexCostStats
-	Bound     [8]byte
-	BoundType types.T
-	Scale     int32
-	Op        types.TemporalOp
-	Zone      *time.Location
+type IndexBlockInputRequest struct {
+	Column          string
+	Observed        *statsinfo.StatsInfo
+	Stats           IndexCostStats
+	Bound           []byte
+	BoundType       types.Type
+	ComparisonScale int32
+	Op              types.ComparisonOp
+	Zone            *time.Location
 }
 
 type IndexBlockInput struct {
@@ -71,6 +71,6 @@ type IndexBlockInput struct {
 // already returned by ordinary Resolve. It opens no relation or subscription.
 type IndexPlanningRelation interface {
 	ReadIndexCostStats(context.Context, client.CatalogReadStamp, *statsinfo.StatsInfo, string) (IndexCostStats, bool, error)
-	ObserveTemporalBlockInput(context.Context, client.CatalogReadStamp, TemporalBlockInputRequest, *int) (IndexBlockInput, bool, error)
+	ObserveIndexBlockInput(context.Context, client.CatalogReadStamp, IndexBlockInputRequest, *int) (IndexBlockInput, bool, error)
 	VerifyIndexPair(context.Context, client.CatalogReadStamp, IndexPairCheck, *int) (bool, error)
 }

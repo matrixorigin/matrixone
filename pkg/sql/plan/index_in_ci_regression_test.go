@@ -64,7 +64,9 @@ func TestIndexOnlyConstructionFailureKeepsOriginalScan(t *testing.T) {
 	refs := map[[2]int32]int{{tag, 1}: 1}
 	match, ok := builder.matchRegularIndexOnlyScan(idx, node, builder.newEncodedRegularIndexCostContext(node, refs))
 	require.True(t, ok)
-	require.Equal(t, int32(-1), builder.applyRegularIndexOnlyScan(idx, node, colMap, &Snapshot{}, match))
+	id, err := builder.applyRegularIndexOnlyScan(idx, node, colMap, &Snapshot{}, match)
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), id)
 	got, indexErr := builder.applyIndicesForFiltersRegularIndex(id, node, refs, colMap)
 	require.NoError(t, indexErr)
 	require.Equal(t, id, got)

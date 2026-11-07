@@ -20,17 +20,6 @@ import (
 	"time"
 )
 
-// TemporalOp compares the indexed component with the bound, in that order.
-type TemporalOp uint8
-
-const (
-	TemporalEqual TemporalOp = iota
-	TemporalLess
-	TemporalLessEqual
-	TemporalGreater
-	TemporalGreaterEqual
-)
-
 // TemporalCandidate is a closed candidate interval and an optional zero point.
 // DATETIME consumers must additionally include the physical tails outside the
 // supported calendar domain. Full and Empty are mutually exclusive.
@@ -45,17 +34,17 @@ func temporalFull() TemporalCandidate {
 	return TemporalCandidate{Lo: math.MinInt64, Hi: math.MaxInt64, Sentinel: math.MinInt64, Full: true}
 }
 
-func temporalCompare(a, b int64, op TemporalOp) bool {
+func temporalCompare(a, b int64, op ComparisonOp) bool {
 	switch op {
-	case TemporalEqual:
+	case ComparisonEqual:
 		return a == b
-	case TemporalLess:
+	case ComparisonLess:
 		return a < b
-	case TemporalLessEqual:
+	case ComparisonLessEqual:
 		return a <= b
-	case TemporalGreater:
+	case ComparisonGreater:
 		return a > b
-	case TemporalGreaterEqual:
+	case ComparisonGreaterEqual:
 		return a >= b
 	default:
 		return false
@@ -72,7 +61,7 @@ func temporalAdd(a, b int64) (int64, bool) {
 // BuildTemporalCandidate builds a necessary physical bound for a mixed
 // DATETIME/TIMESTAMP comparison. Unsupported calculations retain Full.
 func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32,
-	bound int64, boundIsNull bool, op TemporalOp, zone *time.Location,
+	bound int64, boundIsNull bool, op ComparisonOp, zone *time.Location,
 ) (TemporalCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return TemporalCandidate{}, err
@@ -80,7 +69,7 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 	if boundIsNull {
 		return TemporalCandidate{Empty: true}, nil
 	}
-	if timestampScale < 0 || timestampScale > 6 || op > TemporalGreaterEqual || zone == nil {
+	if timestampScale < 0 || timestampScale > 6 || op > ComparisonGreaterEqual || zone == nil {
 		return temporalFull(), nil
 	}
 	offset, fixed := FixedZoneOffset(zone)
@@ -95,23 +84,23 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 		value := int64(Datetime(bound).ToTimestamp(zone).TruncateToScale(timestampScale))
 		lo, hi := int64(math.MinInt64), int64(math.MaxInt64)
 		switch op {
-		case TemporalEqual:
+		case ComparisonEqual:
 			lo, hi = value, value
-		case TemporalLess:
+		case ComparisonLess:
 			var ok bool
 			hi, ok = temporalAdd(value, -1)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalLessEqual:
+		case ComparisonLessEqual:
 			hi = value
-		case TemporalGreater:
+		case ComparisonGreater:
 			var ok bool
 			lo, ok = temporalAdd(value, 1)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalGreaterEqual:
+		case ComparisonGreaterEqual:
 			lo = value
 		}
 		return TemporalCandidate{Lo: lo, Hi: hi, Sentinel: lo}, nil
@@ -126,21 +115,21 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 	var ok bool
 	if timestampScale == 6 {
 		switch op {
-		case TemporalEqual:
+		case ComparisonEqual:
 			lo, hi = bound, bound
-		case TemporalLess:
+		case ComparisonLess:
 			hi, ok = temporalAdd(bound, -1)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalLessEqual:
+		case ComparisonLessEqual:
 			hi = bound
-		case TemporalGreater:
+		case ComparisonGreater:
 			lo, ok = temporalAdd(bound, 1)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalGreaterEqual:
+		case ComparisonGreaterEqual:
 			lo = bound
 		}
 	} else if bound > q {
@@ -154,7 +143,7 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 		}
 		half := q / 2
 		switch op {
-		case TemporalEqual:
+		case ComparisonEqual:
 			if bound%q != 0 {
 				return TemporalCandidate{Empty: true}, nil
 			}
@@ -166,22 +155,22 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalLess:
+		case ComparisonLess:
 			hi, ok = temporalAdd(ceil, -half-1)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalLessEqual:
+		case ComparisonLessEqual:
 			hi, ok = temporalAdd(floor, half-1)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalGreater:
+		case ComparisonGreater:
 			lo, ok = temporalAdd(floor, half)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalGreaterEqual:
+		case ComparisonGreaterEqual:
 			lo, ok = temporalAdd(ceil, -half)
 			if !ok {
 				return temporalFull(), nil
@@ -189,7 +178,7 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 		}
 	} else {
 		switch op {
-		case TemporalEqual:
+		case ComparisonEqual:
 			lo, ok = temporalAdd(bound, -q)
 			if !ok {
 				return temporalFull(), nil
@@ -198,12 +187,12 @@ func BuildTemporalCandidate(ctx context.Context, keyKind T, timestampScale int32
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalLess, TemporalLessEqual:
+		case ComparisonLess, ComparisonLessEqual:
 			hi, ok = temporalAdd(bound, q)
 			if !ok {
 				return temporalFull(), nil
 			}
-		case TemporalGreater, TemporalGreaterEqual:
+		case ComparisonGreater, ComparisonGreaterEqual:
 			lo, ok = temporalAdd(bound, -q)
 			if !ok {
 				return temporalFull(), nil

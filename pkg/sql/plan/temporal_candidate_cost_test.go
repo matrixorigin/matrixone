@@ -35,27 +35,27 @@ import (
 func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 	for _, scenario := range []string{"eligible", "unmarked lifetime", "missing scope", "missing original owner", "other original scan", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
 		t.Run(scenario, func(t *testing.T) {
-			builder, _, _ := temporalCBOTraversalFixture(t)
+			builder, _, _ := newIndexCostFixture(t)
 			switch scenario {
 			case "unmarked lifetime":
 				builder.qry.ExecutionDependentAccess = false
 			case "missing scope":
 				builder.borrowResolutionAllowed = false
 			case "missing original owner":
-				builder.temporalOriginalScan = temporalOriginalScan{}
+				builder.originalIndexScan = originalIndexScan{}
 			case "other original scan":
-				builder.temporalOriginalScan.scanID++
+				builder.originalIndexScan.scanID++
 			case "unproved original owner":
 				scan := builder.qry.Nodes[0]
 				scan.FilterList = append(scan.FilterList, DeepCopyExpr(scan.FilterList[0]))
 				steps := builder.qry.Steps
 				builder.qry.Steps = nil // The original owner is captured before step publication.
-				builder.collectOriginalTemporalOwner(0)
+				builder.collectOriginalIndexOwner(0)
 				builder.qry.Steps = steps
-				require.False(t, builder.temporalOriginalScan.safe)
+				require.False(t, builder.originalIndexScan.safe)
 				scan.FilterList = scan.FilterList[:1] // Model a later equivalent rewrite.
 			case "parameter provenance":
-				compiler := builder.compCtx.(*temporalCBOContext).encodedIndexCostTestContext.MockCompilerContext
+				compiler := builder.compCtx.(*indexCostCompilerFixture).encodedIndexCostTestContext.MockCompilerContext
 				compiler.SetContext(withPreparedSourceBindings(builder.GetContext(), nil, nil))
 			case "prepared statement":
 				builder.isPrepareStatement = true
@@ -89,7 +89,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 func TestTemporalMissingBorrowPreservesCancellation(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "missing", true: "disabled"}[disabled], func(t *testing.T) {
-			builder, _, _ := temporalCBOTraversalFixture(t)
+			builder, _, _ := newIndexCostFixture(t)
 			builder.clearScanBorrows()
 			builder.borrowResolutionDisabled = disabled
 			stop := errors.New("planning stopped")
@@ -125,9 +125,9 @@ func (c *trackingResolveContext) Resolve(database, name string, snapshot *Snapsh
 }
 
 func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
-	fixture, _, _ := temporalCBOTraversalFixture(t)
+	fixture, _, _ := newIndexCostFixture(t)
 	scan := fixture.qry.Nodes[0]
-	underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+	underlying := fixture.compCtx.(*indexCostCompilerFixture).encodedIndexCostTestContext
 	underlying.tables["base"] = scan.TableDef
 	underlying.objects["base"] = scan.ObjRef
 	compiler := &trackingResolveContext{CompilerContext: underlying}
@@ -169,9 +169,9 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 func TestPlanningInputCompilerIdentityChanges(t *testing.T) {
 	for _, scenario := range []string{"initial rejection stays rejected", "owner changes during lookup", "process mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
-			fixture, _, _ := temporalCBOTraversalFixture(t)
+			fixture, _, _ := newIndexCostFixture(t)
 			scan := fixture.qry.Nodes[0]
-			underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+			underlying := fixture.compCtx.(*indexCostCompilerFixture).encodedIndexCostTestContext
 			underlying.tables["base"], underlying.objects["base"] = scan.TableDef, scan.ObjRef
 			compiler := &trackingResolveContext{CompilerContext: underlying}
 			stmt, err := mysql.ParseOne(compiler.GetContext(), "select d from base where d > now()", 1)
@@ -204,9 +204,9 @@ func TestPlanningInputCompilerIdentityChanges(t *testing.T) {
 }
 
 func TestPlanningInputCanRecoverAfterLaterCompilerMismatch(t *testing.T) {
-	fixture, _, _ := temporalCBOTraversalFixture(t)
+	fixture, _, _ := newIndexCostFixture(t)
 	scan := fixture.qry.Nodes[0]
-	underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+	underlying := fixture.compCtx.(*indexCostCompilerFixture).encodedIndexCostTestContext
 	underlying.tables["base"], underlying.objects["base"] = scan.TableDef, scan.ObjRef
 	compiler := &trackingResolveContext{CompilerContext: underlying}
 	stmt, err := mysql.ParseOne(compiler.GetContext(), "select a.d from base a join base b on a.d=b.d join base c on a.d=c.d", 1)
@@ -228,16 +228,15 @@ func TestPlanningInputCanRecoverAfterLaterCompilerMismatch(t *testing.T) {
 }
 
 func TestTemporalCandidateDirectEntryWithoutInput(t *testing.T) {
-	builder, _, index := temporalCBOTraversalFixture(t)
+	builder, _, index := newIndexCostFixture(t)
 	builder.planningInput = nil
-	_, err := builder.enumerateTemporalIndexCandidates(0, []*plan.IndexDef{index}, nil, func(regularIndexAccessCandidate) {
-		t.Fatal("a missing input cannot yield a temporal candidate")
-	})
+	access, err := builder.observeIndexCost(0, nil)
 	require.NoError(t, err)
-	id, applied, err := builder.applyTemporalIndexCandidate(0, index, nil, nil, temporalIndexAccess{budget: 1})
+	require.Nil(t, access)
+	scan, err := builder.buildRegularIndexOnlyScan(index, builder.qry.Nodes[0], nil, nil, &regularIndexOnlyMatch{observation: &indexCostObservation{budget: 1}})
 	require.NoError(t, err)
-	require.Zero(t, id)
-	require.False(t, applied)
+	require.Nil(t, scan)
+
 }
 
 func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
@@ -267,7 +266,7 @@ func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
 	intent := ExecutionIntent{TimeZone: time.UTC, UnixTime: proc.Base.UnixTime,
 		Placement: schedule.LocalAccessIntent{CurrentCN: schedule.Worker{ID: "cn", Addr: "local:6001", Route: schedule.WorkerRouteLocal}}}
 	wrapper := &trackingResolveContext{CompilerContext: ctx}
-	otherCompiler := &temporalCBOContext{encodedIndexCostTestContext: fixture}
+	otherCompiler := &indexCostCompilerFixture{encodedIndexCostTestContext: fixture}
 	p, err := BuildPlan(wrapper, stmt, false, NewPlanningInput(stmt, intent, otherCompiler))
 	require.NoError(t, err)
 	require.Positive(t, wrapper.resolves, "a mismatched resolver must not bypass the compiler wrapper")
@@ -285,8 +284,8 @@ func TestTemporalIndexSelectionFromPublicPlanning(t *testing.T) {
 
 func TestTemporalCandidateCostEvaluationErrors(t *testing.T) {
 	ctx := context.Background()
-	require.Nil(t, temporalCandidateCostEvaluationError(moerr.NewInvalidInputNoCtx("SQL diagnostic")))
+	require.Nil(t, indexCostEvaluationError(moerr.NewInvalidInputNoCtx("SQL diagnostic")))
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded, moerr.NewOOM(ctx), moerr.NewInternalError(ctx, "internal")} {
-		require.ErrorIs(t, temporalCandidateCostEvaluationError(err), err)
+		require.ErrorIs(t, indexCostEvaluationError(err), err)
 	}
 }

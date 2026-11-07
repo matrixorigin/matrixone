@@ -17,6 +17,8 @@ package index
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,4 +51,56 @@ func TestZoneMapMatchThreeValuedLogic(t *testing.T) {
 	require.True(t, no.Excludes())
 	require.True(t, yes.MayMatch())
 	require.False(t, yes.Excludes())
+}
+
+// Independent scalar predicates establish exact block existence in the ordinary
+// domain; uninitialized or differently typed metadata must remain unknown.
+func TestScalarZoneMapMatcherOrdinary(t *testing.T) {
+	values := []int64{-5, 0, 9}
+	for _, decimal := range []bool{false, true} {
+		kind, scale := types.T_int64, int32(0)
+		if decimal {
+			kind, scale = types.T_decimal64, 2
+		}
+		zm := NewZM(kind, scale)
+		for _, value := range values {
+			encoded := value
+			if decimal {
+				encoded *= 100
+			}
+			UpdateZM(zm, types.EncodeInt64(&encoded))
+		}
+		for _, bound := range []int64{-6, -5, 0, 9, 10} {
+			for op := types.ComparisonEqual; op <= types.ComparisonGreaterEqual; op++ {
+				// Decimal bounds deliberately use a different scale.
+				value, boundScale := bound, int32(0)
+				if decimal {
+					value *= 10
+					boundScale = 1
+				}
+				match, _, ok := MakeScalarZoneMapMatcher(types.New(kind, 0, scale), types.EncodeInt64(&value), types.New(kind, 0, boundScale), 0, nil, op)
+				require.True(t, ok)
+				want := false
+				for _, row := range values {
+					switch op {
+					case types.ComparisonEqual:
+						want = want || row == bound
+					case types.ComparisonLess:
+						want = want || row < bound
+					case types.ComparisonLessEqual:
+						want = want || row <= bound
+					case types.ComparisonGreater:
+						want = want || row > bound
+					case types.ComparisonGreaterEqual:
+						want = want || row >= bound
+					}
+				}
+				got := match(zm)
+				require.True(t, got.Known)
+				require.Equal(t, want, got.Match, "decimal=%v bound=%d op=%s", decimal, bound, op)
+				require.False(t, match(NewZM(kind, scale)).Known)
+				require.False(t, match(NewZM(types.T_varchar, 0)).Known)
+			}
+		}
+	}
 }

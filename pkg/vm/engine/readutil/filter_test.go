@@ -183,7 +183,7 @@ func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
 	t.Run("invalid timestamp precision fails open", func(t *testing.T) {
 		value := int64(0)
 		for _, scale := range []int32{-1, 7} {
-			_, ok := makeTemporalFilterMatcher(types.T_datetime, types.EncodeInt64(&value), types.T_timestamp, scale, zone, "=")
+			_, _, ok := index.MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeInt64(&value), types.T_timestamp.ToType(), scale, zone, types.ComparisonEqual)
 			require.False(t, ok)
 		}
 	})

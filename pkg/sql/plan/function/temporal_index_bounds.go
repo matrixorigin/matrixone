@@ -57,8 +57,8 @@ func temporalBoundEndpoint[Input, Output temporalBoundValue](parameters []*vecto
 		scale, scaleNull := scales.GetValue(row)
 		selector, selectorNull := selectors.GetValue(row)
 		candidate := types.TemporalCandidate{Lo: math.MinInt64, Hi: math.MaxInt64, Sentinel: math.MinInt64, Full: true}
-		if !opNull && !scaleNull && !selectorNull && op >= 0 && op <= int32(types.TemporalGreaterEqual) && selector >= 0 && selector <= 2 {
-			bound, err := types.BuildTemporalCandidate(proc.Ctx, key, scale, int64(value), valueNull, types.TemporalOp(op), proc.GetSessionInfo().TimeZone)
+		if !opNull && !scaleNull && !selectorNull && op >= 0 && op <= int32(types.ComparisonGreaterEqual) && selector >= 0 && selector <= 2 {
+			bound, err := types.BuildTemporalCandidate(proc.Ctx, key, scale, int64(value), valueNull, types.ComparisonOp(op), proc.GetSessionInfo().TimeZone)
 			if err != nil {
 				return err
 			}

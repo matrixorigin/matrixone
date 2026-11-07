@@ -40,7 +40,7 @@ func TestMixedTemporalZoneMatcher(t *testing.T) {
 		op   string
 		want bool
 	}{{"=", true}, {"<", false}, {"<=", true}, {">", false}, {">=", true}} {
-		match, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeInt64(&encoded), types.T_timestamp, 3, zone, tc.op)
+		match, _, ok := MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeInt64(&encoded), types.T_timestamp.ToType(), 3, zone, func() types.ComparisonOp { value, _ := types.ParseComparisonOp(tc.op); return value }())
 		require.True(t, ok)
 		got := match(zm)
 		require.True(t, got.Known, tc.op)
@@ -49,16 +49,16 @@ func TestMixedTemporalZoneMatcher(t *testing.T) {
 			require.False(t, match(unknown).Known, "unknown or incompatible metadata cannot prune")
 		}
 	}
-	_, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeInt64(&encoded), types.T_timestamp, 7, zone, "=")
+	_, _, ok := MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeInt64(&encoded), types.T_timestamp.ToType(), 7, zone, types.ComparisonEqual)
 	require.False(t, ok)
-	_, ok = MakeMixedTemporalMatcher(types.T_datetime, types.EncodeInt64(&encoded), types.T_timestamp, 3, nil, "=")
+	_, _, ok = MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeInt64(&encoded), types.T_timestamp.ToType(), 3, nil, types.ComparisonEqual)
 	require.False(t, ok)
-	_, ok = MakeMixedTemporalMatcher(types.T_datetime, types.EncodeInt64(&encoded), types.T_timestamp, 3, zone, "invalid")
+	_, _, ok = MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeInt64(&encoded), types.T_timestamp.ToType(), 3, zone, types.ComparisonOp(255))
 	require.False(t, ok)
 
 	// The opposite physical type converts the DATETIME bound at the
 	// TIMESTAMP column's scale before comparing against its zone map.
-	match, ok := MakeMixedTemporalMatcher(types.T_timestamp, types.EncodeInt64(&v), types.T_datetime, 3, zone, "=")
+	match, _, ok := MakeScalarZoneMapMatcher(types.T_timestamp.ToType(), types.EncodeInt64(&v), types.T_datetime.ToType(), 3, zone, types.ComparisonEqual)
 	require.True(t, ok)
 	matched := match(wrongType)
 	require.True(t, matched.Known)
@@ -85,7 +85,7 @@ func TestMixedTemporalZoneMatcherSentinelRanges(t *testing.T) {
 				UpdateZM(zm, types.EncodeDatetime(&row))
 			}
 			bound := types.Timestamp(0)
-			match, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeTimestamp(&bound), types.T_timestamp, 0, zone, "=")
+			match, _, ok := MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeTimestamp(&bound), types.T_timestamp.ToType(), 0, zone, types.ComparisonEqual)
 			require.True(t, ok)
 			require.False(t, match(zm).Known, "non-monotone intervals cannot establish exclusion or a lower-bound hit")
 		})
@@ -99,7 +99,7 @@ func TestMixedTemporalZoneMatcherMalformedEndpoints(t *testing.T) {
 			boundType = types.T_datetime
 		}
 		zero := int64(0)
-		match, ok := MakeMixedTemporalMatcher(column, types.EncodeInt64(&zero), boundType, 6, time.UTC, "=")
+		match, _, ok := MakeScalarZoneMapMatcher(column.ToType(), types.EncodeInt64(&zero), boundType.ToType(), 6, time.UTC, types.ComparisonEqual)
 		require.True(t, ok)
 		zm := NewZM(column, 6)
 		UpdateZM(zm, types.EncodeInt64(&zero))
@@ -161,7 +161,7 @@ func TestMixedTemporalZoneMatcherScalarOracle(t *testing.T) {
 					crossesSentinel := scale < 6 && lo <= types.ZeroTimestamp && hi >= types.ZeroTimestamp
 					for _, bound := range []types.Timestamp{types.ZeroTimestamp, 0, rows[0].ToTimestamp(zone).TruncateToScale(scale), rows[1].ToTimestamp(zone).TruncateToScale(scale)} {
 						for _, op := range []string{"=", "<", "<=", ">", ">="} {
-							match, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeTimestamp(&bound), types.T_timestamp, scale, zone, op)
+							match, _, ok := MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeTimestamp(&bound), types.T_timestamp.ToType(), scale, zone, func() types.ComparisonOp { value, _ := types.ParseComparisonOp(op); return value }())
 							require.True(t, ok)
 							got := match(zm)
 							if r[0] > r[1] || r[0] != r[1] && (r[0] < 0 || r[1] > maxDate) {
@@ -206,7 +206,7 @@ func BenchmarkMixedTemporalZoneMatcher(b *testing.B) {
 		zm := NewZM(types.T_datetime, 6)
 		UpdateZM(zm, types.EncodeDatetime(&low))
 		UpdateZM(zm, types.EncodeDatetime(&high))
-		fast, ok := MakeMixedTemporalMatcher(types.T_datetime, types.EncodeTimestamp(&bound), types.T_timestamp, 0, zone, "=")
+		fast, _, ok := MakeScalarZoneMapMatcher(types.T_datetime.ToType(), types.EncodeTimestamp(&bound), types.T_timestamp.ToType(), 0, zone, types.ComparisonEqual)
 		require.True(b, ok)
 		calendar := func(zm ZM) ZoneMapMatch {
 			lo, hi, known := types.DatetimeRangeToTimestampRange(zm.GetMin().(types.Datetime), zm.GetMax().(types.Datetime), zone)

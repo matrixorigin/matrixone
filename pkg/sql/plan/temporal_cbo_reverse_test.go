@@ -30,7 +30,7 @@ import (
 // Exercise the admitted typed plan all the way through the selector and the
 // generated encoded-key filter and residual, independently of SQL parsing.
 func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
-	builder, source, _ := temporalCBOTraversalFixture(t)
+	builder, source, _ := newIndexCostFixture(t)
 	proc := builder.compCtx.GetProcess()
 	scan := builder.qry.Nodes[0]
 	scan.TableDef.Cols[0].Typ.Id = int32(types.T_timestamp)
@@ -46,9 +46,9 @@ func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
 	source.observation.Max = float64(bound.ToTimestamp(time.UTC) + 100*types.MicroSecsPerSec)
 	steps := builder.qry.Steps
 	builder.qry.Steps = nil
-	builder.collectOriginalTemporalOwner(0)
+	builder.collectOriginalIndexOwner(0)
 	builder.qry.Steps = steps
-	require.True(t, builder.temporalOriginalScan.safe, "the original typed predicate must be admitted")
+	require.True(t, builder.originalIndexScan.safe, "the original typed predicate must be admitted")
 	id, err := builder.applyIndicesWithOrder(0, map[[2]int32]int{{scan.BindingTags[0], 0}: 1}, make(map[[2]int32]*pb.Expr), false)
 	require.NoError(t, err)
 	require.NotZero(t, id, "the typed path must actually select the covering index")

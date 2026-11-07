@@ -77,10 +77,10 @@ func TestExecutionDependentAccessRejectsOrdinaryCache(t *testing.T) {
 func TestExecutionIntentUsesStatementSQL(t *testing.T) {
 	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 122)
 	defer prepareStmt.Close()
-	stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select 1", 1)
+	stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select 1 from intent_table", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	raw := "select /*+ SET_VAR(query_max_workers=2) */ 1"
+	raw := "select /*+ SET_VAR(query_max_workers=2) */ 1 from intent_table"
 	input, intent, ok := planningInputForStatement(ses, ses.GetProc(), raw, "", stmt)
 	require.True(t, ok)
 	require.NotNil(t, input)
@@ -89,8 +89,8 @@ func TestExecutionIntentUsesStatementSQL(t *testing.T) {
 	proc := ses.GetProc()
 	require.True(t, intent.MatchesProcess(proc))
 	require.True(t, executionIntentMatchesCompile(&intent, ses, proc, raw, "", stmt))
-	require.False(t, executionIntentMatchesCompile(&intent, ses, proc, "select 1", "", stmt), "changed scheduling must rebuild")
-	require.False(t, executionIntentMatchesCompile(&intent, ses, proc, "/*+ SIDECAR */ select 1", "", stmt), "changed offload must rebuild")
+	require.False(t, executionIntentMatchesCompile(&intent, ses, proc, "select 1 from intent_table", "", stmt), "changed scheduling must rebuild")
+	require.False(t, executionIntentMatchesCompile(&intent, ses, proc, "/*+ SIDECAR */ select 1 from intent_table", "", stmt), "changed offload must rebuild")
 	require.False(t, executionIntentMatchesCompile(nil, ses, proc, raw, "", stmt))
 	oldZone, oldTime := proc.GetSessionInfo().TimeZone, proc.Base.UnixTime
 	defer func() { proc.GetSessionInfo().TimeZone, proc.Base.UnixTime = oldZone, oldTime }()
@@ -100,7 +100,7 @@ func TestExecutionIntentUsesStatementSQL(t *testing.T) {
 	proc.Base.UnixTime++
 	require.False(t, intent.MatchesProcess(proc), "clock drift must invalidate the sample")
 	proc.Base.UnixTime = oldTime
-	_, intent, ok = planningInputForStatement(ses, ses.GetProc(), "/*+ SIDECAR */ select 1", "", stmt)
+	_, intent, ok = planningInputForStatement(ses, ses.GetProc(), "/*+ SIDECAR */ select 1 from intent_table", "", stmt)
 	require.True(t, ok)
 	require.True(t, intent.Placement.Sirius)
 	_, _, ok = planningInputForStatement(ses, ses.GetProc(), "", "", stmt)
@@ -120,7 +120,7 @@ func TestExecutionIntentForExplain(t *testing.T) {
 		sql      string
 		eligible bool
 	}{
-		{"explain select 1", true},
+		{"explain select 1 from intent_table", true},
 		{"explain select ?", false},
 		{"explain execute missing", false},
 	} {
@@ -142,10 +142,10 @@ func TestExecutionIntentForExplain(t *testing.T) {
 func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
 	ses, prepared, _, execCtx := newPreparedExecuteEnv(t, 123)
 	defer prepared.Close()
-	stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select 1", 1)
+	stmt, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, "select 1 from intent_table", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	const sql = "select /*+ SET_VAR(query_max_workers=2) */ 1"
+	const sql = "select /*+ SET_VAR(query_max_workers=2) */ 1 from intent_table"
 	_, intent, ok := planningInputForStatement(ses, ses.GetProc(), sql, "", stmt)
 	require.True(t, ok)
 	marked := &plan.Expr{CandidateFilter: true}
@@ -158,7 +158,7 @@ func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
 	require.Same(t, candidate, got)
 	require.True(t, validated)
 	require.Zero(t, builds)
-	got, validated, err = validateCandidatePlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), "select 1", "", stmt, rebuild)
+	got, validated, err = validateCandidatePlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), "select 1 from intent_table", "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, safe, got)
 	require.False(t, validated)
@@ -193,7 +193,11 @@ func TestTemporalSafeRebuildDropsStaleSnapshot(t *testing.T) {
 func TestCreateCompileTemporalDriftPreservesRequestState(t *testing.T) {
 	ses, prepared, cw, execCtx := newPreparedExecuteEnv(t, 126)
 	defer prepared.Close()
-	_, intent, ok := planningInputForStatement(ses, cw.proc, prepared.Sql, "", prepared.PrepareStmt)
+	const statementSQL = "select 1 from intent_table"
+	statement, err := parsers.ParseOne(execCtx.reqCtx, dialect.MYSQL, statementSQL, 1)
+	require.NoError(t, err)
+	defer statement.Free()
+	_, intent, ok := planningInputForStatement(ses, cw.proc, statementSQL, "", statement)
 	require.True(t, ok)
 	intent.UnixTime++
 	marked := &plan.Expr{CandidateFilter: true}
@@ -203,8 +207,8 @@ func TestCreateCompileTemporalDriftPreservesRequestState(t *testing.T) {
 	cw.proc.ReplaceTopCtx(top)
 	cw.proc.SetMessageBoard(message.NewMessageBoard())
 	oldRequest, oldTop, oldBoard := execCtx.reqCtx, cw.proc.GetTopContext(), cw.proc.GetMessageBoard()
-	compiled, err := createCompile(execCtx, ses, cw.proc, ses.GetDatabaseName(), false, prepared.Sql, prepared.Sql,
-		nil, prepared.PrepareStmt, candidate, nil, false, nil, false, nil, nil, 0, &intent)
+	compiled, err := createCompile(execCtx, ses, cw.proc, ses.GetDatabaseName(), false, statementSQL, statementSQL,
+		nil, statement, candidate, nil, false, nil, false, nil, nil, 0, &intent)
 	require.Nil(t, compiled)
 	require.ErrorIs(t, err, compile.ErrExecutionIntentDrift)
 	require.Same(t, oldRequest, execCtx.reqCtx)

@@ -60,10 +60,47 @@ type PlanningInput struct {
 }
 
 func NewPlanningInput(root *tree.Select, intent ExecutionIntent, owner CompilerContext) *PlanningInput {
-	if root == nil || root.Select == nil || tree.ParameterCount(root) != 0 {
+	if !PlanningInputMayUseIndex(root) || tree.ParameterCount(root) != 0 {
 		return nil
 	}
 	return &PlanningInput{root: root, intent: intent, owner: owner}
+}
+
+// PlanningInputMayUseIndex cheaply excludes literal-only, scan-free roots.
+// Uncertain syntax retains the complete parameter and bound-plan checks. This
+// is an allocation fast path, never a positive candidate-admission proof.
+func PlanningInputMayUseIndex(root *tree.Select) bool {
+	if root == nil || root.Select == nil {
+		return false
+	}
+	clause, ok := root.Select.(*tree.SelectClause)
+	if !ok || root.With != nil || root.RewriteOption != nil || root.TimeWindow != nil || len(root.OrderBy) != 0 || root.Limit != nil ||
+		root.RankOption != nil || root.Ep != nil || len(root.IntoVars) != 0 || root.SelectLockInfo != nil ||
+		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
+		len(clause.Windows) != 0 || len(clause.IntoVars) != 0 || clause.IntoExport != nil || len(clause.OrderByOriginalExprs) != 0 || len(clause.OrderBySourceProbes) != 0 {
+		return true
+	}
+	if clause.From != nil && len(clause.From.Tables) != 0 {
+		// The parser represents an omitted FROM as one unnamed table. Real
+		// table references, including explicit DUAL, retain the normal proof.
+		if len(clause.From.Tables) != 1 {
+			return true
+		}
+		alias, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+		if !ok {
+			return true
+		}
+		table, ok := alias.Expr.(*tree.TableName)
+		if !ok || table.ObjectName != "" || table.ExplicitSchema || table.ExplicitCatalog || table.AtTsExpr != nil || table.IcebergRef != nil {
+			return true
+		}
+	}
+	for _, expr := range clause.Exprs {
+		if _, literal := expr.Expr.(*tree.NumVal); !literal {
+			return true
+		}
+	}
+	return false
 }
 
 func (input *PlanningInput) claim(root *tree.Select) bool {

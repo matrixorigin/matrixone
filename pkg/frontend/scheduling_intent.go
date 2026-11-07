@@ -32,7 +32,7 @@ func planningInputForStatement(ses FeSession, proc *process.Process, sql, sqlMod
 		return nil, plan2.ExecutionIntent{}, false
 	}
 	root := planningInputRoot(stmt)
-	if root == nil {
+	if !plan2.PlanningInputMayUseIndex(root) {
 		return nil, plan2.ExecutionIntent{}, false
 	}
 	intent := plan2.ExecutionIntent{

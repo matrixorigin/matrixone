@@ -189,6 +189,12 @@ func (zm ZM) GetScale() int32 {
 	return int32(sz)
 }
 
+// HasType compares the persisted type header, including its encoded scale.
+// SQL uses -1 for an unspecified scale; SetScale stores its low six bits.
+func (zm ZM) HasType(typ types.Type) bool {
+	return zm.GetType() == typ.Oid && zm.GetScale() == int32(0x3f&byte(typ.Scale))
+}
+
 func (zm ZM) GetMin() any {
 	if !zm.IsInited() {
 		return nil

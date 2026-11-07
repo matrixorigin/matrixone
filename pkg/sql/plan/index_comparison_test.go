@@ -184,7 +184,8 @@ func TestRegularIndexComparisonKeepsSafePrefixAndResidual(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []int32{0}, match.filterIdx, "unsafe later component cannot enter the encoded prefix")
 	require.Equal(t, []int32{0}, cost.matchPointBackfill(idx, false))
-	id := builder.applyRegularIndexOnlyScan(idx, node, map[[2]int32]*planpb.Expr{}, &Snapshot{}, match)
+	id, err := builder.applyRegularIndexOnlyScan(idx, node, map[[2]int32]*planpb.Expr{}, &Snapshot{}, match)
+	require.NoError(t, err)
 	require.NotEqual(t, int32(-1), id)
 	scan := builder.qry.Nodes[id]
 	require.Len(t, scan.FilterList, 2)
@@ -310,7 +311,7 @@ func TestIndexDecimalComparisonRejectsOverflowingNormalization(t *testing.T) {
 	value, err := types.ParseDecimal128("12345678901234567890.00", 38, 2)
 	require.NoError(t, err)
 	bound := &planpb.Expr{Typ: makePlan2Type(&source), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{A: int64(value.B0_63), B: int64(value.B64_127)}}}}}
-	require.False(t, analyzeIndexComparisonBound(context.Background(), bound, makePlan2Type(&key)).usable)
+	require.False(t, analyzeIndexComparisonBound(context.Background(), bound, makePlan2Type(&key)).exact())
 }
 
 func TestSerializedIndexComparisonChecksFoldedStringDomain(t *testing.T) {

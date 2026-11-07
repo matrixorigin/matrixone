@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,16 +54,19 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		exec("set time_zone='+00:00'")
 		sparseClock := time.Date(2026, time.April, 30, 23, 59, 59, 0, time.UTC).Unix()
 		exec(fmt.Sprintf("set timestamp=%d", sparseClock))
-		exec("create table events(id int primary key, d datetime(6), key idx_d(d))")
+		exec("create table events(id int primary key, d datetime(6), n bigint, key idx_d(d), key idx_n(n))")
 		// Native layout statistics require more than 100,000 rows. Use the
 		// first eligible cardinality and scatter dates across primary-key order,
 		// so the index competes with overlapping base blocks.
-		exec("insert into events select result, case when mod(result*8191,100001) < 99901 then date_add('2020-01-01 00:00:00', interval mod(result*8191,100001) second) else date_add(now(6), interval 1 day) end from generate_series(0,100000) g")
+		exec("insert into events select result, case when mod(result*8191,100001) < 99901 then date_add('2020-01-01 00:00:00', interval mod(result*8191,100001) second) else date_add(now(6), interval 1 day) end, mod(result*8191,100001) from generate_series(0,100000) g")
 		var index string
 		require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='idx_d' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='events') limit 1", schema).Scan(&index))
 		exec("select mo_ctl('dn','flush','" + schema + ".events')")
 		exec("select mo_ctl('dn','flush','" + schema + "." + index + "')")
-		exec("analyze table events(d) fullscan")
+		var eventsIntegerIndex string
+		require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='idx_n' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='events') limit 1", schema).Scan(&eventsIntegerIndex))
+		exec("select mo_ctl('dn','flush','" + schema + "." + eventsIntegerIndex + "')")
+		exec("analyze table events(d,n) fullscan")
 		query := "select id,d from events where d > now(6)"
 		explain := func(prefix, query string) string {
 			t.Helper()
@@ -187,13 +191,16 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		// The same value distribution can need only one BASE block when dates
 		// correlate with the PK. Object overlap alone cannot distinguish this
 		// layout from events; AUTO must keep the cheaper physical scan.
-		exec("create table ordered_events(id int primary key, d datetime(6), key idx_d(d))")
-		exec("insert into ordered_events select result, case when result < 99901 then date_add('2020-01-01 00:00:00', interval result second) else date_add(now(6), interval 1 day) end from generate_series(0,100000) g")
+		exec("create table ordered_events(id int primary key, d datetime(6), n bigint, key idx_d(d), key idx_n(n))")
+		exec("insert into ordered_events select result, case when result < 99901 then date_add('2020-01-01 00:00:00', interval result second) else date_add(now(6), interval 1 day) end, result from generate_series(0,100000) g")
 		var orderedIndex string
 		require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='idx_d' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='ordered_events') limit 1", schema).Scan(&orderedIndex))
 		exec("select mo_ctl('dn','flush','" + schema + ".ordered_events')")
 		exec("select mo_ctl('dn','flush','" + schema + "." + orderedIndex + "')")
-		exec("analyze table ordered_events(d) fullscan")
+		var ordered_eventsIntegerIndex string
+		require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='idx_n' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='ordered_events') limit 1", schema).Scan(&ordered_eventsIntegerIndex))
+		exec("select mo_ctl('dn','flush','" + schema + "." + ordered_eventsIntegerIndex + "')")
+		exec("analyze table ordered_events(d,n) fullscan")
 		const orderedQuery = "select id,d from ordered_events where d > now(6)"
 		orderedPlan := explain("explain analyze ", orderedQuery)
 		require.Contains(t, orderedPlan, "Table Scan on "+schema+".ordered_events", orderedPlan)
@@ -203,6 +210,33 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 		require.Equal(t, orderedExpected, ids(orderedQuery))
 		for id := range orderedExpected {
 			require.GreaterOrEqual(t, id, int64(99901))
+		}
+
+		// Ordinary integer costing uses the same cached-block observation. The
+		// two layouts must return the complete independently derived row map.
+		for _, table := range []string{"events", "ordered_events"} {
+			t.Run("integer observed access/"+table, func(t *testing.T) {
+				query := "select id,n from " + table + " where n >= 99901"
+				want := make(map[int64]string)
+				for id := int64(0); id <= 100000; id++ {
+					n := id
+					if table == "events" {
+						n = id * 8191 % 100001
+					}
+					if n >= 99901 {
+						want[id] = strconv.FormatInt(n, 10)
+					}
+				}
+				require.Equal(t, want, idsWith(t, query))
+				require.Equal(t, want, idsWith(t, "select id,n from "+table+" ignore index(idx_n) where n >= 99901"))
+				physical := explain("explain analyze ", query)
+				if table == "events" {
+					require.Contains(t, physical, "Index Table Scan on events.idx_n", physical)
+				} else {
+					require.NotContains(t, physical, "Index Table Scan", physical)
+					require.Contains(t, physical, "Table Scan on "+schema+".ordered_events", physical)
+				}
+			})
 		}
 
 		// A cast on the original DATETIME bound has not been proved safe for
@@ -267,7 +301,7 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 			exec("set time_zone='" + zone + "'")
 			require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), ids(query))
 		}
-		exec("analyze table events(d) fullscan")
+		exec("analyze table events(d,n) fullscan")
 		require.Equal(t, expected, ids(query))
 
 		// Authorization is checked against the logical base table, including

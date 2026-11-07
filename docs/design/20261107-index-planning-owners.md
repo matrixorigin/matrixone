@@ -380,3 +380,34 @@ oracles. Run affected normal/race/public SQL/static checks. The mandatory
 unmodified-main/final matched mixed campaign includes scan-free SELECT and
 ordinary reader hot paths. Historical feature-baseline measurements remain
 separate evidence and cannot close that performance gate.
+
+## Avoid paying for losing candidates
+
+The matched main/final campaign found repeatable planning overhead on ordered
+sparse BASE scans. Allocation profiling attributes part of it to constructing
+an executable candidate solely for pricing before discovering it cannot win.
+The common selector first charges the existing per-index traversal and scores
+the observed estimate with zero fixed predicate work. A valid lower bound that
+cannot strictly beat BASE or the current best needs no candidate construction,
+provided the existing comparison/input checks still prove it constructible.
+Invalid scores retain the existing pricing/error path. Possible winners retain
+actual topology pricing and a second call to the same scorer, preserving its
+floating-point addition order, rejection rules and ties. Candidate state no
+longer copies the estimate or BASE work already owned by its observation.
+
+Construction is prepaid only when performed. An incomplete attempted price
+still discards optional enumeration; saved work may allow a later winner within
+the same fixed budget. Cancellation is checked around pricing and before
+enumeration completes and takes precedence over optional errors. Ordinary
+resolution, lifetime discovery and final publication checks remain unchanged.
+
+The final-reader equality proof retains bounded shape/size checks and protobuf
+equality for every non-statistical field. It compares shallow expression and
+function copies recursively, ignoring only Ndv/Selectivity, without cloning
+two complete trees or mutating their sources. The shared scalar matcher selects
+its raw operator at compilation. The reader likewise selects its minimal block
+closure whenever no early stop or bloom work is possible. Sorted stop/seek,
+decimal carriers, unknown results, mixed semantics and bloom errors keep their
+existing owners. This optimization was reviewed by gpt-6.1-terra/max before
+implementation and requires renewed normal/race/public/static and matched
+main/final performance evidence.

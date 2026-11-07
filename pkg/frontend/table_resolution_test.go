@@ -50,7 +50,7 @@ type temporalCaptureRelation struct{ engine.Relation }
 func (*temporalCaptureRelation) ReadIndexCostStats(context.Context, client.CatalogReadStamp, *statsinfo.StatsInfo, string) (engine.IndexCostStats, bool, error) {
 	return engine.IndexCostStats{}, false, nil
 }
-func (*temporalCaptureRelation) ObserveTemporalBlockInput(context.Context, client.CatalogReadStamp, engine.TemporalBlockInputRequest, *int) (engine.IndexBlockInput, bool, error) {
+func (*temporalCaptureRelation) ObserveIndexBlockInput(context.Context, client.CatalogReadStamp, engine.IndexBlockInputRequest, *int) (engine.IndexBlockInput, bool, error) {
 	return engine.IndexBlockInput{}, false, nil
 }
 func (*temporalCaptureRelation) VerifyIndexPair(context.Context, client.CatalogReadStamp, engine.IndexPairCheck, *int) (bool, error) {
