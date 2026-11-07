@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // indexComparisonDomain describes how SQL bounds relate to physical keys.
@@ -338,6 +339,122 @@ type indexComparison struct {
 	op     types.ComparisonOp
 	scale  int32
 	domain indexComparisonDomain
+}
+
+// observationMatches checks only the execution state used to observe this
+// comparison. A raw integer literal has no clock or time-zone dependency.
+func (comparison indexComparison) observationMatches(intent ExecutionIntent, proc *process.Process) bool {
+	if comparison.domain == indexComparisonInverse {
+		return intent.MatchesProcess(proc)
+	}
+	return ProcessAllowsIndexObservation(proc)
+}
+
+// costRanges describes the physical values that may satisfy the comparison.
+// These numeric arms are only a cost approximation, never an execution filter.
+// It writes at most four arms into the caller's buffer and returns their count.
+func (comparison indexComparison) costRanges(ctx context.Context, scalar indexCostScalar, zone *time.Location, spans *[4][2]float64) (int, bool, error) {
+	if comparison.domain == indexComparisonInverse {
+		if scalar.null || len(scalar.value) != 8 {
+			return 0, false, nil
+		}
+		kind := types.T(comparison.column.Typ.Id)
+		candidate, err := types.BuildTemporalCandidate(ctx, kind, comparison.scale, types.DecodeInt64(scalar.value), false, comparison.op, zone)
+		if err != nil {
+			return 0, false, err
+		}
+		count, ok := temporalIndexCostRanges(kind, candidate, spans)
+		return count, ok, nil
+	}
+	if comparison.domain != indexComparisonRaw {
+		return 0, false, nil
+	}
+	value, ok := indexIntegerCostValue(scalar)
+	if !ok {
+		return 0, false, nil
+	}
+	lo, hi := math.Inf(-1), math.Inf(1)
+	switch comparison.op {
+	case types.ComparisonEqual:
+		lo, hi = value, value
+	case types.ComparisonLess:
+		hi = value - 1
+	case types.ComparisonLessEqual:
+		hi = value
+	case types.ComparisonGreater:
+		lo = value + 1
+	case types.ComparisonGreaterEqual:
+		lo = value
+	default:
+		return 0, false, nil
+	}
+	spans[0] = [2]float64{lo, hi}
+	return 1, true, nil
+}
+
+func temporalIndexCostRanges(kind types.T, candidate types.TemporalCandidate, spans *[4][2]float64) (int, bool) {
+	if (kind != types.T_datetime && kind != types.T_timestamp) || candidate.Full || candidate.Empty || candidate.Lo > candidate.Hi {
+		return 0, false
+	}
+	spans[0] = [2]float64{float64(candidate.Lo), float64(candidate.Hi)}
+	if kind == types.T_datetime {
+		spans[1] = [2]float64{float64(candidate.Sentinel), float64(candidate.Sentinel)}
+		spans[2] = [2]float64{math.MinInt64, -2}
+		spans[3] = [2]float64{float64(int64(types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999)) + 1), math.MaxInt64}
+		return 4, true
+	}
+	return 1, true
+}
+
+func indexIntegerCostValue(scalar indexCostScalar) (float64, bool) {
+	if scalar.null || !scalar.typ.IsIntOrUint() || len(scalar.value) != scalar.typ.Oid.FixedLength() {
+		return 0, false
+	}
+	var value int64
+	switch scalar.typ.Oid {
+	case types.T_uint8:
+		return float64(types.DecodeUint8(scalar.value)), true
+	case types.T_uint16:
+		return float64(types.DecodeUint16(scalar.value)), true
+	case types.T_uint32:
+		return float64(types.DecodeUint32(scalar.value)), true
+	case types.T_uint64:
+		v := types.DecodeUint64(scalar.value)
+		return float64(v), v < 1<<53
+	case types.T_int8:
+		value = int64(types.DecodeInt8(scalar.value))
+	case types.T_int16:
+		value = int64(types.DecodeInt16(scalar.value))
+	case types.T_int32:
+		value = int64(types.DecodeInt32(scalar.value))
+	case types.T_int64:
+		value = types.DecodeInt64(scalar.value)
+	default:
+		return 0, false
+	}
+	return float64(value), value > -(1<<53) && value < 1<<53
+}
+
+// The current necessary predicate has at most seven bound endpoints. Encoded
+// leaves copy endpoint trees; reserve those copies and wrapper nodes before
+// construction. The later structure walk charges its own work separately.
+func (comparison indexComparison) prepayNecessaryPredicate(ctx context.Context, budget *int) bool {
+	bound := comparison.bound
+	if comparison.domain != indexComparisonInverse {
+		return false
+	}
+	nodes := 0
+	if !indexCostExpressionFits(ctx, bound, 0, &nodes, budget) {
+		return false
+	}
+	return spendIndexCostWork(ctx, budget, 16*(nodes+64)+16*bound.ProtoSize()) && *budget > 0
+}
+
+func (comparison indexComparison) necessaryPredicate(ctx context.Context, column, physical *plan.Expr) (*plan.Expr, error) {
+	if comparison.domain != indexComparisonInverse {
+		return nil, nil
+	}
+	return buildTemporalCandidate(ctx, column, comparison.bound, physical, comparison.op, comparison.scale)
 }
 
 // necessaryRangeAllowed proves producer-specific execution conditions. The
@@ -688,12 +805,12 @@ func makeNecessaryIndexHint(ctx context.Context, atom indexComparison, index *pl
 		if types.T(physical.Typ.Id) != types.T_varchar {
 			return nil, false, nil
 		}
-		hint, err = buildTemporalCandidate(ctx, atom.column, atom.bound, physical, atom.op, atom.scale)
+		hint, err = atom.necessaryPredicate(ctx, atom.column, physical)
 	} else {
 		if physical.Typ.Id != atom.column.Typ.Id || physical.Typ.Scale != atom.column.Typ.Scale {
 			return nil, false, nil
 		}
-		hint, err = buildTemporalCandidate(ctx, physical, atom.bound, nil, atom.op, atom.scale)
+		hint, err = atom.necessaryPredicate(ctx, physical, nil)
 	}
 	if err != nil || hint == nil {
 		return nil, false, err

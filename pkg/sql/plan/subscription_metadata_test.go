@@ -135,10 +135,9 @@ func (c *subscriptionMetadataTestContext) DatabaseExists(
 func (c *subscriptionMetadataTestContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot, borrowOutput ...*TableResolution,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+	borrowOutput.Reset()
 	if strings.EqualFold(databaseName, INFORMATION_SCHEMA) &&
 		strings.EqualFold(tableName, informationSchemaStatistics) {
 		obj, tableDef := subscriptionStatisticsTestView()
@@ -146,9 +145,9 @@ func (c *subscriptionMetadataTestContext) Resolve(
 	}
 	subscription := c.subscriptionFor(databaseName)
 	if subscription == nil {
-		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot)
+		return c.MockCompilerContext.Resolve(databaseName, tableName, snapshot, nil)
 	}
-	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot)
+	obj, tableDef, err := c.MockCompilerContext.Resolve(subscription.DbName, tableName, snapshot, nil)
 	if err != nil || tableDef == nil {
 		return obj, tableDef, err
 	}

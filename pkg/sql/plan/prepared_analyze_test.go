@@ -26,7 +26,7 @@ type preparedAnalyzeCompilerContext struct {
 	CompilerContext
 	defaultDatabase string
 	snapshot        *Snapshot
-	resolve         func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error)
+	resolve         func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error)
 }
 
 func (c *preparedAnalyzeCompilerContext) DefaultDatabase() string {
@@ -35,14 +35,13 @@ func (c *preparedAnalyzeCompilerContext) DefaultDatabase() string {
 
 func (c *preparedAnalyzeCompilerContext) Resolve(
 	databaseName, tableName string,
-	snapshot *Snapshot, borrowOutput ...*TableResolution,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+	borrowOutput.Reset()
 	if c.resolve != nil {
-		return c.resolve(databaseName, tableName, snapshot)
+		return c.resolve(databaseName, tableName, snapshot, nil)
 	}
-	return c.CompilerContext.Resolve(databaseName, tableName, snapshot)
+	return c.CompilerContext.Resolve(databaseName, tableName, snapshot, nil)
 }
 
 func (c *preparedAnalyzeCompilerContext) ResolveSnapshotWithSnapshotName(string) (*Snapshot, error) {
@@ -71,9 +70,9 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
 			defaultDatabase: "bvt_test1",
-			resolve: func(databaseName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+			resolve: func(databaseName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 				resolvedDatabase = databaseName
-				return base.Resolve(databaseName, tableName, snapshot)
+				return base.Resolve(databaseName, tableName, snapshot, nil)
 			},
 		}
 		prepared, err := buildPrepare(tree.NewPrepareString("analyze_stmt", "analyze table t1(a)"), ctx, nil)
@@ -89,9 +88,9 @@ func TestBuildPreparedAnalyze(t *testing.T) {
 			CompilerContext: base,
 			defaultDatabase: "tpch",
 			snapshot:        snapshot,
-			resolve: func(databaseName, tableName string, actual *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+			resolve: func(databaseName, tableName string, actual *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 				require.Equal(t, snapshot, actual)
-				return base.Resolve(databaseName, tableName, actual)
+				return base.Resolve(databaseName, tableName, actual, nil)
 			},
 		}
 		prepared, err := buildPrepare(tree.NewPrepareString("analyze_stmt",
@@ -139,8 +138,8 @@ func TestBuildPreparedAnalyzeRejectsInvalidDependencies(t *testing.T) {
 		ctx := &preparedAnalyzeCompilerContext{
 			CompilerContext: base,
 			defaultDatabase: "tpch",
-			resolve: func(databaseName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-				objRef, tableDef, err := base.Resolve(databaseName, tableName, snapshot)
+			resolve: func(databaseName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+				objRef, tableDef, err := base.Resolve(databaseName, tableName, snapshot, nil)
 				for _, col := range tableDef.Cols {
 					col.Hidden = true
 				}

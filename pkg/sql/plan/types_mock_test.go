@@ -364,15 +364,10 @@ func (mr *MockCompilerContext2MockRecorder) IsPublishing(dbName interface{}) *go
 }
 
 // Resolve mocks base method.
-func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	m.ctrl.T.Helper()
-	args := []interface{}{schemaName, tableName, snapshot}
-	for _, output := range borrowOutput {
-		args = append(args, output)
-	}
-	ret := m.ctrl.Call(m, "Resolve", args...)
+	ret := m.ctrl.Call(m, "Resolve", schemaName, tableName, snapshot, borrowOutput)
 	ret0, _ := ret[0].(*ObjectRef)
 	ret1, _ := ret[1].(*TableDef)
 	ret2, _ := ret[2].(error)
@@ -380,22 +375,16 @@ func (m *MockCompilerContext2) Resolve(schemaName, tableName string, snapshot *S
 }
 
 // Resolve indicates an expected call of Resolve.
-func (mr *MockCompilerContext2MockRecorder) Resolve(schemaName, tableName, snapshot interface{}, borrowOutput ...interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) Resolve(schemaName, tableName, snapshot, borrowOutput interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	args := append([]interface{}{schemaName, tableName, snapshot}, borrowOutput...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCompilerContext2)(nil).Resolve), args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCompilerContext2)(nil).Resolve), schemaName, tableName, snapshot, borrowOutput)
 }
 
 // ResolveWithoutTemporaryAlias mocks base method.
-func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	m.ctrl.T.Helper()
-	args := []interface{}{schemaName, tableName, snapshot}
-	for _, output := range borrowOutput {
-		args = append(args, output)
-	}
-	ret := m.ctrl.Call(m, "ResolveWithoutTemporaryAlias", args...)
+	ret := m.ctrl.Call(m, "ResolveWithoutTemporaryAlias", schemaName, tableName, snapshot, borrowOutput)
 	ret0, _ := ret[0].(*ObjectRef)
 	ret1, _ := ret[1].(*TableDef)
 	ret2, _ := ret[2].(error)
@@ -403,10 +392,9 @@ func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableNam
 }
 
 // ResolveWithoutTemporaryAlias indicates an expected call of ResolveWithoutTemporaryAlias.
-func (mr *MockCompilerContext2MockRecorder) ResolveWithoutTemporaryAlias(schemaName, tableName, snapshot interface{}, borrowOutput ...interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) ResolveWithoutTemporaryAlias(schemaName, tableName, snapshot, borrowOutput interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	args := append([]interface{}{schemaName, tableName, snapshot}, borrowOutput...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveWithoutTemporaryAlias", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveWithoutTemporaryAlias), args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveWithoutTemporaryAlias", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveWithoutTemporaryAlias), schemaName, tableName, snapshot, borrowOutput)
 }
 
 // ResolveAccountIds mocks base method.
@@ -441,15 +429,10 @@ func (mr *MockCompilerContext2MockRecorder) ResolveById(tableId, snapshot interf
 }
 
 // ResolveIndexTableByRef mocks base method.
-func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	m.ctrl.T.Helper()
-	args := []interface{}{ref, tblName, snapshot}
-	for _, output := range borrowOutput {
-		args = append(args, output)
-	}
-	ret := m.ctrl.Call(m, "ResolveIndexTableByRef", args...)
+	ret := m.ctrl.Call(m, "ResolveIndexTableByRef", ref, tblName, snapshot, borrowOutput)
 	ret0, _ := ret[0].(*ObjectRef)
 	ret1, _ := ret[1].(*TableDef)
 	ret2, _ := ret[2].(error)
@@ -457,10 +440,9 @@ func (m *MockCompilerContext2) ResolveIndexTableByRef(ref *ObjectRef, tblName st
 }
 
 // ResolveIndexTableByRef indicates an expected call of ResolveIndexTableByRef.
-func (mr *MockCompilerContext2MockRecorder) ResolveIndexTableByRef(ref, tblName, snapshot interface{}, borrowOutput ...interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) ResolveIndexTableByRef(ref, tblName, snapshot, borrowOutput interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	args := append([]interface{}{ref, tblName, snapshot}, borrowOutput...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveIndexTableByRef", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveIndexTableByRef), args...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveIndexTableByRef", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveIndexTableByRef), ref, tblName, snapshot, borrowOutput)
 }
 
 // ResolveSnapshotWithSnapshotName mocks base method.

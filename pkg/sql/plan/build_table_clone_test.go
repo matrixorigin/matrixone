@@ -100,9 +100,8 @@ type prepareCloneSourceContext struct {
 	targetReads int
 }
 
-func (c *prepareCloneSourceContext) Resolve(db, table string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *prepareCloneSourceContext) Resolve(db, table string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if db == "targetdb" {
 		c.targetReads++
 		return nil, nil, errors.New("caller destination must not be resolved")
@@ -110,7 +109,7 @@ func (c *prepareCloneSourceContext) Resolve(db, table string, snapshot *Snapshot
 	if c.sourceErr != nil {
 		return nil, nil, c.sourceErr
 	}
-	return c.MockCompilerContext.Resolve(db, table, snapshot)
+	return c.MockCompilerContext.Resolve(db, table, snapshot, nil)
 }
 
 func (c *prepareCloneSourceContext) DatabaseExists(db string, snapshot *Snapshot) bool {

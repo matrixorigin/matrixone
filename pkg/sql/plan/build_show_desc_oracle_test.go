@@ -335,14 +335,13 @@ type descPostDescriptionBindFailContext struct {
 }
 
 func (c *descPostDescriptionBindFailContext) Resolve(
-	dbName string, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution,
+	dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+	borrowOutput.Reset()
 	if c.closeCount >= 1 && strings.EqualFold(dbName, MO_CATALOG_DB_NAME) {
 		return nil, nil, errors.New("rewritten sql binding unavailable")
 	}
-	return c.descViewProviderRecorder.Resolve(dbName, tableName, snapshot)
+	return c.descViewProviderRecorder.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func (c *descPostDescriptionBindFailContext) GetAccountId() (uint32, error) {

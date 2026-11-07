@@ -3647,7 +3647,7 @@ func resetPreparePlan(
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 			if err != nil {
 				return nil, err
 			}

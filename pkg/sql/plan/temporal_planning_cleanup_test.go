@@ -30,9 +30,9 @@ type cleanupBorrowCompiler struct {
 	borrow *BorrowedTable
 }
 
-func (c *cleanupBorrowCompiler) Resolve(database, name string, snapshot *Snapshot, outputs ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	output := PrepareTableResolution(outputs...)
-	ref, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+func (c *cleanupBorrowCompiler) Resolve(database, name string, snapshot *Snapshot, output *TableResolution) (*ObjectRef, *TableDef, error) {
+	output.Reset()
+	ref, def, err := c.CompilerContext.Resolve(database, name, snapshot, nil)
 	if err == nil && output != nil {
 		output.Borrow = c.borrow
 	}

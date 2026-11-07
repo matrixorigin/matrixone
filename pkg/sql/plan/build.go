@@ -104,7 +104,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	defer builder.finishPlanningInput()
-	if planningInput.claim(stmt) && planningInput.intent.MatchesProcess(ctx.GetProcess()) {
+	if planningInput.claim(stmt) && ProcessAllowsIndexObservation(ctx.GetProcess()) {
 		builder.planningInput = planningInput
 		builder.borrowResolutionAllowed = samePlanningCompiler(planningInput.owner, ctx)
 	}

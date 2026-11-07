@@ -7674,7 +7674,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 			return nil
 		}
 	}
-	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot)
+	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot, nil)
 	if err != nil || tableDef == nil {
 		return nil
 	}
@@ -13948,13 +13948,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		var tableDef *TableDef
 		var borrow *BorrowedTable
 		if parent != nil {
-			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot)
+			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot, nil)
 		} else if resolver := builder.borrowingCompiler(); resolver != nil {
 			var resolved TableResolution
 			obj, tableDef, err = resolveIndexMaintenanceSource(resolver, tbl, catalogDatabase, table, snapshot, &resolved)
 			borrow = resolved.Borrow
 		} else {
-			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot)
+			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot, nil)
 		}
 		if err != nil {
 			return 0, "", err

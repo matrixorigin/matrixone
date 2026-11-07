@@ -149,7 +149,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +219,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, err
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +498,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +566,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +673,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1078,7 +1078,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	tblName := stmt.TableName.GetTableName()
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}

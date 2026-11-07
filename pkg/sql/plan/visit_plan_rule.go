@@ -170,7 +170,7 @@ func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) er
 			continue
 		}
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot)
+			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot, nil)
 		if err != nil {
 			return err
 		}

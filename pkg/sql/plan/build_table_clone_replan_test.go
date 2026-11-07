@@ -37,14 +37,13 @@ type subscriberOnlyCompilerContext struct {
 }
 
 func (c *subscriberOnlyCompilerContext) Resolve(
-	dbName string, tableName string, snapshot *Snapshot, borrowOutput ...*TableResolution,
+	dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+	borrowOutput.Reset()
 	if dbName == c.hiddenDB {
 		return nil, nil, nil
 	}
-	obj, def, err := c.subscriptionScopeCompilerContext.Resolve(dbName, tableName, snapshot)
+	obj, def, err := c.subscriptionScopeCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	if def != nil && dbName == c.subscription.SubName {
 		def.DbName = c.subscription.DbName
 	}

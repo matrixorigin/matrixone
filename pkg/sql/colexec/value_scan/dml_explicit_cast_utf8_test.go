@@ -355,18 +355,18 @@ func (c *doubleDeptMockContext) retypeDeptno(tbl *planpb.TableDef) {
 
 // The wrapper can change the descriptor, so neither resolver route publishes
 // an underlying borrowed relation as evidence for that descriptor.
-func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, outputs ...*plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
-	plan2.PrepareTableResolution(outputs...)
-	obj, tbl, err := c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, outputs *plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	outputs.Reset()
+	obj, tbl, err := c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	if err == nil && strings.EqualFold(tableName, "dept") {
 		c.retypeDeptno(tbl)
 	}
 	return obj, tbl, err
 }
 
-func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, outputs ...*plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
-	plan2.PrepareTableResolution(outputs...)
-	obj, tbl, err := c.MockCompilerContext.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot)
+func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, outputs *plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	outputs.Reset()
+	obj, tbl, err := c.MockCompilerContext.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot, nil)
 	if err == nil && strings.EqualFold(tableName, "dept") {
 		c.retypeDeptno(tbl)
 	}
@@ -393,7 +393,7 @@ func TestInsertValuesNestedBinaryPreservingCastKeepsConversionContract(t *testin
 
 	// Verify the planner-visible destination metadata through the wrapper
 	// before any statement is built: real T_float64, still nullable.
-	_, checked, err := ctx.Resolve("", "dept", nil)
+	_, checked, err := ctx.Resolve("", "dept", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "deptno", checked.Cols[0].Name)
 	require.Equal(t, int32(types.T_float64), checked.Cols[0].Typ.Id,

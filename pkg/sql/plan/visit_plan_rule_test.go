@@ -477,9 +477,8 @@ type resolveErrorCompilerContext struct {
 	err error
 }
 
-func (c *resolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *resolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, c.err
 }
 
@@ -487,7 +486,7 @@ type viewDependencyCompilerContext struct {
 	*MockCompilerContext
 	views    []string
 	snapshot *Snapshot
-	resolve  func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error)
+	resolve  func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error)
 }
 
 func (c *viewDependencyCompilerContext) GetViews() []string {
@@ -505,11 +504,10 @@ func (c *viewDependencyCompilerContext) GetSnapshot() *Snapshot {
 func (c *viewDependencyCompilerContext) Resolve(
 	databaseName string,
 	tableName string,
-	snapshot *Snapshot, borrowOutput ...*TableResolution,
+	snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
-	return c.resolve(databaseName, tableName, snapshot)
+	borrowOutput.Reset()
+	return c.resolve(databaseName, tableName, snapshot, nil)
 }
 
 func TestCollectPrepareDdlSchemas(t *testing.T) {
@@ -980,7 +978,7 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 			viewKey,
 		},
 	}
-	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		require.Equal(t, "sub", databaseName)
 		require.Equal(t, "src_v", tableName)
 		require.NotSame(t, snapshot, gotSnapshot)
@@ -1008,7 +1006,7 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"subscription_one#v", "subscription_two#v"},
 	}
-	ctx.resolve = func(databaseName, tableName string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
 			SchemaName:       "publisher_db",
 			ObjName:          tableName,
@@ -1265,7 +1263,7 @@ func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 			ctx := &viewDependencyCompilerContext{
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				views:               []string{testCase.view},
-				resolve: func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error) {
+				resolve: func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 					t.Fatal("invalid dependency must fail before resolution")
 					return nil, nil, nil
 				},
@@ -1281,14 +1279,14 @@ func TestCollectPrepareViewSchemasPropagatesResolutionFailures(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"db#v"},
-		resolve: func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error) {
+		resolve: func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 			return nil, nil, resolveErr
 		},
 	}
 	_, err := collectPrepareViewSchemas(ctx)
 	require.ErrorIs(t, err, resolveErr)
 
-	ctx.resolve = func(string, string, *Snapshot, ...*TableResolution) (*ObjectRef, *TableDef, error) {
+	ctx.resolve = func(string, string, *Snapshot, *TableResolution) (*ObjectRef, *TableDef, error) {
 		return nil, nil, nil
 	}
 	_, err = collectPrepareViewSchemas(ctx)
@@ -1299,7 +1297,7 @@ func TestBuildPrepareClearsViewsFromPreviousStatement(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"dropped_db#dropped_view"},
-		resolve: func(databaseName, tableName string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
+		resolve: func(databaseName, tableName string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			require.NotEqual(t, "dropped_db", databaseName)
 			require.NotEqual(t, "dropped_view", tableName)
 			return nil, nil, nil

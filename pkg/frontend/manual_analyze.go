@@ -167,7 +167,7 @@ func bindAnalyzeTables(
 		if dbName == "" {
 			return nil, moerr.NewNoDB(execCtx.reqCtx)
 		}
-		obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
+		obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil, nil)
 		if err != nil {
 			return nil, err
 		}

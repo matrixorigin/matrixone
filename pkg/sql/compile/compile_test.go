@@ -4139,7 +4139,7 @@ func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCach
 func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	base.SetContext(context.Background())
-	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
+	_, tableDef, err := base.Resolve("tpch", "lineitem", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, tableDef)
 

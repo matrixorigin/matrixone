@@ -167,7 +167,7 @@ func TestBuildTruncatePropagatesChildResolveFailure(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 
 	parent := &TableDef{Name: "p9", TblId: 77019, RefChildTbls: []uint64{77029}}
-	ctx.EXPECT().Resolve("constraint_test", "p9", gomock.Any()).
+	ctx.EXPECT().Resolve("constraint_test", "p9", gomock.Any(), gomock.Any()).
 		Return(&ObjectRef{}, parent, nil).AnyTimes()
 	probe := moerr.NewInternalErrorf(context.Background(), "probe fk child resolve failure")
 	ctx.EXPECT().ResolveById(uint64(77029), gomock.Any()).
@@ -191,7 +191,7 @@ func TestBuildTruncateUnresolvedChildStillFailsClosed(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 
 	parent := &TableDef{Name: "p9", TblId: 77019, RefChildTbls: []uint64{77029}}
-	ctx.EXPECT().Resolve("constraint_test", "p9", gomock.Any()).
+	ctx.EXPECT().Resolve("constraint_test", "p9", gomock.Any(), gomock.Any()).
 		Return(&ObjectRef{}, parent, nil).AnyTimes()
 	ctx.EXPECT().ResolveById(uint64(77029), gomock.Any()).
 		Return(nil, nil, nil).AnyTimes()
@@ -213,7 +213,7 @@ func TestBuildDropPropagatesChildResolveFailure(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 
 	parent := &TableDef{Name: "p9", TblId: 77019, RefChildTbls: []uint64{77029}}
-	ctx.EXPECT().Resolve("constraint_test", "p9", gomock.Any()).
+	ctx.EXPECT().Resolve("constraint_test", "p9", gomock.Any(), gomock.Any()).
 		Return(&ObjectRef{}, parent, nil).AnyTimes()
 	ctx.EXPECT().ResolveVariable("foreign_key_checks", gomock.Any(), gomock.Any()).
 		Return(nil, nil).AnyTimes()

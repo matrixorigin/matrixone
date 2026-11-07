@@ -318,14 +318,13 @@ type showTablesBootstrapContext struct {
 	privilegeLookups int
 }
 
-func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
 		c.privilegeLookups++
 		return nil, nil, nil
 	}
-	return c.CompilerContext.Resolve(database, table, snapshot)
+	return c.CompilerContext.Resolve(database, table, snapshot, nil)
 }
 
 func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {

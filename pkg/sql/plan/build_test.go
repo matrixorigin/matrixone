@@ -10039,7 +10039,7 @@ func TestOnlyFullGroupByEnumColumnValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
-			_, tableDef, err := mock.ctxt.Resolve("constraint_test", "emp", nil)
+			_, tableDef, err := mock.ctxt.Resolve("constraint_test", "emp", nil, nil)
 			require.NoError(t, err)
 			tableDef.Cols[2].Typ.Id = int32(types.T_enum)
 			tableDef.Cols[2].Typ.Enumvalues = "clerk,manager"

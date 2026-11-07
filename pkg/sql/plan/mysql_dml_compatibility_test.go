@@ -455,7 +455,7 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	_, ok = findMySQLDMLTargetInDirectTableExpr(ctx, cteName, targets, visibleCTEs)
 	require.False(t, ok)
 
-	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil)
+	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	resolvedTargets := makeMySQLDMLTargets([]*ObjectRef{objRef}, []*TableDef{tableDef})
 	nationName := tree.NewTableName(tree.Identifier("nation"), tree.ObjectNamePrefix{}, nil)

@@ -1799,9 +1799,8 @@ func (c *relationStatsContext) StatsWithTableDef(*plan.ObjectRef, *plan.TableDef
 	return c.observed, nil
 }
 
-func (c *relationStatsContext) Resolve(_ string, _ string, _ *plan.Snapshot, borrowOutput ...*splan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	splan.PrepareTableResolution(borrowOutput...)
-
+func (c *relationStatsContext) Resolve(_ string, _ string, _ *plan.Snapshot, borrowOutput *splan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	return &plan.ObjectRef{Obj: 42, ObjName: "t"}, &plan.TableDef{TblId: 42, Name: "t", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int64)}}}, Name2ColIndex: map[string]int32{"v": 0}}, nil
 }
 

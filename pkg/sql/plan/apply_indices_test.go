@@ -1463,9 +1463,8 @@ type indexHintResolveFailureContext struct {
 	nilMetadata bool
 }
 
-func (c *indexHintResolveFailureContext) ResolveIndexTableByRef(_ *ObjectRef, _ string, _ *Snapshot, borrowOutput ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	PrepareTableResolution(borrowOutput...)
-
+func (c *indexHintResolveFailureContext) ResolveIndexTableByRef(_ *ObjectRef, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if c.nilMetadata {
 		return nil, nil, nil
 	}

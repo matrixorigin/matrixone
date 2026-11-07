@@ -2557,7 +2557,7 @@ func resolveTableVisibleColumns(ses *Session, ctx context.Context, tbl *tree.Tab
 		return nil, err
 	}
 
-	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := tcc.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -4446,7 +4446,7 @@ var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx
 	return plan, nil
 }
 
-func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot, ...*plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
+func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot, *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
 	if plan0 == nil {
 		return true, nil
 	}
@@ -4484,7 +4484,7 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		object, exists := resolved[key]
 		if !exists {
 			var err error
-			object.ref, object.def, err = resolveFn(key.database, name, snapshot)
+			object.ref, object.def, err = resolveFn(key.database, name, snapshot, nil)
 			if err != nil {
 				return true, err
 			}

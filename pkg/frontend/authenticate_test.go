@@ -7091,13 +7091,12 @@ func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, sn
 	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
 }
 
-func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput ...*plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan2.PrepareTableResolution(borrowOutput...)
-
+func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if dbName == "mongo_window_auth" && tableName == "events" {
 		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
 	}
-	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {

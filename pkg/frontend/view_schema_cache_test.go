@@ -38,9 +38,8 @@ type viewSchemaCacheCompiler struct {
 	definitions map[string]*plan.TableDef
 }
 
-func (c *viewSchemaCacheCompiler) Resolve(_ string, name string, _ *plan.Snapshot, borrowOutput ...*plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
-	plan.PrepareTableResolution(borrowOutput...)
-
+func (c *viewSchemaCacheCompiler) Resolve(_ string, name string, _ *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	def := c.definitions[name]
 	if def == nil {
 		return nil, nil, nil

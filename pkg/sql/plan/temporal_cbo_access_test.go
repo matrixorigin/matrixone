@@ -122,15 +122,15 @@ type indexCostCompilerFixture struct {
 func (c *indexCostCompilerFixture) BorrowedTableStillCurrent(proc *process.Process, borrow *BorrowedTable) bool {
 	return proc != nil && borrow != nil && borrow.Relation != nil && proc.GetTxnOperator() == borrow.Read.Op
 }
-func (c *indexCostCompilerFixture) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot, outputs ...*TableResolution) (*ObjectRef, *TableDef, error) {
-	output := PrepareTableResolution(outputs...)
+func (c *indexCostCompilerFixture) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot, output *TableResolution) (*ObjectRef, *TableDef, error) {
+	output.Reset()
 	if c.onResolve != nil {
 		c.onResolve()
 	}
 	if c.resolveErr != nil {
 		return nil, nil, c.resolveErr
 	}
-	ref, full, err := c.MockCompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
+	ref, full, err := c.MockCompilerContext.ResolveIndexTableByRef(ref, name, snapshot, nil)
 	if err != nil || ref == nil || full == nil {
 		return ref, full, err
 	}
@@ -198,7 +198,7 @@ func newIndexCostFixture(t *testing.T) (*QueryBuilder, *indexCostRelationFixture
 }
 
 func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
-	for _, scenario := range []string{"selected", "empty access", "cancel empty access", "unknown stats", "unknown estimate", "budget exhausted", "cancel binding", "cancel verification", "cancel verification with exhausted budget", "winner rejected", "different hidden definition", "resolver changes predicate", "resolver changes path", "invalid key collation", "bind tag overflow", "incomplete enumeration", "early producer"} {
+	for _, scenario := range []string{"selected", "empty access", "cancel empty access", "unknown stats", "unknown estimate", "budget exhausted", "cancel binding", "cancel verification", "cancel verification with exhausted budget", "clock drift during observation", "zone drift during observation", "clock drift during resolve", "zone drift during verification", "transaction drift during verification", "winner rejected", "different hidden definition", "resolver changes predicate", "resolver changes path", "invalid key collation", "bind tag overflow", "incomplete enumeration", "early producer"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, source, index := newIndexCostFixture(t)
 			stop := errors.New("statement owner stopped")
@@ -223,6 +223,19 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 					*budget = 0
 					cancel(stop)
 				}
+			case "clock drift during observation":
+				source.onRead = func() { builder.compCtx.GetProcess().Base.UnixTime++ }
+			case "zone drift during observation":
+				source.onRead = func() { builder.compCtx.GetProcess().GetSessionInfo().TimeZone = time.FixedZone("drift", 3600) }
+			case "clock drift during resolve":
+				builder.compCtx.(*indexCostCompilerFixture).onResolve = func() { builder.compCtx.GetProcess().Base.UnixTime++ }
+			case "zone drift during verification":
+				source.onVerify = func(*int) { builder.compCtx.GetProcess().GetSessionInfo().TimeZone = time.FixedZone("drift", 3600) }
+			case "transaction drift during verification":
+				proc := builder.compCtx.GetProcess()
+				original := proc.Base.TxnOperator
+				defer func() { proc.Base.TxnOperator = original }()
+				source.onVerify = func(*int) { proc.Base.TxnOperator = &temporalCBOTestTxn{} }
 			case "winner rejected":
 				source.verify = false
 			case "invalid key collation":
@@ -295,7 +308,7 @@ func TestTemporalCBOConstructionBudgetBeforeCopy(t *testing.T) {
 	atom, ok := analyzeIndexComparison(builder.GetContext(), builder.qry.Nodes[0].FilterList[0])
 	require.True(t, ok)
 	budget := 1
-	require.False(t, prepayIndexRangeConstruction(builder.GetContext(), atom.bound, &budget))
+	require.False(t, atom.prepayNecessaryPredicate(builder.GetContext(), &budget))
 	require.LessOrEqual(t, budget, 0)
 }
 
@@ -501,7 +514,7 @@ func TestTemporalCBOFinalReaderChangesActualSelection(t *testing.T) {
 // Exercise the real ordinary selector and constructor, including the mandatory
 // resolver checkpoint. Optional observations must not manufacture a candidate.
 func TestIntegerIndexCostObservation(t *testing.T) {
-	for _, scenario := range []string{"ordered base", "shuffled index", "missing metadata", "observation error", "resolver error", "resolver drift", "observation drift", "cancel observation"} {
+	for _, scenario := range []string{"ordered base", "shuffled index", "missing metadata", "observation error", "resolver error", "initial clock drift", "resolver clock drift", "resolver zone drift", "observation clock drift", "observation zone drift", "observation transaction drift", "observation row limit", "cancel observation"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, source, _ := newIndexCostFixture(t)
 			scan := builder.qry.Nodes[0]
@@ -543,10 +556,25 @@ func TestIntegerIndexCostObservation(t *testing.T) {
 				source.observeErr = errors.New("optional metadata unavailable")
 			case "resolver error":
 				compiler.resolveErr = errors.New("mandatory index resolution failed")
-			case "resolver drift":
+			case "initial clock drift":
+				proc.Base.UnixTime++
+			case "resolver clock drift":
 				compiler.onResolve = func() { resolved++; proc.Base.UnixTime++ }
-			case "observation drift":
+			case "resolver zone drift":
+				compiler.onResolve = func() { resolved++; proc.GetSessionInfo().TimeZone = time.FixedZone("drift", 3600) }
+			case "observation clock drift":
 				source.onObserve = func() { proc.Base.UnixTime++ }
+			case "observation zone drift":
+				source.onObserve = func() { proc.GetSessionInfo().TimeZone = time.FixedZone("drift", 3600) }
+			case "observation transaction drift":
+				original := proc.Base.TxnOperator
+				defer func() { proc.Base.TxnOperator = original }()
+				source.onObserve = func() { proc.Base.TxnOperator = &temporalCBOTestTxn{} }
+			case "observation row limit":
+				source.onObserve = func() {
+					proc.Base.SessionInfo.ApplySQLSelectLimit = true
+					proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return uint64(1), nil })
+				}
 			case "cancel observation":
 				source.onObserve = func() { cancel(stop) }
 			}
@@ -566,17 +594,14 @@ func TestIntegerIndexCostObservation(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, 1, resolved)
-			if scenario == "ordered base" {
+			switch scenario {
+			case "ordered base", "initial clock drift", "resolver clock drift", "resolver zone drift", "observation clock drift", "observation zone drift":
 				require.Equal(t, int32(0), id)
-			} else {
+			default:
 				require.NotEqual(t, int32(0), id)
 				require.True(t, builder.qry.Nodes[id].IndexScanInfo.IsIndexScan)
 			}
-			if scenario == "resolver drift" {
-				require.Zero(t, source.observed)
-			} else {
-				require.Equal(t, 1, source.observed)
-			}
+			require.Equal(t, 1, source.observed)
 			for _, node := range builder.qry.Nodes {
 				for _, expr := range append(append([]*pb.Expr(nil), node.FilterList...), node.BlockFilterList...) {
 					require.False(t, expr.CandidateFilter)

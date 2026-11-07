@@ -1196,7 +1196,7 @@ func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
 	capture := newViewDependencyCaptureContext(ctx)
 
 	require.NoError(t, capture.enterNestedView())
-	_, _, err := capture.Resolve("tpch", "nation", nil)
+	_, _, err := capture.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	require.Empty(t, capture.dependencies())
 	capture.leaveNestedView()
