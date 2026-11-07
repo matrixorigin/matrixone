@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -780,8 +781,16 @@ func TestFoldedFalseCandidateDoesNotForceEmptyPKFilter(t *testing.T) {
 		filter.CandidateFilter = marked
 		base, err := ConstructBasePKFilter(filter, table, proc.Mp())
 		require.NoError(t, err)
-		require.False(t, base.Empty, "a folded false value alone does not prove an empty scan")
-		base.Cleanup()
+		block, err := ConstructBlockPKFilter(false, base, nil)
+		require.NoError(t, err)
+		require.True(t, block.Valid)
+		pk := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3}, nil, proc.Mp()))
+		require.Equal(t, []int64{1}, block.SortedSearchFunc(containers.Vectors{*pk}))
+		pk.Free(proc.Mp())
+		if block.Cleanup != nil {
+			block.Cleanup()
+		}
 	}
 }
 
