@@ -18,11 +18,11 @@ import (
 	"context"
 	"slices"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/internal/m0read"
@@ -108,7 +108,7 @@ func (txn *Transaction) CaptureM0StatementReadView(ctx context.Context, offset i
 	}
 	// Charge before allocating indexes. Per-map/bucket allowance is deliberately
 	// conservative, not a claim about precise Go heap layout.
-	budget := uint64(256) + uint64(offset)*uint64(unsafe.Sizeof(Entry{})+128)
+	budget := uint64(256) + uint64(offset)*uint64(util.UnsafeSizeOf[Entry]()+128)
 	budget += uint64(len(txn.writes)) * 256 // temporary stats-owner index, charged before allocation
 	for _, e := range txn.writes[:offset] {
 		budget += uint64(len(e.pkRange.min) + len(e.pkRange.max))

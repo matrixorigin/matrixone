@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -149,6 +150,30 @@ func TestM0StatementViewBudgetFailure(t *testing.T) {
 	mp.Free(held)
 	require.Nil(t, view)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestM0StatementViewBudgetChargesEntrySize(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	op, closeOp := client.NewTestTxnOperator(t.Context())
+	t.Cleanup(closeOp)
+	txn := &Transaction{proc: proc, op: op, writes: []Entry{{typ: INSERT}}}
+	baseline := proc.Mp().CurrNB()
+
+	captureBudget := func(offset int) int {
+		view, err := txn.CaptureM0StatementReadView(t.Context(), offset)
+		require.NoError(t, err)
+		defer view.Release()
+		return len(view.(*m0StatementReadView).reservation)
+	}
+	emptyBudget := captureBudget(0)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+
+	entryBudget := captureBudget(1)
+	// The per-entry overhead has two 128-byte allowances in addition to the
+	// actual Entry allocation; reflect measures that layout independently.
+	require.Equal(t, int(reflect.TypeOf(Entry{}).Size())+2*128, entryBudget-emptyBudget)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
 }
 
 func TestM0StatementViewPartialFailureCleanup(t *testing.T) {
