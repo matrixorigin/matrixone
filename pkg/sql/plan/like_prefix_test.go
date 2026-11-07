@@ -704,12 +704,14 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 				unsafeCtx := builder.newEncodedRegularIndexCostContext(node, refs)
 				require.NotEmpty(t, unsafeCtx.matchRangeBackfills(index)[1], scenario+": both candidates reach the safety gate")
 				require.False(t, regularIndexFiltersHaveStableEvaluation(node), scenario)
-				selected := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				selected, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				require.NoError(t, err)
 				require.Equal(t, scanID, selected, scenario+": unsafe prefix must not displace the rejected ordinary baseline")
 				distributions := stats.ByteRangeMap
 				stats.ByteRangeMap = nil
-				withoutStats := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				withoutStats, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
 				stats.ByteRangeMap = distributions
+				require.NoError(t, err)
 				require.Equal(t, scanID, withoutStats, scenario+": absent samples retain the same ordinary baseline")
 			}
 			checkHistorical("throwing residual")
@@ -766,7 +768,8 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 				require.True(t, valid)
 				require.Equal(t, !ctx.filterFacts[positions[0]].logicalPrefix, reject)
 			}
-			result := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+			result, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
 			require.NotEqual(t, scanID, result, "rejected broad IN must not hide useful prefix backfill")
 			indexScan := builder.qry.Nodes[builder.qry.Nodes[result].Children[1]]
 			require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
@@ -999,7 +1002,8 @@ func TestLikePrefixSmallInputAdmission(t *testing.T) {
 			require.True(t, valid)
 			require.False(t, reject, "the small-input admission policy is tested independently of numeric cost rejection")
 		}
-		result := builder.applyIndicesForFiltersRegularIndex(id, node, refs, map[[2]int32]*planpb.Expr{})
+		result, err := builder.applyIndicesForFiltersRegularIndex(id, node, refs, map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
 		wantIndex := force || ordinary || covering && input > objectio.BlockMaxRows
 		if wantIndex {
 			require.NotEqual(t, id, result)

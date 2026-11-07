@@ -183,18 +183,20 @@ type renameNamespaceCompilerContext struct {
 	failure   error
 }
 
-func (c *renameNamespaceCompilerContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *renameNamespaceCompilerContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if def := c.temporary[name]; def != nil {
 		return &ObjectRef{SchemaName: db, ObjName: def.Name, Obj: int64(def.TblId)}, DeepCopyTableDef(def, true), nil
 	}
-	return c.MockCompilerContext.Resolve(db, name, snapshot)
+	return c.MockCompilerContext.Resolve(db, name, snapshot, nil)
 }
 
-func (c *renameNamespaceCompilerContext) ResolveWithoutTemporaryAlias(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *renameNamespaceCompilerContext) ResolveWithoutTemporaryAlias(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if name == c.failName {
 		return nil, nil, c.failure
 	}
-	return c.MockCompilerContext.ResolveWithoutTemporaryAlias(db, name, snapshot)
+	return c.MockCompilerContext.ResolveWithoutTemporaryAlias(db, name, snapshot, nil)
 }
 
 func TestBuildRenameTableIgnoresTemporaryAliases(t *testing.T) {
@@ -226,14 +228,14 @@ func TestBuildRenameTableIgnoresTemporaryAliases(t *testing.T) {
 			}
 			for _, name := range tc.temporary {
 				ctx.temporary[name] = &TableDef{Name: "physical_" + name, TblId: 99, IsTemporary: true, Cols: []*ColDef{{Name: "temp_column"}}}
-				_, def, err := ctx.Resolve("tpch", name, nil)
+				_, def, err := ctx.Resolve("tpch", name, nil, nil)
 				require.NoError(t, err)
 				require.Equal(t, uint64(99), def.TblId)
 			}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "rename table "+tc.pairs, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			if tc.failName != "" {
 				require.ErrorIs(t, err, lookupErr)
 			} else if tc.wantErr != 0 {
@@ -262,7 +264,7 @@ func TestViewBindingContextsRejectDDLResolution(t *testing.T) {
 		&viewDescriptionDependencyContext{CompilerContext: base},
 		&viewDependencyCaptureContext{CompilerContext: base},
 	} {
-		obj, def, err := ctx.ResolveWithoutTemporaryAlias("tpch", "nation", nil)
+		obj, def, err := ctx.ResolveWithoutTemporaryAlias("tpch", "nation", nil, nil)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%T: %v", ctx, err)
 		require.Nil(t, obj)
 		require.Nil(t, def)
@@ -288,7 +290,7 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	ctx.tables["t1"].Name = "t1"
 	ctx.objects["t1"] = &ObjectRef{SchemaName: "tpch", ObjName: "t1"}
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	renames := p.GetDdl().GetRenameTable().GetAlterTables()
@@ -423,7 +425,7 @@ func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			if testCase.wantErrCode != 0 {
 				require.True(t, moerr.IsMoErrCode(err, testCase.wantErrCode), err)
 				if testCase.wantErrCode == moerr.ErrNotSupported {
@@ -513,7 +515,7 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 			cols := tableDef.GetCols()
@@ -534,7 +536,7 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, "unsupported collation")
 		})
 	}
@@ -556,7 +558,7 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	defer stmt.Free()
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetUTF8), tableDef.DefaultCharset)
@@ -587,7 +589,7 @@ func TestBuildCreateTableAcceptsNativeUnicodeCollations(t *testing.T) {
 				"create table t(v varchar(8)) collate "+tc.collation, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 			require.Equal(t, tc.wantCharset, tableDef.DefaultCharset)
@@ -607,7 +609,7 @@ func TestBuildCreateTableNativeUnicodeUniqueUsesVersionedKeyFormat(t *testing.T)
 	defer stmt.Free()
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(collation.KeyFormatV1), tableDef.KeyFormat)
@@ -643,7 +645,7 @@ func TestBuildCreateTableNativeUnicodeUniqueRejectsOtherIndexKinds(t *testing.T)
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.ErrorContains(t, err, "cannot be combined with secondary or fulltext indexes")
 }
 
@@ -657,7 +659,7 @@ func TestBuildCreateTableNativeUnicodeUniqueRejectsTypedExternalTables(t *testin
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, "cannot create index on external table")
 		})
 	}
@@ -679,7 +681,7 @@ func TestBuildCreateTableNativeUnicodeUniqueRequiresAuthoringProtocol(t *testing
 	}()
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
 
-	_, err = BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, proc), stmt, false, nil)
 	require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", defines.MORPCVersion114))
 }
 
@@ -713,7 +715,7 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 			defer stmt.Free()
 
 			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
@@ -732,7 +734,7 @@ func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.ErrorContains(t, err,
 		"replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL")
 }
@@ -750,7 +752,7 @@ func TestCreateTableInheritsEffectiveServerCollation(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(mock, stmt, false)
+	p, err := BuildPlan(mock, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.DefaultCharset)
@@ -764,7 +766,7 @@ func TestBuildCreateTableCharacterSetBinaryConvertsStringTypes(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 3)
@@ -782,7 +784,7 @@ func TestBuildCreateTableBinaryDefaultConvertsUnqualifiedStringType(t *testing.T
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
@@ -799,7 +801,7 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, "is not valid for CHARACTER SET")
 		})
 	}
@@ -816,7 +818,7 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -839,7 +841,7 @@ func TestBuildCreateTableRejectsDisabledCharsetDomains(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			require.ErrorContains(t, err, "unsupported")
 		})
 	}
@@ -851,7 +853,7 @@ func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 	defer stmt.Free()
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	// Contract (meow-31451): DROP TEMPORARY TABLE against an existing
 	// permanent-only table is a missing-object DROP and must surface MySQL
 	// 1051/42S02 "Unknown table", not the 1146 query/DML lookup error. The
@@ -859,7 +861,7 @@ func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsTable))
 
 	ctx.tables["nation"].IsTemporary = true
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.True(t, p.GetDdl().GetDropTable().GetTableDef().GetIsTemporary())
 	require.Empty(t, p.GetDdl().GetDropTable().GetUpdateFkSqls())
@@ -870,7 +872,7 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
 }
@@ -880,7 +882,7 @@ func TestBuildDropViewIfExistsDoesNotTargetBaseTable(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	drop := p.GetDdl().GetDropTable()
 	require.Empty(t, drop.GetTable())
@@ -892,7 +894,7 @@ func TestBuildDropViewRejectsBaseTableWithoutIfExists(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadView), err)
 }
 
@@ -906,7 +908,7 @@ func TestBuildTruncateTemporaryTable(t *testing.T) {
 			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.tables["nation"].IsTemporary = true
 
-			p, err := BuildPlan(ctx, stmt, prepare)
+			p, err := BuildPlan(ctx, stmt, prepare, nil)
 			require.NoError(t, err)
 			truncate := p.GetDdl().GetTruncateTable()
 			require.Equal(t, "tpch", truncate.GetDatabase())
@@ -934,7 +936,7 @@ func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
 	}
 	ctx.objects["tree"] = &ObjectRef{SchemaName: "tpch", ObjName: "tree"}
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []uint64{99}, p.GetDdl().GetTruncateTable().GetForeignTbl())
 }
@@ -970,7 +972,7 @@ func TestBuildTruncateMongoDBExternalTableRejectsReadOnlyDML(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(ctx, stmt, prepare)
+			p, err := BuildPlan(ctx, stmt, prepare, nil)
 			require.Nil(t, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
 			require.Equal(t, "invalid input: cannot insert/update/delete from external table", err.Error())
@@ -990,7 +992,7 @@ func TestBuildTruncateNonMongoExternalTableKeepsExistingBehavior(t *testing.T) {
 		TableType: catalog.SystemExternalRel,
 	}
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetDdl().GetTruncateTable())
 }
@@ -1008,7 +1010,7 @@ func TestBuildTruncateMalformedMongoDBExternalTableReturnsCatalogError(t *testin
 		FeatureFlag: features.MongoDBExternal,
 	}
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.Nil(t, p)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
 	require.Equal(t, "invalid input: MongoDB external table is missing its catalog envelope", err.Error())
@@ -1030,7 +1032,7 @@ func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 		OriginSql: "`n_nationkey` >= 0",
 	}}
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	alter := p.GetDdl().GetAlterTable()
 	require.Equal(t, plan.AlterTable_INPLACE, alter.GetAlgorithmType())
@@ -1080,7 +1082,7 @@ func TestBuildAlterRenameColumnRewritesComplexChecks(t *testing.T) {
 				OriginSql: tc.check,
 			}}
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			checks := p.GetDdl().GetAlterTable().GetCopyTableDef().GetChecks()
 			require.Len(t, checks, 1)
@@ -1128,7 +1130,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 			ctx.tables["nation"].Createsql = "create table nation(" +
 				"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			alter := p.GetDdl().GetAlterTable()
 			require.Equal(t, tc.algorithm, alter.GetAlgorithmType())
@@ -1160,7 +1162,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		}()
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
 
-		_, err := BuildPlan(ctx, stmt, false)
+		_, err := BuildPlan(ctx, stmt, false, nil)
 		require.ErrorContains(t, err, "protocol version 15")
 		require.Empty(t, ctx.tables["nation"].Checks, "catalog-owned source must remain unchanged")
 	})
@@ -1192,7 +1194,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		}()
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
 
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		alter := p.GetDdl().GetAlterTable()
 		require.Equal(t, plan.AlterTable_COPY, alter.GetAlgorithmType())
@@ -1209,7 +1211,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		ctx.tables["nation"].Createsql = `create table nation(
 			n_nationkey int, n_name varchar(25), check (n_name = 'a\nb'))`
 
-		_, err := BuildPlan(ctx, stmt, false)
+		_, err := BuildPlan(ctx, stmt, false, nil)
 		require.ErrorContains(t, err, "ambiguous SQL mode")
 	})
 
@@ -1230,7 +1232,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 			"n_nationkey int primary key, n_name varchar(25), " +
 			"n_regionkey int, n_comment varchar(152))"
 
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		copyDef := p.GetDdl().GetAlterTable().GetCopyTableDef()
 		require.NotNil(t, FindColumn(copyDef.Cols, "nation_id"))
@@ -1324,7 +1326,7 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             test.sql,
 			}
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			var data ViewData
 			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
@@ -1354,7 +1356,7 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 					rootSQL:             replaySQL,
 				}
-				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				replayed, err := BuildPlan(replayCtx, replayStmt, false, nil)
 				require.NoError(t, err)
 				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
 				require.Len(t, replayCols, len(test.replayCols))
@@ -1387,7 +1389,7 @@ func TestBuildCreateViewDefinitionReplaysStringValuesAcrossSQLModes(t *testing.T
 				rootSQL:             rootSQL,
 			}
 			ctx.SetSqlModeOverride(mode)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var data ViewData
@@ -1427,7 +1429,7 @@ func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	tableDef := built.GetDdl().GetCreateView().GetTableDef()
@@ -1446,7 +1448,7 @@ func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             replaySQL,
 	}
-	replayed, err := BuildPlan(replayCtx, replayStmt, false)
+	replayed, err := BuildPlan(replayCtx, replayStmt, false, nil)
 	require.NoError(t, err)
 	replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
 	require.Len(t, replayCols, 1)
@@ -1463,7 +1465,7 @@ func TestBuildCreateViewDefinitionReplaysUnaliasedBinaryHeading(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	tableDef := built.GetDdl().GetCreateView().GetTableDef()
@@ -1483,7 +1485,7 @@ func TestBuildCreateViewDefinitionReplaysUnaliasedBinaryHeading(t *testing.T) {
 		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             replaySQL,
 	}
-	replayed, err := BuildPlan(replayCtx, replayStmt, false)
+	replayed, err := BuildPlan(replayCtx, replayStmt, false, nil)
 	require.NoError(t, err)
 	replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
 	require.Len(t, replayCols, 1)
@@ -1511,7 +1513,7 @@ func TestBuildCreateViewDefinitionReplaysEmptyBinaryAcrossSQLModes(t *testing.T)
 				rootSQL:             rootSQL,
 			}
 			ctx.SetSqlModeOverride(mode)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var data ViewData
@@ -1757,7 +1759,7 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			if test.wantErr != "" {
 				require.EqualError(t, err, test.wantErr)
 			} else {
@@ -1779,7 +1781,7 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, prepare)
+		p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, prepare, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1929,7 +1931,7 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		)
 		require.NoError(t, err)
 		defer stmt.Free()
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		require.ErrorContains(t, err, "protocol version 7")
 	})
 }
@@ -1953,7 +1955,7 @@ func TestBuildCreateTableAutoIncrementOffset(t *testing.T) {
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				offset:              10,
 			}
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantOffset, p.GetDdl().GetCreateTable().GetTableDef().GetAutoIncrOffset())
 		})
@@ -1981,7 +1983,7 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, ctx.calls)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
@@ -2012,7 +2014,7 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2043,14 +2045,14 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_star", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
 
 	missingStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select n_extra from v_star", 1)
 	require.NoError(t, err)
 	defer missingStmt.Free()
-	_, err = BuildPlan(ctx, missingStmt, false)
+	_, err = BuildPlan(ctx, missingStmt, false, nil)
 	require.ErrorContains(t, err, "column n_extra does not exist")
 }
 
@@ -2069,7 +2071,7 @@ func TestGenViewTableDefPersistsExpandedStarForMultiStatementRootSQL(t *testing.
 		}
 	}()
 
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2100,7 +2102,7 @@ func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) 
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2116,7 +2118,7 @@ func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) 
 	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
 	require.NoError(t, err)
 	defer stableStmt.Free()
-	_, err = BuildPlan(ctx, stableStmt, false)
+	_, err = BuildPlan(ctx, stableStmt, false, nil)
 	require.NoError(t, err)
 
 	ctx.tables["v_star_agg"] = DeepCopyTableDef(tableDef, true)
@@ -2125,7 +2127,7 @@ func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) 
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_star_agg", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"id", "min(ti)"}, selectPlan.GetQuery().GetHeadings())
 }
@@ -2140,7 +2142,7 @@ func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2161,7 +2163,7 @@ func TestGenViewTableDefFreezesSampleStar(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2183,7 +2185,7 @@ func TestGenViewTableDefFreezesSampleStar(t *testing.T) {
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_sample", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
 }
@@ -2198,7 +2200,7 @@ func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2222,7 +2224,7 @@ func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_outer_sample", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
 }
@@ -2238,7 +2240,7 @@ func TestGenViewTableDefRewritesSubqueryInsideSampleColumns(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2255,7 +2257,7 @@ func TestGenViewTableDefRewritesSubqueryInsideSampleColumns(t *testing.T) {
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_sample_subquery", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	_, err = BuildPlan(ctx, selectStmt, false)
+	_, err = BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 }
 
@@ -2269,7 +2271,7 @@ func TestGenViewTableDefExpandsMixedStarAndSample(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2285,7 +2287,7 @@ func TestGenViewTableDefExpandsMixedStarAndSample(t *testing.T) {
 	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
 	require.NoError(t, err)
 	defer stableStmt.Free()
-	_, err = BuildPlan(ctx, stableStmt, false)
+	_, err = BuildPlan(ctx, stableStmt, false, nil)
 	require.NoError(t, err)
 }
 
@@ -2311,7 +2313,7 @@ func TestGenViewTableDefExpandsGroupingSetStars(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			tableDef := p.GetDdl().GetCreateView().GetTableDef()
 			require.NotNil(t, tableDef)
@@ -2328,7 +2330,7 @@ func TestGenViewTableDefExpandsGroupingSetStars(t *testing.T) {
 			selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from "+tt.viewName, 1)
 			require.NoError(t, err)
 			defer selectStmt.Free()
-			_, err = BuildPlan(ctx, selectStmt, false)
+			_, err = BuildPlan(ctx, selectStmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -2344,7 +2346,7 @@ func TestGenViewTableDefPersistsExpandedUnionStars(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2513,7 +2515,7 @@ func TestGenViewTableDefPersistsExpandedCTEStars(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2526,7 +2528,7 @@ func TestGenViewTableDefPersistsExpandedCTEStars(t *testing.T) {
 	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
 	require.NoError(t, err)
 	defer stableStmt.Free()
-	_, err = BuildPlan(ctx, stableStmt, false)
+	_, err = BuildPlan(ctx, stableStmt, false, nil)
 	require.NoError(t, err)
 
 	ctx.tables["v_cte"] = DeepCopyTableDef(tableDef, true)
@@ -2541,7 +2543,7 @@ func TestGenViewTableDefPersistsExpandedCTEStars(t *testing.T) {
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_cte", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
 }
@@ -2608,7 +2610,7 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			tableDef := p.GetDdl().GetCreateView().GetTableDef()
 			require.NotNil(t, tableDef)
@@ -2622,7 +2624,7 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 			stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
 			require.NoError(t, err)
 			defer stableStmt.Free()
-			_, err = BuildPlan(ctx, stableStmt, false)
+			_, err = BuildPlan(ctx, stableStmt, false, nil)
 			require.NoError(t, err)
 
 			ctx.tables[tt.viewName] = DeepCopyTableDef(tableDef, true)
@@ -2632,7 +2634,7 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 			selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from "+tt.viewName, 1)
 			require.NoError(t, err)
 			defer selectStmt.Free()
-			selectPlan, err := BuildPlan(ctx, selectStmt, false)
+			selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, tt.headings, selectPlan.GetQuery().GetHeadings())
 		})
@@ -2660,7 +2662,7 @@ func TestBuildAlterViewPersistsExpandedJoinOnSubqueryStars(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetAlterView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2674,7 +2676,7 @@ func TestBuildAlterViewPersistsExpandedJoinOnSubqueryStars(t *testing.T) {
 	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
 	require.NoError(t, err)
 	defer stableStmt.Free()
-	_, err = BuildPlan(ctx, stableStmt, false)
+	_, err = BuildPlan(ctx, stableStmt, false, nil)
 	require.NoError(t, err)
 
 	ctx.tables["v_join_star"] = DeepCopyTableDef(tableDef, true)
@@ -2682,7 +2684,7 @@ func TestBuildAlterViewPersistsExpandedJoinOnSubqueryStars(t *testing.T) {
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_join_star", 1)
 	require.NoError(t, err)
 	defer selectStmt.Free()
-	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	selectPlan, err := BuildPlan(ctx, selectStmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"n_nationkey"}, selectPlan.GetQuery().GetHeadings())
 }
@@ -2813,7 +2815,7 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				p, err := BuildPlan(ctx, stmt, false)
+				p, err := BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err)
 				var cols []*plan.ColDef
 				if view := p.GetDdl().GetCreateView(); view != nil {
@@ -2843,7 +2845,7 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
 		require.Len(t, cols, 2)
@@ -2863,7 +2865,7 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewWrongList))
 		require.Equal(t, uint16(moerr.ER_VIEW_WRONG_LIST), err.(*moerr.Error).MySQLCode())
@@ -2911,7 +2913,7 @@ func TestBuildCreateViewConsumesOutputColumnDefaultProvenance(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			viewPlan, err := BuildPlan(ctx, stmt, false)
+			viewPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			cols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
 			require.Len(t, cols, 1)
@@ -2944,7 +2946,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		p, err := BuildPlan(rootCtx, stmt, false)
+		p, err := BuildPlan(rootCtx, stmt, false, nil)
 		require.NoError(t, err)
 		return p.GetDdl().GetCreateView().GetTableDef()
 	}
@@ -2976,7 +2978,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		p, err := BuildPlan(rootCtx, stmt, false)
+		p, err := BuildPlan(rootCtx, stmt, false, nil)
 		require.NoError(t, err)
 		require.True(t, p.GetDdl().GetCreateView().GetReplace())
 		require.Equal(t, "7", p.GetDdl().GetCreateView().GetTableDef().GetCols()[0].GetDefault().GetOriginString())
@@ -3017,7 +3019,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 			"create table copied_left_join as select * from v_left_join", 1)
 		require.NoError(t, err)
 		defer ctasStmt.Free()
-		ctasPlan, err := BuildPlan(ctx, ctasStmt, false)
+		ctasPlan, err := BuildPlan(ctx, ctasStmt, false, nil)
 		require.NoError(t, err)
 		require.True(t, ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
 
@@ -3027,7 +3029,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ambiguousSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		_, err = BuildPlan(rootCtx, stmt, false)
+		_, err = BuildPlan(rootCtx, stmt, false, nil)
 		require.Error(t, err)
 	})
 }
@@ -3068,7 +3070,7 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(rootCtx, stmt, false)
+	p, err := BuildPlan(rootCtx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
 	require.Len(t, cols, 3)
@@ -3131,7 +3133,7 @@ func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			viewPlan, err := BuildPlan(newContext(rootSQL), stmt, false)
+			viewPlan, err := BuildPlan(newContext(rootSQL), stmt, false, nil)
 			require.NoError(t, err)
 			viewCols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
 			require.Len(t, viewCols, 3)
@@ -3163,7 +3165,7 @@ func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
+			ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false, nil)
 			require.NoError(t, err)
 			ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.GreaterOrEqual(t, len(ctasCols), 3)
@@ -3235,7 +3237,7 @@ func TestOctNotNullSourceCTAS(t *testing.T) {
 				"create table oct_copy as select oct(n_nationkey) as o from nation", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
 			require.Equal(t, int32(types.T_varchar), col.Typ.Id)
@@ -3286,7 +3288,7 @@ func TestTemporalTextExtractionCTASAllowsSynthesizedNull(t *testing.T) {
 				"create table temporal_copy as select "+expression+" as v from nation", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
 			require.False(t, col.Typ.NotNullable)
@@ -3375,7 +3377,7 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
 	require.NoError(t, err)
-	viewPlan, err := BuildPlan(createCtx, stmt, false)
+	viewPlan, err := BuildPlan(createCtx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 
@@ -3400,7 +3402,7 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 				"create table copied as "+test.selectSQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			ctasPlan, err := BuildPlan(ctx, stmt, false)
+			ctasPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.GreaterOrEqual(t, len(cols), 8)
@@ -3553,7 +3555,7 @@ func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
 	require.Len(t, cols, 3)
@@ -3610,7 +3612,7 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			viewPlan, err := BuildPlan(ctx, stmt, false)
+			viewPlan, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			cols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
 			require.Len(t, cols, 2)
@@ -3634,7 +3636,7 @@ func TestBuildCTASTemporalFractionalPrecision(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 3)
@@ -3655,7 +3657,7 @@ func TestBuildCTASConvertTZDottedDatePrecision(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 4)
@@ -3674,7 +3676,7 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 3)
@@ -3699,7 +3701,7 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 6)
@@ -3732,7 +3734,7 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 11)
@@ -3771,7 +3773,7 @@ func TestBuildCTASPreservesJsonUnquoteTextBounds(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 5)
@@ -3795,7 +3797,7 @@ func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 3)
@@ -3814,7 +3816,7 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
 	require.NoError(t, err)
-	createPlan, err := BuildPlan(createCtx, stmt, false)
+	createPlan, err := BuildPlan(createCtx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 
@@ -3828,7 +3830,7 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"select priority from v_enum_set order by priority", 1)
 	require.NoError(t, err)
-	selectPlan, err := BuildPlan(ctx, stmt, false)
+	selectPlan, err := BuildPlan(ctx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 
@@ -3854,7 +3856,7 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"select flags from v_enum_set", 1)
 	require.NoError(t, err)
-	rawSetPlan, err := BuildPlan(ctx, stmt, false)
+	rawSetPlan, err := BuildPlan(ctx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	setDisplayFound := false
@@ -3878,7 +3880,7 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table copied_from_view as select priority, flags, n_name from v_enum_set", 1)
 	require.NoError(t, err)
-	ctasPlan, err := BuildPlan(ctx, stmt, false)
+	ctasPlan, err := BuildPlan(ctx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
@@ -3897,7 +3899,7 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		ctasPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql(), 1)
 	require.NoError(t, err)
-	insertPlan, err := BuildPlan(ctx, stmt, false)
+	insertPlan, err := BuildPlan(ctx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	for _, node := range insertPlan.GetQuery().GetNodes() {
@@ -3914,7 +3916,7 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 		"insert into copied_from_view (priority, flags, n_name) "+
 			"select priority, concat(flags, ',green'), n_name from v_enum_set", 1)
 	require.NoError(t, err)
-	nestedPlan, err := BuildPlan(ctx, stmt, false)
+	nestedPlan, err := BuildPlan(ctx, stmt, false, nil)
 	stmt.Free()
 	require.NoError(t, err)
 	nestedDisplayFound := false
@@ -3953,7 +3955,7 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
 			require.NoError(t, err)
-			createPlan, err := BuildPlan(createCtx, stmt, false)
+			createPlan, err := BuildPlan(createCtx, stmt, false, nil)
 			stmt.Free()
 			require.NoError(t, err)
 
@@ -3967,7 +3969,7 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 				"create table copied as select priority, flags from v", 1)
 			require.NoError(t, err)
-			ctasPlan, err := BuildPlan(ctx, stmt, false)
+			ctasPlan, err := BuildPlan(ctx, stmt, false, nil)
 			stmt.Free()
 			require.NoError(t, err)
 			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
@@ -3989,7 +3991,7 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 				stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 					"select cast(flags as unsigned) from v", 1)
 				require.NoError(t, err)
-				castPlan, err := BuildPlan(ctx, stmt, false)
+				castPlan, err := BuildPlan(ctx, stmt, false, nil)
 				stmt.Free()
 				require.NoError(t, err)
 				for _, node := range castPlan.GetQuery().GetNodes() {
@@ -4027,7 +4029,7 @@ func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
 			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
 			require.NoError(t, err)
-			createPlan, err := BuildPlan(createCtx, stmt, false)
+			createPlan, err := BuildPlan(createCtx, stmt, false, nil)
 			stmt.Free()
 			require.NoError(t, err)
 
@@ -4040,7 +4042,7 @@ func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
 
 			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "select flags from v_semantic_set", 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(ctx, stmt, false)
+			queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 			stmt.Free()
 			require.NoError(t, err)
 
@@ -4152,7 +4154,7 @@ func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.NotEmpty(t, cols)
@@ -4243,7 +4245,7 @@ func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewSelectTmpTable))
 			require.Equal(t, uint16(moerr.ER_VIEW_SELECT_TMPTABLE), err.(*moerr.Error).MySQLCode())
@@ -4262,7 +4264,7 @@ func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	createTable := p.GetDdl().GetCreateTable()
 	require.NotNil(t, createTable)
@@ -4286,7 +4288,7 @@ func TestBuildCreateTablePreservesSingleStatementSQL(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, rootSQL, tableDefCreateSQL(p.GetDdl().GetCreateTable().GetTableDef()))
 }
@@ -4309,7 +4311,7 @@ func TestBuildCreateTableRejectsCaseInsensitiveDuplicateColumns(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 			if tc.duplicate {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDupFieldName), err)
 			} else {
@@ -4342,7 +4344,7 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	persisted := tableDefCreateSQL(built.GetDdl().GetCreateTable().GetTableDef())
 	require.NotContains(t, strings.ToUpper(persisted), " LIKE ")
@@ -4382,7 +4384,7 @@ func TestBuildCreateTableLikeRestoresSubscriptionBeforePlanningTarget(t *testing
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, prepared)
+			built, err := BuildPlan(ctx, stmt, prepared, nil)
 			require.NoError(t, err)
 			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
 			require.Nil(t, ctx.GetQueryingSubscription())
@@ -4439,7 +4441,7 @@ func TestBuildCreateTableLikeQualifiesSameDatabaseForeignKey(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	createTable := built.GetDdl().GetCreateTable()
 	require.Equal(t, "like_fk_src", createTable.Database)
@@ -4512,7 +4514,7 @@ func TestBuildCreateTableLikeSubscriptionForeignKeysUseSourceOnlyContext(t *test
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
 			require.Nil(t, ctx.GetQueryingSubscription())
@@ -4641,7 +4643,7 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, visibilityQueries)
 
@@ -4704,7 +4706,7 @@ func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
 	sequenceStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sequenceSQL, 1)
 	require.NoError(t, err)
 	defer sequenceStmt.Free()
-	sequencePlan, err := BuildPlan(ctx, sequenceStmt, false)
+	sequencePlan, err := BuildPlan(ctx, sequenceStmt, false, nil)
 	require.NoError(t, err)
 
 	sequenceDef := DeepCopyTableDef(
@@ -4731,7 +4733,7 @@ func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
 			require.NoError(t, err)
 			defer createStmt.Free()
 
-			_, err = BuildPlan(ctx, createStmt, false)
+			_, err = BuildPlan(ctx, createStmt, false, nil)
 			require.ErrorContains(t, err, "tpch.seq1 is not BASE TABLE")
 		})
 	}
@@ -4747,7 +4749,7 @@ func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) 
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	createTable := p.GetDdl().GetCreateTable()
 	require.Equal(t, createTable.GetRawSQL(), tableDefCreateSQL(createTable.GetTableDef()))
@@ -4794,7 +4796,7 @@ func TestBuildCreateTablePersistsStatementCanonicalSQL(t *testing.T) {
 			}
 			for i, statement := range statements {
 				createStmt := statement.(*tree.CreateTable)
-				p, err := BuildPlan(ctx, createStmt, false)
+				p, err := BuildPlan(ctx, createStmt, false, nil)
 				require.NoError(t, err)
 				tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 				require.Equal(t, test.wantTmp[i], tableDef.GetTableType() == catalog.SystemTemporaryTable)
@@ -4840,7 +4842,7 @@ func TestBuildTemporaryTableIndexDDLKeepsIndexRelkind(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			indexTables := test.indexTables(p)
 			require.NotEmpty(t, indexTables)
@@ -4959,8 +4961,8 @@ func TestBuildAlterView(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -5056,8 +5058,8 @@ func TestBuildLockTables(t *testing.T) {
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
@@ -5266,12 +5268,12 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer stmt.Free()
-	plan, err = BuildPlan(tempCtx, stmt, false)
+	plan, err = BuildPlan(tempCtx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, physicalTempName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
 
 	tempCtx.rootSQL = createTempSQL
-	_, err = BuildPlan(tempCtx, stmt, false)
+	_, err = BuildPlan(tempCtx, stmt, false, nil)
 	require.Error(t, err)
 	moErr, ok := err.(*moerr.Error)
 	require.True(t, ok, "unexpected error type %T: %v", err, err)
@@ -5285,7 +5287,7 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 		fmt.Sprintf("create table `%s` (id int)", invalidTempName), 1)
 	require.NoError(t, err)
 	defer invalidTempStmt.Free()
-	_, err = BuildPlan(tempCtx, invalidTempStmt, false)
+	_, err = BuildPlan(tempCtx, invalidTempStmt, false, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 }
 
@@ -6338,7 +6340,7 @@ func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	var visible []*plan.ColDef
@@ -6389,7 +6391,7 @@ func TestBuildCTASExplicitTargetDefaultOverridesAutoIncrementTypeDefault(t *test
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	var idCol *plan.ColDef
@@ -6495,7 +6497,7 @@ func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		logicPlan, err := BuildPlan(ctx, stmt, false)
+		logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 
 		for _, column := range logicPlan.GetDdl().GetCreateView().GetTableDef().GetCols()[:2] {
@@ -6513,7 +6515,7 @@ func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
 	require.True(t, isEnumPlanType(&col.Typ))
@@ -7092,7 +7094,6 @@ func TestBuildCreatePitr(t *testing.T) {
 		ctx.GetAccountNameFunc = func() string { return "sys" }
 		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
 		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
-		ctx.ResolveFunc = func(string, string, *Snapshot) (*ObjectRef, *TableDef) { return nil, nil }
 		stmt := baseStmt()
 		stmt.Level = tree.PITRLEVELTABLE
 		stmt.DatabaseName = "db1"
@@ -7107,14 +7108,16 @@ func TestBuildCreatePitr(t *testing.T) {
 		ctx.GetAccountNameFunc = func() string { return "sys" }
 		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
 		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
-		ctx.ResolveFunc = func(string, string, *Snapshot) (*ObjectRef, *TableDef) { return &ObjectRef{}, &TableDef{TblId: 456} }
+		key := mockQualifiedTableName("db1", "tb1")
+		ctx.objectsByQualifiedName = map[string]*ObjectRef{key: {}}
+		ctx.tablesByQualifiedName = map[string]*TableDef{key: {TblId: 456}}
 		stmt := baseStmt()
 		stmt.Level = tree.PITRLEVELTABLE
 		stmt.DatabaseName = "db1"
 		stmt.TableName = "tb1"
 		plan, err := buildCreatePitr(stmt, ctx)
-		assert.Error(t, err)
-		assert.Nil(t, plan)
+		require.NoError(t, err)
+		require.EqualValues(t, 456, plan.GetDdl().GetCreatePitr().GetTableId())
 	})
 }
 
@@ -7249,7 +7252,7 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	createTablePlan := p.GetDdl().GetCreateTable()
 	tableDef := createTablePlan.GetTableDef()
@@ -8028,7 +8031,7 @@ func TestBuildCreateViewMetadataReplay(t *testing.T) {
 				defer stmt.Free()
 				ctx := &rootSQLCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: sqlText}
 				ctx.SetSqlModeOverride(mode)
-				built, err := BuildPlan(ctx, stmt, false)
+				built, err := BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err, sqlText)
 				return built.GetDdl().GetCreateView().GetTableDef()
 			}
@@ -8120,7 +8123,7 @@ func TestBuildCTASUnsignedDecimalAttributeProvenance(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 4)
@@ -8176,7 +8179,7 @@ func TestBuildCTASUnsignedDecimalSetOperationProvenance(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err, sql)
 		return built.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	}
@@ -8234,7 +8237,7 @@ func TestBuildCTASUnsignedDecimalSetOperationProvenance(t *testing.T) {
 			"insert into dst_uall(a) values (-1.5)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		require.Empty(t,
 			collectAssignmentFunctionExprs(built, admissionNames...),
@@ -8257,7 +8260,7 @@ func TestBuildCTASUnsignedDecimalSetOperationProvenance(t *testing.T) {
 			"insert into dst_att(a) values (-1.5)", 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		require.NotEmpty(t,
 			collectAssignmentFunctionExprs(built, unsignedDecimalAdmissionName),

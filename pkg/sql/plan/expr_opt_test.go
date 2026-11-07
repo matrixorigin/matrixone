@@ -452,7 +452,7 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			found := false
 			for _, node := range built.GetQuery().Nodes {
@@ -506,7 +506,7 @@ func TestCompositePartBlockFilterDoesNotReadRewrittenPart(t *testing.T) {
 	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
 	stmt, err := mysql.ParseOne(ctx.GetContext(), "select a from part_probe where a = 10 and b = 20", 1)
 	require.NoError(t, err)
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	for _, node := range built.GetQuery().Nodes {
 		if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {

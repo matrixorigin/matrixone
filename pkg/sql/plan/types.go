@@ -232,12 +232,14 @@ type CompilerContext interface {
 	// check if database exist
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
-	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	Resolve(schemaName string, tableName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
 	// ResolveWithoutTemporaryAlias skips session aliases for standalone RENAME TABLE.
 	// It retains catalog visibility, temporary ownership and access checks.
-	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
-	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
+	// Revalidate borrowed ordinary results after synchronous planning/reentry.
+	BorrowedTableStillCurrent(*process.Process, *BorrowedTable) bool
 	// get table definition by table id
 	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get the value of variable
@@ -396,11 +398,16 @@ type QueryBuilder struct {
 
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
-	deleteIndexScanTables map[int32]deleteIndexScan
-	integerPrecision      *integerPrecisionBuilder
-	correlationRouteNodes map[int32]bool
-	dependentRelations    map[int32]bool
-	preparedBindingProof  *bool
+	deleteIndexScanTables    map[int32]deleteIndexScan
+	planningInput            *PlanningInput
+	scanBorrows              []scanBorrow
+	borrowResolutionDisabled bool
+	borrowResolutionAllowed  bool
+	originalIndexScan        originalIndexScan
+	integerPrecision         *integerPrecisionBuilder
+	correlationRouteNodes    map[int32]bool
+	dependentRelations       map[int32]bool
+	preparedBindingProof     *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64

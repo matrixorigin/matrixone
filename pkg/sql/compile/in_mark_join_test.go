@@ -205,7 +205,7 @@ func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 
-	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
@@ -288,7 +288,7 @@ func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 
-	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
@@ -344,7 +344,7 @@ func TestCompileArithmeticExistenceUsesHashJoin(t *testing.T) {
 			statements, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			require.Len(t, statements, 1)
-			p, err := plan2.BuildPlan(ctx, statements[0], false)
+			p, err := plan2.BuildPlan(ctx, statements[0], false, nil)
 			require.NoError(t, err)
 			query := p.GetQuery()
 			var joins []*plan.Node

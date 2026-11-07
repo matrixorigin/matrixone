@@ -3036,7 +3036,7 @@ func buildViewCreatePlanForRestore(compCtx plan.CompilerContext, tblInfo *tableI
 	original := compCtx.GetContext()
 	compCtx.SetContext(plan.WithRestoredViewDefinition(original, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql))
 	defer compCtx.SetContext(original)
-	return plan.BuildPlan(compCtx, stmt, false)
+	return plan.BuildPlan(compCtx, stmt, false, nil)
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {

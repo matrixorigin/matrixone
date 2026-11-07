@@ -802,7 +802,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		ctx := compilerCtx.GetContext()
 		stmts, err := mysql.Parse(ctx, sql, 1)
 		require.NoError(t1, err)
-		qry, err := opt.Optimize(stmts[0], false)
+		qry, err := opt.Optimize(stmts[0], false, nil)
 		require.NoError(t1, err)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)

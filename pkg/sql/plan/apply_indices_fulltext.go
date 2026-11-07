@@ -470,7 +470,7 @@ func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int3
 func (builder *QueryBuilder) buildFullTextMatchSearchScan(ctx *BindContext, scanNode *plan.Node,
 	idxdef *plan.IndexDef, fn *plan.Function, wrappedMatchFilters []*plan.Expr, includePreds string) (int32, int64, error) {
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(
-		scanNode.ObjRef, idxdef.IndexTableName, scanNode.ScanSnapshot)
+		scanNode.ObjRef, idxdef.IndexTableName, scanNode.ScanSnapshot, nil)
 	if err != nil {
 		return -1, 0, err
 	}
@@ -883,7 +883,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 
 		if builder.canApplyRegularIndex(secondScanNode) {
-			secondScanNodeID = builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			var err error
+			secondScanNodeID, err = builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, colRefCnt, idxColMap)
+			if err != nil {
+				return 0, nil, nil, nil, err
+			}
 			secondScanNode = builder.qry.Nodes[secondScanNodeID]
 		}
 

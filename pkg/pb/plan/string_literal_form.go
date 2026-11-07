@@ -1738,7 +1738,10 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	if expr == nil {
 		return nil
 	}
-	pending := []*Expr{expr}
+	// Most expression trees need only a small pending stack. Wider trees grow
+	// the same slice without changing their traversal order.
+	var local [16]*Expr
+	pending := append(local[:0], expr)
 	for len(pending) > 0 {
 		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]

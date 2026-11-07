@@ -112,7 +112,7 @@ func unaffectedFloatDefaults(tb testing.TB) (*MockCompilerContext, *planpb.Table
 	stmt, err := parsers.ParseOne(tb.Context(), dialect.MYSQL, "create table t("+strings.Join(cols, ",")+")", 1)
 	require.NoError(tb, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(tb, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef()
 	defaults := 0
