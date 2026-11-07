@@ -1,0 +1,66 @@
+drop database if exists show_create_table_default_quote;
+create database show_create_table_default_quote;
+use show_create_table_default_quote;
+create table t (
+a varchar(32) default 'it''s',
+b varchar(32) default 'x`y',
+c varchar(32) default '',
+d varchar(32) default 'a\\b',
+e varchar(32) default 'plain',
+f int default 9,
+g varchar(32)
+);
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,239,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `a` varchar(32) DEFAULT 'it''s',
+  `b` varchar(32) DEFAULT 'x`y',
+  `c` varchar(32) DEFAULT '',
+  `d` varchar(32) DEFAULT 'a\\b',
+  `e` varchar(32) DEFAULT 'plain',
+  `f` int DEFAULT 9,
+  `g` varchar(32) DEFAULT NULL
+)
+insert into t(f) values (1);
+select a, b, c, d, e, f, g from t;
+➤ a[12,32,0]  ¦  b[12,32,0]  ¦  c[12,32,0]  ¦  d[12,32,0]  ¦  e[12,32,0]  ¦  f[4,32,0]  ¦  g[12,32,0]  𝄀
+it's  ¦  x`y  ¦    ¦  a\b  ¦  plain  ¦  1  ¦  null
+create table replay (`a` varchar(32) DEFAULT 'it''s', `b` varchar(32) DEFAULT 'x`y', `c` varchar(32) DEFAULT '', `d` varchar(32) DEFAULT 'a\\b', `e` varchar(32) DEFAULT 'plain', `f` int DEFAULT 9, `g` varchar(32) DEFAULT NULL);
+show create table replay;
+➤ Table[12,6,0]  ¦  Create Table[12,244,0]  𝄀
+replay  ¦  CREATE TABLE `replay` (
+  `a` varchar(32) DEFAULT 'it''s',
+  `b` varchar(32) DEFAULT 'x`y',
+  `c` varchar(32) DEFAULT '',
+  `d` varchar(32) DEFAULT 'a\\b',
+  `e` varchar(32) DEFAULT 'plain',
+  `f` int DEFAULT 9,
+  `g` varchar(32) DEFAULT NULL
+)
+insert into replay(f) values (1);
+select a, b, c, d, e, f, g from replay;
+➤ a[12,32,0]  ¦  b[12,32,0]  ¦  c[12,32,0]  ¦  d[12,32,0]  ¦  e[12,32,0]  ¦  f[4,32,0]  ¦  g[12,32,0]  𝄀
+it's  ¦  x`y  ¦    ¦  a\b  ¦  plain  ¦  1  ¦  null
+select column_name, column_default, hex(column_default) from information_schema.columns
+where table_schema='show_create_table_default_quote' and table_name='t'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  hex(column_default)[-1,16383,0]  𝄀
+a  ¦  it's  ¦  69742773  𝄀
+b  ¦  x`y  ¦  786079  𝄀
+c  ¦    ¦    𝄀
+d  ¦  a\b  ¦  615C62  𝄀
+e  ¦  plain  ¦  706C61696E  𝄀
+f  ¦  9  ¦  39  𝄀
+g  ¦  null  ¦  null
+select column_name, column_default, hex(column_default) from information_schema.columns
+where table_schema='show_create_table_default_quote' and table_name='replay'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  hex(column_default)[-1,16383,0]  𝄀
+a  ¦  it's  ¦  69742773  𝄀
+b  ¦  x`y  ¦  786079  𝄀
+c  ¦    ¦    𝄀
+d  ¦  a\b  ¦  615C62  𝄀
+e  ¦  plain  ¦  706C61696E  𝄀
+f  ¦  9  ¦  39  𝄀
+g  ¦  null  ¦  null
+drop database show_create_table_default_quote;
