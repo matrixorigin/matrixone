@@ -4622,7 +4622,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
 		var remapErr error
 		statementSchedulingSQL, sources, fragments, schedulingErr := schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource, nil)
 		if schedulingErr != nil {
 			return nil, schedulingErr
 		}
@@ -4667,6 +4667,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var cmdGetDdlStmt *InternalCmdGetDdl
 	var cmdGetObjectStmt *InternalCmdGetObject
 	var cmdObjectListStmt *InternalCmdObjectList
+	var parsedFragments []mysql.SQLFragment
 	var err error
 	// if the input is an option ast, we should use it directly
 	if execCtx.input.getStmt() != nil {
@@ -4720,7 +4721,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
-		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
+		stmts, parsedFragments, err = parseSqlWithFragments(execCtx, ses.GetMySQLParser(), parserSQLMode)
 		if err != nil {
 			return nil, err
 		}
@@ -4779,7 +4780,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		sources = []string{source}
 	} else {
 		statementSchedulingSQL, sources, recordFragments, err = schedulingSQLByStatementWithSQLMode(
-			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource, parsedFragments)
 		if err != nil {
 			return nil, err
 		}
@@ -4801,6 +4802,20 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
+	lowerCaseTableNames, sqlMode := parseSqlOptions(execCtx)
+	return p.ParseWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), lowerCaseTableNames, sqlMode)
+}
+
+func parseSqlWithFragments(execCtx *ExecCtx, p *mysql.MySQLParser, schedulingSQLMode string) ([]tree.Statement, []mysql.SQLFragment, error) {
+	lowerCaseTableNames, sqlMode := parseSqlOptions(execCtx)
+	if lowerCaseTableNames != 1 || sqlMode != schedulingSQLMode {
+		stmts, err := p.ParseWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), lowerCaseTableNames, sqlMode)
+		return stmts, nil, err
+	}
+	return p.ParseWithSQLModeAndFragments(execCtx.reqCtx, execCtx.input.getSql(), lowerCaseTableNames, sqlMode)
+}
+
+func parseSqlOptions(execCtx *ExecCtx) (int64, string) {
 	// The publication binding probe names the exact catalog object the
 	// validation snapshot certified through the executed statement this
 	// parse produces, so its identifiers keep source case and binding can
@@ -4810,12 +4825,7 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	if defines.IsPublicationViewBinding(execCtx.reqCtx) {
 		lowerCaseTableNames = 0
 	}
-	return p.ParseWithSQLMode(
-		execCtx.reqCtx,
-		execCtx.input.getSql(),
-		lowerCaseTableNames,
-		sessionSQLModeForParser(execCtx.ses),
-	)
+	return lowerCaseTableNames, sessionSQLModeForParser(execCtx.ses)
 }
 
 func sessionSQLMode(ses FeSession) string {
@@ -7196,7 +7206,7 @@ func sqlForRecordFromFragments(fragments []mysql.SQLFragment) []string {
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
 // optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
 // this text is control-plane input and must never be sanitized first.
-func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, []mysql.SQLFragment, error) {
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool, fragments []mysql.SQLFragment) ([]string, []string, []mysql.SQLFragment, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
 		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
 		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
@@ -7207,9 +7217,12 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		}
 		return []string{sql}, []string{source}, nil, nil
 	}
-	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
-	if err != nil {
-		return nil, nil, nil, err
+	if fragments == nil {
+		var err error
+		fragments, err = parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	// Rewriting only prepends optimizer hints and retains original SQL. Ordinary
 	// source markers therefore have identical meaning before and after rewrite.

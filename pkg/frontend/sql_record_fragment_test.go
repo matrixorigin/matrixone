@@ -18,6 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +63,7 @@ func TestSQLForRecordByStatementWithSQLMode(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want, records)
 
-			_, _, fragments, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, tc.mode, false)
+			_, _, fragments, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, tc.mode, false, nil)
 			require.NoError(t, err)
 			input := &UserInput{sql: tc.sql}
 			input.setRecordFragments(fragments, tc.mode)
@@ -77,7 +80,7 @@ func TestSQLForRecordByStatementWithSQLMode(t *testing.T) {
 
 func TestSQLForRecordRejectsStaleFragments(t *testing.T) {
 	ctx := context.Background()
-	_, _, oldFragments, err := schedulingSQLByStatementWithSQLMode(ctx, "select 1; select 2", "", false)
+	_, _, oldFragments, err := schedulingSQLByStatementWithSQLMode(ctx, "select 1; select 2", "", false, nil)
 	require.NoError(t, err)
 
 	t.Run("different SQL", func(t *testing.T) {
@@ -91,7 +94,7 @@ func TestSQLForRecordRejectsStaleFragments(t *testing.T) {
 
 	t.Run("different SQL mode", func(t *testing.T) {
 		sql := `select 'a\'; select 2`
-		_, _, fragments, err := schedulingSQLByStatementWithSQLMode(ctx, sql, "NO_BACKSLASH_ESCAPES", false)
+		_, _, fragments, err := schedulingSQLByStatementWithSQLMode(ctx, sql, "NO_BACKSLASH_ESCAPES", false, nil)
 		require.NoError(t, err)
 		input := &UserInput{sql: sql}
 		input.setRecordFragments(fragments, "NO_BACKSLASH_ESCAPES")
@@ -124,4 +127,49 @@ func TestSQLForRecordRejectsStaleFragments(t *testing.T) {
 		require.Equal(t, []string{"select 9"}, records)
 		require.NotNil(t, input.recordFragments)
 	})
+}
+
+func TestParseSQLFragmentReuseRequiresMatchingOptions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", ""))
+	for _, tc := range []struct {
+		name           string
+		lower          int64
+		schedulingMode string
+		publication    bool
+		reuse          bool
+	}{
+		{"matching", 1, "", false, true},
+		{"case sensitive", 0, "", false, false},
+		{"case preserving", 2, "", false, false},
+		{"different mode", 1, "ANSI_QUOTES", false, false},
+		{"publication binding", 1, "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses.sesSysVars.Set("lower_case_table_names", tc.lower)
+			ctx := context.Background()
+			if tc.publication {
+				ctx = defines.WithPublicationViewBinding(ctx)
+			}
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.input = &UserInput{sql: "select * from DbName.MixedName"}
+			parser := ses.GetMySQLParser()
+			want, err := parseSql(execCtx, parser)
+			require.NoError(t, err)
+			defer freeStatements(want)
+			got, fragments, err := parseSqlWithFragments(execCtx, parser, tc.schedulingMode)
+			require.NoError(t, err)
+			defer freeStatements(got)
+			require.Equal(t, tree.String(want[0], dialect.MYSQL), tree.String(got[0], dialect.MYSQL))
+			if tc.reuse {
+				require.Len(t, fragments, 1)
+				require.Equal(t, execCtx.input.sql, fragments[0].SQL)
+			} else {
+				require.Nil(t, fragments)
+			}
+		})
+	}
 }
