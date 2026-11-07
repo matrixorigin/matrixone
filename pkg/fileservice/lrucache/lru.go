@@ -82,6 +82,9 @@ type item[K comparable, V any] struct {
 	// pending is set until postSet of the item returns; eviction passes over it. It is
 	// guarded by the item's shard lock.
 	pending bool
+	// oversized is set for an item larger than the capacity when it was added; Get does
+	// not make it the most recently used.
+	oversized bool
 }
 
 // NewWithPrepareEvict returns a cache with the callbacks of a DiskCache index:
@@ -136,14 +139,15 @@ func (c *Cache[K, V]) SetOldest(ctx context.Context, key K, value V, size int64)
 
 func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldest bool) bool {
 	// An item larger than the capacity is evicted before any other.
-	oldest = oldest || size > c.capacity()
+	oversized := size > c.capacity()
+	oldest = oldest || oversized
 	s := c.shardOf(key)
 	s.mu.Lock()
 	if s.items[key] != nil {
 		s.mu.Unlock()
 		return false
 	}
-	it := &item[K, V]{key: key, value: value, size: size, seq: c.nextSeq.Add(1), pending: true}
+	it := &item[K, V]{key: key, value: value, size: size, seq: c.nextSeq.Add(1), pending: true, oversized: oversized}
 	if oldest {
 		it.stamp = c.oldest.Add(-1)
 		s.items[key] = s.order.PushBack(it)
@@ -169,7 +173,8 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldes
 	return true
 }
 
-// Get returns key's value and makes it the most recently used item.
+// Get returns key's value and makes it the most recently used item, unless it was larger
+// than the capacity when it was added.
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	s := c.shardOf(key)
 	s.mu.Lock()
@@ -179,11 +184,13 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 		return value, false
 	}
 	it := e.Value.(*item[K, V])
-	it.stamp = c.newest.Add(1)
-	wasTail := e == s.order.Back()
-	s.order.MoveToFront(e)
-	if wasTail {
-		s.updateTail()
+	if !it.oversized {
+		it.stamp = c.newest.Add(1)
+		wasTail := e == s.order.Back()
+		s.order.MoveToFront(e)
+		if wasTail {
+			s.updateTail()
+		}
 	}
 	value, size := it.value, it.size
 	s.mu.Unlock()

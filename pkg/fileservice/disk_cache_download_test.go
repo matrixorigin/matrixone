@@ -397,3 +397,35 @@ func TestDiskCacheDownloadReadOverlappingPublicationCounts(t *testing.T) {
 	require.NotNil(t, cache.preloads.groups[group])
 	require.Greater(t, cache.preloads.groups[group].average, 0.0)
 }
+
+// Bytes the read that started a download captures count toward the file's read share also
+// when the file is evicted as soon as it is published.
+func TestDiskCacheDownloadCaptureCountsWhenEvictedOnPublish(t *testing.T) {
+	rangeReadsCost(t, time.Hour)
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1024), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	const group = 7
+	diskPath := cache.pathForFile("obj")
+	cache.preloads.narrowRead(diskPath, group, func() bool { return true })
+	pr, pw := io.Pipe()
+	filled := make(chan error, 1)
+	go func() {
+		filled <- cache.SetFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) { return pr, nil })
+	}()
+	require.Eventually(t, func() bool { return cache.download(diskPath) != nil },
+		diskCacheLifecycleTestTimeout, time.Millisecond)
+	_, err = pw.Write(make([]byte, 4096))
+	require.NoError(t, err)
+	read := newFullObjectDiskCacheReader(&IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 0, Size: 4096}}})
+	require.True(t, read.capture(ctx, cache.download(diskPath)))
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+
+	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
+	cache.preloads.mu.Lock()
+	defer cache.preloads.mu.Unlock()
+	require.NotNil(t, cache.preloads.groups[group])
+	require.Greater(t, cache.preloads.groups[group].average, 0.0)
+}

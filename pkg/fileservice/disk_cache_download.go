@@ -39,20 +39,24 @@ type objectDownload struct {
 	file     *os.File // closed once the download is retired and no reader holds it
 	readers  int
 	retired  bool
-	served   int64 // bytes readers took from the download before credited
-	credited bool  // the cached file counts the bytes readers take
+	served   int64         // bytes readers took from the download before credited
+	credited bool          // the cached file counts the bytes readers take
+	credit   func(n int64) // counts n bytes read toward the published file
 }
 
-// serve records n bytes a reader took from the download, and reports whether the
-// reader counts them toward the cached file itself.
-func (o *objectDownload) serve(n int64) (counted bool) {
+// serve records n bytes a reader took from the download, which count toward the cached
+// file once it is published.
+func (o *objectDownload) serve(n int64) {
 	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.credited {
-		return true
+	if !o.credited {
+		o.served += n
+		o.mu.Unlock()
+		return
 	}
-	o.served += n
-	return false
+	o.mu.Unlock()
+	if o.credit != nil {
+		o.credit(n)
+	}
 }
 
 // takeServed returns the bytes readers took so far; readers count later bytes
@@ -200,6 +204,7 @@ type diskCacheDownloads struct {
 
 func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool) *objectDownload {
 	o := newObjectDownload(tempPath, measured)
+	o.credit = func(n int64) { d.preloads.read(diskPath, n) }
 	d.downloads.mu.Lock()
 	if d.downloads.m == nil {
 		d.downloads.m = make(map[string]*objectDownload)
@@ -263,9 +268,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 	defer o.release()
 	// The bytes count before they are read, so a file published and evicted while the
 	// read runs still has them.
-	if o.serve(entry.Size) {
-		d.preloads.read(diskPath, entry.Size)
-	}
+	o.serve(entry.Size)
 	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}

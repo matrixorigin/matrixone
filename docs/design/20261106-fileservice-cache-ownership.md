@@ -99,7 +99,7 @@ results; a general-purpose cache library; tuning the policy per workload at runt
   removes it; an item that becomes evictable, or is inserted as oldest, while an
   eviction scans may be passed over by that scan. Files found on disk at startup are
   inserted as oldest, and so is an item larger than the capacity, which eviction then
-  removes before any other.
+  removes before any other; a use of it does not make it newer.
 - **Held entries.** Index-file entries that are held are never evicted.
 - **Eviction and bound.** Inserts leave eviction to an evictor already running, which
   checks again when it stops, so a burst cannot lose a wakeup. Eviction removes

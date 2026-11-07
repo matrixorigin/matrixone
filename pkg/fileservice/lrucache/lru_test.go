@@ -506,3 +506,36 @@ func TestPendingOversizedItemEvictsNothingElse(t *testing.T) {
 	require.Equal(t, []string{"big"}, evicted)
 	require.Equal(t, int64(90), c.Used())
 }
+
+func TestOversizedItemStaysOldestWhenUsedWhilePending(t *testing.T) {
+	ctx := context.Background()
+	entered, release := make(chan struct{}), make(chan struct{})
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(100),
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			if key == "big" {
+				close(entered)
+				<-release
+			}
+		},
+		nil,
+		func(string, int, int64, uint64) func() { return func() {} },
+		nil,
+	)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	setDone := make(chan struct{})
+	go func() {
+		c.Set(ctx, "big", 2, 150)
+		close(setDone)
+	}()
+	<-entered
+	_, ok := c.Get(ctx, "big")
+	require.True(t, ok)
+	close(release)
+	<-setDone
+	require.True(t, c.Contains("a"))
+	require.True(t, c.Contains("b"))
+	require.False(t, c.Contains("big"))
+	require.Equal(t, int64(80), c.Used())
+}

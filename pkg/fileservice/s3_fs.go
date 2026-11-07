@@ -1610,6 +1610,7 @@ type fullObjectEntryCapture struct {
 	size   int64
 	data   bytes.Buffer
 	read   bool
+	served bool
 }
 
 func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
@@ -1649,6 +1650,11 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 			want := written - c.offset
 			if c.size >= 0 {
 				want = min(want, c.size)
+			}
+			if ok && want > 0 && !c.served {
+				// The bytes count before they are read, as readFromDownload counts them.
+				download.serve(want)
+				c.served = true
 			}
 			if want > 0 && !r.readRange(download, c, want) {
 				all = false
