@@ -323,6 +323,10 @@ func TestAppendTemporalStorageHintsKeepsRowFilterIndependent(t *testing.T) {
 	require.Equal(t, []*plan.Expr{row, helper}, result)
 	require.Nil(t, storage[:2][1])
 	require.Equal(t, []*plan.Expr{row}, appendCandidateStorageHints(storage, nil))
+	staticHint := plan2.MakePlan2Int64ConstExprWithType(3)
+	staticHint.CandidateFilter = true
+	require.Equal(t, []*plan.Expr{row, staticHint}, appendCandidateStorageHints(storage, []*plan.Expr{staticHint}),
+		"a proved hint does not require a runtime-only function")
 	copy := plan2.DeepCopyExpr(helper)
 	copy.Selectivity = 0.25
 	copy.Ndv = 17

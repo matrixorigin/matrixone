@@ -8654,9 +8654,13 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
 					continue
 				}
-				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				original := fn.Args[i]
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, original, proc, false, true)
 				if foldErr != nil {
 					return false, foldErr
+				}
+				if original.GetCandidateFilter() {
+					folded.CandidateFilter = true
 				}
 				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
@@ -8677,9 +8681,10 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 							Id: int32(newID),
 						},
 					},
-					AuxId:       fn.Args[i].AuxId,
-					Ndv:         fn.Args[i].Ndv,
-					Selectivity: fn.Args[i].Selectivity,
+					AuxId:           fn.Args[i].AuxId,
+					CandidateFilter: fn.Args[i].CandidateFilter,
+					Ndv:             fn.Args[i].Ndv,
+					Selectivity:     fn.Args[i].Selectivity,
 				}
 
 			}

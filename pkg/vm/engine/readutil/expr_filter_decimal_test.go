@@ -628,7 +628,7 @@ func BenchmarkSeekFirstBlockByZoneMap(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				zoneMapSeekSink = seekFirstBlockByZoneMap(
-					dataMeta, 0, nil, types.T_int64,
+					dataMeta, 0, nil, types.T_int64, false,
 					func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyGEByBound(zm, boundBytes, nil, types.T_int64)
 					},

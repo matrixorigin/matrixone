@@ -149,12 +149,12 @@ func (c *Compile) Compile(
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
 	}()
 
-	hasCandidateAccess := plan2.HasCandidateIndexAccess(queryPlan)
-	if hasCandidateAccess && (!c.candidateExecutionAllowed(execTopContext) || !c.candidateIndexPlacementAllowed(queryPlan)) {
+	requiresCapturedExecution := plan2.HasCapturedExecutionAccess(queryPlan)
+	if requiresCapturedExecution && (!c.capturedExecutionAllowed(execTopContext) || !c.capturedExecutionPlacementAllowed(queryPlan)) {
 		return ErrExecutionIntentDrift
 	}
-	if c.preflightPending && (c.candidateIndexTopology || hasCandidateAccess) && c.executionIntent != nil &&
-		!c.candidateExecutionAllowed(execTopContext) {
+	if c.preflightPending && (c.capturedExecutionTopology || requiresCapturedExecution) &&
+		!c.capturedExecutionAllowed(execTopContext) {
 		return ErrExecutionIntentDrift
 	}
 	if c.preflightPending {
@@ -171,7 +171,7 @@ func (c *Compile) Compile(
 	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
 		return err
 	}
-	c.candidateIndexTopology = c.candidateIndexTopology || hasCandidateAccess
+	c.capturedExecutionTopology = c.capturedExecutionTopology || requiresCapturedExecution
 
 	// Refresh borrowed CREATE plans before effects without advancing or
 	// rolling back the caller's workspace statement. This also covers
@@ -1077,9 +1077,9 @@ func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffs
 	if safeFallback {
 		rebuildPlan = true
 	}
-	if !safeFallback && c.candidateRetryNeedsRebuild() {
+	if !safeFallback && c.capturedExecutionRetryNeedsRebuild() {
 		if c.buildFallbackPlanFunc == nil {
-			return nil, moerr.NewInternalError(topContext, "temporal retry has no safe plan rebuild owner")
+			return nil, moerr.NewInternalError(topContext, "captured execution retry has no safe plan rebuild owner")
 		}
 		rebuildPlan = true
 		safeFallback = true
@@ -1152,7 +1152,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffs
 		runC.SetValidatedExecutionIntent(c.executionIntent)
 	}
 	if !rebuildPlan {
-		runC.candidateIndexTopology = c.candidateIndexTopology
+		runC.capturedExecutionTopology = c.capturedExecutionTopology
 	}
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
@@ -1161,7 +1161,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffs
 		runC.preparedJoinDiagnosticFree = false
 		if safeFallback {
 			if c.buildFallbackPlanFunc == nil {
-				e = moerr.NewInternalError(topContext, "temporal retry has no safe plan rebuild owner")
+				e = moerr.NewInternalError(topContext, "captured execution retry has no safe plan rebuild owner")
 				return nil, e
 			}
 			planForRetry, e = c.buildFallbackPlanFunc(topContext)
@@ -1171,8 +1171,8 @@ func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffs
 		if e != nil {
 			return nil, e
 		}
-		if safeFallback && plan2.HasCandidateIndexAccess(planForRetry) {
-			e = moerr.NewInternalError(topContext, "unscoped temporal retry retained a candidate")
+		if safeFallback && plan2.HasCapturedExecutionAccess(planForRetry) {
+			e = moerr.NewInternalError(topContext, "unscoped retry retained captured execution")
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
@@ -1203,7 +1203,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan, safeFallback bool, existingOffs
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
-		c.candidateIndexTopology = runC.candidateIndexTopology
+		c.capturedExecutionTopology = runC.capturedExecutionTopology
 		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures

@@ -149,26 +149,26 @@ func TestTemporalPlanRebuildsOnCompileIntentDrift(t *testing.T) {
 	_, intent, ok := planningInputForStatement(ses, ses.GetProc(), sql, "", stmt)
 	require.True(t, ok)
 	marked := &plan.Expr{CandidateFilter: true}
-	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
+	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{IndexScanInfo: plan.IndexScanInfo{RequiresCapturedExecution: true}, FilterList: []*plan.Expr{marked}}}}}}
 	safe := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	builds := 0
 	rebuild := func() (*plan2.Plan, error) { builds++; return safe, nil }
-	got, validated, err := validateCandidatePlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), sql, "", stmt, rebuild)
+	got, validated, err := validateCapturedExecutionBeforeCompile(candidate, &intent, ses, ses.GetProc(), sql, "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, candidate, got)
 	require.True(t, validated)
 	require.Zero(t, builds)
-	got, validated, err = validateCandidatePlanBeforeCompile(candidate, &intent, ses, ses.GetProc(), "select 1 from intent_table", "", stmt, rebuild)
+	got, validated, err = validateCapturedExecutionBeforeCompile(candidate, &intent, ses, ses.GetProc(), "select 1 from intent_table", "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, safe, got)
 	require.False(t, validated)
 	require.Equal(t, 1, builds)
-	got, validated, err = validateCandidatePlanBeforeCompile(safe, nil, ses, ses.GetProc(), "", "", stmt, rebuild)
+	got, validated, err = validateCapturedExecutionBeforeCompile(safe, nil, ses, ses.GetProc(), "", "", stmt, rebuild)
 	require.NoError(t, err)
 	require.Same(t, safe, got)
 	require.False(t, validated)
 	require.Equal(t, 1, builds, "candidate-free plans keep their existing scheduling path")
-	_, _, err = validateCandidatePlanBeforeCompile(candidate, nil, ses, ses.GetProc(), sql, "", stmt,
+	_, _, err = validateCapturedExecutionBeforeCompile(candidate, nil, ses, ses.GetProc(), sql, "", stmt,
 		func() (*plan2.Plan, error) { return candidate, nil })
 	require.Error(t, err, "an unscoped rebuild must not return a candidate")
 }
@@ -178,7 +178,7 @@ func TestTemporalSafeRebuildDropsStaleSnapshot(t *testing.T) {
 	defer prepared.Close()
 	cw.planGenerationReused = true
 	cw.setPlanSnapshotTS(timestamp.Timestamp{PhysicalTime: 123})
-	rebuilt, err := cw.rebuildWithoutCandidateAccess(execCtx)
+	rebuilt, err := cw.rebuildWithoutCapturedAccess(execCtx)
 	require.NoError(t, err)
 	require.NotNil(t, rebuilt.GetQuery())
 	require.False(t, cw.planGenerationReused)
@@ -201,7 +201,7 @@ func TestCreateCompileTemporalDriftPreservesRequestState(t *testing.T) {
 	require.True(t, ok)
 	intent.UnixTime++
 	marked := &plan.Expr{CandidateFilter: true}
-	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{FilterList: []*plan.Expr{marked}}}}}}
+	candidate := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{IndexScanInfo: plan.IndexScanInfo{RequiresCapturedExecution: true}, FilterList: []*plan.Expr{marked}}}}}}
 	top, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cw.proc.ReplaceTopCtx(top)

@@ -815,7 +815,7 @@ func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][
 
 func appendUniqueBlockFilter(node *plan.Node, filter *plan.Expr, copyFilter bool) {
 	for _, existing := range node.BlockFilterList {
-		if blockFilterEquivalent(existing, filter) {
+		if existing.GetCandidateFilter() == filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter) {
 			return
 		}
 	}
@@ -1073,7 +1073,7 @@ func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
 	}
 	ret := node.BlockFilterList[:0]
 	for _, filter := range node.BlockFilterList {
-		if (filter.GetCandidateFilter() && function.ContainsRuntimeBound(filter)) ||
+		if filter.GetCandidateFilter() ||
 			(allowed != nil && exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed)) {
 			// calcScanStats replaces BlockFilterList at the end of the pass and
 			// does not mutate preserved entries. Transfer the already-independent
@@ -1435,7 +1435,9 @@ func deduplicateBlockFilterList(filters []*plan.Expr) []*plan.Expr {
 		hash := blockFilterSemanticHash(filter)
 		duplicate := false
 		for _, existing := range buckets[hash] {
-			if blockFilterSemanticallyEquivalent(existing, filter) {
+			if existing.GetCandidateFilter() == filter.GetCandidateFilter() &&
+				((filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter)) ||
+					(!filter.GetCandidateFilter() && blockFilterSemanticallyEquivalent(existing, filter))) {
 				duplicate = true
 				break
 			}

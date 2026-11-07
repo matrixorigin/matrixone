@@ -133,9 +133,6 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 		require.True(t, ok)
 		return proveOriginalIndexPath(ctx, query, path)
 	}
-	excludes := func(ctx context.Context) bool {
-		return originalIndexPathExcludesIndex(ctx, scan, proofFor(ctx))
-	}
 	require.True(t, potential(proc.Ctx))
 	bindingCtx := withPreparedSourceBindings(proc.Ctx, nil, []any{"unproved"})
 	mock := NewMockCompilerContext(true, proc)
@@ -173,7 +170,6 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	scan.FilterList[0] = literalPredicate
 	proof := proofFor(proc.Ctx)
 	require.True(t, proof.fits && proof.single, "the typed literal must pass the original-owner proof")
-	require.False(t, excludes(proc.Ctx))
 	require.True(t, potential(proc.Ctx), "a leading key with an eligible typed literal must be replanned")
 	builder.compCtx.SetContext(proc.Ctx)
 	query.ExecutionDependentAccess = false
@@ -203,15 +199,14 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true, Parts: []string{longName, "d"}}}
 	require.True(t, potential(proc.Ctx), "an oversized key name remains conservative")
 	scan.FilterList = []*plan.Expr{predicate, DeepCopyExpr(predicate)}
-	require.True(t, excludes(proc.Ctx), "two original filters cannot produce this candidate")
+	require.False(t, potential(proc.Ctx), "two original filters cannot produce this candidate")
 	proof = proofFor(proc.Ctx)
 	require.True(t, proof.fits)
 	require.Greater(t, proof.remaining, 4096-64, "the proof performs only its initial budget cancellation check")
 	cancelBase, cancelAfterCheck := context.WithCancel(proc.Ctx)
 	defer cancelAfterCheck()
 	lateCancel := &cancelAfterFirstErrCheck{Context: cancelBase, cancel: cancelAfterCheck}
-	require.False(t, excludes(lateCancel), "cancellation during the proof must not exclude the owner")
-	require.Equal(t, 2, lateCancel.checks, "the final exclusion check must observe cancellation")
+	require.True(t, potential(lateCancel), "cancellation during the proof must retain a potential dependency")
 	scan.FilterList = []*plan.Expr{predicate}
 	index.Parts = []string{"d", "id"}
 	scan.TableDef.Indexes = []*plan.IndexDef{index}

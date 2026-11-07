@@ -79,14 +79,13 @@ func executionIntentMatchesCompile(intent *plan2.ExecutionIntent, ses FeSession,
 	return root != nil && tree.ParameterCount(root) == 0 && intent.Placement == statementPlacement(ses, proc, sql, sqlMode, stmt)
 }
 
-// validateCandidatePlanBeforeCompile preserves candidate-free plans and their
-// existing late scheduling. A candidate requires the captured execution to
-// still match; otherwise the caller rebuilds from the original AST without a
-// temporal scope before authorizing or compiling the replacement plan.
-func validateCandidatePlanBeforeCompile(p *plan2.Plan, intent *plan2.ExecutionIntent, ses FeSession,
+// validateCapturedExecutionBeforeCompile preserves plans without a captured
+// execution requirement. A scoped access must still match its original intent;
+// otherwise the caller rebuilds and authorizes the plan without that scope.
+func validateCapturedExecutionBeforeCompile(p *plan2.Plan, intent *plan2.ExecutionIntent, ses FeSession,
 	proc *process.Process, sql, sqlMode string, stmt tree.Statement, rebuild func() (*plan2.Plan, error),
 ) (*plan2.Plan, bool, error) {
-	if !plan2.HasCandidateIndexAccess(p) {
+	if !plan2.HasCapturedExecutionAccess(p) {
 		return p, false, nil
 	}
 	if executionIntentMatchesCompile(intent, ses, proc, sql, sqlMode, stmt) {
@@ -96,8 +95,8 @@ func validateCandidatePlanBeforeCompile(p *plan2.Plan, intent *plan2.ExecutionIn
 	if err != nil {
 		return nil, false, err
 	}
-	if plan2.HasCandidateIndexAccess(safe) {
-		return nil, false, moerr.NewInternalErrorNoCtx("unscoped temporal plan rebuild retained a candidate")
+	if plan2.HasCapturedExecutionAccess(safe) {
+		return nil, false, moerr.NewInternalErrorNoCtx("unscoped plan rebuild retained captured execution")
 	}
 	return safe, false, nil
 }
