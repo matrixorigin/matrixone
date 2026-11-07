@@ -64,6 +64,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 		loopJoin.OpAnalyzer.Reset()
 	}
 
+	loopJoin.prepareMembership()
 	if loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.NonEqCond)
 		if err != nil {
@@ -81,6 +82,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
+		if err := proc.Ctx.Err(); err != nil {
+			return result, err
+		}
 		switch ctr.state {
 		case Build:
 			if err = loopJoin.build(proc, analyzer); err != nil {
@@ -192,12 +196,25 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 	inbat := ctr.inBat
 	mpbat := ctr.mp.GetBatches()
 	count := inbat.RowCount()
+	if ctr.markProbeCol >= 0 && ctr.markProbeCol < len(inbat.Vecs) &&
+		message.MembershipVectorMatches(inbat.Vecs[ctr.markProbeCol], ctr.markType) {
+		index, err := ctr.mp.GetMembershipIndex(proc.Ctx, ctr.markBuildCol, ctr.markType)
+		if err != nil {
+			return err
+		}
+		if index != nil {
+			return ctr.probeMembership(ap, index, proc, result)
+		}
+	}
 	if ctr.joinBat == nil {
 		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(inbat, proc.Mp())
 	}
 
 	rowCountIncrease := 0
 	for i := ctr.probeIdx; i < count; i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
 			if rowCountIncrease >= colexec.DefaultBatchSize {
 				result.Batch = ctr.resBat
@@ -210,6 +227,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			hasTrue := false
 			hasNull := false
 			for idx := 0; idx < len(mpbat); idx++ {
+				if err := proc.Ctx.Err(); err != nil {
+					return err
+				}
 				bat := mpbat[idx]
 				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
 					bat.RowCount(), ctr.cfs); err != nil {
@@ -275,6 +295,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			matched = true
 		}
 		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
+			if err := proc.Ctx.Err(); err != nil {
+				return err
+			}
 			if rowCountIncrease >= colexec.DefaultBatchSize {
 				result.Batch = ctr.resBat
 				ctr.resBat.SetRowCount(rowCountIncrease)

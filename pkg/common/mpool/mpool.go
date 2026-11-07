@@ -587,7 +587,11 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 		}
 		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
-			panic(err)
+			// Admission precedes the physical allocation. A failed allocator
+			// creates no owned buffer and must release both reservations.
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
+			return nil, err
 		}
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
