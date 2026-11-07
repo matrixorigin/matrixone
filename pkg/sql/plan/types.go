@@ -1253,6 +1253,13 @@ type baseBinder struct {
 	// resolves that literal.  Some functions, such as INET_NTOA, have a
 	// string-valued result but still preserve native numeric input overloads.
 	suppressDefaultValueBindType bool
+	// binaryLiteralUnderExplicitTextCast marks the source subtree of the
+	// innermost user-written explicit CAST when that cast targets
+	// non-binary-charset char/varchar/text. In that scope only hex/bit
+	// literals skip the destination-column pre-coercion so the explicit
+	// cast's own binary-to-text contract (invalid UTF-8 -> NULL + Warning
+	// 1300) can apply. See numValDefaultBindType.
+	binaryLiteralUnderExplicitTextCast bool
 	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
 	// INET_NTOA can select its numeric overload.  Those literals are otherwise
 	// materialized as binary strings by the generic literal binder.
