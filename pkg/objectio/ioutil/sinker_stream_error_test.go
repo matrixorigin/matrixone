@@ -32,11 +32,15 @@ import (
 type trackingStreamSinker struct {
 	received *batch.Batch
 	err      error
+	panicErr error
 	rows     int
 }
 
 func (s *trackingStreamSinker) Sink(_ context.Context, b *batch.Batch) error {
 	s.received = b
+	if s.panicErr != nil {
+		panic(s.panicErr)
+	}
 	if s.err != nil {
 		return s.err
 	}
@@ -52,17 +56,20 @@ func (*trackingStreamSinker) Close() error { return nil }
 
 func TestStreamingSpillReleasesMergeBuffer(t *testing.T) {
 	for _, offHeap := range []bool{false, true} {
-		for _, fail := range []bool{false, true} {
+		for _, mode := range []string{"success", "error", "panic"} {
 			for _, rows := range []int{100, int(objectio.BlockMaxRows)} {
-				t.Run(fmt.Sprintf("offHeap=%t/fail=%t/rows=%d", offHeap, fail, rows), func(t *testing.T) {
+				t.Run(fmt.Sprintf("offHeap=%t/mode=%s/rows=%d", offHeap, mode, rows), func(t *testing.T) {
 					proc := testutil.NewProc(t)
 					fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
 					require.NoError(t, err)
 					attrs, typs, _ := mockSchema(3, 2)
 					wantErr := errors.New("injected stream sink failure")
 					file := &trackingStreamSinker{}
-					if fail {
+					switch mode {
+					case "error":
 						file.err = wantErr
+					case "panic":
+						file.panicErr = wantErr
 					}
 					opts := []SinkerOption{WithMemorySizeThreshold(1)}
 					if offHeap {
@@ -74,10 +81,15 @@ func TestStreamingSpillReleasesMergeBuffer(t *testing.T) {
 					defer data.Close()
 					beforeBytes, beforeObjects := proc.Mp().OnHeapOutstanding()
 					beforeOffHeap := proc.Mp().CurrNB()
-					err = sinker.Write(context.Background(), containers.ToCNBatch(data))
-					if fail {
+					if mode == "panic" {
+						require.PanicsWithValue(t, wantErr, func() {
+							_ = sinker.Write(context.Background(), containers.ToCNBatch(data))
+						})
+					} else if mode == "error" {
+						err = sinker.Write(context.Background(), containers.ToCNBatch(data))
 						require.ErrorIs(t, err, wantErr)
 					} else {
+						err = sinker.Write(context.Background(), containers.ToCNBatch(data))
 						require.NoError(t, err)
 						require.Equal(t, rows, file.rows)
 					}
