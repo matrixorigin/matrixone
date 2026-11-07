@@ -17,6 +17,8 @@ package sysview
 import (
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 // SnapshotColumnsDDL selects the namespace of a resolved cross-account snapshot
@@ -38,15 +40,24 @@ func SnapshotColumnsDDL(definition string, accountID uint32, derived bool) (stri
 	// predicates, not to user SQL. Install the caller guard only afterwards.
 	definition = strings.ReplaceAll(definition, "current_account_id()", namespace)
 	oldCTE := strings.ReplaceAll(informationSchemaMetadataVisibilityCTE(), "current_account_id()", namespace)
+	tableFilter := ""
 	if strings.Count(definition, oldCTE) != 1 {
-		return "", false
+		// Current COLUMNS filters physical index children before APPLY. Match
+		// that authored CTE separately from frozen historical templates, and
+		// retain its listing policy when replacing only role-based admission.
+		tableFilter = " AND " + catalog.NonIndexRelationSQLPredicate("tbl")
+		oldCTE = strings.ReplaceAll(informationSchemaMetadataVisibilityCTEWithTableFilter(
+			"SELECT role_id FROM mo_current_roles() role_closure", tableFilter), "current_account_id()", namespace)
+		if strings.Count(definition, oldCTE) != 1 {
+			return "", false
+		}
 	}
 	const callerGuard = "(current_account_id() = 0 AND current_role_id() = 0)"
 	cte := "WITH __mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
 		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
-		"WHERE tbl.account_id = " + namespace + " AND " + callerGuard + ") "
+		"WHERE tbl.account_id = " + namespace + " AND " + callerGuard + tableFilter + ") "
 	definition = strings.Replace(definition, oldCTE, cte, 1)
 	definition = strings.NewReplacer(
 		informationSchemaSubscriptionColumnAuthorizationPredicate(), callerGuard,
