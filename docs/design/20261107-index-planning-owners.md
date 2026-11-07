@@ -100,14 +100,32 @@ budget and final pair checks. Cost statistics never grant authority.
 
 Optional block observation tries the subscription and engine read locks in
 their existing order, and tries the subscriber's client lock. Cached column
-metadata uses the FIFO owner's try-get operation, sharing ordinary hit, ghost,
-retention and callback behavior while declining a contended shard. The metadata
-cache has no post-get callback; the generic try operation only promises not to
-wait for the shard lock. Initial sampling and final revalidation use these same
-operations. A failed try discards all partial counts. Final stats and read-domain
-checks still run after an unavailable final snapshot or transport. The existing
-final cancellation-cause check retains its error precedence and iterator cleanup.
-No optional observation waits for a subscription, transport, engine or cache lock.
+metadata uses the S3-FIFO owner's try-get operation. `Get` and `TryGet` share
+the locked lookup, admission, retention and frequency-update behavior; only
+acquisition of the index-shard mutex differs. A contended shard or absent entry
+returns no value, does not run admission, and leaves references and frequency
+unchanged. A successful lookup retains the value under that lock. The caller
+releases the retained value and any independent admission reservation. Admission
+errors and retain panics preserve the ordinary lookup's cleanup behavior.
+
+The generic try operation only promises not to wait for its index-shard mutex;
+hash, admission, retain and release callbacks must themselves be bounded and
+must obey the cache's existing reentrancy contract. Metadata observation uses
+nil admission and Go-managed immutable `metaBytes`, whose retain and release
+are no-ops. A borrowed metadata view holds its Go slice through the synchronous
+observation and returns copied column values. Pooled or mutable metadata would
+require revisiting this lifetime contract.
+
+Initial sampling and final revalidation use these same operations. A failed try
+discards all partial counts. An unavailable necessary-range candidate leaves the
+established fallback available; an independently eligible ordinary index winner
+survives an incomplete optional refinement. Final stats and read-domain checks
+still run after an unavailable final snapshot or transport. The existing final
+cancellation-cause check retains its error precedence and iterator cleanup. No
+optional observation waits for a subscription, transport, engine or cache lock.
+The migration from the deleted FIFO owner to S3-FIFO requires reference-lifetime,
+contention, cancellation and ordinary-lookup performance controls in addition to
+the existing planner and SQL result controls.
 
 ## Ordinary resolution and root lifetime
 
