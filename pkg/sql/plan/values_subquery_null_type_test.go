@@ -283,3 +283,128 @@ func TestValuesWithSubqueriesTypedArrayF64BranchCarrier(t *testing.T) {
 			"the VALUES UNION ALL must expose the vecf64 destination type")
 	}
 }
+
+// TestValuesWithSubqueriesTypedArrayBitBoundary: the PR32350 review P2 witness
+// at plan level, for INSERT, REPLACE and the vecf64 destination. A bit-literal
+// payload is never a parsed vector carrier: no lowered branch may re-emit it
+// as a bare Literal_VecVal. Uniformly with the vecf32 lowering, the row keeps
+// the checked string-to-array assignment conversion in its branch expression.
+func TestValuesWithSubqueriesTypedArrayBitBoundary(t *testing.T) {
+	for _, stmt := range []struct {
+		name, sql string
+	}{
+		{"insert-vecf32-bit", `insert into docs_vec_raw values (1, b'1', (select 3)), (2, null, null)`},
+		{"replace-vecf32-bit", `replace into docs_vec_raw values (1, b'1', (select 3))`},
+		// Destination-aligned but never parsed: 32 payload bits cannot pass a
+		// length-alignment gate either.
+		{"insert-vecf32-bit-aligned4", `insert into docs_vec_raw values (2, b'00111111100000000000000000000000', (select 3)), (3, null, null)`},
+		// Ordinary all-literal VALUES row: the same guard consumer on the
+		// rowset path, with no lowered subquery branch.
+		{"insert-vecf32-all-literal-bit", `insert into docs_vec_raw values (9, b'1', 9)`},
+	} {
+		t.Run(stmt.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, stmt.sql)
+			require.NoError(t, err, "the bit row must plan like any VALUES row")
+			anchored := false
+			for _, node := range p.GetQuery().GetNodes() {
+				switch node.NodeType {
+				case plan.Node_PROJECT:
+					if !node.NotCacheable || len(node.ProjectList) <= 1 {
+						continue
+					}
+					proj := node.ProjectList[1]
+					require.Equal(t, int32(types.T_array_float32), proj.Typ.Id,
+						"the lowered bit row keeps the destination array type")
+					requireNoBareVecValConst(t, proj, "lowered bit row")
+					anchored = true
+				case plan.Node_VALUE_SCAN:
+					if node.RowsetData == nil || node.TableDef == nil ||
+						len(node.TableDef.Cols) <= 1 || len(node.RowsetData.Cols) <= 1 {
+						continue
+					}
+					require.Equal(t, int32(types.T_array_float32), node.TableDef.Cols[1].Typ.Id,
+						"the literal VALUES branch declares the destination array type")
+					for row := range node.RowsetData.Cols[1].Data {
+						e := node.RowsetData.Cols[1].Data[row].Expr
+						require.Equal(t, int32(types.T_array_float32), e.Typ.Id,
+							"literal row %d keeps the destination array type", row)
+						requireNoBareVecValConst(t, e, "literal VALUES branch")
+					}
+					anchored = true
+				}
+			}
+			require.True(t, anchored, "the bit row must lower a typed VALUES branch")
+		})
+	}
+
+	// vecf64 destination through a local deepcopy twin of docs_vec_raw (the
+	// same private-context resolver as the f64 carrier test; the shared mock
+	// schema stays untouched).
+	const twinName = "docs_vec64_bit_local"
+	proc := newPlanTestProcess(t)
+	ctx := NewMockCompilerContext(true, proc)
+	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil)
+	require.NoError(t, err)
+	require.NotNil(t, baseRef, "docs_vec_raw must resolve with an object reference")
+	require.NotNil(t, baseDef, "docs_vec_raw must resolve in the mock schema")
+	twin := DeepCopyTableDef(baseDef, true)
+	twin.Name = twinName
+	retyped := false
+	for _, col := range twin.Cols {
+		if col.Name == "embedding" {
+			col.Typ.Id = int32(types.T_array_float64)
+			col.Typ.Width = 3
+			retyped = true
+		}
+	}
+	require.True(t, retyped, "twin must retype the embedding column")
+	qualified := mockQualifiedTableName("constraint_test", twinName)
+	ctx.tablesByQualifiedName[qualified] = twin
+	ctx.tables[twinName] = twin
+	twinRef := *baseRef
+	twinRef.ObjName = twinName
+	ctx.objectsByQualifiedName[qualified] = &twinRef
+	ctx.objects[twinName] = &twinRef
+
+	for _, stmt := range []struct {
+		name, sql string
+	}{
+		{"vecf64-insert-bit-b1", "insert into " + twinName + " values (1, b'1', (select 3)), (2, null, null)"},
+		{"vecf64-replace-bit-b1", "replace into " + twinName + " values (1, b'1', (select 3))"},
+		// 64 destination-aligned payload bits: aligned for float64, still
+		// never parsed by the vector parser.
+		{"vecf64-insert-bit-aligned8", "insert into " + twinName + " values (2, b'0011111111110000000000000000000000000000000000000000000000000000', (select 3)), (3, null, null)"},
+	} {
+		t.Run(stmt.name, func(t *testing.T) {
+			parsed, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, stmt.sql, 1)
+			require.NoError(t, err, "grammar must accept bit literals")
+			p, err := BuildPlan(ctx, parsed, false)
+			require.NoError(t, err, "the vecf64 bit row must plan like any VALUES row")
+			anchored := false
+			for _, node := range p.GetQuery().GetNodes() {
+				if node.NodeType != plan.Node_PROJECT || !node.NotCacheable || len(node.ProjectList) <= 1 {
+					continue
+				}
+				proj := node.ProjectList[1]
+				require.Equal(t, int32(types.T_array_float64), proj.Typ.Id,
+					"the lowered vecf64 bit row keeps the destination array type")
+				requireNoBareVecValConst(t, proj, "lowered vecf64 bit row")
+				anchored = true
+			}
+			require.True(t, anchored, "the vecf64 bit row must lower a NotCacheable branch")
+		})
+	}
+}
+
+// requireNoBareVecValConst asserts a branch expression was not re-emitted as
+// a pre-parsed vector literal: a BIT payload is raw decoded bits, and handing
+// them to the array-domain constant decoder either panics on an unaligned
+// length or silently decodes unvalidated bits.
+func requireNoBareVecValConst(t *testing.T, e *plan.Expr, stage string) {
+	t.Helper()
+	if lit := e.GetLit(); lit != nil && !lit.GetIsnull() {
+		if _, ok := lit.GetValue().(*plan.Literal_VecVal); ok {
+			t.Fatalf("%s re-emitted a bare VecVal constant: %v", stage, e)
+		}
+	}
+}

@@ -266,4 +266,24 @@ func issue31882ValuesSubqueryAndNull(t *testing.T, conn *sql.Conn) {
 	require.NoError(t, conn.QueryRowContext(ctx, `select a from r_values_subquery_null where id = 2`).Scan(&rA))
 	require.True(t, rA.Valid)
 	require.Equal(t, int64(22), rA.Int64)
+
+	// Public-SQL BIT carrier witness (PR32350 review P2): a raw BIT payload
+	// is never a parsed vector carrier, so the statement must surface the
+	// checked string-to-array conversion (Error 20101 "malformed vector
+	// input" from the array parser), and the same connection must keep
+	// accepting genuine vector literals afterwards.
+	_, err = conn.ExecContext(ctx,
+		`insert into t_values_subquery_null values (7, (select 7), 7.70, 'g', b'1')`)
+	require.Error(t, err, "the raw BIT payload must not pass the vector assignment unchecked")
+	require.ErrorAs(t, err, &mysqlErr,
+		"the BIT rejection must surface as the driver's typed MySQL error")
+	require.Equal(t, uint16(20101), mysqlErr.Number,
+		"the checked vector conversion error is moerr.ErrInternal malformed vector input")
+	require.ErrorContains(t, err, "malformed vector input")
+	_, err = conn.ExecContext(ctx,
+		`insert into t_values_subquery_null values (8, (select 8), 8.80, 'h', '[1,2,3]')`)
+	require.NoError(t, err, "the same connection must stay usable after the BIT rejection")
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`select l2_distance(vc, '[1,2,3]') from t_values_subquery_null where id = 8`).Scan(&dist))
+	require.Equal(t, float64(0), dist, "the genuine vecf32 literal must round-trip after the BIT rejection")
 }

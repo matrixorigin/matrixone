@@ -15,8 +15,11 @@
 package value_scan
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -344,4 +347,326 @@ func exprHasColRef(e *planpb.Expr) bool {
 		}
 	}
 	return false
+}
+
+// TestInsertValuesSubqueryBitLiteralBoundary: the PR32350 review P2 witness.
+// A BIT payload is never a parsed vector carrier: SetInsertValueString's P_bit
+// arm returns raw decoded bits and bypasses the array parser, so the binder
+// fast path must not hand them to this lowering as a pre-parsed constant.
+// Every BIT row below must be rejected by the checked string-to-array
+// conversion (moerr 20101 "malformed vector input") at bind time or when the
+// branch's own embedding expression is evaluated through the real expression
+// executor — never re-emitted as a bare VecVal, never silently decoded, and
+// never crashing the constant decoder on an unaligned payload. The
+// aligned-payload cases prove a length-alignment gate cannot substitute the
+// origin check: 32/64 payload bits decode to a float32/float64-aligned byte
+// length yet were never parsed by the vector parser. Both destinations run
+// through the same BuildPlan -> original colexec executor consumer, for
+// INSERT and REPLACE lowered branches and for the ordinary all-literal
+// VALUES row the same guard reaches.
+func TestInsertValuesSubqueryBitLiteralBoundary(t *testing.T) {
+	f32 := bitDest{
+		name:       "vecf32",
+		table:      "docs_vec_raw",
+		alignedBit: "00111111100000000000000000000000",
+		oid:        types.T_array_float32,
+		validBytes: []byte{0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x40, 0x40},
+	}
+	f64 := bitDest{
+		name:       "vecf64",
+		table:      bitF64TwinTable,
+		alignedBit: "0011111111110000000000000000000000000000000000000000000000000000",
+		oid:        types.T_array_float64,
+		validBytes: []byte{
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40,
+		},
+	}
+
+	run := func(t *testing.T, d bitDest, proc *process.Process, build plan2.CompilerContext, mock *plan2.MockCompilerContext) {
+		t.Run("insert-bit-b1-unaligned", func(t *testing.T) {
+			checkBitBoundaryCase(t, proc, build, mock,
+				fmt.Sprintf(`insert into %s values (1, b'1', (select 3)), (2, null, null)`, d.table), false)
+		})
+		t.Run("replace-bit-b1-unaligned", func(t *testing.T) {
+			checkBitBoundaryCase(t, proc, build, mock,
+				fmt.Sprintf(`replace into %s values (1, b'1', (select 3))`, d.table), false)
+		})
+		t.Run("insert-bit-aligned-unparsed", func(t *testing.T) {
+			checkBitBoundaryCase(t, proc, build, mock,
+				fmt.Sprintf(`insert into %s values (2, b'%s', (select 3)), (3, null, null)`, d.table, d.alignedBit), false)
+		})
+		t.Run("insert-all-literal-bit-b1", func(t *testing.T) {
+			checkBitBoundaryCase(t, proc, build, mock,
+				fmt.Sprintf(`insert into %s values (9, b'1', 9)`, d.table), true)
+		})
+		t.Run("insert-bit-b1-decoder-panic-isolated", func(t *testing.T) {
+			checkBitDecoderPanicIsolated(t, proc, build, mock,
+				fmt.Sprintf(`insert into %s values (1, b'1', (select 3)), (2, null, null)`, d.table))
+		})
+		t.Run("reuse-next-valid-and-typed-null", func(t *testing.T) {
+			checkBitReuseNextValid(t, proc, build, mock, d)
+		})
+	}
+
+	t.Run("vecf32", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctx := plan2.NewMockCompilerContext(true, proc)
+		run(t, f32, proc, ctx, ctx)
+	})
+	t.Run("vecf64", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		mock := plan2.NewMockCompilerContext(true, proc)
+		run(t, f64, proc, &bitF64TwinContext{MockCompilerContext: mock}, mock)
+	})
+}
+
+// bitDest parameterizes the f32/f64 destinations of the BIT boundary test.
+type bitDest struct {
+	name       string
+	table      string
+	alignedBit string // destination-aligned but never parsed BIT literal
+	oid        types.T
+	validBytes []byte // physical bytes of the genuine '[1,2,3]' literal
+}
+
+// bitF64TwinTable is a vecf64(3) twin of the mock docs_vec_raw table. The
+// shared mock schema exposes no array_float64 destination and its table maps
+// are private, so the twin is resolved by a small test-local embedding of the
+// real mock context: every resolution except the twin name delegates to the
+// real resolver. The twin keeps the resolved object reference, every column
+// and the dimension of the base definition; only the embedding column's
+// element type is retyped. The shared mock schema stays untouched.
+const bitF64TwinTable = "docs_vec64_bit_exec"
+
+type bitF64TwinContext struct {
+	*plan2.MockCompilerContext
+}
+
+func (c *bitF64TwinContext) resolveTwin(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	if strings.ToLower(tableName) != bitF64TwinTable {
+		return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+	}
+	baseRef, baseDef, err := c.MockCompilerContext.Resolve("constraint_test", "docs_vec_raw", snapshot)
+	if err != nil || baseRef == nil || baseDef == nil {
+		return baseRef, baseDef, err
+	}
+	twinRef := *baseRef
+	twinRef.ObjName = bitF64TwinTable
+	twin := plan2.DeepCopyTableDef(baseDef, true)
+	twin.Name = bitF64TwinTable
+	for _, col := range twin.Cols {
+		if col.Name == "embedding" {
+			col.Typ.Id = int32(types.T_array_float64)
+			col.Typ.Width = 3
+		}
+	}
+	return &twinRef, twin, nil
+}
+
+func (c *bitF64TwinContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	return c.resolveTwin(dbName, tableName, snapshot)
+}
+
+func (c *bitF64TwinContext) ResolveWithoutTemporaryAlias(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	return c.resolveTwin(dbName, tableName, snapshot)
+}
+
+// requireCheckedVectorRejection accepts only the checked vector conversion
+// rejection: the array parser's moerr.ErrInternal (20101) "malformed vector
+// input". Any other bind/setup/evaluation error (missing object, harness or
+// internal failure) fails the test instead of silently satisfying it.
+func requireCheckedVectorRejection(t *testing.T, err error, stage string) {
+	t.Helper()
+	require.Error(t, err, "stage %s: a BIT payload must be rejected by the checked vector conversion", stage)
+	if !moerr.IsMoErrCode(err, moerr.ErrInternal) || !strings.Contains(err.Error(), "malformed vector input") {
+		t.Fatalf("stage %s: rejection is not the checked vector conversion class (20101 \"malformed vector input\"): %v",
+			stage, err)
+	}
+}
+
+// requireBitEvalRejected evaluates a branch expression through the real
+// expression executor — the same consumer as evalRowsetData and the
+// projection executor — and requires the checked vector conversion
+// rejection. A successful evaluation means unvalidated bits were decoded.
+func requireBitEvalRejected(t *testing.T, proc *process.Process, e *planpb.Expr, stage string) {
+	t.Helper()
+	exec, setupErr := colexec.NewExpressionExecutor(proc, e)
+	if setupErr != nil {
+		requireCheckedVectorRejection(t, setupErr, stage+" executor setup")
+		return
+	}
+	defer exec.Free()
+	v, evalErr := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if evalErr != nil {
+		requireCheckedVectorRejection(t, evalErr, stage+" evaluation")
+		return
+	}
+	t.Fatalf("stage %s: unchecked BIT payload evaluated without a conversion error: length %d, type %v",
+		stage, v.Length(), v.GetType())
+}
+
+// requireNoBareVecVal asserts a branch expression is not re-emitted as a
+// pre-parsed vector literal: a BIT payload is raw decoded bits, and handing
+// them to the array-domain constant decoder either panics on an unaligned
+// length or silently decodes unvalidated bits.
+func requireNoBareVecVal(t *testing.T, e *planpb.Expr, stage string) {
+	t.Helper()
+	if lit := e.GetLit(); lit != nil && !lit.GetIsnull() {
+		if _, ok := lit.GetValue().(*planpb.Literal_VecVal); ok {
+			t.Fatalf("stage %s: bit payload re-emitted as a pre-parsed VecVal constant: %v", stage, e)
+		}
+	}
+}
+
+// checkBitBoundaryCase proves one BIT row never reaches an unchecked vector
+// constant: bind-time checked rejection, or every lowered branch expression
+// keeps the checked conversion through the real executor. rowsetOnly selects
+// the ordinary all-literal VALUES row (no lowered subquery branch).
+func checkBitBoundaryCase(t *testing.T, proc *process.Process, build plan2.CompilerContext, mock *plan2.MockCompilerContext, sql string, rowsetOnly bool) {
+	t.Helper()
+	stmt, err := parsers.ParseOne(mock.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err, "grammar must accept BIT literals")
+	p, err := plan2.BuildPlan(build, stmt, false)
+	if err != nil {
+		requireCheckedVectorRejection(t, err, "bind")
+		return
+	}
+	checked := 0
+	nodes := p.GetQuery().GetNodes()
+	if !rowsetOnly {
+		// Lowered subquery-row branch: the embedding projection may keep a
+		// checked cast over the string carrier, never a bare VecVal.
+		for i := range nodes {
+			n := nodes[i]
+			if n.NodeType != planpb.Node_PROJECT || !n.NotCacheable || len(n.ProjectList) <= 1 {
+				continue
+			}
+			e := n.ProjectList[1]
+			if e.GetCol() != nil || exprHasColRef(e) || !isArrayDomainType(e.Typ.Id) {
+				continue
+			}
+			requireNoBareVecVal(t, e, "subquery-row branch")
+			checked++
+			requireBitEvalRejected(t, proc, e, "subquery-row branch")
+		}
+	}
+	// Rowset (all-literal) branch: the same contract on the VALUE_SCAN row
+	// data; typed NULL rows are skipped.
+	for i := range nodes {
+		n := nodes[i]
+		if n.NodeType != planpb.Node_VALUE_SCAN || n.RowsetData == nil || n.TableDef == nil ||
+			len(n.TableDef.Cols) <= 1 || len(n.RowsetData.Cols) <= 1 {
+			continue
+		}
+		if !isArrayDomainType(n.TableDef.Cols[1].Typ.Id) {
+			continue
+		}
+		for row := range n.RowsetData.Cols[1].Data {
+			e := n.RowsetData.Cols[1].Data[row].Expr
+			if lit := e.GetLit(); lit != nil && lit.GetIsnull() {
+				continue
+			}
+			requireNoBareVecVal(t, e, "rowset branch")
+			checked++
+			requireBitEvalRejected(t, proc, e, "rowset branch")
+		}
+	}
+	require.Greater(t, checked, 0,
+		"the BIT row must surface at least one lowered branch expression or a bind-time checked rejection")
+}
+
+// checkBitDecoderPanicIsolated keeps the unaligned-payload counterfactual
+// crash apart from the aligned-payload counterexamples: under the pre-fix
+// producer the branch carries a bare VecVal whose length is not a multiple of
+// the element width, and evaluating it panics the constant decoder. This
+// subcase skips the VecVal pre-check so the panic path is exercised in its
+// own test invocation.
+func checkBitDecoderPanicIsolated(t *testing.T, proc *process.Process, build plan2.CompilerContext, mock *plan2.MockCompilerContext, sql string) {
+	t.Helper()
+	stmt, err := parsers.ParseOne(mock.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err, "grammar must accept BIT literals")
+	p, err := plan2.BuildPlan(build, stmt, false)
+	if err != nil {
+		requireCheckedVectorRejection(t, err, "bind")
+		return
+	}
+	embedding := firstArrayBranchEmbedding(p)
+	if embedding == nil {
+		t.Fatalf("the BIT row lowered no branch embedding expression")
+	}
+	requireBitEvalRejected(t, proc, embedding, "unaligned decoder isolation")
+}
+
+func firstArrayBranchEmbedding(p *planpb.Plan) *planpb.Expr {
+	for _, n := range p.GetQuery().GetNodes() {
+		if n.NodeType != planpb.Node_PROJECT || !n.NotCacheable || len(n.ProjectList) <= 1 {
+			continue
+		}
+		e := n.ProjectList[1]
+		if e.GetCol() != nil || exprHasColRef(e) || !isArrayDomainType(e.Typ.Id) {
+			continue
+		}
+		return e
+	}
+	return nil
+}
+
+// checkBitReuseNextValid proves the same process and context keep binding and
+// evaluating genuine vector literals after the BIT rejections: exact physical
+// destination bytes, the declared type and dimension, and the typed NULL row.
+// Both witnesses must actually select their branch, so a zero-hit loop can
+// never fake a pass.
+func checkBitReuseNextValid(t *testing.T, proc *process.Process, build plan2.CompilerContext, mock *plan2.MockCompilerContext, d bitDest) {
+	t.Helper()
+	stmt, err := parsers.ParseOne(mock.GetContext(), dialect.MYSQL,
+		fmt.Sprintf(`insert into %s values (1, '[1,2,3]', (select 3)), (2, null, null)`, d.table), 1)
+	require.NoError(t, err)
+	p, err := plan2.BuildPlan(build, stmt, false)
+	require.NoError(t, err, "the same process and context must keep binding genuine vector literals after the BIT rejections")
+	nodes := p.GetQuery().GetNodes()
+
+	// The literal row is a typed array NULL on the destination column.
+	rowsetNulls := 0
+	for i := range nodes {
+		n := nodes[i]
+		if n.NodeType != planpb.Node_VALUE_SCAN || n.RowsetData == nil || n.TableDef == nil ||
+			len(n.TableDef.Cols) <= 1 || len(n.RowsetData.Cols) <= 1 {
+			continue
+		}
+		if n.TableDef.Cols[1].Typ.Id != int32(d.oid) {
+			continue
+		}
+		for row := range n.RowsetData.Cols[1].Data {
+			res := evalConst(t, proc, n.RowsetData.Cols[1].Data[row].Expr)
+			require.True(t, res.isNull, "the literal row must still lower to a typed array NULL")
+			require.Equal(t, d.oid, res.oid)
+			require.EqualValues(t, 3, res.width)
+			rowsetNulls++
+		}
+	}
+	require.Greater(t, rowsetNulls, 0, "the reuse witness must select the typed NULL row")
+
+	// The subquery-row branch carries the genuine vector carrier with its
+	// exact physical bytes through the real expression executor.
+	seen := 0
+	for i := range nodes {
+		n := nodes[i]
+		if n.NodeType != planpb.Node_PROJECT || !n.NotCacheable || len(n.ProjectList) <= 1 {
+			continue
+		}
+		e := n.ProjectList[1]
+		if e.GetCol() != nil || exprHasColRef(e) || e.Typ.Id != int32(d.oid) {
+			continue
+		}
+		res := evalConst(t, proc, e)
+		require.False(t, res.isNull)
+		require.Equal(t, d.oid, res.oid)
+		require.EqualValues(t, 3, res.width)
+		require.Equal(t, d.validBytes, res.payload,
+			"the genuine vector carrier must materialize its exact destination bytes")
+		seen++
+	}
+	require.Greater(t, seen, 0, "the reuse witness must select at least one valid embedding branch")
 }
