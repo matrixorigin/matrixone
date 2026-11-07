@@ -109,22 +109,12 @@ func (ctx *membershipBarrierContext) Err() error {
 
 type membershipWaitContext struct {
 	context.Context
-	once     sync.Once
-	entered  chan struct{}
-	waiting  chan struct{}
-	waitOnce sync.Once
-}
-
-func (ctx *membershipWaitContext) Err() error {
-	err := ctx.Context.Err()
-	ctx.once.Do(func() { close(ctx.entered) })
-	return err
+	once    sync.Once
+	waiting chan struct{}
 }
 
 func (ctx *membershipWaitContext) Done() <-chan struct{} {
-	if ctx.waiting != nil {
-		ctx.waitOnce.Do(func() { close(ctx.waiting) })
-	}
+	ctx.once.Do(func() { close(ctx.waiting) })
 	return ctx.Context.Done()
 }
 
@@ -141,11 +131,14 @@ func TestMembershipWaitCancellationAndBuilderFailure(t *testing.T) {
 			defer release.Do(func() { close(ctx.release) })
 			built := make(chan error, 1)
 			done := make(chan struct{})
+			var wg sync.WaitGroup
 			t.Cleanup(func() {
 				release.Do(func() { close(ctx.release) })
-				<-done
+				wg.Wait()
 			})
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				defer close(done)
 				_, err := jm.GetMembershipIndex(ctx, 0, types.T_int32.ToType())
 				built <- err
@@ -153,15 +146,22 @@ func TestMembershipWaitCancellationAndBuilderFailure(t *testing.T) {
 			<-ctx.entered
 			waitCtx, stopWaiting := context.WithCancel(context.Background())
 			defer stopWaiting()
-			waiter := &membershipWaitContext{Context: waitCtx, entered: make(chan struct{})}
+			waiter := &membershipWaitContext{Context: waitCtx, waiting: make(chan struct{})}
 			waiting := make(chan error, 1)
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				_, err := jm.GetMembershipIndex(waiter, 0, types.T_int32.ToType())
 				waiting <- err
 			}()
-			<-waiter.entered // initial Err() observed nil; exercise the cancellable wait
+			<-waiter.waiting // Done is evaluated at the ready/context select, not the entry Err check.
 			stopWaiting()
 			require.ErrorIs(t, <-waiting, context.Canceled)
+			select {
+			case <-done:
+				t.Fatal("waiter cancellation must return while the builder is still blocked")
+			default:
+			}
 			// A different key cannot start a second index or wait for this one.
 			other, err := jm.GetMembershipIndex(context.Background(), 1, types.T_int32.ToType())
 			require.NoError(t, err)
@@ -216,7 +216,7 @@ func TestMembershipNativeAllocationFailurePublishes(t *testing.T) {
 				builder <- outcome{index, err}
 			}()
 			<-ctx.entered
-			waitCtx := &membershipWaitContext{Context: context.Background(), entered: make(chan struct{}), waiting: make(chan struct{})}
+			waitCtx := &membershipWaitContext{Context: context.Background(), waiting: make(chan struct{})}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

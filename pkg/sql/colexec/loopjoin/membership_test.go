@@ -258,6 +258,7 @@ type membershipEvalSpy struct {
 	err       error
 	errAtCall int
 	cancel    context.CancelFunc
+	onResult  func(*vector.Vector)
 }
 
 func (spy *membershipEvalSpy) Eval(proc *process.Process, batches []*batch.Batch, selection []bool) (*vector.Vector, error) {
@@ -268,7 +269,39 @@ func (spy *membershipEvalSpy) Eval(proc *process.Process, batches []*batch.Batch
 	if spy.err != nil && (spy.errAtCall == 0 || spy.calls >= spy.errAtCall) {
 		return nil, spy.err
 	}
-	return spy.ExpressionExecutor.Eval(proc, batches, selection)
+	vec, err := spy.ExpressionExecutor.Eval(proc, batches, selection)
+	if err == nil && spy.onResult != nil {
+		spy.onResult(vec)
+	}
+	return vec, err
+}
+
+func TestMarkNullProbeEvaluatorReturnsFlatNulls(t *testing.T) {
+	proc, join, build := newMembershipOperators(t, mpool.MustNewZero())
+	const probes = 33
+	values, nullRows := make([]int32, probes), make([]uint64, probes)
+	want := make([][2]bool, probes)
+	for i := range probes {
+		nullRows[i] = uint64(i)
+		want[i] = [2]bool{false, true}
+	}
+	membershipInputs(t, proc, join, build, values, []int32{1, 0}, nullRows, []uint64{1})
+	// This is the real evaluator control, not a claim that the unimplemented
+	// adaptive gate rejects NULL work. In particular, no const-result fake
+	// replaces FunctionExpressionExecutor below.
+	join.ctr.markProbeCol = -1
+	observed := 0
+	spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr, onResult: func(vec *vector.Vector) {
+		observed++
+		require.False(t, vec.IsConst(), "real NULL equality output can be FLAT; IsConst is not a cost proof")
+		require.Equal(t, 2, vec.Length())
+		require.True(t, vec.GetNulls().Contains(0))
+		require.True(t, vec.GetNulls().Contains(1))
+	}}
+	join.ctr.expr = spy
+	require.Equal(t, want, membershipResults(t, proc, join))
+	require.Equal(t, probes, observed)
+	require.Zero(t, join.ctr.mp.Size())
 }
 
 func TestMarkMembershipPreservesEvaluatorEarlyMatch(t *testing.T) {

@@ -51,4 +51,23 @@ select id, id in (select abs(id) from members) as member from probes order by id
 select id, (id, id) in (select id, id from members) as member from probes order by id;
 select id, id not in (select id from members where members.id < probes.id) as nonmember from probes order by id;
 
+-- 小 RHS 和足够的非 NULL miss，验证高工作量输入及 prepared 跨代的三值结果。
+-- 数据满足渐进选择条件；实际切换仍由算子测试和 EXPLAIN ANALYZE 证明。
+delete from probes;
+delete from members;
+insert into probes values
+(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),(16),(17),
+(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),(31),(32),(33),
+(34),(35),(36),(37),(38),(39),(40),(41),(42),(43),(44),(45),(46),(47),(48),(49),
+(50),(51),(52),(53),(54),(55),(56),(57),(58),(59),(60),(61),(62),(63),(64),(65),(66),
+(1),(NULL);
+insert into members values (1),(NULL);
+prepare membership_threshold from 'select count(*) as total, count(distinct id) as distinct_ids, count(case when member then 1 end) as in_true, count(case when not member then 1 end) as in_false, count(case when member is null then 1 end) as in_null, count(case when nonmember then 1 end) as not_in_true, count(case when not nonmember then 1 end) as not_in_false, count(case when nonmember is null then 1 end) as not_in_null from (select id, id in (select id from members) as member, id not in (select id from members) as nonmember from probes) marks';
+execute membership_threshold;
+delete from members where id is NULL;
+execute membership_threshold;
+delete from members;
+execute membership_threshold;
+deallocate prepare membership_threshold;
+
 drop database mark_membership;
