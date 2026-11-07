@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -370,7 +369,7 @@ func TestIndexFileCacheHoldWinsOverChosenEviction(t *testing.T) {
 	aPath, err := c.disk.pathForDir("a")
 	require.NoError(t, err)
 
-	lru := c.disk.cache.(*lrucache.Cache[string, struct{}])
+	lru := c.disk.cache
 	var release func()
 	lru.SetEvictable(func(path string) bool {
 		if c.disk.dirHeld(path) {

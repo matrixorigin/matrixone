@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -34,7 +33,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -54,7 +52,7 @@ type DiskCache struct {
 		nextReadGeneration uint64
 	}
 
-	cache        diskCacheIndex
+	cache        *lrucache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
 	preloads     *preloadUsage
 	dirEntries   bool
@@ -63,7 +61,13 @@ type DiskCache struct {
 	directoryMu sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
-	diskFullEviction atomic.Bool
+	diskFullEviction     atomic.Bool
+	downloads            diskCacheDownloads
+	downloadMaxExtraWait time.Duration
+	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
+	// the largest whole-object file written.
+	wholeFills   atomic.Int64
+	wholeFileMax atomic.Int64
 	// statFilesystem overrides statDiskCacheFilesystem in tests.
 	statFilesystem func(path string) (diskCacheFilesystemStat, bool)
 
@@ -86,6 +90,9 @@ type DiskCache struct {
 	beforeFilePublication func()
 	// beforeCacheDirFileOpen is a test-only hook between the files of one entry open.
 	beforeCacheDirFileOpen func()
+	// beforeEvictionStart is a test-only hook between an entry leaving the index and its
+	// eviction starting.
+	beforeEvictionStart func(path string)
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -132,33 +139,19 @@ func newDiskCacheWithMetricScope(
 	name string,
 	metricScope string,
 ) (ret *DiskCache, err error) {
-	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope, diskCacheOptions{})
+	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope,
+		diskCacheOptions{downloadMaxExtraWait: DefaultDiskDownloadMaxExtraWait})
 }
 
 type diskCacheOptions struct {
 	// dirEntries makes directories named with cacheDirSuffix cache entries
-	// (IndexFileCache), evicted least recently used first, never while held, and whose
+	// (IndexFileCache), never evicted while held, and whose
 	// capacity does not follow GlobalDiskCacheSizeHint.
 	dirEntries bool
+	// downloadMaxExtraWait is how much later than a range read a read may get its bytes
+	// by waiting for the download of their object.
+	downloadMaxExtraWait time.Duration
 }
-
-// diskCacheIndex accounts for the entries of a DiskCache and evicts them: a
-// fifocache.Cache, or an lrucache.Cache for an IndexFileCache.
-type diskCacheIndex interface {
-	Set(ctx context.Context, key string, value struct{}, size int64) (inserted bool, rejected bool)
-	Get(ctx context.Context, key string) (struct{}, bool)
-	Contains(key string) bool
-	Delete(ctx context.Context, key string)
-	Replace(ctx context.Context, key string, value struct{}, size int64) bool
-	Evict(ctx context.Context, done chan int64, capacityCut int64)
-	ForceEvictWithWait(ctx context.Context, n int64) int64
-	Used() int64
-}
-
-var (
-	_ diskCacheIndex = (*fifocache.Cache[string, struct{}])(nil)
-	_ diskCacheIndex = (*lrucache.Cache[string, struct{}])(nil)
-)
 
 func newDiskCache(
 	ctx context.Context,
@@ -181,8 +174,6 @@ func newDiskCache(
 		cacheDataAllocator = DefaultCacheDataAllocator()
 	}
 
-	seed := maphash.MakeSeed()
-
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGaugeWithScope(metricScope, name, "disk")
 	capacityBytes.Set(float64(capacity()))
 
@@ -201,20 +192,21 @@ func newDiskCache(
 		perfCounterSets:    perfCounterSets,
 		fileSync:           func(file *os.File) error { return file.Sync() },
 
-		capacityFunc: capacityFunc,
-		dirEntries:   opts.dirEntries,
-		preloads:     newPreloadUsage(),
+		capacityFunc:         capacityFunc,
+		dirEntries:           opts.dirEntries,
+		downloadMaxExtraWait: opts.downloadMaxExtraWait,
+		preloads:             newPreloadUsage(),
 	}
 
-	keyShard := func(key string) uint64 {
-		return maphash.String(seed, key)
-	}
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.cached(path)
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
 	prepareEvict := func(path string, _ struct{}, size int64, _ uint64) func() {
+		if ret.beforeEvictionStart != nil {
+			ret.beforeEvictionStart(path)
+		}
 		doneUpdate, ok := ret.startEviction(path, size)
 		if !ok {
 			return nil
@@ -239,12 +231,9 @@ func newDiskCache(
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
+	ret.cache = lrucache.NewWithPrepareEvict(capacityFunc, postSet, nil, prepareEvict, postEvict)
 	if opts.dirEntries {
-		lru := lrucache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
-		lru.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
-		ret.cache = lru
-	} else {
-		ret.cache = fifocache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
+		ret.cache.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)
@@ -323,7 +312,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 						continue // ignore
 					}
 
-					d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
+					d.cache.SetOldest(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 				}
 			}
 		}()
@@ -548,6 +537,21 @@ func (d *DiskCache) Read(
 		if !openedOK {
 			// try full file
 			diskPath = d.pathForFile(path.File)
+			downloading, filled, err := d.readFromDownload(ctx, diskPath, entry)
+			if err != nil {
+				return err
+			}
+			if filled {
+				entry.done = true
+				entry.fromCache = d
+				numHit++
+				return nil
+			}
+			if downloading {
+				// A range read gets these bytes sooner than the download.
+				vector.downloadDeclined = true
+				return nil
+			}
 			if f, newlyOpened, ok := openPath(diskPath); ok {
 				if newlyOpened {
 					numOpenFull++
@@ -642,6 +646,10 @@ func (d *DiskCache) Update(
 	if err != nil {
 		return err
 	}
+	if d.download(d.pathForFile(path.File)) != nil {
+		// The download caches the whole object.
+		return nil
+	}
 
 	// callback
 	var onWritten []OnDiskCacheWrittenFunc
@@ -704,7 +712,7 @@ func (d *DiskCache) writeEntry(
 ) (bool, error) {
 	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, false, claimPublication)
+	}, false, claimPublication, false)
 	if writeErr != nil {
 		return false, d.observeWriteResult(diskPath, writeErr)
 	}
@@ -722,7 +730,7 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
-	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil)
+	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, false)
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
@@ -817,6 +825,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 	claimPublication func() bool,
+	trackDownload bool,
 ) (written bool, err error) {
 	defer func() {
 		d.evictForDiskFull(ctx, err)
@@ -887,6 +896,17 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 			d.mergeWriteCleanupError(diskPath, &err, cleanupDiskCacheTempFile(f))
 		}
 	}()
+	var download *objectDownload
+	var dst io.Writer = f
+	if trackDownload {
+		download = d.startDownload(diskPath, f.Name())
+		dst = downloadProgressWriter{w: f, download: download}
+		endUpdate := doneUpdate
+		doneUpdate = func() error {
+			d.finishDownload(diskPath, download)
+			return endUpdate()
+		}
+	}
 
 	from, err := openReader(ctx)
 	if err != nil {
@@ -909,12 +929,19 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
-	_, err = io.CopyBuffer(f, source, buf)
+	n, err := io.CopyBuffer(dst, source, buf)
+	if download != nil {
+		download.end(err == nil)
+	}
 	if err != nil {
 		if source.err != nil {
 			return false, &diskCacheSourceError{err: source.err}
 		}
 		return false, err
+	}
+
+	if download != nil {
+		d.noteWholeFile(n)
 	}
 
 	if asyncFinalize {
@@ -1395,7 +1422,9 @@ func (d *DiskCache) setFile(
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil)
+	d.wholeFills.Add(1)
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, true)
+	d.wholeFills.Add(-1)
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
 	}
