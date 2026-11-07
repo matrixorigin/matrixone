@@ -56,4 +56,41 @@ execute charge using @id;
 amount
 297.000000
 deallocate prepare charge;
+create table wide_vec(x decimal(25,2), y decimal(25,2));
+insert into wide_vec select cast(result as decimal(25,2)),cast(0.25 as decimal(25,2)) from generate_series(1,257) g;
+select sum(x+y) as add_total, sum(x-y) as sub_total, sum(x+cast(1 as decimal(25,2))) as plus_scalar, sum(cast(1 as decimal(25,2))-x) as scalar_minus from wide_vec;
+add_total	sub_total	plus_scalar	scalar_minus
+33217.25	33088.75	33410.00	-32896.00
+insert into wide_vec values (null,0.25),(300,null);
+select sum(x+y) as add_total, sum(x-y) as sub_total, sum(x+cast(1 as decimal(25,2))) as plus_scalar, sum(cast(1 as decimal(25,2))-x) as scalar_minus from wide_vec;
+add_total	sub_total	plus_scalar	scalar_minus
+33217.25	33088.75	33711.00	-33195.00
+create table native_vec(id int, x decimal(15,2), y decimal(15,2), cost decimal(15,2), qty decimal(15,2));
+insert into native_vec select result,1234.56,0.05,2.50,3.00 from generate_series(1,257) g;
+select sum(x*(1-y)) as revenue from native_vec;
+revenue
+301417.8240
+create table profit_projection as select id,x*(1-y)-cost*qty as amount from native_vec;
+select sum(amount) as profit from profit_projection;
+profit
+299490.3240
+select sum(case when id%2=0 then x*(1-y) else 0 end) as promo, sum(x*(1-y)) as revenue from native_vec;
+promo	revenue
+150122.4960	301417.8240
+create table native_projection as select cost+qty as added, cost-qty as subtracted, cost*qty as product, cast(x as decimal(25,2)) as widened from native_vec;
+select sum(added) as plus_total,sum(subtracted) as minus_total,sum(product) as product_total,sum(widened) as cast_total from native_projection;
+plus_total	minus_total	product_total	cast_total
+1413.50	-128.50	1927.5000	317281.92
+insert into native_vec values(258,null,0.05,2.50,3.00);
+select sum(cast(x as decimal(25,2))) as nullable_cast_total from native_vec;
+nullable_cast_total
+317281.92
+create table selected_casts(ok bool, px varchar(20), py varchar(20));
+insert into selected_casts select true,'2.50','3.00' from generate_series(1,257) g;
+insert into selected_casts values(false,'bad','bad');
+select sum(case when ok then cast(px as decimal(15,2))*cast(py as decimal(15,2)) else 0 end) as selected_product from selected_casts;
+selected_product
+1927.5000
+show warnings;
+Level	Code	Message
 drop database decimal_mul_sub;

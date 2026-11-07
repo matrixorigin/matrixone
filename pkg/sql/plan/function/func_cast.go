@@ -6736,7 +6736,7 @@ func decimal64ToDecimal128Array(
 
 	fromtype := from.GetType()
 	totype := to.GetType()
-	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	safeGrowth := totype.Scale != fromtype.Scale && canWidenDecimalScale(fromtype, totype)
 
 	if !from.WithAnyNullValue() {
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
@@ -6761,8 +6761,12 @@ func decimal64ToDecimal128Array(
 				return err
 			}
 
-			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
-			for i := 0; i < length; i++ {
+			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())[:length]
+			for len(dst) >= 4 {
+				dst[0], dst[1], dst[2], dst[3] = result, result, result, result
+				dst = dst[4:]
+			}
+			for i := range dst {
 				dst[i] = result
 			}
 			return nil
@@ -6790,6 +6794,14 @@ func decimal64ToDecimal128Array(
 				dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
 				_ = v[length-1]
 				_ = dst[length-1]
+				if length >= decimalSIMDCastMinRows {
+					if first := decimal64WidenSIMDPrefix(v, dst, length); first != 0 {
+						for i := first; i < length; i++ {
+							dst[i] = types.Decimal128{B0_63: uint64(v[i]), B64_127: uint64(int64(v[i]) >> 63)}
+						}
+						return nil
+					}
+				}
 				for i := 0; i < length; i++ {
 					s := int64(v[i]) >> 63
 					dst[i] = types.Decimal128{
@@ -6830,6 +6842,14 @@ func decimal64ToDecimal128Array(
 			v := vector.MustFixedColWithTypeCheck[types.Decimal64](srcVec)
 			_ = v[length-1]
 			_ = dst[length-1]
+			if length >= decimalSIMDCastMinRows {
+				if first := decimal64WidenSIMDPrefix(v, dst, length); first != 0 {
+					for i := first; i < length; i++ {
+						dst[i] = types.Decimal128{B0_63: uint64(v[i]), B64_127: uint64(int64(v[i]) >> 63)}
+					}
+					return nil
+				}
+			}
 			for i := 0; i < length; i++ {
 				s := int64(v[i]) >> 63
 				dst[i] = types.Decimal128{

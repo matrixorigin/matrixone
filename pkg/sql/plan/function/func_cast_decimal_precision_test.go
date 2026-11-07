@@ -510,7 +510,7 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 		{"empty skips narrowing overflow", types.New(types.T_decimal128, 10, 2), 10000000000, types.Decimal128{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input, err := vector.NewConstFixed(sourceType, tc.value, 3, proc.Mp())
+			input, err := vector.NewConstFixed(sourceType, tc.value, 5, proc.Mp())
 			require.NoError(t, err)
 			defer input.Free(proc.Mp())
 			require.True(t, input.IsConst())
@@ -518,7 +518,7 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 			result := vector.NewFunctionResultWrapper(tc.target, proc.Mp()).(*vector.FunctionResult[types.Decimal128])
 			defer result.Free()
 			source := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](input)
-			for _, size := range []int{0, 3, 0} {
+			for _, size := range []int{0, 3, 4, 5, 0} {
 				require.NoError(t, result.PreExtendAndReset(size))
 				err = decimal64ToDecimal128Array(source, result, size, nil)
 				if size > 0 && tc.wantErr {
@@ -528,7 +528,11 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, size, result.GetResultVector().Length())
 					if size > 0 {
-						require.Equal(t, []types.Decimal128{tc.want, tc.want, tc.want}, vector.MustFixedColWithTypeCheck[types.Decimal128](result.GetResultVector()))
+						values := vector.MustFixedColWithTypeCheck[types.Decimal128](result.GetResultVector())
+						require.Len(t, values, size)
+						for _, value := range values {
+							require.Equal(t, tc.want, value)
+						}
 					}
 					require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 				}
