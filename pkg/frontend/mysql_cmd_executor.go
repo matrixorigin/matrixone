@@ -7144,10 +7144,7 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 	if err != nil {
 		return nil, err
 	}
-	records, err := parsers.HandleSqlForRecordByStatementWithSQLMode(ctx, sql, sqlMode)
-	if err != nil {
-		return nil, err
-	}
+	records := parsers.HandleSqlForRecordFragments(fragments)
 	if len(fragments) == 1 {
 		return records, nil
 	}
