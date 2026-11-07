@@ -466,3 +466,184 @@ existing error classification. Cover parent/child publication boundaries and
 the reader's PK and cluster-key fallback and cleanup. Rerun affected planner,
 reader, frontend and public SQL checks, static analysis and matched integrated
 performance controls on the final source.
+## Final ownership of access proof and execution requirements
+
+PR #32341 continues the complete refactor of #31944 and #32318. Its planner,
+frontend, storage, reader and scheduler boundaries, serialized plan field and
+execution/retry lifetime trigger mandatory design-first review. This section
+supersedes conflicting original-analysis, candidate and reader decisions above.
+It was developed against `9614729778b36950cff38821d0a228899850cd39`; the design
+review must identify the exact revision containing this amendment before the
+implementation is delivered.
+
+### Problem and invariant
+
+A separate temporal dependency walk and exclusion proof repeat analysis of the
+original bound scan. A BASE choice must still be replanned when another execution
+could choose an INDEX, while ordinary unrelated and prepared plans must keep
+their existing reuse policy. Unknown evidence is not a proof of no dependency.
+
+The current candidate marker conflates two independent facts: an early storage
+filter is safe, and the physical access was admitted under a particular
+execution. A folded or removed expression does not cancel the second fact. The
+existing SQL residual remains authoritative. Authorization, tenant, snapshot,
+error ordering, deadlines, resource ownership and retry publication are not
+weakened. Type inversion retains DATETIME/TIMESTAMP semantics, fixed-offset
+conversion, precision, NULL, sentinels and out-of-domain tails.
+
+### Original-plan owner
+
+Use the bounded unary path and original proof already owned by QueryBuilder for
+both positive optional access admission and plan lifetime. Publish only the
+existing `ExecutionDependentAccess` query fact, independently of the optional
+borrow and BASE/INDEX winner; never clear a prior true value. Keep the current
+4,096-unit, 64-expression and depth-64 positive proof. Run the potentially
+recursive safety check only after a fitting single original proof.
+
+For a live context, a fitting non-single proof excludes the current candidate.
+For a fitting single proof, inspect actual column and bound types, including a
+typed NULL, then determine the old leading-part exclusion and any-index-part
+membership in one bounded traversal. Preserve regular-index classification,
+aliases and all invalid metadata semantics. The leading exclusion spends the
+positive proof's remaining budget; membership has at most 4,096 units. A
+complete exclusion or complete membership miss means no new dependency; a
+witness or unknown means dependency. A malformed earlier index must not hide a
+later suffix witness.
+
+If the positive proof is incomplete, the same owner uses a bounded recursive
+fallback over original FilterList roots, function arguments, lists and retained
+literal sources. Recognize oriented comparison, BETWEEN/IN_RANGE and IN,
+including unproved T_any/parameter sources. Unsupported expression variants,
+cycles, omitted suffixes, malformed or oversized names, depth or work exhaustion
+are UNKNOWN, never a negative proof. Use at most 4,096 charged units, depth 64,
+64 index definitions, 16 parts per index and 256 bytes per inspected name or
+algorithm; charge before traversing children and names. A completed inspection
+showing no matching temporal indexed column is a negative proof. A small
+unrelated integer query on a table with a temporal index remains reusable. No
+bitset, second full-plan walk, callback registry or retained dependency object
+is added. If context is nil or stopped, clear positive admission and do at most
+this same bounded, nonblocking classification; an actual witness or unknown is
+dependent. The owner does not replace cancellation or substantive errors. The
+bound-only view-planning route can return without the ordinary final cancel
+checkpoint, so it must not infer absence from a stopped proof.
+
+Delete `potentialContextDependentIndexPath`, `contextDependentIndexPair` and
+`originalIndexPathExcludesIndex` after their behavioral assertions migrate to the
+original owner and public-plan tests. For complete, live, in-budget inputs the
+new result equals the old `P && !E`; for unsupported inputs only conservative
+false-to-true lifetime changes are allowed.
+
+### Independent physical facts
+
+`Expr.CandidateFilter` means an independently derived necessary storage
+condition. Its producer proves that early evaluation and skipping rejected row
+and ancestor work preserve SQL results and diagnostics, and that the hint is
+safe to evaluate; the exact original predicate remains as a residual. It grants
+no authorization, local placement, captured execution, raw-key compatibility
+or ordered-seek proof. The existing mixed-time producer has the required
+original/current-path proofs. Ordinary and composite predicates stay unmarked
+unless their real producers establish this contract. Mark the root of an
+independent `BlockFilterList` entry, and retain the proof through exact copies,
+folding, remapping, statistics recomputation and transport; discard a hint when
+its equivalence or owning scan cannot be preserved. Marked and unmarked
+block filters must not deduplicate one another. Preserve all marked independent
+hints and send them to the ordinary storage-filter route only after its existing
+eligibility checks and the reader/PK admission below. No new producer or second
+storage path is introduced.
+
+Add `IndexScanInfo.requires_captured_execution` at tag 7. It says the physical
+index access was admitted under the captured `ExecutionIntent` and may compile
+only after the existing exact process/clock/zone, fixed-offset, non-offloaded,
+pinned-local scheduler checks succeed. It is a restriction, never authorization.
+Set it only on publication after the real base/hidden relation pair, borrow,
+root and reentry proofs succeed; ordinary integer cost observation does not set
+it. Move frontend validation and unscoped rebuild checks, compiler setup,
+preflight, scheduling, retry and Reset from candidate provenance to this fact.
+Malformed flagged nodes must be rejected even when not a physical index scan.
+Carry one compile-owned sticky copy across folding and retry, clear it on pool
+reset, and delete the old candidate-topology field and marker-based access
+helpers rather than retaining compatibility routes. Copy the new scan field in
+`DeepCopyNode` and regenerate its protobuf marshal, unmarshal and descriptors.
+`ForceOneCN` alone cannot prove the current coordinator was selected.
+
+The input/intent, one-shot root claim, ordinary resolver output, transaction
+stamp and actual relation-pair check remain: they represent different existing
+attempt, authorization and lifecycle boundaries, not another temporal cache.
+No table lookup, subscription, relation cache, scheduler, background worker or
+execution pipeline is added. Existing substantive errors and cancellation
+precedence remain owned by their current operation. Failed optional observation
+discards partial evidence; failed preflight publishes neither message board nor
+deferred transaction offset. A drift retry rebuilds from the original statement
+without the scoped planning input and reauthorizes the replacement.
+
+### Reader and encoded-key admission
+
+Unmarked OR keeps its current metadata-load/error behavior. A marked condition
+may prune earlier only with an independently valid storage-domain proof. Missing
+or unknown arms must retain data and prevent an unsafe early stop; malformed OR
+declines optional compilation. Ordered seeks require a compatible, known
+physical domain and compatible bounds for every relevant block; an unknown
+lower proof starts at zero, and an unknown upper proof retains the lower seek.
+Unify the two existing seek implementations in the reader with an explicit
+known-proof requirement; ordinary lower seeks retain their established work and
+ordering. Unsupported or malformed marked leaves decline optional pruning.
+
+Keep this admission narrow and concrete: the existing temporal producer uses
+OR, direct scalar equality/BETWEEN and serialized prefix equality/BETWEEN.
+Those forms may also operate on proved ordinary integer and decimal domains;
+use existing scale-aware zone-map comparisons. Float, unsupported/opaque types,
+marked IN/vector leaves and unproved forms fail open until an actual producer
+and a corresponding safe physical contract exist. Do not add a speculative
+vector validation framework. Byte-domain bounds that exceed the stored 30-byte
+zone-map prefix and start with 30 `0xff` bytes cannot authorize prefix
+exclusion: a real matching key can otherwise be excluded by the truncated
+maximum. The current serialized temporal endpoints are at most ten bytes and
+start with their type code, so this restriction does not suppress that path.
+Existing Unicode collation and serialized-key admission stay in force.
+
+PK/memtable filtering compares raw payloads and needs a stronger encoding proof
+than zone-map comparison. Propagate candidate provenance through the existing
+sort-key filter builder; for a marked scalar use the existing exact raw-runtime
+filter pair check, including decimal-scale and actual bound type, plus ordered
+and prefix safety where applicable. Unsupported marked filters decline; AND may
+keep independently safe arms and OR must fail open. The normal unmarked PK path
+and temporary-vector ownership remain unchanged.
+
+### Compatibility, alternatives and validation
+
+Existing table/index storage, SQL syntax and configuration do not change.
+Stopped 4.2 upgrade is the supported contract; mixed-version execution and
+downgrade are out of scope. Saved query-result metadata does persist plan bytes
+used for privilege checks. A new optional field must default safely when absent;
+validate a plan encoded using the actual v4.2.8 schema through the saved-plan
+reader and authorization consumer, including an index-scan node. This fixture
+is format evidence, not a claim that a full stopped upgrade has run.
+
+Retaining the coupled marker was rejected because reader proof, captured
+execution and ordered encoding are independent. Replanning all SELECTs was
+rejected because unrelated plans lose reuse. DuckDB's local optional filter and
+ART access provide a useful residual-predicate precedent, but do not replace
+MO's hidden relation authorization, transaction identity, distributed
+placement, covering projection and retry. A new dependency framework, generic
+runtime hidden-table route, artificial producer or blanket broadening of OR
+pruning would add cost or change errors without the needed proof.
+
+Validate actual owner behavior: bounded/canceled original proof, both operand
+orientations, typed NULL, aliases, leading and suffix indexes, missing metadata,
+unproved and oversized inputs, and ordinary/prepared reuse; full-result BASE to
+INDEX and INDEX to BASE transitions. Exercise proof preservation through stats,
+dedup in both orders, folds, copying and wire transport, plus an ordinary
+integer/decimal synthetic marked reader control. Check no-intent, folded/removed
+hint, invalid flagged node, wrong CN, clock/zone drift, reentry, retry, Reset,
+cleanup and authorization. Include decimal scale mismatch, unknown block,
+truncated `0xff` prefix, NaN/unsupported domain and an unmarked OR injected
+metadata error. Use real reader and saved-result entry points where applicable.
+
+Run affected normal and race owner/consumer tests, relevant public SQL and BVT,
+repository formatting and incremental static analysis after the requested
+rebase. Measure matched old/new executables with identical main base, native
+libraries and fixtures, A/A controls and interleaved rounds: selective and dense
+temporal scans, ordinary integer, prepared and scan-free paths, p50/p95,
+allocations and scanned rows/blocks. Explain reproducible regressions relative
+to measured variability. Do not claim unexecuted upgrade, mixed-version or
+skipped CI coverage.
