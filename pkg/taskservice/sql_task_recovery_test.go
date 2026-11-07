@@ -157,6 +157,7 @@ func TestSQLTaskRecoveryShutdownReleasesPendingGauge(t *testing.T) {
 		<-ctx.Done()
 		return false
 	})
+	t.Cleanup(r.close)
 	before := testutil.ToFloat64(v2.SQLTaskManualPendingGauge)
 	credit := r.reserve(sqlTaskManualReceipt, 1, "task")
 	require.NotNil(t, credit)
@@ -171,7 +172,6 @@ type unavailableSQLTaskReceiptStore struct {
 	TaskStorage
 	base      *memTaskStorage
 	available atomic.Bool
-	attempts  chan struct{}
 }
 
 type rolledBackAdmissionStore struct {
@@ -197,7 +197,7 @@ func (s *rolledBackAdmissionStore) AcquireSQLTaskRun(ctx context.Context, defini
 func TestSQLTaskReacquiredFiringKeepsBothMetadataReceipts(t *testing.T) {
 	ctx := context.Background()
 	base := NewMemTaskStorage().(*memTaskStorage)
-	outage := &unavailableSQLTaskReceiptStore{TaskStorage: base, base: base, attempts: make(chan struct{}, 32)}
+	outage := &unavailableSQLTaskReceiptStore{TaskStorage: base, base: base}
 	store := &rolledBackAdmissionStore{unavailableSQLTaskReceiptStore: outage}
 	service := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
@@ -242,7 +242,6 @@ func TestSQLTaskReacquiredFiringKeepsBothMetadataReceipts(t *testing.T) {
 }
 
 func (s *unavailableSQLTaskReceiptStore) PublishSQLTaskReceipt(ctx context.Context, receipt SQLTaskReceiptRequest) (bool, error) {
-	s.attempts <- struct{}{}
 	if !s.available.Load() {
 		return false, errors.New("injected metadata outage")
 	}
@@ -263,7 +262,7 @@ func TestSQLTaskExecutionRecoversMetadataWithoutReplayingBody(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			base := NewMemTaskStorage().(*memTaskStorage)
-			store := &unavailableSQLTaskReceiptStore{TaskStorage: base, base: base, attempts: make(chan struct{}, 8)}
+			store := &unavailableSQLTaskReceiptStore{TaskStorage: base, base: base}
 			store.available.Store(true)
 			service := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
 			t.Cleanup(func() { require.NoError(t, service.Close()) })

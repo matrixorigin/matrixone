@@ -164,7 +164,11 @@ func TestSQLTaskDeferredParentDoesNotBlockQueuedTasks(t *testing.T) {
 		}
 		if badCalls.Add(1) == 1 {
 			close(firstStarted)
-			<-releaseFirst
+			select {
+			case <-releaseFirst:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		} else {
 			<-ctx.Done() // a second failing admission would occupy the only slot
 		}
