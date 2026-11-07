@@ -190,7 +190,6 @@ show databases;
 cluster_level_snapshot_restore_to_sys_account  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀
@@ -463,7 +462,6 @@ show databases;
 cluster_level_snapshot_restore_to_sys_account  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀
@@ -480,7 +478,6 @@ show databases;
 cluster_level_snapshot_restore_to_sys_account  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀
@@ -551,7 +548,6 @@ show databases;
 cluster_level_snapshot_restore_to_sys_account  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀
@@ -904,7 +900,6 @@ cluster_level_snapshot_restore_to_sys_account  𝄀
 db03  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀
@@ -954,7 +949,6 @@ cluster_level_snapshot_restore_to_sys_account  𝄀
 db03  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 system  𝄀

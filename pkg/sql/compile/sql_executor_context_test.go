@@ -200,14 +200,16 @@ func TestCompilerContextUnsupportedOperations(t *testing.T) {
 
 type recordingSessionCompilerContext struct {
 	*plan.MockCompilerContext
-	snapshot             *plan.Snapshot
-	subscription         *plan.SubscriptionMeta
-	queryingSubscription *plan.SubscriptionMeta
-	checkedSubscription  []string
-	resolvedDatabase     string
-	resolvedTable        string
-	resolvedTableDef     *plan.TableDef
-	proc                 *process.Process
+	snapshot              *plan.Snapshot
+	subscription          *plan.SubscriptionMeta
+	queryingSubscription  *plan.SubscriptionMeta
+	checkedSubscription   []string
+	resolvedDatabase      string
+	resolvedTable         string
+	resolvedTableDef      *plan.TableDef
+	resolvedIndexRef      *plan.ObjectRef
+	resolvedIndexSnapshot *plan.Snapshot
+	proc                  *process.Process
 }
 
 func (c *recordingSessionCompilerContext) GetProcess() *process.Process { return c.proc }
@@ -252,6 +254,12 @@ func (c *recordingSessionCompilerContext) Resolve(
 	return &plan.ObjectRef{}, c.resolvedTableDef, nil
 }
 
+func (c *recordingSessionCompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	c.resolvedIndexRef, c.resolvedIndexSnapshot = ref, snapshot
+	c.resolvedTable = tableName
+	return &plan.ObjectRef{NotLockMeta: ref.NotLockMeta}, c.resolvedTableDef, nil
+}
+
 func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	snapshot := &plan.Snapshot{}
 	subscription := &plan.SubscriptionMeta{Name: "pub", SubName: "sub"}
@@ -282,10 +290,13 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	require.Equal(t, "subscription_db", delegate.resolvedDatabase)
 	require.Equal(t, "source", delegate.resolvedTable)
 	for _, skipMeta := range []bool{false, true} {
-		indexRef, _, err := c.ResolveIndexTableByRef(&plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}, "hidden_index", nil)
+		baseRef := &plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}
+		indexRef, _, err := c.ResolveIndexTableByRef(baseRef, "hidden_index", snapshot)
 		require.NoError(t, err)
 		require.Equal(t, skipMeta, indexRef.NotLockMeta)
 		require.Equal(t, "hidden_index", delegate.resolvedTable)
+		require.Same(t, baseRef, delegate.resolvedIndexRef)
+		require.Same(t, snapshot, delegate.resolvedIndexSnapshot)
 	}
 }
 
@@ -1018,6 +1029,13 @@ func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snaps
 	return &plan.ObjectRef{Obj: 11, PubInfo: &pbplan.PubInfo{TenantId: int32(id)}}, &plan.TableDef{TblId: 11}, nil
 }
 
+func (d *namespaceDelegate) ResolveTemporaryTable(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	require.Equal(d.t, "subscription_db", db)
+	require.Equal(d.t, "source", table)
+	require.Same(d.t, d.snapshot, snapshot)
+	return &plan.ObjectRef{Obj: 22}, &plan.TableDef{TblId: 22, IsTemporary: true}, nil
+}
+
 func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	snapshot := &plan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 23}}
@@ -1033,6 +1051,10 @@ func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
 		_, def, err = c.Resolve("subscription_db", "source", snapshot)
 		require.NoError(t, err)
 		require.Equal(t, uint64(99), def.TblId)
+		obj, def, err = c.ResolveTemporaryTable("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, int64(22), obj.Obj)
+		require.Equal(t, uint64(22), def.TblId)
 	}
 }
 

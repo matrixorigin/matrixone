@@ -189,3 +189,7 @@ func TestIvfflatEntriesTableQuotesIdentifiers(t *testing.T) {
 	require.NotContains(t, mappingSQL, "`db`name`")
 	require.NotContains(t, mappingSQL, "`"+catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col`")
 }
+
+func (s *stubCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return s.RunSql(sql)
+}

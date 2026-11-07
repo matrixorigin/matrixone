@@ -15870,3 +15870,145 @@ func TestFlushLegacyAnyReturnsErrorAndWorkerContinues(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(ctx))
 }
+
+// transferExpiry selects how the transfer pages of the two-generation merge
+// chain age before the delete transaction commits.
+type transferExpiry int
+
+const (
+	// transferExpiryNone keeps both transfer pages readable.
+	transferExpiryNone transferExpiry = iota
+	// transferExpirySecond expires only the second generation's page: the
+	// first hop stays pinned and the miss is reached through recursion.
+	transferExpirySecond
+	// transferExpiryFirst expires the first generation's page as well, so
+	// the miss is already hit by the first Pin.
+	transferExpiryFirst
+)
+
+// transferChainFixture prepares the #32218 scenario shape: a one-row table,
+// an uncommitted delete transaction holding the pre-merge RowID, and two
+// consecutive real data-object merges, with the transfer pages TTL'ed per
+// the expiry mode.
+func transferChainFixture(t *testing.T, expiry transferExpiry) (*testutil.TestEngine, txnif.AsyncTxn, *handle.Filter, [2]common.ID) {
+	t.Helper()
+	ctx := context.Background()
+	e := testutil.NewTestEngineWithDir(ctx, t.TempDir(), t, config.WithLongScanAndCKPOpts(nil))
+	t.Cleanup(func() { _ = e.Close() })
+	s := catalog.MockSchemaAll(1, 0)
+	e.BindSchema(s)
+	b := catalog.MockBatch(s, 1)
+	t.Cleanup(b.Close)
+	e.CreateRelAndAppend(b, true)
+	e.CompactBlocks(true)
+	f := handle.NewEQFilter(b.Vecs[0].Get(0))
+	w, r := e.GetRelation()
+	require.NoError(t, r.DeleteByFilter(ctx, f))
+	mem, disk := model.GetTTL(), model.GetDiskTTL()
+	t.Cleanup(func() {
+		model.SetTTL(mem)
+		model.SetDiskTTL(disk)
+	})
+	var src [2]common.ID
+	for j := 0; j < 2; j++ {
+		shorten := (expiry == transferExpirySecond && j == 1) ||
+			(expiry == transferExpiryFirst && j == 0)
+		if shorten {
+			model.SetTTL(10 * time.Millisecond)
+			model.SetDiskTTL(100 * time.Millisecond)
+		}
+		mt, mr := e.GetRelation()
+		id, _, err := mr.GetByFilter(ctx, f)
+		require.NoError(t, err)
+		src[j] = *id
+		task, err := jobs.NewMergeObjectsTask(nil, mt, []*catalog.ObjectEntry{testutil.GetOneBlockMeta(mr)}, e.Runtime, 0, false)
+		require.NoError(t, err)
+		require.NoError(t, task.OnExec(ctx))
+		require.NoError(t, mt.Commit(ctx))
+	}
+	require.NotEqual(t, src[0], src[1])
+	return e, w, f, src
+}
+
+// TestCommitAfterIntermediateTransferPageExpires reproduces #32218: a delete
+// transaction holding a pre-merge RowID walks a two-hop transfer chain whose
+// second page has been TTL'ed while the first is still readable. The
+// recursive memory transfer must classify the missing mapping as a real
+// retryable transaction r-w conflict — never leak the internal OK-class
+// ExpectedEOB traversal sentinel through commit. The failed commit must
+// leave no partial delete and a fresh retry must succeed.
+func TestCommitAfterIntermediateTransferPageExpires(t *testing.T) {
+	ctx := context.Background()
+	e, w, f, src := transferChainFixture(t, transferExpirySecond)
+
+	// Expire only the second generation's page.
+	require.Eventually(t, func() bool {
+		e.Runtime.TransferTable.RunTTL()
+		p, err := e.Runtime.TransferTable.Pin(src[1])
+		if err != nil {
+			return true
+		}
+		p.Close()
+		return false
+	}, 2*time.Second, 10*time.Millisecond)
+	p, err := e.Runtime.TransferTable.Pin(src[0])
+	require.NoError(t, err, "first-hop page must remain readable")
+	p.Close()
+
+	// Commit must be rejected with a real, retryable r-w conflict. Before
+	// the fix it failed with ExpectedEOB, an OK-class batch-end sentinel.
+	err = w.Commit(ctx)
+	require.Error(t, err)
+	var me *moerr.Error
+	require.ErrorAs(t, err, &me)
+	require.Equal(t, moerr.ErrTxnRWConflict, me.ErrorCode())
+	require.False(t, me.Succeeded())
+	require.True(t, me.IsRealError())
+
+	// The failed commit must not leave a partial delete.
+	e.CheckRowsByScan(1, true)
+
+	// A fresh retry must delete successfully.
+	fresh, rel := e.GetRelation()
+	require.NoError(t, rel.DeleteByFilter(ctx, f))
+	require.NoError(t, fresh.Commit(ctx))
+	e.CheckRowsByScan(0, true)
+}
+
+// TestCommitAfterFirstTransferPageExpires is the missing-first-hop control:
+// when the first transfer page is already TTL'ed, the first Pin on the
+// memory path classifies the miss as the same r-w conflict.
+func TestCommitAfterFirstTransferPageExpires(t *testing.T) {
+	ctx := context.Background()
+	e, w, _, src := transferChainFixture(t, transferExpiryFirst)
+
+	require.Eventually(t, func() bool {
+		e.Runtime.TransferTable.RunTTL()
+		p, err := e.Runtime.TransferTable.Pin(src[0])
+		if err != nil {
+			return true
+		}
+		p.Close()
+		return false
+	}, 2*time.Second, 10*time.Millisecond)
+
+	err := w.Commit(ctx)
+	require.Error(t, err)
+	var me *moerr.Error
+	require.ErrorAs(t, err, &me)
+	require.Equal(t, moerr.ErrTxnRWConflict, me.ErrorCode())
+	require.False(t, me.Succeeded())
+	require.True(t, me.IsRealError())
+
+	e.CheckRowsByScan(1, true)
+}
+
+// TestCommitWithIntactTransferChain is the intact-chain control: with both
+// transfer pages readable, the very same delete transaction commits.
+func TestCommitWithIntactTransferChain(t *testing.T) {
+	ctx := context.Background()
+	e, w, _, _ := transferChainFixture(t, transferExpiryNone)
+
+	require.NoError(t, w.Commit(ctx))
+	e.CheckRowsByScan(0, true)
+}

@@ -13125,6 +13125,9 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
 	}
+	if err = protectHistoricalTableListing(builder.GetContext(), schema, table, viewData.Stmt, snapshot, viewStmt.AsSource); err != nil {
+		return 0, err
+	}
 
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
 		if err = rejectViewSchemaUnstableStar(state.request, viewStmt.AsSource); err != nil {
@@ -13885,8 +13888,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Preserve the existing probe; full resolution below owns error handling.
 		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
-		// TODO
-		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
+		// SHOW's generated metadata sources are identified by the exact AST
+		// node, not by a name that a user predicate could also spell.
+		parent := showIndexGeneratedSource(builder.GetContext(), tbl)
+		var obj *ObjectRef
+		var tableDef *TableDef
+		if parent != nil {
+			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot)
+		} else {
+			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot)
+		}
 		if err != nil {
 			return 0, "", err
 		}
@@ -14190,6 +14201,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			NodeType:     nodeType,
 			Stats:        nil,
 			ObjRef:       obj,
+			ParentObjRef: DeepCopyObjectRef(parent),
 			TableDef:     tableDef,
 			ExternScan:   externScan,
 			BindingTags:  []int32{builder.genNewBindTag()},

@@ -15,7 +15,6 @@ Database
 cache
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system
@@ -45,7 +44,6 @@ Database
 cache
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system
@@ -55,7 +53,6 @@ Database
 cache
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system
@@ -78,7 +75,6 @@ Database
 cache
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 system

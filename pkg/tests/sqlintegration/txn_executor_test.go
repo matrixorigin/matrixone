@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -43,7 +43,8 @@ func TestInformationSchemaViewsUpgradeIsIdempotent(t *testing.T) {
 		upgrade := func() {
 			t.Helper()
 			require.NoError(t, exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-				return v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(txn, 0)
+				entry := versions.InformationSchemaViewsUpgradeEntry()
+				return entry.UpgradeAfterProtocolCheck(txn, 0)
 			}, executor.Options{}.WithWaitCommittedLogApplied()))
 		}
 		viewID := func() uint64 {
