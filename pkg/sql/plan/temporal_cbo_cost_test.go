@@ -116,13 +116,13 @@ func TestTemporalCBOIndexInputRoundsOnlyInputToBlocks(t *testing.T) {
 		{1000000, 100, block}, {1000000, block, 2 * block}, {1000000, block + 1, 2 * block},
 		{100, 1, 100}, {1000000, 999999, 1000000},
 	} {
-		require.Equal(t, tc.want, temporalCBOIndexInputRows(tc.rows, tc.candidates))
+		require.Equal(t, tc.want, indexBlockInputRows(tc.rows, tc.candidates))
 	}
 }
 
 func TestTemporalCBOIndexBlockFloorDoesNotChangeRowWork(t *testing.T) {
 	for _, serialized := range []bool{false, true} {
-		builder, _, index := temporalCBOTraversalFixture(t)
+		builder, _, index := newIndexCostFixture(t)
 		scan := builder.qry.Nodes[0]
 		if !serialized {
 			index.Unique = true

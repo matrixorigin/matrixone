@@ -29,7 +29,7 @@ import (
 )
 
 func TestPlanningInputIsSingleUseAndRootOwned(t *testing.T) {
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1", 1)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1 from nation", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 	root := stmt.(*tree.Select)
@@ -91,7 +91,7 @@ func TestPlanningInputFollowsRootStatementWrappers(t *testing.T) {
 	defer proc.Free()
 	ctx := NewMockCompilerContext(true, proc)
 	ctx.SetContext(proc.Ctx)
-	for _, sql := range []string{"select 1", "(select 1)", "explain select 1", "explain analyze select 1"} {
+	for _, sql := range []string{"select 1 from nation", "(select 1 from nation)", "explain select 1 from nation", "explain analyze select 1 from nation"} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestPlanningInputFollowsRootStatementWrappers(t *testing.T) {
 func TestTemporalScanBorrowUsesOriginalBinding(t *testing.T) {
 	for _, change := range []string{"none", "table", "version", "tag", "replacement"} {
 		t.Run(change, func(t *testing.T) {
-			builder, source, _ := temporalCBOTraversalFixture(t)
+			builder, source, _ := newIndexCostFixture(t)
 			scan := builder.qry.Nodes[0]
 			switch change {
 			case "table":
@@ -156,7 +156,7 @@ func TestTemporalScanBorrowUsesOriginalBinding(t *testing.T) {
 func TestTemporalScanBorrowDeclinesDuplicatesAndOverflow(t *testing.T) {
 	for _, duplicate := range []bool{true, false} {
 		t.Run(map[bool]string{true: "duplicate", false: "overflow"}[duplicate], func(t *testing.T) {
-			builder, _, _ := temporalCBOTraversalFixture(t)
+			builder, _, _ := newIndexCostFixture(t)
 			input := builder.planningInput
 			borrow := builder.scanBorrows[0].borrow
 			for i := 1; i <= maxBorrowedRelations; i++ {
@@ -185,9 +185,30 @@ func TestTemporalScanBorrowDeclinesDuplicatesAndOverflow(t *testing.T) {
 			builder.qry.Nodes = builder.qry.Nodes[:1]
 			builder.qry.Steps = nil
 			builder.qry.ExecutionDependentAccess = false
-			builder.collectOriginalTemporalOwner(0)
+			builder.collectOriginalIndexOwner(0)
 			require.True(t, builder.qry.ExecutionDependentAccess)
-			require.True(t, builder.temporalOriginalScan.safe)
+			require.True(t, builder.originalIndexScan.safe)
+		})
+	}
+}
+
+func TestPlanningInputSkipsOnlyProvedScanFreeRoots(t *testing.T) {
+	for _, tc := range []struct {
+		sql      string
+		possible bool
+	}{
+		{"select 1", false}, {"select 'literal',null", false}, {"select 1 from nation", true},
+		{"select 1 where exists(select 1 from nation)", true}, {"select (select 1 from nation)", true},
+		{"with n as (select 1 from nation) select 1", true}, {"select ?", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.possible, PlanningInputMayUseIndex(stmt.(*tree.Select)))
+			if !tc.possible {
+				require.Nil(t, NewPlanningInput(stmt.(*tree.Select), ExecutionIntent{}, nil))
+			}
 		})
 	}
 }

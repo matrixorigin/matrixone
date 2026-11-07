@@ -159,7 +159,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	data := batch.NewWithSize(2)
-	data.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	data.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 64, -1))
 	data.Vecs[1] = vector.NewVec(types.New(types.T_datetime, 0, 6))
 	defer data.Clean(mp)
 	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, 0, true, false, fs)
@@ -209,18 +209,44 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 	}()
 	f.full.Name2ColIndex = map[string]int32{"id": 0, "d": 1}
 	f.full.Cols[1].Typ.Scale = 6
+	f.full.Cols[0].Typ.Scale = -1
 	f.stats.TableCnt, f.stats.BlockNumber = 4, 2
 	observation, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "d")
 	require.NoError(t, err)
 	require.True(t, ok)
 	bound := types.DatetimeFromClock(2026, 1, 2, 0, 0, 0, 0).ToTimestamp(time.UTC)
-	req := engine.TemporalBlockInputRequest{Column: "d", Observed: f.stats, Stats: observation, BoundType: types.T_timestamp, Scale: 6, Op: types.TemporalGreater, Zone: time.UTC}
+	req := engine.IndexBlockInputRequest{Column: "d", Observed: f.stats, Stats: observation, Bound: make([]byte, 8), BoundType: types.T_timestamp.ToType(), ComparisonScale: 6, Op: types.ComparisonGreater, Zone: time.UTC}
 	copy(req.Bound[:], types.EncodeTimestamp(&bound))
+
+	// The same persisted objects also carry a non-temporal column. Observe its
+	// real block contents through the production API, with independent row oracles.
+	f.stats.MinValMap["id"], f.stats.MaxValMap["id"], f.stats.NdvMap["id"] = 0, 3, 4
+	f.stats.NullCntMap["id"], f.stats.DataTypeMap["id"] = 0, uint64(types.T_uint64)
+	integerStats, ok, err := f.base.ReadIndexCostStats(f.ctx, f.read, f.stats, "id")
+	require.NoError(t, err)
+	require.True(t, ok)
+	for _, tc := range []struct {
+		op     types.ComparisonOp
+		blocks uint64
+	}{
+		{types.ComparisonEqual, 1}, {types.ComparisonLess, 1}, {types.ComparisonLessEqual, 1}, {types.ComparisonGreater, 1}, {types.ComparisonGreaterEqual, 2},
+	} {
+		t.Run("integer "+tc.op.String(), func(t *testing.T) {
+			value := uint64(1)
+			request := engine.IndexBlockInputRequest{Column: "id", Observed: f.stats, Stats: integerStats, Bound: types.EncodeUint64(&value), BoundType: types.New(types.T_uint64, 64, -1), Op: tc.op}
+			budget := engine.MaxIndexPlanningWork
+			input, complete, err := f.base.ObserveIndexBlockInput(f.ctx, f.read, request, &budget)
+			require.NoError(t, err)
+			require.True(t, complete)
+			require.Equal(t, engine.IndexBlockInput{Rows: 2 * tc.blocks, Blocks: tc.blocks}, input)
+		})
+	}
 	var visibleWork int
 	stopCause := errors.New("optional observation cancelled")
 	for _, scenario := range []string{"complete", "two matching blocks", "missing overlap", "NaN overlap", "empty", "budget", "cancelled", "stale stats", "row population", "block population", "pending", "transport unavailable", "entry replaced", "unrelated subscription", "engine contended", "subscriber contended"} {
 		t.Run(scenario, func(t *testing.T) {
 			request := req
+			request.Bound = append([]byte(nil), req.Bound...)
 			ctx := f.ctx
 			budget := engine.MaxIndexPlanningWork
 			e.pClient.subscriber.swapClient(&service.LogtailClient{})
@@ -238,7 +264,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 				f.stats.ShuffleRangeMap["d"].Overlap = math.NaN()
 				t.Cleanup(func() { f.stats.ShuffleRangeMap["d"].Overlap = original })
 			case "empty":
-				request.Op = types.TemporalLess
+				request.Op = types.ComparisonLess
 				empty := date.ToTimestamp(time.UTC)
 				copy(request.Bound[:], types.EncodeTimestamp(&empty))
 			case "budget":
@@ -294,7 +320,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 				e.pClient.subscriber.mu.Lock()
 				t.Cleanup(e.pClient.subscriber.mu.Unlock)
 			}
-			input, complete, err := f.base.ObserveTemporalBlockInput(ctx, f.read, request, &budget)
+			input, complete, err := f.base.ObserveIndexBlockInput(ctx, f.read, request, &budget)
 			if scenario == "cancelled" {
 				require.ErrorIs(t, err, stopCause)
 			} else {
@@ -327,6 +353,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			// partial count exists before invalidation at the second block.
 			ctx := &planningInputWorkContext{Context: parent, budget: &budget, below: budget - 4, skip: 1}
 			request := req
+			request.Bound = append([]byte(nil), req.Bound...)
 			allBlocks := date.ToTimestamp(time.UTC)
 			copy(request.Bound[:], types.EncodeTimestamp(&allBlocks))
 			ctx.action = func() {
@@ -365,7 +392,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 					t.Cleanup(e.pClient.subscriber.mu.Unlock)
 				}
 			}
-			input, complete, err := f.base.ObserveTemporalBlockInput(ctx, f.read, request, &budget)
+			input, complete, err := f.base.ObserveIndexBlockInput(ctx, f.read, request, &budget)
 			if scenario == "cancel during scan" || scenario == "cancel with subscription contended" {
 				require.ErrorIs(t, err, stopCause)
 			} else {
@@ -387,21 +414,22 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 		putObject(t, objectio.ObjectEntry{ObjectStats: missing, CreateTime: types.BuildTS(1, 0)})
 		f.stats.TableCnt, f.stats.BlockNumber = 8, 4
 		request := req
+		request.Bound = append([]byte(nil), req.Bound...)
 		request.Stats.Rows, request.Stats.Blocks = 8, 4
 		budget := engine.MaxIndexPlanningWork
-		input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, request, &budget)
+		input, complete, err := f.base.ObserveIndexBlockInput(f.ctx, f.read, request, &budget)
 		require.NoError(t, err)
 		require.False(t, complete)
 		require.Zero(t, input)
 		f.stats.TableCnt, f.stats.BlockNumber = 4, 2
 		putObject(t, objectio.ObjectEntry{ObjectStats: missing, CreateTime: types.BuildTS(1, 0), DeleteTime: types.BuildTS(2, 0)})
 		budget = engine.MaxIndexPlanningWork
-		input, complete, err = f.base.ObserveTemporalBlockInput(f.ctx, f.read, req, &budget)
+		input, complete, err = f.base.ObserveIndexBlockInput(f.ctx, f.read, req, &budget)
 		require.NoError(t, err)
 		require.True(t, complete, "an invisible cache miss cannot affect the visible population")
 		require.Equal(t, engine.IndexBlockInput{Rows: 2, Blocks: 1}, input)
 		budget = visibleWork
-		input, complete, err = f.base.ObserveTemporalBlockInput(f.ctx, f.read, req, &budget)
+		input, complete, err = f.base.ObserveIndexBlockInput(f.ctx, f.read, req, &budget)
 		require.NoError(t, err)
 		require.False(t, complete, "invisible tree entries still consume traversal budget")
 		require.Zero(t, input)
@@ -417,9 +445,10 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 		putObject(t, objectio.ObjectEntry{ObjectStats: appendable, CreateTime: types.BuildTS(1, 0)})
 		f.stats.TableCnt, f.stats.BlockNumber = 6, 3
 		request := req
+		request.Bound = append([]byte(nil), req.Bound...)
 		request.Stats.Rows, request.Stats.Blocks = 6, 3
 		budget := engine.MaxIndexPlanningWork
-		input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, request, &budget)
+		input, complete, err := f.base.ObserveIndexBlockInput(f.ctx, f.read, request, &budget)
 		require.NoError(t, err)
 		require.False(t, complete)
 		require.Zero(t, input)
@@ -444,11 +473,12 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 		putObject(t, objectio.ObjectEntry{ObjectStats: bad, CreateTime: types.BuildTS(1, 0)})
 		f.stats.TableCnt, f.stats.BlockNumber = 6, 3
 		request := req
+		request.Bound = append([]byte(nil), req.Bound...)
 		request.Stats.Rows, request.Stats.Blocks = 6, 3
 		future := types.DatetimeFromClock(2030, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC)
 		copy(request.Bound[:], types.EncodeTimestamp(&future))
 		budget := engine.MaxIndexPlanningWork
-		input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, request, &budget)
+		input, complete, err := f.base.ObserveIndexBlockInput(f.ctx, f.read, request, &budget)
 		require.NoError(t, err)
 		require.False(t, complete)
 		require.Zero(t, input)
@@ -495,7 +525,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 			e.partitions[[2]uint64{10, 98}] = fresh
 			e.Unlock()
 			budget := engine.MaxIndexPlanningWork
-			input, complete, err := f.base.ObserveTemporalBlockInput(f.ctx, f.read, req, &budget)
+			input, complete, err := f.base.ObserveIndexBlockInput(f.ctx, f.read, req, &budget)
 			require.NoError(t, err)
 			require.False(t, complete)
 			require.Zero(t, input)

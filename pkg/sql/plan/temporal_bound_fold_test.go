@@ -48,7 +48,7 @@ func TestTemporalCandidateProvenanceSurvivesFoldAndCopy(t *testing.T) {
 	now, err := BindFuncExprImplByPlanExpr(proc.Ctx, "now", nil)
 	require.NoError(t, err)
 	column := GetColExpr(Type{Id: int32(types.T_datetime)}, 0, 0)
-	filter, err := makeDirectTemporalCandidate(proc.Ctx, column, now, types.TemporalLess, 0)
+	filter, err := buildTemporalCandidate(proc.Ctx, column, now, nil, types.ComparisonLess, 0)
 	require.NoError(t, err)
 	filter.CandidateFilter = true
 	filter = DeepCopyExpr(filter)

@@ -317,7 +317,10 @@ func (builder *QueryBuilder) buildRegularIndexMerge(
 	scans := make([]*plan.Node, 0, len(candidate.branches))
 	for _, branch := range candidate.branches {
 		localMap := make(map[[2]int32]*plan.Expr)
-		scan := builder.buildRegularIndexOnlyScan(branch.index, branch.scan, localMap, snapshot, branch.match)
+		scan, err := builder.buildRegularIndexOnlyScan(branch.index, branch.scan, localMap, snapshot, branch.match)
+		if err != nil {
+			panic(err)
+		}
 		if scan == nil {
 			return node.NodeId
 		}

@@ -15,9 +15,54 @@
 package index
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+// MakeScalarZoneMapMatcher proves a scalar comparison in its SQL domain before
+// applying it to persisted bounds. Both readers and optional cost observations
+// use this owner; an unknown match never authorizes pruning or a cost credit.
+// The returned bound is the one decimal carrier shared by match, seek and bloom.
+func MakeScalarZoneMapMatcher(columnType types.Type, value []byte, valueType types.Type, comparisonScale int32, zone *time.Location, op types.ComparisonOp) (func(ZM) ZoneMapMatch, ZM, bool) {
+	if op > types.ComparisonGreaterEqual {
+		return nil, nil, false
+	}
+	if !RawScalarZoneMapTypesCompatible(columnType.Oid, valueType.Oid) {
+		match, ok := makeMixedTemporalMatcher(columnType.Oid, value, valueType.Oid, comparisonScale, zone, op)
+		return match, nil, ok
+	}
+	kind := columnType.Oid
+	if kind == types.T_decimal256 || types.IsUnicodeCollation(columnType.Charset) || types.IsUnicodeCollation(valueType.Charset) ||
+		kind.FixedLength() > 0 && len(value) != kind.FixedLength() {
+		return nil, nil, false
+	}
+	var bound ZM
+	if kind.IsDecimal() {
+		bound = NewZM(kind, valueType.Scale)
+		UpdateZM(bound, value)
+	}
+	switch op {
+	case types.ComparisonEqual:
+		return func(zm ZM) ZoneMapMatch { return IntersectsBound(zm, value, bound, kind) }, bound, true
+	case types.ComparisonLess:
+		return func(zm ZM) ZoneMapMatch { return AnyLTByBound(zm, value, bound, kind) }, bound, true
+	case types.ComparisonLessEqual:
+		return func(zm ZM) ZoneMapMatch { return AnyLEByBound(zm, value, bound, kind) }, bound, true
+	case types.ComparisonGreater:
+		return func(zm ZM) ZoneMapMatch { return AnyGTByBound(zm, value, bound, kind) }, bound, true
+	default: // ComparisonGreaterEqual; invalid operators were rejected above.
+		return func(zm ZM) ZoneMapMatch { return AnyGEByBound(zm, value, bound, kind) }, bound, true
+	}
+}
+
+// RawScalarZoneMapTypesCompatible identifies byte-compatible scalar carriers.
+// CHAR/VARCHAR/TEXT/binary bounds share the reader's existing string carrier;
+// collation admission is separate. Other cross-type pairs require conversion.
+func RawScalarZoneMapTypesCompatible(column, value types.T) bool {
+	return column == value || column.IsMySQLString() && value.IsMySQLString()
+}
 
 // ZoneMapMatch distinguishes a proved result from an unsupported comparison.
 // Unknown results retain blocks in the reader and give no lower-cost credit.

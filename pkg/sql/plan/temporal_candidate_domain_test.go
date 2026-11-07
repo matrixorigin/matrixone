@@ -90,7 +90,7 @@ func TestTemporalInteriorDomainUsesActualCurrentTimestamp(t *testing.T) {
 
 // Check the necessary-range union and independent scalar comparisons, including
 // raw out-of-calendar int64 values that SQL INSERT normally cannot produce.
-func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64, scale int32, op types.TemporalOp, zone *time.Location, encoded bool, literal *types.Timestamp) {
+func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64, scale int32, op types.ComparisonOp, zone *time.Location, encoded bool, literal *types.Timestamp) {
 	t.Helper()
 	proc.Base.UnixTime = clock
 	proc.GetSessionInfo().TimeZone = zone
@@ -104,9 +104,9 @@ func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64
 	column := GetColExpr(Type{Id: int32(types.T_datetime), Scale: scale}, 0, 0)
 	var candidate *pb.Expr
 	if encoded {
-		candidate, err = makeEncodedTemporalCandidate(proc.Ctx, GetColExpr(Type{Id: int32(types.T_varchar)}, 0, 0), column, bound, op, scale)
+		candidate, err = buildTemporalCandidate(proc.Ctx, column, bound, GetColExpr(Type{Id: int32(types.T_varchar)}, 0, 0), op, scale)
 	} else {
-		candidate, err = makeDirectTemporalCandidate(proc.Ctx, column, bound, op, scale)
+		candidate, err = buildTemporalCandidate(proc.Ctx, column, bound, nil, op, scale)
 	}
 	require.NoError(t, err)
 	interval, err := types.BuildTemporalCandidate(proc.Ctx, types.T_datetime, scale, int64(stamp), false, op, zone)
@@ -166,15 +166,15 @@ func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64
 			scalar := row.ToTimestamp(zone).TruncateToScale(scale)
 			match := false
 			switch op {
-			case types.TemporalEqual:
+			case types.ComparisonEqual:
 				match = scalar == stamp
-			case types.TemporalLess:
+			case types.ComparisonLess:
 				match = scalar < stamp
-			case types.TemporalLessEqual:
+			case types.ComparisonLessEqual:
 				match = scalar <= stamp
-			case types.TemporalGreater:
+			case types.ComparisonGreater:
 				match = scalar > stamp
-			case types.TemporalGreaterEqual:
+			case types.ComparisonGreaterEqual:
 				match = scalar >= stamp
 			}
 			if match {
@@ -193,7 +193,7 @@ func TestTemporalInteriorUnionMatchesFourArmOracle(t *testing.T) {
 	zones := []*time.Location{time.UTC, time.FixedZone("offset-min", math.MinInt32), time.FixedZone("offset-max", math.MaxInt32), named}
 	for _, clock := range []int64{math.MinInt64, 0, 1714067100123456000, math.MaxInt64} {
 		for _, scale := range []int32{0, 3, 6} {
-			for op := types.TemporalEqual; op <= types.TemporalGreaterEqual; op++ {
+			for op := types.ComparisonEqual; op <= types.ComparisonGreaterEqual; op++ {
 				for _, zone := range zones {
 					for _, encoded := range []bool{false, true} {
 						checkInteriorTemporalUnion(t, proc, clock, scale, op, zone, encoded, nil)
@@ -211,7 +211,7 @@ func TestTemporalInteriorLiteralUnionMatchesFourArmOracle(t *testing.T) {
 	for _, value := range []int64{-1, 0, temporalInteriorTimestampMargin - 1, temporalInteriorTimestampMargin, temporalInteriorTimestampMargin + 1, maximum - temporalInteriorTimestampMargin - 1, maximum - temporalInteriorTimestampMargin, maximum - temporalInteriorTimestampMargin + 1, math.MaxInt64} {
 		bound := types.Timestamp(value)
 		for _, scale := range []int32{0, 3, 6} {
-			for op := types.TemporalEqual; op <= types.TemporalGreaterEqual; op++ {
+			for op := types.ComparisonEqual; op <= types.ComparisonGreaterEqual; op++ {
 				for _, zone := range []*time.Location{time.UTC, time.FixedZone("offset-min", math.MinInt32), time.FixedZone("offset-max", math.MaxInt32)} {
 					for mode := 0; mode < 2; mode++ {
 						checkInteriorTemporalUnion(t, proc, 0, scale, op, zone, mode != 0, &bound)

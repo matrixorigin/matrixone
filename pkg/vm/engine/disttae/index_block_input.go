@@ -57,7 +57,7 @@ func (c *PushClient) planningInputSnapshot(db, table uint64, read client.Catalog
 	return state, entry, true
 }
 
-func spendTemporalInputWork(ctx context.Context, budget *int, work int) bool {
+func spendIndexInputWork(ctx context.Context, budget *int, work int) bool {
 	if ctx == nil || context.Cause(ctx) != nil || budget == nil || work < 0 || *budget < work {
 		return false
 	}
@@ -65,10 +65,10 @@ func spendTemporalInputWork(ctx context.Context, budget *int, work int) bool {
 	return true
 }
 
-// ObserveTemporalBlockInput returns no partial estimate. Every contributing
+// ObserveIndexBlockInput returns no partial estimate. Every contributing
 // object belongs to the same complete immutable snapshot and cached metadata.
 // The result is a cost observation; it authorizes neither rows nor a new plan.
-func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read client.CatalogReadStamp, req engine.TemporalBlockInputRequest, budget *int) (result engine.IndexBlockInput, complete bool, err error) {
+func (tbl *txnTableDelegate) ObserveIndexBlockInput(ctx context.Context, read client.CatalogReadStamp, req engine.IndexBlockInputRequest, budget *int) (result engine.IndexBlockInput, complete bool, err error) {
 	defer func() {
 		if !complete {
 			result = engine.IndexBlockInput{}
@@ -77,7 +77,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 			result, complete, err = engine.IndexBlockInput{}, false, cause
 		}
 	}()
-	if !spendTemporalInputWork(ctx, budget, 1) || req.Stats.Rows <= 0 || req.Stats.Rows > 1<<53 || math.Trunc(req.Stats.Rows) != req.Stats.Rows || req.Stats.Blocks <= 0 || req.Op > types.TemporalGreaterEqual {
+	if !spendIndexInputWork(ctx, budget, 1) || req.Stats.Rows <= 0 || req.Stats.Rows > 1<<53 || math.Trunc(req.Stats.Rows) != req.Stats.Rows || req.Stats.Blocks <= 0 || req.Op > types.ComparisonGreaterEqual || len(req.Bound) > 4096 {
 		return result, false, nil
 	}
 	t, txn, ok := tbl.planningRead(ctx, read)
@@ -93,7 +93,9 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 		return result, false, nil
 	}
 	column := t.tableDef.Cols[pos]
-	match, ok := index.MakeMixedTemporalMatcher(types.T(column.Typ.Id), req.Bound[:], req.BoundType, req.Scale, req.Zone, [...]string{"=", "<", "<=", ">", ">="}[req.Op])
+	columnType := types.New(types.T(column.Typ.Id), column.Typ.Width, column.Typ.Scale)
+	columnType.Charset = uint8(column.Typ.Charset)
+	match, _, ok := index.MakeScalarZoneMapMatcher(columnType, req.Bound, req.BoundType, req.ComparisonScale, req.Zone, req.Op)
 	if !ok {
 		return result, false, nil
 	}
@@ -113,7 +115,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 	}
 	state, entry, ok := c.planningInputSnapshot(t.db.databaseId, t.tableId, read)
 	if !ok || state.ApproxInMemRows() != 0 || state.ApproxInMemTombstones() != 0 || state.ApproxTombstoneObjectsNum() != 0 ||
-		!spendTemporalInputWork(ctx, budget, state.ApproxDataObjectsNum()) {
+		!spendIndexInputWork(ctx, budget, state.ApproxDataObjectsNum()) {
 		return result, false, nil
 	}
 	iter, err := state.NewObjectsIter(types.TimestampToTS(read.Snapshot), true, false)
@@ -126,7 +128,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 	// rather than making a potentially escaping array for every visited block.
 	var objectMeta, block objectio.ColumnBlockMeta
 	for iter.Next() {
-		if !spendTemporalInputWork(ctx, budget, 2) {
+		if !spendIndexInputWork(ctx, budget, 2) {
 			return result, false, nil
 		}
 		object := iter.Entry()
@@ -134,7 +136,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 			return result, false, nil
 		}
 		meta, ok := objectio.TryCachedColumnMeta(ctx, object.Location(), uint16(column.Seqnum), *budget)
-		if !ok || meta.BlockCount() != object.BlkCnt() || !spendTemporalInputWork(ctx, budget, 2*int(meta.BlockCount())+1) {
+		if !ok || meta.BlockCount() != object.BlkCnt() || !spendIndexInputWork(ctx, budget, 2*int(meta.BlockCount())+1) {
 			return result, false, nil
 		}
 		objectMeta, ok = meta.Object()
@@ -142,7 +144,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 			return result, false, nil
 		}
 		objectZM := objectio.ZoneMap(objectMeta.ZoneMap[:])
-		if objectZM.GetType() != types.T(column.Typ.Id) || objectZM.GetScale() != column.Typ.Scale {
+		if !objectZM.HasType(columnType) {
 			return result, false, nil
 		}
 		objectMatch := match(objectZM)
@@ -160,7 +162,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 			}
 			rows += uint64(block.Rows)
 			zm := objectio.ZoneMap(block.ZoneMap[:])
-			if zm.GetType() != types.T(column.Typ.Id) || zm.GetScale() != column.Typ.Scale {
+			if !zm.HasType(columnType) {
 				return result, false, nil
 			}
 			blockMatch := match(zm)
@@ -181,7 +183,7 @@ func (tbl *txnTableDelegate) ObserveTemporalBlockInput(ctx context.Context, read
 			return result, false, nil
 		}
 	}
-	if total.Rows != uint64(req.Stats.Rows) || total.Blocks != uint64(req.Stats.Blocks) || !spendTemporalInputWork(ctx, budget, 1) {
+	if total.Rows != uint64(req.Stats.Rows) || total.Blocks != uint64(req.Stats.Blocks) || !spendIndexInputWork(ctx, budget, 1) {
 		return result, false, nil
 	}
 	latest, latestEntry, valid := c.planningInputSnapshot(t.db.databaseId, t.tableId, read)

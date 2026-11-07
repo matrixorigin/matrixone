@@ -403,7 +403,7 @@ type QueryBuilder struct {
 	scanBorrows              []scanBorrow
 	borrowResolutionDisabled bool
 	borrowResolutionAllowed  bool
-	temporalOriginalScan     temporalOriginalScan
+	originalIndexScan        originalIndexScan
 	integerPrecision         *integerPrecisionBuilder
 	correlationRouteNodes    map[int32]bool
 	dependentRelations       map[int32]bool

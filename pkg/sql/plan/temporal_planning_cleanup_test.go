@@ -45,9 +45,9 @@ func (c *cleanupBorrowCompiler) BorrowedTableStillCurrent(proc *process.Process,
 func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 	for _, outcome := range []string{"success", "error", "panic"} {
 		t.Run(outcome, func(t *testing.T) {
-			fixture, _, _ := temporalCBOTraversalFixture(t)
+			fixture, _, _ := newIndexCostFixture(t)
 			scan := fixture.qry.Nodes[0]
-			underlying := fixture.compCtx.(*temporalCBOContext).encodedIndexCostTestContext
+			underlying := fixture.compCtx.(*indexCostCompilerFixture).encodedIndexCostTestContext
 			underlying.tables["base"] = scan.TableDef
 			underlying.objects["base"] = scan.ObjRef
 			compiler := &cleanupBorrowCompiler{CompilerContext: underlying, borrow: fixture.scanBorrows[0].borrow}

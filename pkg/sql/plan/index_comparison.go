@@ -16,20 +16,30 @@ package plan
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-// indexComparisonBound describes the only conversion allowed when a SQL
-// comparison operand becomes a serialized key component. A residual cannot
-// repair an under-fetch, so an unproved conversion declines the access path.
-type indexComparisonBound struct {
-	usable    bool
-	normalize bool
+// indexComparisonDomain describes how SQL bounds relate to physical keys.
+// Only exact domains may be serialized as an ordinary lookup operand.
+type indexComparisonDomain uint8
+
+const (
+	indexComparisonUnsupported indexComparisonDomain = iota
+	indexComparisonRaw
+	indexComparisonNormalized
+	indexComparisonInverse
+)
+
+func (d indexComparisonDomain) exact() bool {
+	return d == indexComparisonRaw || d == indexComparisonNormalized
 }
 
 func sameIndexComparisonDomain(key, value types.Type) bool {
@@ -44,26 +54,29 @@ func sameIndexComparisonDomain(key, value types.Type) bool {
 			!types.IsUnicodeCollation(key.Charset) && !types.IsUnicodeCollation(value.Charset)
 }
 
-func analyzeIndexComparisonBound(ctx context.Context, bound *plan.Expr, keyType plan.Type) indexComparisonBound {
+func analyzeIndexComparisonBound(ctx context.Context, bound *plan.Expr, keyType plan.Type) indexComparisonDomain {
 	if bound == nil || !isRuntimeConstExpr(bound) {
-		return indexComparisonBound{}
+		return indexComparisonUnsupported
 	}
 	if lit := bound.GetLit(); lit != nil && lit.Isnull {
 		// SERIAL propagates NULL, as SQL comparisons do. Stored SERIAL_FULL
 		// keys can still require a decoded residual; the lookup owns that rule.
-		return indexComparisonBound{usable: true}
+		return indexComparisonRaw
 	}
 	key, value := makeTypeByPlan2Type(keyType), makeTypeByPlan2Expr(bound)
 	if sameIndexComparisonDomain(key, value) {
-		return indexComparisonBound{usable: true}
+		return indexComparisonRaw
 	}
 	if key.Oid.IsDecimal() && value.Oid.IsDecimal() && losslessIndexDecimalBound(ctx, bound, key) {
-		return indexComparisonBound{usable: true, normalize: true}
+		return indexComparisonNormalized
+	}
+	if isDatetimeTimestampTypePair(key.Oid, value.Oid) {
+		return indexComparisonInverse
 	}
 	// In particular, DATETIME/TIMESTAMP comparison converts the DATETIME in
 	// the session zone and truncates it to the TIMESTAMP precision. A cast of
 	// the bound is not its inverse (precision buckets and DST folds/gaps).
-	return indexComparisonBound{}
+	return indexComparisonUnsupported
 }
 
 func losslessIndexDecimalBound(ctx context.Context, bound *plan.Expr, key types.Type) bool {
@@ -161,10 +174,10 @@ func normalizeSerializedIndexComparison(ctx context.Context, filter *plan.Expr, 
 
 func normalizeIndexComparisonBound(ctx context.Context, bound *plan.Expr, keyType plan.Type) (*plan.Expr, error) {
 	decision := analyzeIndexComparisonBound(ctx, bound, keyType)
-	if !decision.usable {
+	if !decision.exact() {
 		return nil, moerr.NewInternalError(ctx, "unsupported serialized index comparison domain")
 	}
-	if decision.normalize {
+	if decision == indexComparisonNormalized {
 		return forceCastExpr(ctx, bound, keyType)
 	}
 	return bound, nil
@@ -211,7 +224,7 @@ func serializedIndexComparisonUsable(ctx context.Context, fn *plan.Function, key
 		types.T(keyType.Id).IsDecimal() && column.Typ.Scale != keyType.Scale {
 		return false
 	}
-	usable := func(bound *plan.Expr) bool { return analyzeIndexComparisonBound(ctx, bound, keyType).usable }
+	usable := func(bound *plan.Expr) bool { return analyzeIndexComparisonBound(ctx, bound, keyType).exact() }
 	switch fn.Func.ObjName {
 	case "=", "<", "<=", ">", ">=":
 		if len(fn.Args) != 2 {
@@ -242,7 +255,7 @@ func serializedIndexInUsable(ctx context.Context, rhs *plan.Expr, keyType plan.T
 	}
 	if list := rhs.GetList(); list != nil {
 		for _, bound := range list.List {
-			if !analyzeIndexComparisonBound(ctx, bound, keyType).usable {
+			if !analyzeIndexComparisonBound(ctx, bound, keyType).exact() {
 				return false
 			}
 		}
@@ -255,7 +268,7 @@ func serializedIndexInUsable(ctx context.Context, rhs *plan.Expr, keyType plan.T
 		return ok && types.T(keyType.Id) != types.T_char && vec.GetType().Oid != types.T_char &&
 			keycodec.SupportsExactRawRuntimeFilterPair(makeTypeByPlan2Type(keyType), *vec.GetType())
 	}
-	return analyzeIndexComparisonBound(ctx, rhs, keyType).usable
+	return analyzeIndexComparisonBound(ctx, rhs, keyType).exact()
 }
 
 func mixedTemporalIndexComparison(fn *plan.Function) bool {
@@ -305,4 +318,528 @@ func (builder *QueryBuilder) compositeKeyComparisonUsable(fn *plan.Function, tab
 func indexEqualityPinsSingleValue(key, value plan.Type) bool {
 	k, v := makeTypeByPlan2Type(key), makeTypeByPlan2Type(value)
 	return sameIndexComparisonDomain(k, v) || k.IsIntOrUint() && v.IsIntOrUint()
+}
+
+type indexComparison struct {
+	column *plan.Expr
+	bound  *plan.Expr
+	op     types.ComparisonOp
+	scale  int32
+	domain indexComparisonDomain
+}
+
+// analyzeIndexComparison identifies a single oriented comparison. It is
+// only a shape and eager-bound proof, not the required query-level admission.
+func analyzeIndexComparison(ctx context.Context, expr *plan.Expr) (indexComparison, bool) {
+	if expr == nil || !indexPredicateEvaluationSafe(expr) {
+		return indexComparison{}, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return indexComparison{}, false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	var op types.ComparisonOp
+	switch id {
+	case function.EQUAL:
+		op = types.ComparisonEqual
+	case function.LESS_THAN:
+		op = types.ComparisonLess
+	case function.LESS_EQUAL:
+		op = types.ComparisonLessEqual
+	case function.GREAT_THAN:
+		op = types.ComparisonGreater
+	case function.GREAT_EQUAL:
+		op = types.ComparisonGreaterEqual
+	default:
+		return indexComparison{}, false
+	}
+	column := indexComparisonColumn(fn)
+	if column == nil {
+		return indexComparison{}, false
+	}
+	bound := fn.Args[1]
+	if column == fn.Args[1] {
+		bound = fn.Args[0]
+		switch op {
+		case types.ComparisonLess:
+			op = types.ComparisonGreater
+		case types.ComparisonLessEqual:
+			op = types.ComparisonGreaterEqual
+		case types.ComparisonGreater:
+			op = types.ComparisonLess
+		case types.ComparisonGreaterEqual:
+			op = types.ComparisonLessEqual
+		}
+	}
+	domain := analyzeIndexComparisonBound(ctx, bound, column.Typ)
+	if domain == indexComparisonUnsupported || !indexBoundEvaluationSafe(bound) {
+		return indexComparison{}, false
+	}
+	scale := column.Typ.Scale
+	if domain == indexComparisonInverse && types.T(bound.Typ.Id) == types.T_timestamp {
+		scale = bound.Typ.Scale
+		if clock := bound.GetF(); clock != nil {
+			wanted := int32(0)
+			if len(clock.Args) == 1 {
+				wanted, _ = temporalFunctionFSPFromPlanExpr(clock.Args[0])
+			}
+			if scale != wanted {
+				return indexComparison{}, false
+			}
+		}
+	}
+	if domain == indexComparisonInverse && (scale < 0 || scale > 6) {
+		return indexComparison{}, false
+	}
+	return indexComparison{column: column, bound: bound, op: op, scale: scale, domain: domain}, true
+}
+
+// indexBoundEvaluationSafe is a positive proof for optional eager evaluation.
+// Prepared parameter provenance must be checked separately before using it.
+func indexBoundEvaluationSafe(expr *plan.Expr) bool {
+	if expr == nil || indexExpressionHasUnprovedSource(expr) {
+		return false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		// A materialized parameter may have literal syntax. The query-level
+		// admission gate must reject unknown or unproved provenance separately.
+		return literal.Src == nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || types.T(expr.Typ.Id) != types.T_timestamp {
+		return false
+	}
+	id, overload := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.CURRENT_TIMESTAMP || overload != 0 {
+		return false
+	}
+	if unstable, known := function.GetFunctionValueUnstableByID(fn.Func.Obj); !known || unstable || !function.IsRuntimeConstant(expr) {
+		return false
+	}
+	switch len(fn.Args) {
+	case 0:
+		return true
+	case 1:
+		_, ok := temporalFunctionFSPFromPlanExpr(fn.Args[0])
+		return ok
+	default:
+		return false
+	}
+}
+
+// indexPredicateEvaluationSafe proves each original predicate, not merely
+// the bound used by an optional candidate. It does not authorize a candidate by
+// itself: the scan, ancestor and prepared-provenance gates are also required.
+func indexPredicateEvaluationSafe(expr *plan.Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_bool || indexExpressionHasUnprovedSource(expr) {
+		return false
+	}
+	if isTruncationSafePredicateExpr(expr) {
+		return true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if _, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj); !ok {
+		return false
+	}
+	if id == function.AND || id == function.OR {
+		return len(fn.Args) == 2 && indexPredicateEvaluationSafe(fn.Args[0]) && indexPredicateEvaluationSafe(fn.Args[1])
+	}
+	if !isTruncationSafeEquality(id) && !isTruncationSafeOrdering(id) || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	left, right := fn.Args[0], fn.Args[1]
+	if left.GetCol() == nil {
+		left, right = right, left
+	}
+	return left.GetCol() != nil &&
+		comparisonEvaluationIsTotal(id, left.Typ, right.Typ) && indexBoundEvaluationSafe(right)
+}
+
+// A literal's retained source may carry parameter or diagnostic provenance.
+// Until those sources are proved per execution, do not narrow around them.
+func indexExpressionHasUnprovedSource(expr *plan.Expr) bool {
+	if expr == nil || expr.GetP() != nil {
+		return true
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if indexExpressionHasUnprovedSource(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if indexExpressionHasUnprovedSource(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// indexScanExpressionsSafe is only the scan-owner part of the
+// proof. The caller must also prove all ancestor paths and query-wide prepared
+// provenance before creating a hint. Pagination is declined until its separate
+// order proof is connected.
+func indexScanExpressionsSafe(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	for _, predicate := range node.FilterList {
+		if !indexPredicateEvaluationSafe(predicate) {
+			return false
+		}
+	}
+	for _, expr := range node.ProjectList {
+		if expr == nil || indexExpressionHasUnprovedSource(expr) || !isTruncationSafeRowExpr(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexCandidatePathSafe checks the current rewritten path. The
+// original-owner proof and final catalog/publication proof are separate.
+func indexCandidatePathSafe(query *plan.Query, scanID int32) bool {
+	path, ok := traceIndexCandidatePath(query)
+	return ok && path.ids[path.len-1] == scanID && indexPathExpressionsSafe(query, path)
+}
+
+// temporalInteriorTimestampMargin includes the fixed-zone offset envelope,
+// the largest precision quantum and strict-bound arithmetic. Values inside
+// this domain cannot trigger the calendar interval's lo>hi reset for a ray.
+const temporalInteriorTimestampMargin = (int64(1)<<31+72*types.SecsPerHour+2)*types.MicroSecsPerSec + types.MicroSecsPerSec + 1
+
+// Classify an immutable expression domain, never the observed statement clock.
+// CURRENT_TIMESTAMP maps every int64 Unix nanosecond input into 1677..2262,
+// including precision rounding, well inside this calendar margin. Other
+// functions and unproved parameter/source values retain the original union.
+func temporalCandidateInteriorTimestampBound(bound *plan.Expr) bool {
+	if bound == nil || types.T(bound.Typ.Id) != types.T_timestamp || bound.Typ.Scale < 0 || bound.Typ.Scale > 6 || bound.AuxId < 0 || bound.PreparedNumeric != nil || len(bound.XXX_unrecognized) != 0 || len(bound.Typ.XXX_unrecognized) != 0 {
+		return false
+	}
+	switch value := bound.Expr.(type) {
+	case *plan.Expr_Lit:
+		if value == nil || value.Lit == nil || value.Lit.Isnull || value.Lit.Src != nil || len(value.Lit.XXX_unrecognized) != 0 {
+			return false
+		}
+		stamp, ok := value.Lit.Value.(*plan.Literal_Timestampval)
+		if !ok || stamp == nil {
+			return false
+		}
+		maximum := int64(types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
+		return stamp.Timestampval >= temporalInteriorTimestampMargin && stamp.Timestampval <= maximum-temporalInteriorTimestampMargin
+	case *plan.Expr_F:
+		if value == nil || value.F == nil || value.F.Func == nil || value.F.Func.PubInfo != nil || value.F.Func.Snapshot != nil || len(value.F.AggConfig) != 0 || len(value.F.XXX_unrecognized) != 0 || len(value.F.Func.XXX_unrecognized) != 0 {
+			return false
+		}
+		if len(value.F.Args) == 1 {
+			arg := value.F.Args[0]
+			if arg == nil || arg.AuxId < 0 || arg.PreparedNumeric != nil {
+				return false
+			}
+			literal, ok := arg.Expr.(*plan.Expr_Lit)
+			if !ok || literal == nil || literal.Lit == nil {
+				return false
+			}
+			fsp, ok := literal.Lit.Value.(*plan.Literal_I64Val)
+			if !ok || fsp == nil {
+				return false
+			}
+		}
+		return indexBoundEvaluationSafe(bound)
+	default:
+		return false
+	}
+}
+
+// One topology owns the main interval, zero point and physical tails.
+// A nonnil physical key emits serialized prefix leaves directly, avoiding an
+// intermediate direct expression tree.
+func buildTemporalCandidate(ctx context.Context, column, bound, physical *plan.Expr, op types.ComparisonOp, scale int32) (candidate *plan.Expr, err error) {
+	if column == nil || column.GetCol() == nil || bound == nil || scale < 0 || scale > 6 || op > types.ComparisonGreaterEqual ||
+		!isDatetimeTimestampTypePair(types.T(column.Typ.Id), types.T(bound.Typ.Id)) || !indexBoundEvaluationSafe(bound) {
+		return nil, moerr.NewInternalError(ctx, "unsupported temporal candidate")
+	}
+	if physical != nil && (physical.GetCol() == nil || types.T(physical.Typ.Id) != types.T_varchar || types.IsUnicodeCollation(uint8(physical.Typ.Charset)) || physical.Typ.ValidateCollation() != nil || column.Typ.ValidateCollation() != nil) {
+		return nil, nil
+	}
+	kind := types.T(column.Typ.Id)
+	bind := func(name string, args ...*plan.Expr) (*plan.Expr, error) {
+		return BindFuncExprImplByPlanExpr(ctx, name, args)
+	}
+	name := "__mo_temporal_datetime_bound"
+	if kind == types.T_timestamp {
+		name = "__mo_temporal_timestamp_bound"
+	}
+	control := func(value int32) *plan.Expr { return MakePlan2Int32ConstExprWithType(value) }
+	endpoint := func(selector int32) (*plan.Expr, error) {
+		expr, bindErr := bind(name, DeepCopyExpr(bound), control(int32(op)), control(scale), control(selector))
+		if bindErr == nil {
+			expr.Typ.Scale = column.Typ.Scale
+		}
+		return expr, bindErr
+	}
+	leaf := func(name string, values ...*plan.Expr) (*plan.Expr, error) {
+		return lowerIndexComparisonLeaf(ctx, column, physical, name, values...)
+	}
+	literal := func(v int64) *plan.Expr {
+		return &plan.Expr{Typ: column.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Datetimeval{Datetimeval: v}}}}
+	}
+	interior := kind == types.T_datetime && temporalCandidateInteriorTimestampBound(bound)
+	lowerRay := interior && (op == types.ComparisonLess || op == types.ComparisonLessEqual)
+	upperRay := interior && (op == types.ComparisonGreater || op == types.ComparisonGreaterEqual)
+	var lo, hi *plan.Expr
+	if lowerRay {
+		lo = literal(math.MinInt64)
+	} else if lo, err = endpoint(0); err != nil {
+		return nil, err
+	}
+	if upperRay {
+		hi = literal(math.MaxInt64)
+	} else if hi, err = endpoint(1); err != nil {
+		return nil, err
+	}
+	candidate, err = leaf("between", lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	if kind == types.T_datetime {
+		if !interior {
+			point, pointErr := endpoint(2)
+			if pointErr != nil {
+				return nil, pointErr
+			}
+			pointExpr, pointErr := leaf("=", point)
+			if pointErr != nil {
+				return nil, pointErr
+			}
+			candidate, err = bind("or", candidate, pointExpr)
+			if err != nil {
+				return nil, err
+			}
+		}
+		maxDate := int64(types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
+		tails := [][2]int64{{math.MinInt64, -2}, {maxDate + 1, math.MaxInt64}}
+		if lowerRay {
+			tails = tails[1:] // the main ray now includes the lower tail and zero
+		} else if upperRay {
+			tails = tails[:1] // the main ray now includes the upper tail
+		}
+		for _, tail := range tails {
+			tailExpr, tailErr := leaf("between", literal(tail[0]), literal(tail[1]))
+			if tailErr != nil {
+				return nil, tailErr
+			}
+			candidate, err = bind("or", candidate, tailExpr)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return candidate, nil
+}
+
+// makeNecessaryIndexHint constructs a necessary physical filter from the atom
+// just proved by indexCandidateOperands. The caller owns placement, cost and the
+// final relation/transaction proof; this filter never replaces the SQL residual.
+func makeNecessaryIndexHint(ctx context.Context, atom indexComparison, index *plan.IndexDef,
+	indexTable *plan.TableDef, indexTag int32,
+) (*plan.Expr, bool, error) {
+	if indexTable == nil || len(indexTable.Cols) == 0 || indexTable.Cols[0] == nil {
+		return nil, false, nil
+	}
+	physical := GetColExpr(indexTable.Cols[0].Typ, indexTag, 0)
+	physical.GetCol().Name = indexTable.Cols[0].Name
+	var hint *plan.Expr
+	var err error
+	if indexTableStoresSerializedKey(index) {
+		if types.T(physical.Typ.Id) != types.T_varchar {
+			return nil, false, nil
+		}
+		hint, err = buildTemporalCandidate(ctx, atom.column, atom.bound, physical, atom.op, atom.scale)
+	} else {
+		if physical.Typ.Id != atom.column.Typ.Id || physical.Typ.Scale != atom.column.Typ.Scale {
+			return nil, false, nil
+		}
+		hint, err = buildTemporalCandidate(ctx, physical, atom.bound, nil, atom.op, atom.scale)
+	}
+	if err != nil || hint == nil {
+		return nil, false, err
+	}
+	hint.CandidateFilter = true
+	return hint, true, nil
+}
+
+// indexCandidateOperands rechecks the current path and index at publication.
+// Catalog resolution may reenter planning, so an earlier proof is not enough.
+func indexCandidateOperands(ctx context.Context, query *plan.Query, scanID int32, index *plan.IndexDef,
+	filterPos int,
+) (indexComparison, bool, error) {
+	if ctx == nil {
+		return indexComparison{}, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return indexComparison{}, false, err
+	}
+	if !indexCandidatePathSafe(query, scanID) {
+		return indexComparison{}, false, nil
+	}
+	scan := query.Nodes[scanID]
+	if len(scan.FilterList) != 1 || filterPos != 0 {
+		return indexComparison{}, false, nil
+	}
+	atom, ok := analyzeIndexComparison(ctx, scan.FilterList[filterPos])
+	if !ok || atom.domain != indexComparisonInverse || !indexComparisonMatches(scan, index, atom) {
+		return indexComparison{}, false, nil
+	}
+	return atom, true, nil
+}
+
+// indexComparisonMatches checks only index-specific facts. Enumeration already
+// proved the current path and atom once; publication repeats the full proof.
+func indexComparisonMatches(scan *plan.Node, index *plan.IndexDef, atom indexComparison) bool {
+	if scan == nil || scan.TableDef == nil || scan.TableDef.Pkey == nil || len(scan.BindingTags) == 0 ||
+		!indexPlanningDefinitionFits(index) || !index.TableExist || !catalog.IsRegularIndexAlgo(index.IndexAlgo) || isSpatialIndexDef(index) ||
+		index.KeyFormat != 0 || len(index.Parts) == 0 || regularIndexHasDeclaredPrefix(index) {
+		return false
+	}
+	for _, part := range index.Parts {
+		pos, exists := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !exists || pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil {
+			return false
+		}
+	}
+	if indexUsesUnicodeCollation(index, scan.TableDef) || functionalIndexColumn(scan.TableDef, index) != nil || !hintedIndexContainsQualifyingRows(index, scan) {
+		return false
+	}
+	position, ok := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
+	if !ok || position < 0 || int(position) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[position] == nil {
+		return false
+	}
+	return atom.column.GetCol().RelPos == scan.BindingTags[0] && atom.column.GetCol().ColPos == position &&
+		atom.column.Typ.Id == scan.TableDef.Cols[position].Typ.Id && atom.column.Typ.Scale == scan.TableDef.Cols[position].Typ.Scale
+}
+
+func indexResidualColumnsMapped(expr *plan.Expr, mapping map[[2]int32]*plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil {
+		return mapping[[2]int32{col.RelPos, col.ColPos}] != nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if !indexResidualColumnsMapped(arg, mapping) {
+				return false
+			}
+		}
+		return true
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if !indexResidualColumnsMapped(item, mapping) {
+				return false
+			}
+		}
+		return true
+	}
+	return expr.GetLit() != nil || expr.GetT() != nil
+}
+
+func indexPlanningDefinitionFits(index *plan.IndexDef) bool {
+	if index == nil || len(index.Parts) > engine.MaxIndexPlanningParts || len(index.IndexName) > engine.MaxIndexPlanningNameBytes || len(index.IndexTableName) > engine.MaxIndexPlanningNameBytes {
+		return false
+	}
+	for _, part := range index.Parts {
+		if len(part) > engine.MaxIndexPlanningNameBytes {
+			return false
+		}
+	}
+	return true
+}
+
+func potentialContextDependentIndexPath(query *plan.Query, path indexCandidatePath) bool {
+	scan := query.Nodes[path.ids[path.len-1]]
+	if scan.TableDef == nil || len(scan.BindingTags) == 0 || len(scan.TableDef.Indexes) == 0 {
+		return false
+	}
+	indexed := make(map[[2]int32]types.T)
+	for _, index := range scan.TableDef.Indexes {
+		if index == nil || !index.TableExist || !catalog.IsRegularIndexAlgo(index.IndexAlgo) {
+			continue
+		}
+		for _, part := range index.Parts {
+			pos, ok := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+			if !ok || pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil {
+				continue
+			}
+			oid := types.T(scan.TableDef.Cols[pos].Typ.Id)
+			if oid == types.T_datetime || oid == types.T_timestamp {
+				indexed[[2]int32{scan.BindingTags[0], pos}] = oid
+			}
+		}
+	}
+	if len(indexed) == 0 {
+		return false
+	}
+	for _, id := range path.ids[:path.len] {
+		node := query.Nodes[id]
+		for _, list := range [][]*plan.Expr{node.FilterList, node.OnList} {
+			for _, root := range list {
+				found := false
+				_ = plan.VisitExprTree(root, func(expr *plan.Expr) error {
+					fn := expr.GetF()
+					if found || fn == nil || fn.Func == nil || len(fn.Args) < 2 {
+						return nil
+					}
+					id, _ := function.DecodeOverloadID(fn.Func.Obj)
+					switch id {
+					case function.EQUAL, function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
+						if len(fn.Args) == 2 {
+							found = contextDependentIndexPair(indexed, fn.Args[0], fn.Args[1]) || contextDependentIndexPair(indexed, fn.Args[1], fn.Args[0])
+						}
+					case function.BETWEEN, function.IN_RANGE:
+						if len(fn.Args) >= 3 {
+							found = contextDependentIndexPair(indexed, fn.Args[0], fn.Args[1]) || contextDependentIndexPair(indexed, fn.Args[0], fn.Args[2])
+						}
+					case function.IN:
+						if len(fn.Args) == 2 && fn.Args[1] != nil {
+							found = contextDependentIndexPair(indexed, fn.Args[0], fn.Args[1])
+							if list := fn.Args[1].GetList(); list != nil {
+								for _, bound := range list.List {
+									found = found || contextDependentIndexPair(indexed, fn.Args[0], bound)
+								}
+							}
+						}
+					}
+					return nil
+				})
+				if found {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func contextDependentIndexPair(indexed map[[2]int32]types.T, candidate, bound *plan.Expr) bool {
+	if candidate == nil || bound == nil || candidate.GetCol() == nil {
+		return false
+	}
+	col := candidate.GetCol()
+	oid, ok := indexed[[2]int32{col.RelPos, col.ColPos}]
+	// An unproved parameter may still become a mixed comparison on rebind.
+	boundType := types.T(bound.Typ.Id)
+	return ok && (isDatetimeTimestampTypePair(oid, boundType) || boundType == types.T_any && indexExpressionHasUnprovedSource(bound))
 }

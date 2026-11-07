@@ -125,28 +125,28 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 		mock := NewMockCompilerContext(true, proc)
 		mock.SetContext(ctx)
 		builder := &QueryBuilder{qry: &owner, compCtx: mock}
-		builder.collectOriginalTemporalOwner(1)
+		builder.collectOriginalIndexOwner(1)
 		return owner.ExecutionDependentAccess
 	}
-	proofFor := func(ctx context.Context) originalTemporalProof {
-		path, ok := traceTemporalCandidatePath(query)
+	proofFor := func(ctx context.Context) originalIndexProof {
+		path, ok := traceIndexCandidatePath(query)
 		require.True(t, ok)
-		return proveOriginalTemporalPath(ctx, query, path)
+		return proveOriginalIndexPath(ctx, query, path)
 	}
 	excludes := func(ctx context.Context) bool {
-		return originalTemporalPathExcludesIndex(ctx, scan, proofFor(ctx))
+		return originalIndexPathExcludesIndex(ctx, scan, proofFor(ctx))
 	}
 	require.True(t, potential(proc.Ctx))
 	bindingCtx := withPreparedSourceBindings(proc.Ctx, nil, []any{"unproved"})
 	mock := NewMockCompilerContext(true, proc)
 	mock.SetContext(bindingCtx)
 	builder := &QueryBuilder{qry: query, compCtx: mock}
-	builder.collectOriginalTemporalOwner(1)
+	builder.collectOriginalIndexOwner(1)
 	require.False(t, query.GetExecutionDependentAccess())
 	require.False(t, preparedBindingState(bindingCtx).valueDependent)
 	query.ExecutionDependentAccess = false
 	builder.isPrepareStatement = true
-	builder.collectOriginalTemporalOwner(1)
+	builder.collectOriginalIndexOwner(1)
 	require.False(t, query.GetExecutionDependentAccess(), "known prepared provenance cannot enter temporal access")
 	builder.isPrepareStatement = false
 	unresolved := DeepCopyExpr(predicate)
@@ -177,7 +177,7 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	require.True(t, potential(proc.Ctx), "a leading key with an eligible typed literal must be replanned")
 	builder.compCtx.SetContext(proc.Ctx)
 	query.ExecutionDependentAccess = false
-	builder.collectOriginalTemporalOwner(1)
+	builder.collectOriginalIndexOwner(1)
 	require.True(t, query.GetExecutionDependentAccess())
 	builder.compCtx.SetContext(bindingCtx)
 	scan.FilterList[0] = predicate
@@ -186,7 +186,7 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	require.False(t, potential(bindingCtx), "bound prepared plans retain their existing reuse owner")
 	query.ExecutionDependentAccess = false
 	preparedBindingState(bindingCtx).valueDependent = false
-	builder.collectOriginalTemporalOwner(1)
+	builder.collectOriginalIndexOwner(1)
 	require.False(t, query.GetExecutionDependentAccess())
 	require.False(t, preparedBindingState(bindingCtx).valueDependent)
 	scan.TableDef.Indexes = []*plan.IndexDef{{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(), TableExist: true}, index}
@@ -222,11 +222,11 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	scan.FilterList = []*plan.Expr{predicate}
 	indexTable := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Typ: Type{Id: int32(types.T_varchar)}}}}
 	makeHint := func() (*plan.Expr, bool, error) {
-		atom, ok, err := temporalIndexOperands(proc.Ctx, query, 0, index, 0)
+		atom, ok, err := indexCandidateOperands(proc.Ctx, query, 0, index, 0)
 		if err != nil || !ok {
 			return nil, false, err
 		}
-		return makeTemporalIndexHint(proc.Ctx, atom, index, indexTable, 2)
+		return makeNecessaryIndexHint(proc.Ctx, atom, index, indexTable, 2)
 	}
 	hint, ok, err := makeHint()
 	require.NoError(t, err)

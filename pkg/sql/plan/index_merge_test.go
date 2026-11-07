@@ -269,9 +269,11 @@ func TestRegularIndexOnlyAliasedSinglePartMapping(t *testing.T) {
 	node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, TableDef: table, ObjRef: ctx.objects[table.Name],
 		BindingTags: []int32{tag}, FilterList: []*planpb.Expr{filter}, Limit: MakePlan2Uint64ConstExprWithType(5)}
 	build := func(index *planpb.IndexDef, mapping map[[2]int32]*planpb.Expr) *planpb.Node {
-		return builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+		scan, err := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
 			filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
 		})
+		require.NoError(t, err)
+		return scan
 	}
 	mapping := make(map[[2]int32]*planpb.Expr)
 	scan := build(index, mapping)
