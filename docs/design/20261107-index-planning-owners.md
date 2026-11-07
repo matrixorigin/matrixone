@@ -47,25 +47,43 @@ exhausted budget does not grant access.
 The same owner also determines whether a future execution could select a
 different access. A BASE decision needs the same lifetime consideration as an
 INDEX decision: a later clock can change the cost. For a complete, live,
-in-budget single proof, the owner checks mixed types and combines regular-index
-leading-part exclusion and any-part membership in one bounded traversal. The
+in-budget single proof, the owner consumes the comparison owner's necessary
+range capability and combines regular-index leading-part exclusion and
+any-part membership in one bounded traversal. The
 access is execution-dependent exactly when leading exclusion is not proved and
 membership is yes or unknown. A completed exclusion or membership miss keeps
 existing reuse, and an already-true dependency is never cleared. This retains
 the previous `P && !E` decision, including a temporal suffix behind an integer
 leading part. A fitting non-single proof cannot produce the current candidate.
 
+The comparison owner is the single source of type-pair capability for both
+positive candidate classification and conservative lifetime analysis. An
+unknown bound asks whether any supported necessary range is possible for the
+key; it never establishes a positive candidate. A typed NULL can be an exact
+SQL comparison without erasing the conservative type-pair lifetime fact. A
+future necessary-range producer extends this owner and its type rule; cache,
+compile, and reader owners do not identify that producer. Readers still prove
+their own physical comparison domains, including ordinary mixed temporal
+predicates that were not produced as candidate ranges.
+
 An incomplete or stopped proof uses a bounded conservative walk of original
-filter expressions and index metadata. Unknown or unvisited evidence cannot
-prove independence; an actual witness or unknown yields a dependent lifetime.
-A completed negative proof preserves reuse for unrelated ordinary plans.
+filter expressions and index metadata. It uses the existing iterative
+expression visitor rather than a separate recursive expression traversal.
+Both inspected nodes and discovered child references are bounded before the
+visitor can enqueue them; cycles, oversized lists, opaque forms and exhausted
+work remain unknown. Unknown or unvisited evidence cannot prove independence;
+an actual witness or unknown yields a dependent lifetime. A fully visited
+supported expression can establish a negative result even when it is deeper
+than the positive admission limit. A completed negative proof preserves reuse
+for unrelated ordinary plans.
 Prepared roots retain their existing reusable-plan owner and do not acquire
 temporal candidate input.
 
 The positive proof has a 4,096-unit work budget, at most 64 expressions per
-list and depth 64. Dependency fallback is also capped at 4,096 charged units,
-depth 64, 64 index definitions, 16 parts per index and 256 bytes per inspected
-name or algorithm. An oversized or uncharged algorithm is not normalized: it
+list and depth 64. Dependency fallback is also capped at 4,096 charged units
+and 4,096 discovered expression references, 64 index definitions, 16 parts
+per index and 256 bytes per inspected name or algorithm. An oversized or
+uncharged algorithm is not normalized: it
 invalidates both a negative membership proof and leading-index exclusion. A
 regular existing index with no parts, a malformed alias, an unvisited part, an
 unproved source or a stopped proof is unknown, never negative evidence. The result is only the existing query
@@ -113,6 +131,10 @@ logical arms to the common direct or serialized physical-leaf lowering.
 Ordinary exact serialization and equality-pinning callers retain their stricter
 requirements. The selector owns enumeration and one scorer; existing FORCE,
 small-table, sorted-scan and spatial policies keep their normal priority.
+The generic observation gate checks the captured execution and placement, but
+does not impose a type-specific zone rule. The necessary comparison owner admits
+the current temporal inverse only for a proved fixed zone. Its lifetime fact
+must already have been recorded before folding, including when BASE wins.
 
 A necessary-range candidate is considered after ordinary matching owns neither
 a winner nor a fallback. Its private mapping, bind tag, full residual and block
@@ -164,13 +186,57 @@ unmarked unless their own producer establishes the contract.
 `IndexScanInfo.requires_captured_execution`, protobuf tag 7, is set on a
 physical index scan only after the necessary access has passed its admission
 and publication checks. The compiler rejects malformed flagged nodes and
-requires the captured process/clock/zone, fixed offset, non-offloaded pinned
+requires the captured process/clock/zone, non-offloaded pinned
 local scheduling and the expected current CN. A folded or removed filter does
 not remove that requirement. The compile owner retains a sticky topology fact
 across retry and clears it on pool reset; frontend validation and an unscoped
 rebuild use the same physical requirement. Drift is rejected before message
 board or deferred transaction-offset publication, and the safe rebuild
 reauthorizes the original statement without captured planning input.
+
+The fixed-zone proof belongs to the temporal comparison producer. It is made
+before cost observation and publication, and the same immutable location and
+statement clock are checked again after reentrant resolution and at compile.
+The temporal endpoint independently widens to the full range when it cannot
+prove a fixed zone. Compile enforces the captured execution contract without
+assuming that every future captured access uses temporal inversion; a
+non-temporal captured access may therefore use a named zone. Published plans
+are trusted internal optimizer products, not a user-supplied authorization
+mechanism; hidden-table resolution and pair authorization remain mandatory.
+
+## Ownership consolidation decision and validation
+
+The previous fallback separately encoded the temporal type pair while the
+comparison owner encoded the same pair for positive admission; the compiler
+also repeated fixed-zone admission after comparing the captured location.
+Together these made a producer's type rules leak into lifetime and execution
+owners. The selected design derives both decisions from the comparison
+capability and leaves fixed-zone admission with the temporal producer. It
+retains the existing query lifetime bit, physical execution requirement,
+ordinary resolver and single selector; none is a compatibility alias.
+
+Blanket invalidation for every indexed query with an incomplete proof is
+rejected because unrelated ordinary plans would stop reusing their generation.
+Moving index/base selection into the reader is also rejected: hidden-index
+resolution, authorization, snapshots and distributed pipeline construction
+would require a second execution path without evidence that it pays for its
+cost. The bounded fallback is needed until its caller has a complete negative
+proof; it uses the existing visitor rather than creating an extensibility
+framework or an unbounded general-purpose dependency graph.
+
+The acceptance evidence covers: a live and cancelled original proof;
+typed and unknown bounds including typed NULL; leading, suffix, unrelated,
+absent, malformed and oversized index metadata; nested, opaque, cyclic and
+wide expressions; BASE and INDEX lifetime decisions; and the ordinary integer
+reuse control. The captured-execution checks cover clock, location and
+placement drift, retries and pre-publication cleanup. A named-zone generic
+captured access is admitted only by its own producer; the temporal producer
+still declines it and its endpoint retains a full range. Public SQL results
+must match the original residual, including after clock or zone changes.
+Owner normal/race tests, affected lint/vet, the real 4.2 stopped-upgrade
+contract, and comparable planning/query performance evidence are required for
+the changed boundaries. Existing evidence is reused when its source and
+semantic inputs remain valid.
 
 The ordinary compile constructor owns immediate publication, deferred
 preflight publication and definition retry at their existing offset and
