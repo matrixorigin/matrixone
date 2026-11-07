@@ -699,6 +699,84 @@ func TestUnixTimestampPreEpochWholeSecondIsNonNullZero(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestUnixTimestampArgumentBounds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	values := []string{
+		"1970-01-01 00:00:00.000000",
+		"1970-01-01 00:00:00.000001",
+		"1970-01-01 00:00:00.999999",
+		"1970-01-01 00:00:01.000000",
+		"3001-01-18 23:59:59.999998",
+		"3001-01-18 23:59:59.999999",
+		"3001-01-19 00:00:00.000000",
+		"9999-12-31 23:59:59.000000",
+	}
+	stamps := make([]types.Timestamp, len(values))
+	datetimes := make([]types.Datetime, len(values))
+	for i, value := range values {
+		var err error
+		stamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+		datetimes[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+	intValues := []int64{0, 0, 0, 1, 32536771199, 32536771199, 0, 0}
+	decimalValues := []types.Decimal128{
+		{}, {}, {}, mustDecimal128(t, "1.000000", 38, 6),
+		mustDecimal128(t, "32536771199.999998", 38, 6),
+		mustDecimal128(t, "32536771199.999999", 38, 6), {}, {},
+	}
+	for _, input := range []struct {
+		name   string
+		values FunctionTestInput
+		intFn  executeLogicOfOverload
+		decFn  executeLogicOfOverload
+	}{
+		{"TIMESTAMP", NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), stamps, nil), builtInUnixTimestamp, builtInUnixTimestamp},
+		{"DATETIME", NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), datetimes, nil), builtInUnixTimestampDatetime, builtInUnixTimestampDatetime},
+		{"VARCHAR", NewFunctionTestInput(types.T_varchar.ToType(), values, nil), builtInUnixTimestampVarcharToInt64, builtInUnixTimestampVarcharToDecimal128},
+	} {
+		t.Run(input.name+"/integer", func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input.values},
+				NewFunctionTestResult(types.T_int64.ToType(), false, intValues, nil), input.intFn)
+			ok, info := fcTC.RunAndFree()
+			require.True(t, ok, info)
+		})
+		t.Run(input.name+"/decimal", func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input.values},
+				NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, decimalValues, nil), input.decFn)
+			ok, info := fcTC.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+
+	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+08", 8*60*60)
+	localValues := []string{"1970-01-01 08:00:00.999999", "1970-01-01 08:00:01.000000"}
+	localDatetimes := make([]types.Datetime, len(localValues))
+	for i, value := range localValues {
+		var err error
+		localDatetimes[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+	for _, input := range []struct {
+		name   string
+		values FunctionTestInput
+		fn     executeLogicOfOverload
+	}{
+		{"DATETIME", NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), localDatetimes, nil), builtInUnixTimestampDatetime},
+		{"VARCHAR", NewFunctionTestInput(types.T_varchar.ToType(), localValues, nil), builtInUnixTimestampVarcharToDecimal128},
+	} {
+		t.Run(input.name+"/non-UTC", func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input.values},
+				NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+					[]types.Decimal128{{}, mustDecimal128(t, "1.000000", 38, 6)}, nil), input.fn)
+			ok, info := fcTC.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC

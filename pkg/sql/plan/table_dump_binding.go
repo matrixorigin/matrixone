@@ -19,6 +19,7 @@ import (
 	"errors"
 	"iter"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,16 +50,17 @@ type tableDumpBindingBudget struct {
 }
 
 type tableDumpExpressionVisitor struct {
-	nodes                 int
-	hasColumn             bool
-	hasDivision           bool
-	hasIntegerDivision    bool
-	hasSpecial            bool
-	hasTimestampAdd       bool
-	hasUnixTimestamp      bool
-	hasJSON               bool
-	hasIncompleteTemporal bool
-	hasTimeString         bool
+	nodes                     int
+	hasColumn                 bool
+	hasDivision               bool
+	hasIntegerDivision        bool
+	hasSpecial                bool
+	hasTimestampAdd           bool
+	hasUnixTimestamp          bool
+	mayUseJapaneseMonthAbbrev bool
+	hasJSON                   bool
+	hasIncompleteTemporal     bool
+	hasTimeString             bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -84,6 +86,20 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 			v.hasJSON = true
 		case "date_format", "datediff", "to_days", "to_seconds", "dayofweek", "week":
 			v.hasIncompleteTemporal = true
+			if numericAstFunctionName(fn) == "date_format" {
+				mayUseAbbrev := true
+				if len(fn.Exprs) >= 2 {
+					switch format := unwrapParenExpr(fn.Exprs[1]).(type) {
+					case *tree.StrVal:
+						mayUseAbbrev = strings.Contains(format.String(), "%b")
+					case *tree.NumVal:
+						if format.ValType == tree.P_char {
+							mayUseAbbrev = strings.Contains(format.String(), "%b")
+						}
+					}
+				}
+				v.mayUseJapaneseMonthAbbrev = v.mayUseJapaneseMonthAbbrev || mayUseAbbrev
+			}
 		}
 	}
 	return e, false
@@ -245,14 +261,15 @@ const (
 
 // A flag selects one coherent pre-migration binding, never per-node metadata.
 const (
-	tableDumpBindingPreTemporalNullability   tableDumpBindingMode = 1 << 7
-	tableDumpBindingPreUnixTimestampDatetime tableDumpBindingMode = 1 << 8
-	tableDumpBindingPreJSON                  tableDumpBindingMode = 1 << 6
-	tableDumpBindingPreIncompleteTemporal    tableDumpBindingMode = 1 << 10
-	tableDumpBindingDDLColumnScope           tableDumpBindingMode = 1 << 9
-	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
-	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
-	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
+	tableDumpBindingLegacyJapaneseMonthAbbrev tableDumpBindingMode = 1 << 5
+	tableDumpBindingPreTemporalNullability    tableDumpBindingMode = 1 << 7
+	tableDumpBindingPreUnixTimestampDatetime  tableDumpBindingMode = 1 << 8
+	tableDumpBindingPreJSON                   tableDumpBindingMode = 1 << 6
+	tableDumpBindingPreIncompleteTemporal     tableDumpBindingMode = 1 << 10
+	tableDumpBindingDDLColumnScope            tableDumpBindingMode = 1 << 9
+	tableDumpBindingPreIntegerDecimal         tableDumpBindingMode = 1 << 15
+	tableDumpBindingPreDecimalPrecision       tableDumpBindingMode = 1 << 16
+	tableDumpBindingPreTimeNullability        tableDumpBindingMode = 1 << 17
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -438,7 +455,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingLegacyJapaneseMonthAbbrev)
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -477,6 +494,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	proc := ctx.GetProcess()
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
+	}
+	if mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 {
+		bindCtx = function.WithLegacyJapaneseMonthAbbrev(bindCtx)
+		previous := proc.GetTopContext()
+		proc.ReplaceTopCtx(function.WithLegacyJapaneseMonthAbbrev(previous))
+		defer proc.ReplaceTopCtx(previous)
 	}
 	if mode&tableDumpBindingPreJSON != 0 {
 		// Constant folding executes with proc.Ctx. This process is private to
@@ -826,19 +849,38 @@ func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale strin
 	timeZones func(func(*time.Location) bool), sessions []tableDumpSessionCandidate,
 	bind func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error),
 	match func(tableDumpSessionCandidate, *planpb.Expr) bool) (bool, error) {
-	localesFor := func(needsLocale bool) []string {
+	localesFor := func(search tableDumpSessionCandidate) []string {
+		if search.mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 {
+			return []string{"ja_JP"}
+		}
 		locales := []string{locale}
-		if needsLocale {
+		if search.dependency.locale {
+			if locale != "ja_JP" {
+				locales = append(locales, "ja_JP")
+			}
 			for _, other := range function.TemporalLocaleNames() {
-				if other != locale {
+				if other != locale && other != "ja_JP" {
 					locales = append(locales, other)
 				}
 			}
 		}
 		return locales
 	}
+	legacy := false
 	for _, search := range sessions {
-		for _, other := range localesFor(search.dependency.locale)[1:] {
+		legacy = legacy || search.mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0
+	}
+	if legacy {
+		sort.SliceStable(sessions, func(i, j int) bool {
+			if sessions[i].increment != sessions[j].increment {
+				return sessions[i].increment < sessions[j].increment
+			}
+			return sessions[i].mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 &&
+				sessions[j].mode&tableDumpBindingLegacyJapaneseMonthAbbrev == 0
+		})
+	}
+	for _, search := range sessions {
+		for _, other := range localesFor(search)[1:] {
 			rebound, err := bind(search, zone, other)
 			if err != nil {
 				return false, err
@@ -848,11 +890,30 @@ func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale strin
 			}
 		}
 	}
+	if legacy {
+		for _, search := range sessions {
+			if !search.dependency.timeZone && !search.folded && !search.stored {
+				continue
+			}
+			for _, lc := range localesFor(search) {
+				for hour := -13; hour <= 14; hour++ {
+					tz := time.FixedZone("table dump common offset", hour*3600)
+					rebound, err := bind(search, tz, lc)
+					if err != nil {
+						return false, err
+					}
+					if match(search, rebound) {
+						return true, nil
+					}
+				}
+			}
+		}
+	}
 	for _, search := range sessions {
 		if !search.dependency.timeZone && !search.folded && !search.stored {
 			continue
 		}
-		for _, lc := range localesFor(search.dependency.locale) {
+		for _, lc := range localesFor(search) {
 			if search.folded || search.stored {
 				var fatal error
 				matched := matchTableDumpTimestampDefault(want, nil, zone, func(tz *time.Location) (*planpb.Expr, error) {
@@ -1300,6 +1361,60 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 			}
+			if !matched && item.kind == "default" && visit.mayUseJapaneseMonthAbbrev {
+				for increment := int64(0); increment <= maxIncrement && !matched; increment++ {
+					for _, mode := range modes {
+						legacyMode := mode | tableDumpBindingLegacyJapaneseMonthAbbrev
+						dependency = tableDumpDefaultSession{captureUnfolded: true}
+						candidate, bindErr := bind(increment, legacyMode, zone, "ja_JP")
+						if fatal != nil {
+							stmt.Free()
+							return false, fatal
+						}
+						if bindErr == nil {
+							var matchErr error
+							matched, matchErr = matchCandidate(legacyMode, candidate)
+							if matchErr != nil {
+								stmt.Free()
+								return false, matchErr
+							}
+							if matched {
+								sensitive = true
+								break
+							}
+						}
+						if !matched && (dependency.timeZone || dependency.locale) {
+							// Reuse a proven table timezone, but bind this historical
+							// spelling only under ja_JP and compare the whole tree.
+							readingDependency := dependency
+							var hintErr error
+							matched, hintErr = budget.matchSessionHints(zone, "ja_JP",
+								func(tz *time.Location, _ string) (*planpb.Expr, error) {
+									dependency = tableDumpDefaultSession{}
+									bound, _ := bind(increment, legacyMode, tz, "ja_JP")
+									return bound, fatal
+								}, func(bound *planpb.Expr) (bool, error) { return matchCandidate(legacyMode, bound) })
+							dependency = readingDependency
+							proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = zone, locale
+							if hintErr != nil {
+								stmt.Free()
+								return false, hintErr
+							}
+							if matched {
+								sensitive = true
+								break
+							}
+						}
+						_, folded := tableDumpTimestampLiteral(candidate)
+						_, stored := tableDumpTimestampLiteral(want)
+						typeCanMatch := bindErr != nil || candidate == nil || want == nil || sameTableDumpBoundType(candidate.Typ, want.Typ)
+						if typeCanMatch && (dependency.timeZone || folded || stored) {
+							sessions = append(sessions, tableDumpSessionCandidate{increment, legacyMode,
+								tableDumpDefaultSession{timeZone: dependency.timeZone, locale: dependency.locale}, folded, stored})
+						}
+					}
+				}
+			}
 			if !matched {
 				bindSession := func(search tableDumpSessionCandidate, tz *time.Location, lc string) (*planpb.Expr, error) {
 					if fatal != nil {
@@ -1312,6 +1427,9 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				matchSession := func(search tableDumpSessionCandidate, rebound *planpb.Expr) bool {
 					var result bool
 					result, fatal = matchCandidate(search.mode, rebound)
+					if result && search.mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 {
+						sensitive = true
+					}
 					return result
 				}
 				matched, err = matchLegacyFloatSessionProbes(ctx, zone, locale, timeZones, probes, budget, candidateVisitLimit, bindSession,

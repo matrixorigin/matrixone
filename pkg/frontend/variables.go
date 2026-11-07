@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -1009,7 +1010,7 @@ func (SystemVariableLocaleType) ConvertFromString(value string) (interface{}, er
 
 func normalizeTimeLocale(value string) (string, error) {
 	value = strings.TrimSpace(value)
-	for _, locale := range []string{"en_US", "fr_FR", "de_DE", "ja_JP"} {
+	for _, locale := range function.TemporalLocaleNames() {
 		if strings.EqualFold(value, locale) {
 			return locale, nil
 		}
