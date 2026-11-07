@@ -25,6 +25,170 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIntegerAssignmentClampsTypedSourceOutsideStrictMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, sqlMode string
+		ignore        bool
+		wantError     bool
+	}{
+		{"strict", "STRICT_TRANS_TABLES", false, true},
+		{"nonstrict", "", false, false},
+		{"ignore", "STRICT_TRANS_TABLES", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newMemoryFunctionTestProcess(t)
+			defer proc.Free()
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.sqlMode, nil
+				}
+				return nil, nil
+			})
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{300, -1}, nil),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0, 0}, nil),
+			}
+			fn := NewAssignCast
+			if tc.ignore {
+				fn = NewAssignIgnoreCast
+			}
+			testCase := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_uint8.ToType(), tc.wantError, []uint8{255, 0}, nil), fn)
+			ok, info := testCase.RunAndFree()
+			require.True(t, ok, info)
+			if tc.wantError {
+				require.Empty(t, warnings.warnings)
+			} else {
+				require.Len(t, warnings.warnings, 2)
+				for _, warning := range warnings.warnings {
+					require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+				}
+			}
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestIntegerAssignmentClampsExact64BitBoundaries(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		target FunctionTestInput
+		want   FunctionTestResult
+	}{
+		{"signed narrow", NewFunctionTestInput(types.T_int64.ToType(), []int64{-129, 128}, nil),
+			NewFunctionTestInput(types.T_int8.ToType(), []int8{0, 0}, nil),
+			NewFunctionTestResult(types.T_int8.ToType(), false, []int8{-128, 127}, nil)},
+		{"unsigned to signed", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MaxInt64}, nil)},
+		{"signed to unsigned", NewFunctionTestInput(types.T_int64.ToType(), []int64{math.MinInt64}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, nil),
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, tc.target}, tc.want, NewAssignCast)
+			ok, info := testCase.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestFloatAssignmentClampsOutsideStrictMode(t *testing.T) {
+	for _, ignore := range []bool{false, true} {
+		proc := newMemoryFunctionTestProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			if name == "sql_mode" {
+				if ignore {
+					return "STRICT_TRANS_TABLES", nil
+				}
+				return "", nil
+			}
+			return nil, nil
+		})
+		warnings := &numericWarningSession{}
+		proc.WarningSink = warnings
+		fn := NewAssignCast
+		if ignore {
+			fn = NewAssignIgnoreCast
+		}
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{300.4, -1}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0, 0}, nil),
+		}
+		testCase := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{255, 0}, nil), fn)
+		ok, info := testCase.RunAndFree()
+		require.True(t, ok, info)
+		require.Len(t, warnings.warnings, 2)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}
+}
+
+func TestNonStrictIntegerAssignmentAdjustsTextSources(t *testing.T) {
+	for _, ignore := range []bool{false, true} {
+		proc := newMemoryFunctionTestProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			if name == "sql_mode" {
+				if ignore {
+					return "STRICT_TRANS_TABLES", nil
+				}
+				return "", nil
+			}
+			return nil, nil
+		})
+		warnings := &numericWarningSession{}
+		proc.WarningSink = warnings
+		fn := NewAssignCast
+		if ignore {
+			fn = NewAssignIgnoreCast
+		}
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"300", "bad"}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0, 0}, nil),
+		}
+		testCase := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{255, 0}, nil), fn)
+		ok, info := testCase.RunAndFree()
+		require.True(t, ok, info)
+		require.Len(t, warnings.warnings, 2)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}
+}
+
+func TestStrictIntegerAssignmentRejectsTextOverflow(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "STRICT_TRANS_TABLES", nil
+		}
+		return nil, nil
+	})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"300"}, nil),
+		NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0}, nil),
+	}
+	testCase := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0}, nil), NewAssignCast)
+	ok, info := testCase.RunAndFree()
+	require.True(t, ok, info)
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestIntegerAssignmentContracts(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {

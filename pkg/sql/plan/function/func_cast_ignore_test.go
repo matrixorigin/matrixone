@@ -156,12 +156,13 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 		require.Empty(t, session.warnings)
 	})
 
-	t.Run("integer range remains an error", func(t *testing.T) {
-		_, session, err := runAssignmentIgnoreStringCast(
+	t.Run("integer range adjusts with a warning", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int8.ToType(), []string{"999"}, nil, false, nil)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
-		require.Empty(t, session.warnings)
+		require.NoError(t, err)
+		require.Equal(t, []int8{math.MaxInt8}, vector.MustFixedColWithTypeCheck[int8](result))
+		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+			stripWarningMessages(session.warnings))
 	})
 
 	t.Run("extension numeric syntax is not treated as a decimal prefix", func(t *testing.T) {
@@ -287,11 +288,14 @@ func TestAssignmentIgnoreDecimalClassification(t *testing.T) {
 				stripWarningMessages(session.warnings))
 		})
 
-		t.Run(tc.name+" range is not lexical", func(t *testing.T) {
-			_, session, err := runAssignmentIgnoreStringCast(
+		t.Run(tc.name+" range adjusts with a warning", func(t *testing.T) {
+			result, session, err := runAssignmentIgnoreStringCast(
 				t, types.T_varchar.ToType(), tc.target, []string{"999999999999999999999999999999999999999"}, nil, false, nil)
-			require.Error(t, err)
-			require.Empty(t, session.warnings)
+			require.NoError(t, err)
+			require.Equal(t, strings.Repeat("9", int(tc.target.Width-tc.target.Scale))+".99",
+				decimalVectorValueString(result, tc.target))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
+				stripWarningMessages(session.warnings))
 		})
 
 		t.Run(tc.name+" prefix is retained", func(t *testing.T) {

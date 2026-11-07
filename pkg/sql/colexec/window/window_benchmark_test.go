@@ -202,11 +202,13 @@ func TestWindowHashPartitionAcceptanceConsumer(t *testing.T) {
 							break
 						}
 						rowsSeen += result.Batch.RowCount()
-						values := vector.MustFixedColWithTypeCheck[int64](
+						values := vector.MustFixedColWithTypeCheck[types.Decimal128](
 							result.Batch.Vecs[pipeline.valuePos+1],
 						)
 						for _, value := range values {
-							checksums[algorithm] += value
+							asInt, err := strconv.ParseInt(value.Format(0), 10, 64)
+							require.NoError(t, err)
+							checksums[algorithm] += asInt
 						}
 					}
 					require.Equal(t, 4096, rowsSeen)
@@ -384,7 +386,7 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 				if err := arg.Prepare(proc); err != nil {
 					b.Fatal(err)
 				}
-				var last int64
+				var last types.Decimal128
 				for {
 					result, err := vm.Exec(arg, proc)
 					if err != nil {
@@ -393,11 +395,11 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 					if result.Batch == nil {
 						break
 					}
-					values := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+					values := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[1])
 					last = values[len(values)-1]
 				}
-				if want := int64(width.bound + 1); last != want {
-					b.Fatalf("last sliding sum: got %d, want %d", last, want)
+				if want := types.Decimal128FromInt64(int64(width.bound + 1)); last != want {
+					b.Fatalf("last sliding sum: got %s, want %s", last.Format(0), want.Format(0))
 				}
 
 				arg.Reset(proc, false, nil)

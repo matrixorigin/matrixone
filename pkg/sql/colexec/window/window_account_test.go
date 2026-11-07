@@ -114,7 +114,11 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 						if tc.partitioned {
 							sum = int64(row + 1)
 						}
-						require.Equal(t, sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row))
+						if tc.partitioned {
+							require.Equal(t, sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row))
+						} else {
+							require.Equal(t, types.Decimal128FromInt64(sum), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[3], row))
+						}
 					}
 				}
 				require.NotNil(t, arg.ctr.bat)

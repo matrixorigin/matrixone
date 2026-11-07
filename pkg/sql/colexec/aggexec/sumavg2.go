@@ -148,8 +148,10 @@ func SumReturnType(typs []types.Type) types.Type {
 	switch typ.Oid {
 	case types.T_float32, types.T_float64:
 		return types.T_float64.ToType()
-	case types.T_int8, types.T_int16, types.T_int32, types.T_year:
+	case types.T_int8, types.T_int16, types.T_year:
 		return types.T_int64.ToType()
+	case types.T_int32:
+		return types.New(types.T_decimal128, 32, 0)
 	case types.T_int64:
 		return types.New(types.T_decimal128, 38, 0)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_bit:
@@ -1091,7 +1093,7 @@ func appendNativeAvgResult(vec *vector.Vector, value any, mp *mpool.MPool) error
 }
 
 type sumAvgDecimalArg interface {
-	int64 | uint64 | types.Decimal64 | types.Decimal128 | types.Decimal256
+	int32 | int64 | uint64 | types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
 type sumAvgDecimalState interface {
@@ -1114,6 +1116,8 @@ func decimalStateFromArg[A sumAvgDecimalArg, S sumAvgDecimalState](v A, argScale
 	switch any(state).(type) {
 	case types.Decimal128:
 		switch value := any(v).(type) {
+		case int32:
+			return any(types.Decimal128FromInt64(int64(value))).(S)
 		case int64:
 			return any(types.Decimal128FromInt64(value)).(S)
 		case uint64:
@@ -1125,6 +1129,8 @@ func decimalStateFromArg[A sumAvgDecimalArg, S sumAvgDecimalState](v A, argScale
 		}
 	case types.Decimal256:
 		switch value := any(v).(type) {
+		case int32:
+			return any(types.Decimal256FromInt64(int64(value))).(S)
 		case int64:
 			return any(types.Decimal256FromInt64(value)).(S)
 		case uint64:
@@ -1891,7 +1897,7 @@ func decAvg[S sumAvgDecimalState](sum S, count int64, argScale int32, resultType
 
 func sumAvgDecimalArgScale(typ types.Type) int32 {
 	switch typ.Oid {
-	case types.T_int64, types.T_uint64:
+	case types.T_int32, types.T_int64, types.T_uint64:
 		return 0
 	default:
 		return typ.Scale
@@ -2055,6 +2061,9 @@ func makeSumAvgExecWithLegacyDecimalSumState(
 	case types.T_year:
 		return newSumAvgExec[int64, types.MoYear](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int32:
+		if isSum {
+			return newSumAvgDecExec[int32, types.Decimal128](mp, isSum, aggID, isDistinct, param)
+		}
 		return newSumAvgExec[int64, int32](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int64:
 		if !isSum && AvgReturnType([]types.Type{param}).Oid == types.T_decimal256 {
@@ -2130,7 +2139,13 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 	if isSum {
 		exec.aggInfo.stateTypes = []types.Type{sumTyp}
 	} else {
-		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+		// AVG keeps its native integer accumulator even when SUM of the same
+		// argument exposes a DECIMAL result.
+		stateType := sumTyp
+		if param.Oid == types.T_int32 {
+			stateType = types.T_int64.ToType()
+		}
+		exec.aggInfo.stateTypes = []types.Type{stateType, types.T_int64.ToType()}
 	}
 	return &exec
 }
@@ -2149,7 +2164,7 @@ func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool,
 	// If a [Decimal128,Decimal128] instantiation is ever added, this must be updated.
 	var a A
 	switch any(a).(type) {
-	case int64, uint64, types.Decimal64, types.Decimal128:
+	case int32, int64, uint64, types.Decimal64, types.Decimal128:
 		exec.localAddSafe = true
 	default:
 		exec.localAddSafe = false

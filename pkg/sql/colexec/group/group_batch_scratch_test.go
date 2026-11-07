@@ -15,6 +15,7 @@
 package group
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -213,7 +214,7 @@ func TestGroupMiniBatchScratchResults(t *testing.T) {
 			got := make(map[key][2]int64)
 			for _, output := range collectBatches(t, g, proc) {
 				counts := vector.MustFixedColNoTypeCheck[int64](output.Vecs[2])
-				sums := vector.MustFixedColNoTypeCheck[int64](output.Vecs[3])
+				sums := vector.MustFixedColNoTypeCheck[types.Decimal128](output.Vecs[3])
 				for row := 0; row < output.RowCount(); row++ {
 					k := key{null: output.Vecs[0].GetNulls().Contains(uint64(row))}
 					if !k.null {
@@ -224,7 +225,9 @@ func TestGroupMiniBatchScratchResults(t *testing.T) {
 					require.False(t, output.Vecs[3].GetNulls().Contains(uint64(row)))
 					_, duplicate := got[k]
 					require.False(t, duplicate, "duplicate output group %#v", k)
-					got[k] = [2]int64{counts[row], sums[row]}
+					actualSum, err := strconv.ParseInt(sums[row].Format(0), 10, 64)
+					require.NoError(t, err)
+					got[k] = [2]int64{counts[row], actualSum}
 				}
 			}
 			require.Equal(t, want, got)

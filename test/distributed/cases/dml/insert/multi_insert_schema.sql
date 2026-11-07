@@ -17,6 +17,10 @@ create table wide (id bigint primary key, name varchar(100), amount double, ts d
 create table reordered (note text, amount decimal(20,6), id smallint primary key);
 create table typed (id int primary key, name char(10), amount int, ts_text varchar(30), amount_text varchar(30), when_day int);
 
+-- These rows exercise multi-target routing with deliberate DATETIME-to-DATE
+-- truncation. Allow that conversion without changing the strict-mode DATE test.
+set @mi_schema_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
 insert all
   into narrow (id, name) values (id, name)
   into wide (id, name, amount, ts, flag, note) values (id, name, amount, ts, flag, note)
@@ -27,6 +31,7 @@ select * from narrow order by id;
 select id, name, amount, ts, flag, note, extra, created is not null as has_created from wide order by id;
 select id, amount, note from reordered order by id;
 select * from typed order by id;
+set session sql_mode = @mi_schema_saved_sql_mode;
 
 -- ================= constraints of every kind per target
 create table with_uk (id int primary key, name varchar(30), unique key uk_name(name), key ik_id(id));
@@ -77,13 +82,14 @@ insert all into with_gen (id, amount, doubled) values (id + 10, amount, amount) 
 
 -- ================= target types that need conversion: json, enum, varbinary, uuid-ish strings, dates from strings
 create table conv (id int primary key, j json, e enum('alpha','beta','gamma','other'), b varbinary(20), d date, t time, f float);
+set session sql_mode = '';
 insert first
   when name in ('alpha', 'beta', 'gamma') then into conv (id, j, e, b, d, t, f) values (id, json_object('name', name, 'amount', amount), name, name, ts, ts, amount)
   else                                          into conv (id, j, e, b, d, t, f) values (id, json_array(id, name), 'other', 'x', ts, ts, amount)
 select id, name, amount, ts from src;
 select id, j, e, hex(b), d, t, f from conv order by id;
+set session sql_mode = @mi_schema_saved_sql_mode;
 -- an enum value outside the definition is rejected
-set @mi_schema_saved_sql_mode = @@session.sql_mode;
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert all into conv (id, e) values (id + 10, name) select id, name from src where name = 'delta';
 select count(*) from conv;

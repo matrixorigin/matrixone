@@ -1065,6 +1065,14 @@ func (b *sqlJSONPlanBuilder) resolveUpdateExpr(node *plan.Node, expr *plan.Expr,
 		if impl.Col.Name == "" {
 			return b.resolveUpdateRef(node, impl.Col, active)
 		}
+		// LOCK_OP forwards its child's columns. Its projected references may
+		// carry display names for computed expressions; follow the child when
+		// available while retaining names from plans without that lineage.
+		if node != nil && node.NodeType == plan.Node_LOCK_OP {
+			if resolved, ok := b.resolveUpdateRef(node, impl.Col, active); ok {
+				return resolved, true
+			}
+		}
 	case *plan.Expr_F:
 		if impl.F == nil {
 			return nil, false

@@ -49,6 +49,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func requireInt32SumValues(t testing.TB, result *vector.Vector, want []int64) {
+	t.Helper()
+	require.Equal(t, types.T_decimal128, result.GetType().Oid)
+	require.Equal(t, int32(0), result.GetType().Scale)
+	got := vector.MustFixedColWithTypeCheck[types.Decimal128](result)
+	require.Len(t, got, len(want))
+	for row, value := range want {
+		require.Equal(t, types.Decimal128FromInt64(value), got[row], "row %d", row)
+	}
+}
+
 // add unit tests for cases
 type winTestCase struct {
 	arg  *Window
@@ -939,8 +950,7 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
-	require.Equal(t, []int64{30, 60, 90, 70},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requireInt32SumValues(t, result.Batch.Vecs[1], []int64{30, 60, 90, 70})
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
@@ -981,8 +991,7 @@ func TestWindowPrepareRangeFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
-	require.Equal(t, []int64{10, 50, 50},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+	requireInt32SumValues(t, result.Batch.Vecs[2], []int64{10, 50, 50})
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
@@ -1014,8 +1023,7 @@ func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
 	require.True(t, cumulativeRowsFrame(arg.ctr.runtimeFrames[0], nil, bat.RowCount()))
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
-	require.Equal(t, []int64{10, 30, 60, 100},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requireInt32SumValues(t, result.Batch.Vecs[1], []int64{10, 30, 60, 100})
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 
 	arg.Free(proc, false, nil)
@@ -1046,8 +1054,7 @@ func TestWindowPreparedBoundedSlidingSumUsesRuntimeValue(t *testing.T) {
 	require.True(t, boundedSlidingRowsFrame(arg.ctr.runtimeFrames[0]))
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
-	require.Equal(t, []int64{10, 30, 50, 70},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requireInt32SumValues(t, result.Batch.Vecs[1], []int64{10, 30, 50, 70})
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 
 	arg.Free(proc, false, nil)
@@ -1896,11 +1903,11 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		want := int64(idx+1) * int64(idx+2) / 2
-		require.Equal(t, want, resultValues[idx], "row %d", idx)
+		require.Equal(t, types.Decimal128FromInt64(want), resultValues[idx], "row %d", idx)
 	}
 	require.Nil(t, arg.ctr.runningAgg)
 
@@ -1942,10 +1949,10 @@ func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	resultVec := result.Batch.Vecs[1]
-	resultValues := vector.MustFixedColWithTypeCheck[int64](resultVec)
+	resultValues := vector.MustFixedColWithTypeCheck[types.Decimal128](resultVec)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, rows - 1} {
-		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+		require.Equal(t, types.Decimal128FromInt64(int64(values[idx])), resultValues[idx], "row %d", idx)
 	}
 	require.False(t, resultVec.HasNull(), "tail capacity must not make a non-null window result nullable")
 
@@ -2008,7 +2015,7 @@ func TestWindowSkipsEmptyInputBatch(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	require.Equal(t, []int64{7}, collectFixedWindowColumn[int64](t, arg, proc, 1))
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(7)}, collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -2046,10 +2053,10 @@ func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 2)
+	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 2)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+		require.Equal(t, types.Decimal128FromInt64(int64(values[idx])), resultValues[idx], "row %d", idx)
 	}
 
 	arg.Free(proc, false, nil)
@@ -2547,8 +2554,7 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 3, 10, 30},
-		vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{1, 3, 10, 30})
 	require.Nil(t, ctr.runningAgg)
 
 	result.Free(proc.Mp())
@@ -2772,10 +2778,10 @@ func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, row := range []int{0, 1023, 1024, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
-		require.Equal(t, int64(min(row+1, 1025)), resultValues[row], "row %d", row)
+		require.Equal(t, types.Decimal128FromInt64(int64(min(row+1, 1025))), resultValues[row], "row %d", row)
 	}
 	require.Nil(t, arg.ctr.runningAgg)
 
@@ -2832,8 +2838,7 @@ func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 3, 5, 7, 10, 30, 50, 70},
-		vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{1, 3, 5, 7, 10, 30, 50, 70})
 	require.Nil(t, ctr.runningAgg)
 
 	result.Free(proc.Mp())
@@ -2860,8 +2865,7 @@ func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 1, 0, 4},
-		vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{1, 1, 0, 4})
 	require.False(t, result.IsNull(0))
 	require.False(t, result.IsNull(1))
 	require.True(t, result.IsNull(2))
@@ -3136,8 +3140,7 @@ func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 1, 4},
-		vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{1, 1, 4})
 	require.False(t, result.HasNull())
 
 	result.Free(proc.Mp())
@@ -3327,7 +3330,7 @@ func TestWindowConstantKeysWithForcedSpill(t *testing.T) {
 				return
 			}
 			if tc.function == "sum" {
-				require.Equal(t, []int64{20, 20, 20, 30}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+				require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(20), types.Decimal128FromInt64(20), types.Decimal128FromInt64(20), types.Decimal128FromInt64(30)}, collectFixedWindowColumn[types.Decimal128](t, arg, proc, 2))
 			} else {
 				require.Equal(t, tc.want, collectFixedWindowColumn[uint64](t, arg, proc, 2))
 			}
@@ -4038,7 +4041,7 @@ func TestWindowRangeVarcharOrderBy(t *testing.T) {
 		string(result.Batch.Vecs[1].GetBytesAt(1)),
 		string(result.Batch.Vecs[1].GetBytesAt(2)),
 	})
-	require.Equal(t, []int64{100, 350, 350}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+	requireInt32SumValues(t, result.Batch.Vecs[2], []int64{100, 350, 350})
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -5533,8 +5536,7 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 	}
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{12, 23, 16, 12, 23, 16, 15, 8},
-		vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{12, 23, 16, 12, 23, 16, 15, 8})
 	result.Free(mp)
 }
 
@@ -5575,7 +5577,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *t
 	}
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{15, 15, 15, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{15, 15, 15, 15})
 	result.Free(mp)
 
 	// Const storage must still obey finite RANGE bounds instead of treating
@@ -5707,7 +5709,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(
 			}
 			result, runErr := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 			require.NoError(t, runErr)
-			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
+			requireInt32SumValues(t, result, test.want)
 			result.Free(mp)
 		})
 	}
@@ -5805,7 +5807,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T
 			}
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 			require.NoError(t, err)
-			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
+			requireInt32SumValues(t, result, test.want)
 			result.Free(mp)
 		})
 	}
@@ -5871,7 +5873,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 
 	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{11, 10}, vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{11, 10})
 	result.Free(mp)
 }
 
@@ -5931,7 +5933,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *te
 
 	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 3, 7, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	requireInt32SumValues(t, result, []int64{1, 3, 7, 15})
 	result.Free(mp)
 }
 

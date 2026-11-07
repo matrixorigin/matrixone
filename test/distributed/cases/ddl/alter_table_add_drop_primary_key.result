@@ -163,7 +163,7 @@ pri07    col1    decimal    NO
 pri07    col2    double    YES
 drop table pri07;
 drop table if exists pri08;
-create table pri08 (col1 binary, col2 int unsigned);
+create table pri08 (col1 varbinary(13), col2 int unsigned);
 insert into pri08 values ('ewfijew', 372984324);
 insert into pri08 values ('ew8u3ejkfcwev', 2147483647);
 select * from pri08;
@@ -173,23 +173,23 @@ ew8u3ejkfcwev    2147483647
 alter table pri08 add constraint primary key (col1);
 show create table pri08;
 Table    Create Table
-pri08    CREATE TABLE `pri08` (\n  `col1` binary(1) NOT NULL,\n  `col2` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri08    CREATE TABLE `pri08` (\n  `col1` varbinary(13) NOT NULL,\n  `col2` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri08;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    binary(1)    NO    PRI    null        
+col1    varbinary(13)    NO    PRI    null
 col2    int unsigned    YES        null        
 alter table pri08 add constraint primary key (col2);
 Multiple primary key defined
 show create table pri08;
 Table    Create Table
-pri08    CREATE TABLE `pri08` (\n  `col1` binary(1) NOT NULL,\n  `col2` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+pri08    CREATE TABLE `pri08` (\n  `col1` varbinary(13) NOT NULL,\n  `col2` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 show columns from pri08;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    binary(1)    NO    PRI    null        
+col1    varbinary(13)    NO    PRI    null
 col2    int unsigned    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri08' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
-pri08    col1    binary    NO
+pri08    col1    varbinary    NO
 pri08    col2    int    YES
 drop table pri08;
 drop table if exists pri09;

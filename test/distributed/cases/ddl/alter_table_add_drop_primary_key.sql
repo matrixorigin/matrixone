@@ -104,7 +104,7 @@ drop table pri07;
 
 -- abnormal test：Add more than one primary key to the same table
 drop table if exists pri08;
-create table pri08 (col1 binary, col2 int unsigned);
+create table pri08 (col1 varbinary(13), col2 int unsigned);
 insert into pri08 values ('ewfijew', 372984324);
 insert into pri08 values ('ew8u3ejkfcwev', 2147483647);
 select * from pri08;

@@ -5890,12 +5890,43 @@ func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
 		"mixed CHAR/VARCHAR must keep the variable-string output domain")
 }
 
+func TestSumIntPlannerResultIsDecimal(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"select sum(cast(n_nationkey as int)) from nation")
+	require.NoError(t, err)
+	root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_decimal128), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(32), root.ProjectList[0].Typ.Width)
+	require.Zero(t, root.ProjectList[0].Typ.Scale)
+}
+
 func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		sql     string
 		wantKey bool
 	}{
+		{
+			name:    "coalesce char and literal",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), '') from nation",
+			wantKey: true,
+		},
+		{
+			name:    "ifnull char and literal",
+			sql:     "select distinct ifnull(cast(n_name as char(8)), '') from nation",
+			wantKey: true,
+		},
+		{
+			name:    "coalesce char char",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as char(8))) from nation",
+			wantKey: true,
+		},
+		{
+			name:    "ifnull char char",
+			sql:     "select distinct ifnull(cast(n_name as char(8)), cast(n_comment as char(8))) from nation",
+			wantKey: true,
+		},
 		{
 			name:    "coalesce char varchar",
 			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation",
@@ -6132,6 +6163,14 @@ func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{
+			name: "coalesce char and literal",
+			sql:  "select coalesce(cast(n_name as char(8)), ''), count(*) from nation group by coalesce(cast(n_name as char(8)), '')",
+		},
+		{
+			name: "ifnull char and literal",
+			sql:  "select ifnull(cast(n_name as char(8)), ''), count(*) from nation group by ifnull(cast(n_name as char(8)), '')",
+		},
 		{
 			name: "direct",
 			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",

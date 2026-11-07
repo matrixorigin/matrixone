@@ -1053,13 +1053,22 @@ func useAssignmentStrictCast(targetType Type) bool {
 func useSqlModeStringAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_char) ||
 		targetType.Id == int32(types.T_varchar) ||
+		targetType.Id == int32(types.T_binary) ||
+		targetType.Id == int32(types.T_varbinary) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text)
 }
 
 func useSqlModeAssignmentCast(targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
+		int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64):
+		return true
+	}
 	return useSqlModeStringAssignmentCast(targetType) ||
+		types.T(targetType.Id).IsDecimal() ||
 		types.T(targetType.Id).IsFloat() ||
+		targetType.Id == int32(types.T_date) ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
@@ -1334,6 +1343,9 @@ func rePoliceUnsignedDecimalAssignmentBoundary(
 func needsSameTypeAssignmentCast(targetType Type) bool {
 	return isMediumIntPlanType(targetType) ||
 		isAttributedDecimalPlanType(targetType) ||
+		types.T(targetType.Id).IsDecimal() ||
+		targetType.Id == int32(types.T_binary) ||
+		targetType.Id == int32(types.T_varbinary) ||
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
@@ -1386,7 +1398,8 @@ func forceCastExpr2WithProcess(
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
 	t1 := makeTypeByPlan2Expr(expr)
-	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) && !alterCopyBinaryAssignment(ctx, targetType.Typ) {
+	if t1.Eq(t2) && (!needsSameTypeAssignmentCast(targetType.Typ) || validatedDecimalLiteralFitsAssignmentTarget(expr, targetType.Typ)) &&
+		!alterCopyBinaryAssignment(ctx, targetType.Typ) {
 		return expr, nil
 	}
 	if isAttributedDecimalPlanType(targetType.Typ) {
@@ -1462,6 +1475,12 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 	}
 	if !assignmentCastProtocolSupported(proc) {
 		if isIgnore {
+			if targetType.Id == int32(types.T_date) {
+				return "cast_strict"
+			}
+			return "cast"
+		}
+		if types.T(targetType.Id).IsInteger() {
 			return "cast"
 		}
 		return "cast_strict"
@@ -1521,8 +1540,16 @@ func alterCopyBinaryAssignment(ctx context.Context, target Type) bool {
 }
 
 func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	// Numeric-to-DATE is unsupported by the cast registry. Keep the legacy
+	// strict-cast diagnostic instead of exposing the new assignment-cast name.
+	if targetType.Id == int32(types.T_date) && types.T(expr.Typ.Id).IsInteger() {
+		return "cast_strict"
+	}
 	if alterCopyBinaryAssignment(ctx, targetType) {
 		return "cast_strict"
+	}
+	if integerLiteralFitsAssignmentTarget(expr, targetType) || validatedDecimalLiteralFitsAssignmentTarget(expr, targetType) {
+		return "cast"
 	}
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
@@ -1535,6 +1562,95 @@ func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, target
 		}
 	}
 	return name
+}
+
+func validatedDecimalLiteralFitsAssignmentTarget(expr *Expr, targetType Type) bool {
+	if expr.GetLit() == nil || !types.T(targetType.Id).IsDecimal() ||
+		isAttributedDecimalPlanType(targetType) || expr.Typ.Id != targetType.Id {
+		return false
+	}
+	if expr.Typ.Scale != targetType.Scale || expr.Typ.Width > targetType.Width {
+		return false
+	}
+	switch value := expr.GetLit().Value.(type) {
+	case *plan.Literal_Decimal64Val:
+		if targetType.Id != int32(types.T_decimal64) || value.Decimal64Val == nil {
+			return false
+		}
+		coefficient := types.Decimal64(value.Decimal64Val.A).Format(0)
+		return len(strings.TrimPrefix(coefficient, "-")) <= int(targetType.Width)
+	case *plan.Literal_Decimal128Val:
+		if targetType.Id != int32(types.T_decimal128) || value.Decimal128Val == nil {
+			return false
+		}
+		decimal := types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}
+		return len(strings.TrimPrefix(decimal.Format(0), "-")) <= int(targetType.Width)
+	}
+	return false
+}
+
+func integerLiteralFitsAssignmentTarget(expr *Expr, targetType Type) bool {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || !types.T(targetType.Id).IsInteger() || isMediumIntPlanType(targetType) {
+		return false
+	}
+	var negative bool
+	var magnitude uint64
+	switch v := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		negative, magnitude = signedPlanLiteralMagnitude(int64(v.I8Val))
+	case *plan.Literal_I16Val:
+		negative, magnitude = signedPlanLiteralMagnitude(int64(v.I16Val))
+	case *plan.Literal_I32Val:
+		negative, magnitude = signedPlanLiteralMagnitude(int64(v.I32Val))
+	case *plan.Literal_I64Val:
+		negative, magnitude = signedPlanLiteralMagnitude(v.I64Val)
+	case *plan.Literal_U8Val:
+		magnitude = uint64(v.U8Val)
+	case *plan.Literal_U16Val:
+		magnitude = uint64(v.U16Val)
+	case *plan.Literal_U32Val:
+		magnitude = uint64(v.U32Val)
+	case *plan.Literal_U64Val:
+		magnitude = v.U64Val
+	default:
+		return false
+	}
+	var bits uint
+	signed := types.T(targetType.Id).IsSignedInt()
+	switch types.T(targetType.Id) {
+	case types.T_int8, types.T_uint8:
+		bits = 8
+	case types.T_int16, types.T_uint16:
+		bits = 16
+	case types.T_int32, types.T_uint32:
+		bits = 32
+	case types.T_int64, types.T_uint64:
+		bits = 64
+	default:
+		return false
+	}
+	if signed {
+		limit := uint64(1) << (bits - 1)
+		if negative {
+			return magnitude <= limit
+		}
+		return magnitude < limit
+	}
+	if negative {
+		return magnitude == 0
+	}
+	if bits == 64 {
+		return true
+	}
+	return magnitude < uint64(1)<<bits
+}
+
+func signedPlanLiteralMagnitude(value int64) (bool, uint64) {
+	if value < 0 {
+		return true, uint64(-(value + 1)) + 1
+	}
+	return false, uint64(value)
 }
 
 func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool, columnName ...string) (*Expr, error) {
@@ -1571,6 +1687,13 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 		// Key/index-only COPY must not reinterpret historical binary payloads.
 		// New expressions/type changes and recomputed generated columns still
 		// pass through their strict destination-assignment owners.
+		return expr, nil
+	}
+	if sourceExpr != nil && sourceExpr.GetCol() != nil && types.T(targetType.Id).IsDecimal() &&
+		!isAttributedDecimalPlanType(targetType) &&
+		makeTypeByPlan2Expr(sourceExpr).Eq(makeTypeByPlan2Type(targetType)) {
+		// A stored DECIMAL column has already passed its declared precision
+		// boundary. Preserve the direct projection when DML carries it forward.
 		return expr, nil
 	}
 	if types.T(targetType.Id).IsInteger() && preparedExprContainsParam(sourceExpr) &&
@@ -1958,7 +2081,8 @@ func forceCastExprWithNameAndAssignment(
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Eq(t2) && !forceSameType && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
+	if t1.Eq(t2) && !forceSameType && !(isAssignment && needsSameTypeAssignmentCast(targetType) &&
+		!validatedDecimalLiteralFitsAssignmentTarget(expr, targetType)) {
 		return expr, nil
 	}
 
@@ -1984,17 +2108,72 @@ func forceCastExprWithNameAndAssignment(
 	}, nil
 }
 
+// Keep ordinary in-range VALUES literals on their established typed-constant
+// path. Only an adjustment candidate needs its wider source at runtime.
+func insertNumericLiteralNeedsAdjustment(proc *process.Process, numVal *tree.NumVal, colType *types.Type) bool {
+	var canInsert bool
+	var err error
+	switch colType.Oid {
+	case types.T_int8:
+		canInsert, _, err = util.SetInsertValueNumber[int8](proc, numVal, colType)
+	case types.T_int16:
+		canInsert, _, err = util.SetInsertValueNumber[int16](proc, numVal, colType)
+	case types.T_int32:
+		canInsert, _, err = util.SetInsertValueNumber[int32](proc, numVal, colType)
+	case types.T_int64:
+		canInsert, _, err = util.SetInsertValueNumber[int64](proc, numVal, colType)
+	case types.T_uint8:
+		canInsert, _, err = util.SetInsertValueNumber[uint8](proc, numVal, colType)
+	case types.T_uint16:
+		canInsert, _, err = util.SetInsertValueNumber[uint16](proc, numVal, colType)
+	case types.T_uint32:
+		canInsert, _, err = util.SetInsertValueNumber[uint32](proc, numVal, colType)
+	case types.T_uint64:
+		canInsert, _, err = util.SetInsertValueNumber[uint64](proc, numVal, colType)
+	case types.T_decimal64:
+		canInsert, _, err = util.SetInsertValueDecimal64(proc, numVal, colType)
+	case types.T_decimal128:
+		canInsert, _, err = util.SetInsertValueDecimal128(proc, numVal, colType)
+	default:
+		return false
+	}
+	return err != nil || !canInsert
+}
+
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
 	}
-	// Do not parse IGNORE string assignments to numeric/temporal columns while
+	if colType.Oid.IsDecimal() && (isIgnore || !function.StrictSqlModeForAssignment(proc)) &&
+		(numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_int64 ||
+			numVal.ValType == tree.P_uint64 || numVal.ValType == tree.P_float64) &&
+		insertNumericLiteralNeedsAdjustment(proc, numVal, colType) {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	}
+	if colType.Oid.IsInteger() && (isIgnore || !function.StrictSqlModeForAssignment(proc)) &&
+		(numVal.ValType == tree.P_int64 || numVal.ValType == tree.P_uint64) &&
+		insertNumericLiteralNeedsAdjustment(proc, numVal, colType) {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	}
+	// Do not parse adjustment-eligible string assignments to numeric/temporal columns while
 	// building the plan. The runtime assignment cast owns the adjustment and
 	// warning so INSERT ... VALUES, INSERT ... SELECT, UPDATE, and prepared
 	// executions share one contract and diagnostics are emitted per logical row.
-	if isIgnore && numVal.ValType == tree.P_char && useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
+	if (isIgnore || (!function.StrictSqlModeForAssignment(proc) && useSqlModeAssignmentCast(makePlan2Type(colType)))) &&
+		numVal.ValType == tree.P_char &&
+		useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
 		expr := MakePlan2StringConstExprWithType(numVal.String())
-		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
+		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 	}
 	// MEDIUMINT's 24-bit domain is narrower than its int32/uint32 storage.
 	// Keep the literal's original source type so assignment checking cannot be
@@ -2115,7 +2294,25 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// over-length CHAR/VARCHAR (relaxed to defer to sql_mode). Enforce width
 		// at runtime via the assignment cast (cast_assign / lenient for IGNORE).
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
+	case types.T_binary, types.T_varbinary:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
+		conversionType := *colType
+		if isIgnore || !function.StrictSqlModeForAssignment(proc) {
+			conversionType.Width = 0 // decode before the mode-aware width check
+		}
+		canInsert, num, err := util.SetInsertValueString(proc, numVal, &conversionType)
+		if err != nil || !canInsert {
+			return nil, err
+		}
+		expr := MakePlan2StringConstExprWithType(string(num))
+		if !isIgnore && function.StrictSqlModeForAssignment(proc) {
+			return expr, nil
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+	case types.T_blob, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {

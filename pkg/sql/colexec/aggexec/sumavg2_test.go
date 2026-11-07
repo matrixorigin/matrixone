@@ -174,6 +174,11 @@ func TestSumAvgScalarFillBoundaries(t *testing.T) {
 			}, false},
 	} {
 		for _, isSum := range []bool{true, false} {
+			// SUM(INT32) uses a DECIMAL128 accumulator; only AVG can reach
+			// this native int64 overflow path.
+			if tc.name == "signed overflow" && isSum {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s/sum=%t", tc.name, isSum), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
@@ -257,6 +262,7 @@ func BenchmarkSumAvgScalarFill(b *testing.B) {
 }
 
 func TestSumDecimalReturnType(t *testing.T) {
+	require.Equal(t, types.New(types.T_decimal128, 32, 0), SumReturnType([]types.Type{types.T_int32.ToType()}))
 	for _, test := range []struct {
 		name  string
 		input types.Type
@@ -1540,7 +1546,7 @@ func TestWindowSlidingSumRemoveRestoresNull(t *testing.T) {
 	require.NoError(t, err)
 	defer results[0].Free(mp)
 	require.True(t, results[0].IsNull(0))
-	require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+	require.Equal(t, types.Decimal128FromInt64(0), vector.MustFixedColNoTypeCheck[types.Decimal128](results[0])[0])
 }
 
 func TestWindowSlidingSumConstantInputAndEmptyRemoval(t *testing.T) {
@@ -2461,7 +2467,7 @@ func testSumAvg(t *testing.T,
 		}
 	})
 
-	sumTypes := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal256, 40, 0), types.New(types.T_decimal256, 60, 0), types.New(types.T_decimal256, 65, 0)}
+	sumTypes := []types.Type{types.T_int64.ToType(), types.New(types.T_decimal128, 32, 0), types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal256, 40, 0), types.New(types.T_decimal256, 60, 0), types.New(types.T_decimal256, 65, 0)}
 	avgTypes := []types.Type{types.New(types.T_decimal128, 7, 4), types.New(types.T_decimal128, 14, 4), types.New(types.T_decimal128, 23, 4), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal128, 22, 4), types.New(types.T_decimal256, 42, 4), types.New(types.T_decimal256, 65, 4)}
 	metadata := sumTypes
 	decimals := [3]string{"111", "53", "58"}

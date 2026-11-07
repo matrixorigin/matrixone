@@ -9513,7 +9513,7 @@ func bindFuncExprImplByPlanExpr(
 	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
 		return nil, err
 	}
-	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
+	if returnType.Oid == types.T_char || returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {
 				Typ.PadSpace = true
