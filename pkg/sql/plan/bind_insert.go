@@ -1683,6 +1683,235 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	return lastNodeID, outputTag, targetPkPos, nil
 }
 
+// insertColForbidsNull mirrors colexec.ColForbidsNull for plan-side use: a
+// column enforces NOT NULL through its explicit flag or through a default
+// whose descriptor does not permit NULL.
+func insertColForbidsNull(col *plan.ColDef) bool {
+	return col != nil && (col.NotNull || (col.Default != nil && !col.Default.NullAbility))
+}
+
+// insertDefaultCanYieldNull reports whether a defaulted column's cell can
+// hold SQL NULL when a dependent row expression reads it, mirroring the
+// cell getDefaultExprForAssignment derives: a NULL-constant default and a
+// non-literal (expression) default can produce one; a non-null constant
+// default cannot. The classification is static so the answer for a column
+// declared after the reading expression is the same as for an earlier one;
+// shapes whose derivation errors (a NOT NULL column without any default
+// descriptor) abort the statement before the distinction matters and keep
+// the conservative answer. Callers only apply it to columns that already
+// forbid NULL.
+func insertDefaultCanYieldNull(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	d := col.Default
+	if d == nil {
+		// getDefaultExpr rejects this shape for NOT NULL columns; the
+		// conservative answer only matters for nullable columns, which never
+		// reach a fill.
+		return !col.NotNull || col.Typ.AutoIncr
+	}
+	if d.Expr == nil {
+		// the derived default is the NULL constant
+		return true
+	}
+	if lit := d.Expr.GetLit(); lit != nil {
+		return lit.Isnull
+	}
+	// an expression default is evaluated per row and can yield NULL
+	return true
+}
+
+// uniqueNullDefaultRefilledForIgnore reports whether the named index part is
+// a column whose raw cell the pre-insert IGNORE adjustment rewrites into the
+// column type's implicit default: every consumer running after the
+// adjustment then sees a non-NULL value, so the part must not qualify its
+// unique index as permanently NULL. The eligibility mirrors the adjustment
+// itself: only statements that run it, and only a column that forbids NULL
+// yet can still receive NULL (its omitted default evaluates to NULL). The
+// caller restricts this further to parts flagged as planning a NULL, so a
+// nullable part keeps its stored NULL. The column is resolved through the
+// column list rather than Name2ColIndex because a definition shaped like a
+// raw create-plan definition does not carry that map yet. Hidden and
+// auto-increment columns never take the adjustment, and types without an
+// implicit default keep the constraint rejection, so all of those keep the
+// historical skip decision.
+func uniqueNullDefaultRefilledForIgnore(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	partName string,
+	assignmentIgnore bool,
+) bool {
+	if !assignmentIgnore || tableDef == nil {
+		return false
+	}
+	col := FindColumn(tableDef.Cols, partName)
+	if col == nil || col.Hidden || col.Typ.AutoIncr {
+		return false
+	}
+	if !insertColForbidsNull(col) || !insertDefaultCanYieldNull(col) {
+		return false
+	}
+	_, fillMode := implicitFilledChildDefaultExpr(ctx, col.Typ)
+	return fillMode != implicitFillRejected
+}
+
+// implicitFillMode classifies how the pre-insert IGNORE adjustment treats a
+// supplied NULL of the given column type, so the INSERT IGNORE foreign-key
+// filter evaluates the value the write pipeline would actually store.
+type implicitFillMode int
+
+const (
+	// implicitFillMirrored: the stored implicit default has a plan constant
+	// (mirroring colexec.BatchDataNotNullFillForIgnore), so the check can
+	// coalesce to it.
+	implicitFillMirrored implicitFillMode = iota
+	// implicitFillUnmirrored: the write side fills the cell (zero uuid, json
+	// null payload) but the plan has no constant for that value, so the
+	// MATCH-SIMPLE exemption must still be dropped; the existence check then
+	// sees the raw NULL and the filter skips the row instead of letting the
+	// adjustment store an orphan.
+	implicitFillUnmirrored
+	// implicitFillRejected: the type has no implicit default at all, the
+	// write side keeps the constraint violation, so the exempt expression
+	// stays and that row aborts the statement later.
+	implicitFillRejected
+)
+
+// implicitFilledChildDefaultExpr classifies the implicit-default fill for the
+// column type and, for implicitFillMirrored, returns the plan constant of the
+// value the fill stores.
+func implicitFilledChildDefaultExpr(ctx context.Context, typ plan.Type) (*plan.Expr, implicitFillMode) {
+	result := func(e *plan.Expr) (*plan.Expr, implicitFillMode) {
+		e.Typ = typ
+		e.Typ.NotNullable = true
+		return e, implicitFillMirrored
+	}
+	fallback := func() (*plan.Expr, implicitFillMode) {
+		return nil, implicitFillRejected
+	}
+	switch types.T(typ.Id) {
+	case types.T_bool:
+		return result(makePlan2BoolConstExprWithType(false))
+	case types.T_bit:
+		return result(makePlan2Uint64ConstExprWithType(0))
+	case types.T_int8:
+		return result(makePlan2Int8ConstExprWithType(0))
+	case types.T_int16:
+		return result(makePlan2Int16ConstExprWithType(0))
+	case types.T_int32:
+		return result(makePlan2Int32ConstExprWithType(0))
+	case types.T_int64:
+		return result(makePlan2Int64ConstExprWithType(0))
+	case types.T_uint8:
+		return result(makePlan2Uint8ConstExprWithType(0))
+	case types.T_uint16:
+		return result(makePlan2Uint16ConstExprWithType(0))
+	case types.T_uint32:
+		return result(makePlan2Uint32ConstExprWithType(0))
+	case types.T_uint64:
+		return result(makePlan2Uint64ConstExprWithType(0))
+	case types.T_float32:
+		return result(makePlan2Float32ConstExprWithType(0))
+	case types.T_float64:
+		return result(makePlan2Float64ConstExprWithType(0))
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// The runtime fill stores all-zero bits, +0 (code 0 in every
+		// low-precision format); mirror it as float32(0) assignment-cast
+		// to the column type, the same shape the decimal families use.
+		// When this plan cannot build the cast the write side still fills
+		// the cell, so the fill is unmirrored (the foreign-key existence
+		// check sees the raw NULL and skips the row), not rejected.
+		zero := makePlan2Float32ConstExprWithType(0)
+		cast, err := makePlan2AssignmentCastExpr(ctx, zero, typ)
+		if err != nil {
+			return nil, implicitFillUnmirrored
+		}
+		return result(cast)
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		zero, err := makePlan2DecimalExprWithType(ctx, "0", false)
+		if err != nil {
+			return fallback()
+		}
+		cast, err := makePlan2AssignmentCastExpr(ctx, zero, typ)
+		if err != nil {
+			return fallback()
+		}
+		return result(cast)
+	case types.T_date:
+		// The runtime fill stores types.ZeroDate ('0000-00-00', the temporal
+		// zero sentinel encoded as -1), not Date(0) ('0001-01-01'); every
+		// plan-side consumer of the fill must evaluate the same sentinel.
+		return result(makePlan2DateConstExprWithType(int32(types.ZeroDate)))
+	case types.T_datetime:
+		return result(makePlan2DateTimeConstExprWithType(int64(types.ZeroDatetime)))
+	case types.T_time:
+		return result(makePlan2TimeConstExprWithType(0))
+	case types.T_timestamp:
+		return result(makePlan2TimestampConstExprWithType(int64(types.ZeroTimestamp)))
+	case types.T_year:
+		return result(makePlan2Int16ConstExprWithType(0))
+	case types.T_char, types.T_varchar:
+		return result(makePlan2StringConstExprWithType(""))
+	case types.T_varbinary:
+		return result(makePlan2VarBinaryConstExprWithType(""))
+	case types.T_binary:
+		// The runtime fill right-pads BINARY(n) with 0x00 to the declared
+		// width - exactly the value an ordinary empty-string assignment
+		// stores, per the string->binary cast's zero-fill rule. Evaluate
+		// the mirror through that assignment cast so the checked value and
+		// the stored fill agree byte for byte; if the cast cannot be built
+		// the fill stays unmirrored instead of diverging from the stored
+		// value.
+		empty := makePlan2VarBinaryConstExprWithType("")
+		cast, err := makePlan2AssignmentCastExpr(ctx, empty, typ)
+		if err != nil {
+			return nil, implicitFillUnmirrored
+		}
+		return result(cast)
+	case types.T_blob, types.T_text:
+		return result(makePlan2StringConstExprWithType(""))
+	case types.T_enum:
+		return result(makePlan2Uint16ConstExprWithType(0))
+	case types.T_uuid, types.T_json:
+		// The write side fills these families (types.Uuid{} and the json
+		// null payload) but no plan constant exists for the stored value.
+		return nil, implicitFillUnmirrored
+	default:
+		// No implicit default exists for this family (geometry, datalink and
+		// friends): the write keeps the constraint violation.
+		return fallback()
+	}
+}
+
+// implicitGeneratedColFillExpr returns the plan constant of the value the
+// IGNORE fill stores for every family the rewrite of a generated-column
+// reference can mirror, including the two families the foreign-key
+// classifier leaves unmirrored: uuid has no plan literal at all and the
+// JSON literal one-of is not a runnable vector value, so both get a typed
+// cast of the constant text whose runtime evaluation produces exactly the
+// stored fill (the zero uuid; the JSON null document). The second result is
+// false for families without a storable fill.
+func implicitGeneratedColFillExpr(ctx context.Context, typ plan.Type) (*plan.Expr, bool) {
+	var constText string
+	switch types.T(typ.Id) {
+	case types.T_uuid:
+		constText = "00000000-0000-0000-0000-000000000000"
+	case types.T_json:
+		constText = "null"
+	default:
+		e, mode := implicitFilledChildDefaultExpr(ctx, typ)
+		return e, mode == implicitFillMirrored && e != nil
+	}
+	castExpr, err := makePlan2CastExpr(ctx, makePlan2StringConstExprWithType(constText), typ)
+	if err != nil || castExpr == nil {
+		return nil, false
+	}
+	castExpr.Typ = typ
+	castExpr.Typ.NotNullable = true
+	return castExpr, true
+}
+
 // appendModernChildFkMarkOks appends, for every non-self-referencing foreign key, a
 // MARK join against the parent table and returns one boolean "ok" expression per FK,
 // true when the parent row exists or any FK column is NULL (MATCH SIMPLE). A MARK join
@@ -1693,6 +1922,14 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 // columns a unique-key child carries. childColPos maps a child FK column name to its
 // position under selectTag. lockRows is false only for ODKU's transient action
 // validation stream; its retained final action is locked and revalidated later.
+// coalesceFilledChildCols is set only by the INSERT IGNORE filter: it evaluates every
+// NOT NULL child key column as the value the write pipeline will actually store,
+// replacing a supplied NULL with the implicit default of the column type in the
+// existence check, exactly like the pre-insert adjustment does before the row is
+// written, and drops the MATCH-SIMPLE NULL exemption for those columns so an adjusted
+// value without a parent is skipped instead of silently storing an orphan. Types
+// whose filled value has no plan constant (uuid, json) keep the raw column in the
+// existence check but still lose the exemption, so a NULL key cell cannot pass.
 func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
@@ -1700,6 +1937,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	selectTag int32,
 	childColPos func(colName string) int32,
 	lockRows bool,
+	coalesceFilledChildCols bool,
 ) (int32, []*plan.Expr, error) {
 	selectNode := builder.updateInputProjectNode(lastNodeID)
 	inputTypes := make([]plan.Type, len(selectNode.ProjectList))
@@ -2009,7 +2247,8 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		nullConds := make([]*plan.Expr, 0, len(fk.Cols))
 		for k, childColId := range fk.Cols {
 			childPos := childColPos(id2name[childColId])
-			childTyp := tableDef.Cols[tableDef.Name2ColIndex[id2name[childColId]]].Typ
+			childColName := id2name[childColId]
+			childTyp := tableDef.Cols[tableDef.Name2ColIndex[childColName]].Typ
 			if childPos >= 0 && int(childPos) < len(selectNode.ProjectList) {
 				childTyp = selectNode.ProjectList[childPos].Typ
 			}
@@ -2017,12 +2256,44 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			parentTyp := parentTableDef.Cols[parentPos].Typ
 
 			childExpr := &plan.Expr{Typ: childTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(childPos)}}}
+			// Under statement IGNORE a NULL in this column never reaches the write:
+			// it is adjusted to the implicit default first. Evaluate the existence
+			// check on that stored value and keep no NULL exemption for it.
+			childNullNeverStored := false
+			if coalesceFilledChildCols {
+				childDef := tableDef.Cols[tableDef.Name2ColIndex[childColName]]
+				if (childDef != nil && childDef.NotNull) ||
+					(childDef != nil && childDef.Default != nil && !childDef.Default.NullAbility) {
+					dflt, mode := implicitFilledChildDefaultExpr(builder.GetContext(), childTyp)
+					switch mode {
+					case implicitFillMirrored:
+						filled, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+							[]*plan.Expr{childExpr, dflt})
+						if err != nil {
+							return 0, nil, err
+						}
+						childExpr = filled
+						childNullNeverStored = true
+					case implicitFillUnmirrored:
+						// No plan constant exists for the filled value, but the
+						// write will not store NULL: drop the MATCH-SIMPLE
+						// exemption so the raw NULL fails the existence
+						// check and the row is skipped, never stored as an
+						// orphan.
+						childNullNeverStored = true
+					}
+				}
+			}
 			parentExpr := &plan.Expr{Typ: parentTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: parentTag, ColPos: int32(parentPos)}}}
 			cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
 			if err != nil {
 				return 0, nil, err
 			}
 			joinPreds = append(joinPreds, cond)
+			if childNullNeverStored {
+				// MATCH SIMPLE never applies: the column cannot store the NULL.
+				continue
+			}
 			nullCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(childExpr)})
 			if err != nil {
 				return 0, nil, err
@@ -2076,7 +2347,7 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 		childTyps[i] = e.Typ
 	}
 
-	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag, childColPos, true)
+	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag, childColPos, true, false)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -2139,7 +2410,7 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	}
 
 	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(bindCtx, tableDef, lastNodeID, selectTag,
-		func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, true)
+		func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, true, true)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -3065,6 +3336,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				bindCtx,
 				lastNodeID,
 			)
+			// The barrier FILTER below consumes this project's computed lock-key
+			// columns positionally and the restored row image exports them as
+			// columns; keep the materialization physical instead of inlining
+			// the key expressions past the FILTER.
+			if builder.materializedLockKeyProjects == nil {
+				builder.materializedLockKeyProjects = make(map[int32]struct{})
+			}
+			builder.materializedLockKeyProjects[lastNodeID] = struct{}{}
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
@@ -3865,7 +4144,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					var oks []*plan.Expr
 					lastNodeID, oks, err = builder.appendModernChildFkMarkOks(
 						bindCtx, odkuActionConstraintDef, lastNodeID, selectTag,
-						func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, false)
+						func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, false, false)
 					if err != nil {
 						return 0, err
 					}
@@ -4401,7 +4680,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			var oks []*plan.Expr
 			lastNodeID, oks, err = builder.appendModernChildFkMarkOks(
 				bindCtx, odkuAllForeignKeyDef, lastNodeID, finalProjTag,
-				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, true)
+				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }, true, false)
 			if err != nil {
 				return 0, err
 			}
@@ -5491,6 +5770,147 @@ func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, igno
 	return targets
 }
 
+// insertIgnoreSuppliedColumnMayYieldNull reports whether the values feeding one
+// supplied column can still deliver a NULL cell under the pre-insert NULL
+// adjustment. supplied is the bound per-column expression — a source-slot
+// reference, possibly wrapped in the assignment cast — and sourceNodeID is the
+// INSERT source node that reference points into.
+func (builder *QueryBuilder) insertIgnoreSuppliedColumnMayYieldNull(sourceNodeID int32, supplied *plan.Expr) bool {
+	for supplied != nil {
+		if colRef := supplied.GetCol(); colRef != nil {
+			return builder.insertIgnoreSourceSlotMayYieldNull(sourceNodeID, colRef.ColPos)
+		}
+		fn := supplied.GetF()
+		if fn == nil || len(fn.Args) != 1 {
+			// an opaque wrapper (multi-argument function, parameter marker,
+			// evaluated expression) is runtime data: treat it as nullable
+			return true
+		}
+		supplied = fn.Args[0]
+	}
+	return true
+}
+
+// insertIgnoreSourceSlotMayYieldNull follows one source slot through plain
+// re-projection projects down to the row data producing it. Only a VALUE_SCAN
+// rowset binding a non-NULL literal for every row proves the slot non-nullable;
+// derived projections, parameters and every other source shape (external scan,
+// select pipeline) are runtime data and stay nullable.
+func (builder *QueryBuilder) insertIgnoreSourceSlotMayYieldNull(nodeID int32, slot int32) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return true
+	}
+	node := builder.qry.Nodes[nodeID]
+	switch node.NodeType {
+	case plan.Node_PROJECT:
+		if int(slot) >= len(node.ProjectList) || len(node.Children) == 0 {
+			return true
+		}
+		entry := node.ProjectList[slot]
+		if entry == nil {
+			return true
+		}
+		if colRef := entry.GetCol(); colRef != nil {
+			return builder.insertIgnoreSourceSlotMayYieldNull(node.Children[0], colRef.ColPos)
+		}
+		return true
+	case plan.Node_VALUE_SCAN:
+		if node.RowsetData == nil || int(slot) >= len(node.RowsetData.Cols) {
+			return true
+		}
+		for _, row := range node.RowsetData.Cols[slot].Data {
+			if row == nil || row.Expr == nil {
+				return true
+			}
+			if lit := row.Expr.GetLit(); lit == nil || lit.Isnull {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+// coalesceGeneratedColIgnoreFillRefs rewrites a dependent row expression
+// (a generated-column expression or a column default expression) for
+// INSERT IGNORE so that references to columns whose cell the pre-insert
+// adjustment can still fill are evaluated on the adjusted value. Dependent
+// expressions are computed in these projections, i.e. before PRE_INSERT
+// applies the fill; a reference left raw computes from the pre-adjustment
+// cell and stores a stale value (MySQL reads the adjusted value). A
+// reference in a column that forbids NULL and whose cell can still hold the
+// supplied or computed NULL becomes coalesce(ref, implicit default constant)
+// for every family the fill stores: mirrorable types get their plan constant
+// and uuid/json get a typed cast of the constant text (the zero uuid, the
+// JSON null document). Rejected families abort the statement anyway, so
+// their references stay raw.
+//
+// A reference qualifies when its cell source is dynamic: a supplied column,
+// a generated column (its value is computed per row, so a NOT NULL
+// generated column can still be NULL when the dependent expression reads
+// it), or a defaulted column whose derived default is the NULL constant or
+// an expression. A non-null constant default never yields NULL, so its
+// references stay raw. The defaulted-column classification is static (it
+// does not depend on the planner having visited the referenced column), so
+// a forward reference resolves with the same answer.
+func (builder *QueryBuilder) coalesceGeneratedColIgnoreFillRefs(
+	tableDef *plan.TableDef,
+	insertColToExpr map[string]*plan.Expr,
+	expr *plan.Expr,
+) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col == nil || e.Col.RelPos != 0 {
+			return expr, nil
+		}
+		idx := e.Col.ColPos
+		if idx < 0 || int(idx) >= len(tableDef.Cols) {
+			return expr, nil
+		}
+		col := tableDef.Cols[idx]
+		if col.Hidden || col.Typ.AutoIncr {
+			return expr, nil
+		}
+		if !insertColForbidsNull(col) {
+			return expr, nil
+		}
+		if col.GeneratedCol == nil {
+			if _, supplied := insertColToExpr[col.Name]; !supplied && !insertDefaultCanYieldNull(col) {
+				return expr, nil
+			}
+		}
+		constExpr, ok := implicitGeneratedColFillExpr(builder.GetContext(), col.Typ)
+		if !ok || constExpr == nil {
+			return expr, nil
+		}
+		ref := DeepCopyExpr(expr)
+		return BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+			[]*plan.Expr{ref, constExpr})
+	case *plan.Expr_F:
+		var err error
+		for i, arg := range e.F.Args {
+			if e.F.Args[i], err = builder.coalesceGeneratedColIgnoreFillRefs(tableDef, insertColToExpr, arg); err != nil {
+				return nil, err
+			}
+		}
+		return expr, nil
+	case *plan.Expr_List:
+		var err error
+		for i, item := range e.List.List {
+			if e.List.List[i], err = builder.coalesceGeneratedColIgnoreFillRefs(tableDef, insertColToExpr, item); err != nil {
+				return nil, err
+			}
+		}
+		return expr, nil
+	default:
+		return expr, nil
+	}
+}
+
 func (builder *QueryBuilder) appendNodesForInsertStmt(
 	bindCtx *BindContext,
 	lastNodeID int32,
@@ -5500,6 +5920,10 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	assignmentIgnore bool,
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
+	// The NULL-fill decision below reads the supplied value streams through
+	// the incoming source node; later stages of this function re-point
+	// lastNodeID at the projections they append.
+	insertSourceNodeID := lastNodeID
 	hasAutoCol := false
 	odkuAutoIncrementColumn := int32(-1)
 	for i, col := range tableDef.Cols {
@@ -5601,6 +6025,19 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					}
 				}
 			}
+			// A default expression is another dependent row expression the
+			// pre-insert adjustment feeds: under IGNORE the value it reads
+			// from a NOT NULL column must already be the adjusted value, so
+			// the plan coalesces the reference to the implicit default before
+			// the fill runs (MySQL evaluates the default from the adjusted
+			// cell; a raw reference stores the stale pre-adjustment result).
+			if assignmentIgnore {
+				defExpr, err = builder.coalesceGeneratedColIgnoreFillRefs(
+					tableDef, insertColToExpr, defExpr)
+				if err != nil {
+					return 0, nil, nil, -1, err
+				}
+			}
 
 			colIdxToProjPos[int32(i)] = int32(len(projList1))
 			projList2 = append(projList2, &plan.Expr{
@@ -5630,6 +6067,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		)
 		if err != nil {
 			return 0, nil, nil, -1, err
+		}
+		if assignmentIgnore {
+			genExpr, err = builder.coalesceGeneratedColIgnoreFillRefs(
+				tableDef, insertColToExpr, genExpr)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
 		}
 		// The copied catalog expression is rebound against THIS statement: a
 		// definition that needs the conditional boolean contracts evaluates
@@ -5717,14 +6161,71 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			continue
 		}
 
+		// The skip decision must follow the value after the IGNORE
+		// adjustment, not the raw default: the pre-insert fill rewrites an
+		// omitted NOT NULL column whose default evaluates to NULL into the
+		// type's implicit default before unique arbitration runs, so such a
+		// part is not permanently NULL. A raw-NULL skip would silently drop
+		// the arbitration, the lock keys and the index-table writes for the
+		// entries the write produces.
 		skipUniqueIdx[i] = true
 		for _, part := range idxDef.Parts {
-			if !columnIsNull[catalog.ResolveAlias(part)] {
+			partName := catalog.ResolveAlias(part)
+			if !columnIsNull[partName] {
+				skipUniqueIdx[i] = false
+				break
+			}
+			if uniqueNullDefaultRefilledForIgnore(builder.GetContext(), tableDef, partName, assignmentIgnore) {
 				skipUniqueIdx[i] = false
 				break
 			}
 		}
 	}
+	// The NULL adjustment for INSERT IGNORE runs inside PRE_INSERT, ahead of
+	// every downstream consumer (unique-key arbitration, CHECK filters,
+	// foreign-key validation and the write). Tables whose shapes need the node
+	// anyway get that ordering for free; a simple explicit primary key would
+	// otherwise skip the node and the adjustment would run only at write time,
+	// after all those consumers already matched the original NULL. Force the
+	// node whenever a column that forbids NULL can still receive one: a
+	// supplied value that can yield NULL (a VALUES rowset whose every row binds
+	// a non-NULL literal cannot, so those statements keep the allocator-free
+	// shape), a generated column's per-row computation (a NOT NULL generated
+	// column can derive NULL, and the CHECK filter coalesces a NULL predicate
+	// to true, so such a row would slip through every consumer and land in the
+	// write-side backstop fill), or a derived default that can evaluate to NULL
+	// (a NULL-constant or expression default).
+	forceIgnoreFill := false
+	if assignmentIgnore {
+		for _, col := range tableDef.Cols {
+			if col == nil || col.Hidden || col.Typ.AutoIncr {
+				continue
+			}
+			if !insertColForbidsNull(col) {
+				continue
+			}
+			if col.GeneratedCol != nil {
+				forceIgnoreFill = true
+				break
+			}
+			if supplied, ok := insertColToExpr[col.Name]; ok {
+				// The adjustment only fires when a row can actually reach the
+				// write carrying NULL. A VALUES source whose every row binds a
+				// non-NULL literal for this column proves that none can; any
+				// other supplied shape (external scan input, a select pipeline,
+				// an evaluated expression) stays conservatively nullable and
+				// keeps the fill node.
+				if !builder.insertIgnoreSuppliedColumnMayYieldNull(insertSourceNodeID, supplied) {
+					continue
+				}
+			} else if !insertDefaultCanYieldNull(col) {
+				continue
+			}
+			forceIgnoreFill = true
+			break
+		}
+	}
+
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
 	// A table without a user-visible AUTO_INCREMENT column may still carry
@@ -5758,7 +6259,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		}
 	}
 
-	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
+	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil || forceIgnoreFill {
 		preInsertCtx := &plan.PreInsertCtx{
 			Ref:                          objRef,
 			TableDef:                     tableDef,
@@ -5909,6 +6410,20 @@ func (builder *QueryBuilder) buildValueScan(
 	var err error
 	effectiveColNames := append([]string(nil), colNames...)
 
+	// Row-local DEFAULT expressions evaluate inside VALUE_SCAN, before
+	// PRE_INSERT applies the IGNORE fill, so their references to NOT NULL
+	// columns read the unadjusted cell. Under INSERT IGNORE the same
+	// coalesce-to-implicit-default normalization the pre-insert projection
+	// applies must also hold here. The supplied set follows the user-visible
+	// column list (an all-default VALUES () supplies nothing); dependency
+	// closure columns added below stay omitted.
+	ignoreSupplied := map[string]*plan.Expr{}
+	if builder.isInsertIgnore && !isAllDefault {
+		for _, name := range colNames {
+			ignoreSupplied[name] = nil
+		}
+	}
+
 	if isReplace {
 		if err = validateValuesSubqueryBranchLimit(builder.GetContext(), stmt.Rows); err != nil {
 			return 0, nil, err
@@ -5958,6 +6473,12 @@ func (builder *QueryBuilder) buildValueScan(
 			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
+			}
+			if builder.isInsertIgnore {
+				defExpr, err = builder.coalesceGeneratedColIgnoreFillRefs(tableDef, ignoreSupplied, defExpr)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
 			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {
@@ -6035,6 +6556,12 @@ func (builder *QueryBuilder) buildValueScan(
 					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
+					}
+					if builder.isInsertIgnore {
+						defExpr, err = builder.coalesceGeneratedColIgnoreFillRefs(tableDef, ignoreSupplied, defExpr)
+						if err != nil {
+							return 0, nil, err
+						}
 					}
 				} else {
 					valueBinder := binder
@@ -6199,6 +6726,12 @@ func (builder *QueryBuilder) buildValueScan(
 			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
+			}
+			if builder.isInsertIgnore {
+				defExpr, err = builder.coalesceGeneratedColIgnoreFillRefs(tableDef, ignoreSupplied, defExpr)
+				if err != nil {
+					return 0, nil, err
+				}
 			}
 			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore, col.Name)
 			if err != nil {

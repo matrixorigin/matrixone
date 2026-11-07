@@ -56,6 +56,15 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.SetPassword:
+		// SET PASSWORD is dispatched to the frontend (tree/stmt.go), but no
+		// password-rotation handler exists. Falling through the switch returns
+		// a nil error that respClientWhenSuccess turns into a false OK while
+		// the old credential keeps working. Reject every parsed form with a
+		// fixed not-supported error instead; the constant message never
+		// echoes the password, its subject, or the statement text.
+		return stats, moerr.NewNotSupported(execCtx.reqCtx,
+			"set password is not supported, use ALTER USER ... IDENTIFIED BY ... to change a password")
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)

@@ -184,6 +184,12 @@ func (c *Compile) Compile(
 	if err = validateIncompleteTemporalStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
+	if c.indexMaintenanceSpec != nil {
+		c.indexMaintenanceNodeID, err = selectIndexMaintenanceNode(queryPlan.GetQuery(), c.indexMaintenanceSpec, c.indexMaintenanceLiterals)
+		if err != nil {
+			return err
+		}
+	}
 
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
@@ -1065,6 +1071,8 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	// statement's bounded retry window.
 	seqRetryState := c.proc.GetSequenceRetryState()
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.indexMaintenanceSpec = c.indexMaintenanceSpec.Clone()
+	runC.indexMaintenanceLiterals = append([]string(nil), c.indexMaintenanceLiterals...)
 	if seqRetryState != nil {
 		c.proc.ReplaceSequenceRetryState(seqRetryState)
 	}

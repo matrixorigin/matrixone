@@ -46,12 +46,16 @@ func quoteIdent(ident string) string {
 // cuVS minimum graph size. Used to auto-populate IndexCapacity and to derive the
 // small-tail CDC cutoff; this non-NULL basis MUST match the build cursor, which
 // likewise advances only on non-NULL rows.
-func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src, vecCol string) (int64, error) {
+func fetchSrcTableRowCount(proc *process.Process, runSql runSqlFunc, db, src, vecCol string, policies ...*executor.IndexRelationPolicy) (int64, error) {
 	sql := fmt.Sprintf("SELECT count(*) FROM %s.%s", quoteIdent(db), quoteIdent(src))
 	if vecCol != "" {
 		sql += fmt.Sprintf(" WHERE %s IS NOT NULL", quoteIdent(vecCol))
 	}
-	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	if len(policies) > 0 {
+		sqlproc.IndexRelationPolicy = policies[0]
+	}
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, err
 	}
@@ -323,10 +327,13 @@ func buildSnapshotTS(proc *process.Process) int64 {
 // metadataProvenance reports whether this index's metadata table already carries the appended
 // nrow/build_ts columns, so the writer names them only when they exist. See
 // sqlexec.HasProvenanceColumns for why a CN can meet either shape.
-func metadataProvenance(proc *process.Process, dbName, metadataTable string) bool {
+func metadataProvenance(proc *process.Process, dbName, metadataTable string, policies ...*executor.IndexRelationPolicy) bool {
 	if proc == nil {
 		return false
 	}
-	return sqlexec.HasProvenanceColumns(
-		sqlexec.NewSqlProcess(proc), dbName, metadataTable, catalog.IndexMetadata_TblCol_Build_Ts)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	if len(policies) > 0 {
+		sqlproc.IndexRelationPolicy = policies[0]
+	}
+	return sqlexec.HasProvenanceColumns(sqlproc, dbName, metadataTable, catalog.IndexMetadata_TblCol_Build_Ts)
 }

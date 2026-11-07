@@ -395,8 +395,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and relname != '%s' and relkind != '%s' and (%s)",
-		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and %s and relname != '%s' and relkind != '%s' and (%s)",
+		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonIndexRelationSQLPredicate(""), catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Historical rows cannot be matched against current object grants. A
 	// subscription is admitted by subscriber-local broad authorization and keeps
@@ -471,8 +471,8 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and relname != '%s' and (%s)",
-		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and %s and relname != '%s' and (%s)",
+		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonIndexRelationSQLPredicate(""), catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -810,15 +810,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or col.att_relname = %s", sqlquote.String(catalogTblName))
 		}
 		accountClause := fmt.Sprintf("col.account_id = %v or (col.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(catalogTblName), accountClause)
 	} else {
-		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND col.att_is_hidden = 0 ORDER BY col.attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, " + showColumnsCollation + " `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) WHEN length(mo_show_visible_bin(col.att_default, 7)) > 0 THEN 'DEFAULT_GENERATED' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = %s AND col.att_relname = %s AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, sqlquote.String(dbName), sqlquote.String(catalogTblName))
 	}
@@ -936,10 +936,11 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relkind != '%s'
 				and relname != '%s'
 				and not startswith(relname, '%s')
+				and %s
 				and relname != '%s'
 				and (%s)
 				and %s`
-	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.MO_ACCOUNT_LOCK, accountClause, catalog.NonTemporaryTableSQLPredicate(""))
+	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonIndexRelationSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause, catalog.NonTemporaryTableSQLPredicate(""))
 	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
 		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
 	}
