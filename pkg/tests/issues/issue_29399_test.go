@@ -534,6 +534,14 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			defer public.Close()
 			require.NoError(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count))
 			execSQLRequire(t, ctx, admin, "drop user public_u")
+			// The DROP commits on CN0. Authorization on CN1 uses its own applied
+			// snapshot, so test the retained session after that commit is visible.
+			syncAuthenticatedClusterCommit(t, ctx, c)
+			observer := open(account+"#admin", cn1.GetServiceConfig().CN.Frontend.Port)
+			var users int
+			require.NoError(t, observer.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_user where user_name = 'public_u'").Scan(&users))
+			require.Zero(t, users, "CN1 must observe the committed user deletion")
 			require.ErrorContains(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count), "do not have privilege")
 		})
 		t.Run("cross account restore cannot reuse authenticated numeric identities", func(t *testing.T) {
