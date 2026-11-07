@@ -1,0 +1,35 @@
+drop database if exists udf_python_revision_bvt;
+create database udf_python_revision_bvt;
+use udf_python_revision_bvt;
+create function python_bvt_revision (x int) returns int language python as 'def python_bvt_revision(ctx, x): return None if x is None else x + 1' handler 'python_bvt_revision';
+create table revision_values (id int, value int);
+insert into revision_values values (1, 1), (2, null);
+select id, python_bvt_revision(value) as result from revision_values order by id;
+➤ id[4,32,0]  ¦  result[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  null
+create or replace function python_bvt_revision (x int) returns int language python as 'def python_bvt_revision(ctx, x): return None if x is None else x + 2' handler 'python_bvt_revision';
+select id, python_bvt_revision(value) as result from revision_values order by id;
+➤ id[4,32,0]  ¦  result[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  null
+prepare python_revision_plan from 'select id, python_bvt_revision(value) as result from revision_values order by id';
+execute python_revision_plan;
+➤ id[4,32,0]  ¦  result[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  null
+create or replace function python_bvt_revision (x int) returns int language python as 'def python_bvt_revision(ctx, x): return None if x is None else x + 4' handler 'python_bvt_revision';
+execute python_revision_plan;
+➤ id[4,32,0]  ¦  result[4,32,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  null
+deallocate prepare python_revision_plan;
+drop function python_bvt_revision(int);
+create function python_bvt_revision (x int) returns int language python as 'def python_bvt_revision(ctx, x): return None if x is None else x + 3' handler 'python_bvt_revision';
+select id, python_bvt_revision(value) as result from revision_values order by id;
+➤ id[4,32,0]  ¦  result[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  null
+drop function python_bvt_revision(int);
+drop table revision_values;
+drop database udf_python_revision_bvt;

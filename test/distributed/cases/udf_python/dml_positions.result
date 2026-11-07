@@ -1,0 +1,17 @@
+drop database if exists udf_python_dml_bvt;
+create database udf_python_dml_bvt;
+use udf_python_dml_bvt;
+create function python_bvt_dml_add (x int) returns int language python as 'def python_bvt_dml_add(ctx, x): return None if x is None else x + 1' handler 'python_bvt_dml_add';
+create table dml_values (id int primary key, value int);
+insert into dml_values values (1, 1), (2, 2), (3, null);
+insert into dml_values values (4, python_bvt_dml_add(3));
+update dml_values set value = python_bvt_dml_add(value) where id = 1;
+delete from dml_values where python_bvt_dml_add(value) >= 4;
+select id, value from dml_values order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  null
+drop function python_bvt_dml_add(int);
+drop table dml_values;
+drop database udf_python_dml_bvt;

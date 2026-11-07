@@ -1,0 +1,30 @@
+drop database if exists udf_python_dml_errors_bvt;
+create database udf_python_dml_errors_bvt;
+use udf_python_dml_errors_bvt;
+create function python_bvt_dml_fail (x int) returns int language python as 'def python_bvt_dml_fail(ctx, x): return x if x != 2 else 1 / 0' handler 'python_bvt_dml_fail';
+create table source_values (id int primary key, value int);
+insert into source_values values (1, 1), (2, 2), (3, 3);
+update source_values set value = python_bvt_dml_fail(value);
+python udf: worker error: USER_CODE: handler or runtime failed
+select id, value from source_values order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+create table inserted_values (id int primary key, value int);
+insert into inserted_values select id, python_bvt_dml_fail(value) from source_values;
+python udf: worker error: USER_CODE: handler or runtime failed
+select count(*) as inserted_rows from inserted_values;
+➤ inserted_rows[-5,64,0]  𝄀
+0
+delete from source_values where python_bvt_dml_fail(value) > 0;
+python udf: worker error: USER_CODE: handler or runtime failed
+select id, value from source_values order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+drop function python_bvt_dml_fail(int);
+drop table inserted_values;
+drop table source_values;
+drop database udf_python_dml_errors_bvt;

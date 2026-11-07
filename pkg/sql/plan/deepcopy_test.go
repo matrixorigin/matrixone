@@ -479,6 +479,10 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
+		SelectLockReferences: []*planpb.SelectLockReference{{
+			ObjectRef: &planpb.ObjectRef{SchemaName: "db", ObjName: "locked"},
+			ViewPath:  []*planpb.ViewStep{{DatabaseName: "db", ViewName: "lock_view"}},
+		}, nil},
 		ViewReferences: []*planpb.ViewReference{{
 			ViewPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "inner", SubscriptionName: "sub",
 				Snapshot: &planpb.Snapshot{
@@ -503,6 +507,25 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 			StmtType: planpb.Query_SELECT,
 			Headings: []string{"background"},
 		}, nil},
+		RoutineDependencies: []*planpb.RoutinePlanDependency{{
+			FunctionRef: &planpb.FunctionRef{
+				FunctionId:       41,
+				Revision:         7,
+				NamespaceVersion: 12,
+				AccountId:        9,
+				DatabaseId:       8,
+			},
+			Language:              "python",
+			ContractVersion:       1,
+			DefinitionFingerprint: "fingerprint",
+			ArtifactDigest:        "artifact",
+			EnvironmentDigest:     "environment",
+		}},
+		Correlation: &planpb.CorrelationSpec{
+			Version:    planpb.CorrelationVersion,
+			StepOwners: []uint32{0, 1},
+			Programs:   []*planpb.CorrelationProgram{{RootNode: 7}},
+		},
 	}
 
 	encoded, err := (&planpb.Query{ViewReferences: source.ViewReferences}).Marshal()
@@ -512,6 +535,11 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Equal(t, source.ViewReferences, decoded.ViewReferences)
 	cloned := DeepCopyQuery(source)
 	require.True(t, proto.Equal(source, cloned))
+	cloned.SelectLockReferences[0].ObjectRef.ObjName = "changed"
+	cloned.SelectLockReferences[0].ViewPath[0].ViewName = "changed"
+	require.Equal(t, "locked", source.SelectLockReferences[0].ObjectRef.ObjName)
+	require.Equal(t, "lock_view", source.SelectLockReferences[0].ViewPath[0].ViewName)
+	require.Nil(t, cloned.SelectLockReferences[1])
 	require.Equal(t, source.ViewReferences, cloned.ViewReferences)
 	cloned.ViewReferences[0].ViewPath[0].ViewName = "changed"
 	cloned.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime = 99
@@ -536,6 +564,9 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Len(t, cloned.BackgroundQueries, 2)
 	require.Nil(t, cloned.BackgroundQueries[1])
 	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
+	require.Equal(t, source.RoutineDependencies, cloned.RoutineDependencies)
+	require.NotSame(t, source.RoutineDependencies[0], cloned.RoutineDependencies[0])
+	require.NotSame(t, source.RoutineDependencies[0].FunctionRef, cloned.RoutineDependencies[0].FunctionRef)
 
 	cloned.Params[0].GetP().Pos = 99
 	cloned.CatalogDependencies[0].ObjName = "changed"
@@ -544,9 +575,15 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	cloned.Steps[0] = 99
 	cloned.Headings[0] = "changed"
 	cloned.BackgroundQueries[0].Headings[0] = "changed"
+	cloned.RoutineDependencies[0].FunctionRef.Revision = 99
+	cloned.Correlation.StepOwners[0] = 99
+	cloned.Correlation.Programs[0].RootNode = 99
 	require.Equal(t, int32(3), source.Steps[0])
 	require.Equal(t, "id", source.Headings[0])
 	require.Equal(t, "background", source.BackgroundQueries[0].Headings[0])
+	require.Equal(t, uint64(7), source.RoutineDependencies[0].FunctionRef.Revision)
+	require.Equal(t, uint32(0), source.Correlation.StepOwners[0])
+	require.Equal(t, int32(7), source.Correlation.Programs[0].RootNode)
 }
 
 func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T) {
