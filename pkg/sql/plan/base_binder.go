@@ -12530,6 +12530,15 @@ func appendCastBeforeExprWithOverload(
 	// for 0xXXXX, if the value is over 1<<53-1, when covert it into float64,it will lost, so just change it into uint64
 	typ := toType
 	typ.PadSpace = false
+	if !typ.CollationCoercibilitySet && types.T(typ.Id).IsMySQLString() &&
+		types.StaticStringDomain(makeTypeByPlan2Type(typ)) == types.StringDomainBinary {
+		// A CAST result carries MySQL's IMPLICIT coercibility (2). Constant
+		// folding replaces this cast with a literal that keeps only this Typ,
+		// so without the stamp a folded CAST(x AS BINARY) drops to a coercible
+		// literal (4) and loses to a column's collation instead of tying with
+		// it byte-wise (issue #31175).
+		typ.CollationCoercibility, typ.CollationCoercibilitySet = 2, true
+	}
 	if overloadID <= 1 && fromPadSpace &&
 		(types.T(typ.Id) == types.T_varchar || types.T(typ.Id) == types.T_text) {
 		typ.PadSpace = true
