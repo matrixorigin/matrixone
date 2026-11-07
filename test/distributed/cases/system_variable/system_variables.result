@@ -209,12 +209,12 @@ views
 desc key_column_usage;
 ➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 constraint_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+constraint_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-column_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 position_in_unique_constraint  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -259,7 +259,7 @@ table_catalog  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 view_definition  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-check_option  ¦  varchar(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+check_option  ¦  varchar(9)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  varchar(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  varchar(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
