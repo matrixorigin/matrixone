@@ -218,6 +218,47 @@ func TestByteCandidateReaderAndPKResults(t *testing.T) {
 	}
 }
 
+func TestByteEqualityPrunesAmbiguousObjectBeforeLoad(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_varbinary), Width: 64}
+	table := decimalTableDef(typ, true)
+	table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
+	ff := bytes.Repeat([]byte{0xff}, 30)
+	for _, tc := range []struct {
+		name  string
+		value []byte
+	}{
+		{"flagged", append(bytes.Clone(ff), 2)},
+		{"exact", ff},
+		{"rounded", append(append(bytes.Clone(ff[:29]), 0xfe), 1)},
+	} {
+		for _, marked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/marked=%t", tc.name, marked), func(t *testing.T) {
+				col := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "amount"}}}
+				bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("a")}}}
+				expr := foldedFunction("=", []*plan.Expr{col, bound})
+				expr.CandidateFilter = marked
+				fast, _, _, _, _, compiled, _ := CompileFilterExprs([]*plan.Expr{expr}, table, nil)
+				require.True(t, compiled)
+				require.NotNil(t, fast)
+				stats := objectio.NewObjectStats()
+				require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+				require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+				require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, index.BuildZM(types.T_varbinary, tc.value)))
+				match, err := fast(stats)
+				require.NoError(t, err)
+				require.False(t, match)
+				var blocks objectio.BlockInfoSlice
+				_, loads, _, _, _, _, fastTotal, fastHits, err := FilterObjects(t.Context(), engine.RangesParam{}, fast, nil, nil, nil, nil, nil, []objectio.ObjectStats{*stats}, nil, &blocks, false, nil, nil)
+				require.NoError(t, err)
+				require.Zero(t, loads)
+				require.Equal(t, 1, fastTotal)
+				require.Equal(t, 1, fastHits)
+				require.Zero(t, blocks.Len())
+			})
+		}
+	}
+}
+
 func TestCandidateVectorWithoutProducerProofFailsOpen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

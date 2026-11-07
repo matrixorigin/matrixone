@@ -49,8 +49,8 @@ func TestCachedMetadataRemainsImmutableDuringAggregation(t *testing.T) {
 	part := e.GetOrCreateLatestPart(f.ctx, 7, 10, 98)
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	var views []objectio.CachedColumnMeta
-	var originals [][objectio.ZoneMapSize]byte
+	views := make([]objectio.CachedColumnMeta, 0, 2)
+	originals := make([][objectio.ZoneMapSize]byte, 0, 2)
 	for _, value := range []uint64{1, 100} {
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 64, -1))
@@ -77,30 +77,43 @@ func TestCachedMetadataRemainsImmutableDuringAggregation(t *testing.T) {
 		require.NoError(t, ps.HandleObjectEntry(f.ctx, nil, objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(1, 0)}, false))
 		release()
 	}
-	ready, stop := make(chan struct{}), make(chan struct{})
+	start := make(chan struct{})
+	type aggregateResult struct {
+		values [][2]any
+		err    error
+	}
+	result := make(chan aggregateResult, 1)
+	observed := make(chan [][objectio.ZoneMapSize]byte, 1)
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		close(ready)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			for _, view := range views {
-				_, _ = view.Object()
-			}
-		}
+		<-start
+		values, _, err := f.base.origin.MaxAndMinValues(f.ctx)
+		result <- aggregateResult{values: values, err: err}
 	}()
-	<-ready
-	defer func() { close(stop); wg.Wait() }()
-	values, _, err := f.base.origin.MaxAndMinValues(f.ctx)
-	require.NoError(t, err)
-	require.Len(t, values, 1)
-	require.Equal(t, uint64(1), values[0][0])
-	require.Equal(t, uint64(100), values[0][1])
+	go func() {
+		defer wg.Done()
+		<-start
+		current := make([][objectio.ZoneMapSize]byte, 0, len(views))
+		for _, view := range views {
+			meta, ok := view.Object()
+			if !ok {
+				observed <- nil
+				return
+			}
+			current = append(current, meta.ZoneMap)
+		}
+		observed <- current
+	}()
+	close(start)
+	got, read := <-result, <-observed
+	wg.Wait()
+	require.NoError(t, got.err)
+	require.Len(t, got.values, 1)
+	require.Equal(t, uint64(1), got.values[0][0])
+	require.Equal(t, uint64(100), got.values[0][1])
+	require.Equal(t, originals, read, "the observer must read both unmodified cached zone maps")
 	for i, view := range views {
 		current, ok := view.Object()
 		require.True(t, ok)
