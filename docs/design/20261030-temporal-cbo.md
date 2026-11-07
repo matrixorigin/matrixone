@@ -2,13 +2,12 @@
 
 Issue #31619 reported incorrect results for an indexed `DATETIME` compared with
 `NOW()`, a `TIMESTAMP`. #31624 restored correctness on main by refusing unsafe
-index bounds and retaining the SQL predicate. PR #31944 adds a cost-based
-performance path for eligible comparisons; it does not replace that fix.
+index bounds and retaining the SQL predicate. This design adds a cost-based
+performance path for eligible comparisons while retaining that correctness fix.
 
 The candidate-range proof is in [temporal index ranges](20261028-temporal-index-ranges.md).
-The final generic owner and API contract is in
-[index planning owners](20261107-index-planning-owners.md); it replaces the
-intermediate borrowed-read and access-consolidation designs.
+The shared owner and API contracts are in
+[index planning owners](20261107-index-planning-owners.md).
 
 ## Contract and scope
 
@@ -33,8 +32,8 @@ fixed-offset time zone, a positively proved literal or `CURRENT_TIMESTAMP`
 bound, local scheduling, and a covering regular index whose leading part is
 the temporal column. Prepared templates and bound prepared executions use their
 existing reusable-plan ownership and carry no candidate execution input or
-candidate-specific rebuild path. Prepared AUTO, named-zone AUTO, LIMIT/OFFSET, aggregates,
-joins, FORCE INDEX, and non-covering backfill remain on existing paths. This is
+candidate-specific rebuild path. Prepared AUTO, named-zone AUTO, LIMIT/OFFSET, aggregates, joins, FORCE INDEX,
+and non-covering backfill remain on existing paths. This is
 best-effort optimization: no query is promised an index scan. In particular,
 the FORCE INDEX and LIMIT query from #31619 does not use this AUTO path.
 The demonstrated selected path is a DATETIME key compared with
@@ -51,7 +50,8 @@ the execution-time expression reads the current statement clock and zone.
 For named zones the bound stays Full; no transition-specific inverse is used.
 The reader receives a marked necessary block filter and the covering scan
 retains a separately remapped complete row filter. Copy, fold and protocol
-transport preserve the filter and empty-range provenance. Ordinary same-type
+transport preserve the filter proof. An empty temporal range is widened before
+reader pruning so the residual determines the result. Ordinary same-type
 comparisons retain their normal index path.
 
 The fixed-zone scalar comparison fast path uses direct offset arithmetic only
@@ -150,15 +150,3 @@ layouts, transitions, same-domain and prepared controls. A/A p50 noise above
 use INDEX, scan less and beat main; meaningful regressions in dense, ordered or
 unaffected paths require diagnosis and correction rather than a broad
 no-regression claim.
-
-
-The final integration in [index planning owners](20261107-index-planning-owners.md)
-shares comparison classification, physical leaf lowering, range-union costing,
-covering construction and cached block observation with ordinary comparisons.
-One controlled costing extension observes an already eligible integer covering
-winner after its ordinary hidden-resolution error checkpoint and may retain BASE
-when complete evidence shows lower work. Incomplete evidence preserves the
-ordinary choice. Necessary-range type semantics and full SQL residuals remain.
-Performance acceptance also includes this integer control, ordinary reader hot
-paths and scan-free SELECT. Feature-baseline comparisons alone do not satisfy
-the unmodified-main acceptance above.

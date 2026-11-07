@@ -84,8 +84,8 @@ Preserve this marker through deep copy, folding and process transport. It identi
 necessary candidate ranges, including the reader's OR and seek behavior. Unknown,
 malformed or nonconstant folds and unsupported storage filters fail open. Reader
 outputs still run the full original predicate, including physical tails and sentinel
-values. The execution and empty-guard consolidation is specified in
-[Temporal access consolidation](20261107-index-planning-owners.md).
+values. The filter proof and execution lifetime are specified in
+[index planning ownership](20261107-index-planning-owners.md).
 
 Time, timezone, placement and transaction identity belong to the current execution.
 The cost observation never replaces the runtime expression. A changed execution
