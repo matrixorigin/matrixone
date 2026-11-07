@@ -20,18 +20,18 @@ make the backend connection pool lazy.
 
 ## FIFO index ownership
 
-[FIFO construction](../../pkg/fileservice/fifocache/fifo.go) creates non-nil shard
-maps without reserving 1024 entries per shard. Index storage grows with occupancy;
-shard locks, callbacks, ghost identity, pending-byte accounting and data capacity
-retain their existing semantics. Dense insertion may pay map-growth cost earlier,
-and maps are not promised to shrink after a historical peak.
+[FIFO construction](../../pkg/fileservice/s3fifo/cache.go) creates non-nil shard
+maps without reserving entries per shard. Index storage grows with occupancy;
+shard locks, notifications, ghost identity and data capacity retain their
+semantics. Dense insertion may pay map-growth cost earlier, and maps are not
+promised to shrink after a historical peak.
 
 ## Regression and retirement boundaries
 
 [Client-pool tests](../../pkg/vm/engine/tae/logstore/driver/logservicedriver/clientpool_test.go)
 retain unused checkout/return, first zero/small/large append, buffer reuse, backend
 record identity, cancellation, factory failure and pool-close controls.
-[FIFO tests](../../pkg/fileservice/fifocache/fifo_test.go) and its consumers retain
+[FIFO tests](../../pkg/fileservice/s3fifo/cache_test.go) and its consumers retain
 construction, admission/eviction and dense-use contracts. These are existing
 regression responsibilities, not new test results reported by this document.
 

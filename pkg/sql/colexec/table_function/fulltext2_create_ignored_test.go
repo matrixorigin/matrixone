@@ -33,7 +33,7 @@ import (
 )
 
 func ft2IgnoredCfg(t *testing.T, ignored string, limit int64, pkey string) string {
-	b, err := sonic.Marshal(fulltext2.TableConfig{ThreadsBuild: 1, DbName: "db", IndexTable: "__idx",
+	b, err := sonic.Marshal(fulltext2.TableConfig{ThreadsBuild: 1, DbName: "db", IndexTable: "__idx", MetadataTable: "__meta",
 		Parser: "json", IgnoredTable: ignored, MaxBadRecords: limit, PKey: pkey})
 	require.NoError(t, err)
 	return string(b)
@@ -43,11 +43,14 @@ func ft2IgnoredCfg(t *testing.T, ignored string, limit int64, pkey string) strin
 func TestFulltext2CreateLeavesOutInvalidJSON(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	lookups := installOrdinaryMaintenanceRelations(t, proc)
 	var sqls []string
+	var policies []*executor.IndexRelationPolicy
 	prev := fulltext2_runSql
 	t.Cleanup(func() { fulltext2_runSql = prev })
-	fulltext2_runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	fulltext2_runSql = func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		sqls = append(sqls, sql)
+		policies = append(policies, p.IndexRelationPolicy)
 		return executor.Result{}, nil
 	}
 
@@ -56,16 +59,23 @@ func TestFulltext2CreateLeavesOutInvalidJSON(t *testing.T) {
 	tf, _ := ft2CreateArgVecs(t, mp, cfg, 3, "{bad")
 	t.Cleanup(func() { st.free(tf, proc, false, nil) })
 	require.NoError(t, st.start(tf, proc, 0, nil))
+	require.Equal(t, 3, *lookups, "the store, metadata and ignored tables are admitted")
 	require.Equal(t, int64(1), st.ignored.spill.Len())
-
-	tf2, _ := ft2CreateArgVecs(t, mp, cfg, 4, "[worse")
-	err := st.start(tf2, proc, 0, nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrIndexTooManyBadRecords), "%v", err)
+	admitted := st.policy
 
 	require.NoError(t, st.end(tf, proc))
 	joined := strings.Join(sqls, ";")
 	require.Contains(t, joined, "REPLACE INTO `db`.`__ign`")
 	require.Contains(t, joined, "(3, 20351, 'the text the index parses as JSON is not valid JSON: ")
+	for i, sql := range sqls {
+		if strings.Contains(sql, "`__ign`") {
+			require.Same(t, admitted, policies[i], "the ignored rows are written under the admitted policy")
+		}
+	}
+
+	tf2, _ := ft2CreateArgVecs(t, mp, cfg, 4, "[worse")
+	err := st.start(tf2, proc, 0, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrIndexTooManyBadRecords), "%v", err)
 	st.free(tf, proc, false, nil)
 	require.Nil(t, st.ignored)
 }
@@ -73,6 +83,7 @@ func TestFulltext2CreateLeavesOutInvalidJSON(t *testing.T) {
 func TestFulltext2CreateWithoutIgnoredTable(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	installOrdinaryMaintenanceRelations(t, proc)
 	st := &fulltext2CreateState{}
 	tf, _ := ft2CreateArgVecs(t, mp, ft2IgnoredCfg(t, "", 0, "id"), 3, "{bad")
 	err := st.start(tf, proc, 0, nil)

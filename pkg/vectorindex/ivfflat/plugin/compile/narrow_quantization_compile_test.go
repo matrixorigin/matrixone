@@ -629,3 +629,7 @@ func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex
 
 // BuildTS stubs (fulltext2 async-freshness interface method).
 func (f *fakeCachedIndex) BuildTS() int64 { return 0 }
+
+func (c *scriptedCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return c.RunSql(sql)
+}

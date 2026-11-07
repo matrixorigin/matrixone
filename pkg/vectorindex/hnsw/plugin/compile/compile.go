@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -141,7 +142,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 			return err
 		}
 		for _, sql := range sqls {
-			if err = ctx.RunSql(sql); err != nil {
+			if err = maintenance.RunSQL(ctx, sql, "hnsw_create", indexName); err != nil {
 				return err
 			}
 		}

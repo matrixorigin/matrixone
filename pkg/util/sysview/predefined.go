@@ -199,12 +199,16 @@ func informationSchemaMetadataVisibilityCompatibilityCTE() string {
 }
 
 func informationSchemaMetadataVisibilityCTEWithActiveRoles(activeRolesSQL string) string {
+	return informationSchemaMetadataVisibilityCTEWithTableFilter(activeRolesSQL, "")
+}
+
+func informationSchemaMetadataVisibilityCTEWithTableFilter(activeRolesSQL, tableFilter string) string {
 	return "WITH __mo_active_roles(role_id) AS (" + activeRolesSQL + "), " +
 		"__mo_visible_tables AS (" +
 		"SELECT tbl.account_id, tbl.rel_id, tbl.relname, tbl.reldatabase, tbl.reldatabase_id, tbl.relkind, " +
 		"tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, tbl.rel_logical_id, " +
 		"tbl.owner, tbl.`constraint` FROM mo_catalog.mo_tables tbl " +
-		"WHERE tbl.account_id = current_account_id() AND (" +
+		"WHERE tbl.account_id = current_account_id()" + tableFilter + " AND (" +
 		"tbl.reldatabase IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug') " +
 		"OR tbl.owner IN (SELECT role_id FROM __mo_active_roles) " +
 		"OR EXISTS (SELECT 1 FROM mo_catalog.mo_database db JOIN __mo_active_roles ar ON db.owner = ar.role_id " +
@@ -456,6 +460,26 @@ func InformationSchemaColumnsPreDefaultGeneratedDDL() string {
 	return informationSchemaColumnsUnsignedDecimalColumnsTypeOver(
 		informationSchemaColumnsUnboundedGeneratedExpressionDDL(
 			informationSchemaColumnsEnumSetDDL(InformationSchemaColumnsBinaryFamilyNullDDL())))
+}
+
+// informationSchemaColumnsWithLocalPhysicalIndexFilter filters local sources
+// before APPLY without changing the historical templates.
+func informationSchemaColumnsWithLocalPhysicalIndexFilter(ddl string) string {
+	local := informationSchemaMetadataVisibilityCTEWithTableFilter(
+		"SELECT role_id FROM mo_current_roles() role_closure", " AND "+catalog.NonIndexRelationSQLPredicate("tbl"))
+	return strings.Replace(ddl, informationSchemaMetadataVisibilityCTE(), local, 1)
+}
+
+// informationSchemaColumnsPhysicalIndexDDL applies the current listing policy
+// without changing the historical templates from which this view is derived.
+// Filter view sources before APPLY so an internal relation is never described.
+func informationSchemaColumnsPhysicalIndexDDL() string {
+	ddl := informationSchemaColumnsWithLocalPhysicalIndexFilter(informationSchemaColumnsWithDefaultGeneratedExtraDDL())
+	subscription := informationSchemaSubscriptionColumnAuthorizationPredicate()
+	ddl = strings.Replace(ddl, subscription, subscription+" AND "+catalog.NonIndexRelationSQLPredicateForColumns(
+		"mc.att_relname", "mc.relkind", "mc.extra_info"), 1)
+	subscriptionView := informationSchemaSubscriptionViewAuthorizationPredicate()
+	return strings.Replace(ddl, subscriptionView, subscriptionView+" AND "+catalog.NonIndexRelationSQLPredicate("mt"), 1)
 }
 
 // The MEDIUMINT DATA_TYPE arm distinguishes the pre-change current template
@@ -891,7 +915,8 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaColumnsWithDefaultGeneratedExtraDDL()
+	InformationSchemaColumnsDDL             = informationSchemaColumnsPhysicalIndexDDL()
+	InformationSchemaColumnsLocalCurrentDDL = informationSchemaColumnsWithLocalPhysicalIndexFilter(InformationSchemaColumnsV41DDL)
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -1025,56 +1050,22 @@ var (
 		"cast(null as timestamp) AS CHECK_TIME,",
 	).Replace(InformationSchemaTablesDDL)
 
-	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
+	// The released definitions above remain stable. Only current listings add
+	// the physical-index classifier, independently in each SELECT branch.
+	InformationSchemaTablesCurrentDDL = strings.ReplaceAll(InformationSchemaTablesV118DDL,
+		catalog.NonTemporaryTableSQLPredicate("tbl"),
+		catalog.NonTemporaryTableSQLPredicate("tbl")+" and "+catalog.NonIndexRelationSQLPredicate("tbl"))
+	InformationSchemaTablesLocalCurrentDDL = strings.Replace(InformationSchemaTablesV41DDL,
+		catalog.NonTemporaryTableSQLPredicate("tbl"),
+		catalog.NonTemporaryTableSQLPredicate("tbl")+" and "+catalog.NonIndexRelationSQLPredicate("tbl"), 1)
+
+	InformationSchemaPartitionsDDL = informationSchemaPartitionsCreate +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
-		"'def' AS `TABLE_CATALOG`," +
-		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
-		"`tbl`.`relname` AS `TABLE_NAME`," +
-		"`pt`.`partition_name` AS `PARTITION_NAME`," +
-		"NULL AS `SUBPARTITION_NAME`," +
-		"(`pt`.`partition_ordinal_position` + 1) AS `PARTITION_ORDINAL_POSITION`," +
-		"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
-		"(case `meta`.`partition_method` " +
-		"when 'Key' then NULL " +
-		"when 'LinearKey' then 'LINEAR KEY' " +
-		"when 'Hash' then 'HASH' " +
-		"when 'LinearHash' then 'LINEAR HASH' " +
-		"when 'Range' then (case when `meta`.`partition_description` like '%columns%' then 'RANGE COLUMNS' else 'RANGE' end) " +
-		"when 'List' then 'LIST' " +
-		"else NULL end) AS `PARTITION_METHOD`," +
-		"NULL AS `SUBPARTITION_METHOD`," +
-		"(case when `meta`.`partition_description` like '%(%' then " +
-		"  replace( " +
-		"    substring( " +
-		"      `meta`.`partition_description`, " +
-		"      locate('(', `meta`.`partition_description`) + 1, " +
-		"      (length(`meta`.`partition_description`) - locate(')', reverse(`meta`.`partition_description`)) + 1) - locate('(', `meta`.`partition_description`) - 1 " +
-		"    ), '`', '' " +
-		"  ) " +
-		"when `meta`.`partition_description` like '%)' then " +
-		"  replace(`meta`.`partition_description`, '`', '') " +
-		"else `meta`.`partition_description` end) AS `PARTITION_EXPRESSION`," +
-		"NULL AS `SUBPARTITION_EXPRESSION`," +
-		"(case when `pt`.`partition_expression_str` like 'values less than%' then " +
-		"  substring(`pt`.`partition_expression_str`, locate('(', `pt`.`partition_expression_str`) + 1, " +
-		"    locate(')', `pt`.`partition_expression_str`) - locate('(', `pt`.`partition_expression_str`) - 1" +
-		"  ) " +
-		"when `pt`.`partition_expression_str` like 'values in%' then " +
-		"  `pt`.`partition_expression_str` " +
-		"else `pt`.`partition_expression_str` end) AS `PARTITION_DESCRIPTION`," +
+		informationSchemaPartitionsProjection +
 		"mo_table_rows(`tbl`.`reldatabase`, coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`," +
-		"0 AS `AVG_ROW_LENGTH`," +
+		informationSchemaPartitionsAverageRowLength +
 		"mo_table_size(`tbl`.`reldatabase`, coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`," +
-		"0 AS `MAX_DATA_LENGTH`," +
-		"0 AS `INDEX_LENGTH`," +
-		"0 AS `DATA_FREE`," +
-		"`tbl`.`created_time` AS `CREATE_TIME`," +
-		"NULL AS `UPDATE_TIME`," +
-		"NULL AS `CHECK_TIME`," +
-		"NULL AS `CHECKSUM`," +
-		"''  AS `PARTITION_COMMENT`," +
-		"'default' AS `NODEGROUP`," +
-		"NULL AS `TABLESPACE_NAME` " +
+		informationSchemaPartitionsProjectionTail +
 		"FROM `__mo_visible_tables` `tbl` " +
 		"LEFT JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
 		"LEFT JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
@@ -1087,7 +1078,7 @@ var (
 		// index tables do not leak in as ordinary-table rows; stats stay
 		// one evaluation per row on the real base or physical partition
 		// identity (coalesce above).
-		" AND NOT startswith(`tbl`.`relname`, '" + catalog.IndexTableNamePrefix + "')" +
+		" AND " + catalog.NonIndexRelationSQLPredicate("tbl") +
 		" AND " + catalog.NonTemporaryTableSQLPredicate("tbl") +
 		" AND `tbl`.`relname` != '" + catalog.MO_ACCOUNT_LOCK + "'" +
 		" AND `tbl`.`relkind` NOT IN ('" + catalog.SystemPartitionRel + "', '" +

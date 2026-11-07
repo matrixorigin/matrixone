@@ -12,7 +12,6 @@ select * from indup_01;
 2  ¦  2  𝄀
 3  ¦  1
 insert into indup_01 values (null,1),(null,2),(null,null) on duplicate key ignore;
-constraint violation: Column 'a' cannot be null
 select * from indup_01;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  1  𝄀

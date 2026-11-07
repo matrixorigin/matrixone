@@ -172,6 +172,98 @@ func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
 }
 
+// TestUniqueConstraintSymbolPreservesIdentifierCase pins the mixed-case
+// residual of issue #31659: an explicit "CONSTRAINT `Uq_MiXeD` UNIQUE"
+// symbol keeps its declared spelling through the real parser, byte-equal
+// to the equivalent "UNIQUE KEY `Uq_MiXeD`(k)" name, including quoted
+// Unicode and embedded-backtick spellings, for CREATE and ALTER ADD.
+// Primary-key, foreign-key and check symbols intentionally keep their
+// legacy case-normalized form; their name lookup and duplicate rejection
+// consumers are unchanged by this fix and the pins below guard that scope.
+func TestUniqueConstraintSymbolPreservesIdentifierCase(t *testing.T) {
+	symbolIndex := func(sql string) *tree.UniqueIndex {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		// Root finding: the AST nodes belong to the owning test's lifetime.
+		// A helper-local defer Free scrubbed the pooled nodes before the
+		// caller's assertions; returning them unleased would leak pool
+		// objects. Free exactly when the owning test finishes.
+		t.Cleanup(stmt.Free)
+		var found *tree.UniqueIndex
+		for _, def := range stmt.(*tree.CreateTable).Defs {
+			if u, ok := def.(*tree.UniqueIndex); ok {
+				found = u
+			}
+		}
+		require.NotNil(t, found)
+		return found
+	}
+
+	symbol := symbolIndex(
+		"create table symbol_case (id int primary key, k int, constraint `Uq_MiXeD` unique(k))")
+	require.Equal(t, "Uq_MiXeD", symbol.GetIndexName())
+
+	explicit := symbolIndex(
+		"create table explicit_case (id int primary key, k int, unique key `Uq_MiXeD`(k))")
+	require.Equal(t, explicit.GetIndexName(), symbol.GetIndexName())
+
+	unicodeSymbol := symbolIndex(
+		"create table unicode_case (id int primary key, k int, constraint `MiXeD_πανα` unique(k))")
+	unicodeControl := symbolIndex(
+		"create table unicode_control (id int primary key, k int, unique key `MiXeD_πανα`(k))")
+	require.Equal(t, unicodeControl.GetIndexName(), unicodeSymbol.GetIndexName())
+
+	embedded := symbolIndex(
+		"create table embedded_case (id int primary key, k int, constraint `a``b` unique(k))")
+	embeddedControl := symbolIndex(
+		"create table embedded_control (id int primary key, k int, unique key `a``b`(k))")
+	require.Equal(t, embeddedControl.GetIndexName(), embedded.GetIndexName())
+
+	// ALTER ADD CONSTRAINT goes through the same constraint_keyword owner.
+	alter, err := ParseOne(context.Background(),
+		"alter table t add constraint `AlTeR_MiXeD` unique(k)", 1)
+	require.NoError(t, err)
+	defer alter.Free()
+	var added *tree.UniqueIndex
+	for _, opt := range alter.(*tree.AlterTable).Options {
+		switch o := opt.(type) {
+		case *tree.AlterOptionAdd:
+			if u, ok := o.Def.(*tree.UniqueIndex); ok {
+				added = u
+			}
+		}
+	}
+	require.NotNil(t, added)
+	require.Equal(t, "AlTeR_MiXeD", added.GetIndexName())
+
+	// Scope guard: PK/FK/CHECK symbols keep their legacy case-normalized
+	// form, so their name lookup, duplicate rejection and drop behavior
+	// are untouched by the UNIQUE-symbol fix above.
+	stmt, err := ParseOne(context.Background(),
+		"create table pins (id int, k int, "+
+			"constraint `Pk_MiXeD` primary key (id), "+
+			"constraint `Fk_MiXeD` foreign key (k) references p(k), "+
+			"constraint `Ck_MiXeD` check (k > 0))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	primaryKey := ""
+	foreignKey := ""
+	checkKey := ""
+	for _, def := range stmt.(*tree.CreateTable).Defs {
+		switch v := def.(type) {
+		case *tree.PrimaryKeyIndex:
+			primaryKey = v.ConstraintSymbol
+		case *tree.ForeignKey:
+			foreignKey = v.ConstraintSymbol
+		case *tree.CheckIndex:
+			checkKey = v.ConstraintSymbol
+		}
+	}
+	require.Equal(t, "pk_mixed", primaryKey)
+	require.Equal(t, "fk_mixed", foreignKey)
+	require.Equal(t, "ck_mixed", checkKey)
+}
+
 func TestConfigIsNonReservedIdentifier(t *testing.T) {
 	_, err := ParseOne(context.Background(), "CREATE TABLE config ("+
 		"`key` VARCHAR(255) PRIMARY KEY,"+

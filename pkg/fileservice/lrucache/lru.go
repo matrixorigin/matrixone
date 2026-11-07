@@ -13,26 +13,40 @@
 // limitations under the License.
 
 // Package lrucache is a size-bounded cache with least-recently-used eviction, with the
-// methods and callbacks of fifocache.Cache.
+// methods and callbacks of a DiskCache index.
 package lrucache
 
 import (
 	"container/list"
 	"context"
+	"hash/maphash"
+	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
+const (
+	numShards  = 16
+	evictBatch = 64
+)
+
 // Cache evicts the least recently used items once the total size exceeds the capacity.
-// Set and Get make an item the most recently used.
+// Set and Get make an item the most recently used. Keys are spread over shards, each
+// ordered by the stamp of its items' last use, and eviction takes the evictable item with
+// the oldest stamp across the shards when it removes it. An item that becomes evictable, or
+// is set oldest, while an eviction scans the shards can be passed over by that eviction.
 type Cache[K comparable, V any] struct {
-	mu       sync.Mutex
 	capacity fscache.CapacityFunc
-	used     int64
-	nextSeq  uint64
-	order    *list.List // of *item[K, V], most recently used first
-	items    map[K]*list.Element
+	seed     maphash.Seed
+	shards   [numShards]shard[K, V]
+	used     atomic.Int64
+	nextSeq  atomic.Uint64
+	newest   atomic.Int64  // last stamp given to a use
+	added    atomic.Uint64 // count of Sets and of Replaces that grew an item
+	oldest   atomic.Int64  // last stamp given by SetOldest
+	evictor  sync.Mutex
 
 	postSet      func(ctx context.Context, key K, value V, size int64, seq uint64)
 	postGet      func(ctx context.Context, key K, value V, size int64)
@@ -41,148 +55,180 @@ type Cache[K comparable, V any] struct {
 	evictable    func(key K) bool
 }
 
+type shard[K comparable, V any] struct {
+	mu    sync.Mutex
+	order list.List // of *item[K, V], highest stamp first
+	items map[K]*list.Element
+	tail  atomic.Int64 // stamp of the last item, or math.MaxInt64 when empty
+	_     [128]byte
+}
+
+// updateTail publishes the stamp of the last item. The caller holds s.mu.
+func (s *shard[K, V]) updateTail() {
+	if e := s.order.Back(); e != nil {
+		s.tail.Store(e.Value.(*item[K, V]).stamp)
+	} else {
+		s.tail.Store(math.MaxInt64)
+	}
+}
+
 type item[K comparable, V any] struct {
 	key   K
 	value V
 	size  int64
 	seq   uint64
+	stamp int64
 }
 
-type evicted[K comparable, V any] struct {
-	item   item[K, V]
-	finish func()
-}
-
-// NewWithPrepareEvict returns a cache with the callbacks of fifocache.NewWithPrepareEvict:
-// prepareEvict runs for Delete and eviction while the item is removed, and the cleanup it
-// returns runs once after postEvict, outside the cache's lock. Replace does not invoke
-// prepareEvict. keyShardFunc is accepted for the same signature and not used.
+// NewWithPrepareEvict returns a cache with the callbacks of a DiskCache index:
+// prepareEvict runs for Delete and eviction after the item is removed, then postEvict, then
+// the cleanup prepareEvict returns, all outside the cache's locks. Replace does not invoke
+// prepareEvict.
 func NewWithPrepareEvict[K comparable, V any](
 	capacity fscache.CapacityFunc,
-	keyShardFunc func(K) uint64,
 	postSet func(ctx context.Context, key K, value V, size int64, seq uint64),
 	postGet func(ctx context.Context, key K, value V, size int64),
 	prepareEvict func(key K, value V, size int64, seq uint64) func(),
 	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64),
 ) *Cache[K, V] {
-	return &Cache[K, V]{
+	c := &Cache[K, V]{
 		capacity:     capacity,
-		order:        list.New(),
-		items:        make(map[K]*list.Element),
+		seed:         maphash.MakeSeed(),
 		postSet:      postSet,
 		postGet:      postGet,
 		prepareEvict: prepareEvict,
 		postEvict:    postEvict,
 	}
+	for i := range c.shards {
+		c.shards[i].items = make(map[K]*list.Element)
+		c.shards[i].tail.Store(math.MaxInt64)
+	}
+	return c
 }
 
 // SetEvictable makes eviction pass over the items for which evictable returns false,
-// which then stay even when the cache is over capacity. evictable runs under the cache's
+// which then stay even when the cache is over capacity. evictable runs under a shard's
 // lock and must not call the cache. Call it before the cache is used.
 func (c *Cache[K, V]) SetEvictable(evictable func(key K) bool) {
 	c.evictable = evictable
 }
 
-// Set adds key as the most recently used item, then evicts down to the capacity. It
-// does nothing and returns false when key is present.
-func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) (inserted bool, rejected bool) {
-	c.mu.Lock()
-	if c.items[key] != nil {
-		c.mu.Unlock()
-		return false, false
-	}
-	c.nextSeq++
-	it := item[K, V]{key: key, value: value, size: size, seq: c.nextSeq}
-	c.items[key] = c.order.PushFront(&it)
-	c.used += size
-	c.mu.Unlock()
-	if c.postSet != nil {
-		c.postSet(ctx, key, value, size, it.seq)
-	}
-	c.Evict(ctx, nil, 0)
-	return true, false
+func (c *Cache[K, V]) shardOf(key K) *shard[K, V] {
+	return &c.shards[maphash.Comparable(c.seed, key)%numShards]
 }
 
-// SetOldest adds key as the least recently used item, then evicts down to the capacity.
-// It does nothing and returns false when key is present.
+// Set adds key as the most recently used item, then evicts down to the capacity unless an
+// eviction is running, which then does. It does nothing and returns false when key is
+// present.
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) (inserted bool, rejected bool) {
+	return c.set(ctx, key, value, size, false), false
+}
+
+// SetOldest adds key as the least recently used item, then evicts as Set does. It does
+// nothing and returns false when key is present.
 func (c *Cache[K, V]) SetOldest(ctx context.Context, key K, value V, size int64) bool {
-	c.mu.Lock()
-	if c.items[key] != nil {
-		c.mu.Unlock()
+	return c.set(ctx, key, value, size, true)
+}
+
+func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldest bool) bool {
+	s := c.shardOf(key)
+	s.mu.Lock()
+	if s.items[key] != nil {
+		s.mu.Unlock()
 		return false
 	}
-	c.nextSeq++
-	it := item[K, V]{key: key, value: value, size: size, seq: c.nextSeq}
-	c.items[key] = c.order.PushBack(&it)
-	c.used += size
-	c.mu.Unlock()
-	if c.postSet != nil {
-		c.postSet(ctx, key, value, size, it.seq)
+	it := &item[K, V]{key: key, value: value, size: size, seq: c.nextSeq.Add(1)}
+	if oldest {
+		it.stamp = c.oldest.Add(-1)
+		s.items[key] = s.order.PushBack(it)
+	} else {
+		it.stamp = c.newest.Add(1)
+		s.items[key] = s.order.PushFront(it)
 	}
-	c.Evict(ctx, nil, 0)
+	s.updateTail()
+	c.used.Add(size)
+	c.added.Add(1)
+	seq := it.seq
+	s.mu.Unlock()
+	if c.postSet != nil {
+		c.postSet(ctx, key, value, size, seq)
+	}
+	c.evictOver(ctx)
 	return true
 }
 
 // Get returns key's value and makes it the most recently used item.
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
-	c.mu.Lock()
-	e := c.items[key]
+	s := c.shardOf(key)
+	s.mu.Lock()
+	e := s.items[key]
 	if e == nil {
-		c.mu.Unlock()
+		s.mu.Unlock()
 		return value, false
 	}
-	c.order.MoveToFront(e)
-	it := *e.Value.(*item[K, V])
-	c.mu.Unlock()
-	if c.postGet != nil {
-		c.postGet(ctx, key, it.value, it.size)
+	it := e.Value.(*item[K, V])
+	it.stamp = c.newest.Add(1)
+	wasTail := e == s.order.Back()
+	s.order.MoveToFront(e)
+	if wasTail {
+		s.updateTail()
 	}
-	return it.value, true
+	value, size := it.value, it.size
+	s.mu.Unlock()
+	if c.postGet != nil {
+		c.postGet(ctx, key, value, size)
+	}
+	return value, true
 }
 
 // Contains reports whether key is present, without counting a use.
 func (c *Cache[K, V]) Contains(key K) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.items[key] != nil
+	s := c.shardOf(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.items[key] != nil
 }
 
 // Delete removes key.
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	c.mu.Lock()
-	e := c.items[key]
+	s := c.shardOf(key)
+	s.mu.Lock()
+	e := s.items[key]
 	if e == nil {
-		c.mu.Unlock()
+		s.mu.Unlock()
 		return
 	}
-	ev := c.removeLocked(e)
-	c.mu.Unlock()
-	c.finishEvictions(ctx, []evicted[K, V]{ev})
+	it := c.removeLocked(s, e)
+	s.mu.Unlock()
+	c.finishEvictions(ctx, []item[K, V]{it})
 }
 
-// Replace sets the value and size of a present key, keeping its place, and returns
-// false when key is absent. The old value goes to postEvict.
+// Replace sets the value and size of a present key, keeping its place, then evicts as Set
+// does. It returns false when key is absent. The old value goes to postEvict.
 func (c *Cache[K, V]) Replace(ctx context.Context, key K, value V, size int64) bool {
-	c.mu.Lock()
-	e := c.items[key]
+	s := c.shardOf(key)
+	s.mu.Lock()
+	e := s.items[key]
 	if e == nil {
-		c.mu.Unlock()
+		s.mu.Unlock()
 		return false
 	}
 	it := e.Value.(*item[K, V])
 	old := *it
-	c.nextSeq++
-	it.value, it.size, it.seq = value, size, c.nextSeq
-	c.used += size - old.size
+	it.value, it.size, it.seq = value, size, c.nextSeq.Add(1)
+	c.used.Add(size - old.size)
+	if size > old.size {
+		c.added.Add(1)
+	}
 	seq := it.seq
-	c.mu.Unlock()
+	s.mu.Unlock()
 	if c.postEvict != nil {
 		c.postEvict(ctx, old.key, old.value, old.size, old.seq)
 	}
 	if c.postSet != nil {
 		c.postSet(ctx, key, value, size, seq)
 	}
-	c.Evict(ctx, nil, 0)
+	c.evictOver(ctx)
 	return true
 }
 
@@ -217,9 +263,7 @@ func (c *Cache[K, V]) EvictToTargetWithWait(ctx context.Context, target int64) i
 }
 
 func (c *Cache[K, V]) Used() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.used
+	return c.used.Load()
 }
 
 func (c *Cache[K, V]) Capacity() int64 {
@@ -229,54 +273,155 @@ func (c *Cache[K, V]) Capacity() int64 {
 // evictTo removes the least recently used evictable items until at most target bytes
 // are used, and returns the bytes used after.
 func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
-	var evictions []evicted[K, V]
-	c.mu.Lock()
-	for e := c.order.Back(); e != nil && c.used > target; {
-		prev := e.Prev()
-		if c.evictable == nil || c.evictable(e.Value.(*item[K, V]).key) {
-			evictions = append(evictions, c.removeLocked(e))
+	for c.used.Load() > target {
+		c.evictor.Lock()
+		evictions := c.removeTo(target)
+		c.evictor.Unlock()
+		c.finishEvictions(ctx, evictions)
+		if len(evictions) < evictBatch {
+			break
 		}
-		e = prev
 	}
-	used := c.used
-	c.mu.Unlock()
-	c.finishEvictions(ctx, evictions)
+	used := c.used.Load()
+	c.evictOver(ctx)
 	return used
 }
 
-func (c *Cache[K, V]) removeLocked(e *list.Element) evicted[K, V] {
-	it := *e.Value.(*item[K, V])
-	c.order.Remove(e)
-	delete(c.items, it.key)
-	c.used -= it.size
-	ev := evicted[K, V]{item: it}
-	if c.prepareEvict != nil {
-		ev.finish = c.prepareEvict(it.key, it.value, it.size, it.seq)
+// evictOver evicts down to the capacity, unless another eviction is running: that one
+// checks again once it is done. It stops when nothing is evictable and nothing was added
+// meanwhile.
+func (c *Cache[K, V]) evictOver(ctx context.Context) {
+	for c.used.Load() > c.capacity() {
+		if !c.evictor.TryLock() {
+			return
+		}
+		added := c.added.Load()
+		evictions := c.removeTo(c.capacity())
+		c.evictor.Unlock()
+		c.finishEvictions(ctx, evictions)
+		if len(evictions) == 0 && c.added.Load() == added {
+			return
+		}
 	}
-	return ev
 }
 
-// finishEvictions runs postEvict and the prepareEvict cleanup of each eviction, every
-// cleanup even if a callback panics.
-func (c *Cache[K, V]) finishEvictions(ctx context.Context, evictions []evicted[K, V]) {
+// removeTo removes up to evictBatch of the least recently used evictable items, stopping
+// once at most target bytes are used. The caller holds c.evictor.
+func (c *Cache[K, V]) removeTo(target int64) []item[K, V] {
+	var evictions []item[K, V]
+	for len(evictions) < evictBatch && c.used.Load() > target {
+		it, ok := c.removeOldest()
+		if !ok {
+			break
+		}
+		evictions = append(evictions, it)
+	}
+	return evictions
+}
+
+// removeOldest removes the evictable item with the oldest stamp, and returns false when no
+// item is evictable. A shard whose oldest item changed since its stamp was read is read
+// again. The caller holds c.evictor.
+func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
+	for {
+		var oldest *shard[K, V]
+		stamp := int64(math.MaxInt64)
+		for i := range c.shards {
+			if t := c.shards[i].tail.Load(); t < stamp {
+				oldest, stamp = &c.shards[i], t
+			}
+		}
+		if oldest == nil {
+			return item[K, V]{}, false
+		}
+		oldest.mu.Lock()
+		e := oldest.order.Back()
+		if e == nil || e.Value.(*item[K, V]).stamp != stamp {
+			oldest.mu.Unlock()
+			continue
+		}
+		if c.evictable == nil || c.evictable(e.Value.(*item[K, V]).key) {
+			it := c.removeLocked(oldest, e)
+			oldest.mu.Unlock()
+			return it, true
+		}
+		oldest.mu.Unlock()
+		return c.scanOldest()
+	}
+}
+
+// scanOldest is removeOldest looking past the items that are not evictable. It scans again
+// when the oldest evictable item of the shard it picked changed meanwhile.
+func (c *Cache[K, V]) scanOldest() (item[K, V], bool) {
+	for {
+		var oldest *shard[K, V]
+		var stamp int64
+		for i := range c.shards {
+			s := &c.shards[i]
+			s.mu.Lock()
+			if e := c.oldestLocked(s); e != nil {
+				if st := e.Value.(*item[K, V]).stamp; oldest == nil || st < stamp {
+					oldest, stamp = s, st
+				}
+			}
+			s.mu.Unlock()
+		}
+		if oldest == nil {
+			return item[K, V]{}, false
+		}
+		oldest.mu.Lock()
+		if e := c.oldestLocked(oldest); e != nil && e.Value.(*item[K, V]).stamp == stamp {
+			it := c.removeLocked(oldest, e)
+			oldest.mu.Unlock()
+			return it, true
+		}
+		oldest.mu.Unlock()
+	}
+}
+
+// oldestLocked returns the evictable element of s with the oldest stamp, or nil. The
+// caller holds s.mu.
+func (c *Cache[K, V]) oldestLocked(s *shard[K, V]) *list.Element {
+	for e := s.order.Back(); e != nil; e = e.Prev() {
+		if c.evictable == nil || c.evictable(e.Value.(*item[K, V]).key) {
+			return e
+		}
+	}
+	return nil
+}
+
+func (c *Cache[K, V]) removeLocked(s *shard[K, V], e *list.Element) item[K, V] {
+	it := *e.Value.(*item[K, V])
+	s.order.Remove(e)
+	delete(s.items, it.key)
+	s.updateTail()
+	c.used.Add(-it.size)
+	return it
+}
+
+// finishEvictions runs the callbacks of each removed item, for every item even if a callback
+// panics.
+func (c *Cache[K, V]) finishEvictions(ctx context.Context, evictions []item[K, V]) {
 	next := 0
 	defer func() {
-		for ; next < len(evictions); next++ {
-			if f := evictions[next].finish; f != nil {
-				f()
-			}
+		if next < len(evictions) {
+			c.finishEvictions(ctx, evictions[next:])
 		}
 	}()
 	for next < len(evictions) {
-		ev := evictions[next]
+		it := evictions[next]
 		next++
-		func() {
-			if ev.finish != nil {
-				defer ev.finish()
-			}
-			if c.postEvict != nil {
-				c.postEvict(ctx, ev.item.key, ev.item.value, ev.item.size, ev.item.seq)
-			}
-		}()
+		c.finishEviction(ctx, it)
+	}
+}
+
+func (c *Cache[K, V]) finishEviction(ctx context.Context, it item[K, V]) {
+	if c.prepareEvict != nil {
+		if finish := c.prepareEvict(it.key, it.value, it.size, it.seq); finish != nil {
+			defer finish()
+		}
+	}
+	if c.postEvict != nil {
+		c.postEvict(ctx, it.key, it.value, it.size, it.seq)
 	}
 }

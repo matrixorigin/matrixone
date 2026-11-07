@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
@@ -52,8 +53,10 @@ var fulltext2_runSql = sqlexec.RunSql
 // fulltext2CreateState builds a positional fulltext2 index from the source rows.
 // argVecs: [0]=cfg(JSON const), [1]=pk, [2..]=indexed text columns.
 type fulltext2CreateState struct {
-	inited bool
-	tblcfg fulltext2.TableConfig
+	inited         bool
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	tblcfg         fulltext2.TableConfig
 	// Streaming base build: only ONE open segment is held in memory. It is sealed +
 	// persisted (and its postings freed) the moment it reaches `capacity` docs, so
 	// peak build memory is one capacity-bounded segment rather than the whole corpus.
@@ -78,6 +81,7 @@ type fulltext2CreateState struct {
 
 func (u *fulltext2CreateState) reset(tf *TableFunction, proc *process.Process) {
 	u.abortPipeline()
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -117,7 +121,12 @@ func fulltext2CreatePrepare(proc *process.Process, arg *TableFunction) (tvfState
 
 // start tokenizes source row nthRow and Add's its ordered terms to the builder.
 func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
-	if !u.inited {
+	defer func() {
+		if err != nil {
+			u.policy = nil
+		}
+	}()
+	if u.policy == nil {
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
 			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_create: first argument (config) must be a string")
@@ -129,9 +138,20 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "fulltext2_create: config is empty")
 		}
-		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+		if u.inited && cfgstr != u.admittedConfig {
+			return moerr.NewInvalidInput(proc.Ctx, "fulltext2_create: config changed during operator reuse")
+		}
+		var cfg fulltext2.TableConfig
+		if err = sonic.Unmarshal([]byte(cfgstr), &cfg); err != nil {
 			return err
 		}
+		policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_create", cfg.DbName, "", fulltext2.MaintenanceOperands(cfg)...)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+	}
+	if !u.inited {
 		if u.filters, err = tokenfilter.Build(u.tblcfg.TokenFilters); err != nil {
 			return err
 		}
@@ -231,6 +251,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 		return err
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexRelationPolicy = u.policy
 	if err = u.clearBasesOnce(sqlproc); err != nil {
 		return err
 	}
@@ -279,6 +300,7 @@ func (u *fulltext2CreateState) newBuildPipeline(proc *process.Process) *fulltext
 		SpillDir:  fulltext2.LocalSpillDir(proc.Ctx, proc.Base.FileService),
 		Write: func(spilled *fulltext2.SpilledSegment) error {
 			sqlproc := sqlexec.NewSqlProcess(proc)
+			sqlproc.IndexRelationPolicy = u.policy
 			if err := u.clearBasesOnce(sqlproc); err != nil {
 				return err
 			}
@@ -539,7 +561,7 @@ func (u *fulltext2CreateState) tokenizeContent(content []byte) ([]fulltext2.Word
 // clearing and per-segment persistence already happened incrementally as segments
 // filled during the feed, so peak memory never exceeded one open segment.
 func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) error {
-	if !u.inited {
+	if !u.inited || u.policy == nil {
 		return nil
 	}
 	if u.pipe != nil {
@@ -553,6 +575,7 @@ func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) err
 	}
 	if u.ignored != nil {
 		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
 		if err := u.ignored.sqls(u.ignoredConfig(), sqlproc.BuildSnapshotTS(), func(sql string) error {
 			res, err := fulltext2_runSql(sqlproc, sql)
 			if err != nil {

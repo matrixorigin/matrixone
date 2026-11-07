@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
@@ -300,6 +301,17 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			exec(owner, "create database "+publisherDB)
 			exec(owner, "create table "+publisherDB+".src(id bigint auto_increment primary key, v int)")
 			exec(owner, "insert into "+publisherDB+".src values(7,11)")
+			// A publisher's renamed index child must not become subscriber metadata.
+			exec(owner, "create table "+publisherDB+".metadata_source(id int primary key, v int, key iv(v))")
+			var physicalIndex string
+			require.NoError(t, owner.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='metadata_source') and name='iv' limit 1", publisherDB).Scan(&physicalIndex))
+			exec(owner, "alter table "+publisherDB+"."+sqlquote.Ident(physicalIndex)+" rename to renamed_index")
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				_, err := owner.ExecContext(cleanupCtx, "alter table "+publisherDB+".renamed_index rename to "+sqlquote.Ident(physicalIndex))
+				require.NoError(t, err)
+			}()
 			exec(owner, "create publication "+publication+" database "+publisherDB+" account "+account)
 
 			tenantDB, err := sql.Open("mysql", fmt.Sprintf(account+"#root#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -316,6 +328,27 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			}
 			execSubscriber("create database " + publisherDB)
 			execSubscriber("create database subscribed from sys publication " + publication)
+			var hiddenColumns, ordinaryColumns int
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from information_schema.columns where table_schema='subscribed' and table_name='renamed_index'").Scan(&hiddenColumns))
+			require.Zero(t, hiddenColumns)
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from information_schema.columns where table_schema='subscribed' and table_name='metadata_source'").Scan(&ordinaryColumns))
+			require.Equal(t, 2, ordinaryColumns)
+			execSubscriber("create role subscriber_metadata_reader")
+			execSubscriber("create user subscriber_metadata_user identified by '111' default role subscriber_metadata_reader")
+			execSubscriber("grant connect on account * to subscriber_metadata_reader")
+			execSubscriber("grant show tables on database subscribed to subscriber_metadata_reader")
+			readerDB, err := sql.Open("mysql", fmt.Sprintf(account+"#subscriber_metadata_user#subscriber_metadata_reader:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer readerDB.Close()
+			for _, tc := range []struct {
+				table string
+				want  int
+			}{{"metadata_source", 2}, {"renamed_index", 0}} {
+				var visible int
+				err = readerDB.QueryRowContext(ctx, "select count(*) from information_schema.columns where table_schema='subscribed' and table_name=?", tc.table).Scan(&visible)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, visible, tc.table)
+			}
 			cloneAndCheck := func(target string, temporary bool) {
 				t.Helper()
 				qualifier := ""

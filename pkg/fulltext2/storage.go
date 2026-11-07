@@ -127,6 +127,19 @@ type TableConfig struct {
 	ProbeTailBarLogical uint32 `json:"probe_tail_bar_logical,omitempty"`
 }
 
+// MaintenanceOperands returns the relations fulltext2_create writes: the chunk store, the
+// metadata table and, when cfg has one, the ignored table.
+func MaintenanceOperands(cfg TableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.FullText2Index_TblType_Storage, Name: cfg.IndexTable},
+		{Role: catalog.FullText2Index_TblType_Metadata, Name: cfg.MetadataTable},
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
+
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
 // mock the DB round-trips (metadata reads, base/tail chunk loads, budget gates,
 // compaction). Production points them at the real executor; tests swap them for fakes
