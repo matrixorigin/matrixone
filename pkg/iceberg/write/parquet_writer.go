@@ -92,6 +92,7 @@ func NewParquetDataWriter(ctx context.Context, cfg DataWriterConfig, dst io.Writ
 			cw,
 			parquet.NewSchema("iceberg", group),
 			parquet.MaxRowsPerRowGroup(parquetWriteMaxRowsPerRowGroup),
+			parquet.DataPageStatistics(false),
 		),
 		out:     cw,
 		fields:  append([]api.SchemaField(nil), cfg.Schema.Fields...),

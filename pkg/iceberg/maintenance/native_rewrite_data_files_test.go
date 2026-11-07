@@ -17,6 +17,7 @@ package maintenance
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/testutil/parquettest"
 	"io"
 	"math"
 	"testing"
@@ -630,6 +631,7 @@ func TestParquetConcatRewriteDataFilesCompactorMergesAppendOnlyFiles(t *testing.
 	require.Equal(t, int64(5), replacement.RecordCount)
 	require.Equal(t, int64(len(result.Objects[0].Payload)), replacement.FileSizeInBytes)
 	require.Equal(t, map[string]any{"region": "ksa"}, replacement.Partition)
+	parquettest.RequireNoDataPageStatistics(t, result.Objects[0].Payload)
 	require.Equal(t, int64(5), rewriteDataFilesParquetRowCount(t, result.Objects[0].Payload))
 }
 

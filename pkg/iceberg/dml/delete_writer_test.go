@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/testutil/parquettest"
 	"io"
 	"math"
 	"strconv"
@@ -62,6 +63,7 @@ func TestWritePositionDeleteFileUsesIcebergReservedSchemaAndSortedRows(t *testin
 	require.NotEmpty(t, file.FilePathHash)
 	require.True(t, strings.HasPrefix(file.FilePathRedacted, "<redacted:path:"))
 
+	parquettest.RequireNoDataPageStatistics(t, buf.Bytes())
 	pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 	require.Equal(t, int64(2), pf.NumRows())
@@ -140,6 +142,7 @@ func TestWriteEqualityDeleteFileUsesTableFieldIDsAndMetadata(t *testing.T) {
 	require.Equal(t, []byte("ksa"), file.LowerBounds[2])
 	require.Equal(t, []byte("ksa"), file.UpperBounds[2])
 
+	parquettest.RequireNoDataPageStatistics(t, buf.Bytes())
 	pf, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 	require.Equal(t, int64(2), pf.NumRows())

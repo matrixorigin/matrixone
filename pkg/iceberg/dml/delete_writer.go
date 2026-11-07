@@ -134,7 +134,7 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 		return api.DataFile{}, err
 	}
 	defer releaseDeleteWriterMemory(req.MemoryBudget, scratchBytes)
-	writer := parquet.NewGenericWriter[any](cw, schema, parquet.MaxRowsPerRowGroup(deleteMaxRowsPerRowGroup))
+	writer := parquet.NewGenericWriter[any](cw, schema, parquet.MaxRowsPerRowGroup(deleteMaxRowsPerRowGroup), parquet.DataPageStatistics(false))
 	writerFinished := false
 	defer func() {
 		if !writerFinished {
@@ -231,7 +231,7 @@ func WriteEqualityDeleteFile(ctx context.Context, dst io.Writer, req EqualityDel
 		return api.DataFile{}, err
 	}
 	defer releaseDeleteWriterMemory(req.MemoryBudget, scratchBytes)
-	writer := parquet.NewGenericWriter[any](cw, parquet.NewSchema("equality_delete", group), parquet.MaxRowsPerRowGroup(deleteMaxRowsPerRowGroup))
+	writer := parquet.NewGenericWriter[any](cw, parquet.NewSchema("equality_delete", group), parquet.MaxRowsPerRowGroup(deleteMaxRowsPerRowGroup), parquet.DataPageStatistics(false))
 	writerFinished := false
 	defer func() {
 		if !writerFinished {

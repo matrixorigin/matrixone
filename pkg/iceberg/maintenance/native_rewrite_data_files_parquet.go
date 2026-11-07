@@ -514,6 +514,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 				parquet.PageBufferSize(rewriteDataFilesPageBufferBytes),
 				parquet.WriteBufferSize(0),
 				parquet.MaxRowsPerRowGroup(rewriteDataFilesRowsPerRowGroup),
+				parquet.DataPageStatistics(false),
 			)
 		}
 		projection, err := newRewriteDataFilesProjection(req.Metadata, writerSchema, file.Schema())

@@ -15,6 +15,7 @@ RUN curl -fsSL https://pixi.sh/install.sh -o /tmp/pixi-install.sh && \
 
 WORKDIR /matrixone
 COPY go.mod go.sum ./
+COPY third_party/parquet-go/go.mod third_party/parquet-go/go.mod
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off

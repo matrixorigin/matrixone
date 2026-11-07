@@ -22,10 +22,10 @@ WORKDIR /matrixone
 ENV GOWORK=off
 
 # Pre-download dependencies (this layer is cached).
-# Copy only go.mod and go.sum first for better caching
-# If go.mod/go.sum don't change, this layer will be cached
-# and won't re-download dependencies, significantly reducing build time
+# Copy module manifests first for better caching.
+# The local replacement manifest is required by go mod download.
 COPY go.mod go.sum ./
+COPY third_party/parquet-go/go.mod third_party/parquet-go/go.mod
 RUN go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct && \
     module_files="$(sha256sum go.mod go.sum)" && \
     go mod download && \
@@ -53,6 +53,7 @@ COPY etc ./etc
 # Copy source code and build the binary
 # This creates /mo-service in the image for production use
 # If source code is mounted as volume at runtime, it will override this
+COPY third_party/parquet-go ./third_party/parquet-go
 COPY pkg ./pkg
 COPY cmd ./cmd
 COPY proto ./proto

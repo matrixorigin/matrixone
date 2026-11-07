@@ -345,6 +345,26 @@ select * from pq_stats_check;
 select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
 ➤ source[12,-1,0]  ¦  count(*)[-5,64,0]  ¦  MIN(id)[-5,64,0]  ¦  MAX(score)[8,54,0]  𝄀
 no_stats  ¦  5  ¦  10  ¦  95.5
+drop table if exists pq_coalesced_bool;
+create table pq_coalesced_bool(a int primary key, s varchar(6000));
+load data infile {'filepath'='$resources/parquet/coalesced_bool_statistics.parquet', 'format'='parquet'} into table pq_coalesced_bool;
+select a, length(s), s = case a when 1 then 'a' else repeat('z', 5000) end from pq_coalesced_bool order by a;
+➤ a[4,32,0]  ¦  length(s)[-5,64,0]  ¦  s = case a when 1 then a else repeat(z, 5000) end[-6,8,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  5000  ¦  1
+truncate table pq_coalesced_bool;
+load data infile {'filepath'='$resources/parquet/coalesced_bool_no_statistics.parquet', 'format'='parquet'} into table pq_coalesced_bool;
+select a, length(s), s = case a when 1 then 'a' else repeat('z', 5000) end from pq_coalesced_bool order by a;
+➤ a[4,32,0]  ¦  length(s)[-5,64,0]  ¦  s = case a when 1 then a else repeat(z, 5000) end[-6,8,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  5000  ¦  1
+truncate table pq_coalesced_bool;
+load data infile {'filepath'='$resources/parquet/coalesced_bool_statistics.parquet', 'format'='parquet'} into table pq_coalesced_bool parallel 'false';
+select a, length(s), s = case a when 1 then 'a' else repeat('z', 5000) end from pq_coalesced_bool order by a;
+➤ a[4,32,0]  ¦  length(s)[-5,64,0]  ¦  s = case a when 1 then a else repeat(z, 5000) end[-6,8,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  5000  ¦  1
+drop table pq_coalesced_bool;
 drop table if exists empty_table;
 create table empty_table(col1 bigint, col2 varchar);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table;

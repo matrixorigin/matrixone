@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/testutil/parquettest"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
@@ -126,8 +127,8 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer func() { require.Zero(t, mp.CurrNB()) }()
 		bat := newBytesBatch(t, mp, types.T_varchar, 30,
-			[][]byte{[]byte("héllo"), []byte("世界"), nil, []byte("plain")},
-			[]bool{false, false, true, false})
+			[][]byte{[]byte("héllo"), []byte("世界"), []byte("z"), []byte("é"), nil, []byte("plain")},
+			[]bool{false, false, false, false, true, false})
 		defer bat.Clean(mp)
 		require.NoError(t, pw.WriteBatch(bat, mp, nil))
 		data, err := pw.Close()
@@ -135,8 +136,16 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 		require.Equal(t, "PAR1", string(data[:4]))
 		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
-		require.Equal(t, int64(4), file.NumRows())
+		parquettest.RequireNoDataPageStatistics(t, data)
+		require.Equal(t, int64(6), file.NumRows())
+		require.NotNil(t, file.Metadata().Schema[1].LogicalType)
 		require.NotNil(t, file.Metadata().Schema[1].LogicalType.UTF8)
+		stats := file.Metadata().RowGroups[0].Columns[0].MetaData.Statistics
+		require.Empty(t, stats.Min)
+		require.Empty(t, stats.Max)
+		require.Equal(t, []byte("héllo"), stats.MinValue)
+		require.Equal(t, []byte("世界"), stats.MaxValue)
+		require.Equal(t, int64(1), stats.NullCount)
 	})
 
 	t.Run("binary-flagged columns bypass validation and stay lossless", func(t *testing.T) {
@@ -162,8 +171,8 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 				require.False(t, pw.utf8Cols[0])
 				mp := mpool.MustNewZero()
 				defer func() { require.Zero(t, mp.CurrNB()) }()
-				raw := [][]byte{{0xFF}, {0x61, 0xFF, 0x62}, []byte("plain")}
-				bat := newBytesBatch(t, mp, tc.engineT, 30, raw, []bool{false, false, false})
+				raw := [][]byte{{0x7a}, {0x80}, {0xFF}, {0x61, 0xFF, 0x62}, []byte("plain")}
+				bat := newBytesBatch(t, mp, tc.engineT, 30, raw, []bool{false, false, false, false, false})
 				defer bat.Clean(mp)
 				require.NoError(t, pw.WriteBatch(bat, mp, nil))
 				data, err := pw.Close()
@@ -173,6 +182,12 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 				// raw binary is BYTE_ARRAY with neither UTF8 nor STRING tags.
 				file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 				require.NoError(t, err)
+				parquettest.RequireNoDataPageStatistics(t, data)
+				stats := file.Metadata().RowGroups[0].Columns[0].MetaData.Statistics
+				require.Empty(t, stats.Min)
+				require.Empty(t, stats.Max)
+				require.Equal(t, []byte{0x61, 0xff, 0x62}, stats.MinValue)
+				require.Equal(t, []byte{0xff}, stats.MaxValue)
 				require.Len(t, file.Metadata().Schema, 2)
 				leaf := file.Metadata().Schema[1]
 				require.Nil(t, leaf.LogicalType)
