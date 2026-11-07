@@ -77,7 +77,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
+		expr, err = b.bindNumVal(exprImpl, b.numValDefaultBindType(exprImpl))
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
@@ -264,18 +264,24 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
-			// A user-written explicit CAST is a semantic boundary: its source
-			// must bind exactly as in a SELECT projection. Without
-			// suppression, an INSERT/REPLACE value binder pre-coerces a
-			// binary-domain source literal (x'FF', b'...', _binary'...') to
-			// the destination column type, erasing the binary domain before
-			// the explicit cast can apply its own conversion contract
-			// (invalid UTF-8 -> NULL + Warning 1300). The outer assignment
-			// cast still consumes the explicit cast's result.
-			suppress := b.suppressDefaultValueBindType
-			b.suppressDefaultValueBindType = true
+			// A user-written explicit CAST into non-binary-charset text is a
+			// semantic boundary for binary-domain literals: without
+			// protection, an INSERT/REPLACE value binder pre-coerces a hex or
+			// bit source literal (x'FF', b'...') to the destination column
+			// type, erasing the binary domain before the explicit cast can
+			// apply its own conversion contract (invalid UTF-8 -> NULL +
+			// Warning 1300) — including literals nested inside source
+			// expressions such as IFNULL/COALESCE/CONCAT. Protection is a
+			// leaf-level gate (numValDefaultBindType): only hex/bit NumVal
+			// leaves skip pre-coercion, so string literals, plain numeric
+			// literals, columns and non-literal expressions bind identically
+			// either way and keep the historical pre-coercion (CAST(X'3132'
+			// AS SIGNED) in VALUES stays 12, plain numeric text defaults keep
+			// folding). The innermost explicit cast owns its source subtree.
+			suppress := b.binaryLiteralUnderExplicitTextCast
+			b.binaryLiteralUnderExplicitTextCast = explicitCastTargetsNonBinaryText(typ)
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
-			b.suppressDefaultValueBindType = suppress
+			b.binaryLiteralUnderExplicitTextCast = suppress
 		}
 		b.numericParamType = parentParamType
 		if err != nil {
@@ -477,6 +483,35 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 		}
 		astExpr = paren.Expr
 	}
+}
+
+// explicitCastTargetsNonBinaryText reports whether an explicit CAST target is
+// non-binary-charset char/varchar/text — the conversion domain guarded by
+// func_cast.go binarySourceToText and mirrored by function.go
+// explicitBinaryToTextCastMaySynthesizeNull.
+func explicitCastTargetsNonBinaryText(typ Type) bool {
+	t := types.T(typ.Id)
+	if t != types.T_char && t != types.T_varchar && t != types.T_text {
+		return false
+	}
+	return typ.Charset != uint32(types.CharsetBinary)
+}
+
+// numValDefaultBindType applies the INSERT/REPLACE destination-column
+// pre-coercion to numeric literals, except that a hex or bit literal bound in
+// the source subtree of an explicit CAST into non-binary-charset text keeps
+// its raw binary bytes: defaultValueBindType would rewrite those leaves to
+// the destination column type and erase the binary domain before the explicit
+// cast's conversion contract (invalid UTF-8 -> NULL + Warning 1300) could
+// apply. Plain numeric literals, string literals and non-literal expressions
+// are unaffected, so folded text defaults and numeric-target casts keep the
+// historical coercion.
+func (b *baseBinder) numValDefaultBindType(astExpr *tree.NumVal) Type {
+	if b.binaryLiteralUnderExplicitTextCast &&
+		(astExpr.ValType == tree.P_hexnum || astExpr.ValType == tree.P_bit) {
+		return Type{}
+	}
+	return b.defaultValueBindType()
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
