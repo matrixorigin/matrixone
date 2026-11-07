@@ -234,7 +234,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			// so INSERT/REPLACE destination pre-coercion cannot erase the
 			// binary domain before conversion (NULL + Warning 1300).
 			suppressBinarySourceGuard := b.binaryLiteralUnderExplicitTextCast
-			b.binaryLiteralUnderExplicitTextCast = explicitCastTargetsNonBinaryText(typ)
+			b.binaryLiteralUnderExplicitTextCast = binarySourceGuardForCastSource(suppressBinarySourceGuard, typ)
 			expr, err = b.bindFuncExprImplByAstExpr("convert", []tree.Expr{exprImpl.Expr, charsetLiteral}, depth)
 			b.binaryLiteralUnderExplicitTextCast = suppressBinarySourceGuard
 			if err != nil {
@@ -287,9 +287,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			// identically either way and keep the historical pre-coercion
 			// (CAST(X'3132' AS SIGNED) in VALUES stays 12, plain numeric text
 			// defaults keep folding). The innermost explicit cast owns its
-			// source subtree.
+			// source subtree, except that a byte-preserving nested cast whose
+			// target stays in the binary domain (CAST(... AS BINARY), binary-
+			// charset CHAR) is transparent: it does not change the bytes an
+			// enclosing text cast converts, so an inherited guard passes
+			// through it unchanged (review5810535982).
 			suppress := b.binaryLiteralUnderExplicitTextCast
-			b.binaryLiteralUnderExplicitTextCast = explicitCastTargetsNonBinaryText(typ)
+			b.binaryLiteralUnderExplicitTextCast = binarySourceGuardForCastSource(suppress, typ)
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
 			b.binaryLiteralUnderExplicitTextCast = suppress
 		}
@@ -505,6 +509,34 @@ func explicitCastTargetsNonBinaryText(typ Type) bool {
 		return false
 	}
 	return typ.Charset != uint32(types.CharsetBinary)
+}
+
+// explicitCastKeepsBinaryDomain reports whether an explicit CAST target stays
+// in the binary domain (binary-charset char/varchar/text/binary/varbinary):
+// the cast keeps the raw source bytes, at most truncating or zero-padding
+// them to the target width, so an enclosing non-binary text cast's
+// conversion contract still applies to the same bytes.
+func explicitCastKeepsBinaryDomain(typ Type) bool {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text, types.T_varbinary, types.T_binary:
+	default:
+		return false
+	}
+	return typ.Charset == uint32(types.CharsetBinary)
+}
+
+// binarySourceGuardForCastSource derives the leaf-level binary-source guard
+// for the source subtree of an explicit CAST with target typ, given the
+// guard inherited from any enclosing explicit text cast. A non-binary-charset
+// text target opens the guard for its own source subtree. A binary-domain
+// target is byte-preserving, so an inherited guard passes through it
+// unchanged; any other target (numeric, temporal, ...) is a substantive
+// conversion boundary and closes the guard.
+func binarySourceGuardForCastSource(inherited bool, typ Type) bool {
+	if explicitCastTargetsNonBinaryText(typ) {
+		return true
+	}
+	return inherited && explicitCastKeepsBinaryDomain(typ)
 }
 
 // numValDefaultBindType applies the INSERT/REPLACE destination-column

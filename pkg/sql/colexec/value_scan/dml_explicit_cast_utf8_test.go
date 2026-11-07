@@ -15,11 +15,13 @@
 package value_scan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -331,4 +333,149 @@ func TestInsertValuesExplicitBinaryCastProtectsNumericDestination(t *testing.T) 
 	// keeps historical assignment binding and emits no Warning 1300.
 	_, _, codes = evalCol0("insert into dept values (_binary X'3132','n','l')")
 	require.Empty(t, codes, "implicit assignment must not produce Warning 1300")
+}
+
+// doubleDeptMockContext is a test-local CompilerContext wrapper: MockCompilerContext
+// resolve() returns a fresh DeepCopyTableDef per call, so retyping the copy's
+// deptno column to a nullable SQL DOUBLE (types.T_float64, 8 bytes — not
+// T_float8/FP8 like vecblock_t.g) rewrites exactly what the planner sees for
+// this test and nothing else. The global mock schema, other tests and every
+// other column/primary-key/binder behavior stay untouched.
+type doubleDeptMockContext struct {
+	*plan2.MockCompilerContext
+}
+
+func (c *doubleDeptMockContext) retypeDeptno(tbl *planpb.TableDef) {
+	if tbl == nil || len(tbl.Cols) == 0 || tbl.Cols[0].Name != "deptno" {
+		return
+	}
+	doubleTyp := types.T_float64.ToType()
+	tbl.Cols[0].Typ = planpb.Type{Id: int32(doubleTyp.Oid), Width: doubleTyp.Width, Scale: doubleTyp.Scale}
+}
+
+func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	obj, tbl, err := c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+	if err == nil && strings.EqualFold(tableName, "dept") {
+		c.retypeDeptno(tbl)
+	}
+	return obj, tbl, err
+}
+
+func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	obj, tbl, err := c.MockCompilerContext.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot)
+	if err == nil && strings.EqualFold(tableName, "dept") {
+		c.retypeDeptno(tbl)
+	}
+	return obj, tbl, err
+}
+
+// review5810535982: binary-domain source protection must pass through
+// byte-preserving nested casts. CAST(CAST(X'FF' AS BINARY) AS CHAR) into a
+// nullable DOUBLE destination used to lose protection at the inner BINARY
+// cast: the hex leaf was pre-coerced to the DOUBLE destination (255) before
+// the outer text conversion, storing 255 without Warning 1300 instead of
+// NULL. Only casts that keep the value in the binary domain (binary-charset
+// char/varchar/binary/varbinary targets) are transparent to the guard;
+// numeric or other substantive conversion targets keep their own boundary.
+//
+// Fixture contract (corrected after the 102 fixture used vecblock_t.g, which
+// is T_float8 = FP8 e4m3, not DOUBLE): the destination must be a real
+// nullable SQL DOUBLE, i.e. types.T_float64. The destination metadata, the
+// final VALUES assignment expression type and the evaluated vector type are
+// all asserted to be T_float64 before any float64 value is read.
+func TestInsertValuesNestedBinaryPreservingCastKeepsConversionContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := &doubleDeptMockContext{MockCompilerContext: plan2.NewMockCompilerContext(true, proc)}
+
+	// Verify the planner-visible destination metadata through the wrapper
+	// before any statement is built: real T_float64, still nullable.
+	_, checked, err := ctx.Resolve("", "dept", nil)
+	require.NoError(t, err)
+	require.Equal(t, "deptno", checked.Cols[0].Name)
+	require.Equal(t, int32(types.T_float64), checked.Cols[0].Typ.Id,
+		"destination must be real SQL DOUBLE (T_float64), not T_float8/FP8")
+	require.False(t, checked.Cols[0].Typ.NotNullable, "destination stays nullable")
+
+	evalG := func(sql string) (bool, float64, []uint16) {
+		t.Helper()
+		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		p, err := plan2.BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		var valueExpr *planpb.Expr
+		for _, n := range p.GetQuery().GetNodes() {
+			if n.RowsetData != nil {
+				valueExpr = n.RowsetData.Cols[0].Data[0].Expr
+			}
+		}
+		require.NotNil(t, valueExpr, "plan has no rowset data")
+		// The final destination assignment expression must be typed DOUBLE:
+		// the value is read as float64 only when the plan expression and the
+		// evaluated vector agree on T_float64.
+		require.Equal(t, int32(types.T_float64), valueExpr.GetTyp().Id,
+			"VALUES destination assignment expression must be typed DOUBLE")
+		sink := &dmlCastWarningSink{}
+		proc.WarningSink = sink
+		exec, err := colexec.NewExpressionExecutor(proc, valueExpr)
+		require.NoError(t, err)
+		defer exec.Free()
+		vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		// The evaluated vector is borrowed: the executor owns and frees it.
+		require.Equal(t, int32(types.T_float64), int32(vec.GetType().Oid),
+			"evaluated vector must be DOUBLE before any float64 read")
+		if vec.GetNulls().Contains(0) {
+			return true, 0, sink.codes
+		}
+		return false, vector.MustFixedColNoTypeCheck[float64](vec)[0], sink.codes
+	}
+
+	// The review case: nested BINARY cast is byte-preserving, so the outer
+	// text cast still owns the conversion -> NULL + exactly one Warning 1300.
+	isNull, _, codes := evalG("insert into dept values (CAST(CAST(x'FF' AS BINARY) AS CHAR),'n','l')")
+	require.True(t, isNull, "nested binary-preserving cast must keep NULL, not a numerically coerced 255")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// REPLACE shares the INSERT value binder: same contract.
+	isNull, _, codes = evalG("replace into dept values (CAST(CAST(x'FF' AS BINARY) AS CHAR),'n','l')")
+	require.True(t, isNull, "REPLACE nullable DOUBLE destination keeps NULL + 1300")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// Charset-explicit outer form: the CONVERT source binding is equally
+	// protected through the nested BINARY cast.
+	isNull, _, codes = evalG("insert into dept values (CAST(CAST(x'FF' AS BINARY) AS CHAR CHARACTER SET utf8mb4),'n','l')")
+	require.True(t, isNull, "charset-explicit text cast keeps NULL + 1300 through nested BINARY")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// Byte length boundary: BINARY(2) pads with a zero byte but stays in the
+	// binary domain; the outer text conversion still applies (FF 00 is
+	// invalid UTF-8) -> NULL + 1300.
+	isNull, _, codes = evalG("insert into dept values (CAST(CAST(x'FF' AS BINARY(2)) AS CHAR),'n','l')")
+	require.True(t, isNull, "binary-preserving cast with padding keeps NULL + 1300")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// Inner charset-explicit binary cast (CHAR CHARACTER SET binary): this is
+	// the other binary-domain branch of the guard helper and must pass an
+	// enclosing text cast's protection through unchanged.
+	isNull, _, codes = evalG("insert into dept values (CAST(CAST(x'FF' AS CHAR CHARACTER SET binary) AS CHAR),'n','l')")
+	require.True(t, isNull, "inner binary-charset CHAR cast is byte-preserving: NULL + 1300")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// Nearest legal control: valid-UTF8 bytes through the nested BINARY cast
+	// convert to text '12' and assign to DOUBLE as exactly 12 with no
+	// warning.
+	isNull, num, codes := evalG("insert into dept values (CAST(CAST(x'3132' AS BINARY) AS CHAR),'n','l')")
+	require.False(t, isNull, "valid bytes '12' through nested binary-preserving cast must not yield NULL")
+	require.Equal(t, float64(12), num, "valid bytes '12' reach the DOUBLE destination as exactly 12")
+	require.Empty(t, codes)
+
+	// Numeric barrier control: the guard must NOT pass through a substantive
+	// numeric conversion. The inner SIGNED cast owns its source subtree, so
+	// the same invalid-UTF8 hex literal keeps the historical destination
+	// pre-coercion (FF interpreted numerically as 255, no NULL, no Warning
+	// 1300) — the decisive contrast with the byte-preserving cases above.
+	isNull, num, codes = evalG("insert into dept values (CAST(CAST(x'FF' AS SIGNED) AS CHAR),'n','l')")
+	require.False(t, isNull, "numeric-target inner cast keeps its own conversion boundary (no NULL)")
+	require.Equal(t, float64(255), num, "inner numeric cast keeps legacy numeric interpretation of FF as exactly 255")
+	require.Empty(t, codes, "numeric barrier emits no Warning 1300")
 }
