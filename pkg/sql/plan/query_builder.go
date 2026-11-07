@@ -4762,12 +4762,27 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
 				}
 			}
+			var labelWidths map[int32]*plan.MySQLSpecialResultType
+			for i := range ctx.headings {
+				result := mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+				if result != nil && result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL {
+					if labelWidths == nil {
+						labelWidths = make(map[int32]*plan.MySQLSpecialResultType)
+					}
+					labelWidths[int32(i)] = result
+				}
+			}
 			ctx.clearOutputColumnProvenance()
 			for i, id := range integerIDs {
 				if !shareGroupingInput {
 					id = builder.integerPrecision.reference(id)
 				}
 				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
+			for i, result := range labelWidths {
+				provenance := ctx.outputColumnProvenanceForProject(i)
+				provenance.MySQLSpecialResultType = result
+				ctx.setOutputColumnProvenance(i, provenance)
 			}
 		}
 		return nodeID, err
@@ -5239,6 +5254,62 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		})
 	}
 	ctx.clearOutputColumnProvenance()
+	{
+		// These branches may lower one SQL grouping query, not a user UNION.
+		// Capture label domains independently of schema lineage; rollup NULL
+		// branches are neutral and must not erase the non-NULL presentation.
+		for colIdx := range ctx.headings {
+			var candidate *plan.MySQLSpecialResultType
+			compatible := true
+			hasRollup, widthOnly, allAggregate, labelOnly := false, false, true, false
+			for branchIdx, branchCtx := range subCtxList {
+				result := mysqlSpecialResultTypeFromProvenance(branchCtx.outputColumnProvenanceForProject(int32(colIdx)))
+				if captured := branchCtx.mysqlSpecialResultTypes[int32(colIdx)]; captured != nil {
+					result = DeepCopyMySQLSpecialResultType(captured)
+				}
+				if result == nil {
+					if !setBranchPureNull[branchIdx][colIdx] {
+						compatible = false
+						break
+					}
+					continue
+				}
+				if candidate != nil && !mysqlSpecialOrderTypesCompatible(&candidate.Typ, &result.Typ) {
+					compatible = false
+					break
+				}
+				labelOnly = labelOnly || result.LabelOnly || result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL
+				allAggregate = allAggregate && (result.Kind == plan.MySQLSpecialResultType_AGGREGATE || result.Kind == plan.MySQLSpecialResultType_ROLLUP_AGGREGATE)
+				hasRollup = hasRollup || result.Kind == plan.MySQLSpecialResultType_ROLLUP ||
+					result.Kind == plan.MySQLSpecialResultType_ROLLUP_AGGREGATE || result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL
+				widthOnly = widthOnly || result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL
+				candidate = result
+			}
+			if compatible && candidate != nil && (shareGroupingInput || hasRollup || widthOnly || labelOnly) {
+				// A user UNION normally clears ENUM/SET identity. An already
+				// rolled-up CHAR item is not an ENUM/SET field, however, and
+				// retains CHAR when the other non-NULL label domains agree.
+				candidate.Kind = plan.MySQLSpecialResultType_ROLLUP
+				if shareGroupingInput && allAggregate {
+					candidate.Kind = plan.MySQLSpecialResultType_ROLLUP_AGGREGATE
+				} else if !shareGroupingInput {
+					candidate.Kind = plan.MySQLSpecialResultType_CHAR_LABEL
+					labelOnly = true
+				}
+				candidate.LabelOnly = labelOnly
+				if distinct {
+					candidate.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
+				}
+				if widthOnly {
+					candidate.Kind = plan.MySQLSpecialResultType_VARCHAR_LABEL
+				}
+				if ctx.mysqlSpecialResultTypes == nil {
+					ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
+				}
+				ctx.mysqlSpecialResultTypes[int32(colIdx)] = candidate
+			}
+		}
+	}
 	if g := builder.integerPrecision; g != nil {
 		for colIdx, output := range ctx.projects {
 			if !types.T(output.Typ.Id).IsInteger() {
@@ -6297,8 +6368,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.integerPrecisionTransparentBoundary = true
 	}
 	defer func() {
-		if err == nil && isRoot && builder.integerPrecision != nil {
-			builder.captureIntegerPrecisionOutputs(ctx)
+		if err == nil && isRoot {
+			builder.captureMySQLSpecialResultTypes(ctx, nodeID)
+			if builder.integerPrecision != nil {
+				builder.captureIntegerPrecisionOutputs(ctx)
+			}
 		}
 	}()
 
@@ -6785,6 +6859,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	builder.captureMySQLSpecialBlockResultTypes(ctx)
+
 	// SELECT projection subqueries are flattened before this pagination is
 	// attached to their plan. The cloned CTE domain may otherwise evaluate a
 	// row that the final Top never consumes. Keep the demand scoped to this
@@ -12040,6 +12116,29 @@ func (builder *QueryBuilder) appendWindowNode(
 		}
 	}
 
+	// This is the current block's window input, before projection subqueries
+	// add JOINs above it. Capture the value-independent fact at its owner.
+	var constantInput *bool
+	for _, result := range ctx.mysqlSpecialResultTypes {
+		if result.Kind != plan.MySQLSpecialResultType_PREPARE_ONLY {
+			continue
+		}
+		if constantInput == nil {
+			state := preparedBindingState(builder.GetContext())
+			var values []any
+			if state != nil {
+				values = state.values
+			}
+			proof := newResultMaterialization(builder.qry, values, builder.ctxByNode)
+			constant := proof.bound(nodeID) <= 1
+			if proof.usedValues && state != nil {
+				state.valueDependent = true
+			}
+			constantInput = &constant
+		}
+		result.MaterializationElided = *constantInput
+	}
+
 	for i, w := range ctx.windows {
 		e := w.GetW()
 		if len(e.PartitionBy) > 0 {
@@ -14621,6 +14720,18 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			if result := outputColumnProvenance[i].MySQLSpecialResultType; result != nil {
+				switch result.Kind {
+				case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_ROLLUP_AGGREGATE:
+					result = DeepCopyMySQLSpecialResultType(result)
+					result.Kind = plan.MySQLSpecialResultType_COLUMN
+					outputColumnProvenance[i].MySQLSpecialResultType = result
+				case plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_PREPARE_ONLY, plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
+					result = DeepCopyMySQLSpecialResultType(result)
+					result.Kind = plan.MySQLSpecialResultType_VARCHAR_LABEL
+					outputColumnProvenance[i].MySQLSpecialResultType = result
+				}
+			}
 			if id := outputColumnProvenance[i].IntegerPrecisionID; id != 0 && builder.integerPrecision != nil {
 				if subCtx.integerPrecision != nil && subCtx.integerPrecision != builder.integerPrecision {
 					id = builder.integerPrecision.importID(subCtx.integerPrecision.graph, id)

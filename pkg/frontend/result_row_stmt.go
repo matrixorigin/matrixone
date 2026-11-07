@@ -499,6 +499,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err != nil {
 				return err
 			}
+			applyCursorEnumSetResultMetadata(columns, colDefs)
 			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 			freezeResultMetadata(execCtx.runner)
 			// A cursor must retain its metadata before the pipeline starts so
@@ -713,6 +714,19 @@ func (resper *MysqlResp) writeColumnDefs(ses *Session, execCtx *ExecCtx, columns
 
 	if execCtx.prepareColDef != nil && len(columns) != len(execCtx.prepareColDef) {
 		execCtx.prepareColDef = nil
+	}
+	if execCtx.prepareColDef != nil && execCtx.prepareStmt != nil {
+		query := execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+		for _, result := range query.GetMysqlSpecialResultTypes() {
+			if result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY ||
+				execCtx.input != nil && execCtx.input.isCursorExecute && enumSetCursorMaterializes(result.Kind) {
+				// COM_STMT_PREPARE can publish CHAR before a window or DISTINCT
+				// materializes VARCHAR. Never reuse those packets for execution
+				// (including cursors), or mutate the statement's prepare cache.
+				execCtx.prepareColDef = nil
+				break
+			}
+		}
 	}
 
 	//send columns

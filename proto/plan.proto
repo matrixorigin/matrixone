@@ -472,6 +472,9 @@ message ColDef {
   ResultColumnKind result_column_kind = 23;
   // Result publication only; never persisted as a table/view schema attribute.
   IntegerResultPresentation integer_result_presentation = 24;
+  // Result publication only: the declared ENUM/SET domain behind a label
+  // projection. typ remains the executable string type.
+  MySQLSpecialResultType mysql_special_result_type = 25;
 }
 
 message Default {
@@ -1912,6 +1915,9 @@ message Query {
   IntegerPrecisionGraph integer_precision = 20;
   // Logical targets of exclusive SELECT locks, retained across optimization.
   repeated SelectLockReference select_lock_references = 21;
+  // Output-aligned ENUM/SET presentations captured before optimization. Empty
+  // when none apply; zero domain types mark ordinary output columns.
+  repeated MySQLSpecialResultType mysql_special_result_types = 22 [(gogoproto.nullable) = false];
 }
 
 message TransationControl {
@@ -2629,4 +2635,32 @@ message SelectLockReference {
   ObjectRef object_ref = 1;
   repeated ViewStep view_path = 2;
   bool is_cluster_table = 3;
+}
+
+// Result publication only, independent of executable types and schema lineage.
+message MySQLSpecialResultType {
+  enum Kind {
+    COLUMN = 0;
+    AGGREGATE = 1;
+    SCALAR_SUBQUERY = 2;
+    // Grouping-set fields have CHAR presentation but no ENUM/SET field flags.
+    ROLLUP = 3;
+    // Window MIN/MAX and DISTINCT ROLLUP use VARCHAR only when materialized.
+    PREPARE_ONLY = 4;
+    // Materialized expression fields retain label width, not ENUM/SET flags.
+    VARCHAR_LABEL = 5;
+    // ROLLUP aggregate labels stay CHAR; FROM exposes their declaration fields.
+    ROLLUP_AGGREGATE = 6;
+    // SET expression labels preserve CHAR through forwarding, without field flags.
+    CHAR_LABEL = 7;
+  }
+  Type typ = 1 [(gogoproto.nullable) = false];
+  Kind kind = 2;
+  // Result publication only: MySQL can omit materialization for this result.
+  // Empty paths and constant/implicit-group window inputs are distinct proofs.
+  // Cursor execution still materializes its result schema.
+  bool materialization_elided = 3;
+  // Stored expression labels never regain ENUM/SET declaration flags, even
+  // when their current producer becomes an aggregate or a forwarded field.
+  bool label_only = 4;
 }

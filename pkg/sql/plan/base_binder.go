@@ -584,8 +584,11 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 						return &Expr{Typ: makePlan2Type(&textType), Expr: param.Expr}, nil
 					}
 					if isRoot {
-						// Physical relational columns cannot carry ANY.
-						return MakePlan2NullTextConstExprWithType(""), nil
+						// Physical columns cannot carry ANY, but a binary NULL is
+						// still a parameter with a TEXT schema, not a neutral SQL NULL
+						// literal. Keep its source through SET type/width merging.
+						textType := types.T_text.ToType()
+						return &Expr{Typ: makePlan2Type(&textType), Expr: param.Expr}, nil
 					}
 				}
 			}
@@ -4721,6 +4724,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	var rangeArgs []*plan.Expr
+	if name == "between" && b.ctx != nil && len(args) == 3 && !function.IsRuntimeConstant(args[0]) {
+		// Numeric-contract rewriting and overload resolution may replace args
+		// in place. Retain the field and native signed/unsigned source domains.
+		rangeArgs = DeepCopyExprList(args)
+	}
 	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
 		preparedSourceBindings(b.GetContext()) == nil {
 		var err error
@@ -5044,6 +5053,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
+			if rangeArgs != nil {
+				// Preserve the source domains even if the overload stays BETWEEN:
+				// its native integer endpoints may already have become DECIMAL.
+				rangeOrigin := &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "between"}, Args: rangeArgs,
+				}}}
+				owner := b.ctx
+				if owner.queryBlockOwner != nil {
+					owner = owner.queryBlockOwner
+				}
+				if owner.mysqlSpecialRangeOrigins == nil {
+					owner.mysqlSpecialRangeOrigins = make(map[*plan.Expr]*plan.Expr)
+				}
+				owner.mysqlSpecialRangeOrigins[e] = rangeOrigin
+			}
 			if b.builder != nil && b.builder.integerPrecision != nil {
 				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
 			}

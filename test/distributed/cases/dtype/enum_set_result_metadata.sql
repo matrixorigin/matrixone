@@ -1,0 +1,628 @@
+-- ENUM/SET publish CHAR metadata while retaining label strings, including
+-- empty labels and NULL. Ordinary strings and computed expressions are controls.
+drop table if exists jdbc_enum_set_metadata;
+create table jdbc_enum_set_metadata (
+    id int primary key,
+    e enum('a','bb',''),
+    s set('x','yy'),
+    c char(2),
+    v varchar(2),
+    u int unique,
+    n int
+);
+insert into jdbc_enum_set_metadata values
+    (1, 'a', 'x,yy', 'ab', 'ab', 1, 1), (2, '', '', '', '', null, 2), (3, null, null, null, null, null, 3);
+-- @metacmp(true)
+select e, s, c, v from jdbc_enum_set_metadata where 1 = 0;
+-- @metacmp(true)
+select e, s, c, v from jdbc_enum_set_metadata order by id;
+-- @metacmp(true)
+select e as enum_alias, s as set_alias
+from (select id, e, s from jdbc_enum_set_metadata order by id limit 3) d order by id;
+-- @metacmp(true)
+select concat(e) as expr_e, cast(s as char) as expr_s from jdbc_enum_set_metadata where 1 = 0;
+-- @metacmp(true)
+select e, s from jdbc_enum_set_metadata where 1 = 0
+union all select e, s from jdbc_enum_set_metadata where 1 = 0;
+-- Functional dependency must retain field metadata across the internal aggregate rewrite.
+-- @metacmp(true)
+select e, s from jdbc_enum_set_metadata group by id order by id;
+-- MIN/MAX and scalar subqueries retain CHAR widths without source-column flags.
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata;
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata where 1 = 0;
+-- @metacmp(true)
+select (select e from jdbc_enum_set_metadata where id = 1) as scalar_e,
+       (select s from jdbc_enum_set_metadata where id = 1) as scalar_s;
+-- @metacmp(true)
+select (select e from jdbc_enum_set_metadata where 1 = 0) as scalar_e,
+       (select s from jdbc_enum_set_metadata where 1 = 0) as scalar_s;
+-- @metacmp(true)
+select (select b.e from jdbc_enum_set_metadata b where b.id = a.id) as scalar_e,
+       (select b.s from jdbc_enum_set_metadata b where b.id = a.id) as scalar_s
+from jdbc_enum_set_metadata a order by id;
+-- A derived aggregate exposes fields; a derived scalar subquery is an ordinary string.
+-- @metacmp(true)
+select e, s from (select min(e) e, max(s) s from jdbc_enum_set_metadata) d;
+-- @metacmp(true)
+select e, s from (select (select e from jdbc_enum_set_metadata where id = 1) e,
+                        (select s from jdbc_enum_set_metadata where id = 1) s) d;
+-- Internal grouping-set UNION ALL is not a user set-operation boundary.
+-- @metacmp(true)
+select e, s from jdbc_enum_set_metadata group by e, s with rollup order by e desc, s desc;
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata group by id with rollup order by min_e, max_s;
+-- DISTINCT ROLLUP and nonconstant window inputs materialize VARCHAR at execution.
+-- @metacmp(true)
+select distinct e, s from jdbc_enum_set_metadata group by e, s with rollup order by e, s;
+-- @metacmp(true)
+select min(e) over () as min_e, max(s) over () as max_s from jdbc_enum_set_metadata;
+-- @metacmp(true)
+select e, s from (select e, s from jdbc_enum_set_metadata group by e, s with rollup) d order by e desc, s desc;
+-- Materialized labels retain width but cannot regain CHAR identity.
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d;
+-- Identical branches must not be rewritten into DISTINCT ROLLUP metadata.
+-- @metacmp(true)
+select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup order by e desc,s desc;
+-- Static emptiness elides non-cursor materialization; runtime emptiness does not.
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata limit 0;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where false;
+-- @metacmp(true)
+select distinct e,s from jdbc_enum_set_metadata where false group by e,s with rollup;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where id > 100;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d limit 0;
+-- A global group emits one row even on empty input, without window materialization.
+-- @metacmp(true)
+select min(min(e)) over() as min_e, max(max(s)) over() as max_s from jdbc_enum_set_metadata where false;
+-- @metacmp(true)
+select min(min(e)) over() as min_e, max(max(s)) over() as max_s from jdbc_enum_set_metadata;
+-- Constant window inputs differ from a final result truncated to one row.
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where id=1;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata order by id limit 1) d;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata limit 1;
+-- NULL rejection and join emptiness must respect the join's preserved side.
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where null;
+-- @metacmp(true)
+select min(l.e) over() as min_e, max(l.s) over() as max_s
+from jdbc_enum_set_metadata l join jdbc_enum_set_metadata r on false;
+-- @metacmp(true)
+select min(l.e) over() as min_e, max(l.s) over() as max_s
+from jdbc_enum_set_metadata l left join jdbc_enum_set_metadata r on false;
+-- PARTITION and ordinary grouping preserve constant/empty input facts.
+-- @metacmp(true)
+select min(e) over(partition by id) as min_e,max(s) over(partition by id) as max_s
+from jdbc_enum_set_metadata where id=1;
+-- @metacmp(true)
+select min(e) over(partition by id) as min_e,max(s) over(partition by id) as max_s
+from jdbc_enum_set_metadata where false;
+-- @metacmp(true)
+select min(min(e)) over() as min_e,max(max(s)) over() as max_s
+from jdbc_enum_set_metadata where id=1 group by id;
+-- @metacmp(true)
+select min(min(e)) over() as min_e,max(max(s)) over() as max_s
+from jdbc_enum_set_metadata where false group by id;
+-- Projection-generated joins and inner windows do not redefine the outer window block.
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s,
+       (select count(*) from jdbc_enum_set_metadata) as total
+from jdbc_enum_set_metadata where id=1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s
+from (select id,e,s,row_number() over(order by id) as n
+      from jdbc_enum_set_metadata order by id limit 1)d where n>0;
+-- Existence providers must be proven constant, not rejected categorically.
+-- @metacmp(true)
+select min(l.e) over() as min_e,max(l.s) over() as max_s from jdbc_enum_set_metadata l
+where l.id=1 and exists(select 1 from jdbc_enum_set_metadata r where r.id=1 and r.id=l.id);
+-- @metacmp(true)
+select min(l.e) over() as min_e,max(l.s) over() as max_s from jdbc_enum_set_metadata l
+where l.id=1 and not exists(select 1 from jdbc_enum_set_metadata r where r.id=100);
+-- Equivalent non-NULL key equalities differ from a nullable unique-key NULL probe.
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata where id between 1 and 1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata where id<=>1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata where u<=>1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s,count(*) over() as null_matches
+from jdbc_enum_set_metadata where u<=>null;
+-- A derived provider is not const merely because its underlying scan is a point lookup.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from (select id from jdbc_enum_set_metadata where id=1 limit 1)d);
+-- Direct independent aggregate existence belongs to its own query block.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata where false);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and not exists(select count(*) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from (select count(*) as n from jdbc_enum_set_metadata)d);
+-- A once-evaluated scalar may supply a constant key through a generated JOIN.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select min(id) from jdbc_enum_set_metadata);
+-- A lossless widened key still admits the once-evaluated scalar value.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select count(*) from jdbc_enum_set_metadata);
+-- Access eligibility is distinct from mathematical cast injectivity.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where cast(id as signed)=(select count(*) from jdbc_enum_set_metadata where id<=1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where cast(id as signed)=1;
+-- Independent anti-existence and correlated global-group existence are not FROM providers.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and not exists(select 1 from (select id from jdbc_enum_set_metadata where id=100 limit 1)d);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and not exists(select 1 from (select id from jdbc_enum_set_metadata where id=1 limit 1)d);
+-- @metacmp(true)
+select min(l.e)over() as min_e,max(l.s)over() as max_s from jdbc_enum_set_metadata l where l.id=1
+and exists(select count(*) from jdbc_enum_set_metadata r where r.id>=l.id);
+-- @metacmp(true)
+select min(l.e)over() as min_e,max(l.s)over() as max_s from jdbc_enum_set_metadata l where l.id=1
+and not exists(select count(*) from jdbc_enum_set_metadata r where r.id>=l.id);
+-- @metacmp(true)
+select min(l.e)over() as min_e,max(l.s)over() as max_s from jdbc_enum_set_metadata l where l.id=1
+and exists(select count(*) from jdbc_enum_set_metadata r where r.id>=l.id having count(*)>0);
+-- Conjuncts compose through multiple generated scalar JOINs.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select min(id) from jdbc_enum_set_metadata) and id=(select min(id) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=coalesce((select min(id) from jdbc_enum_set_metadata),1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select min(id) from jdbc_enum_set_metadata where id=(select min(id) from jdbc_enum_set_metadata));
+-- Rejecting BETWEEN includes its lowered conjunction and NULL comparisons.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2 and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between null and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 1 and null;
+create table jdbc_enum_set_composite(a int,b int,e enum('a','bb',''),s set('x','yy'),primary key(a,b));
+insert into jdbc_enum_set_composite select if(id=3,2,1),if(id=2,2,1),e,s from jdbc_enum_set_metadata;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_composite
+where a=(select min(id) from jdbc_enum_set_metadata) and b=(select min(id) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_composite
+where a=(select min(id) from jdbc_enum_set_metadata);
+drop table jdbc_enum_set_composite;
+-- Outer key facts must stop at a materialized query-block boundary.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from
+(select id,e,s from jdbc_enum_set_metadata order by id limit 2)d
+where id=(select min(id) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from
+(select id,e,s from jdbc_enum_set_metadata order by id limit 2)d where id=1;
+-- Existential consumers share local key facts, not arbitrary cardinality bounds.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id group by b.e);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from jdbc_enum_set_metadata b where b.id=(select min(id) from jdbc_enum_set_metadata));
+-- INNER ON admits constraints; a preserved outer input is a different contract.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata order by id limit 1)b on a.id=b.id;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata order by id limit 1)b on true where a.id=b.id;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata order by id limit 1)b on a.id=b.id;
+-- Normalize row-admission Boolean identities without rewriting execution.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or false;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or id=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or id=2;
+-- Prepared range rejection uses this binding and must not taint later execution.
+prepare enum_range_metadata from 'select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_lo=2;
+set @enum_hi=1;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_lo=1;
+set @enum_hi=2;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_lo=null;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_lo=1;
+set @enum_hi=null;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_hi=2;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+deallocate prepare enum_range_metadata;
+set @enum_lo=null;
+set @enum_hi=null;
+-- A point provider is not a constant output after conditional null-extension.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=1;
+-- Correlation consumes only an independently established outer const environment.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where exists(select 1 from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id);
+-- NOT identities must preserve UNKNOWN until the row-admission boundary.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(not(id=1));
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<>1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id=1 or null);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<>1 and null);
+-- Compare exact decimal bounds without a float conversion or scale truncation.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2.5 and 1.5;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches
+from jdbc_enum_set_metadata where id between 1.5 and 2.5;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between -1.5 and -2.5;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2.50 and 1.500;
+-- WHERE null rejection may discharge conditional LEFT null-extension; ON alone cannot.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=b.id;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=100)b on true where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where b.id is not null and a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where b.id is not null or a.id=2;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where not(b.id is null) and a.id=coalesce(b.id,2);
+-- Identical empty row sets need not have identical MySQL window-omission eligibility.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=1.2 and id<=1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where 1.2<=id and 1.1>=id;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>1.2 and id<1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 1.2 and 1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(not(id between 1.2 and 1.1));
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where (id between 1.2 and 1.1) or id=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id between 1.2 and 1.1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where 2<=id and 1>=id;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>2 and id<1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>1 and id<2;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=1 and id<1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<2 or id>1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<1.2 or id>1.1);
+-- Fractional comparisons fold to strict integral endpoints, not observed integer-set emptiness.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2.0 and id<=1.0;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>2.0 and id<1.0;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=cast(2.0 as decimal(10,1)) and id<=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2 and id<=1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2.2 and id<=1.2;
+-- SQL variable decimals retain source scale independently of binary packet runtime types.
+prepare enum_decimal_source from 'select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_decimal_lo=2.5,@enum_decimal_hi=1.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=1.5,@enum_decimal_hi=2.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=null,@enum_decimal_hi=2.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=1.5,@enum_decimal_hi=null;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=2.50,@enum_decimal_hi=1.500;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=1.5,@enum_decimal_hi=2.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+deallocate prepare enum_decimal_source;
+set @enum_decimal_lo=null,@enum_decimal_hi=null;
+-- Aggregate declarations and stored CHAR labels have distinct forwarding contracts.
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select min(e)e,max(s)s from jdbc_enum_set_metadata group by id with rollup)d;
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup)d;
+-- NULL rejection follows each function, not arbitrary descendants of arithmetic.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and length(b.id)>0;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and (b.id is null)+1>0;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=(b.id is null)+1;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=b.id+1;
+-- Empty ranges need an indexed field, including NULL-bound BETWEEN.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n>=2 and n<=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between null and 1;
+alter table jdbc_enum_set_metadata add index range_n(n);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between null and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata ignore index(range_n) where n between 2 and 1;
+alter table jdbc_enum_set_metadata alter index range_n invisible;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+alter table jdbc_enum_set_metadata alter index range_n visible;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+alter table jdbc_enum_set_metadata drop index range_n;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+prepare enum_string_range from 'select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_string_lo='2',@enum_string_hi='1';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='1',@enum_string_hi='2';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='1.2',@enum_string_hi='1.1';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo=null,@enum_string_hi='1';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='2.5',@enum_string_hi='1.5';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='1',@enum_string_hi='2';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+deallocate prepare enum_string_range;
+set @enum_string_lo=null,@enum_string_hi=null;
+-- CHAR expression labels cannot regain declaration flags through aggregates.
+-- @metacmp(true)
+select min(e) as min_e,max(s) as max_s from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup)d;
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select min(e)e,max(s)s from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup)d)a;
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select e,s from(select min(e)e,max(s)s from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup)d)a)b;
+-- Row admission and NULL propagation are separate contracts.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and (b.id=1) is true;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and (length(b.id)>0) is true;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and sign(b.id)>0;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=sign(b.id)+1;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=sign(b.id is null)+1;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and (b.id is null) is true;
+-- Ordinary comparison folding uses the full declared field domain, without an index requirement.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2147483648;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id< -2147483648;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2147483647.2;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id<= -2147483648.2;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n>=2147483648;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2147483648 and 2147483648;
+-- BETWEEN retains its own indexed-range and native-domain folding rules.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2147483648 and 2147483649;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between -2147483650 and -2147483649;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 1.2 and 1.2;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 1.2 and 1.8;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2147483647.1 and 2147483647.9;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between -2147483648.9 and -2147483648.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2147483648 and 2147483649;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 1.2 and 1.2;
+-- Reuse the same three rows for unsigned field-domain coverage.
+alter table jdbc_enum_set_metadata modify n int unsigned;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n<0;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n<-0.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n>=4294967296;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between -1 and -1;
+alter table jdbc_enum_set_metadata add index unsigned_n(n);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 4294967296 and 4294967297;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between -0.9 and -0.1;
+alter table jdbc_enum_set_metadata drop index unsigned_n;
+alter table jdbc_enum_set_metadata modify n int;
+-- Wide native integer identities survive decimal comparison carriers.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n=1.2;
+alter table jdbc_enum_set_metadata modify n bigint;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n=9223372036854775808;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 9223372036854775808 and 9223372036854775808;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between -9223372036854775809 and -9223372036854775809;
+alter table jdbc_enum_set_metadata add index wide_n(n);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 9223372036854775808 and 9223372036854775809;
+alter table jdbc_enum_set_metadata drop index wide_n;
+alter table jdbc_enum_set_metadata modify n bigint unsigned;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between -1 and -1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n=-1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 18446744073709551616 and 18446744073709551616;
+alter table jdbc_enum_set_metadata add index wide_n(n);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 18446744073709551616 and 18446744073709551617;
+alter table jdbc_enum_set_metadata drop index wide_n;
+alter table jdbc_enum_set_metadata modify n int;
+-- Literal NULL remains a neutral SET branch; typed binary NULL is covered by the wire probe.
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup union select null,null)d;
+-- Stored CHAR identity survives aggregation followed by another SET operation.
+-- @metacmp(true)
+select min(e) as min_e,max(s) as max_s from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union all select e,s from jdbc_enum_set_metadata)d union all select null,null;
+-- Scalar FROM materialization keeps VARCHAR label widths, never declaration flags.
+-- @metacmp(true)
+select e,s from(select
+(select e from jdbc_enum_set_metadata where id=1)e,
+(select s from jdbc_enum_set_metadata where id=1)s)d;
+-- Numeric endpoint casts own their result domain; scientific literals stay DOUBLE sources.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id between cast(2.5e0 as decimal(10,1)) and cast(1.5e0 as decimal(10,1));
+-- Single-comparison folding is distinct from a lossless floating index proof.
+alter table jdbc_enum_set_metadata modify n bigint;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n>=1e30;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where n>=1000000000000000000000000000000;
+alter table jdbc_enum_set_metadata modify n int;
+-- TRUE consumes FALSE/UNKNOWN admission; native BETWEEN keeps its own consumer boundary.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where (id>=2147483648) is true;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not((id>=2147483648) is not true);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where (n between 2147483648 and 2147483648) is true;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where (id between 2 and 1) is true;
+-- NOT FALSE only exposes a comparison whose operands cannot be NULL.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where (id>=2147483648) is not false;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where (n>=2147483648) is not false;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join(select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where (b.id>=2147483648) is not false;
+-- NULL propagation, NULL masking, and truth negation have separate contracts.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join(select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where sin(b.id)>0;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join(select id from jdbc_enum_set_metadata where id=1)b on true where a.id=ceil(b.id);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join(select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where not(b.id is not true);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join(select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where b.id is not false;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join(select id from jdbc_enum_set_metadata where id=1)b on true where a.id=ceil(b.id is null)+1;
+drop table jdbc_enum_set_metadata;

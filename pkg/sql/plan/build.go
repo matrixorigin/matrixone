@@ -1012,6 +1012,13 @@ func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
 
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
+	return GetResultColumnsFromPlanWithParams(p, nil)
+}
+
+// GetResultColumnsFromPlanWithParams derives execution publication metadata
+// from the current plan and this execution's admitted parameters. Neither the
+// plan nor its prepare-time metadata is specialized or mutated by publication.
+func GetResultColumnsFromPlanWithParams(p *Plan, parameters []any) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
 		step := int(query.MainOutputStep())
 		if query.HasReturning {
@@ -1033,10 +1040,24 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
 		// result types on the existing origin/key path.
 		var kinds *resultColumnKinds
+		var materialization *resultMaterialization
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
 				Typ:  expr.Typ,
+			}
+
+			if idx < len(query.MysqlSpecialResultTypes) && types.T(expr.Typ.Id).IsMySQLString() {
+				typ := &query.MysqlSpecialResultTypes[idx]
+				if isEnumOrSetPlanType(&typ.Typ) {
+					columns[idx].MysqlSpecialResultType = DeepCopyMySQLSpecialResultType(typ)
+					if typ.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && !typ.MaterializationElided {
+						if materialization == nil {
+							materialization = newResultMaterialization(query, parameters)
+						}
+						columns[idx].MysqlSpecialResultType.MaterializationElided = materialization.elided(query.Steps[step], expr)
+					}
+				}
 			}
 
 			if graph := query.IntegerPrecision; graph != nil && idx < len(graph.Outputs) {

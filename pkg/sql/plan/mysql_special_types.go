@@ -881,6 +881,133 @@ func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Typ
 	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
+// Result presentation is not schema lineage: MIN/MAX and scalar subqueries
+// retain CHAR publication but do not inherit a source default or field flags.
+func mysqlSpecialResultTypeFromProvenance(provenance OutputColumnProvenance) *plan.MySQLSpecialResultType {
+	if provenance.MySQLSpecialResultType != nil {
+		return DeepCopyMySQLSpecialResultType(provenance.MySQLSpecialResultType)
+	}
+	if typ := mysqlSpecialTypeFromProvenance(provenance); typ != nil {
+		return &plan.MySQLSpecialResultType{Typ: *typ}
+	}
+	return nil
+}
+
+// Materializing a label as VARCHAR irreversibly loses CHAR identity. Later
+// value-preserving operators may retain its width, but cannot recreate it.
+func withMySQLSpecialResultKind(result *plan.MySQLSpecialResultType, kind plan.MySQLSpecialResultType_Kind) *plan.MySQLSpecialResultType {
+	if result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL {
+		result.LabelOnly = true
+	}
+	if result.Kind != plan.MySQLSpecialResultType_VARCHAR_LABEL {
+		result.Kind = kind
+	}
+	return result
+}
+
+func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, expr *plan.Expr) *plan.MySQLSpecialResultType {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		args := expr.GetF().Args
+		if len(args) == 2 && isEnumOrSetPlanType(&args[1].Typ) {
+			return &plan.MySQLSpecialResultType{Typ: *DeepCopyType(&args[1].Typ)}
+		}
+	}
+	if col := expr.GetCol(); col != nil && ctx.windowTag > 0 && col.RelPos == ctx.windowTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(ctx.windows) {
+		window := ctx.windows[col.ColPos].GetW()
+		if window != nil {
+			fn := window.WindowFunc.GetF()
+			if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+				(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
+				if result := builder.mysqlSpecialResultTypeForExpr(ctx, fn.Args[0]); result != nil {
+					return withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_PREPARE_ONLY)
+				}
+			}
+		}
+		return nil
+	}
+	if col := expr.GetCol(); col != nil && ctx.aggregateTag > 0 && col.RelPos == ctx.aggregateTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(ctx.aggregates) {
+		fn := ctx.aggregates[col.ColPos].GetF()
+		if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
+			if result := builder.mysqlSpecialResultTypeForExpr(ctx, fn.Args[0]); result != nil {
+				return withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_AGGREGATE)
+			}
+		}
+		return nil
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR &&
+		sub.NodeId >= 0 && int(sub.NodeId) < len(builder.ctxByNode) {
+		subCtx := builder.ctxByNode[sub.NodeId]
+		if subCtx != nil {
+			if result := mysqlSpecialResultTypeFromProvenance(subCtx.outputColumnProvenanceForProject(0)); result != nil {
+				// MySQL eliminates an unfiltered no-FROM scalar projection; it
+				// publishes the forwarded expression rather than a subquery item.
+				node := builder.qry.Nodes[sub.NodeId]
+				if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+					input := builder.qry.Nodes[node.Children[0]]
+					if input.NodeType == plan.Node_VALUE_SCAN && input.TableDef == nil {
+						return result
+					}
+				}
+				return withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_SCALAR_SUBQUERY)
+			}
+		}
+		return nil
+	}
+	return mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForExpr(expr))
+}
+
+// Freeze only presentation before ANY_VALUE, aggregate-input and subquery
+// rewrites. Schema/default provenance continues to follow the rewritten plan.
+func (builder *QueryBuilder) captureMySQLSpecialBlockResultTypes(ctx *BindContext) {
+	for i := range ctx.headings {
+		if result := builder.mysqlSpecialResultTypeForExpr(ctx, ctx.projects[i]); result != nil {
+			if ctx.mysqlSpecialResultTypes == nil {
+				ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
+			}
+			if ctx.sortRollup {
+				kind := plan.MySQLSpecialResultType_ROLLUP
+				if result.Kind == plan.MySQLSpecialResultType_AGGREGATE {
+					kind = plan.MySQLSpecialResultType_ROLLUP_AGGREGATE
+				}
+				withMySQLSpecialResultKind(result, kind)
+			}
+			ctx.mysqlSpecialResultTypes[int32(i)] = result
+		}
+	}
+}
+
+// Publish the completed root block, after set operations have cleared identity.
+func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext, root int32) {
+	if builder.qry.StmtType != plan.Query_SELECT {
+		return
+	}
+	builder.qry.MysqlSpecialResultTypes = nil
+	var materializationElided *bool
+	for i := range ctx.headings {
+		typ := mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+		if typ == nil {
+			continue
+		}
+		if builder.qry.MysqlSpecialResultTypes == nil {
+			builder.qry.MysqlSpecialResultTypes = make([]plan.MySQLSpecialResultType, len(ctx.headings))
+		}
+		if typ.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY {
+			if materializationElided == nil {
+				elided := newResultMaterialization(builder.qry, nil).bound(root) == 0
+				materializationElided = &elided
+			}
+			typ.MaterializationElided = typ.MaterializationElided || *materializationElided
+		}
+		builder.qry.MysqlSpecialResultTypes[i] = *typ
+	}
+}
+
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }
