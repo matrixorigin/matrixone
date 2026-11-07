@@ -431,3 +431,38 @@ decimal carriers, unknown results, mixed semantics and bloom errors keep their
 existing owners. This optimization was reviewed by gpt-6.1-terra/max before
 implementation and requires renewed normal/race/public/static and matched
 main/final performance evidence.
+
+## Preserve regular-index errors and remove unused reader state
+
+Regular index construction returns errors through the existing planner chain.
+Ordinary mandatory resolution and column-map failures are returned instead of
+being converted to panics. The index-merge selector and builder return errors
+to the same caller; they check cancellation on a declined merge and before
+publishing branches. A recursive rewrite updates a parent child ID only after
+the child succeeds. Optional ordinary binding errors still decline that access,
+but cancellation does not become a silent decline.
+
+For ordinary access, the request cause supplies an otherwise absent error or
+replaces its exact context cancellation sentinel. A distinct substantive error
+is preserved. If an error wraps that sentinel and the request has a distinct
+cause, the returned error retains both. Necessary-candidate construction keeps
+its existing cancellation precedence. No recovery shim or builder error state
+is introduced. Before publication, failures do not publish scans, caller column
+maps or hints. A consumed ordinary binding tag remains private to the failed
+builder; after the commit point the existing final cancellation check prevents
+the private plan from being returned or cached.
+
+Remove the unused production index-only wrapper; tests register their indexes
+and drive the real selector, or exercise its actual matcher and mapping owners.
+Remove the reader's empty-filter state, which has no real leaf producer: empty
+or unsupported OR input falls back to the existing non-pruning filter. This
+also preserves conservative handling for compound cluster keys and independent
+membership hints. Temporal candidate emptiness remains type-owned and is widened
+before the reader sees a pruning bound.
+
+Validate cancellation and deadlines after successful relation resolution,
+later merge-branch failure, concurrent substantive errors and the frontend's
+existing error classification. Cover parent/child publication boundaries and
+the reader's PK and cluster-key fallback and cleanup. Rerun affected planner,
+reader, frontend and public SQL checks, static analysis and matched integrated
+performance controls on the final source.
