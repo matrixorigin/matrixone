@@ -2138,7 +2138,7 @@ func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
 		return nil, nil, false
 	}
-	if isJSONNumericComparisonArgs(fn.Args) {
+	if isMixedJSONScalarComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
@@ -2155,7 +2155,7 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 	if fn == nil || len(fn.Args) != 2 {
 		return nil, nil, false
 	}
-	if isJSONNumericComparisonArgs(fn.Args) {
+	if isMixedJSONScalarComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
@@ -2175,7 +2175,7 @@ func extractEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Ex
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
 		return nil, nil, false
 	}
-	if isJSONNumericComparisonArgs(fn.Args) {
+	if isMixedJSONScalarComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
@@ -2332,7 +2332,7 @@ func classifyDomainEquality(fn *plan.Function, kind domainKind) (*plan.Expr, dom
 	if len(fn.Args) != 2 {
 		return nil, domainOther, nil
 	}
-	if isJSONNumericComparisonArgs(fn.Args) {
+	if isMixedJSONScalarComparisonArgs(fn.Args) {
 		return nil, domainOther, nil
 	}
 	var colExpr, constExpr *plan.Expr
@@ -2803,16 +2803,16 @@ func (builder *QueryBuilder) bindCompositeKeyPredicate(name string, args ...*pla
 
 // Composite-key rewrites require a shared key domain. Mixed JSON/numeric
 // predicates must stay as SQL residuals, including both bounds of a range.
-func compositeKeyPredicateHasMixedJSONNumericArgs(fn *plan.Function) bool {
+func compositeKeyPredicateHasMixedJSONArgs(fn *plan.Function) bool {
 	if fn == nil || fn.Func == nil {
 		return false
 	}
 	switch fn.Func.ObjName {
 	case "=", "<", "<=", ">", ">=":
-		return isJSONNumericComparisonArgs(fn.Args)
+		return isMixedJSONScalarComparisonArgs(fn.Args)
 	case "between", "in_range":
-		return len(fn.Args) >= 3 && (isJSONNumericComparisonArgs(fn.Args[:2]) ||
-			isJSONNumericComparisonArgs([]*plan.Expr{fn.Args[0], fn.Args[2]}))
+		return len(fn.Args) >= 3 && (isMixedJSONScalarComparisonArgs(fn.Args[:2]) ||
+			isMixedJSONScalarComparisonArgs([]*plan.Expr{fn.Args[0], fn.Args[2]}))
 	}
 	return false
 }
@@ -2853,7 +2853,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			// scalar bound. Leave this optional rewrite entirely unchanged.
 			return filters
 		}
-		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONArgs(fn) ||
 			lowerCompoundKey && numParts > 1 && !builder.compositeKeyComparisonUsable(fn, tableDef) {
 			continue
 		}
@@ -2971,7 +2971,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 				}
 
 				mergedFn := subExpr.GetF()
-				if !hasNonNilFunctionArgs(mergedFn, 2) || compositeKeyPredicateHasMixedJSONNumericArgs(mergedFn) ||
+				if !hasNonNilFunctionArgs(mergedFn, 2) || compositeKeyPredicateHasMixedJSONArgs(mergedFn) ||
 					mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
@@ -3154,7 +3154,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONArgs(fn) ||
 			lowerCompoundKey && numParts > 1 && !builder.compositeKeyComparisonUsable(fn, tableDef) {
 			continue
 		}
@@ -3253,7 +3253,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		if fn == nil || fn.Func == nil {
 			return filters
 		}
-		if compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+		if compositeKeyPredicateHasMixedJSONArgs(fn) ||
 			!builder.compositeKeyComparisonUsable(fn, tableDef) {
 			break
 		}

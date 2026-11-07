@@ -1099,7 +1099,11 @@ func TestJSONComparisonOperandDomains(t *testing.T) {
 		left, right types.T
 	}{
 		{name: "numeric", sql: "select cast('3' as json) > 1", left: types.T_json, right: types.T_int64},
-		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", left: types.T_varchar, right: types.T_varchar},
+		// Issue #31121 keeps a JSON/string equality inside its typed operand
+		// domains: the JSON side stays JSON and the character literal stays
+		// character, instead of conflating both sides into a common VARCHAR
+		// text comparison.
+		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", left: types.T_json, right: types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))

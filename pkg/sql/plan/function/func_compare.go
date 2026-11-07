@@ -15,7 +15,6 @@
 package function
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"math"
@@ -49,6 +48,7 @@ func comparePreparedJSON(
 	nullSafe bool,
 	cmp func(int) bool,
 	selectList *FunctionSelectList,
+	operatorName string,
 ) error {
 	leftIsParam := parameters[0].IsPreparedJSONComparisonParam()
 	rightIsParam := parameters[1].IsPreparedJSONComparisonParam()
@@ -120,10 +120,10 @@ func comparePreparedJSON(
 			}
 		}
 
-		// JSON null participates in the same SQL-null comparison contract as a
-		// JSON-to-scalar cast. Account for it before short-circuiting on a NULL
-		// parameter so <=> observes two null values, not one.
-		jsonNull = jsonNull || isJSONLiteralNull(jsonValue)
+		// JSON literal null is a comparable JSON value here, not SQL NULL: the
+		// per-parameter comparison below type-ranks it exactly like MySQL.
+		// Only a SQL NULL vector entry still participates in the SQL NULL
+		// contract, so <=> observes two SQL nulls, not JSON-null versus SQL NULL.
 		if jsonNull || paramNull {
 			if nullSafe {
 				rss[row] = jsonNull && paramNull
@@ -131,6 +131,30 @@ func comparePreparedJSON(
 				resultNulls.Add(uint64(row))
 			}
 			continue
+		}
+
+		// A binary-domain parameter is the runtime form of the binary-string
+		// peer the static operator check rejects, whatever EXECUTE channel
+		// carried it: the binary protocol attaches the concrete type
+		// (BINARY, VARBINARY, BLOB), and the binary-string sidecar of an
+		// untyped parameter encodes an opaque scalar that the marshaled
+		// round trip stores as the binary BLOB framing. Refuse the pair
+		// with the same invalid-argument operator error the equivalent
+		// CAST('...' AS BINARY) form receives, so prepared execution cannot
+		// admit a comparison the typed form never binds. A NULL parameter
+		// stays under the SQL NULL contract above.
+		if paramType == types.T_binary || paramType == types.T_varbinary ||
+			paramType == types.T_blob ||
+			(paramType == types.T_any && paramValue.Type == bytejson.TpCodeBlob) {
+			peer := types.T_binary.ToType()
+			if paramType != types.T_any {
+				peer = paramType.ToType()
+			}
+			pair := []types.Type{types.T_json.ToType(), peer}
+			if paramPos == 0 {
+				pair[0], pair[1] = pair[1], pair[0]
+			}
+			return moerr.NewInvalidArg(proc.Ctx, "operator "+operatorName, pair)
 		}
 
 		var comparison int
@@ -227,17 +251,49 @@ func validComparisonJSONVarlena(data []byte) bool {
 	return payloadLength == uint64(len(data)-prefixLength)
 }
 
-// compareJSONScalarWithBoolean applies the established numeric-to-boolean
-// comparison coercion without erasing the JSON scalar category. JSON strings
-// are valid values of a different category, so they compare unequal instead
-// of becoming SQL NULL or being parsed as boolean text.
+// compareJSONScalarWithBoolean ranks a JSON value against its SQL boolean
+// peer. The SQL TRUE and FALSE constants compare as JSON boolean literals,
+// the highest JSON category: JSON literal null, strings, objects and arrays
+// type-rank below that category (MySQL 8.0.44 receipts
+// mysql-r21-bool-table.txt, mysql-r21-bool-category-cells.txt), while a JSON
+// literal true/false compares by boolean value. JSON numbers keep MO's
+// established numeric-to-boolean fold (nonzero = true): upstream-pinned
+// func_json_extract rows rely on that equality (cast(1.20 as decimal) = true
+// and the 1e100/1e-300 exponent rows), so the ordering predicates stay
+// coherent with it.
 func compareJSONScalarWithBoolean(
 	ctx context.Context,
 	jsonValue bytejson.ByteJson,
 	booleanValue bool,
 ) (comparison int, jsonNull bool, err error) {
-	if jsonValue.Type == bytejson.TpCodeString {
-		return 1, false, nil
+	if LegacyJSONScalarSemantics(ctx) {
+		// Predecessor production source eabd1009f443cd26064d51eb63d2b0b58af91c5e:
+		// a JSON string was a category of its own (comparison 1, so a string
+		// document never equalled the boolean colleague, whatever text it
+		// carried), the JSON literal null folded to SQL NULL through the cast,
+		// and objects or arrays failed that cast. Only the directly admitted
+		// equality family reaches this kernel in that era; the era binder
+		// restores the (BOOL, BOOL) cast pair for the ordering family.
+		// DUMP/LOAD verification of predecessor-authored folded defaults
+		// needs exactly those values.
+		if jsonValue.Type == bytejson.TpCodeString {
+			return 1, false, nil
+		}
+	} else {
+		switch jsonValue.Type {
+		case bytejson.TpCodeString, bytejson.TpCodeObject, bytejson.TpCodeArray:
+			// Strings, objects and arrays are different JSON categories
+			// below the boolean peer instead of boolean text to parse, so
+			// they compare unequal and rank below it instead of erroring
+			// through the SQL boolean cast.
+			return -1, false, nil
+		}
+		if isJSONLiteralNull(jsonValue) {
+			// JSON null type-ranks below boolean in the JSON domain, so
+			// null = false is false while null < false is true. It is SQL NULL
+			// only on the SQL side of the comparison.
+			return -1, false, nil
+		}
 	}
 	value, isNull, err := jsonScalarToBool(ctx, jsonValue)
 	if err != nil || isNull {
@@ -336,7 +392,13 @@ func compareJSONBoolean(
 		if !booleanNull {
 			booleanValue = booleanValues[booleanRow]
 		}
-		jsonVectorNull = jsonVectorNull || isJSONLiteralNull(jsonValue)
+		// Only a SQL NULL vector entry short-circuits; JSON literal null is a
+		// value that type-ranks below the boolean peer. Pre-#31121 archives
+		// folded literal null into the SQL NULL contract, so the verifier
+		// rebinds that era too.
+		if LegacyJSONScalarSemantics(proc.Ctx) && isJSONLiteralNull(jsonValue) {
+			jsonVectorNull = true
+		}
 		if jsonVectorNull || booleanNull {
 			if nullSafe {
 				rss[row] = jsonVectorNull && booleanNull
@@ -355,6 +417,13 @@ func compareJSONBoolean(
 				resultNulls.Add(uint64(row))
 			}
 			continue
+		}
+		// compareJSONScalarWithBoolean orients the JSON operand against the
+		// boolean one. Flip the sign when the boolean operand comes first so
+		// ordering predicates keep their left/right orientation; the equality
+		// and null-safe predicates are sign-insensitive.
+		if jsonPos == 1 {
+			comparison = -comparison
 		}
 		rss[row] = cmp(comparison)
 	}
@@ -385,15 +454,11 @@ func comparePreparedJSONScalars(
 		return comparison, jsonNull, false, err
 
 	case vector.PrepareParamNone:
-		left, leftErr := preparedJSONString(jsonValue)
-		if leftErr != nil {
-			return 0, false, false, leftErr
-		}
-		right, rightErr := preparedJSONString(paramValue)
-		if rightErr != nil {
-			return 0, false, false, rightErr
-		}
-		return bytes.Compare(left, right), false, false, nil
+		// An untyped parameter keeps the same JSON domain as the equivalent
+		// string literal: the adapter already encoded it as a JSON string
+		// scalar, so rank-compare in the JSON domain instead of byte-comparing
+		// serialized texts.
+		return bytejson.CompareByteJsonTrusted(jsonValue, paramValue), false, false, nil
 
 	default:
 		return 0, false, false, moerr.NewInternalErrorf(proc.Ctx, "unsupported prepared parameter kind %d", kind)
@@ -418,14 +483,30 @@ func comparePreparedJSONScalarsAsType(
 	case types.T_bit, types.T_year:
 		return comparePreparedJSONUnsignedScalars(
 			proc.Ctx, jsonValue, paramValue, math.MaxUint64, paramType)
-	case types.T_char, types.T_varchar, types.T_text,
-		types.T_json, types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum, types.T_geometry:
-		if isJSONLiteralNull(paramValue) {
-			return 0, false, true, nil
+	case types.T_bool:
+		// The binary protocol declares the concrete type for its Boolean
+		// parameters, so the typed tail shares the kind-based arm's kernel:
+		// the category ranking and numeric zero/nonzero fold of the mixed
+		// JSON/BOOL comparison family, not a plain JSON domain ranking.
+		right, err := preparedJSONBoolean(proc.Ctx, paramValue)
+		if err != nil {
+			return 0, false, false, err
 		}
+		comparison, jsonNull, err := compareJSONScalarWithBoolean(proc.Ctx, jsonValue, right)
+		return comparison, jsonNull, false, err
+	case types.T_char, types.T_varchar, types.T_text:
+		// A character parameter is the JSON peer of the same SQL string literal,
+		// so it must follow the same type-ranked JSON domain. compareJSONOverlap
+		// semantics would rank JSON booleans and literal null below/beside the
+		// string payload, contradicting the literal comparison and MySQL.
+		return bytejson.CompareByteJsonTrusted(jsonValue, paramValue), false, false, nil
+	case types.T_json, types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_enum, types.T_geometry:
+		// A JSON-typed parameter carries its own document; JSON literal null in
+		// either operand stays a comparable value instead of SQL NULL. The
+		// binary byte domains never reach here: the executor rejects a declared
+		// binary-domain parameter before the dispatch above.
 		return compareJSONOverlapExact(jsonValue, paramValue), false, false, nil
-
 	}
 
 	return 0, false, false, moerr.NewInternalErrorf(
@@ -482,23 +563,6 @@ func preparedJSONFloatScalarWithLimit(
 		result = float64(float32(result))
 	}
 	return result, false, nil
-}
-
-func preparedJSONString(value bytejson.ByteJson) ([]byte, error) {
-	switch value.Type {
-	case bytejson.TpCodeString:
-		return value.GetString(), nil
-	case bytejson.TpCodeLiteral:
-		switch value.Data[0] {
-		case bytejson.LiteralNull:
-			return []byte("null"), nil
-		case bytejson.LiteralTrue:
-			return []byte("true"), nil
-		case bytejson.LiteralFalse:
-			return []byte("false"), nil
-		}
-	}
-	return value.MarshalJSON()
 }
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
@@ -968,6 +1032,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, true, func(c int) bool { return c == 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, true, func(c int) bool { return c == 0 }); done {
@@ -976,7 +1043,7 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, true, func(a, b float32) bool { return a == b }); done {
 		return err
 	}
-	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
 		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
 	}
 
@@ -1046,7 +1113,7 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 		}, selectList)
 	case types.T_json:
 		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-			return comparePreparedJSON(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+			return comparePreparedJSON(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList, "<=>")
 		}
 		return opBinaryJSONBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(c int) bool {
 			return c == 0
@@ -1145,6 +1212,9 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c == 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c == 0 }); done {
@@ -1153,7 +1223,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a == b }); done {
 		return err
 	}
-	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
 		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
@@ -1228,7 +1298,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_json:
 		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList, "=")
 		}
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c == 0
@@ -1578,8 +1648,11 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c > 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, false, func(c int) bool { return c > 0 }, selectList)
+	}
 	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c > 0 }, selectList)
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c > 0 }, selectList, ">")
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -1588,6 +1661,11 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a > b }); done {
 		return err
+	}
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
+		// JSON/BOOL ordering ranks JSON literal null below the boolean peer
+		// instead of casting the JSON operand through the SQL boolean cast.
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c > 0 }, selectList)
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
@@ -1756,8 +1834,11 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c >= 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, false, func(c int) bool { return c >= 0 }, selectList)
+	}
 	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c >= 0 }, selectList)
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c >= 0 }, selectList, ">=")
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -1766,6 +1847,11 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a >= b }); done {
 		return err
+	}
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
+		// JSON/BOOL ordering ranks JSON literal null below the boolean peer
+		// instead of casting the JSON operand through the SQL boolean cast.
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c >= 0 }, selectList)
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
@@ -1934,6 +2020,9 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c != 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	if done, err := blockScaledCompare(parameters, rs, proc, length, selectList, false, func(c int) bool { return c != 0 }); done {
@@ -1942,7 +2031,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a != b }); done {
 		return err
 	}
-	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
 		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
@@ -2016,7 +2105,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_json:
 		if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList, "<>")
 		}
 		return opBinaryJSONBytesBytesToFixed(parameters, rs, proc, length, func(c int) bool {
 			return c != 0
@@ -2115,8 +2204,11 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c < 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, false, func(c int) bool { return c < 0 }, selectList)
+	}
 	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c < 0 }, selectList)
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c < 0 }, selectList, "<")
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -2125,6 +2217,11 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a < b }); done {
 		return err
+	}
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
+		// JSON/BOOL ordering ranks JSON literal null below the boolean peer
+		// instead of casting the JSON operand through the SQL boolean cast.
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c < 0 }, selectList)
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
@@ -2293,8 +2390,11 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	if IsJSONNumericComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
 		return compareJSONNumericVectors(parameters, result, proc, length, false, func(c int) bool { return c <= 0 }, selectList)
 	}
+	if IsJSONStringComparison(parameters[0].GetType().Oid, parameters[1].GetType().Oid) {
+		return compareJSONStringVectors(parameters, result, proc, length, false, func(c int) bool { return c <= 0 }, selectList)
+	}
 	if parameters[0].IsPreparedJSONComparisonParam() || parameters[1].IsPreparedJSONComparisonParam() {
-		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c <= 0 }, selectList)
+		return comparePreparedJSON(parameters, vector.MustFunctionResult[bool](result), proc, length, false, func(c int) bool { return c <= 0 }, selectList, "<=")
 	}
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -2303,6 +2403,11 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 	if done, err := lowPrecisionCompare(parameters, rs, proc, length, selectList, false, func(a, b float32) bool { return a <= b }); done {
 		return err
+	}
+	if IsJSONBooleanComparison(paramType.Oid, parameters[1].GetType().Oid) {
+		// JSON/BOOL ordering ranks JSON literal null below the boolean peer
+		// instead of casting the JSON operand through the SQL boolean cast.
+		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c <= 0 }, selectList)
 	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {

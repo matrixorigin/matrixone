@@ -336,6 +336,33 @@ func normalizeJsonOrderingParam(
 		(kind == vector.PrepareParamInteger || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
 		return normalizeJsonComparisonParam(parameters, result, proc, length, selectList)
 	}
+	// A character parameter compares like the equivalent SQL string literal:
+	// MySQL uses the parameter bytes as a JSON string scalar. Parsing the text
+	// as a JSON document would make ordering results depend on whether the peer
+	// form happens to parse, which is the literal/prepared divergence.
+	if isOrderingCharacterParam(paramType, kind) {
+		return normalizeJsonComparisonParam(parameters, result, proc, length, selectList)
+	}
+	// A Boolean prepared parameter carries its SQL category into the ordering
+	// executors exactly like the numeric and character categories: the boolean
+	// kernel folds JSON numbers by their zero/nonzero value and type-ranks the
+	// other JSON categories. Without this route the parameter's text parses as
+	// a JSON literal and the ordering rank-compares in the plain JSON domain,
+	// where every number ranks below JSON true, so a prepared predicate like
+	// CAST('0.5' AS JSON) < TRUE contradicts its literal form. Both EXECUTE
+	// channels are covered: the binary protocol attaches the concrete type,
+	// and an untyped parameter still declares the Boolean conversion kind.
+	if isOrderingBooleanParam(paramType, kind) {
+		return normalizeJsonComparisonParam(parameters, result, proc, length, selectList)
+	}
+	// A binary-domain parameter cannot join the JSON comparison domain: the
+	// static operator check rejects the equivalent CAST('...' AS BINARY) peer.
+	// Keeping it out of the plain JSON parse below lets the comparison
+	// executor reject the pair with that same operator error instead of
+	// silently folding the parameter bytes into a JSON document.
+	if isOrderingBinaryParam(paramType) {
+		return normalizeJsonComparisonParam(parameters, result, proc, length, selectList)
+	}
 	from := vector.GenerateFunctionStrParameter(parameters[0])
 	to := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -355,6 +382,42 @@ func normalizeJsonOrderingParam(
 		}
 	}
 	return nil
+}
+
+// isOrderingCharacterParam recognizes prepared parameters whose SQL category
+// is character text: either the binary protocol declared a character type, or
+// the text protocol carried no category. Their bytes are a JSON string scalar
+// for ordering, exactly like a SQL string literal.
+func isOrderingCharacterParam(paramType types.T, kind vector.PrepareParamKind) bool {
+	switch paramType {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	case types.T_any:
+		return kind == vector.PrepareParamNone
+	}
+	return false
+}
+
+// isOrderingBooleanParam recognizes the Boolean category on either EXECUTE
+// channel: the binary protocol declares the concrete type, while an untyped
+// parameter carries the Boolean conversion kind alone.
+func isOrderingBooleanParam(paramType types.T, kind vector.PrepareParamKind) bool {
+	if paramType == types.T_bool {
+		return true
+	}
+	return paramType == types.T_any && kind == vector.PrepareParamBoolean
+}
+
+// isOrderingBinaryParam recognizes the binary byte domains (BINARY,
+// VARBINARY, BLOB) a declared parameter can carry. They never join the JSON
+// comparison domain; routing them through the marker-preserving adapter lets
+// the comparison executor reject the pair like the typed CAST form.
+func isOrderingBinaryParam(paramType types.T) bool {
+	switch paramType {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	}
+	return false
 }
 
 func encodeJsonOrderingParam(value []byte) ([]byte, error) {

@@ -19,14 +19,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
 
-func isMixedJSONNumericAsof(node *plan.Node) bool {
+func isMixedJSONScalarAsof(node *plan.Node) bool {
 	return node != nil && (node.JoinType == plan.Node_ASOF || node.JoinType == plan.Node_ASOF_LEFT) &&
-		colexec.HasMixedJSONNumericEquality(node.OnList...)
+		colexec.HasMixedJSONScalarEquality(node.OnList...)
 }
 
-func queryHasMixedJSONNumericAsof(qry *plan.Query) bool {
+func queryHasMixedJSONScalarAsof(qry *plan.Query) bool {
 	for _, node := range qry.Nodes {
-		if isMixedJSONNumericAsof(node) {
+		if isMixedJSONScalarAsof(node) {
 			return true
 		}
 	}

@@ -85,7 +85,7 @@ func TestCompileMixedAsofPhysicalPlan(t *testing.T) {
 			require.Empty(t, n.RuntimeFilterBuildList)
 			require.Len(t, op.EqConds[0], 1)
 			require.Len(t, op.EqConds[1], 1)
-			require.True(t, colexec.HasMixedJSONNumericEquality(op.NonEqCond))
+			require.True(t, colexec.HasMixedJSONScalarEquality(op.NonEqCond))
 			buildScope := out[0].PreScopes[len(out[0].PreScopes)-1]
 			require.Equal(t, c.addr, buildScope.NodeInfo.Addr)
 			require.Equal(t, 1, buildScope.NodeInfo.Mcpu)
@@ -139,7 +139,7 @@ func TestMixedAsofPlacementAndRoundTrip(t *testing.T) {
 	for _, arg := range []*hashjoin.HashJoin{copied, roundtrip} {
 		require.NoError(t, arg.SetAllocationAccount(account))
 		require.NoError(t, arg.Prepare(c.proc))
-		require.True(t, colexec.HasMixedJSONNumericEquality(arg.NonEqCond))
+		require.True(t, colexec.HasMixedJSONScalarEquality(arg.NonEqCond))
 		arg.Reset(c.proc, false, nil)
 		require.NoError(t, arg.Prepare(c.proc))
 		arg.Free(c.proc, false, nil)

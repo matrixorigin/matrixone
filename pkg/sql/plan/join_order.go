@@ -151,17 +151,44 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 	return false
 }
 
-// Mixed JSON/numeric equality is a typed comparison, not a shared key domain.
-// Retain it as a residual predicate; key extraction and equality propagation
-// must not replace either operand with the other physical representation.
+// isJSONNumericComparisonArgs stays numeric-only for the ONLY_FULL_GROUP_BY
+// single-value relaxation in mysql_full_group_by.go: a numeric literal can
+// equal several distinct JSON numbers (3 and 3.0), while a character literal
+// pins exactly the one JSON string value that equals it, so the relaxation
+// retains MySQL semantics for the character domain.
 func isJSONNumericComparisonArgs(args []*plan.Expr) bool {
 	return len(args) == 2 && args[0] != nil && args[1] != nil &&
 		function.IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))
 }
 
+// isMixedJSONScalarComparisonArgs extends that mixed-domain classification to
+// the JSON/character equality admitted for issue #31121: JSON hashes through
+// its canonical encoding while SQL character values hash as raw bytes, so
+// such an equality must stay a typed residual everywhere a single physical
+// key domain is assumed - hash, shuffle, runtime-filter, lock and index keys.
+// The JSON/boolean pair follows the same rule: the SQL boolean hashes as its
+// own 0/1 value while a JSON document hashes canonically, and the direct
+// comparison kernels preserve the JSON scalar category for either side.
+func isMixedJSONScalarComparisonArgs(args []*plan.Expr) bool {
+	return len(args) == 2 && args[0] != nil && args[1] != nil &&
+		(function.IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+			function.IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+			function.IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)))
+}
+
+// isMixedJSONScalarBetweenArgs extends that mixed-domain classification to
+// the persisted three-node BETWEEN form: every leg whose operands cross the
+// JSON scalar boundary keeps its per-domain ranking, so the BETWEEN must stay
+// a typed residual exactly like its lowered legs.
+func isMixedJSONScalarBetweenArgs(args []*plan.Expr) bool {
+	return len(args) == 3 && args[0] != nil &&
+		((args[1] != nil && isMixedJSONScalarComparisonArgs(args[0:2])) ||
+			(args[2] != nil && isMixedJSONScalarComparisonArgs([]*plan.Expr{args[0], args[2]})))
+}
+
 func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		if !IsEqualFunc(e.F.Func.GetObj()) || isJSONNumericComparisonArgs(e.F.Args) {
+		if !IsEqualFunc(e.F.Func.GetObj()) || isMixedJSONScalarComparisonArgs(e.F.Args) {
 			return false
 		}
 
@@ -196,7 +223,7 @@ func IsEquiJoinCondition(expr *plan.Expr) bool {
 		return false
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || e.F == nil || e.F.Func == nil || len(e.F.Args) != 2 || !IsEqualFunc(e.F.Func.GetObj()) || isJSONNumericComparisonArgs(e.F.Args) {
+	if !ok || e.F == nil || e.F.Func == nil || len(e.F.Args) != 2 || !IsEqualFunc(e.F.Func.GetObj()) || isMixedJSONScalarComparisonArgs(e.F.Args) {
 		return false
 	}
 	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
