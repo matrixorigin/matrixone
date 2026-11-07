@@ -36,6 +36,58 @@ permission to access a hidden relation or place a scan, and `ForceOneCN` alone
 does not prove the selected CN is the current coordinator. Statistics can
 choose a path but cannot authorize dropping rows.
 
+## Final ownership of observation and resolution
+
+An observation is an optional cost input; its prerequisites must be the ones
+used by that input. The existing planner and relation owners establish the
+original scan, pinned placement, unrestricted session row limit, bounded work,
+authorized borrowed read and transaction identity. These conditions apply to
+both ordinary and necessary-range observations. A raw integer literal does not
+depend on the statement clock or session time zone. It can therefore select the
+ordinary BASE or INDEX plan even if either changes during resolver reentry or
+observation. The comparison owner requires the captured clock and time zone for
+an inverse temporal comparison before and after observation; the publication,
+frontend compile and compile-retry checks retain their existing full execution
+snapshot and placement proof for a physical necessary-range index scan. This
+also preserves BASE-to-INDEX replanning for a later temporal statement. Neither
+kind of observation adds a persistent dependency, cache or second read path.
+
+The comparison owner produces the cost ranges and the executable necessary
+predicate from the same classified comparison. The common scorer receives only
+bounded numeric range arms and a success/error result; it does not derive
+temporal endpoints or reinterpret a sampled scalar as an executable predicate.
+Invalid, full, empty or unproved ranges decline cost credit. Range union,
+cardinality statistics, work budgets and cancellation remain with their existing
+common owners. The physical hint still leaves the original SQL residual in
+place. Construction prepays bounded work before copying expressions.
+
+Each ordinary resolver method accepts one explicit optional `TableResolution`
+output. A nil output requests only the ordinary descriptor. A non-nil output is
+cleared on every attempt, including failed resolution and access denial; it is
+populated only after the same resolver has completed its authorization and read
+identity checks. Wrappers whose namespace, descriptor or visibility differs
+clear and decline the borrow; a wrapper may forward only when it preserves the
+same relation and transaction contract. There is no variadic compatibility form,
+second resolver implementation or extra relation ownership.
+
+The relevant alternatives are retaining the blanket time check, which needlessly
+couples ordinary integer costing to temporal state, and adding a generic
+dependency registry or separate resolver path, which would add state and
+dispatch without another concrete producer. The selected owner-local checks and
+single resolver contract require mechanical caller migration but no new storage,
+wire field, background work or long-lived state. The stopped 4.2 upgrade and
+saved-plan authorization contracts are unchanged; rolling mixed-version upgrade
+and downgrade remain out of scope.
+
+Validation must cover integer selection with clock and zone drift at both
+resolver and observation boundaries, temporal rejection and rebuild on the
+same changes, session-limit and transaction drift, cancellation and optional
+metadata errors. Exercise resolver output reuse on success, error, access
+denial and wrappers, and compile the complete caller closure. Re-run the
+affected planner/frontend/compiler normal and race tests, public SQL parity,
+static checks and matched performance controls. Existing upgrade and reader
+evidence is reusable only where its source and dependencies remain unchanged.
+
 ## Original-plan proof and lifetime
 
 The builder traces a SELECT's bounded unary project/filter path to the original
