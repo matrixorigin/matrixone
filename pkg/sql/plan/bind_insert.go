@@ -6833,6 +6833,14 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		// physical bytes intact. A non-literal source typed outside the array
 		// domain keeps the ordinary assignment cast below.
 		targetID := types.T(targetCols[colIdx].Typ.Id)
+		// typeswitch:partial the binder fast path materializes a raw
+		// string-domain binary carrier only for vecf32/vecf64
+		// (MakeInsertValueConstExpr -> SetInsertValueString); every other
+		// vector element type returns nil from that fast path and reaches
+		// here already cast-bound to the destination by the generic binder's
+		// forceCastExpr2 — including vecf8/vecf4, whose block-scaled casts
+		// produce stored cells rather than fixed element bytes — so only
+		// those two carriers need this array-domain re-emit.
 		if (targetID == types.T_array_float32 || targetID == types.T_array_float64) && types.T(expr.Typ.Id) != targetID {
 			if lit := expr.GetLit(); lit != nil && !lit.Isnull {
 				if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
