@@ -597,7 +597,10 @@ and a corresponding safe physical contract exist. Do not add a speculative
 vector validation framework. Byte-domain bounds that exceed the stored 30-byte
 zone-map prefix and start with 30 `0xff` bytes cannot authorize prefix
 exclusion: a real matching key can otherwise be excluded by the truncated
-maximum. The current serialized temporal endpoints are at most ten bytes and
+maximum. Marked strict raw byte-domain `<` and `>` likewise decline optional
+pruning: two distinct long values can truncate to the same maximum. Inclusive
+raw equality/BETWEEN remain admitted only where their normal type and bound
+proofs succeed. The current serialized temporal endpoints are at most ten bytes and
 start with their type code, so this restriction does not suppress that path.
 Existing Unicode collation and serialized-key admission stay in force.
 
@@ -605,7 +608,11 @@ PK/memtable filtering compares raw payloads and needs a stronger encoding proof
 than zone-map comparison. Propagate candidate provenance through the existing
 sort-key filter builder; for a marked scalar use the existing exact raw-runtime
 filter pair check, including decimal-scale and actual bound type, plus ordered
-and prefix safety where applicable. Unsupported marked filters decline; AND may
+and prefix safety where applicable. Explicitly decline marked scalar CHAR even
+when the raw equality codec accepts it: SQL padding semantics can identify byte
+strings that a raw key probe would treat as different. Marked strict raw byte
+ranges and unsafe truncated prefix bounds also decline in the PK path.
+Unsupported marked filters decline; AND may
 keep independently safe arms and OR must fail open. The normal unmarked PK path
 and temporary-vector ownership remain unchanged.
 
@@ -636,8 +643,8 @@ dedup in both orders, folds, copying and wire transport, plus an ordinary
 integer/decimal synthetic marked reader control. Check no-intent, folded/removed
 hint, invalid flagged node, wrong CN, clock/zone drift, reentry, retry, Reset,
 cleanup and authorization. Include decimal scale mismatch, unknown block,
-truncated `0xff` prefix, NaN/unsupported domain and an unmarked OR injected
-metadata error. Use real reader and saved-result entry points where applicable.
+truncated `0xff` prefix, strict byte ranges, padded CHAR, NaN/unsupported
+domain and an unmarked OR injected metadata error. Use real reader and saved-result entry points where applicable.
 
 Run affected normal and race owner/consumer tests, relevant public SQL and BVT,
 repository formatting and incremental static analysis after the requested
