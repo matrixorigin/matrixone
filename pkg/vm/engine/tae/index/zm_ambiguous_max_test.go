@@ -207,6 +207,66 @@ func TestByteZoneMapAmbiguousEncodingAndLowerPruning(t *testing.T) {
 	require.Equal(t, v.Length(), hi)
 }
 
+func TestByteEqualityAmbiguousMaxKeepsLowerProof(t *testing.T) {
+	ff := bytes.Repeat([]byte{0xff}, 30)
+	for _, tc := range []struct {
+		name   string
+		value  []byte
+		legacy bool
+	}{
+		{"flagged", append(bytes.Clone(ff), 2), false},
+		{"legacy", append(bytes.Clone(ff), 2), true},
+		{"exact", ff, false},
+		{"rounded", append(append(bytes.Clone(ff[:29]), 0xfe), 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zm := BuildZM(types.T_varbinary, tc.value)
+			if tc.legacy {
+				zm = legacyObjectSummaryForTest(tc.value)
+			}
+			typ := types.New(types.T_varbinary, 64, 0)
+			match, _, ok := MakeScalarZoneMapMatcher(typ, []byte("a"), typ, 0, nil, types.ComparisonEqual)
+			require.True(t, ok)
+			require.True(t, match(zm).Excludes(), "a key below the minimum is absent even when the maximum is ambiguous")
+			match, _, ok = MakeScalarZoneMapMatcher(typ, tc.value, typ, 0, nil, types.ComparisonEqual)
+			require.True(t, ok)
+			require.True(t, match(zm).MayMatch(), "the represented value must remain a candidate")
+		})
+	}
+	typ := types.New(types.T_varbinary, 64, 0)
+	min := append(bytes.Repeat([]byte{'a'}, 29), 'c')
+	zm := BuildZM(types.T_varbinary, min)
+	UpdateZM(zm, append(bytes.Clone(ff), 2))
+	longLowerKey := append(append(bytes.Repeat([]byte{'a'}, 29), 'b'), 0)
+	match, _, ok := MakeScalarZoneMapMatcher(typ, longLowerKey, typ, 0, nil, types.ComparisonEqual)
+	require.True(t, ok)
+	require.True(t, match(zm).Excludes(), "a long bound is compared directly, without rounding it upward")
+	require.False(t, match(nil).Known)
+	require.False(t, match(BuildZM(types.T_varchar, []byte("a"))).Known)
+
+	finite := BuildZM(types.T_varbinary, []byte("m"))
+	for _, tc := range []struct {
+		value string
+		match bool
+	}{{"a", false}, {"m", true}, {"z", false}} {
+		m, _, valid := MakeScalarZoneMapMatcher(typ, []byte(tc.value), typ, 0, nil, types.ComparisonEqual)
+		require.True(t, valid)
+		require.Equal(t, tc.match, m(finite).MayMatch())
+	}
+	mixed, _, ok := MakeScalarZoneMapMatcher(typ, []byte("a"), types.T_varchar.ToType(), 0, nil, types.ComparisonEqual)
+	require.True(t, ok)
+	require.True(t, mixed(zm).MayMatch(), "mixed carriers retain their conservative behavior")
+
+	// A raw lower bound cannot disprove CHAR equality: trailing spaces are
+	// insignificant to SQL even when a different row truncates the maximum.
+	charType := types.New(types.T_char, 64, 0)
+	charZM := BuildZM(types.T_char, append([]byte("a"), bytes.Repeat([]byte{' '}, 31)...))
+	UpdateZM(charZM, append(bytes.Clone(ff), 2))
+	match, _, ok = MakeScalarZoneMapMatcher(charType, []byte("a"), charType, 0, nil, types.ComparisonEqual)
+	require.True(t, ok)
+	require.True(t, match(charZM).MayMatch())
+}
+
 func TestByteZoneMapAmbiguousMaxNullableMembership(t *testing.T) {
 	prefix := bytes.Repeat([]byte{0xff}, 30)
 	value := append(bytes.Clone(prefix), 2)
