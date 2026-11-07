@@ -454,6 +454,40 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 	}
 }
 
+func TestRandomBytesPreservesVolatility(t *testing.T) {
+	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			fn, err := function.GetFunctionByName(proc.Ctx, "random_bytes", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			literal := &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}
+			if typ == types.T_uint64 {
+				literal.Value = &plan.Literal_U64Val{U64Val: 1}
+			}
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_blob)}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "random_bytes"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(typ), NotNullable: true}, Expr: &plan.Expr_Lit{Lit: literal}}},
+			}}}
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			input := batch.NewWithSize(0)
+			input.SetRowCount(2)
+			for generation := 0; generation < 2; generation++ {
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, 2, result.Length())
+				require.False(t, result.IsConst(), "constant arguments must not share one folded random draw")
+				executor.ResetForNextQuery()
+			}
+			ov, ok := function.GetFunctionByIdWithoutError(fn.GetEncodedOverloadID())
+			require.True(t, ok)
+			require.True(t, ov.CannotFold(), "the IFNULL same-source proof relies on this metadata")
+		})
+	}
+}
+
 func TestExpressionReset(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

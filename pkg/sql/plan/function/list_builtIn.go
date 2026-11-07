@@ -3224,13 +3224,14 @@ var supportedStringBuiltIns = []FuncNew{
 	// random_bytes
 	{
 		functionId: RANDOM_BYTES,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
@@ -3241,6 +3242,7 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 1,
+				volatile:   true,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()

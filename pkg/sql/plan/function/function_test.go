@@ -412,6 +412,173 @@ func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	require.Equal(t, startMp, proc.Mp().CurrNB())
 }
 
+func TestNumericCastNullContract(t *testing.T) {
+	inputs := []struct {
+		typ    types.T
+		values any
+	}{
+		{types.T_int8, []int8{0, 1, 0}}, {types.T_int16, []int16{0, 1, 0}},
+		{types.T_int32, []int32{0, 1, 0}}, {types.T_int64, []int64{0, 1, 0}},
+		{types.T_uint8, []uint8{0, 1, 0}}, {types.T_uint16, []uint16{0, 1, 0}},
+		{types.T_uint32, []uint32{0, 1, 0}}, {types.T_uint64, []uint64{0, 1, 0}},
+		{types.T_float32, []float32{0, 1, 0}}, {types.T_float64, []float64{0, 1, 0}},
+		{types.T_decimal64, []types.Decimal64{0, 1, 0}},
+		{types.T_decimal128, []types.Decimal128{{}, {B0_63: 1}, {}}},
+		{types.T_decimal256, nil},
+		{types.T_bool, []bool{false, true, false}},
+		{types.T_bit, []uint64{0, 1, 0}},
+	}
+	typeOf := func(typ types.T) types.Type {
+		result := typ.ToType()
+		if typ.IsDecimal() {
+			result.Width, result.Scale = 18, 0
+		} else if typ == types.T_bit {
+			result.Width = 64
+		}
+		return result
+	}
+	targets := make([]types.Type, 0, len(inputs)+5)
+	for _, input := range inputs {
+		targets = append(targets, typeOf(input.typ))
+	}
+	targets = append(targets, types.New(types.T_float32, 10, 2), types.New(types.T_float64, 10, 2),
+		types.New(types.T_char, 64, 0), types.New(types.T_varchar, 64, 0), types.T_text.ToType())
+	tested := 0
+	for _, source := range inputs {
+		for _, target := range targets {
+			// These pairs are not implemented by CAST, not admitted by the proof.
+			if (source.typ == types.T_bool && (target.Oid.IsFloat() || target.Oid.IsDecimal())) ||
+				(source.typ.IsDecimal() && target.Oid == types.T_bool) {
+				continue
+			}
+			tested++
+			t.Run(fmt.Sprintf("%s_to_%s_%d_%d", source.typ, target.Oid, target.Width, target.Scale), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+				var input *vector.Vector
+				if source.typ == types.T_decimal256 {
+					input = vector.NewVec(typeOf(source.typ))
+					t.Cleanup(func() { input.Free(proc.Mp()) })
+					require.NoError(t, vector.AppendFixedList(input, []types.Decimal256{{}, {B0_63: 1}, {}}, nil, proc.Mp()))
+				} else {
+					input = testutil.NewVector(3, typeOf(source.typ), proc.Mp(), false, source.values)
+					t.Cleanup(func() { input.Free(proc.Mp()) })
+				}
+				input.GetNulls().Add(2)
+				targetType := vector.NewVec(target)
+				t.Cleanup(func() { targetType.Free(proc.Mp()) })
+				result, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, 0), []*vector.Vector{input, targetType}, 3)
+				require.NoError(t, err)
+				t.Cleanup(func() { result.Free(proc.Mp()) })
+				require.Equal(t, 3, result.Length())
+				require.False(t, result.IsNull(0))
+				require.False(t, result.IsNull(1))
+				require.True(t, result.IsNull(2))
+				if target.Oid == types.T_char || target.Oid == types.T_varchar || target.Oid == types.T_text {
+					if source.typ == types.T_bit {
+						require.Equal(t, []byte{0}, result.GetBytesAt(0))
+						require.Equal(t, []byte{1}, result.GetBytesAt(1))
+					} else {
+						require.Equal(t, "0", string(result.GetBytesAt(0)))
+						require.Equal(t, "1", string(result.GetBytesAt(1)))
+					}
+				}
+			})
+		}
+	}
+	require.Equal(t, 290, tested, "every admitted scalar/target configuration must execute")
+	for _, targetType := range []types.Type{types.T_int8.ToType(), types.New(types.T_varchar, 1, 0), types.New(types.T_bit, 1, 0)} {
+		t.Run(fmt.Sprintf("%s_error", targetType.Oid), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			input := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{300})
+			t.Cleanup(func() { input.Free(proc.Mp()) })
+			target := vector.NewVec(targetType)
+			t.Cleanup(func() { target.Free(proc.Mp()) })
+			result, err := RunFunctionDirectly(proc, EncodeOverloadID(CAST, 0), []*vector.Vector{input, target}, 1)
+			require.Error(t, err, "nonnull proof must not turn conversion errors into success")
+			require.Nil(t, result)
+		})
+	}
+}
+
+func TestRandomBytesNullabilityContract(t *testing.T) {
+	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			input := vector.NewVec(typ.ToType())
+			t.Cleanup(func() { input.Free(proc.Mp()) })
+			if typ == types.T_int64 {
+				require.NoError(t, vector.AppendFixedList(input, []int64{0, 1025, -1}, nil, proc.Mp()))
+			} else {
+				require.NoError(t, vector.AppendFixedList(input, []uint64{0, 1025, ^uint64(0)}, nil, proc.Mp()))
+			}
+			fn, err := GetFunctionByName(proc.Ctx, "random_bytes", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 3)
+			require.NoError(t, err)
+			t.Cleanup(func() { result.Free(proc.Mp()) })
+			require.Equal(t, 3, result.Length())
+			require.False(t, result.IsConst(), "keep volatile evaluation")
+			for row := uint64(0); row < 3; row++ {
+				require.True(t, result.IsNull(row), "invalid non-NULL lengths produce NULL")
+			}
+			for _, nonNullInput := range []bool{true, false} {
+				args := []*plan.Expr{{Typ: plan.Type{Id: int32(typ), NotNullable: nonNullInput}}}
+				require.False(t, DeduceNotNullable(fn.GetEncodedOverloadID(), args),
+					"output nullability must not be inferred solely from argument nullability")
+			}
+		})
+	}
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}},
+		{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}},
+	}
+	require.True(t, DeduceNotNullable(AndFunctionEncodedID, args))
+	args[0].Typ.NotNullable = false
+	require.False(t, DeduceNotNullable(AndFunctionEncodedID, args))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(ISNULL, 0), args[:1]))
+}
+
+func TestRunRandomBytesDirectlyPreservesVolatility(t *testing.T) {
+	for _, typ := range []types.T{types.T_int64, types.T_uint64} {
+		for _, constant := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%t", typ, constant), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+				input := vector.NewVec(typ.ToType())
+				t.Cleanup(func() { input.Free(proc.Mp()) })
+				if typ == types.T_int64 {
+					require.NoError(t, vector.AppendFixedList(input, []int64{1, 2}, nil, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixedList(input, []uint64{1, 2}, nil, proc.Mp()))
+				}
+				if constant {
+					input.ToConst()
+					input.SetLength(2)
+				}
+				fn, err := GetFunctionByName(proc.Ctx, "random_bytes", []types.Type{typ.ToType()})
+				require.NoError(t, err)
+				result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 2)
+				require.NoError(t, err)
+				t.Cleanup(func() { result.Free(proc.Mp()) })
+				require.Equal(t, 2, result.Length())
+				require.False(t, result.IsConst(), "volatile results must not collapse to the first row")
+				for row := 0; row < 2; row++ {
+					if !result.IsNull(uint64(row)) {
+						expectedLength := row + 1
+						if constant {
+							expectedLength = 1
+						}
+						require.Len(t, result.GetBytesAt(row), expectedLength)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestRunFunctionDirectly(t *testing.T) {
 	// fold case.
 	{
@@ -426,6 +593,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 10)
 		require.NoError(t, err)
 
+		require.True(t, v.IsConst())
 		require.Equal(t, 10, v.Length())
 		wrapper := vector.GenerateFunctionFixedTypeParameter[bool](v)
 		for i := 0; i < 10; i++ {
@@ -451,6 +619,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 2)
 		require.NoError(t, err)
 
+		require.False(t, v.IsConst())
 		require.Equal(t, 2, v.Length())
 		wrapper := vector.GenerateFunctionFixedTypeParameter[bool](v)
 		for i := 0; i < 2; i++ {
