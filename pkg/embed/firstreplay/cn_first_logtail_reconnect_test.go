@@ -12,23 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package embed
+package firstreplay
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/buffer"
@@ -36,39 +35,22 @@ import (
 )
 
 func TestCNFirstReplayDisconnect(t *testing.T) {
-	const child = "MO_TEST_FIRST_REPLAY_DISCONNECT_CHILD"
-	const childRoot = "MO_TEST_FIRST_REPLAY_DISCONNECT_ROOT"
-	if os.Getenv(child) != "1" {
-		// Replay/receive fault points are process-wide. Keep them away from the
-		// package's shared basicCluster, including during full-package runs.
-		dir := t.TempDir()
-		log, err := os.Create(filepath.Join(dir, "child.log"))
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, log.Close()) })
-		executable, err := os.Executable()
-		require.NoError(t, err)
-		ctx, cancel := context.WithTimeout(context.Background(), 160*time.Second)
+	// This package has its own test process: replay faults cannot affect the
+	// shared embed cluster, and admission remains exclusive across processes.
+	// Reserve time for replay and cleanup instead of charging admission wait to
+	// the replay deadline below.
+	admissionCtx := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		reserve := min(150*time.Second, time.Until(deadline)/2)
+		var cancel context.CancelFunc
+		admissionCtx, cancel = context.WithDeadline(admissionCtx, deadline.Add(-reserve))
 		defer cancel()
-		cmd := exec.CommandContext(ctx, executable, "-test.run=^TestCNFirstReplayDisconnect$", "-test.count=1", "-test.v", "-test.timeout=150s")
-		cmd.Env = append(os.Environ(), child+"=1", childRoot+"="+dir)
-		cmd.Stdout, cmd.Stderr = log, log
-		err = cmd.Run()
-		if err != nil {
-			if info, statErr := log.Stat(); statErr == nil {
-				length := min(info.Size(), 64<<10)
-				tail := make([]byte, int(length))
-				_, _ = log.ReadAt(tail, info.Size()-length)
-				t.Logf("isolated first-replay child log tail:\n%s", tail)
-			}
-		}
-		require.NoError(t, ctx.Err(), "isolated first-replay child exceeded its deadline")
-		require.NoError(t, err, "isolated first-replay child failed")
-		t.Log("isolated child verified replay recovery, fresh TN timestamp, and prepared SQL results [1,2] then [2]")
-		return
 	}
-	dataPath := os.Getenv(childRoot)
-	require.NotEmpty(t, dataPath)
-	c, err := NewCluster(WithTesting(), WithDataPath(dataPath), WithCNCount(1))
+	admission, err := clusteradmission.Acquire(admissionCtx)
+	require.NoError(t, err, "acquire test cluster admission")
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
+
+	c, err := embed.NewCluster(embed.WithTesting(), embed.WithDataPath(t.TempDir()), embed.WithCNCount(1))
 	started := make(chan struct{})
 	var startupErr error
 	startupLaunched := false
@@ -103,7 +85,7 @@ func TestCNFirstReplayDisconnect(t *testing.T) {
 	if fault.Enable() {
 		t.Cleanup(func() { fault.Disable() })
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	addFault := func(name, action string, arg int64, target string) {
 		require.NoError(t, fault.AddFaultPoint(ctx, name, ":::", action, arg, target, false))
