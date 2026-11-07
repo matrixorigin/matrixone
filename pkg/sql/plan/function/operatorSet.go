@@ -1338,7 +1338,10 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			return castFromWidened(iffCheck(nil, widened), widened)
 		}
 		conditionType := inputs[0]
-		needCast := conditionType.Oid == types.T_any
+		// A temporal condition is a boolean context: like NOT/AND/IS TRUE it is
+		// cast to BOOL through its numeric value, which keeps fractional TIME
+		// truthiness and treats the zero-date sentinel as false.
+		needCast := conditionType.Oid == types.T_any || isTemporalContextSource(conditionType.Oid)
 		if needCast {
 			conditionType = types.T_bool.ToType()
 		} else if conditionType.Oid != types.T_bool &&
