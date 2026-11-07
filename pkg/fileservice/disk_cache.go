@@ -55,6 +55,7 @@ type DiskCache struct {
 	cache        *lrucache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
 	preloads     *preloadUsage
+	ranges       cachedRanges
 	dirEntries   bool
 	// held counts the holds on entry directories.
 	held        dirHolds
@@ -205,6 +206,7 @@ func newDiskCache(
 				ret.preloads.read(path, n)
 			}
 		}
+		ret.ranges.add(ret.path, path)
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -233,6 +235,7 @@ func newDiskCache(
 	}
 	postEvict := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.removed(path, size)
+		ret.ranges.remove(path)
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -539,10 +542,12 @@ func (d *DiskCache) Read(
 			}
 		}
 
+		var downloading bool
 		if !openedOK {
 			// try full file
 			diskPath = d.pathForFile(path.File)
-			downloading, filled, err := d.readFromDownload(ctx, diskPath, entry)
+			var filled bool
+			downloading, filled, err = d.readFromDownload(ctx, diskPath, entry)
 			if err != nil {
 				return err
 			}
@@ -552,23 +557,52 @@ func (d *DiskCache) Read(
 				numHit++
 				return nil
 			}
-			if downloading {
-				// A range read gets these bytes sooner than the download.
-				vector.downloadDeclined = true
-				return nil
-			}
-			if f, newlyOpened, ok := openPath(diskPath); ok {
-				if newlyOpened {
-					numOpenFull++
-				}
-				LogEvent(ctx, str_disk_cache_file_seek_begin)
-				_, err = f.file.Seek(entry.Offset, io.SeekStart)
-				LogEvent(ctx, str_disk_cache_file_seek_end)
-				if err == nil {
-					opened = f
-					openedOK = true
+			if !downloading {
+				if f, newlyOpened, ok := openPath(diskPath); ok {
+					if newlyOpened {
+						numOpenFull++
+					}
+					LogEvent(ctx, str_disk_cache_file_seek_begin)
+					_, err = f.file.Seek(entry.Offset, io.SeekStart)
+					LogEvent(ctx, str_disk_cache_file_seek_end)
+					if err == nil {
+						opened = f
+						openedOK = true
+					}
 				}
 			}
+		}
+
+		// try a cached range that contains the entry; rangeOffset is where the entry
+		// starts in it
+		var rangeOffset int64
+		for tried := []string(nil); !openedOK; {
+			r, ok := d.ranges.containing(d.rangeObjectKey(path.File), entry.Offset, entry.Size, tried)
+			if !ok {
+				break
+			}
+			tried = append(tried, r.diskPath)
+			if !d.cache.Contains(r.diskPath) {
+				d.ranges.remove(r.diskPath)
+				continue
+			}
+			f, newlyOpened, ok := openPath(r.diskPath)
+			if !ok {
+				continue
+			}
+			if newlyOpened {
+				numOpenIOEntry++
+			}
+			if _, err = f.file.Seek(entry.Offset-r.offset, io.SeekStart); err == nil {
+				diskPath, opened, openedOK = r.diskPath, f, true
+				rangeOffset = entry.Offset - r.offset
+			}
+		}
+
+		if !openedOK && downloading {
+			// A range read gets these bytes sooner than the download.
+			vector.downloadDeclined = true
+			return nil
 		}
 
 		if !openedOK {
@@ -599,7 +633,7 @@ func (d *DiskCache) Read(
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
-		readOffset, readSize := int64(0), entry.Size
+		readOffset, readSize := rangeOffset, entry.Size
 		if diskPath == d.pathForFile(path.File) {
 			readOffset = entry.Offset
 			d.preloads.read(diskPath, entry.Size)
