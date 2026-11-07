@@ -24,6 +24,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/minio/minio-go/v7"
 	"github.com/tencentyun/cos-go-sdk-v5"
@@ -104,9 +105,7 @@ func IsRetryableStartupError(err error) bool {
 		return true
 	}
 
-	var minioErr minio.ErrorResponse
-	if errors.As(err, &minioErr) {
-		statusCode := minioErr.StatusCode
+	if statusCode, ok := objectStorageStatusCode(err); ok {
 		if statusCode == http.StatusRequestTimeout ||
 			statusCode == http.StatusTooManyRequests ||
 			statusCode >= http.StatusInternalServerError {
@@ -139,6 +138,28 @@ func IsRetryableStartupError(err error) bool {
 	}
 
 	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// objectStorageStatusCode returns the HTTP status of the object-storage response that err
+// reports.
+func objectStorageStatusCode(err error) (int, bool) {
+	var minioErr minio.ErrorResponse
+	if errors.As(err, &minioErr) {
+		return minioErr.StatusCode, true
+	}
+	var awsErr interface{ HTTPStatusCode() int }
+	if errors.As(err, &awsErr) {
+		return awsErr.HTTPStatusCode(), true
+	}
+	var ossErr oss.ServiceError
+	if errors.As(err, &ossErr) {
+		return ossErr.StatusCode, true
+	}
+	var cosErr *cos.ErrorResponse
+	if errors.As(err, &cosErr) && cosErr.Response != nil {
+		return cosErr.Response.StatusCode, true
+	}
+	return 0, false
 }
 
 type errorStr string

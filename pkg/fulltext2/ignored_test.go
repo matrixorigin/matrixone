@@ -20,9 +20,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"syscall"
 	"testing"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	smithy "github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +55,12 @@ func TestDatalinkError(t *testing.T) {
 		&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
 		&net.DNSError{Err: "no such host", Name: "minio"},
 		moerr.NewNotSupportedNoCtx("asynchronous indexes require remote Datalink sources"),
+		&smithy.OperationError{ServiceID: "S3", OperationName: "GetObject", Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}},
+				Err:      errors.New("api error SlowDown"),
+			},
+		}},
 	} {
 		require.Equal(t, err, DatalinkError(url, err), "%v is retried", err)
 	}

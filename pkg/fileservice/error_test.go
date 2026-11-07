@@ -31,9 +31,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	smithy "github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/cos-go-sdk-v5"
 )
+
+// awsStatusError is the error the AWS SDK returns once it stops retrying a request that got
+// statusCode.
+func awsStatusError(statusCode int) error {
+	return &smithy.OperationError{
+		ServiceID:     "S3",
+		OperationName: "GetObject",
+		Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: statusCode}},
+				Err:      errors.New("api error"),
+			},
+		},
+	}
+}
 
 func TestIsRetryableStartupErrorTypedFailures(t *testing.T) {
 	tests := []struct {
@@ -57,7 +77,12 @@ func TestIsRetryableStartupErrorTypedFailures(t *testing.T) {
 			},
 			want: true,
 		},
+		{name: "aws too many requests", err: awsStatusError(http.StatusTooManyRequests), want: true},
+		{name: "aws service unavailable", err: awsStatusError(http.StatusServiceUnavailable), want: true},
+		{name: "oss service unavailable", err: oss.ServiceError{StatusCode: http.StatusServiceUnavailable}, want: true},
+		{name: "cos service unavailable", err: &cos.ErrorResponse{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}}, want: true},
 		{name: "bad request", err: minio.ErrorResponse{StatusCode: http.StatusBadRequest}, want: false},
+		{name: "aws forbidden", err: awsStatusError(http.StatusForbidden), want: false},
 		{name: "unauthorized", err: minio.ErrorResponse{StatusCode: http.StatusUnauthorized}, want: false},
 		{name: "forbidden", err: minio.ErrorResponse{StatusCode: http.StatusForbidden}, want: false},
 		{name: "not found", err: minio.ErrorResponse{StatusCode: http.StatusNotFound}, want: false},
