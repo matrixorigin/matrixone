@@ -63,6 +63,7 @@ func makeSubscriptionCandidateResult(
 		types.New(types.T_varchar, 5000, 0),
 		types.T_text.ToType(),
 		types.T_text.ToType(),
+		types.T_uint32.ToType(),
 	}
 	bat := batch.NewWithSize(len(columnTypes))
 	for i := range columnTypes {
@@ -79,6 +80,7 @@ func makeSubscriptionCandidateResult(
 		require.NoError(t, vector.AppendBytes(bat.Vecs[6], []byte("source_db"), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[7], []byte("*"), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[8], []byte(accountList), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[9], uint32(22), false, mp))
 	}
 	bat.SetRowCount(count)
 	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
@@ -87,7 +89,7 @@ func makeSubscriptionCandidateResult(
 func makeSubscriptionAliasResult(t *testing.T, mp *mpool.MPool, start uint64, count int) executor.Result {
 	result := makeSubscriptionCandidateResult(t, mp, start, count, "all")
 	bat := result.Batches[0]
-	for _, column := range []int{3, 4, 7, 8} {
+	for _, column := range []int{3, 4, 7, 8, 9} {
 		bat.Vecs[column].Free(mp)
 	}
 	bat.Vecs = []*vector.Vector{bat.Vecs[0], bat.Vecs[1], bat.Vecs[2], bat.Vecs[5], bat.Vecs[6]}
@@ -128,6 +130,38 @@ func closedSignal() chan struct{} {
 	return done
 }
 
+func TestSubscriptionMetadataSourceOwnerAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		publisher, source, subscriber uint32
+		accounts                      string
+		allowed                       bool
+	}{
+		{"ordinary", 22, 22, 7, "all", true},
+		{"system foreign third party", 0, 41, 7, "all", true},
+		{"owner-only foreign", 22, 7, 7, "subscriber", true},
+		{"duplicate owner names", 22, 7, 7, "subscriber,subscriber", true},
+		{"canonical trimmed names", 22, 7, 7, "subscriber, subscriber ", true},
+		{"system physical owner", 22, 0, 0, "sys", true},
+		{"foreign third party", 22, 41, 7, "subscriber", false},
+		{"foreign all targets", 22, 7, 7, "all", false},
+		{"foreign wider targets", 22, 7, 7, "subscriber,another", false},
+		{"withdrawn membership", 0, 41, 7, "another", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "subscriber"
+			if tc.subscriber == 0 {
+				name = "sys"
+			}
+			require.Equal(t, tc.allowed, subscriptionCandidateAuthorized(subscriptionCandidate{
+				subscriberID: tc.subscriber, subscriberName: name,
+				publisherID: tc.publisher, publisherName: "publisher", sourceAccountID: tc.source,
+				accountList: tc.accounts,
+			}))
+		})
+	}
+}
+
 func TestSubscriptionMetadataQueryBuilders(t *testing.T) {
 	candidateSQL := buildSubscriptionAliasQuery(17, 91)
 	require.Contains(t, candidateSQL, "d.account_id = 17")
@@ -140,6 +174,9 @@ func TestSubscriptionMetadataQueryBuilders(t *testing.T) {
 	require.Contains(t, authorized, sqlquote.String("pub'account"))
 	require.Contains(t, authorized, sqlquote.String("pub'name"))
 	require.Contains(t, authorized, "publisher.status <> 'suspend'")
+	require.Contains(t, authorized, "source.dat_id = p.database_id AND source.datname = p.database_name")
+	require.Contains(t, authorized, "CASE WHEN p.database_id = 0 THEN p.account_id ELSE source.account_id END")
+	require.Contains(t, authorized, "p.database_id = 0 OR source.dat_id IS NOT NULL", "a missing persisted source must not fall back to the publisher decoy")
 	require.NotContains(t, candidateSQL, "p.all_table")
 	require.Contains(t, candidateSQL, "LIMIT 64")
 
@@ -149,12 +186,15 @@ func TestSubscriptionMetadataQueryBuilders(t *testing.T) {
 		localDatabaseName: "sub'alias",
 		localOwner:        8,
 		publisherID:       23,
+		sourceAccountID:   41,
 		sourceDatabase:    "source'db",
 	}
 	tablesSQL := buildSubscriptionTablesQuery(candidate, []string{"orders", "odd'name"})
 	require.Contains(t, tablesSQL, "CAST(17 AS INT UNSIGNED) AS account_id")
 	require.Contains(t, tablesSQL, "CAST(99 AS BIGINT UNSIGNED) AS reldatabase_id")
 	require.Contains(t, tablesSQL, "CAST(8 AS INT UNSIGNED) AS owner")
+	require.Contains(t, tablesSQL, "CAST(41 AS INT UNSIGNED) AS publisher_account_id")
+	require.NotContains(t, tablesSQL, "CAST(23 AS INT UNSIGNED) AS publisher_account_id")
 	require.Contains(t, tablesSQL, "CAST("+sqlquote.String("sub'alias")+" AS VARCHAR(5000))")
 	require.Contains(t, tablesSQL, "tbl.reldatabase = "+sqlquote.String("source'db"))
 	require.Contains(t, tablesSQL, sqlquote.String("odd'name"))
@@ -599,11 +639,15 @@ func TestDecodeSubscriptionCandidatesAndAuthorization(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	result := makeSubscriptionCandidateResult(t, mp, 10, 2, "subscriber,other")
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(result.Batches[0].Vecs[9], 1, uint32(41)))
 	candidates, rows, lastID, err := decodeSubscriptionCandidates(result, 9)
 	require.NoError(t, err)
 	require.Equal(t, 2, rows)
 	require.Equal(t, uint64(11), lastID)
 	require.Len(t, candidates, 2)
+	require.Equal(t, uint32(22), candidates[1].publisherID)
+	require.Equal(t, uint32(41), candidates[1].sourceAccountID)
+	require.False(t, subscriptionCandidateAuthorized(candidates[1]))
 	require.Equal(t, "sub_10", candidates[0].localDatabaseName)
 	require.True(t, subscriptionCandidateAuthorized(candidates[0]))
 	result.Close()
@@ -616,9 +660,30 @@ func TestDecodeSubscriptionCandidatesAndAuthorization(t *testing.T) {
 	require.True(t, subscriptionCandidateAuthorized(candidates[0]))
 	candidates[0].publisherName = candidates[0].subscriberName
 	require.False(t, subscriptionCandidateAuthorized(candidates[0]))
+	for _, mode := range []string{"null", "short", "type"} {
+		t.Run(mode, func(t *testing.T) {
+			result := makeSubscriptionCandidateResult(t, mp, 1, 1, "all")
+			defer result.Close()
+			bat := result.Batches[0]
+			bat.Vecs[9].Free(mp)
+			typ := types.T_uint32
+			if mode == "type" {
+				typ = types.T_varchar
+			}
+			bat.Vecs[9] = vector.NewVec(typ.ToType())
+			if mode == "null" {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[9], uint32(0), true, mp))
+			} else if mode == "type" {
+				require.NoError(t, vector.AppendBytes(bat.Vecs[9], []byte("22"), false, mp))
+			}
+			_, _, _, err := decodeSubscriptionCandidates(result, 0)
+			require.Error(t, err, "unknown physical ownership must not become publisher fallback")
+		})
+		require.Zero(t, mp.CurrNB())
+	}
 }
 
-func TestSubscriptionMetadataProducerPaginatesAndUsesPublisherIdentity(t *testing.T) {
+func TestSubscriptionMetadataProducerPaginatesAndUsesPhysicalSourceIdentity(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	originalRunSQL := subscriptionMetadataRunSQL
@@ -639,7 +704,13 @@ func TestSubscriptionMetadataProducerPaginatesAndUsesPublisherIdentity(t *testin
 			}
 			// The final alias has lost current eligibility; pagination must still
 			// advance by the full historical alias page, not the admitted rows.
-			return makeSubscriptionCandidateResult(t, mp, 1, subscriptionCandidatePageSize-1, "all"), nil
+			result := makeSubscriptionCandidateResult(t, mp, 1, subscriptionCandidatePageSize-1, "all")
+			// A sys publication now sources account 22. Its publisher must not
+			// become the execution identity for the historical catalog scan.
+			for row := 0; row < result.Batches[0].RowCount(); row++ {
+				require.NoError(t, vector.SetFixedAtWithTypeCheck(result.Batches[0].Vecs[4], row, uint32(0)))
+			}
+			return result, nil
 		}
 		if proc.SqlCtx.CNUuid != "data" {
 			return executor.Result{}, fmt.Errorf("aliases must use data T")
@@ -666,7 +737,7 @@ func TestSubscriptionMetadataProducerPaginatesAndUsesPublisherIdentity(t *testin
 			return executor.Result{}, fmt.Errorf("source schema must remain at data T")
 		}
 		if sqlProcess.AccountIDOverride == nil || *sqlProcess.AccountIDOverride != 22 {
-			return executor.Result{}, fmt.Errorf("unexpected publisher identity")
+			return executor.Result{}, fmt.Errorf("unexpected physical source identity")
 		}
 		if !strings.Contains(sql, "CAST(7 AS INT UNSIGNED) AS account_id") {
 			return executor.Result{}, fmt.Errorf("subscriber identity missing from source query")

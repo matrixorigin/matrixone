@@ -1200,6 +1200,9 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		t.Run("cross-account snapshot metadata namespace", func(t *testing.T) {
 			testSnapshotMetadataNamespace(t, ctx, sys, subscriber)
 		})
+		t.Run("historical foreign source remapping", func(t *testing.T) {
+			testHistoricalSubscriptionForeignSource(t, sys, subscriber)
+		})
 		// Cleanup must work after the scenario's context is cancelled or expires.
 		cancel()
 	})

@@ -2541,15 +2541,14 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 // runtime resolution keeps the publisher identity for such rows, which
 // fails closed.
 func publicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID uint32, targetAccountIDs []uint32) bool {
-	if publisherAccountID == ownerAccountID || publisherAccountID == sysAccountID {
-		return true
-	}
+	ownerOnly := true
 	for _, targetAccountID := range targetAccountIDs {
 		if targetAccountID != ownerAccountID {
-			return false
+			ownerOnly = false
+			break
 		}
 	}
-	return true
+	return pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, ownerAccountID, ownerOnly)
 }
 
 // publicationForeignSourceUnauthorizedError is the stable rejection of a
@@ -3128,14 +3127,14 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, p
 			err = dbErr
 			return
 		}
-		resolvePhysicalSource := uint32(accId) == sourceAccountID || accId == sysAccountID
+		resolvePhysicalSource := pubsub.PublicationSourceOwnerAuthorized(uint32(accId), sourceAccountID, false)
 		if !resolvePhysicalSource {
 			admitted, admErr := publicationTargetsAdmitForeignSource(newCtx, bh, pubInfo, sourceAccountID)
 			if admErr != nil {
 				err = admErr
 				return
 			}
-			resolvePhysicalSource = admitted
+			resolvePhysicalSource = pubsub.PublicationSourceOwnerAuthorized(uint32(accId), sourceAccountID, admitted)
 		}
 		if !resolvePhysicalSource {
 			// Keeping the publisher identity would silently resolve a
@@ -3215,15 +3214,14 @@ func checkSubscriptionValidForCreate(
 		// and owner-only target sets stay admitted, and a general publisher's
 		// row that would expose the owner's database beyond the owner is
 		// rejected here instead of creating an unusable subscription.
-		authorized := uint32(publisherAccountID) == physicalAccountID ||
-			publisherAccountID == sysAccountID
+		authorized := pubsub.PublicationSourceOwnerAuthorized(uint32(publisherAccountID), physicalAccountID, false)
 		if !authorized {
-			var admitErr error
-			authorized, admitErr = publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
+			ownerOnly, admitErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, physicalAccountID)
 			if admitErr != nil {
 				err = admitErr
 				return
 			}
+			authorized = pubsub.PublicationSourceOwnerAuthorized(uint32(publisherAccountID), physicalAccountID, ownerOnly)
 		}
 		if !authorized {
 			err = publicationForeignSourceUnauthorizedError(ctx, uint32(publisherAccountID), physicalAccountID, pubInfo.DbName)
@@ -3299,13 +3297,13 @@ func resolveSubscriptionSourceAccounts(
 			}
 			owners[pubInfo.DbId] = owner
 		}
-		resolveOwner := publisherAccountID == owner || publisherAccountID == sysAccountID
+		resolveOwner := pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, owner, false)
 		if !resolveOwner {
 			admittedByTargets, admErr := publicationTargetsAdmitForeignSource(ctx, bh, pubInfo, owner)
 			if admErr != nil {
 				return nil, admErr
 			}
-			resolveOwner = admittedByTargets
+			resolveOwner = pubsub.PublicationSourceOwnerAuthorized(publisherAccountID, owner, admittedByTargets)
 		}
 		if !resolveOwner {
 			// An unauthorized foreign source must not enumerate through the

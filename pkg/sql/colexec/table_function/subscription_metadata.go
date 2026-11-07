@@ -66,6 +66,7 @@ type subscriptionCandidate struct {
 	localOwner        uint32
 	subscriberName    string
 	publisherID       uint32
+	sourceAccountID   uint32
 	publisherName     string
 	sourceDatabase    string
 	tableList         string
@@ -616,11 +617,13 @@ func buildAuthorizedSubscriptionQuery(subscriberID uint32, aliases []subscriptio
 			alias.id, sqlquote.String(alias.name), alias.owner, sqlquote.String(alias.publisher), sqlquote.String(alias.publication))
 	}
 	return fmt.Sprintf("SELECT d.dat_id, d.datname, d.owner, subscriber.account_name, "+
-		"CAST(p.account_id AS INT UNSIGNED), publisher.account_name, p.database_name, p.table_list, p.account_list "+
+		"CAST(p.account_id AS INT UNSIGNED), publisher.account_name, p.database_name, p.table_list, p.account_list, "+
+		"CAST(CASE WHEN p.database_id = 0 THEN p.account_id ELSE source.account_id END AS INT UNSIGNED) "+
 		"FROM (%s) d JOIN mo_catalog.mo_account publisher ON publisher.account_name = d.pub_account_name "+
 		"JOIN mo_catalog.mo_pubs p ON p.account_id = publisher.account_id AND p.pub_name = d.pub_name "+
 		"JOIN mo_catalog.mo_account subscriber ON subscriber.account_id = %d "+
-		"WHERE publisher.status <> %s ORDER BY d.dat_id", strings.Join(rows, " UNION ALL "), subscriberID, sqlquote.String("suspend"))
+		"LEFT JOIN mo_catalog.mo_database source ON source.dat_id = p.database_id AND source.datname = p.database_name "+
+		"WHERE publisher.status <> %s AND (p.database_id = 0 OR source.dat_id IS NOT NULL) ORDER BY d.dat_id", strings.Join(rows, " UNION ALL "), subscriberID, sqlquote.String("suspend"))
 }
 
 func decodeSubscriptionCandidates(
@@ -651,6 +654,7 @@ func decodeSubscriptionCandidates(
 				localOwner:        vector.GetFixedAtWithTypeCheck[uint32](source.Vecs[2], row),
 				subscriberName:    strings.Clone(source.Vecs[3].GetStringAt(row)),
 				publisherID:       vector.GetFixedAtWithTypeCheck[uint32](source.Vecs[4], row),
+				sourceAccountID:   vector.GetFixedAtWithTypeCheck[uint32](source.Vecs[9], row),
 				publisherName:     strings.Clone(source.Vecs[5].GetStringAt(row)),
 				sourceDatabase:    strings.Clone(source.Vecs[6].GetStringAt(row)),
 				tableList:         strings.Clone(source.Vecs[7].GetStringAt(row)),
@@ -672,6 +676,7 @@ func validateSubscriptionCandidateBatch(source *batch.Batch) error {
 		types.T_varchar,
 		types.T_text,
 		types.T_text,
+		types.T_uint32,
 	}
 	return validateSubscriptionMetadataBatch(source, expected)
 }
@@ -705,7 +710,24 @@ func subscriptionCandidateAuthorized(candidate subscriptionCandidate) bool {
 		return false
 	}
 	publication := pubsub.PubInfo{SubAccountsStr: candidate.accountList}
-	return publication.InSubAccounts(candidate.subscriberName)
+	if !publication.InSubAccounts(candidate.subscriberName) {
+		return false
+	}
+	// An admitted general publisher's foreign source can target only its
+	// owner. The page's current subscriber row already resolves that name to
+	// subscriberID, so owner-only names establish the same ID set as canonical
+	// subscription admission, without another query per candidate or target.
+	ownerOnly := candidate.sourceAccountID == candidate.subscriberID &&
+		!strings.EqualFold(candidate.accountList, pubsub.AccountAll)
+	if ownerOnly {
+		for name := range strings.SplitSeq(candidate.accountList, pubsub.Sep) {
+			if strings.TrimSpace(name) != candidate.subscriberName {
+				ownerOnly = false
+				break
+			}
+		}
+	}
+	return pubsub.PublicationSourceOwnerAuthorized(candidate.publisherID, candidate.sourceAccountID, ownerOnly)
 }
 
 func streamSubscriptionCandidate(
@@ -721,7 +743,7 @@ func streamSubscriptionCandidate(
 		}
 		sql := config.buildQuery(candidate, tableNames)
 		sqlProcess := sqlexec.NewSqlProcessWithContext(sqlContext).
-			WithExecutionIdentity(candidate.publisherID, catalog.MO_CATALOG)
+			WithExecutionIdentity(candidate.sourceAccountID, catalog.MO_CATALOG)
 		executorErrCh := make(chan error, 1)
 		_, err := subscriptionMetadataRunStreamingSQL(ctx, sqlProcess, sql, streamCh, executorErrCh)
 		select {
@@ -789,7 +811,9 @@ func buildSubscriptionTablesQuery(candidate subscriptionCandidate, tableNames []
 		"tbl.relkind, tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
 		"tbl.rel_logical_id, CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) +
 		" AS INT UNSIGNED) AS owner, " +
-		"CAST(" + strconv.FormatUint(uint64(candidate.publisherID), 10) +
+		// The frozen View consumer calls this routing column
+		// publisher_account_id, but it must resolve the physical relation.
+		"CAST(" + strconv.FormatUint(uint64(candidate.sourceAccountID), 10) +
 		" AS INT UNSIGNED) AS publisher_account_id " +
 		"FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND tbl.reldatabase = " +
