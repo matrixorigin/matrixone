@@ -42,6 +42,7 @@ type Cache[K comparable, V any] struct {
 	seed     maphash.Seed
 	shards   [numShards]shard[K, V]
 	used     atomic.Int64
+	pending  atomic.Int64 // bytes of the items whose postSet has not returned
 	nextSeq  atomic.Uint64
 	newest   atomic.Int64  // last stamp given to a use
 	added    atomic.Uint64 // count of Sets and of Replaces that grew an item
@@ -78,6 +79,9 @@ type item[K comparable, V any] struct {
 	size  int64
 	seq   uint64
 	stamp int64
+	// pending is set until postSet of the item returns; eviction passes over it. It is
+	// guarded by the item's shard lock.
+	pending bool
 }
 
 // NewWithPrepareEvict returns a cache with the callbacks of a DiskCache index:
@@ -131,13 +135,15 @@ func (c *Cache[K, V]) SetOldest(ctx context.Context, key K, value V, size int64)
 }
 
 func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldest bool) bool {
+	// An item larger than the capacity is evicted before any other.
+	oldest = oldest || size > c.capacity()
 	s := c.shardOf(key)
 	s.mu.Lock()
 	if s.items[key] != nil {
 		s.mu.Unlock()
 		return false
 	}
-	it := &item[K, V]{key: key, value: value, size: size, seq: c.nextSeq.Add(1)}
+	it := &item[K, V]{key: key, value: value, size: size, seq: c.nextSeq.Add(1), pending: true}
 	if oldest {
 		it.stamp = c.oldest.Add(-1)
 		s.items[key] = s.order.PushBack(it)
@@ -147,12 +153,18 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldes
 	}
 	s.updateTail()
 	c.used.Add(size)
+	c.pending.Add(size)
 	c.added.Add(1)
 	seq := it.seq
 	s.mu.Unlock()
 	if c.postSet != nil {
 		c.postSet(ctx, key, value, size, seq)
 	}
+	s.mu.Lock()
+	it.pending = false
+	s.mu.Unlock()
+	c.pending.Add(-size)
+	c.added.Add(1)
 	c.evictOver(ctx)
 	return true
 }
@@ -270,10 +282,16 @@ func (c *Cache[K, V]) Capacity() int64 {
 	return c.capacity()
 }
 
+// settled returns the bytes used by the items eviction may remove: an item whose postSet
+// has not returned is neither evicted nor evicted for.
+func (c *Cache[K, V]) settled() int64 {
+	return c.used.Load() - c.pending.Load()
+}
+
 // evictTo removes the least recently used evictable items until at most target bytes
 // are used, and returns the bytes used after.
 func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
-	for c.used.Load() > target {
+	for c.settled() > target {
 		c.evictor.Lock()
 		evictions := c.removeTo(target)
 		c.evictor.Unlock()
@@ -291,7 +309,7 @@ func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
 // checks again once it is done. It stops when nothing is evictable and nothing was added
 // meanwhile.
 func (c *Cache[K, V]) evictOver(ctx context.Context) {
-	for c.used.Load() > c.capacity() {
+	for c.settled() > c.capacity() {
 		if !c.evictor.TryLock() {
 			return
 		}
@@ -309,7 +327,7 @@ func (c *Cache[K, V]) evictOver(ctx context.Context) {
 // once at most target bytes are used. The caller holds c.evictor.
 func (c *Cache[K, V]) removeTo(target int64) []item[K, V] {
 	var evictions []item[K, V]
-	for len(evictions) < evictBatch && c.used.Load() > target {
+	for len(evictions) < evictBatch && c.settled() > target {
 		it, ok := c.removeOldest()
 		if !ok {
 			break
@@ -340,7 +358,7 @@ func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
 			oldest.mu.Unlock()
 			continue
 		}
-		if c.evictable == nil || c.evictable(e.Value.(*item[K, V]).key) {
+		if c.canEvict(e) {
 			it := c.removeLocked(oldest, e)
 			oldest.mu.Unlock()
 			return it, true
@@ -383,11 +401,18 @@ func (c *Cache[K, V]) scanOldest() (item[K, V], bool) {
 // caller holds s.mu.
 func (c *Cache[K, V]) oldestLocked(s *shard[K, V]) *list.Element {
 	for e := s.order.Back(); e != nil; e = e.Prev() {
-		if c.evictable == nil || c.evictable(e.Value.(*item[K, V]).key) {
+		if c.canEvict(e) {
 			return e
 		}
 	}
 	return nil
+}
+
+// canEvict reports whether eviction may remove the item of e. The caller holds its
+// shard's lock.
+func (c *Cache[K, V]) canEvict(e *list.Element) bool {
+	it := e.Value.(*item[K, V])
+	return !it.pending && (c.evictable == nil || c.evictable(it.key))
 }
 
 func (c *Cache[K, V]) removeLocked(s *shard[K, V], e *list.Element) item[K, V] {

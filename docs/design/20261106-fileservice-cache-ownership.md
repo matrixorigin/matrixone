@@ -1,6 +1,6 @@
 # File-service cache ownership, eviction and object downloads
 
-Version: v2, 2026-11-06. Scope: [PR #32275](https://github.com/matrixorigin/matrixone/pull/32275), issue [#32274](https://github.com/matrixorigin/matrixone/issues/32274). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) (#32033, #32034, #32040).
+Version: v3, 2026-11-07. Scope: [PR #32275](https://github.com/matrixorigin/matrixone/pull/32275) and its follow-up fixes, issue [#32274](https://github.com/matrixorigin/matrixone/issues/32274). Builds on [thrash-aware whole-object prefetch](20261102-thrash-aware-prefetch.md) (#32033, #32034, #32040).
 
 ## Review status
 
@@ -11,6 +11,13 @@ contract reviewable; it does not claim an approval that predates it. An independ
 design review must approve the design-only commit that adds this document, and the PR
 must link that revision, before implementation review resumes. Material deviations of
 the implementation from this document require a new version and review.
+
+v2 was approved and merged with #32275. v3 adds the contracts of the fixes that review of
+the merged code found: a download keeps its reader's deadline and ends when the disk
+cache closes; the cost estimates use only downloads from object storage and range reads
+read to the end; reads of a downloading object count toward its read share; an item
+larger than the disk cache's capacity is evicted first; and an item is neither evicted
+nor counted toward eviction before its insert notification returns.
 
 ## Problem
 
@@ -91,12 +98,16 @@ results; a general-purpose cache library; tuning the policy per workload at runt
   Eviction removes the evictable item with the oldest stamp across all shards when it
   removes it; an item that becomes evictable, or is inserted as oldest, while an
   eviction scans may be passed over by that scan. Files found on disk at startup are
-  inserted as oldest.
+  inserted as oldest, and so is an item larger than the capacity, which eviction then
+  removes before any other.
 - **Held entries.** Index-file entries that are held are never evicted.
 - **Eviction and bound.** Inserts leave eviction to an evictor already running, which
   checks again when it stops, so a burst cannot lose a wakeup. Eviction removes
   bounded batches and runs every removal callback outside all locks, so a callback may
-  use the cache; if a callback panics, the remaining removals still complete. The
+  use the cache; if a callback panics, the remaining removals still complete. An item
+  is neither evicted nor counted toward eviction before its insert notification
+  returns, so the notifications of one inserted item arrive in order and an item
+  larger than the capacity evicts no other while it waits. The
   index of a file and its bytes on disk stay in step through the existing disk-cache
   update protocol.
 
@@ -106,7 +117,8 @@ This amends the turning-off rule of the
 [thrash-aware prefetch design](20261102-thrash-aware-prefetch.md): a table's signal turns
 off after its quiet period only while another whole object fits in the disk cache
 beside the cached files and the whole-object downloads in progress. The per-table
-choice of which table switches is unchanged.
+choice of which table switches is unchanged. Bytes read from an object while it
+downloads count as read from its cached file.
 
 ### An object being downloaded is fetched once (decision)
 
@@ -117,16 +129,18 @@ choice of which table switches is unchanged.
   the background.
 - A read whose bytes are not yet written waits if the download will write them no
   more than `disk-download-max-extra-wait` (default 200 ms) later than a range read
-  could fetch them. The time to the bytes comes from the download's own rate; the time
-  of a range read from the latency and bandwidth of the range reads observed.
+  could fetch them. The time to the bytes comes from the download's own rate, or that of
+  earlier downloads from object storage; the time of a range read from the latency and
+  bandwidth of the range reads the file service read to the end itself.
 - A read beyond that margin reads its range at once only when its bytes are at most an
   eighth of what the download still writes before them; a read larger than that would
   fetch again most of what the download is about to write, so it waits instead.
 - A wait is bounded by the predicted time plus the margin, after which the read falls
   back to a range read.
 - A download that fails after a read got its bytes does not fail that read, and caches
-  nothing. Until the read that started a download returns, cancelling it cancels the
-  download; afterwards the download no longer depends on it.
+  nothing. A read that waits for its download still fails when its own context ends. Until the read that started a download returns, cancelling it cancels the
+  download; afterwards the download no longer depends on it. The download keeps that
+  read's deadline and ends when the disk cache closes.
 - Ranges read while their object is downloading are not cached separately.
 - The cache's synchronous update mode, used only by tests, keeps the old behavior for
   the read that starts a download: it returns once the object is cached.
