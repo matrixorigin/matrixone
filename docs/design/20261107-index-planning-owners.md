@@ -46,14 +46,21 @@ exhausted budget does not grant access.
 
 The same owner also determines whether a future execution could select a
 different access. A BASE decision needs the same lifetime consideration as an
-INDEX decision: a later clock can change the cost. For a complete single proof,
-the owner checks mixed types and combines regular-index leading-part exclusion
-and any-part membership in one bounded traversal. An incomplete or stopped
-proof uses a bounded conservative walk of original filter expressions and
-index metadata. Unknown or unvisited evidence cannot prove independence; an
-actual witness or unknown yields a dependent lifetime. A completed negative
-proof preserves reuse for unrelated ordinary plans. Prepared roots retain their
-existing reusable-plan owner and do not acquire temporal candidate input.
+INDEX decision: a later clock can change the cost. For a complete, live,
+in-budget single proof, the owner checks mixed types and combines regular-index
+leading-part exclusion and any-part membership in one bounded traversal. The
+access is execution-dependent exactly when leading exclusion is not proved and
+membership is yes or unknown. A completed exclusion or membership miss keeps
+existing reuse, and an already-true dependency is never cleared. This retains
+the previous `P && !E` decision, including a temporal suffix behind an integer
+leading part. A fitting non-single proof cannot produce the current candidate.
+
+An incomplete or stopped proof uses a bounded conservative walk of original
+filter expressions and index metadata. Unknown or unvisited evidence cannot
+prove independence; an actual witness or unknown yields a dependent lifetime.
+A completed negative proof preserves reuse for unrelated ordinary plans.
+Prepared roots retain their existing reusable-plan owner and do not acquire
+temporal candidate input.
 
 The positive proof has a 4,096-unit work budget, at most 64 expressions per
 list and depth 64. Dependency fallback is also capped at 4,096 charged units,
@@ -250,10 +257,21 @@ boundaries and full SQL results against BASE controls; sparse/dense clock
 transitions; ordinary and prepared reuse; authorization and schema changes;
 read-identity drift, contention, cancellation, retries and failed publication;
 marker copy/fold/transport; malformed, unknown and unsupported reader/PK
-inputs; and saved-plan privilege allow/deny. Test flagged and old-writer-shaped
-unflagged maxima, scalar and prefix bounds, sorted/nullable membership,
-multi-block seeks, cached-metadata immutability under concurrent aggregation,
-and malformed/oversized index metadata with ordinary-reuse controls. Normal and race owner tests,
+inputs; and saved-plan privilege allow/deny. Compare complete live proofs with
+the frozen old decision, including typed NULL, both orientations, a temporal
+suffix behind an integer index part, malformed earlier definitions and a later
+valid witness. Test oversized algorithms and parts, budget exhaustion,
+cancellation and ordinary/prepared reuse.
+
+Test flagged and old-writer-shaped unflagged maxima, scalar and prefix bounds,
+singleton proofs, zone-map/vector round trips and merges, sorted/nullable
+membership and multi-block seeks. Public SQL must flush VARBINARY non-key and
+primary-key data, verify block-filter pushdown, and compare projection oracles
+with both orientations of strict comparisons and primary-key IN. Include
+matching and nonmatching controls, NULL, inclusive bounds, equality and BETWEEN.
+With two actual objects, assert `MaxAndMinValues` leaves both cached metadata
+values unchanged. Coordinate its aggregation with the observer reading those
+same cached objects under race, with explicit start and cleanup barriers. Normal and race owner tests,
 public SQL/BVT and incremental static checks cover their affected scopes.
 
 Performance comparisons use matched source bases, native libraries, data,
