@@ -814,6 +814,8 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	prepared := &PrepareStmt{
 		Name:                  GetPrepareStmtName(41),
+		Sql:                   "select 1",
+		PreparePlan:           crc32MigrationTestPlan(t, "select 1"),
 		rewritePolicyCaptured: true,
 		getFromSendLongData:   map[int]struct{}{0: {}},
 	}
@@ -845,6 +847,7 @@ func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
 	first := &PrepareStmt{
 		Name:                  GetPrepareStmtName(41),
 		Sql:                   "select 1",
+		PreparePlan:           crc32MigrationTestPlan(t, "select 1"),
 		rewritePolicyCaptured: true,
 		// An empty result is still fetchable until FETCH closes its cursor.
 		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
@@ -852,6 +855,7 @@ func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
 	second := &PrepareStmt{
 		Name:                  GetPrepareStmtName(42),
 		Sql:                   "select 2",
+		PreparePlan:           crc32MigrationTestPlan(t, "select 2"),
 		rewritePolicyCaptured: true,
 		cursor: &preparedStmtCursor{
 			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}, {int64(2)}}},
@@ -887,6 +891,7 @@ func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
 	stmt := &PrepareStmt{
 		Name:                  GetPrepareStmtName(41),
 		Sql:                   "select 1",
+		PreparePlan:           crc32MigrationTestPlan(t, "select 1"),
 		rewritePolicyCaptured: true,
 		cursor: &preparedStmtCursor{
 			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
@@ -974,7 +979,7 @@ func TestMigrateConnectionFromRejectsUnvalidatedRewriteGeneration(t *testing.T) 
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	ses.prepareStmts = map[string]*PrepareStmt{
-		"old": {Name: "old", Sql: "select 1", rewritePolicyCaptured: true},
+		"old": {Name: "old", Sql: "select 1", PreparePlan: crc32MigrationTestPlan(t, "select 1"), rewritePolicyCaptured: true},
 	}
 	ses.rewritePolicyGeneration = 1
 	rt := &Routine{mc: newMigrateController()}

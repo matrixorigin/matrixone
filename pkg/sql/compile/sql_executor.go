@@ -499,6 +499,9 @@ func (exec *txnExecutor) exec(
 			logicalId)
 	}
 
+	if def := statementOption.CRC32CopyExpressions(); def != nil {
+		exec.ctx = context.WithValue(exec.ctx, defines.CRC32CopyExpressionsKey{}, def)
+	}
 	if kind, ok := statementOption.KeepRelKind(); ok {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.RelKindKey{},

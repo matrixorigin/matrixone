@@ -70,6 +70,14 @@ func TestAlterCopyCreateOptionsCarriesLogicalId(t *testing.T) {
 	require.Equal(t, uint64(0), alterCopyCreateOptions(none).KeepLogicalId())
 }
 
+func TestAlterCopyCarriesCRC32Expressions(t *testing.T) {
+	schema := &plan.TableDef{Name: "copy"}
+	qry := &plan.AlterTable{TableDef: &plan.TableDef{}, CopyTableDef: schema}
+	opts := alterCopyCreateOptions(qry)
+	require.Same(t, schema, opts.CRC32CopyExpressions())
+	require.True(t, opts.TrustedCheckConstraintNames())
+}
+
 // The replica keeps the source CHECK constraint names on purpose: it replaces
 // the source, it is not an unrelated sibling. The create therefore has to
 // carry TrustedCheckConstraintNames, otherwise the ALTER ... COPY replica

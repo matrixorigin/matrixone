@@ -1334,6 +1334,36 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	return
 }
 
+// CRC32 execution identities are shared with the function registry. Catalog and
+// wire expressions retain the identity selected by their original binder.
+const (
+	CRC32LegacyOverload   = 0
+	CRC32JSONTextOverload = 1
+)
+
+// isCRC32JSONTextBytes recognizes the bound identity, including when an
+// argument is unresolved. It is independent of any peer capability.
+func isCRC32JSONTextBytes(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
+}
+
+// ContainsCRC32JSONTextBytes identifies the new CRC32 identity, including in
+// folded source expressions. Callers use it to preserve catalog semantics.
+func ContainsCRC32JSONTextBytes(owner any) (bool, error) {
+	found := false
+	err := VisitExpressionsInOwner(owner, func(expr *Expr) error {
+		return VisitExprTree(expr, func(current *Expr) error {
+			found = found || isCRC32JSONTextBytes(current)
+			return nil
+		})
+	})
+	return found, err
+}
+
 // isASCIIInt32Result identifies the new physical result contract of ASCII.
 // Older serialized plans use the same overload IDs with UINT8 results, so the
 // result type must participate in the feature check; gating every ASCII call

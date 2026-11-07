@@ -681,7 +681,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildOnUpdate(proc.Ctx, onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
+			_, err = buildOnUpdate(proc.Ctx, onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildGeneratedExpr(proc.Ctx, generatedCol,
@@ -1213,6 +1213,62 @@ func mustBindPersistedFollowupExpr(t *testing.T, ctx context.Context, name strin
 	expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	require.NoError(t, err)
 	return expr
+}
+
+func TestPersistedCRC32JSONRetainsExistingAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		old, exists := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if exists {
+				rt.SetGlobalVariables(key, old)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	for _, overload := range []int32{function.CRC32LegacyOverload, function.CRC32JSONTextOverload} {
+		expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, overload), ObjName: "crc32"},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}}}
+		required, err := RequiredPersistedExpressionProtocolVersion(expr)
+		require.NoError(t, err)
+		require.Equal(t, int64(defines.MORPCVersion80), required, "the existing UINT64 result gate remains")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion80)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion80)
+		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
+		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion79)
+		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 80")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion80)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion79)
+		require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, expr), "protocol version 80")
+	}
+}
+
+func TestPersistedCRC32MixedOwnerKeepsExistingHighestFloor(t *testing.T) {
+	crc := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+		Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload),
+	}}}}
+	concat := mustBindPersistedFollowupExpr(t, context.Background(), "concat", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		MakePlan2StringConstExprWithType("suffix"),
+	})
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{GeneratedCol: &planpb.GeneratedCol{Expr: crc}},
+		{GeneratedCol: &planpb.GeneratedCol{Expr: concat}},
+	}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONInputContracts)
+	require.True(t, features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)
+	required, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion129), required)
 }
 
 func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {

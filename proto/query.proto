@@ -609,12 +609,41 @@ message GetStatsInfoResponse {
   statsinfo.StatsInfo StatsInfo = 1;
 }
 
+// Deliberately finite proof for a nongenerated ordinary INT32 base table.
+// Version 1 carries no executable expressions, authorization, or catalog graph.
+message DirectSelectColumnV1 {
+  string Name = 1;
+  uint32 Seqnum = 2;
+  int32 TypeID = 3;
+  int32 Width = 4;
+  bool NotNullable = 5;
+}
+
+message DirectSelectOrderV1 {
+  string Column = 1;
+  bool Desc = 2;
+}
+
+message PreparedDirectTableSelectV1 {
+  uint32 Version = 1;
+  uint32 AccountID = 2;
+  uint64 DatabaseID = 3;
+  uint64 TableID = 4;
+  uint32 TableVersion = 5;
+  string DatabaseName = 6;
+  string TableName = 7;
+  repeated DirectSelectColumnV1 Columns = 8;
+  repeated string Projection = 9;
+  repeated DirectSelectOrderV1 OrderBy = 10;
+}
+
 message PrepareStmt {
   string Name = 1;
   string SQL = 2;
   bytes ParamTypes = 3;
   // Minimum target protocol needed to rebind this prepared SQL faithfully.
   int64 RequiredProtocolVersion = 4;
+  PreparedDirectTableSelectV1 DirectTableSelect = 5;
 }
 
 message MigrateTempTable {
@@ -710,6 +739,9 @@ message MigrateConnToRequest {
   uint64 LastInsertID = 15;
   // True only when LastInsertID came from an authoritative source snapshot.
   bool LastInsertIDExported = 16;
+  // The caller owns a disposable, unpublished target. After replay begins,
+  // failure closes this connection; an unconfirmed RPC requires a fresh target.
+  bool CloseTargetOnReplayFailure = 17;
 }
 
 message MigrateUserDefinedVar {

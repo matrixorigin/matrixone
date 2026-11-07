@@ -1,9 +1,11 @@
 SELECT crc32('123');
 SELECT crc32(null);
 SELECT crc32('123456');
+drop table if exists crc32test;
 CREATE TABLE crc32test(col1 varchar(100));
 INSERT INTO crc32test VALUES ('123'),(NULL),('123456');
 SELECT crc32(col1) FROM crc32test;
+drop table crc32test;
 SELECT CRC32('Hello, World!') AS crc32_hello_world;
 
 -- null string
@@ -57,7 +59,132 @@ create table t1 (a json,b int);
 insert into t1 values ('{"t1":"a"}',1);
 insert into t1 values ('{"t1":"b"}',2);
 insert into t1 values ('{"t1":"c"}',3);
+insert into t1 values ('[1,true,"x"]',4);
+insert into t1 values ('1',5);
+insert into t1 values ('"x"',6);
+insert into t1 values ('true',7);
+insert into t1 values ('false',8);
+insert into t1 values ('null',9);
+insert into t1 values (NULL,10);
 select crc32(a),b from t1;
+drop table t1;
+
+drop table if exists crc32_json_api;
+create table crc32_json_api(id int primary key, doc json);
+insert into crc32_json_api values (1, '{"b":2,"a":1}'), (2, '[1,true,"x"]');
+prepare crc32_json_stmt from 'select crc32(doc) from crc32_json_api where id = ?';
+set @crc32_json_id = 1;
+execute crc32_json_stmt using @crc32_json_id;
+set @crc32_json_id = 2;
+execute crc32_json_stmt using @crc32_json_id;
+deallocate prepare crc32_json_stmt;
+create view crc32_json_view as select id, crc32(doc) as checksum from crc32_json_api;
+select id, checksum from crc32_json_view order by id;
+create table crc32_json_ctas as select id, crc32(doc) as checksum from crc32_json_api;
+select id, checksum from crc32_json_ctas order by id;
+drop view crc32_json_view;
+drop table crc32_json_ctas;
+drop table crc32_json_api;
+
+drop table if exists crc32_generated;
+create table crc32_generated(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));
+insert into crc32_generated(id,j) values (1,'{"t1":"a"}');
+insert into crc32_generated(id,j) select 2,j from crc32_generated where id=1;
+update crc32_generated set j='{"t1":"b"}' where id=2;
+replace into crc32_generated(id,j) values (1,'{"t1":"c"}');
+insert into crc32_generated(id,j) values (2,'{"t1":"a"}') on duplicate key update j=values(j);
+select id,c,c=crc32(j) as consistent from crc32_generated order by id;
+prepare crc32_generated_stmt from 'select c,crc32(j) from crc32_generated where id=?';
+set @crc32_generated_id=2;
+execute crc32_generated_stmt using @crc32_generated_id;
+deallocate prepare crc32_generated_stmt;
+alter table crc32_generated add column note int;
+select id,c,c=crc32(j) as consistent from crc32_generated order by id;
+create unique index uk_c on crc32_generated(c);
+insert ignore into crc32_generated(id,j) values (3,'{"t1":"a"}');
+select count(*) as row_count from crc32_generated;
+drop table crc32_generated;
+
+-- Composite CRC32 generated input: ordinary integer COPY remains legal.
+-- Fresh JSON DDL binds CRC1; this is not a legacy CRC0 catalog regression.
+drop table if exists crc32_generated_auto_input;
+create table crc32_generated_auto_input(id bigint unsigned not null primary key,val json,g bigint unsigned generated always as (crc32(val)+id) stored);
+insert into crc32_generated_auto_input(id,val) values(1,'1');
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+alter table crc32_generated_auto_input modify column id bigint unsigned not null,algorithm=copy;
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+-- Reject AUTO_INCREMENT on an input, not on the generated column itself.
+alter table crc32_generated_auto_input modify column id bigint unsigned not null auto_increment,algorithm=copy;
+select count(*) as ordinary_id_columns from information_schema.columns where table_schema=database() and table_name='crc32_generated_auto_input' and column_name='id' and data_type='bigint' and lower(column_type) like '%unsigned%' and is_nullable='NO' and column_key='PRI' and extra='';
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+update crc32_generated_auto_input set id=3 where id=1;
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+alter table crc32_generated_auto_input change column id id bigint unsigned not null auto_increment,algorithm=copy;
+select count(*) as ordinary_id_columns from information_schema.columns where table_schema=database() and table_name='crc32_generated_auto_input' and column_name='id' and data_type='bigint' and lower(column_type) like '%unsigned%' and is_nullable='NO' and column_key='PRI' and extra='';
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+insert into crc32_generated_auto_input(id,val) values(2,'1');
+select id,cast(val as varchar) as val_text,g from crc32_generated_auto_input order by id;
+drop table crc32_generated_auto_input;
+select count(*) as remaining_auto_input_tables from information_schema.tables where table_schema=database() and (table_name='crc32_generated_auto_input' or table_name like 'crc32_generated_auto_input_copy_%');
+
+drop table if exists crc32_generated_convert;
+create table crc32_generated_convert(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));
+insert into crc32_generated_convert(id,j) values (1,'1');
+alter table crc32_generated_convert modify column j bigint;
+insert into crc32_generated_convert(id,j) values (2,1);
+select id,c,c=crc32(j) as consistent from crc32_generated_convert order by id;
+select id from crc32_generated_convert where c=2212294583 order by id;
+drop table crc32_generated_convert;
+
+-- A current CHECK must keep its input after COPY reorders two JSON columns.
+drop table if exists crc32_check_copy;
+create table crc32_check_copy(id int primary key,j json,x json,constraint ck_crc32 check(crc32(j)=2212294583));
+insert into crc32_check_copy values(1,'1','2');
+alter table crc32_check_copy modify column j json after x;
+insert into crc32_check_copy(id,j,x) values(2,'1','2');
+insert into crc32_check_copy(id,j,x) values(3,'2','1');
+update crc32_check_copy set j='2',x='1' where id=1;
+select id from crc32_check_copy order by id;
+create table crc32_check_like like crc32_check_copy;
+insert into crc32_check_like(id,j,x) values(4,'1','2');
+insert into crc32_check_like(id,j,x) values(5,'2','1');
+select id from crc32_check_like order by id;
+-- New text-semantic CHECKs, unlike legacy binary-JSON contracts, may rebind.
+alter table crc32_check_copy modify column j bigint;
+insert into crc32_check_copy(id,j,x) values(6,1,'2');
+insert into crc32_check_copy(id,j,x) values(7,2,'1');
+select id from crc32_check_copy order by id;
+drop table crc32_check_like;
+drop table crc32_check_copy;
+
+-- Current-binary public controls for multi-clause COPY with different column types.
+-- Legacy CRC0 catalog identity is covered by the planner regression, not manufactured by this BVT.
+drop table if exists crc32_check_clauses;
+drop table if exists crc32_check_reverse;
+create table crc32_check_clauses(id int primary key,j json,x int,constraint ck_crc32_clauses check(crc32(j)=2212294583));
+insert into crc32_check_clauses values(1,'1',2);
+alter table crc32_check_clauses modify column j json after x,modify column x int;
+insert into crc32_check_clauses(id,j,x) values(2,'1',3);
+insert into crc32_check_clauses(id,j,x) values(3,'2',1);
+update crc32_check_clauses set x=4 where id=1;
+update crc32_check_clauses set j='2' where id=1;
+select id,x from crc32_check_clauses order by id;
+create table crc32_check_reverse(id int primary key,j json,x int,constraint ck_crc32_reverse check(crc32(j)=2212294583));
+insert into crc32_check_reverse values(1,'1',2);
+alter table crc32_check_reverse modify column x int,modify column j json after x;
+insert into crc32_check_reverse(id,j,x) values(2,'1',3);
+insert into crc32_check_reverse(id,j,x) values(3,'2',1);
+update crc32_check_reverse set x=4 where id=1;
+update crc32_check_reverse set j='2' where id=1;
+select id,x from crc32_check_reverse order by id;
+drop table crc32_check_reverse;
+drop table crc32_check_clauses;
+
+drop table if exists crc32_binary;
+create table crc32_binary(id int, b varbinary(2));
+insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
+select id,crc32(b) from crc32_binary order by id;
+drop table crc32_binary;
 
 
 drop table if exists test_table;
@@ -136,4 +263,18 @@ insert into job values
 select crc32(jobTitle) from job;
 drop table job;
 
+-- Release upgrades must reach a complete CDC catalog before CRC32's durable admission.
+select count(*) as cdc_upgrade_prerequisite_columns from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id', 'owner_generation', 'pending_source_table_id', 'target_identity');
+
+create table crc32_gen_attributes(j json, g bigint unsigned generated always as (crc32(j)) stored);
+insert into crc32_gen_attributes(j) values ('{"t1":"a"}');
+alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored default 0;
+alter table crc32_gen_attributes change column g g bigint unsigned generated always as (crc32(j)) stored on update current_timestamp;
+alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored auto_increment;
+select g from crc32_gen_attributes;
+drop table crc32_gen_attributes;
+-- Closed dependent SELECTs remain replayable without reading catalog expressions.
+prepare crc32_closed_subquery from 'select (select (select t.k limit 1)) as k from (select 42 as k) t';
+execute crc32_closed_subquery;
+deallocate prepare crc32_closed_subquery;
 drop database test;

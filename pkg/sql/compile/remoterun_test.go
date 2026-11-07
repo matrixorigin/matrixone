@@ -1640,6 +1640,20 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
+	t.Run("CRC32 JSON text identity retains existing result gate", func(t *testing.T) {
+		crc := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32JSONTextOverload), ObjName: "crc32"},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}}}
+		pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{crc}}}}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, pipeline), "protocol version 80")
+		for _, version := range []int64{defines.MORPCVersion80, defines.MORPCVersion134} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, pipeline))
+		}
+	})
+
 	t.Run("typed BIN/CONV sender and receiver boundary", func(t *testing.T) {
 		cases := []struct {
 			name       string
@@ -1877,6 +1891,37 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
+}
+
+func TestCRC32JSONTextBytesKeepsExistingStreamMinimum(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion134
+	crc := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32JSONTextOverload), ObjName: "crc32"},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+	}}}
+	floatCast := floatConversionProtocolExpr(planfunction.CAST, types.T_varchar, types.T_float64)
+	for _, tc := range []struct {
+		name  string
+		exprs []*planpb.Expr
+		want  int64
+	}{
+		{"crc only", []*planpb.Expr{crc}, 0},
+		{"crc then float", []*planpb.Expr{crc, floatCast}, defines.MORPCVersion132},
+		{"float then crc", []*planpb.Expr{floatCast, crc}, defines.MORPCVersion132},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := projection.NewArgument()
+			defer root.Release()
+			root.ProjectList = tc.exprs
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: root}
+			minimum := defines.MORPCVersion134
+			data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
+			require.NoError(t, err)
+			require.NotEmpty(t, data)
+			require.Equal(t, tc.want, minimum)
+		})
+	}
 }
 
 func TestRemoteASCIIResultProtocolValidation(t *testing.T) {

@@ -36,6 +36,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The TN read barrier is already applied, but a transaction snapshot can be
+// newer. In that case wait until that exact snapshot is applied before using it
+// as the synthetic conflict frontier. The waiter returns an exclusive timestamp.
+func appliedConflictFrontier(
+	ctx context.Context,
+	snapshot, frontier timestamp.Timestamp,
+	wait func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error),
+) (timestamp.Timestamp, error) {
+	if !frontier.Less(snapshot) {
+		return frontier, nil
+	}
+	appliedExclusive, err := wait(ctx, snapshot)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	if !snapshot.Less(appliedExclusive) {
+		return timestamp.Timestamp{}, fmt.Errorf("logtail waiter did not apply transaction snapshot")
+	}
+	return snapshot, nil
+}
+
 // A reconnect invalidates the subscription generation used by a PK check.
 // Exercise that error through the frontend after earlier DDL/DML, then retry
 // the entire transaction. The owned cluster isolates the reconnect callback
@@ -148,8 +169,10 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	var snapshot timestamp.Timestamp
+	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
+	require.NoError(t, err)
 	found := false
+	var snapshot timestamp.Timestamp
 	cn.GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
 		if bytes.Equal(tx.Meta.ID, owner) {
 			found = true
@@ -160,12 +183,8 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 		return true
 	})
 	require.True(t, found, "the parked DELETE must belong to an active transaction")
-	// RC chooses the latest applied timestamp's successor. A TN read barrier
-	// need not cover that snapshot, so wait for the parked transaction's actual
-	// snapshot before choosing the already-applied conflicting lock frontier.
-	_, err = cn.GetTxnClient().WaitLogTailAppliedAt(ctx, snapshot)
+	frontier, err = appliedConflictFrontier(ctx, snapshot, frontier, cn.GetTxnClient().WaitLogTailAppliedAt)
 	require.NoError(t, err)
-	frontier = pushClient.LatestLogtailAppliedTime()
 	require.True(t, snapshot.LessEq(frontier))
 	require.NoError(t, pushClient.Disconnect())
 	select {
