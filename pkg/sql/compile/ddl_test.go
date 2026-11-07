@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/prashantv/gostub"
 
@@ -747,7 +748,7 @@ func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
 		moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)),
 	)
 	moruntime.SetupServiceBasedRuntime(service, rt)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
 
 	ctrl := gomock.NewController(t)
 	lockService := mock_lock.NewMockLockService(ctrl)
@@ -795,7 +796,7 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 		service := t.Name()
 		rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
 		moruntime.SetupServiceBasedRuntime(service, rt)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
 
 		ctrl := gomock.NewController(t)
 		lockService := mock_lock.NewMockLockService(ctrl)
