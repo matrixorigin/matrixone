@@ -82,7 +82,6 @@ func candidateScalarFilterSafe(expr *plan.Expr, table *plan.TableDef, rawKey boo
 		return false
 	}
 	if types.IsUnicodeCollation(uint8(column.Charset)) || column.PadSpace ||
-		bytesDomain && (name == "<" || name == ">") ||
 		!bytesDomain && (name == "prefix_eq" || name == "prefix_between") {
 		return false
 	}
@@ -98,27 +97,12 @@ func candidateScalarFilterSafe(expr *plan.Expr, table *plan.TableDef, rawKey boo
 		if size := kind.FixedLength(); size > 0 && len(value) != size {
 			return false
 		}
-		if (name == "prefix_eq" || name == "prefix_between") && unsafeCandidatePrefix(value) {
-			return false
-		}
 		if rawKey {
 			valueType := types.New(types.T(bound.Typ.Id), bound.Typ.Width, bound.Typ.Scale)
 			valueType.Charset = uint8(bound.Typ.Charset)
 			if !keycodec.SupportsExactRawRuntimeFilterPair(columnType, valueType) {
 				return false
 			}
-		}
-	}
-	return true
-}
-
-func unsafeCandidatePrefix(value []byte) bool {
-	if len(value) <= 30 {
-		return false
-	}
-	for _, b := range value[:30] {
-		if b != 0xff {
-			return false
 		}
 	}
 	return true

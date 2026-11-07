@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -115,4 +117,36 @@ func TestOriginalDependencyFallbackKeepsUnrelatedPlansReusable(t *testing.T) {
 		builder.collectOriginalIndexOwner(0)
 		require.True(t, builder.qry.ExecutionDependentAccess)
 	}
+}
+
+func TestOriginalDependencyRejectsUnprovedIndexMetadata(t *testing.T) {
+	builder, _, temporal := newIndexCostFixture(t)
+	scan := builder.qry.Nodes[0]
+	regular := catalog.MoIndexDefaultAlgo.ToString()
+	empty := &pb.IndexDef{IndexAlgo: regular, TableExist: true}
+	scan.TableDef.Indexes = []*pb.IndexDef{empty}
+	check := originalDependencyCheck{scan: scan, budget: 4096}
+	membership, _ := check.indexedColumn(-1, nil, nil)
+	require.Equal(t, dependencyUnknown, membership)
+	scan.FilterList = []*pb.Expr{{Expr: &pb.Expr_W{W: &pb.WindowSpec{}}}}
+	builder.qry.ExecutionDependentAccess = false
+	builder.collectOriginalIndexOwner(0)
+	require.True(t, builder.qry.ExecutionDependentAccess, "malformed metadata cannot prove a reusable lifetime")
+
+	scan.TableDef.Indexes = []*pb.IndexDef{empty, temporal}
+	check = originalDependencyCheck{scan: scan, budget: 4096}
+	membership, _ = check.indexedColumn(0, nil, nil)
+	require.Equal(t, dependencyYes, membership, "a malformed earlier index must not hide a later witness")
+
+	scan.TableDef.Indexes = []*pb.IndexDef{{IndexAlgo: strings.Repeat(" ", 257), TableExist: true, Parts: []string{"id"}}}
+	check = originalDependencyCheck{scan: scan, budget: 4096}
+	exclusionBudget := 4096
+	membership, excludes := check.indexedColumn(0, context.Background(), &exclusionBudget)
+	require.Equal(t, dependencyUnknown, membership)
+	require.False(t, excludes, "an unbounded algorithm name cannot prove exclusion")
+
+	scan.TableDef.Indexes = []*pb.IndexDef{{IndexAlgo: regular, TableExist: true, Parts: []string{"id"}}}
+	builder.qry.ExecutionDependentAccess = false
+	builder.collectOriginalIndexOwner(0)
+	require.False(t, builder.qry.ExecutionDependentAccess, "complete integer-only evidence remains reusable")
 }

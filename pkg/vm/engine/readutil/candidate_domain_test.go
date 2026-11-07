@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -82,15 +85,11 @@ func TestCandidateOrdinaryIntegerAccess(t *testing.T) {
 func TestCandidateUnsupportedPhysicalBoundsFailOpen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	longFF := append(bytes.Repeat([]byte{0xff}, 30), 1)
 	for _, tc := range []struct {
 		name, op string
 		kind     types.T
 		bound    []byte
 	}{
-		{"truncated prefix", "prefix_eq", types.T_varchar, longFF},
-		{"strict bytes less", "<", types.T_varchar, longFF},
-		{"strict bytes greater", ">", types.T_varchar, longFF},
 		{"padded char", "=", types.T_char, []byte("MO")},
 		{"float domain", "=", types.T_float64, types.EncodeFloat64(new(float64))},
 		{"malformed integer", "=", types.T_int64, []byte{1}},
@@ -119,7 +118,7 @@ func TestCandidateSupportedBytePrefixesRemainUsable(t *testing.T) {
 	typ := plan.Type{Id: int32(types.T_varchar), Width: 64}
 	table := decimalTableDef(typ, true)
 	table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
-	for _, value := range [][]byte{bytes.Repeat([]byte{0xff}, 30), bytes.Repeat([]byte{'a'}, 31)} {
+	for _, value := range [][]byte{bytes.Repeat([]byte{0xff}, 30), append(bytes.Repeat([]byte{0xff}, 30), 1), bytes.Repeat([]byte{'a'}, 31)} {
 		col := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "amount"}}}
 		bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: value}}}
 		filter := foldedFunction("prefix_eq", []*plan.Expr{col, bound})
@@ -130,6 +129,92 @@ func TestCandidateSupportedBytePrefixesRemainUsable(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, base.Valid)
 		base.Cleanup()
+	}
+}
+
+func TestByteCandidateReaderAndPKResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := plan.Type{Id: int32(types.T_varchar), Width: 64}
+	table := decimalTableDef(typ, true)
+	table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
+	prefix := append(bytes.Repeat([]byte{0xff}, 30), 0)
+	values := [][]byte{prefix, append(bytes.Clone(prefix), 0), append(bytes.Repeat([]byte{0xff}, 30), 1), append(bytes.Repeat([]byte{0xff}, 30), 2)}
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(proc.Mp())
+	meta := objectio.BuildMetaData(uint16(len(values)), 1)
+	all := index.NewZM(types.T_varchar, 0)
+	for i, value := range values {
+		require.NoError(t, vector.AppendBytes(input, value, false, proc.Mp()))
+		zm := index.BuildZM(types.T_varchar, value)
+		meta.GetBlockMeta(uint32(i)).MustGetColumn(0).SetZoneMap(zm)
+		index.UpdateZM(all, value)
+	}
+	// Object summaries from older writers could lose a block's truncation bit.
+	// The actual block metadata retains its flag; exercise the legacy summary
+	// together with real block pruning and ordered seeks.
+	legacy := index.NewZM(types.T_varchar, 0)
+	index.UpdateZM(legacy, all.GetMinBuf())
+	index.UpdateZM(legacy, all.GetMaxBuf())
+	require.False(t, legacy.MaxTruncated())
+	meta.MustGetColumn(0).SetZoneMap(legacy)
+	for _, tc := range []struct {
+		name   string
+		bounds [][]byte
+		want   []int64
+	}{
+		{"<", [][]byte{values[2]}, []int64{0, 1}},
+		{">", [][]byte{values[2]}, []int64{3}},
+		{"prefix_eq", [][]byte{prefix}, []int64{0, 1}},
+		{"prefix_between", [][]byte{prefix, values[2]}, []int64{0, 1, 2}},
+	} {
+		for _, marked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/marked=%t", tc.name, marked), func(t *testing.T) {
+				args := []*plan.Expr{{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "amount"}}}}
+				for _, value := range tc.bounds {
+					args = append(args, &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: value}}})
+				}
+				expr := foldedFunction(tc.name, args)
+				expr.CandidateFilter = marked
+				_, _, _, block, seek, compiled, _ := CompileFilterExpr(expr, table, nil)
+				require.True(t, compiled)
+				for _, row := range tc.want {
+					stop, match, err := block(int(row), meta.GetBlockMeta(uint32(row)), nil)
+					require.NoError(t, err)
+					require.False(t, stop)
+					require.True(t, match, "reader must retain matching block %d", row)
+				}
+				if seek != nil {
+					require.LessOrEqual(t, seek(meta), int(tc.want[0]))
+				}
+				base, err := ConstructBasePKFilter(expr, table, proc.Mp())
+				require.NoError(t, err)
+				defer base.Cleanup()
+				require.True(t, base.Valid)
+				persisted, err := ConstructBlockPKFilter(false, base, nil)
+				require.NoError(t, err)
+				require.True(t, persisted.Valid)
+				require.Equal(t, tc.want, persisted.SortedSearchFunc(containers.Vectors{*input}))
+				if persisted.Cleanup != nil {
+					defer persisted.Cleanup()
+				}
+				memory, err := NewMemPKFilter(table, types.MaxTs().ToTimestamp(), newTestPackerPool(), base, engine.FilterHint{})
+				require.NoError(t, err)
+				require.True(t, memory.Valid())
+				packer := types.NewPacker()
+				defer packer.Close()
+				skipped := objectio.GetReusableBitmap()
+				defer skipped.Release()
+				memory.FilterVector(input, packer, &skipped)
+				for i := range values {
+					want := false
+					for _, row := range tc.want {
+						want = want || row == int64(i)
+					}
+					require.Equal(t, !want, skipped.Contains(uint64(i)), "memory row %d", i)
+				}
+			})
+		}
 	}
 }
 
