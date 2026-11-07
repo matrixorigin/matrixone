@@ -188,7 +188,10 @@ func (check *originalDependencyCheck) indexedColumn(position int32, ctx context.
 		}
 		membershipFits := check.spend(1) && len(index.IndexAlgo) <= engine.MaxIndexPlanningNameBytes && check.spend(len(index.IndexAlgo))
 		if !membershipFits {
-			unknown = true
+			// Classification may scan the name; do not normalize an unbounded
+			// or uncharged algorithm or infer exclusion from it.
+			excludes, unknown = false, true
+			continue
 		}
 		if !catalog.IsRegularIndexAlgo(index.IndexAlgo) {
 			continue
@@ -203,10 +206,10 @@ func (check *originalDependencyCheck) indexedColumn(position int32, ctx context.
 				}
 			}
 		}
-		if !index.TableExist || !membershipFits {
+		if !index.TableExist {
 			continue
 		}
-		if len(index.Parts) > engine.MaxIndexPlanningParts {
+		if len(index.Parts) == 0 || len(index.Parts) > engine.MaxIndexPlanningParts {
 			unknown = true
 			continue
 		}

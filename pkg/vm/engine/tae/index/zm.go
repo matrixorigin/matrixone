@@ -268,6 +268,32 @@ func (zm ZM) MaxTruncated() bool {
 func (zm ZM) SetMaxTruncated() {
 	zm[61] |= 0x80
 }
+
+// MayHaveUnboundedByteMax reports an upper bound that cannot exclude a byte
+// value. Older object summaries could lose the truncation bit, so an unmarked
+// 30-byte all-FF maximum is indistinguishable from a longer maximum.
+func (zm ZM) MayHaveUnboundedByteMax() bool {
+	if !zm.IsInited() {
+		return false
+	}
+	max := zm.GetMaxBuf()
+	if !zm.MaxTruncated() && (len(max) != 30 || !hasMaxPrefix(max)) {
+		return false
+	}
+	return zm.IsString() && !zm.IsArray()
+}
+
+// prefixMaxCompare preserves the useful theoretical upper bound for a short
+// prefix. A longer prefix sharing an ambiguous maximum cannot be excluded.
+func (zm ZM) prefixMaxCompare(bound []byte) int {
+	max := zm.GetMaxBuf()
+	comparison := types.PrefixCompare(max, bound)
+	if comparison <= 0 && zm.MayHaveUnboundedByteMax() &&
+		(comparison < 0 || len(max) != 30 || !hasMaxPrefix(max)) {
+		return 1
+	}
+	return comparison
+}
 func (zm ZM) Encode() []byte {
 	return zm[:]
 }
@@ -324,7 +350,7 @@ func (zm ZM) containsBytes(k []byte) bool {
 }
 
 func (zm ZM) containsString(k []byte) bool {
-	if zm.MaxTruncated() {
+	if zm.MayHaveUnboundedByteMax() {
 		return true
 	}
 	return compute.CompareBytes(k, zm.GetMinBuf()) >= 0 &&
@@ -374,6 +400,9 @@ func (zm ZM) AnyLTByValue(k []byte) bool {
 func (zm ZM) AnyGTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
+	}
+	if zm.MayHaveUnboundedByteMax() {
+		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) > 0
@@ -575,7 +604,7 @@ func (zm ZM) AnyGT(o ZM) (res bool, ok bool) {
 	}
 	// zm.max > o.min
 	ok = true
-	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) > 0
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) > 0 || zm.MayHaveUnboundedByteMax()
 	return
 }
 
@@ -586,7 +615,7 @@ func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
 	}
 	// zm.max >= o.min
 	ok = true
-	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) >= 0
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) >= 0 || zm.MayHaveUnboundedByteMax()
 	return
 }
 
@@ -596,6 +625,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 		return false
 	}
 	if zm.hasNaNBound() {
+		return true
+	}
+	if zm.MayHaveUnboundedByteMax() {
 		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
@@ -629,7 +661,7 @@ func (zm ZM) AnyLT(o ZM) (res bool, ok bool) {
 	}
 	// zm.min < o.max
 	ok = true
-	res = compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) < 0
+	res = compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) < 0 || o.MayHaveUnboundedByteMax()
 	return
 }
 
@@ -640,7 +672,7 @@ func (zm ZM) AnyLE(o ZM) (res bool, ok bool) {
 	}
 	// zm.min <= o.max
 	ok = true
-	res = compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) <= 0
+	res = compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) <= 0 || o.MayHaveUnboundedByteMax()
 	return
 }
 
@@ -651,8 +683,8 @@ func (zm ZM) AnyBetween(lb, ub ZM) (res bool, ok bool) {
 	}
 	// zm.max >= lb.min && zm.min <= ub.max
 	ok = true
-	res = compute.Compare(zm.GetMaxBuf(), lb.GetMinBuf(), zm.GetType(), zm.GetScale(), lb.GetScale()) >= 0 &&
-		compute.Compare(zm.GetMinBuf(), ub.GetMaxBuf(), zm.GetType(), zm.GetScale(), ub.GetScale()) <= 0
+	res = (compute.Compare(zm.GetMaxBuf(), lb.GetMinBuf(), zm.GetType(), zm.GetScale(), lb.GetScale()) >= 0 || zm.MayHaveUnboundedByteMax()) &&
+		(compute.Compare(zm.GetMinBuf(), ub.GetMaxBuf(), zm.GetType(), zm.GetScale(), ub.GetScale()) <= 0 || ub.MayHaveUnboundedByteMax())
 	return
 }
 
@@ -661,14 +693,14 @@ func (zm ZM) AnyBetween(lb, ub ZM) (res bool, ok bool) {
 // max <= v
 func (zm ZM) FastLEValue(v []byte, scale int32) (res bool) {
 	t := zm.GetType()
-	return compute.Compare(zm.GetMaxBuf(), v, t, zm.GetScale(), scale) <= 0
+	return !zm.MayHaveUnboundedByteMax() && compute.Compare(zm.GetMaxBuf(), v, t, zm.GetScale(), scale) <= 0
 }
 
 func (zm ZM) FastIntersect(o ZM) (res bool) {
 	t := zm.GetType()
 	// zm.max >= o.min && zm.min <= v2.max
-	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
-		compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0
+	res = (compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 || zm.MayHaveUnboundedByteMax()) &&
+		(compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0 || o.MayHaveUnboundedByteMax())
 	return
 }
 
@@ -746,31 +778,28 @@ func (zm ZM) PrefixGT(s []byte) bool {
 
 func (zm ZM) PrefixEq(s []byte) bool {
 	zmin := zm.GetMinBuf()
-	zmax := zm.GetMaxBuf()
 
-	return types.PrefixCompare(zmin, s) <= 0 && types.PrefixCompare(zmax, s) >= 0
+	return types.PrefixCompare(zmin, s) <= 0 && zm.prefixMaxCompare(s) >= 0
 }
 
 func (zm ZM) PrefixBetween(lb, ub []byte) bool {
 	zmin := zm.GetMinBuf()
-	zmax := zm.GetMaxBuf()
 
-	return types.PrefixCompare(zmin, ub) <= 0 && types.PrefixCompare(zmax, lb) >= 0
+	return types.PrefixCompare(zmin, ub) <= 0 && zm.prefixMaxCompare(lb) >= 0
 }
 
 func (zm ZM) PrefixInRange(lb, ub []byte, hint uint8) bool {
 	zmin := zm.GetMinBuf()
-	zmax := zm.GetMaxBuf()
 
 	switch hint {
 	case 1: // (lb, ub]
-		return types.PrefixCompare(zmax, lb) > 0 && types.PrefixCompare(zmin, ub) <= 0
+		return zm.prefixMaxCompare(lb) > 0 && types.PrefixCompare(zmin, ub) <= 0
 	case 2: // [lb, ub)
-		return types.PrefixCompare(zmax, lb) >= 0 && types.PrefixCompare(zmin, ub) < 0
+		return zm.prefixMaxCompare(lb) >= 0 && types.PrefixCompare(zmin, ub) < 0
 	case 3: // (lb, ub)
-		return types.PrefixCompare(zmax, lb) > 0 && types.PrefixCompare(zmin, ub) < 0
+		return zm.prefixMaxCompare(lb) > 0 && types.PrefixCompare(zmin, ub) < 0
 	default: // [lb, ub]
-		return types.PrefixCompare(zmax, lb) >= 0 && types.PrefixCompare(zmin, ub) <= 0
+		return zm.prefixMaxCompare(lb) >= 0 && types.PrefixCompare(zmin, ub) <= 0
 	}
 }
 
@@ -811,11 +840,11 @@ func (zm ZM) InRange(lb, ub []byte, hint uint8) bool {
 // scan also makes this membership check independent of producer ordering.
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	col, area := vector.MustVarlenaRawData(vec)
-	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
+	minVal := zm.GetMinBuf()
 	for i := range col {
 		needle := col[i].GetByteSlice(area)
 		if types.PrefixCompare(minVal, needle) <= 0 &&
-			types.PrefixCompare(maxVal, needle) >= 0 {
+			zm.prefixMaxCompare(needle) >= 0 {
 			return true
 		}
 	}
@@ -1129,6 +1158,9 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		lowerBound := sort.Search(len(col), func(i int) bool {
 			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
+		if zm.MayHaveUnboundedByteMax() {
+			return lowerBound, len(col)
+		}
 		upperBound := sort.Search(len(col), func(i int) bool {
 			return types.PrefixCompare(maxVal, col[i].GetByteSlice(area)) < 0
 		})
@@ -1411,7 +1443,7 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 
-		return lowerBound < len(col) && types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+		return lowerBound < len(col) && (zm.MayHaveUnboundedByteMax() || types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0)
 
 	case types.T_array_float32:
 		col := vector.MustArrayCol[float32](vec)
@@ -1836,6 +1868,19 @@ func UpdateZM(zm ZM, v []byte) {
 	}
 }
 
+// MergeZM combines bounds without taking ownership of src. Sum accounting
+// stays with the caller; a truncated byte maximum must survive the merge.
+func MergeZM(dst, src ZM) {
+	if !src.IsInited() {
+		return
+	}
+	UpdateZM(dst, src.GetMaxBuf())
+	UpdateZM(dst, src.GetMinBuf())
+	if src.IsString() && src.MaxTruncated() {
+		dst.SetMaxTruncated()
+	}
+}
+
 // it is only used for test
 func UpdateZMAny(zm ZM, v any) {
 	vv := types.EncodeValue(v, zm.GetType())
@@ -1910,7 +1955,7 @@ func ZMToVector(zm ZM, vec *vector.Vector, m *mpool.MPool) (*vector.Vector, erro
 	}
 
 	null := false
-	if t.IsVarlen() && zm.MaxTruncated() {
+	if t.IsVarlen() && (zm.MaxTruncated() || zm.MayHaveUnboundedByteMax()) {
 		null = true
 	}
 	err = appendFn(zm.GetMaxBuf(), null, m)

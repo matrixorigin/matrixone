@@ -2455,8 +2455,7 @@ func collectTableStats(
 				if !zoneMap.IsInited() {
 					continue
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
+				index.MergeZM(info.ColumnZMs[idx], zoneMap)
 
 				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {

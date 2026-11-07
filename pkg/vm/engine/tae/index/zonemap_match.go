@@ -289,7 +289,7 @@ func AnyPrefixGTByValue(zm ZM, value []byte, columnType types.T) ZoneMapMatch {
 		return ZoneMapMatch{}
 	}
 	return ZoneMapMatch{
-		Match: types.PrefixCompare(zm.GetMaxBuf(), value) > 0,
+		Match: zm.prefixMaxCompare(value) > 0,
 		Known: true,
 	}
 }
@@ -299,7 +299,7 @@ func AnyPrefixGEByValue(zm ZM, value []byte, columnType types.T) ZoneMapMatch {
 		return ZoneMapMatch{}
 	}
 	return ZoneMapMatch{
-		Match: types.PrefixCompare(zm.GetMaxBuf(), value) >= 0,
+		Match: zm.prefixMaxCompare(value) >= 0,
 		Known: true,
 	}
 }
