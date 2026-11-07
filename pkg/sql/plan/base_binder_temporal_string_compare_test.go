@@ -241,3 +241,326 @@ func TestScalarTimeDirectParamComparisonKeepsStringSemantics(t *testing.T) {
 	require.NoError(t, err)
 	requireTemporalCompareArgTypes(t, expr, types.T_varchar, 0)
 }
+
+// MySQL compares DATE values with strings in the DATETIME domain. A string
+// literal with a non-zero time portion must promote the comparison to
+// DATETIME(6) so its time portion is not truncated away (issue #31539).
+func requireDateStringDatetimeDomain(t *testing.T, expr *planpb.Expr, datePos int) {
+	t.Helper()
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 2)
+	// The comparison promotes both sides to DATETIME; only the string side's
+	// scale matters, because it must keep the literal's fractional seconds.
+	require.Equal(t, int32(types.T_datetime), fn.Args[datePos].Typ.Id)
+	require.Equal(t, int32(types.T_datetime), fn.Args[1-datePos].Typ.Id)
+	require.Equal(t, int32(6), fn.Args[1-datePos].Typ.Scale)
+}
+
+func TestDateFractionalStringLiteralComparisonUsesDatetimeDomain(t *testing.T) {
+	ctx := context.Background()
+	dateLit := makePlan2DateConstExprWithType(0)
+	stringLit := makePlan2StringConstExprWithType("2026-01-01 00:00:00.001")
+
+	for _, operator := range []string{"=", "<=>", "!=", "<", "<=", ">", ">="} {
+		t.Run(operator, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, operator, []*planpb.Expr{dateLit, stringLit})
+			require.NoError(t, err)
+			requireDateStringDatetimeDomain(t, expr, 0)
+		})
+	}
+
+	t.Run("string on the left", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "<", []*planpb.Expr{stringLit, dateLit})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 1)
+	})
+
+	t.Run("date column", func(t *testing.T) {
+		dateCol := makeTemporalCompareColumn(types.T_date, 0, 0)
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "<", []*planpb.Expr{dateCol, stringLit})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 0)
+	})
+}
+
+// A string literal whose time portion is zero compares identically in the
+// DATE and DATETIME domains, so it keeps the DATE domain (and its column
+// fast path). Strings that fail the canonical datetime parse keep the
+// DATE-domain error behavior as well.
+func TestDateZeroTimeAndInvalidStringLiteralComparisonKeepsDateDomain(t *testing.T) {
+	ctx := context.Background()
+	dateCol := makeTemporalCompareColumn(types.T_date, 0, 0)
+
+	for name, text := range map[string]string{
+		"plain date":        "2026-01-01",
+		"midnight":          "2026-01-01 00:00:00",
+		"midnight fraction": "2026-01-01 00:00:00.000000",
+		"compact date":      "20260101",
+		"slash clock":       "2026-01-03 00/00/00",
+		"invalid":           "not-a-date",
+	} {
+		t.Run(name, func(t *testing.T) {
+			stringLit := makePlan2StringConstExprWithType(text)
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{dateCol, stringLit})
+			require.NoError(t, err)
+			requireTemporalCompareArgTypes(t, expr, types.T_date, 0)
+		})
+	}
+}
+
+// A compact datetime string ('YYYYMMDDHHMMSS') parses as a datetime, but the
+// DATE cast parser refuses it, so keeping the DATE domain would evaluate the
+// comparison as NULL instead of matching MySQL. Such literals promote to the
+// DATETIME domain even when their time portion is zero.
+func TestDateCompactDatetimeStringLiteralComparisonUsesDatetimeDomain(t *testing.T) {
+	ctx := context.Background()
+	dateCol := makeTemporalCompareColumn(types.T_date, 0, 0)
+
+	for name, text := range map[string]string{
+		"compact midnight":   "20260101000000",
+		"compact one second": "20260101000001",
+	} {
+		t.Run(name, func(t *testing.T) {
+			stringLit := makePlan2StringConstExprWithType(text)
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{dateCol, stringLit})
+			require.NoError(t, err)
+			requireDateStringDatetimeDomain(t, expr, 0)
+		})
+	}
+
+	t.Run("compact midnight ordering", func(t *testing.T) {
+		stringLit := makePlan2StringConstExprWithType("20260101000001")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "<", []*planpb.Expr{dateCol, stringLit})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 0)
+	})
+
+	t.Run("compact midnight reversed", func(t *testing.T) {
+		stringLit := makePlan2StringConstExprWithType("20260101000000")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{stringLit, dateCol})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 1)
+	})
+}
+
+// A binary-introducer (_binary'...') literal carries string content that
+// MySQL coerces in temporal comparisons exactly like a character string, so
+// it follows the same DATE comparison rule. Binary comparisons and BETWEEN
+// share this one eligibility rule, keeping NOT BETWEEN the exact negation
+// of BETWEEN (issue #31539 review).
+func makeBinaryIntroducerConstExpr(v string) *planpb.Expr {
+	expr := makePlan2VarBinaryConstExprWithType(v)
+	expr.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	return expr
+}
+
+func TestDateBinaryIntroducerStringLiteralComparisonUsesDatetimeDomain(t *testing.T) {
+	ctx := context.Background()
+	dateCol := makeTemporalCompareColumn(types.T_date, 0, 0)
+
+	t.Run("fractional promotes", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "<", []*planpb.Expr{dateCol, makeBinaryIntroducerConstExpr("2026-01-01 00:00:00.001")})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 0)
+	})
+
+	t.Run("noon equality promotes", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{dateCol, makeBinaryIntroducerConstExpr("2026-01-01 12:00:00")})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 0)
+	})
+
+	t.Run("reversed", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, ">", []*planpb.Expr{makeBinaryIntroducerConstExpr("2026-01-01 00:00:00.001"), dateCol})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 1)
+	})
+
+	t.Run("compact datetime promotes", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{dateCol, makeBinaryIntroducerConstExpr("20260101000000")})
+		require.NoError(t, err)
+		requireDateStringDatetimeDomain(t, expr, 0)
+	})
+
+	t.Run("zero time keeps date domain", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{dateCol, makeBinaryIntroducerConstExpr("2026-01-01 00:00:00")})
+		require.NoError(t, err)
+		requireTemporalCompareArgTypes(t, expr, types.T_date, 0)
+	})
+
+	t.Run("invalid keeps date domain", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{dateCol, makeBinaryIntroducerConstExpr("not-a-date")})
+		require.NoError(t, err)
+		requireTemporalCompareArgTypes(t, expr, types.T_date, 0)
+	})
+}
+
+func TestDateFractionalStringLiteralBetweenUsesDatetimeDomain(t *testing.T) {
+	ctx := context.Background()
+	dateCol := makeTemporalCompareColumn(types.T_date, 0, 0)
+
+	t.Run("fractional lower bound", func(t *testing.T) {
+		lower := makePlan2StringConstExprWithType("2026-01-01 00:00:00.5")
+		upper := makePlan2StringConstExprWithType("2026-01-02")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+		require.Equal(t, int32(types.T_datetime), fn.Args[0].Typ.Id)
+		require.Equal(t, int32(types.T_datetime), fn.Args[1].Typ.Id)
+		require.Equal(t, int32(6), fn.Args[1].Typ.Scale)
+		require.Equal(t, int32(types.T_datetime), fn.Args[2].Typ.Id)
+		require.Equal(t, int32(6), fn.Args[2].Typ.Scale)
+	})
+
+	t.Run("fractional upper bound", func(t *testing.T) {
+		lower := makePlan2StringConstExprWithType("2026-01-01")
+		upper := makePlan2StringConstExprWithType("2026-01-02 23:59:59")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		require.Equal(t, int32(types.T_datetime), fn.Args[0].Typ.Id)
+		require.Equal(t, int32(types.T_datetime), fn.Args[1].Typ.Id)
+		require.Equal(t, int32(types.T_datetime), fn.Args[2].Typ.Id)
+	})
+
+	t.Run("zero time bounds keep date domain", func(t *testing.T) {
+		lower := makePlan2StringConstExprWithType("2026-01-01")
+		upper := makePlan2StringConstExprWithType("2026-01-02 00:00:00")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		for _, arg := range fn.Args {
+			require.Equal(t, int32(types.T_date), arg.Typ.Id)
+		}
+	})
+
+	t.Run("compact midnight bounds promote", func(t *testing.T) {
+		// The DATE cast parser refuses compact datetimes, so the range would
+		// evaluate as NULL in the DATE domain; both bounds are datetime
+		// parseable, so the range promotes.
+		lower := makePlan2StringConstExprWithType("20260101000000")
+		upper := makePlan2StringConstExprWithType("20260103000000")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+		for _, arg := range fn.Args {
+			require.Equal(t, int32(types.T_datetime), arg.Typ.Id)
+		}
+		require.Equal(t, int32(6), fn.Args[1].Typ.Scale)
+		require.Equal(t, int32(6), fn.Args[2].Typ.Scale)
+	})
+
+	t.Run("datetime unparseable bound expands to independent comparisons", func(t *testing.T) {
+		// The datetime parser rejects the slash-separated clock, so the
+		// range cannot share one DATETIME domain. The positive range expands
+		// to the same independent comparisons NOT BETWEEN uses: the noon
+		// bound keeps its time portion in the DATETIME domain while the
+		// slash-clock bound converts in the DATE domain (the conversion the
+		// DATE cast accepts). This keeps BETWEEN the exact negation of NOT
+		// BETWEEN and excludes the midnight row, matching MySQL.
+		lower := makePlan2StringConstExprWithType("2026-01-01 12:00:00")
+		upper := makePlan2StringConstExprWithType("2026-01-03 00/00/00")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		lowerCmp, upperCmp := requireBetweenExpansion(t, expr)
+		requireDateStringDatetimeDomain(t, lowerCmp, 0)
+		requireTemporalCompareArgTypes(t, upperCmp, types.T_date, 0)
+	})
+
+	t.Run("typed date peer expands to independent comparisons", func(t *testing.T) {
+		// A typed DATE bound is not a string literal, so a fused range
+		// would truncate the noon bound in its shared DATE domain while NOT
+		// BETWEEN preserves it. Expand instead.
+		lower := makePlan2StringConstExprWithType("2026-01-01 12:00:00")
+		upper := makePlan2DateConstExprWithType(0)
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		lowerCmp, upperCmp := requireBetweenExpansion(t, expr)
+		requireDateStringDatetimeDomain(t, lowerCmp, 0)
+		requireTemporalCompareArgTypes(t, upperCmp, types.T_date, 0)
+	})
+
+	t.Run("promoting upper bound with typed date peer expands", func(t *testing.T) {
+		lower := makePlan2DateConstExprWithType(0)
+		upper := makePlan2StringConstExprWithType("2026-01-03 12:00:00")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		lowerCmp, upperCmp := requireBetweenExpansion(t, expr)
+		requireTemporalCompareArgTypes(t, lowerCmp, types.T_date, 0)
+		requireDateStringDatetimeDomain(t, upperCmp, 0)
+	})
+
+	t.Run("parameter bound expands to independent comparisons", func(t *testing.T) {
+		// A direct parameter is not a literal, so the range expands; the
+		// parameter bound keeps its per-bound DATE-domain conversion while
+		// the promoting string bound keeps its time portion.
+		lower := makeTemporalCompareParam(0)
+		upper := makePlan2StringConstExprWithType("2026-01-03 12:00:00")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		_, upperCmp := requireBetweenExpansion(t, expr)
+		requireDateStringDatetimeDomain(t, upperCmp, 0)
+	})
+
+	t.Run("binary introducer bounds promote like character strings", func(t *testing.T) {
+		lower := makeBinaryIntroducerConstExpr("2026-01-01 12:00:00")
+		upper := makeBinaryIntroducerConstExpr("2026-01-03")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		fn := expr.GetF()
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+		for _, arg := range fn.Args {
+			require.Equal(t, int32(types.T_datetime), arg.Typ.Id)
+		}
+	})
+
+	t.Run("binary introducer unparseable bound expands", func(t *testing.T) {
+		// The noon _binary bound promotes exactly as it would in a
+		// standalone comparison; the slash-clock _binary bound keeps the
+		// DATE-domain conversion. This is the expansion NOT BETWEEN uses,
+		// so the two forms stay exact negations.
+		lower := makeBinaryIntroducerConstExpr("2026-01-01 12:00:00")
+		upper := makeBinaryIntroducerConstExpr("2026-01-03 00/00/00")
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{dateCol, lower, upper})
+		require.NoError(t, err)
+		lowerCmp, upperCmp := requireBetweenExpansion(t, expr)
+		requireDateStringDatetimeDomain(t, lowerCmp, 0)
+		requireTemporalCompareArgTypes(t, upperCmp, types.T_date, 0)
+	})
+}
+
+// requireBetweenExpansion asserts that a positive range expanded to the
+// same independent comparisons NOT BETWEEN uses and returns them
+// (left >= lower, left <= upper).
+func requireBetweenExpansion(t *testing.T, expr *planpb.Expr) (lowerCmp *planpb.Expr, upperCmp *planpb.Expr) {
+	t.Helper()
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "and", fn.Func.GetObjName())
+	require.Len(t, fn.Args, 2)
+	lowerCmp = fn.Args[0]
+	upperCmp = fn.Args[1]
+	require.Equal(t, ">=", lowerCmp.GetF().Func.GetObjName())
+	require.Equal(t, "<=", upperCmp.GetF().Func.GetObjName())
+	return lowerCmp, upperCmp
+}
+
+// Scalar TIME comparisons keep MySQL's string semantics and must not be
+// promoted by the DATE rule.
+func TestScalarTimeShortStringComparisonKeepsStringSemantics(t *testing.T) {
+	ctx := context.Background()
+	timeLit := makePlan2TimeConstExprWithType(0)
+	stringLit := makePlan2StringConstExprWithType("05:00")
+
+	expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{timeLit, stringLit})
+	require.NoError(t, err)
+	requireTemporalCompareArgTypes(t, expr, types.T_varchar, 0)
+}
