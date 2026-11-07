@@ -4580,6 +4580,7 @@ func containsSelectInto(stmts []tree.Statement) bool {
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+	execCtx.input.clearRecordFragments()
 	// Inputs that carry a rewrite policy use the snapshot captured at their
 	// protocol boundary. Other inputs retain their existing session-level
 	// behavior.
@@ -4620,7 +4621,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		return cws, nil
 	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
 		var remapErr error
-		statementSchedulingSQL, sources, schedulingErr := schedulingSQLByStatementWithSQLMode(
+		statementSchedulingSQL, sources, fragments, schedulingErr := schedulingSQLByStatementWithSQLMode(
 			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
 		if schedulingErr != nil {
 			return nil, schedulingErr
@@ -4635,6 +4636,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		if len(statementRemaps) != len(cached.stmts) {
 			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of remapdb policies is not equal to cached statements")
 		}
+		execCtx.input.setRecordFragments(fragments, parserSQLMode)
 		execCtx.input.setSqlSourceTypes(ses, sources)
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -4767,6 +4769,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 
 	var statementSchedulingSQL []string
 	var sources []string
+	var recordFragments []mysql.SQLFragment
 	if execCtx.input.getStmt() != nil {
 		statementSchedulingSQL = []string{execCtx.input.getSql()}
 		source := constant.InternalSql
@@ -4775,7 +4778,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		sources = []string{source}
 	} else {
-		statementSchedulingSQL, sources, err = schedulingSQLByStatementWithSQLMode(
+		statementSchedulingSQL, sources, recordFragments, err = schedulingSQLByStatementWithSQLMode(
 			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode, internalSource)
 		if err != nil {
 			return nil, err
@@ -4784,6 +4787,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	if len(statementSchedulingSQL) != len(stmts) || len(sources) != len(stmts) {
 		return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to statements")
 	}
+	execCtx.input.setRecordFragments(recordFragments, parserSQLMode)
 	execCtx.input.setSqlSourceTypes(ses, sources)
 	for i, stmt := range stmts {
 		tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -5068,6 +5072,7 @@ func nextSQLModeStatementInput(
 func newSQLStatementInput(input *UserInput, sql string) *UserInput {
 	statementInput := *input
 	statementInput.sql = sql
+	statementInput.clearRecordFragments()
 	statementInput.hashedSql = ""
 	statementInput.sqlSourceType = nil
 	statementInput.genHash()
@@ -5089,6 +5094,7 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	// Source entries are read-only; reclassification replaces the entire slice.
 	rewrittenInput := *input
 	rewrittenInput.sql = rewritten
+	rewrittenInput.clearRecordFragments()
 	rewrittenInput.genHash()
 	return &rewrittenInput, nil
 }
@@ -6601,6 +6607,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	var cws []ComputationWrapper
 	if err == nil {
 		execCtx.input = executionInput
+		executionInput.clearRecordFragments()
 		cws, err = GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 			ses.GetUserName(),
 			pu.StorageEngine,
@@ -6677,10 +6684,14 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 	var sqlRecord []string
 	if !stagedSQLMode {
-		sqlRecord, err = sqlForRecordByStatementWithSQLMode(execCtx.reqCtx, input.getSql(), sessionSQLModeForParser(ses))
+		sqlRecord, err = input.sqlForRecord(execCtx.reqCtx, sessionSQLModeForParser(ses), len(cws))
 		if err != nil {
 			return err
 		}
+	}
+	input.clearRecordFragments()
+	if executionInput != input {
+		executionInput.clearRecordFragments()
 	}
 	stagedInputs := make([]*UserInput, 0, 1)
 	stagedSQLRecords := make([]string, 0, 1)
@@ -6885,6 +6896,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				}
 				execCtx.input = currentInput
 				rebuilt, buildErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(), ses.GetUserName(), pu.StorageEngine, proc, ses)
+				currentInput.clearRecordFragments()
 				if buildErr != nil {
 					return buildErr
 				}
@@ -7043,6 +7055,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				ses.GetUserName(),
 				pu.StorageEngine,
 				proc, ses)
+			nextInput.clearRecordFragments()
 			if nextErr != nil {
 				return recordParseError(nextInput, nextErr)
 			}
@@ -7129,6 +7142,18 @@ func sessionTimestampToUnixNano(seconds float64) int64 {
 // the parser's AST list. HandleSqlForRecord intentionally preserves blank and
 // comment-only semicolon fragments for its existing callers; execution skips
 // those fragments, so filter them here before indexing by computation wrapper.
+func (input *UserInput) sqlForRecord(ctx context.Context, sqlMode string, statementCount int) ([]string, error) {
+	defer input.clearRecordFragments()
+	if input.getStmt() == nil && input.getPreparePlan() == nil &&
+		input.recordFragments != nil && input.recordSQL == input.getSql() && input.recordSQLMode == sqlMode {
+		records := sqlForRecordFromFragments(input.recordFragments)
+		if len(records) == statementCount {
+			return records, nil
+		}
+	}
+	return sqlForRecordByStatementWithSQLMode(ctx, input.getSql(), sqlMode)
+}
+
 func sqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
 	return sqlForRecordByStatementWithSQLMode(ctx, sql, "")
 }
@@ -7140,30 +7165,38 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
 		return parsers.HandleSqlForRecord(sql), nil
 	}
-	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return nil, err
 	}
-	records := parsers.HandleSqlForRecordFragments(fragments)
+	return sqlForRecordFromFragments(fragments), nil
+}
+
+func sqlForRecordFromFragments(fragments []mysql.SQLFragment) []string {
+	parts := make([]string, len(fragments))
+	for i, fragment := range fragments {
+		parts[i] = fragment.SQL
+	}
+	records := parsers.HandleSqlForRecordFragments(parts)
 	if len(fragments) == 1 {
-		return records, nil
+		return records
 	}
 	byStatement := make([]string, 0, len(records))
 	for i, fragment := range fragments {
-		if parsers.FragmentHasStatement(fragment) {
+		if parsers.FragmentHasStatement(fragment.SQL) {
 			byStatement = append(byStatement, records[i])
 		}
 	}
 	if len(byStatement) == 0 {
-		return []string{""}, nil
+		return []string{""}
 	}
-	return byStatement, nil
+	return byStatement
 }
 
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
 // optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
 // this text is control-plane input and must never be sanitized first.
-func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, error) {
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, []mysql.SQLFragment, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
 		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
 		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
@@ -7172,17 +7205,17 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		if !internalSource {
 			source = statementSQLSource(sql, sqlMode)
 		}
-		return []string{sql}, []string{source}, nil
+		return []string{sql}, []string{source}, nil, nil
 	}
 	fragments, err := parsers.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Rewriting only prepends optimizer hints and retains original SQL. Ordinary
 	// source markers therefore have identical meaning before and after rewrite.
 	sources, err := sqlSourcesByFragment(ctx, sql, sqlMode, fragments, internalSource)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	byStatement := make([]string, 0, len(fragments))
 	bySource := sources[:0]
@@ -7197,9 +7230,9 @@ func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMod
 		if internalSource {
 			source = constant.InternalSql
 		}
-		return []string{sql}, []string{source}, nil
+		return []string{sql}, []string{source}, fragments, nil
 	}
-	return byStatement, bySource, nil
+	return byStatement, bySource, fragments, nil
 }
 
 func checkNodeCanCache(p *plan2.Plan) bool {
