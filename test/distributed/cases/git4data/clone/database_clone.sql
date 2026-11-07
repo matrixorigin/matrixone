@@ -16,12 +16,36 @@ set sql_mode = 'PIPES_AS_CONCAT';
 create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
 set sql_mode = default;
 
+-- A Starlark procedure that executes a literal mo.sql query must bind the
+-- clone just like the equivalent SQL procedure body.
+create table db0.clone_probe(id int primary key, v varchar(32));
+insert into db0.clone_probe values (1, 'source-v1');
+create procedure db0.p_clone_probe_sql() 'begin select v as answer from db0.clone_probe where id = 1; end';
+create procedure db0.p_clone_probe_starlark(out answer varchar) language 'starlark'
+$$
+rows, err = mo.sql("select v from db0.clone_probe where id = 1")
+out_answer = "ERR" if err != None else rows[0][0]
+$$;
+create procedure db0.p_clone_probe_starlark_lhs(out answer varchar) language 'starlark'
+$$
+values = {}
+values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
+out_answer = "BAD" if "source-v2" in values else "GOOD"
+$$;
+create procedure db0.p_clone_probe_starlark_for() language 'starlark'
+$$
+values = {}
+for values[mo.sql("update db0.clone_probe set v = 'clone-for' where id = 1")[1]] in [1]: pass
+$$;
+
 -- Functions are catalog metadata too. They must be restored before a view that
 -- binds them, and source-qualified routine queries must bind the clone.
 create function db0.f_clone_answer() returns int language sql as 'select count(*) from db0.s1';
 create view db0.v_clone_answer as select f_clone_answer() as answer;
 
 create database db0_copy_0 clone db0;
+update db0.clone_probe set v = 'source-v2' where id = 1;
+update db0_copy_0.clone_probe set v = 'clone-v2' where id = 1;
 show tables from db0_copy_0;
 select * from db0_copy_0.s1;
 select name from mo_catalog.mo_stored_procedure
@@ -34,6 +58,14 @@ call db0_copy_0.p_answer();
 call db0_copy_0.p_double(21, @db0_copy_double);
 select @db0_copy_double;
 call db0_copy_0.p_sql_mode();
+call db0_copy_0.p_clone_probe_sql();
+call db0_copy_0.p_clone_probe_starlark(@db0_clone_starlark);
+select @db0_clone_starlark;
+call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
+select @db0_clone_starlark_lhs;
+call db0_copy_0.p_clone_probe_starlark_for();
+select v from db0.clone_probe where id = 1;
+select v from db0_copy_0.clone_probe where id = 1;
 
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
