@@ -2620,7 +2620,7 @@ func doExplainStmtWithExecutionInput(reqCtx context.Context, ses *Session, stmt 
 		compiler := ses.GetTxnCompileCtx()
 		exPlan, err = buildPlanWithAuthorization(reqCtx, ses, compiler, stmt.Statement, input)
 		if err == nil {
-			exPlan, _, err = validateCandidatePlanBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
+			exPlan, _, err = validateCapturedExecutionBeforeCompile(exPlan, &intent, ses, proc, schedulingSQL, sessionSQLModeForScheduling(ses), stmt, func() (*plan.Plan, error) {
 				return buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement, nil)
 			})
 		}

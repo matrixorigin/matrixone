@@ -138,48 +138,34 @@ func makeVectorValueZoneMapBound(
 	return bound, true
 }
 
+// When requireKnown is set, -1 means that ordered skipping was not proved.
 func seekFirstBlockByZoneMap(
 	meta objectio.ObjectDataMeta,
 	seqNum uint16,
 	bound objectio.ZoneMap,
 	columnType types.T,
+	requireKnown bool,
 	compare func(objectio.ZoneMap) index.ZoneMapMatch,
 ) int {
 	blockCnt := int(meta.BlockCount())
 	if blockCnt == 0 || !zoneMapMetadataComparable(meta.MustGetColumn(seqNum).ZoneMap(), bound, columnType) {
+		if requireKnown {
+			return -1
+		}
 		return 0
 	}
 	for j := range blockCnt {
-		if !zoneMapMetadataComparable(meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap(), bound, columnType) {
+		zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap()
+		if !zoneMapMetadataComparable(zm, bound, columnType) || requireKnown && !compare(zm).Known {
+			if requireKnown {
+				return -1
+			}
 			return 0
 		}
 	}
 	return sort.Search(blockCnt, func(j int) bool {
 		return compare(meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap()).Match
 	})
-}
-
-func seekFirstBlockByZoneMapKnown(
-	meta objectio.ObjectDataMeta,
-	seqNum uint16,
-	bound objectio.ZoneMap,
-	columnType types.T,
-	compare func(objectio.ZoneMap) index.ZoneMapMatch,
-) (int, bool) {
-	blockCnt := int(meta.BlockCount())
-	if blockCnt == 0 || !zoneMapMetadataComparable(meta.MustGetColumn(seqNum).ZoneMap(), bound, columnType) {
-		return 0, false
-	}
-	for j := range blockCnt {
-		zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap()
-		if !zoneMapMetadataComparable(zm, bound, columnType) || !compare(zm).Known {
-			return 0, false
-		}
-	}
-	return sort.Search(blockCnt, func(j int) bool {
-		result := compare(meta.GetBlockMeta(uint32(j)).MustGetColumn(seqNum).ZoneMap())
-		return result.Match
-	}), true
 }
 
 func zoneMapMetadataComparable(
@@ -335,7 +321,7 @@ func compileScalarComparisonFilter(
 			}
 		}
 		seekOp = func(meta objectio.ObjectDataMeta) int {
-			return seekFirstBlockByZoneMap(meta, seqNum, bound, columnType.Oid, seekMatch)
+			return seekFirstBlockByZoneMap(meta, seqNum, bound, columnType.Oid, false, seekMatch)
 		}
 	}
 	return fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, true, highSelectivityHint, true
@@ -536,6 +522,19 @@ func compileFilterExprWithProof(
 		if function.GetZoneMapEvaluation(exprImpl.F) == function.ZoneMapUnsupported {
 			canCompile = false
 			return
+		}
+		name := exprImpl.F.Func.ObjName
+		if name == "or" && len(exprImpl.F.Args) < 2 {
+			return nil, nil, nil, nil, nil, false, false
+		}
+		if candidateFilter && name != "or" {
+			if name == "isnull" || name == "isnotnull" {
+				if len(exprImpl.F.Args) != 1 || candidateColumnDefinition(exprImpl.F.Args[0], tableDef) == nil {
+					return nil, nil, nil, nil, nil, false, false
+				}
+			} else if !candidateScalarFilterSafe(expr, tableDef, false) {
+				return nil, nil, nil, nil, nil, false, false
+			}
 		}
 		if op1, op2, op3, op4, op5, can, hsh, handled := compileScalarComparisonFilter(
 			expr, exprImpl, tableDef, fs, zone,
@@ -785,7 +784,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 					})
 				}
@@ -829,20 +828,15 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					if !candidateFilter {
-						return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
-							return index.AnyPrefixGEByValue(zm, vals[0], columnType)
-						})
-					}
-					pos, known := seekFirstBlockByZoneMapKnown(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					pos := seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, candidateFilter, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyPrefixGEByValue(zm, vals[0], columnType)
 					})
-					if candidateFilter && known && pos < int(meta.BlockCount()) && index.AnyPrefixLEByValue(
+					if candidateFilter && pos >= 0 && pos < int(meta.BlockCount()) && index.AnyPrefixLEByValue(
 						meta.GetBlockMeta(uint32(pos)).MustGetColumn(uint16(seqNum)).ZoneMap(), vals[1], columnType,
 					).Excludes() {
 						return int(meta.BlockCount())
 					}
-					return pos
+					return max(pos, 0)
 				}
 			}
 		case "prefix_in_range":
@@ -893,7 +887,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						if hint == 1 || hint == 3 {
 							return index.AnyPrefixGTByValue(zm, vals[0], columnType)
 						}
@@ -954,20 +948,15 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					if !candidateFilter {
-						return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) index.ZoneMapMatch {
-							return index.AnyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
-						})
-					}
-					pos, known := seekFirstBlockByZoneMapKnown(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					pos := seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), candidateFilter, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyGEByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 					})
-					if candidateFilter && known && pos < int(meta.BlockCount()) && index.AnyLEByBound(
+					if candidateFilter && pos >= 0 && pos < int(meta.BlockCount()) && index.AnyLEByBound(
 						meta.GetBlockMeta(uint32(pos)).MustGetColumn(uint16(seqNum)).ZoneMap(), vals[1], upperBound, types.T(colDef.Typ.Id),
 					).Excludes() {
 						return int(meta.BlockCount())
 					}
-					return pos
+					return max(pos, 0)
 				}
 			}
 		case "in_range":
@@ -1033,7 +1022,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), lowerBound, types.T(colDef.Typ.Id), false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						if hint == 1 || hint == 3 {
 							return index.AnyGTByBound(zm, vals[0], lowerBound, types.T(colDef.Typ.Id))
 						}
@@ -1102,7 +1091,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted && minPrefix != nil {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), nil, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyPrefixGEByValue(zm, minPrefix, columnType)
 					})
 				}
@@ -1222,7 +1211,7 @@ func compileFilterExprWithProof(
 			}
 			if isSorted && minVal != nil {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
-					return seekFirstBlockByZoneMap(meta, uint16(seqNum), minBound, columnType, func(zm objectio.ZoneMap) index.ZoneMapMatch {
+					return seekFirstBlockByZoneMap(meta, uint16(seqNum), minBound, columnType, false, func(zm objectio.ZoneMap) index.ZoneMapMatch {
 						return index.AnyGEByBound(zm, minVal, minBound, columnType)
 					})
 				}

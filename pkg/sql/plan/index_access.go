@@ -18,7 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -139,36 +141,273 @@ func proveOriginalIndexPath(ctx context.Context, query *plan.Query, path indexCa
 	return proof
 }
 
-func originalIndexPathExcludesIndex(ctx context.Context, scan *plan.Node, proof originalIndexProof) bool {
-	if ctx == nil || !proof.fits {
+// dependencyResult is local to the original-plan proof. Unknown must never be
+// used as evidence that a later execution can reuse the selected access.
+type dependencyResult uint8
+
+const (
+	dependencyNo dependencyResult = iota
+	dependencyYes
+	dependencyUnknown
+)
+
+type originalDependencyCheck struct {
+	scan   *plan.Node
+	budget int
+}
+
+func (check *originalDependencyCheck) spend(work int) bool {
+	if work < 0 || check.budget < work {
+		check.budget = 0
 		return false
 	}
-	if !proof.single {
-		return ctx.Err() == nil
+	check.budget -= work
+	return true
+}
+
+// indexedColumn checks any-part membership. When exclusionBudget is present it
+// also proves, in the same bounded traversal, that no regular index has this
+// column first. A negative position asks whether any indexed column is temporal.
+func (check *originalDependencyCheck) indexedColumn(position int32, ctx context.Context, exclusionBudget *int) (dependencyResult, bool) {
+	excludes := exclusionBudget != nil
+	if check.scan == nil || check.scan.TableDef == nil || len(check.scan.BindingTags) == 0 {
+		return dependencyNo, excludes
 	}
-	if scan.TableDef == nil || len(scan.TableDef.Indexes) > engine.MaxIndexPlanningDefinitions {
-		return false
+	table := check.scan.TableDef
+	if len(table.Indexes) > engine.MaxIndexPlanningDefinitions {
+		return dependencyUnknown, false
 	}
-	budget := proof.remaining
-	for _, index := range scan.TableDef.Indexes {
-		if index == nil || !spendIndexCostWork(ctx, &budget, 1) {
-			return false
+	seen, unknown := false, false
+	for _, index := range table.Indexes {
+		if index == nil {
+			excludes, unknown = false, true
+			continue
+		}
+		if excludes && !spendIndexCostWork(ctx, exclusionBudget, 1) {
+			excludes = false
+		}
+		membershipFits := check.spend(1) && len(index.IndexAlgo) <= engine.MaxIndexPlanningNameBytes && check.spend(len(index.IndexAlgo))
+		if !membershipFits {
+			unknown = true
 		}
 		if !catalog.IsRegularIndexAlgo(index.IndexAlgo) {
 			continue
 		}
-		if !index.TableExist || len(index.Parts) == 0 || len(index.Parts[0]) == 0 || len(index.Parts[0]) > engine.MaxIndexPlanningNameBytes || !spendIndexCostWork(ctx, &budget, len(index.Parts[0])) {
-			return false
+		if excludes {
+			if !index.TableExist || len(index.Parts) == 0 || len(index.Parts[0]) == 0 || len(index.Parts[0]) > engine.MaxIndexPlanningNameBytes || !spendIndexCostWork(ctx, exclusionBudget, len(index.Parts[0])) {
+				excludes = false
+			} else {
+				pos, ok := table.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
+				if !ok || pos < 0 || int(pos) >= len(table.Cols) || table.Cols[pos] == nil || pos == position {
+					excludes = false
+				}
+			}
 		}
-		pos, exists := scan.TableDef.Name2ColIndex[catalog.ResolveAlias(index.Parts[0])]
-		if !exists || pos < 0 || int(pos) >= len(scan.TableDef.Cols) || scan.TableDef.Cols[pos] == nil {
-			return false
+		if !index.TableExist || !membershipFits {
+			continue
 		}
-		if pos == proof.atom.column.GetCol().ColPos {
-			return false
+		if len(index.Parts) > engine.MaxIndexPlanningParts {
+			unknown = true
+			continue
+		}
+		for _, part := range index.Parts {
+			if len(part) == 0 || len(part) > engine.MaxIndexPlanningNameBytes || !check.spend(1+len(part)) {
+				unknown = true
+				break
+			}
+			pos, ok := table.Name2ColIndex[catalog.ResolveAlias(part)]
+			if !ok || pos < 0 || int(pos) >= len(table.Cols) || table.Cols[pos] == nil {
+				unknown = true
+				continue
+			}
+			if position >= 0 && pos == position {
+				seen = true
+			} else if position < 0 {
+				oid := types.T(table.Cols[pos].Typ.Id)
+				seen = seen || oid == types.T_datetime || oid == types.T_timestamp
+			}
+			if seen && !excludes {
+				return dependencyYes, false
+			}
 		}
 	}
-	return ctx.Err() == nil
+	if excludes && (ctx == nil || context.Cause(ctx) != nil) {
+		excludes = false
+	}
+	if seen {
+		return dependencyYes, excludes
+	}
+	if unknown {
+		return dependencyUnknown, excludes
+	}
+	return dependencyNo, excludes
+}
+
+// unprovedSource mirrors the existing source check but shares this proof's
+// bound. An exhausted or opaque source cannot establish a negative result.
+func (check *originalDependencyCheck) unprovedSource(expr *plan.Expr, depth int) dependencyResult {
+	if depth > 64 || !check.spend(1) {
+		return dependencyUnknown
+	}
+	if expr == nil || expr.GetP() != nil {
+		return dependencyYes
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
+		return dependencyYes
+	}
+	var children []*plan.Expr
+	if fn := expr.GetF(); fn != nil {
+		children = fn.Args
+	} else if list := expr.GetList(); list != nil {
+		children = list.List
+	}
+	for _, child := range children {
+		result := check.unprovedSource(child, depth+1)
+		if result != dependencyNo {
+			return result
+		}
+	}
+	return dependencyNo
+}
+
+func (check *originalDependencyCheck) pair(column, bound *plan.Expr) dependencyResult {
+	if column == nil || bound == nil || column.GetCol() == nil || check.scan == nil ||
+		check.scan.TableDef == nil || len(check.scan.BindingTags) == 0 {
+		return dependencyNo
+	}
+	ref, table := column.GetCol(), check.scan.TableDef
+	if ref.RelPos != check.scan.BindingTags[0] || ref.ColPos < 0 || int(ref.ColPos) >= len(table.Cols) || table.Cols[ref.ColPos] == nil {
+		return dependencyNo
+	}
+	oid, boundType := types.T(table.Cols[ref.ColPos].Typ.Id), types.T(bound.Typ.Id)
+	if oid != types.T_datetime && oid != types.T_timestamp {
+		return dependencyNo
+	}
+	if !isDatetimeTimestampTypePair(oid, boundType) {
+		if boundType != types.T_any {
+			return dependencyNo
+		}
+		source := check.unprovedSource(bound, 0)
+		if source != dependencyYes {
+			return source
+		}
+	}
+	result, _ := check.indexedColumn(ref.ColPos, nil, nil)
+	return result
+}
+
+func (check *originalDependencyCheck) expr(expr *plan.Expr, depth int) dependencyResult {
+	if depth > 64 || !check.spend(1) {
+		return dependencyUnknown
+	}
+	if expr == nil {
+		return dependencyNo
+	}
+	var children []*plan.Expr
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if value.F == nil || value.F.Func == nil {
+			return dependencyUnknown
+		}
+		fn := value.F
+		id, _ := function.DecodeOverloadID(fn.Func.Obj)
+		var pairs [2][2]*plan.Expr
+		pairCount := 0
+		switch id {
+		case function.EQUAL, function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
+			if len(fn.Args) == 2 {
+				pairs = [2][2]*plan.Expr{{fn.Args[0], fn.Args[1]}, {fn.Args[1], fn.Args[0]}}
+				pairCount = 2
+			}
+		case function.BETWEEN, function.IN_RANGE:
+			if len(fn.Args) >= 3 {
+				pairs = [2][2]*plan.Expr{{fn.Args[0], fn.Args[1]}, {fn.Args[0], fn.Args[2]}}
+				pairCount = 2
+			}
+		case function.IN:
+			if len(fn.Args) == 2 && fn.Args[1] != nil {
+				result := check.pair(fn.Args[0], fn.Args[1])
+				if result != dependencyNo {
+					return result
+				}
+				if list := fn.Args[1].GetList(); list != nil {
+					for _, item := range list.List {
+						if !check.spend(1) {
+							return dependencyUnknown
+						}
+						if result := check.pair(fn.Args[0], item); result != dependencyNo {
+							return result
+						}
+					}
+				}
+			}
+		}
+		for _, pair := range pairs[:pairCount] {
+			if result := check.pair(pair[0], pair[1]); result != dependencyNo {
+				return result
+			}
+		}
+		children = fn.Args
+	case *plan.Expr_List:
+		if value.List == nil {
+			return dependencyUnknown
+		}
+		children = value.List.List
+	case *plan.Expr_Lit:
+		if value.Lit != nil && value.Lit.Src != nil {
+			return check.expr(value.Lit.Src, depth+1)
+		}
+	case nil, *plan.Expr_Col, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+		*plan.Expr_Corr, *plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec,
+		*plan.Expr_Fold, *plan.Expr_Slot:
+		return dependencyNo
+	default:
+		return dependencyUnknown
+	}
+	for _, child := range children {
+		if result := check.expr(child, depth+1); result != dependencyNo {
+			return result
+		}
+	}
+	return dependencyNo
+}
+
+// originalDependencyFallback is used only when the positive shape proof is
+// incomplete or stopped. It never assumes that an unvisited expression is safe.
+func originalDependencyFallback(query *plan.Query, path indexCandidatePath) bool {
+	check := originalDependencyCheck{scan: query.Nodes[path.ids[path.len-1]], budget: 4096}
+	if check.scan.TableDef == nil || len(check.scan.BindingTags) == 0 || len(check.scan.TableDef.Indexes) == 0 {
+		return false
+	}
+	for _, id := range path.ids[:path.len] {
+		for _, expr := range query.Nodes[id].FilterList {
+			switch check.expr(expr, 0) {
+			case dependencyYes:
+				return true
+			case dependencyUnknown:
+				result, _ := check.indexedColumn(-1, nil, nil)
+				return result != dependencyNo
+			}
+		}
+	}
+	return false
+}
+
+// originalSingleDependency combines the leading exclusion and any-part
+// membership decisions for a complete original comparison.
+func originalSingleDependency(ctx context.Context, scan *plan.Node, proof originalIndexProof) bool {
+	if scan.TableDef == nil || len(scan.BindingTags) == 0 || len(scan.TableDef.Indexes) == 0 {
+		return false
+	}
+	table, atom := scan.TableDef, proof.atom
+	position := atom.column.GetCol().ColPos
+	if !isDatetimeTimestampTypePair(types.T(table.Cols[position].Typ.Id), types.T(atom.bound.Typ.Id)) {
+		return false
+	}
+	check := originalDependencyCheck{scan: scan, budget: 4096}
+	exclusionBudget := proof.remaining
+	membership, excludes := check.indexedColumn(position, ctx, &exclusionBudget)
+	return !excludes && membership != dependencyNo
 }
 
 // collectOriginalIndexOwner keeps the conservative cache-lifetime result
@@ -196,22 +435,23 @@ func (builder *QueryBuilder) collectOriginalIndexOwner(rootID int32) {
 		return
 	}
 	ctx := builder.GetContext()
-	var proof originalIndexProof
-	proved := false
-	originalProof := func() originalIndexProof {
-		if !proved {
-			proof = proveOriginalIndexPath(ctx, &owner, path)
-			proved = true
-		} else if ctx == nil || context.Cause(ctx) != nil {
-			return originalIndexProof{}
-		}
-		return proof
+	scan := owner.Nodes[path.ids[path.len-1]]
+	if !capture && (scan.TableDef == nil || len(scan.BindingTags) == 0 || len(scan.TableDef.Indexes) == 0) {
+		return
 	}
-	if potentialContextDependentIndexPath(&owner, path) && !originalIndexPathExcludesIndex(ctx, owner.Nodes[path.ids[path.len-1]], originalProof()) {
+	var proof originalIndexProof
+	if ctx != nil && context.Cause(ctx) == nil {
+		proof = proveOriginalIndexPath(ctx, &owner, path)
+	}
+	stopped := ctx == nil || context.Cause(ctx) != nil
+	if stopped || !proof.fits {
+		if originalDependencyFallback(&owner, path) {
+			builder.qry.ExecutionDependentAccess = true
+		}
+	} else if proof.single && originalSingleDependency(ctx, scan, proof) {
 		builder.qry.ExecutionDependentAccess = true
 	}
-	if capture && indexPathExpressionsSafe(&owner, path) {
-		proof := originalProof()
-		builder.originalIndexScan = originalIndexScan{scanID: path.ids[path.len-1], safe: proof.fits && proof.single}
+	if capture && proof.fits && proof.single && ctx != nil && context.Cause(ctx) == nil && indexPathExpressionsSafe(&owner, path) && context.Cause(ctx) == nil {
+		builder.originalIndexScan = originalIndexScan{scanID: path.ids[path.len-1], safe: true}
 	}
 }

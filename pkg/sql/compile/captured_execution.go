@@ -25,8 +25,8 @@ import (
 )
 
 // ErrExecutionIntentDrift is internal control flow: the execution owner must
-// rebuild the original plan without temporal access before retrying compile.
-var ErrExecutionIntentDrift = moerr.NewInternalError(moerr.NoReportContext(), "temporal access intent changed before compilation")
+// rebuild the original plan without captured access before retrying compile.
+var ErrExecutionIntentDrift = moerr.NewInternalError(moerr.NoReportContext(), "captured execution changed before compilation")
 
 // SetValidatedExecutionIntent binds the frontend's already checked
 // execution snapshot to this compile. The copy cannot follow later wrapper
@@ -39,7 +39,7 @@ func (c *Compile) SetValidatedExecutionIntent(intent *plan2.ExecutionIntent) {
 	}
 }
 
-func (c *Compile) candidateExecutionAllowed(ctx context.Context) bool {
+func (c *Compile) capturedExecutionAllowed(ctx context.Context) bool {
 	intent := c.executionIntent
 	if intent == nil || !intent.MatchesProcess(c.proc) || !intent.Placement.AllowsPinnedLocalAccess() ||
 		intent.Placement.Scheduling != c.querySchedulingIntent || intent.Placement.CurrentCN.ID != c.proc.GetService() ||
@@ -50,13 +50,13 @@ func (c *Compile) candidateExecutionAllowed(ctx context.Context) bool {
 	return fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
 }
 
-func (c *Compile) candidateRetryNeedsRebuild() bool {
-	return c.candidateIndexTopology && (c.executionIntent == nil || !c.executionIntent.MatchesProcess(c.proc))
+func (c *Compile) capturedExecutionRetryNeedsRebuild() bool {
+	return c.capturedExecutionTopology && (c.executionIntent == nil || !c.executionIntent.MatchesProcess(c.proc))
 }
 
-// Check every marked scan, including a missing/cleared local placement bit.
-func (c *Compile) candidateIndexPlacementAllowed(template *plan.Plan) bool {
-	if !plan2.HasCandidateIndexAccess(template) {
+// Check every required scan, including a missing or cleared local placement bit.
+func (c *Compile) capturedExecutionPlacementAllowed(template *plan.Plan) bool {
+	if !plan2.HasCapturedExecutionAccess(template) {
 		return true
 	}
 	intent := c.executionIntent
@@ -64,7 +64,7 @@ func (c *Compile) candidateIndexPlacementAllowed(template *plan.Plan) bool {
 		return false
 	}
 	for _, node := range template.GetQuery().Nodes {
-		if plan2.NodeHasCandidateFilter(node) && (!plan2.CandidatePhysicalIndexScan(node) || node.Stats == nil || !node.Stats.ForceOneCN) {
+		if plan2.NodeRequiresCapturedExecution(node) && (!plan2.CapturedExecutionIndexScan(node) || node.Stats == nil || !node.Stats.ForceOneCN) {
 			return false
 		}
 	}

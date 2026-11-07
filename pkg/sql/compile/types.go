@@ -311,7 +311,7 @@ type Compile struct {
 	preparedJoinDiagnosticFree bool
 	// Validated for this execution only; never retained by a cached plan.
 	executionIntent            *plan2.ExecutionIntent
-	candidateIndexTopology     bool
+	capturedExecutionTopology  bool
 	preflightPending           bool
 	txnOffsetPending           bool
 	preserveProcessOnPoolClear bool

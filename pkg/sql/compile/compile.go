@@ -131,7 +131,7 @@ var (
 )
 
 // CompileSetup selects the existing statement-setup checkpoint. It grants no
-// permission to execute a candidate without validating its execution intent.
+// permission to execute scoped access without validating its execution intent.
 type CompileSetup uint8
 
 const (
@@ -207,7 +207,7 @@ func NewCompile(
 // touching the shared Process. It is valid only after the preflight rejected.
 func (c *Compile) DiscardPreflight() {
 	if c == nil || !c.preflightPending {
-		panic("temporal preflight discard after publication")
+		panic("preflight discard after publication")
 	}
 	c.isPrepare = false
 	c.preserveProcessOnPoolClear = true
@@ -340,9 +340,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.preparedParamValues = nil
 	c.executionIntent = nil
 	c.preparedJoinDiagnosticFree = len(diagnosticProof) != 0 && diagnosticProof[0]
-	// An existing physical topology can retain narrowed candidate expressions.
+	// A physical topology can remain tied to a captured execution after folding.
 	// Clearing the snapshot cannot revoke those expressions, so rebuild instead.
-	if c.candidateIndexTopology || plan2.HasCandidateIndexAccess(c.pn) {
+	if c.capturedExecutionTopology || plan2.HasCapturedExecutionAccess(c.pn) {
 		return cantCompileForPrepareErr
 	}
 	// Reset only supports the TP topology admitted by prepare-time compilation.
@@ -617,7 +617,7 @@ func (c *Compile) clear() {
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
 	c.executionIntent = nil
-	c.candidateIndexTopology = false
+	c.capturedExecutionTopology = false
 	c.preflightPending = false
 	c.txnOffsetPending = false
 	c.schedulingTrace = nil
@@ -1489,7 +1489,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
-	if plan2.HasCandidatePhysicalIndexScans(qry) && c.execType != plan2.ExecTypeTP {
+	if plan2.HasCapturedExecutionIndexScans(qry) && c.execType != plan2.ExecTypeTP {
 		c.execType = plan2.ExecTypeAP_ONECN
 	}
 	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
@@ -5932,12 +5932,12 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	return nil
 }
 
-// appendCandidateStorageHints gives memtable/PK readers the same execution-time
-// candidates as object pruning, without forwarding an identical row copy twice.
+// appendCandidateStorageHints gives memtable/PK readers the same proved hints
+// as object pruning, without forwarding an identical row copy twice.
 func appendCandidateStorageHints(storage, block []*plan.Expr) []*plan.Expr {
 	cloned := false
 	for _, expr := range block {
-		if expr.GetCandidateFilter() && function.ContainsRuntimeBound(expr) {
+		if expr.GetCandidateFilter() {
 			alreadyPresent := false
 			for _, existing := range storage {
 				if existing.GetCandidateFilter() && candidateStorageHintEqual(existing, expr) {

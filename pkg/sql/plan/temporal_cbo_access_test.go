@@ -279,6 +279,7 @@ func TestTemporalCBOThroughIndexTraversal(t *testing.T) {
 			require.NotEqual(t, int32(0), id)
 			node := builder.qry.Nodes[id]
 			require.True(t, node.IndexScanInfo.IsIndexScan)
+			require.True(t, node.IndexScanInfo.RequiresCapturedExecution)
 			require.True(t, node.Stats.ForceOneCN)
 			require.Len(t, node.FilterList, 1, "verified storage pruning preserves the complete SQL residual")
 			require.False(t, node.FilterList[0].CandidateFilter)

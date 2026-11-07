@@ -459,12 +459,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.plan = runtimePlan
 		}
 	}
-	if !execCtx.input.isBinaryProtExecute && plan2.HasCandidateIndexAccess(cwft.plan) {
+	if !execCtx.input.isBinaryProtExecute && plan2.HasCapturedExecutionAccess(cwft.plan) {
 		previousPlan := cwft.plan
-		cwft.plan, cwft.executionIntentValidated, err = validateCandidatePlanBeforeCompile(
+		cwft.plan, cwft.executionIntentValidated, err = validateCapturedExecutionBeforeCompile(
 			cwft.plan, cwft.executionIntent, cwft.ses, cwft.proc,
 			cwft.schedulingSQLOr(execCtx.sqlOfStmt), sessionSQLModeForScheduling(cwft.ses), cwft.stmt,
-			func() (*plan2.Plan, error) { return cwft.rebuildWithoutCandidateAccess(execCtx) })
+			func() (*plan2.Plan, error) { return cwft.rebuildWithoutCapturedAccess(execCtx) })
 		if err != nil {
 			return nil, err
 		}
@@ -677,12 +677,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 	} else {
-		if plan2.HasCandidateIndexAccess(cwft.plan) {
+		if plan2.HasCapturedExecutionAccess(cwft.plan) {
 			previousPlan := cwft.plan
-			cwft.plan, cwft.executionIntentValidated, err = validateCandidatePlanBeforeCompile(
+			cwft.plan, cwft.executionIntentValidated, err = validateCapturedExecutionBeforeCompile(
 				cwft.plan, cwft.executionIntent, cwft.ses, cwft.proc,
 				cwft.schedulingSQLOr(execCtx.sqlOfStmt), sessionSQLModeForScheduling(cwft.ses), cwft.stmt,
-				func() (*plan2.Plan, error) { return cwft.rebuildWithoutCandidateAccess(execCtx) })
+				func() (*plan2.Plan, error) { return cwft.rebuildWithoutCapturedAccess(execCtx) })
 			if err != nil {
 				return nil, err
 			}
@@ -742,7 +742,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 		cwft.compile, err = compileCurrentPlan()
 		if errors.Is(err, compile.ErrExecutionIntentDrift) {
-			cwft.plan, err = cwft.rebuildWithoutCandidateAccess(execCtx)
+			cwft.plan, err = cwft.rebuildWithoutCapturedAccess(execCtx)
 			if err == nil && !cwft.ses.IsBackgroundSession() {
 				if cwft.ses.GetTenantInfo() != nil {
 					var authStats statistic.StatsArray
@@ -2939,20 +2939,20 @@ func (cwft *TxnComputationWrapper) validatedExecutionIntent() *plan2.ExecutionIn
 	return cwft.executionIntent
 }
 
-func (cwft *TxnComputationWrapper) rebuildWithoutCandidateAccess(execCtx *ExecCtx) (*plan2.Plan, error) {
+func (cwft *TxnComputationWrapper) rebuildWithoutCapturedAccess(execCtx *ExecCtx) (*plan2.Plan, error) {
 	rebuilt, err := buildPlanWithPrepareMode(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt, execCtx.input.isPreparedExpr(), nil)
 	if err != nil {
 		return nil, err
 	}
-	if plan2.HasCandidateIndexAccess(rebuilt) {
-		return nil, moerr.NewInternalErrorNoCtx("unscoped temporal plan rebuild retained a candidate")
+	if plan2.HasCapturedExecutionAccess(rebuilt) {
+		return nil, moerr.NewInternalErrorNoCtx("unscoped plan rebuild retained captured execution")
 	}
 	cwft.executionIntentValidated = false
-	cwft.markCandidatePlanRebuilt()
+	cwft.markUnscopedPlanRebuilt()
 	return rebuilt, nil
 }
 
-func (cwft *TxnComputationWrapper) markCandidatePlanRebuilt() {
+func (cwft *TxnComputationWrapper) markUnscopedPlanRebuilt() {
 	cwft.planGenerationReused = false
 	cwft.planSnapshotTS = timestamp.Timestamp{}
 	cwft.hasPlanSnapshotTS = false
@@ -3049,7 +3049,7 @@ func createCompile(
 	// because CTAS and other DDL may execute follow-up SQL through the internal
 	// executor after the client has switched databases.
 	setup := compile.ImmediateSetup
-	if executionIntent != nil && plan2.HasCandidateIndexAccess(plan) {
+	if executionIntent != nil && plan2.HasCapturedExecutionAccess(plan) {
 		setup = compile.PreflightSetup
 	}
 	retCompile = compile.NewCompile(
@@ -3108,8 +3108,8 @@ func createCompile(
 			}); err != nil {
 				return nil, err
 			}
-			if plan2.HasCandidateIndexAccess(safe) {
-				return nil, moerr.NewInternalErrorNoCtx("unscoped temporal retry retained a candidate")
+			if plan2.HasCapturedExecutionAccess(safe) {
+				return nil, moerr.NewInternalErrorNoCtx("unscoped retry retained captured execution")
 			}
 			if !ses.IsBackgroundSession() {
 				var authStats statistic.StatsArray

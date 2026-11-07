@@ -64,7 +64,12 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	}
 
 	for i := range node.BlockFilterList {
-		node.BlockFilterList[i] = r.constantFold(node.BlockFilterList[i], proc)
+		original := node.BlockFilterList[i]
+		folded := r.constantFold(original, proc)
+		if folded != nil && original.GetCandidateFilter() {
+			folded.CandidateFilter = true
+		}
+		node.BlockFilterList[i] = folded
 	}
 
 	for i := range node.ProjectList {

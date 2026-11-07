@@ -5161,6 +5161,7 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 		FilterList: filters, Limit: node.Limit, Offset: node.Offset, BindingTags: []int32{idxTag}, ScanSnapshot: node.ScanSnapshot})
 	if necessary {
 		result.BlockFilterList = []*plan.Expr{hint}
+		result.IndexScanInfo.RequiresCapturedExecution = true
 	}
 	return result, nil
 }
@@ -6160,32 +6161,20 @@ func nullPreservingTarget(expr *plan.Expr, tag, position int32) bool {
 	return false
 }
 
-// CandidatePhysicalIndexScan identifies the ordinary physical index scan that
-// carries a necessary storage predicate. It grants no execution authority.
-func CandidatePhysicalIndexScan(node *plan.Node) bool {
-	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.IndexScanInfo.IsIndexScan && NodeHasCandidateFilter(node)
+// CapturedExecutionIndexScan identifies a physical index scan whose access was
+// admitted for a particular execution.
+func CapturedExecutionIndexScan(node *plan.Node) bool {
+	return node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.IndexScanInfo.IsIndexScan && NodeRequiresCapturedExecution(node)
 }
 
-// NodeHasCandidateFilter identifies necessary predicates carrying the owning
-// statement's admitted index-planning proof. It grants no execution authority.
-func NodeHasCandidateFilter(node *plan.Node) bool {
-	if node == nil {
-		return false
-	}
-	for _, list := range [][]*plan.Expr{node.BlockFilterList, node.FilterList} {
-		for _, expr := range list {
-			if expr.GetCandidateFilter() {
-				return true
-			}
-		}
-	}
-	return false
+// NodeRequiresCapturedExecution also observes malformed nodes so preflight can
+// reject a misplaced requirement before any execution work is published.
+func NodeRequiresCapturedExecution(node *plan.Node) bool {
+	return node != nil && node.IndexScanInfo.RequiresCapturedExecution
 }
 
-// HasCandidateIndexAccess observes current provenance at its caller's phase.
-// Reentrant resolution and execution drift require fresh observations rather
-// than retaining this result as another independently managed query state.
-func HasCandidateIndexAccess(p *plan.Plan) bool {
+// HasCapturedExecutionAccess checks for the physical execution requirement.
+func HasCapturedExecutionAccess(p *plan.Plan) bool {
 	if p == nil {
 		return false
 	}
@@ -6194,20 +6183,20 @@ func HasCandidateIndexAccess(p *plan.Plan) bool {
 		return false
 	}
 	for _, node := range query.Nodes {
-		if NodeHasCandidateFilter(node) {
+		if NodeRequiresCapturedExecution(node) {
 			return true
 		}
 	}
 	return false
 }
 
-// HasCandidatePhysicalIndexScans additionally requires a physical index scan.
-func HasCandidatePhysicalIndexScans(query *plan.Query) bool {
+// HasCapturedExecutionIndexScans additionally requires a physical index scan.
+func HasCapturedExecutionIndexScans(query *plan.Query) bool {
 	if query == nil {
 		return false
 	}
 	for _, node := range query.Nodes {
-		if CandidatePhysicalIndexScan(node) {
+		if CapturedExecutionIndexScan(node) {
 			return true
 		}
 	}

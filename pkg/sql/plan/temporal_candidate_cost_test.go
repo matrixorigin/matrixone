@@ -152,7 +152,7 @@ func TestParameterizedPreparedPlanningUsesOrdinaryResolver(t *testing.T) {
 	require.Equal(t, 1, compiler.resolves, "the table must still be resolved once")
 	require.Zero(t, compiler.borrowRequests, "a parameterized attempt cannot borrow a native relation")
 	require.False(t, bound.Plan.GetQuery().GetExecutionDependentAccess())
-	require.False(t, HasCandidateIndexAccess(bound.Plan))
+	require.False(t, HasCapturedExecutionAccess(bound.Plan))
 	require.False(t, bound.ValueDependent, "an unsupported temporal access must preserve prepared reuse")
 
 	missing, err := mysql.ParseOne(compiler.GetContext(), "select * from missing_table where id = ?", 1)

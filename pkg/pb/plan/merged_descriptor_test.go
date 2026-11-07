@@ -85,7 +85,7 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 
 func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
 	// Physical OID 32 is decimal64; numeric attribute mask 3 is normalized ZEROFILL.
-	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, ExecutionDependentAccess: true, Nodes: []*Node{{FilterList: []*Expr{{
+	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, ExecutionDependentAccess: true, Nodes: []*Node{{IndexScanInfo: IndexScanInfo{IsIndexScan: true, RequiresCapturedExecution: true}, FilterList: []*Expr{{
 		Typ:             Type{Id: 32, Width: 10, Scale: 2, NumericAttributes: 3},
 		CandidateFilter: true,
 		Expr:            &Expr_Fold{Fold: &FoldVal{IsConst: true, Data: []byte{1}}},
