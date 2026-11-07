@@ -6670,6 +6670,19 @@ func TestPreparedViewMetadataUdfRebuildsEveryExecute(t *testing.T) {
 	require.False(t, shouldRebuildPreparePlan(false, ordinaryPlan))
 }
 
+func TestPreparedTemporaryDDLRebuildsEveryExecute(t *testing.T) {
+	for _, temporary := range []bool{false, true} {
+		create := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{Temporary: temporary}},
+		}}}
+		alter := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_AlterTable{AlterTable: &plan.AlterTable{TableDef: &plan.TableDef{IsTemporary: temporary}}},
+		}}}
+		require.Equal(t, temporary, shouldRebuildPreparePlan(false, create))
+		require.Equal(t, temporary, shouldRebuildPreparePlan(false, alter))
+	}
+}
+
 func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 122, "select ?")
 	defer prepareStmt.Close()

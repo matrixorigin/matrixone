@@ -353,6 +353,21 @@ where schema_name = 'metadata_visibility_show_db';
 1
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
 grant show tables on database metadata_visibility_show_db to metadata_visibility_primary;
+set @metadata_index = (select index_table_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'metadata_visibility_db' and relname = 'hidden_table') and index_table_name is not null and index_table_name <> '' limit 1);
+set @metadata_rename = concat('alter table metadata_visibility_db.`', @metadata_index, '` rename to metadata_index_child');
+prepare metadata_rename from @metadata_rename;
+execute metadata_rename;
+deallocate prepare metadata_rename;
+select count(*) = 0 as index_columns_hidden from information_schema.columns where table_schema = 'metadata_visibility_db' and table_name = 'metadata_index_child';
+➤ index_columns_hidden[-7,1,0]  𝄀
+1
+select count(*) = 3 as base_columns_visible from information_schema.columns where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table';
+➤ base_columns_visible[-7,1,0]  𝄀
+1
+set @metadata_restore = concat('alter table metadata_visibility_db.metadata_index_child rename to `', @metadata_index, '`');
+prepare metadata_restore from @metadata_restore;
+execute metadata_restore;
+deallocate prepare metadata_restore;
 show tables from metadata_visibility_show_db;
 ➤ Tables_in_metadata_visibility_show_db[12,5000,0]
 show full tables from metadata_visibility_db;

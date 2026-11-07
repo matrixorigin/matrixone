@@ -527,6 +527,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		originSQL = sql
 		cwft.ifIsExeccute = true
 
+		// Explicit-account CLONE has a source-only prepared carrier. The
+		// frontend owner resolves and plans the destination in its real account.
+		if clone, ok := cwft.stmt.(*tree.CloneTable); ok && clone.ToAccountOpt != nil && !clone.IsRestore {
+			return nil, nil
+		}
+
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
@@ -967,7 +973,7 @@ func initExecuteStmtParamInSession(
 		cwft,
 		execPlan,
 		stmtName,
-		executionSes.GetTxnCompileCtx().Resolve,
+		executionSes.GetTxnCompileCtx().resolveForCatalogValidation,
 		executionSes.GetTxnCompileCtx(),
 	)
 }
@@ -2828,7 +2834,10 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 		return schemaChanged
 	}
 	if ddl := p.GetDdl(); ddl != nil {
-		if create := ddl.GetCreateTable(); create != nil && create.DatabaseDefaults != nil {
+		if create := ddl.GetCreateTable(); create != nil && (create.DatabaseDefaults != nil || create.GetTemporary()) {
+			return true
+		}
+		if alter := ddl.GetAlterTable(); alter != nil && alter.GetTableDef().GetIsTemporary() {
 			return true
 		}
 		if ddl.GetAlterDatabase() != nil || ddl.GetCreateDatabase().GetDefaults() != nil {
@@ -3037,7 +3046,11 @@ func buildPlanForCompileRetry(
 			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 				CatalogDependencies: preparedRetry.fieldSchemas,
 			}}}
-			changed, err := checkModify(dependencies, compilerContext.Resolve)
+			resolve := compilerContext.Resolve
+			if tcc, ok := compilerContext.(*TxnCompilerContext); ok {
+				resolve = tcc.resolveForCatalogValidation
+			}
+			changed, err := checkModify(dependencies, resolve)
 			if err != nil {
 				return nil, err
 			}

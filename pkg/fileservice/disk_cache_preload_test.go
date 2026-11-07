@@ -30,6 +30,10 @@ type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time { return c.t }
 
+func roomFor() bool { return true }
+
+func noRoom() bool { return false }
+
 func newTestPreloadUsage() (*preloadUsage, *fakeClock) {
 	clock := &fakeClock{t: time.Unix(1000, 0)}
 	p := newPreloadUsage()
@@ -41,7 +45,7 @@ func newTestPreloadUsage() (*preloadUsage, *fakeClock) {
 // bytes from it and evicts it.
 func evict(p *preloadUsage, group uint64, i int, served, size int64) {
 	path := fmt.Sprintf("/cache/00%d/full%d-%d.mofscache", i%10, group, i)
-	p.narrowRead(path, group)
+	p.narrowRead(path, group, roomFor)
 	p.cached(path)
 	p.read(path, served)
 	p.removed(path, size)
@@ -51,20 +55,20 @@ func TestPreloadUsageGroupThrashesAfterMinSamples(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	for i := 0; i < preloadUsageMinSamples-1; i++ {
 		evict(p, 1, i, 0, 100)
-		require.False(t, p.narrowRead("/cache/x", 1), "fewer than %d evictions", preloadUsageMinSamples)
+		require.False(t, p.narrowRead("/cache/x", 1, roomFor), "fewer than %d evictions", preloadUsageMinSamples)
 	}
 	evict(p, 1, preloadUsageMinSamples, 0, 100)
-	require.True(t, p.narrowRead("/cache/x", 1))
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 }
 
 func TestPreloadUsagePartlyUsedGroupNeedsMoreSamples(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	for i := 0; i < preloadUsageMoreSamples-1; i++ {
 		evict(p, 1, i, 20, 100)
-		require.False(t, p.narrowRead("/cache/x", 1), "a share of 0.2 over %d evictions", i+1)
+		require.False(t, p.narrowRead("/cache/x", 1, roomFor), "a share of 0.2 over %d evictions", i+1)
 	}
 	evict(p, 1, preloadUsageMoreSamples, 20, 100)
-	require.True(t, p.narrowRead("/cache/x", 1))
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 }
 
 func TestPreloadUsageGroupsAreSeparate(t *testing.T) {
@@ -73,9 +77,9 @@ func TestPreloadUsageGroupsAreSeparate(t *testing.T) {
 		evict(p, 1, i, 0, 100)  // the base table thrashes
 		evict(p, 2, i, 90, 100) // the entries table is read well
 	}
-	require.True(t, p.narrowRead("/cache/x", 1))
-	require.False(t, p.narrowRead("/cache/y", 2))
-	require.False(t, p.narrowRead("/cache/z", 3), "a group with no evictions")
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
+	require.False(t, p.narrowRead("/cache/y", 2, roomFor))
+	require.False(t, p.narrowRead("/cache/z", 3, roomFor), "a group with no evictions")
 }
 
 func TestPreloadUsageIgnoresFilesOfNoNarrowRead(t *testing.T) {
@@ -104,12 +108,12 @@ func TestPreloadUsageStaysOnWhileItsFilesAreEvicted(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		evict(p, 1, i, 0, 100)
 	}
-	require.True(t, p.narrowRead("/cache/x", 1))
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 	// Whole-object files of the group are still evicted, even well read: it stays on.
 	for i := 10; i < 100; i++ {
 		clock.t = clock.t.Add(time.Second)
 		evict(p, 1, i, 100, 100)
-		require.True(t, p.narrowRead("/cache/x", 1))
+		require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 	}
 }
 
@@ -119,8 +123,8 @@ func TestPreloadUsageTurnsOffAfterItsQuietPeriod(t *testing.T) {
 		evict(p, 1, i, 0, 100)
 		evict(p, 2, i, 0, 100)
 	}
-	require.True(t, p.narrowRead("/cache/x", 1))
-	require.True(t, p.narrowRead("/cache/y", 2))
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
+	require.True(t, p.narrowRead("/cache/y", 2, roomFor))
 	// Group 2's files keep being evicted, from other files and range files of the
 	// cache too; group 1's stop.
 	for i := 0; i <= int(preloadQuietPeriod/time.Second); i++ {
@@ -130,13 +134,26 @@ func TestPreloadUsageTurnsOffAfterItsQuietPeriod(t *testing.T) {
 		p.removed("/cache/001/fullscan.mofscache", 100)
 		p.removed(fmt.Sprintf("/cache/001/%d-10obj.mofscache", i), 10)
 	}
-	require.False(t, p.narrowRead("/cache/x", 1), "group 1 fits once its own files stop being evicted")
-	require.True(t, p.narrowRead("/cache/y", 2))
+	require.False(t, p.narrowRead("/cache/x", 1, roomFor), "group 1 fits once its own files stop being evicted")
+	require.True(t, p.narrowRead("/cache/y", 2, roomFor))
 	// Turning off restarts the evidence: it takes the minimum samples again.
 	for i := 10; i < 10+preloadUsageMinSamples-1; i++ {
 		evict(p, 1, i, 0, 100)
 	}
-	require.False(t, p.narrowRead("/cache/x", 1))
+	require.False(t, p.narrowRead("/cache/x", 1, roomFor))
+}
+
+// A group that stopped being evicted only because it stopped filling whole objects
+// keeps thrashing while the cache has no room for another whole object.
+func TestPreloadUsageStaysOnWithoutRoom(t *testing.T) {
+	p, clock := newTestPreloadUsage()
+	for i := 0; i < preloadUsageMinSamples; i++ {
+		evict(p, 1, i, 0, 100)
+	}
+	require.True(t, p.narrowRead("/cache/x", 1, noRoom))
+	clock.t = clock.t.Add(preloadQuietPeriodMax + time.Second)
+	require.True(t, p.narrowRead("/cache/x", 1, noRoom))
+	require.False(t, p.narrowRead("/cache/x", 1, roomFor))
 }
 
 func TestPreloadUsageQuietPeriodDoublesWhenThrashingResumes(t *testing.T) {
@@ -145,11 +162,11 @@ func TestPreloadUsageQuietPeriodDoublesWhenThrashingResumes(t *testing.T) {
 		for i := 0; i < preloadUsageMinSamples; i++ {
 			evict(p, 1, i, 0, 100)
 		}
-		require.True(t, p.narrowRead("/cache/x", 1))
+		require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 	}
 	end := func() {
 		clock.t = clock.t.Add(p.groups[1].quiet + time.Second)
-		require.False(t, p.narrowRead("/cache/x", 1))
+		require.False(t, p.narrowRead("/cache/x", 1, roomFor))
 	}
 	thrash()
 	want := preloadQuietPeriod
@@ -174,12 +191,12 @@ func TestPreloadUsageExplicitDeleteIsNotEviction(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		evict(p, 1, i, 0, 100)
 	}
-	require.True(t, p.narrowRead("/cache/x", 1))
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 	samples := p.groups[1].samples
 
 	clock.t = clock.t.Add(preloadQuietPeriod / 2)
 	path := "/cache/001/full-deleted.mofscache"
-	p.narrowRead(path, 1)
+	p.narrowRead(path, 1, roomFor)
 	p.cached(path)
 	p.deleted(path)
 	p.removed(path, 100)
@@ -190,7 +207,7 @@ func TestPreloadUsageExplicitDeleteIsNotEviction(t *testing.T) {
 	// The delete did not extend the quiet period.
 	clock.t = clock.t.Add(preloadQuietPeriod/2 + time.Second)
 	require.Equal(t, preloadQuietPeriod, p.groups[1].quiet)
-	require.False(t, p.narrowRead("/cache/x", 1))
+	require.False(t, p.narrowRead("/cache/x", 1, roomFor))
 }
 
 func TestPreloadUsageNoGroup(t *testing.T) {
@@ -200,7 +217,7 @@ func TestPreloadUsageNoGroup(t *testing.T) {
 	}
 	require.Empty(t, p.objects, "reads of no group are not mapped")
 	require.Empty(t, p.groups)
-	require.False(t, p.narrowRead("/cache/x", 0))
+	require.False(t, p.narrowRead("/cache/x", 0, roomFor))
 }
 
 func TestPreloadUsageEvictionForgetsTheObject(t *testing.T) {
@@ -213,7 +230,7 @@ func TestPreloadUsageEvictionForgetsTheObject(t *testing.T) {
 func TestPreloadUsageObjectsAreBounded(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	for i := 0; i <= preloadObjectsMax; i++ {
-		p.narrowRead(fmt.Sprintf("/cache/full%d", i), 1)
+		p.narrowRead(fmt.Sprintf("/cache/full%d", i), 1, roomFor)
 	}
 	require.Len(t, p.objects, preloadObjectsMax)
 }
@@ -226,7 +243,7 @@ func TestPreloadUsageGroupsAreBounded(t *testing.T) {
 	for i := 1; i < preloadUsageMinSamples; i++ {
 		evict(p, 1, i, 0, 100)
 	}
-	require.True(t, p.narrowRead("/cache/x", 1))
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 
 	evict(p, preloadGroupsMax+1, 0, 0, 100)
 	require.Len(t, p.groups, preloadGroupsMax, "no group is idle yet")
@@ -239,7 +256,7 @@ func TestPreloadUsageGroupsAreBounded(t *testing.T) {
 	evict(p, preloadGroupsMax+1, 0, 0, 100)
 	require.Len(t, p.groups, 2, "idle groups are forgotten")
 	require.Contains(t, p.groups, uint64(preloadGroupsMax+1))
-	require.True(t, p.narrowRead("/cache/x", 1), "a thrashing group is kept")
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor), "a thrashing group is kept")
 }
 
 func TestPreloadUsageIgnoresEntryFiles(t *testing.T) {
@@ -254,7 +271,7 @@ func TestPreloadUsageNilIsSafe(t *testing.T) {
 	p.read("/cache/001/full.mofscache", 1)
 	p.deleted("/cache/001/full.mofscache")
 	p.removed("/cache/001/full.mofscache", 1)
-	require.False(t, p.narrowRead("/cache/001/full.mofscache", 1))
+	require.False(t, p.narrowRead("/cache/001/full.mofscache", 1, roomFor))
 }
 
 type skippedFS struct {
@@ -301,9 +318,9 @@ func TestDiskCacheReportsGroupThrashing(t *testing.T) {
 	defer cache.Close(ctx)
 
 	content := bytes.Repeat([]byte("x"), fileSize)
-	for i := 0; i < 40 && !cache.preloads.narrowRead("probe", 1); i++ {
+	for i := 0; i < 40 && !cache.preloads.narrowRead("probe", 1, roomFor); i++ {
 		name := fmt.Sprintf("obj%d", i)
-		cache.preloads.narrowRead(cache.pathForFile(name), 1)
+		cache.preloads.narrowRead(cache.pathForFile(name), 1, roomFor)
 		require.NoError(t, cache.SetFile(ctx, name, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
 		}))
@@ -312,13 +329,48 @@ func TestDiskCacheReportsGroupThrashing(t *testing.T) {
 		require.True(t, vec.Entries[0].done)
 		cache.Evict(ctx, nil)
 	}
-	require.True(t, cache.preloads.narrowRead("probe", 1))
-	require.False(t, cache.preloads.narrowRead("probe", 2))
+	require.True(t, cache.preloads.narrowRead("probe", 1, roomFor))
+	require.False(t, cache.preloads.narrowRead("probe", 2, roomFor))
 
 	samples := cache.preloads.groups[1].samples
 	require.NoError(t, cache.DeletePaths(ctx, []string{"obj39", "obj38", "obj37"}))
 	require.Equal(t, samples, cache.preloads.groups[1].samples)
 	require.Empty(t, cache.preloads.deleting)
+}
+
+// A whole object, sized as the largest whole-object file cached so far, fits while it
+// and the fills in progress stay within the capacity.
+func TestDiskCacheWholeObjectFits(t *testing.T) {
+	ctx := context.Background()
+	const fileSize = 4096
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(4*fileSize), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	require.False(t, cache.wholeObjectFits(), "before any file, the estimate is larger than the cache")
+
+	content := bytes.Repeat([]byte("x"), fileSize)
+	set := func(name string) {
+		require.NoError(t, cache.SetFile(ctx, name, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(content)), nil
+		}))
+	}
+	for i := 0; i < 3; i++ {
+		set(fmt.Sprintf("obj%d", i))
+		require.True(t, cache.wholeObjectFits(), "%d files cached", i+1)
+	}
+	pr, pw := io.Pipe()
+	filled := make(chan error, 1)
+	go func() {
+		filled <- cache.SetFile(ctx, "obj3", func(context.Context) (io.ReadCloser, error) { return pr, nil })
+	}()
+	_, err = pw.Write(content[:1])
+	require.NoError(t, err)
+	require.False(t, cache.wholeObjectFits(), "a fill in progress takes the last room")
+	_, err = pw.Write(content[1:])
+	require.NoError(t, err)
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+	require.False(t, cache.wholeObjectFits(), "the cache is full")
 }
 
 func TestS3FSWholeObjectPreloadSkippedByGroup(t *testing.T) {

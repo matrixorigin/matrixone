@@ -33,6 +33,25 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+// BindIndexMaintenanceView resolves a consumed view and all nested view/UDF
+// definitions without optimizing or executing any resulting query plan.
+func BindIndexMaintenanceView(ctx CompilerContext, stmt *tree.Select) error {
+	if ctx == nil || stmt == nil || !defines.IsIndexMaintenanceViewBinding(ctx.GetContext()) {
+		return moerr.NewInvalidInputNoCtx("invalid index maintenance view probe")
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+	builder.parseOptimizeHints()
+	if _, err := builder.bindSelect(stmt, bindCtx, true); err != nil {
+		return err
+	}
+	ctx.SetViews(bindCtx.views)
+	return nil
+}
+
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
 }

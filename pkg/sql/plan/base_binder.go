@@ -3638,7 +3638,7 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 			name,
 		)
 	}
-	udf, err := b.builder.compCtx.ResolveUdf(name, args)
+	udf, err := b.resolveIndexViewUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
@@ -4990,7 +4990,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			// Materialize temporal constants before relocation checks see their
 			// diagnostic flag, without folding unrelated enclosing functions.
 			// PREPARE retains sources for EXECUTE-time zero-date policy.
-			if !b.builder.isPrepareStatement && !defines.IsPublicationViewBinding(b.GetContext()) {
+			if !b.builder.isPrepareStatement && !defines.IsNoEvaluationViewBinding(b.GetContext()) {
 				proc := b.builder.compCtx.GetProcess()
 				e = foldTemporalTextConstant(proc, e)
 				if fn := e.GetF(); fn != nil {
@@ -5057,13 +5057,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			name,
 		)
 	}
-	cmpCtx := b.builder.compCtx
-	udf, err := cmpCtx.ResolveUdf(name, args)
+	udf, err := b.resolveIndexViewUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.Udf, error) {
+	compiler := b.builder.compCtx
+	if restricted, ok := compiler.(interface{ IndexMaintenanceRestricted() bool }); ok && restricted.IndexMaintenanceRestricted() {
+		if resolver, ok := compiler.(ViewUdfResolver); ok {
+			database := compiler.DefaultDatabase()
+			if b.ctx != nil && b.ctx.defaultDatabase != "" {
+				database = b.ctx.defaultDatabase
+			}
+			return resolver.ResolveViewUdf(name, args, database)
+		}
+	}
+	return compiler.ResolveUdf(name, args)
 }
 
 func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
@@ -5825,7 +5838,7 @@ func bindFuncExprAndConstFoldInternal(
 	// argument types and picks the same overload; only the value
 	// materialization is left to the subscriber's own compile, which
 	// executes these folders as usual.
-	if !defines.IsPublicationViewBinding(ctx) {
+	if !defines.IsNoEvaluationViewBinding(ctx) {
 		foldFloatComparisonConstants(proc, name, args)
 		if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 			return nil, err
@@ -5859,7 +5872,7 @@ func bindFuncExprAndConstFoldInternal(
 	// bound types and the binding verdict are exactly what an unmarked build
 	// starts from, and the subscriber's ordinary compile infers and folds as
 	// usual.
-	if !defines.IsPublicationViewBinding(ctx) {
+	if !defines.IsNoEvaluationViewBinding(ctx) {
 		annotateStringLengthSource(retExpr, proc)
 	}
 	if observer != nil {
@@ -5868,7 +5881,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 	}
 
-	if defines.IsPublicationViewBinding(ctx) {
+	if defines.IsNoEvaluationViewBinding(ctx) {
 		// Publication scope validation binds the persisted metadata of an
 		// existing view and must not evaluate any expression of it: the fold
 		// stages behind this switch - the executor-backed comparison folders

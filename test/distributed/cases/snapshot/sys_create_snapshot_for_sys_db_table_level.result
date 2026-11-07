@@ -51,7 +51,6 @@ show databases;
 ➤ Database[12,-1,0]  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 sp_test  𝄀
@@ -218,7 +217,6 @@ show databases;
 ➤ Database[12,-1,0]  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 sp_test03  𝄀
@@ -422,7 +420,6 @@ show databases;
 db07  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
-mo_debug  𝄀
 mo_task  𝄀
 mysql  𝄀
 sys_create_snapshot_for_sys_db_table_level  𝄀

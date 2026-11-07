@@ -37,6 +37,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -299,7 +300,10 @@ type Compile struct {
 	// nil for every native statement.
 	siriusRead *siriusReadOwner
 
-	pn *plan.Plan
+	pn                       *plan.Plan
+	indexMaintenanceSpec     *executor.IndexMaintenanceSpec
+	indexMaintenanceLiterals []string
+	indexMaintenanceNodeID   int32
 	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
 	// alone cannot recover the source type of each original parameter.
 	preparedParamValues []any
