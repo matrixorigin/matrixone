@@ -171,6 +171,18 @@ func TestTemporalIndexHintRequiresWholePlanAndIndexProof(t *testing.T) {
 	proof := proofFor(proc.Ctx)
 	require.True(t, proof.fits && proof.single, "the typed literal must pass the original-owner proof")
 	require.True(t, potential(proc.Ctx), "a leading key with an eligible typed literal must be replanned")
+	typedNull := DeepCopyExpr(literalPredicate)
+	typedNull.GetF().Args[1].Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
+	scan.FilterList[0] = typedNull
+	proof = proofFor(proc.Ctx)
+	require.True(t, proof.fits && proof.single)
+	require.Equal(t, indexComparisonRaw, proof.atom.domain, "NULL uses the exact comparison domain")
+	require.True(t, potential(proc.Ctx), "a typed NULL must not erase the conservative lifetime proof")
+	typedNull.GetF().Args[1].Typ.Id = int32(types.T_any)
+	proof = proofFor(proc.Ctx)
+	require.False(t, proof.single, "an untyped NULL cannot prove an executable comparison")
+	require.False(t, potential(proc.Ctx), "a proved untyped NULL cannot become an inverse candidate")
+	scan.FilterList[0] = literalPredicate
 	builder.compCtx.SetContext(proc.Ctx)
 	query.ExecutionDependentAccess = false
 	builder.collectOriginalIndexOwner(1)

@@ -16,10 +16,8 @@ package compile
 
 import (
 	"context"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -41,13 +39,9 @@ func (c *Compile) SetValidatedExecutionIntent(intent *plan2.ExecutionIntent) {
 
 func (c *Compile) capturedExecutionAllowed(ctx context.Context) bool {
 	intent := c.executionIntent
-	if intent == nil || !intent.MatchesProcess(c.proc) || !intent.Placement.AllowsPinnedLocalAccess() ||
-		intent.Placement.Scheduling != c.querySchedulingIntent || intent.Placement.CurrentCN.ID != c.proc.GetService() ||
-		intent.Placement.CurrentCN.Addr != c.addr || siriusOffloadRequested(ctx) {
-		return false
-	}
-	offset, fixed := types.FixedZoneOffset(c.proc.GetSessionInfo().TimeZone)
-	return fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
+	return intent != nil && intent.MatchesProcess(c.proc) && intent.Placement.AllowsPinnedLocalAccess() &&
+		intent.Placement.Scheduling == c.querySchedulingIntent && intent.Placement.CurrentCN.ID == c.proc.GetService() &&
+		intent.Placement.CurrentCN.Addr == c.addr && !siriusOffloadRequested(ctx)
 }
 
 func (c *Compile) capturedExecutionRetryNeedsRebuild() bool {

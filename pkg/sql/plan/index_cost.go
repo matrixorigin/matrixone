@@ -498,16 +498,12 @@ type indexCostObservation struct {
 	budget     int
 }
 
-func (builder *QueryBuilder) indexObservationAllowed(scanID int32, finalized, inverse bool) bool {
+func (builder *QueryBuilder) indexObservationAllowed(scanID int32, finalized bool) bool {
 	original := builder.originalIndexScan
 	input := builder.planningInput
 	if !finalized || !original.safe || original.scanID != scanID || builder.isReusablePlan() || builder.sessionSelectLimitMayStopEarly ||
 		input == nil || !input.intent.MatchesProcess(builder.compCtx.GetProcess()) || !input.intent.Placement.AllowsPinnedLocalAccess() || GetForceScanOnMultiCN() {
 		return false
-	}
-	if inverse {
-		_, fixed := types.FixedZoneOffset(input.intent.TimeZone)
-		return fixed && builder.qry.ExecutionDependentAccess
 	}
 	return true
 }

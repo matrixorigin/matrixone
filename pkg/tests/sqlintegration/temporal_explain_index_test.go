@@ -297,9 +297,14 @@ func TestTemporalExplainIndexParity(t *testing.T) {
 			require.Equal(t, want, binaryIDs(), "binary prepared execution must retain clock and schema behavior")
 		}
 		exec("deallocate prepare temporal_prepared")
-		for _, zone := range []string{"+14:00", "-12:00", "+00:00"} {
+		for _, zone := range []string{"+14:00", "-12:00", "America/New_York", "+00:00"} {
 			exec("set time_zone='" + zone + "'")
 			require.Equal(t, ids("select id,d from events ignore index(idx_d) where d > now(6)"), ids(query))
+			if zone == "America/New_York" {
+				path := explain("explain ", query)
+				require.Contains(t, path, "Table Scan on "+schema+".events", path)
+				require.NotContains(t, path, "Index Table Scan on events.idx_d", path)
+			}
 		}
 		exec("analyze table events(d,n) fullscan")
 		require.Equal(t, expected, ids(query))

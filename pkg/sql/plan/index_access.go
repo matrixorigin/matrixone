@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -167,7 +168,8 @@ func (check *originalDependencyCheck) spend(work int) bool {
 
 // indexedColumn checks any-part membership. When exclusionBudget is present it
 // also proves, in the same bounded traversal, that no regular index has this
-// column first. A negative position asks whether any indexed column is temporal.
+// column first. A negative position asks whether any indexed column can have
+// an execution-dependent inverse comparison.
 func (check *originalDependencyCheck) indexedColumn(position int32, ctx context.Context, exclusionBudget *int) (dependencyResult, bool) {
 	excludes := exclusionBudget != nil
 	if check.scan == nil || check.scan.TableDef == nil || len(check.scan.BindingTags) == 0 {
@@ -227,7 +229,7 @@ func (check *originalDependencyCheck) indexedColumn(position int32, ctx context.
 				seen = true
 			} else if position < 0 {
 				oid := types.T(table.Cols[pos].Typ.Id)
-				seen = seen || oid == types.T_datetime || oid == types.T_timestamp
+				seen = seen || indexComparisonMayNeedInverse(oid, types.T_any)
 			}
 			if seen && !excludes {
 				return dependencyYes, false
@@ -246,51 +248,133 @@ func (check *originalDependencyCheck) indexedColumn(position int32, ctx context.
 	return dependencyNo, excludes
 }
 
-// unprovedSource mirrors the existing source check but shares this proof's
-// bound. An exhausted or opaque source cannot establish a negative result.
-func (check *originalDependencyCheck) unprovedSource(expr *plan.Expr, depth int) dependencyResult {
-	if depth > 64 || !check.spend(1) {
+// visit reuses the expression owner's iterative walk. Charge inspected nodes
+// and limit discovered references before the visitor enqueues them, including
+// aliases and cycles. An incomplete walk cannot prove independence.
+func (check *originalDependencyCheck) visit(expr *plan.Expr, inspect func(*plan.Expr) dependencyResult) dependencyResult {
+	if expr == nil {
+		if !check.spend(1) {
+			return dependencyUnknown
+		}
+		return dependencyNo
+	}
+	if check.budget <= 0 {
 		return dependencyUnknown
 	}
-	if expr == nil || expr.GetP() != nil {
-		return dependencyYes
-	}
-	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
-		return dependencyYes
-	}
-	var children []*plan.Expr
-	if fn := expr.GetF(); fn != nil {
-		children = fn.Args
-	} else if list := expr.GetList(); list != nil {
-		children = list.List
-	}
-	for _, child := range children {
-		result := check.unprovedSource(child, depth+1)
-		if result != dependencyNo {
-			return result
+	result := dependencyNo
+	stop := moerr.GetOkStopCurrRecur()
+	err := plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if !check.spend(1) {
+			result = dependencyUnknown
+			return stop
 		}
+		children := 0
+		switch value := current.Expr.(type) {
+		case *plan.Expr_F:
+			if value == nil {
+				result = dependencyUnknown
+				return stop
+			}
+			if value.F != nil {
+				children = len(value.F.Args)
+			}
+		case *plan.Expr_List:
+			if value == nil {
+				result = dependencyUnknown
+				return stop
+			}
+			if value.List != nil {
+				children = len(value.List.List)
+			}
+		case *plan.Expr_Lit:
+			if value == nil {
+				result = dependencyUnknown
+				return stop
+			}
+			if value.Lit != nil {
+				// VisitExprTree enqueues the source even when it is nil.
+				children = 1
+			}
+		case *plan.Expr_P:
+			if value == nil {
+				result = dependencyUnknown
+				return stop
+			}
+		case *plan.Expr_W, *plan.Expr_Sub, *plan.Expr_Dependent:
+			result = dependencyUnknown
+			return stop
+		}
+		if !check.spend(children) {
+			result = dependencyUnknown
+			return stop
+		}
+		result = inspect(current)
+		if result != dependencyNo {
+			return stop
+		}
+		return nil
+	})
+	if err != nil && err != stop {
+		return dependencyUnknown
 	}
-	return dependencyNo
+	return result
+}
+
+// An exhausted or opaque bound cannot establish that its source is reusable.
+func (check *originalDependencyCheck) unprovedSource(expr *plan.Expr) dependencyResult {
+	if expr == nil {
+		if !check.spend(1) {
+			return dependencyUnknown
+		}
+		return dependencyYes
+	}
+	return check.visit(expr, func(current *plan.Expr) dependencyResult {
+		if current.GetP() != nil {
+			return dependencyYes
+		}
+		if lit := current.GetLit(); lit != nil && lit.Src != nil {
+			return dependencyYes
+		}
+		var children []*plan.Expr
+		if fn := current.GetF(); fn != nil {
+			children = fn.Args
+		} else if list := current.GetList(); list != nil {
+			children = list.List
+		}
+		for _, child := range children {
+			if child == nil {
+				return dependencyYes
+			}
+		}
+		return dependencyNo
+	})
 }
 
 func (check *originalDependencyCheck) pair(column, bound *plan.Expr) dependencyResult {
-	if column == nil || bound == nil || column.GetCol() == nil || check.scan == nil ||
+	if column == nil || bound == nil || check.scan == nil ||
 		check.scan.TableDef == nil || len(check.scan.BindingTags) == 0 {
 		return dependencyNo
 	}
-	ref, table := column.GetCol(), check.scan.TableDef
+	col, ok := column.Expr.(*plan.Expr_Col)
+	if !ok {
+		return dependencyNo
+	}
+	if col == nil {
+		return dependencyUnknown
+	}
+	ref, table := col.Col, check.scan.TableDef
+	if ref == nil {
+		return dependencyUnknown
+	}
 	if ref.RelPos != check.scan.BindingTags[0] || ref.ColPos < 0 || int(ref.ColPos) >= len(table.Cols) || table.Cols[ref.ColPos] == nil {
 		return dependencyNo
 	}
 	oid, boundType := types.T(table.Cols[ref.ColPos].Typ.Id), types.T(bound.Typ.Id)
-	if oid != types.T_datetime && oid != types.T_timestamp {
+	if !indexComparisonMayNeedInverse(oid, boundType) {
 		return dependencyNo
 	}
-	if !isDatetimeTimestampTypePair(oid, boundType) {
-		if boundType != types.T_any {
-			return dependencyNo
-		}
-		source := check.unprovedSource(bound, 0)
+	if boundType == types.T_any {
+		source := check.unprovedSource(bound)
 		if source != dependencyYes {
 			return source
 		}
@@ -299,80 +383,66 @@ func (check *originalDependencyCheck) pair(column, bound *plan.Expr) dependencyR
 	return result
 }
 
-func (check *originalDependencyCheck) expr(expr *plan.Expr, depth int) dependencyResult {
-	if depth > 64 || !check.spend(1) {
-		return dependencyUnknown
-	}
-	if expr == nil {
-		return dependencyNo
-	}
-	var children []*plan.Expr
-	switch value := expr.Expr.(type) {
-	case *plan.Expr_F:
-		if value.F == nil || value.F.Func == nil {
-			return dependencyUnknown
-		}
-		fn := value.F
-		id, _ := function.DecodeOverloadID(fn.Func.Obj)
-		var pairs [2][2]*plan.Expr
-		pairCount := 0
-		switch id {
-		case function.EQUAL, function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
-			if len(fn.Args) == 2 {
-				pairs = [2][2]*plan.Expr{{fn.Args[0], fn.Args[1]}, {fn.Args[1], fn.Args[0]}}
-				pairCount = 2
+func (check *originalDependencyCheck) expr(expr *plan.Expr) dependencyResult {
+	return check.visit(expr, func(expr *plan.Expr) dependencyResult {
+		switch value := expr.Expr.(type) {
+		case *plan.Expr_F:
+			if value.F == nil || value.F.Func == nil {
+				return dependencyUnknown
 			}
-		case function.BETWEEN, function.IN_RANGE:
-			if len(fn.Args) >= 3 {
-				pairs = [2][2]*plan.Expr{{fn.Args[0], fn.Args[1]}, {fn.Args[0], fn.Args[2]}}
-				pairCount = 2
-			}
-		case function.IN:
-			if len(fn.Args) == 2 && fn.Args[1] != nil {
-				result := check.pair(fn.Args[0], fn.Args[1])
-				if result != dependencyNo {
-					return result
+			fn := value.F
+			id, _ := function.DecodeOverloadID(fn.Func.Obj)
+			var pairs [2][2]*plan.Expr
+			pairCount := 0
+			switch id {
+			case function.EQUAL, function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
+				if len(fn.Args) == 2 {
+					pairs = [2][2]*plan.Expr{{fn.Args[0], fn.Args[1]}, {fn.Args[1], fn.Args[0]}}
+					pairCount = 2
 				}
-				if list := fn.Args[1].GetList(); list != nil {
-					for _, item := range list.List {
-						if !check.spend(1) {
+			case function.BETWEEN, function.IN_RANGE:
+				if len(fn.Args) >= 3 {
+					pairs = [2][2]*plan.Expr{{fn.Args[0], fn.Args[1]}, {fn.Args[0], fn.Args[2]}}
+					pairCount = 2
+				}
+			case function.IN:
+				if len(fn.Args) == 2 && fn.Args[1] != nil {
+					result := check.pair(fn.Args[0], fn.Args[1])
+					if result != dependencyNo {
+						return result
+					}
+					if list, ok := fn.Args[1].Expr.(*plan.Expr_List); ok {
+						if list == nil || list.List == nil {
 							return dependencyUnknown
 						}
-						if result := check.pair(fn.Args[0], item); result != dependencyNo {
-							return result
+						for _, item := range list.List.List {
+							if !check.spend(1) {
+								return dependencyUnknown
+							}
+							if result := check.pair(fn.Args[0], item); result != dependencyNo {
+								return result
+							}
 						}
 					}
 				}
 			}
-		}
-		for _, pair := range pairs[:pairCount] {
-			if result := check.pair(pair[0], pair[1]); result != dependencyNo {
-				return result
+			for _, pair := range pairs[:pairCount] {
+				if result := check.pair(pair[0], pair[1]); result != dependencyNo {
+					return result
+				}
 			}
-		}
-		children = fn.Args
-	case *plan.Expr_List:
-		if value.List == nil {
+		case *plan.Expr_List:
+			if value.List == nil {
+				return dependencyUnknown
+			}
+		case nil, *plan.Expr_Lit, *plan.Expr_Col, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+			*plan.Expr_Corr, *plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec,
+			*plan.Expr_Fold, *plan.Expr_Slot:
+		default:
 			return dependencyUnknown
 		}
-		children = value.List.List
-	case *plan.Expr_Lit:
-		if value.Lit != nil && value.Lit.Src != nil {
-			return check.expr(value.Lit.Src, depth+1)
-		}
-	case nil, *plan.Expr_Col, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
-		*plan.Expr_Corr, *plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec,
-		*plan.Expr_Fold, *plan.Expr_Slot:
 		return dependencyNo
-	default:
-		return dependencyUnknown
-	}
-	for _, child := range children {
-		if result := check.expr(child, depth+1); result != dependencyNo {
-			return result
-		}
-	}
-	return dependencyNo
+	})
 }
 
 // originalDependencyFallback is used only when the positive shape proof is
@@ -384,7 +454,7 @@ func originalDependencyFallback(query *plan.Query, path indexCandidatePath) bool
 	}
 	for _, id := range path.ids[:path.len] {
 		for _, expr := range query.Nodes[id].FilterList {
-			switch check.expr(expr, 0) {
+			switch check.expr(expr) {
 			case dependencyYes:
 				return true
 			case dependencyUnknown:
@@ -404,7 +474,8 @@ func originalSingleDependency(ctx context.Context, scan *plan.Node, proof origin
 	}
 	table, atom := scan.TableDef, proof.atom
 	position := atom.column.GetCol().ColPos
-	if !isDatetimeTimestampTypePair(types.T(table.Cols[position].Typ.Id), types.T(atom.bound.Typ.Id)) {
+	boundType := types.T(atom.bound.Typ.Id)
+	if boundType == types.T_any || !indexComparisonMayNeedInverse(types.T(table.Cols[position].Typ.Id), boundType) {
 		return false
 	}
 	check := originalDependencyCheck{scan: scan, budget: 4096}

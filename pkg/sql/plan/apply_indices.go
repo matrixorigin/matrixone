@@ -2632,13 +2632,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 
 	var necessaryIndexes []int
 	var comparison indexComparison
-	admitNecessary := !forceIndex && !ignoreStats && !preferSortedScan && len(indexes) <= engine.MaxIndexPlanningDefinitions && builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized, true)
+	admitNecessary := !forceIndex && !ignoreStats && !preferSortedScan && len(indexes) <= engine.MaxIndexPlanningDefinitions &&
+		builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized) && builder.qry.ExecutionDependentAccess
 	if admitNecessary {
 		var ok bool
 		if len(node.FilterList) == 1 {
 			comparison, ok = analyzeIndexComparison(builder.GetContext(), node.FilterList[0])
 		}
-		admitNecessary = ok && comparison.domain == indexComparisonInverse
+		admitNecessary = ok && comparison.necessaryRangeAllowed(builder.planningInput.intent.TimeZone)
 	}
 	for idx, idxDef := range indexes {
 		if admitNecessary && !indexPlanningDefinitionFits(idxDef) {
@@ -2726,7 +2727,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAtPhase(nodeID in
 	}
 	if best.indexPos != -1 && best.shape == encodedRegularIndexCostIndexOnly {
 		match := &regularIndexOnlyMatch{filterIdx: best.filterIdx, filterType: best.filterType, leadingEqual: best.leadingEqual, residualLeadingPos: best.residualLeadingPos, observation: best.observation}
-		if best.observation != nil || !forceIndex && !ignoreStats && !preferSortedScan && builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized, false) {
+		if best.observation != nil || !forceIndex && !ignoreStats && !preferSortedScan && builder.indexObservationAllowed(nodeID, lateBaseStatsFinalized) {
 			match.cost = costCtx
 		}
 		ret, err := builder.applyRegularIndexOnlyScan(indexes[best.indexPos], node, idxColMap, scanSnapshot, match)
@@ -5170,7 +5171,7 @@ func (builder *QueryBuilder) buildRegularIndexOnlyScan(
 // Its caller has already performed the mandatory hidden-table resolution.
 func (builder *QueryBuilder) observedBaseCheaper(node *plan.Node, index *IndexDef, match *regularIndexOnlyMatch) (bool, error) {
 	ctx := builder.GetContext()
-	if !builder.indexObservationAllowed(node.NodeId, true, false) || len(node.FilterList) != 1 || len(node.BlockFilterList) != 1 || len(match.filterIdx) != 1 || match.filterIdx[0] != 0 ||
+	if !builder.indexObservationAllowed(node.NodeId, true) || len(node.FilterList) != 1 || len(node.BlockFilterList) != 1 || len(match.filterIdx) != 1 || match.filterIdx[0] != 0 ||
 		match.cost == nil || !match.cost.valid || node.NodeId < 0 || int(node.NodeId) >= len(builder.qry.Nodes) || builder.qry.Nodes[node.NodeId] != node {
 		return false, nil
 	}

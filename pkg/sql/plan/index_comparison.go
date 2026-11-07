@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -40,6 +41,17 @@ const (
 
 func (d indexComparisonDomain) exact() bool {
 	return d == indexComparisonRaw || d == indexComparisonNormalized
+}
+
+// indexComparisonMayNeedInverse is the comparison owner's capability check.
+// An unknown bound is only a conservative lifetime question; it must not
+// admit an executable index range.
+func indexComparisonMayNeedInverse(key, bound types.T) bool {
+	if bound == types.T_any {
+		return isDatetimeTimestampTypePair(key, types.T_datetime) ||
+			isDatetimeTimestampTypePair(key, types.T_timestamp)
+	}
+	return isDatetimeTimestampTypePair(key, bound)
 }
 
 func sameIndexComparisonDomain(key, value types.Type) bool {
@@ -70,7 +82,7 @@ func analyzeIndexComparisonBound(ctx context.Context, bound *plan.Expr, keyType 
 	if key.Oid.IsDecimal() && value.Oid.IsDecimal() && losslessIndexDecimalBound(ctx, bound, key) {
 		return indexComparisonNormalized
 	}
-	if isDatetimeTimestampTypePair(key.Oid, value.Oid) {
+	if value.Oid != types.T_any && indexComparisonMayNeedInverse(key.Oid, value.Oid) {
 		return indexComparisonInverse
 	}
 	// In particular, DATETIME/TIMESTAMP comparison converts the DATETIME in
@@ -326,6 +338,16 @@ type indexComparison struct {
 	op     types.ComparisonOp
 	scale  int32
 	domain indexComparisonDomain
+}
+
+// necessaryRangeAllowed proves producer-specific execution conditions. The
+// generic observation and compile owners only check their captured context.
+func (comparison indexComparison) necessaryRangeAllowed(zone *time.Location) bool {
+	if comparison.domain != indexComparisonInverse {
+		return false
+	}
+	offset, fixed := types.FixedZoneOffset(zone)
+	return fixed && int64(offset) >= math.MinInt32 && int64(offset) <= math.MaxInt32
 }
 
 // analyzeIndexComparison identifies a single oriented comparison. It is
