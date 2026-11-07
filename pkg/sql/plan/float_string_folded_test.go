@@ -527,7 +527,7 @@ func TestCreateViewCastLiteralNullability87(t *testing.T) {
 		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		cv := p.GetDdl().GetCreateView()
 		require.NotNil(t, cv, sql)
