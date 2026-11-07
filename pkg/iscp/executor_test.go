@@ -210,7 +210,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
 	spec := &JobSpec{
-		ConsumerInfo: ConsumerInfo{InitSQL: "select 1"},
+		ConsumerInfo: ConsumerInfo{ConsumerType: int8(ConsumerType_IndexSync), InitSQL: "select 1"},
 		TriggerSpec:  TriggerSpec{JobType: TriggerType_Default},
 	}
 	watermark := types.BuildTS(10, 0)
@@ -253,7 +253,7 @@ func TestTableEntryDoesNotShareInitIterations(t *testing.T) {
 		require.Len(t, iter.jobNames, 1)
 	}
 
-	// Normal running jobs retain the existing shared-iteration behavior.
+	// In-step Running index jobs share one change read.
 	table.AddOrUpdateSinker(
 		context.Background(),
 		"index_hv",
