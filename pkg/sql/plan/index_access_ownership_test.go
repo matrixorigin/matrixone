@@ -90,7 +90,25 @@ func TestOriginalDependencyFallbackKeepsUnrelatedPlansReusable(t *testing.T) {
 	builder.collectOriginalIndexOwner(0)
 	require.False(t, builder.qry.ExecutionDependentAccess, "an unrelated parameter must not make an integer predicate temporal")
 
+	// The ordinary predicate remains reusable even when its original tree is
+	// deeper than the positive index proof can accept. A relevant predicate at
+	// the same depth must still protect the lifetime of a cached BASE plan.
+	deep := predicate
+	for i := 0; i < 128; i++ {
+		deep = &pb.Expr{Typ: pb.Type{Id: int32(types.T_bool)}, Expr: &pb.Expr_F{F: &pb.Function{
+			Func: &pb.ObjectRef{Obj: function.EncodeOverloadID(function.AND, 0)},
+			Args: []*pb.Expr{deep, MakePlan2BoolConstExprWithType(true)},
+		}}}
+	}
+	scan.FilterList = []*pb.Expr{deep}
+	builder.collectOriginalIndexOwner(0)
+	require.False(t, builder.qry.ExecutionDependentAccess, "a completely inspected deep integer predicate remains reusable")
 	predicate.GetF().Args[0] = GetColExpr(scan.TableDef.Cols[0].Typ, scan.BindingTags[0], 0)
+	builder.collectOriginalIndexOwner(0)
+	require.True(t, builder.qry.ExecutionDependentAccess, "a deep temporal parameter still requires replanning")
+
+	scan.FilterList = []*pb.Expr{predicate}
+	builder.qry.ExecutionDependentAccess = false
 	builder.collectOriginalIndexOwner(0)
 	require.True(t, builder.qry.ExecutionDependentAccess, "an unresolved temporal bound cannot prove reusable access")
 
@@ -117,6 +135,25 @@ func TestOriginalDependencyFallbackKeepsUnrelatedPlansReusable(t *testing.T) {
 		builder.collectOriginalIndexOwner(0)
 		require.True(t, builder.qry.ExecutionDependentAccess)
 	}
+	// Many individually bounded expressions can still exceed the total work
+	// budget through nil children, which the shared visitor skips on delivery.
+	wide := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{
+		Func: &pb.ObjectRef{Obj: function.EncodeOverloadID(function.OR, 0)},
+		Args: make([]*pb.Expr, 128),
+	}}}
+	scan.FilterList = make([]*pb.Expr, 80)
+	for i := range scan.FilterList {
+		scan.FilterList[i] = wide
+	}
+	builder.qry.ExecutionDependentAccess = false
+	builder.collectOriginalIndexOwner(0)
+	require.True(t, builder.qry.ExecutionDependentAccess, "unvisited child references cannot prove a reusable lifetime")
+	// Nil filter roots still consume the shared work budget; they cannot make
+	// an arbitrarily long malformed filter list look like a complete proof.
+	scan.FilterList = make([]*pb.Expr, 4097)
+	builder.qry.ExecutionDependentAccess = false
+	builder.collectOriginalIndexOwner(0)
+	require.True(t, builder.qry.ExecutionDependentAccess)
 }
 
 func TestOriginalDependencyRejectsUnprovedIndexMetadata(t *testing.T) {

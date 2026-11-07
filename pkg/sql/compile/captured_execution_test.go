@@ -99,7 +99,9 @@ func TestTemporalCandidateExecutionFenceAndReuse(t *testing.T) {
 	proc.GetSessionInfo().TimeZone = zone
 	intent.TimeZone = zone
 	c.SetValidatedExecutionIntent(intent)
-	require.False(t, c.capturedExecutionAllowed(context.Background()))
+	require.True(t, c.capturedExecutionAllowed(context.Background()), "the generic captured execution contract does not impose a producer's zone rule")
+	proc.GetSessionInfo().TimeZone = time.UTC
+	require.False(t, c.capturedExecutionAllowed(context.Background()), "a changed zone still invalidates the captured execution")
 }
 
 func TestTemporalCandidateWithoutPhysicalIndexOrIntentFailsPreflight(t *testing.T) {

@@ -33,7 +33,7 @@ import (
 )
 
 func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
-	for _, scenario := range []string{"eligible", "unmarked lifetime", "missing scope", "missing original owner", "other original scan", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "session row limit", "unknown session row limit"} {
+	for _, scenario := range []string{"eligible", "unmarked lifetime", "missing scope", "missing original owner", "other original scan", "unproved original owner", "parameter provenance", "prepared statement", "sirius", "clock drift", "named zone", "session row limit", "unknown session row limit"} {
 		t.Run(scenario, func(t *testing.T) {
 			builder, _, _ := newIndexCostFixture(t)
 			switch scenario {
@@ -63,6 +63,11 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 				builder.planningInput.intent.Placement.Sirius = true
 			case "clock drift":
 				builder.planningInput.intent.UnixTime++
+			case "named zone":
+				zone, err := time.LoadLocation("America/New_York")
+				require.NoError(t, err)
+				builder.compCtx.GetProcess().GetSessionInfo().TimeZone = zone
+				builder.planningInput.intent.TimeZone = zone
 			case "session row limit":
 				builder.sessionSelectLimitMayStopEarly = true
 			case "unknown session row limit":

@@ -49,8 +49,8 @@ different access. A BASE decision needs the same lifetime consideration as an
 INDEX decision: a later clock can change the cost. For a complete, live,
 in-budget single proof, the owner consumes the comparison owner's necessary
 range capability and combines regular-index leading-part exclusion and
-any-part membership in one bounded traversal. The
-access is execution-dependent exactly when leading exclusion is not proved and
+any-part membership in one bounded traversal. The access is execution-dependent
+exactly when leading exclusion is not proved and
 membership is yes or unknown. A completed exclusion or membership miss keeps
 existing reuse, and an already-true dependency is never cleared. This retains
 the previous `P && !E` decision, including a temporal suffix behind an integer
@@ -80,13 +80,13 @@ Prepared roots retain their existing reusable-plan owner and do not acquire
 temporal candidate input.
 
 The positive proof has a 4,096-unit work budget, at most 64 expressions per
-list and depth 64. Dependency fallback is also capped at 4,096 charged units
-and 4,096 discovered expression references, 64 index definitions, 16 parts
+list and depth 64. Dependency fallback is also capped at 4,096 charged units,
+including inspected nodes and enqueued references, 64 index definitions, 16 parts
 per index and 256 bytes per inspected name or algorithm. An oversized or
-uncharged algorithm is not normalized: it
-invalidates both a negative membership proof and leading-index exclusion. A
+uncharged algorithm is not normalized: it invalidates both a negative membership proof and leading-index exclusion. A
 regular existing index with no parts, a malformed alias, an unvisited part, an
-unproved source or a stopped proof is unknown, never negative evidence. The result is only the existing query
+unproved source or a stopped proof is unknown, never negative evidence. The
+result is only the existing query
 reuse fact; no retained dependency tree or general visitor framework is added.
 
 ## Authorized resolution and read identity
@@ -204,6 +204,19 @@ non-temporal captured access may therefore use a named zone. Published plans
 are trusted internal optimizer products, not a user-supplied authorization
 mechanism; hidden-table resolution and pair authorization remain mandatory.
 
+The ordinary compile constructor owns immediate publication, deferred
+preflight publication and definition retry at their existing offset and
+message-board checkpoints. Cancellation, substantive errors, retries, panic
+cleanup and pool lifecycle retain their existing owners. Regular-index and
+index-merge failures return through the planner's normal error path; a failed
+child rewrite does not publish a replacement child ID or partial branch.
+
+Frontend plan reuse derives the separate ordinary-generation, prepared-logical
+and prepared-physical decisions at the existing policy owner. Existing
+foreign-key, view/UDF/subscription, index-coverage, DDL-default, time-zone,
+percentile/EWM and snapshot checks retain their layer-specific meaning.
+Unrelated ordinary and prepared queries do not acquire a new execution intent.
+
 ## Ownership consolidation decision and validation
 
 The previous fallback separately encoded the temporal type pair while the
@@ -237,19 +250,6 @@ Owner normal/race tests, affected lint/vet, the real 4.2 stopped-upgrade
 contract, and comparable planning/query performance evidence are required for
 the changed boundaries. Existing evidence is reused when its source and
 semantic inputs remain valid.
-
-The ordinary compile constructor owns immediate publication, deferred
-preflight publication and definition retry at their existing offset and
-message-board checkpoints. Cancellation, substantive errors, retries, panic
-cleanup and pool lifecycle retain their existing owners. Regular-index and
-index-merge failures return through the planner's normal error path; a failed
-child rewrite does not publish a replacement child ID or partial branch.
-
-Frontend plan reuse derives the separate ordinary-generation, prepared-logical
-and prepared-physical decisions at the existing policy owner. Existing
-foreign-key, view/UDF/subscription, index-coverage, DDL-default, time-zone,
-percentile/EWM and snapshot checks retain their layer-specific meaning.
-Unrelated ordinary and prepared queries do not acquire a new execution intent.
 
 ## Reader and sort-key admission
 
