@@ -469,11 +469,23 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if !mustRuntimeFilter(node) && rightChild.Stats.Outcnt > 5000000 {
-		return
+	// A proven singleton is independent of stale or unavailable cardinality
+	// estimates. Only use it for an otherwise rejected, safe probe; never alter
+	// the default-statistics sentinel or the selected join topology.
+	singletonChecked, singletonOK, singletonAdmission := false, false, false
+	allowSingleton := func() bool {
+		if !singletonChecked {
+			singletonChecked = true
+			singletonOK = builder.singletonRuntimeFilterCandidate(node, leftChild, node.Children[1])
+		}
+		return singletonOK
 	}
-	if node.Stats.HashmapStats.HashOnPK && rightChild.Stats.Outcnt > 320000 {
-		return
+	if (!mustRuntimeFilter(node) && rightChild.Stats.Outcnt > 5000000) ||
+		(node.Stats.HashmapStats.HashOnPK && rightChild.Stats.Outcnt > 320000) {
+		if !allowSingleton() {
+			return
+		}
+		singletonAdmission = true
 	}
 
 	leftTags := make(map[int32]bool)
@@ -545,11 +557,17 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				probeNdv = 100
 			}
 			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
-				return
+				if !allowSingleton() {
+					return
+				}
+				singletonAdmission = true
 			}
 			if sortOrder != 0 {
 				if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
-					return
+					if !allowSingleton() {
+						return
+					}
+					singletonAdmission = true
 				}
 			} else {
 				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
@@ -570,6 +588,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		inLimit := GetInFilterCardLimit(sid)
 		if sortOrder == 0 {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		if singletonAdmission && inLimit <= 0 {
+			return
 		}
 		// Placement is decided before hashbuild knows the actual number of
 		// unique keys.  If the planner already knows the build cannot fit in an
@@ -602,7 +623,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		// SINGLE output cardinality belongs to its semantic preserved side.  Do
 		// not feed the existing probe-side RF heuristic into SINGLE stats here;
 		// preserved-side cardinality and cost selection are a separate phase.
-		if node.JoinType != plan.Node_SINGLE {
+		if node.JoinType != plan.Node_SINGLE && !singletonAdmission {
 			recalcStatsByRuntimeFilter(leftChild, node, builder)
 		}
 		return

@@ -927,16 +927,17 @@ func (s *mysqlSinker2) Error() error {
 
 // SetError sets the error state
 //
-// Converts non-moerr.Error to moerr.Error for consistency
+// Preserves classified backend/control causes for stream recovery.
 func (s *mysqlSinker2) SetError(err error) {
 	if err == nil {
 		s.err.Store(nil)
 		return
 	}
 
-	// Convert to moerr.Error if needed
 	if _, ok := err.(*moerr.Error); !ok {
-		err = moerr.ConvertGoError(context.Background(), err)
+		if _, classified := ClassifyRetryableError(err); !classified {
+			err = moerr.ConvertGoError(context.Background(), err)
+		}
 	}
 
 	s.err.Store(&err)
