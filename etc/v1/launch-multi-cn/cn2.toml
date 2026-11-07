@@ -14,6 +14,7 @@ service-addresses = [
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK"
+data-dir = "mo-data/local-cn2"
 
 [[fileservice]]
 name = "SHARED"

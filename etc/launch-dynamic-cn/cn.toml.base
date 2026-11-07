@@ -14,7 +14,7 @@ service-addresses = [
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK-V2"
-data-dir = "mo-data/local2"
+data-dir = "mo-data/local-cn%[3]d"
 
 [[fileservice]]
 name = "SHARED"
@@ -33,16 +33,16 @@ backend = "DISK-ETL"
 [observability]
 
 [cn]
-uuid = "dd1dccb%d-4d3c-41f8-b482-5251dc7a41bf"
-port-base = %d
-service-host = "cn%d"
+uuid = "dd1dccb%[1]d-4d3c-41f8-b482-5251dc7a41bf"
+port-base = %[2]d
+service-host = "cn%[3]d"
 
 [cn.Engine]
 type = "distributed-tae"
 
 [cn.frontend]
-port = %d
-unix-socket = "/tmp/mysql%d.sock"
+port = %[4]d
+unix-socket = "/tmp/mysql%[5]d.sock"
 
 [cn.frontend.iceberg]
 enable = true
