@@ -1,0 +1,241 @@
+set experimental_fulltext_index = 1;
+drop database if exists issue28494_fulltext;
+create database issue28494_fulltext;
+use issue28494_fulltext;
+create table docs(
+id int primary key,
+body varchar(256) character set utf8mb4 collate utf8mb4_general_ci,
+notes text character set utf8mb4 collate utf8mb4_general_ci,
+payload int
+);
+insert into docs values (1, 'Résumé alpha', 'noteold', 1);
+create fulltext index ft_body on docs(body);
+create fulltext index ft_notes on docs(notes);
+select id, length(body) as stored_len, length(notes) as notes_len from docs;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  notes_len[4,32,0]  𝄀
+1  ¦  14  ¦  7
+select id from docs where match(body) against('résumé') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('noteold') order by id;
+➤ id[4,32,0]  𝄀
+1
+insert into docs values (1, 'resume alpha', 'notenew', 2)
+on duplicate key update body = values(body), notes = 'notenew', payload = values(payload);
+select id, body, notes, payload from docs order by id;
+➤ id[4,32,0]  ¦  body[12,256,0]  ¦  notes[12,0,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  resume alpha  ¦  notenew  ¦  2
+select id from docs where match(body) against('resume') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(body) against('résumé') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('notenew') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('noteold') order by id;
+➤ id[4,32,0]
+insert into docs values (1, 'RESUME ALPHA ', 'notecase', 3)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  notes_len[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  13  ¦  8  ¦  3
+select id from docs where match(notes) against('notecase') order by id;
+➤ id[4,32,0]  𝄀
+1
+insert into docs values (2, 'nulold', 'nulnoteold', 4);
+insert into docs values (2, concat('nul', char(0), 'token'), 'nulnotenew', 5)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, length(body) as stored_len from docs where id = 2;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  𝄀
+2  ¦  9
+select id from docs where match(body) against('token') order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from docs where match(notes) against('nulnotenew') order by id;
+➤ id[4,32,0]  𝄀
+2
+insert into docs values (1, concat('longtoken ', repeat('x', 128)), concat('texttailtoken ', repeat('y', 4096)), 6)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs where id = 1;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  notes_len[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  138  ¦  4110  ¦  6
+select id from docs where match(body) against('longtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('texttailtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
+insert into docs values
+(1, concat('changedlongtoken ', repeat('x', 128)), 'changednote', 7),
+(3, 'freshword', 'freshnote', 8)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, payload from docs order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  5  𝄀
+3  ¦  8
+select id from docs where match(body) against('changedlongtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('changednote') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(body) against('freshword') order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from docs where match(notes) against('freshnote') order by id;
+➤ id[4,32,0]  𝄀
+3
+begin;
+insert into docs values (1, 'rollbacktoken', 'rollbacknote', 9)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+rollback;
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs where id = 1;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  notes_len[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  145  ¦  11  ¦  7
+select id from docs where match(body) against('rollbacktoken') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('changedlongtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('rollbacknote') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('changednote') order by id;
+➤ id[4,32,0]
+1
+insert into docs values (4, NULL, 'nullnote', 10);
+insert into docs values (4, NULL, 'nullnote', 11)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, length(body) as stored_len, payload from docs where id = 4;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  payload[4,32,0]  𝄀
+4  ¦  null  ¦  11
+insert into docs values (4, 'nullvalue', 'nullnote', 12)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id from docs where match(body) against('nullvalue') order by id;
+➤ id[4,32,0]  𝄀
+4
+insert into docs values (4, NULL, 'nullnote', 13)
+on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id from docs where match(body) against('nullvalue') order by id;
+➤ id[4,32,0]
+insert into docs values (11, 'stablebody', 'stablenote', 1), (12, 'priorbody', 'priornote', 2);
+insert into docs values (11, 'stablebody', 'stablenote', 11), (12, 'changedbody', 'changednotes', 12), (13, 'freshbody', 'freshnotes', 13) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, body, notes, payload from docs where id >= 11 order by id;
+➤ id[4,32,0]  ¦  body[12,256,0]  ¦  notes[-1,16383,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  stablebody  ¦  stablenote  ¦  11  𝄀
+12  ¦  changedbody  ¦  changednotes  ¦  12  𝄀
+13  ¦  freshbody  ¦  freshnotes  ¦  13
+select id from docs where match(body) against('stablebody') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(body) against('changedbody') order by id;
+➤ id[4,32,0]  𝄀
+12
+select id from docs where match(body) against('freshbody') order by id;
+➤ id[4,32,0]  𝄀
+13
+select id from docs where match(notes) against('stablenote') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(notes) against('changednotes') order by id;
+➤ id[4,32,0]  𝄀
+12
+select id from docs where match(notes) against('freshnotes') order by id;
+➤ id[4,32,0]  𝄀
+13
+select id from docs where match(body) against('priorbody') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('priornote') order by id;
+➤ id[4,32,0]
+insert into docs values (11, 'stablebody', 'asymmetricnote', 21) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id from docs where match(body) against('stablebody') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(notes) against('stablenote') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('asymmetricnote') order by id;
+➤ id[4,32,0]  𝄀
+11
+insert into docs values (11, 'asymmetricbody', 'asymmetricnote', 22) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, body, notes, payload from docs where id = 11;
+➤ id[4,32,0]  ¦  body[12,256,0]  ¦  notes[-1,16383,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  asymmetricbody  ¦  asymmetricnote  ¦  22
+select id from docs where match(body) against('stablebody') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('asymmetricbody') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(notes) against('asymmetricnote') order by id;
+➤ id[4,32,0]  𝄀
+11
+insert into docs values (14, 'tailbody', concat(repeat('prefix ', 600), 'oldtailtoken'), 30);
+insert into docs values (14, 'tailbody', concat(repeat('prefix ', 600), 'newtailtoken'), 31) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, length(notes) as notes_len, hex(notes) = hex(concat(repeat('prefix ', 600), 'newtailtoken')) as exact_bytes, payload from docs where id = 14;
+➤ id[4,32,0]  ¦  notes_len[-5,64,0]  ¦  exact_bytes[-7,1,0]  ¦  payload[4,32,0]  𝄀
+14  ¦  4212  ¦  1  ¦  31
+select id from docs where match(notes) against('oldtailtoken') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('newtailtoken') order by id;
+➤ id[4,32,0]  𝄀
+14
+select id from docs where match(body) against('tailbody') order by id;
+➤ id[4,32,0]  𝄀
+14
+begin;
+insert into docs values (11, 'abortbody', 'abortnote', 41), (14, 'aborttailbody', concat(repeat('prefix ', 600), 'aborttailtoken'), 42), (15, 'abortfreshbody', 'abortfreshnote', 43) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+rollback;
+select id, body, payload from docs where id >= 11 order by id;
+➤ id[4,32,0]  ¦  body[12,256,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  asymmetricbody  ¦  22  𝄀
+12  ¦  changedbody  ¦  12  𝄀
+13  ¦  freshbody  ¦  13  𝄀
+14  ¦  tailbody  ¦  31
+select id, length(notes) as notes_len, hex(notes) = hex(concat(repeat('prefix ', 600), 'newtailtoken')) as exact_bytes from docs where id = 14;
+➤ id[4,32,0]  ¦  notes_len[-5,64,0]  ¦  exact_bytes[-7,1,0]  𝄀
+14  ¦  4212  ¦  1
+select id from docs where match(body) against('abortbody') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('aborttailbody') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('abortfreshbody') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('abortnote') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('aborttailtoken') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('abortfreshnote') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('asymmetricbody') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(body) against('tailbody') order by id;
+➤ id[4,32,0]  𝄀
+14
+select id from docs where match(notes) against('asymmetricnote') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(notes) against('newtailtoken') order by id;
+➤ id[4,32,0]  𝄀
+14
+insert into docs values (11, 'asymmetricbody', 'asymmetricnote', 51), (14, 'tailbody', concat(repeat('prefix ', 600), 'newtailtoken'), 52) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, payload from docs where id in (11, 14) order by id;
+➤ id[4,32,0]  ¦  payload[4,32,0]  𝄀
+11  ¦  51  𝄀
+14  ¦  52
+select count(*) as document_count from docs where id >= 11;
+➤ document_count[-5,64,0]  𝄀
+4
+select id from docs where match(body) against('asymmetricbody') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(body) against('tailbody') order by id;
+➤ id[4,32,0]  𝄀
+14
+select id from docs where match(notes) against('asymmetricnote') order by id;
+➤ id[4,32,0]  𝄀
+11
+select id from docs where match(notes) against('newtailtoken') order by id;
+➤ id[4,32,0]  𝄀
+14
+drop database issue28494_fulltext;
