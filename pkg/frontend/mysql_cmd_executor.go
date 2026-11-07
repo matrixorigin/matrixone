@@ -7152,16 +7152,16 @@ func sessionTimestampToUnixNano(seconds float64) int64 {
 // the parser's AST list. HandleSqlForRecord intentionally preserves blank and
 // comment-only semicolon fragments for its existing callers; execution skips
 // those fragments, so filter them here before indexing by computation wrapper.
-func (input *UserInput) sqlForRecord(ctx context.Context, sqlMode string, statementCount int) ([]string, error) {
-	defer input.clearRecordFragments()
-	if input.getStmt() == nil && input.getPreparePlan() == nil &&
-		input.recordFragments != nil && input.recordSQL == input.getSql() && input.recordSQLMode == sqlMode {
-		records := sqlForRecordFromFragments(input.recordFragments)
+func (ui *UserInput) sqlForRecord(ctx context.Context, sqlMode string, statementCount int) ([]string, error) {
+	defer ui.clearRecordFragments()
+	if ui.getStmt() == nil && ui.getPreparePlan() == nil &&
+		ui.recordFragments != nil && ui.recordSQL == ui.getSql() && ui.recordSQLMode == sqlMode {
+		records := sqlForRecordFromFragments(ui.recordFragments)
 		if len(records) == statementCount {
 			return records, nil
 		}
 	}
-	return sqlForRecordByStatementWithSQLMode(ctx, input.getSql(), sqlMode)
+	return sqlForRecordByStatementWithSQLMode(ctx, ui.getSql(), sqlMode)
 }
 
 func sqlForRecordByStatement(ctx context.Context, sql string) ([]string, error) {
