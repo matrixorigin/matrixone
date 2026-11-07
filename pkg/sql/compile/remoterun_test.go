@@ -372,6 +372,15 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		return restored
 	}
 
+	t.Run("TopValueTag", func(t *testing.T) {
+		original := top.NewArgument().WithLimit(plan.MakePlan2Int64ConstExprWithType(3))
+		defer original.Release()
+		original.TopValueTag = 42
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.TopValueTag, restored.(*top.Top).TopValueTag)
+	})
+
 	t.Run("ProductL2", func(t *testing.T) {
 		original := &productl2.Productl2{
 			Result:       []colexec.ResultPos{{Rel: 1, Pos: 2}},
