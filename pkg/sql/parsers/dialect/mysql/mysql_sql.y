@@ -4476,6 +4476,20 @@ alter_sql_task_stmt:
             Timeout: $6,
         }
     }
+|   ALTER TASK ident RESET RUNS INTEGRAL FORCE
+    {
+        runID, ok := signedIntegral(yylex, $6)
+        if !ok { goto ret1 }
+        if runID <= 0 {
+            yylex.Error("SQL task run ID must be positive")
+            goto ret1
+        }
+        $$ = &tree.AlterSQLTask{
+            Name: tree.Identifier($3.Compare()),
+            Action: tree.AlterTaskResetRun,
+            RunID: runID,
+        }
+    }
 
 alter_role_stmt:
     ALTER ROLE IF EXISTS role_name RENAME TO role_name

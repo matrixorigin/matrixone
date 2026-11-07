@@ -16,12 +16,14 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -52,25 +54,124 @@ func NewSQLTaskExecutor(
 
 func (e *SQLTaskExecutor) TaskExecutor() TaskExecutor {
 	return func(ctx context.Context, value task.Task) error {
+		if disposition, ok := ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition); ok {
+			disposition.handled = true
+		}
 		asyncTask, ok := value.(*task.AsyncTask)
 		if !ok {
 			return moerr.NewInternalErrorNoCtx("invalid sql task payload")
 		}
+		service := sqlTaskServiceOwner(e.taskService)
+		if service == nil {
+			deferSQLTask(ctx)
+			return ErrNotReady
+		}
+		claim := sqlTaskAsyncClaim{id: asyncTask.ID, runner: asyncTask.TaskRunner, epoch: asyncTask.Epoch,
+			parent: asyncTask.ParentTaskID, metadata: asyncTask.Metadata.ID}
+		guardKey := sqlTaskGuardKey{kind: 1, value: claim.parent}
+		if guardKey.value == "" || len(guardKey.value) > 50 {
+			guardKey = sqlTaskGuardKey{kind: 2, value: strconv.FormatUint(claim.id, 10)}
+		}
+		guard := service.sqlRecovery.tryGuard(guardKey, 50)
+		if guard == nil {
+			deferSQLTask(ctx)
+			return nil // defer the unclaimed firing
+		}
+		defer service.sqlRecovery.releaseGuard(guard)
 		spec := new(task.SQLTaskContext)
 		if err := spec.Unmarshal(asyncTask.Metadata.Context); err != nil {
-			return err
-		}
-		err := e.ExecuteContext(ctx, spec, false)
-		if err == ErrSQLTaskOverlap {
+			if !service.finishUnclaimedSQLTask(ctx, claim, err, 0) {
+				deferSQLTask(ctx)
+			}
 			return nil
+		}
+		if spec.TriggerType != SQLTaskTriggerScheduled {
+			if !service.finishUnclaimedSQLTask(ctx, claim, moerr.NewInvalidStateNoCtx("invalid scheduled SQL task trigger"), 0) {
+				deferSQLTask(ctx)
+			}
+			return nil
+		}
+		ctx = context.WithValue(ctx, sqlTaskScheduledGuardContextKey{}, guard)
+		err := e.executeContext(ctx, spec, true, &claim)
+		if err == ErrSQLTaskStaleFiring || err == ErrSQLTaskNotFound || err == ErrSQLTaskOverlap {
+			var cleanupTaskID uint64
+			if err == ErrSQLTaskStaleFiring && claim.parent == fmt.Sprintf("sql-task:%d", spec.TaskId) {
+				cleanupTaskID = spec.TaskId
+			}
+			if !service.finishUnclaimedSQLTask(ctx, claim, nil, cleanupTaskID) {
+				deferSQLTask(ctx)
+			}
+			return nil
+		}
+		if err == ErrSQLTaskClaimed || err == ErrSQLTaskRecoveryCapacity {
+			deferSQLTask(ctx)
+			return nil
+		}
+		if err != nil {
+			if disposition, ok := ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition); ok && !disposition.owned {
+				disposition.deferred = true
+				disposition.failed = ctx.Err() == nil && err != errSQLTaskStoreBusy
+			}
 		}
 		return err
 	}
 }
 
+type sqlTaskDispositionContextKey struct{}
+type sqlTaskScheduledGuardContextKey struct{}
+type sqlTaskRunnerDisposition struct{ handled, owned, deferred, failed bool }
+
+func deferSQLTask(ctx context.Context) {
+	if disposition, ok := ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition); ok {
+		disposition.deferred = true
+	}
+}
+
+func deferFailedSQLTask(ctx context.Context) {
+	if disposition, ok := ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition); ok && !disposition.owned {
+		disposition.deferred = true
+		disposition.failed = ctx.Err() == nil
+	}
+}
+
 func (e *SQLTaskExecutor) ExecuteContext(ctx context.Context, spec *task.SQLTaskContext, overlapAsError bool) error {
+	return e.executeContext(ctx, spec, overlapAsError, nil)
+}
+
+func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTaskContext, overlapAsError bool, claim *sqlTaskAsyncClaim) error {
 	if spec == nil {
 		return moerr.NewInternalErrorNoCtx("sql task context is nil")
+	}
+	// A known result must always fit in its bounded recovery receipt.
+	if len(e.runnerCN) > sqlTaskRunnerMaxBytes || claim != nil &&
+		(len(claim.runner) > sqlTaskAsyncRunnerMaxBytes || len(claim.parent) > 50 || len(claim.metadata) > 50) {
+		return moerr.NewInvalidInputNoCtx("SQL task execution identifier is too long")
+	}
+	if spec.TriggerType == SQLTaskTriggerScheduled {
+		ctx = context.WithValue(ctx, defines.SQLTaskBackgroundKey{}, true)
+	}
+	service := sqlTaskServiceOwner(e.taskService)
+	if service == nil {
+		return ErrNotReady
+	}
+	recovery := service.sqlRecovery
+	class := sqlTaskManualReceipt
+	if spec.TriggerType == SQLTaskTriggerScheduled {
+		class = sqlTaskScheduledReceipt
+	}
+	var manualGuard *sqlTaskManualGuard
+	if class == sqlTaskManualReceipt {
+		manualGuard, _ = ctx.Value(sqlTaskManualGuardContextKey{}).(*sqlTaskManualGuard)
+		if manualGuard == nil || manualGuard.owner != recovery || manualGuard.guard.key.account != spec.AccountId || manualGuard.guard.key.value != spec.TaskName {
+			var release func()
+			var err error
+			ctx, release, err = BeginSQLTaskManualAdmission(ctx, e.taskService, spec.AccountId, spec.TaskName)
+			if err != nil {
+				return err
+			}
+			defer release()
+			manualGuard = ctx.Value(sqlTaskManualGuardContextKey{}).(*sqlTaskManualGuard)
+		}
 	}
 
 	sqlTask := SQLTask{
@@ -88,7 +189,8 @@ func (e *SQLTaskExecutor) ExecuteContext(ctx context.Context, spec *task.SQLTask
 	}
 	ctx = attachSQLTaskContext(ctx, sqlTask)
 
-	var lastErr error
+	var nextRun *SQLTaskRun
+	var credit *sqlTaskCredit
 	for attempt := 1; attempt <= sqlTask.RetryLimit+1; attempt++ {
 		run := SQLTaskRun{
 			TaskID:        sqlTask.TaskID,
@@ -102,58 +204,224 @@ func (e *SQLTaskExecutor) ExecuteContext(ctx context.Context, spec *task.SQLTask
 			GateResult:    true,
 			RunnerCN:      e.runnerCN,
 		}
-
-		runID, err := e.taskService.GetStorage().AcquireSQLTaskRun(ctx, sqlTask, run)
-		if err != nil {
-			if err == ErrSQLTaskOverlap && !overlapAsError {
-				return nil
+		if nextRun != nil {
+			run, nextRun = *nextRun, nil
+		} else {
+			admission := &SQLTaskRunAdmission{TriggerSequence: spec.TriggerCount, Reserve: func(account uint32, name string) bool {
+				credit = recovery.reserve(class, account, name)
+				return credit != nil
+			}}
+			if claim != nil {
+				admission.AsyncTaskID, admission.RunnerCN, admission.Epoch = claim.id, claim.runner, claim.epoch
+				admission.ParentTaskID, admission.MetadataID = claim.parent, claim.metadata
+			}
+			admitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			runID, err := service.store.AcquireSQLTaskRun(admitCtx, sqlTask, run, admission)
+			cancel()
+			if manualGuard != nil {
+				manualGuard.owner.releaseGuard(manualGuard.guard)
+				manualGuard = nil
+			}
+			run.RunID = runID
+			if err != nil {
+				if runID != 0 && credit != nil {
+					freezeSQLTaskRun(&run, moerr.NewInternalErrorNoCtx("admission outcome was uncertain; SQL did not start"), false)
+					run.Status = SQLTaskStatusFailed
+					if pending := e.publishSQLTaskResult(recovery, credit, claim, run, sqlTaskReceiptAdmission, err); pending != nil {
+						return pending
+					}
+					return err
+				}
+				recovery.release(credit)
+				if err == ErrSQLTaskOverlap && !overlapAsError {
+					return nil
+				}
+				return err
+			}
+			if runID == 0 || credit == nil {
+				recovery.release(credit)
+				return ErrNotReady
+			}
+			if disposition, ok := ctx.Value(sqlTaskDispositionContextKey{}).(*sqlTaskRunnerDisposition); ok {
+				disposition.owned = true
+			}
+			if guard, ok := ctx.Value(sqlTaskScheduledGuardContextKey{}).(*sqlTaskGuard); ok {
+				recovery.releaseGuard(guard)
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			run.Status = SQLTaskStatusTimeout
+			freezeSQLTaskRun(&run, err, true)
+			if pending := e.publishSQLTaskResult(recovery, credit, claim, run, sqlTaskReceiptTerminal, err); pending != nil {
+				return pending
 			}
 			return err
 		}
-		run.RunID = runID
-
 		allowed, err := e.evaluateGate(ctx, sqlTask)
-		if err != nil {
-			run.Status = SQLTaskStatusFailed
-			run.GateResult = false
-			if _, completeErr := e.finishRun(ctx, &run, err, false); completeErr != nil {
-				return completeErr
-			}
-			lastErr = err
-		} else if !allowed {
+		if err == nil && !allowed {
 			run.Status = SQLTaskStatusSkipped
 			run.GateResult = false
-			if _, completeErr := e.finishRun(ctx, &run, nil, false); completeErr != nil {
-				return completeErr
-			}
-			return nil
-		} else {
-			run.RowsAffected, err = e.executeStatements(ctx, sqlTask)
-			if err == nil {
-				run.Status = SQLTaskStatusSuccess
-				if _, completeErr := e.finishRun(ctx, &run, nil, false); completeErr != nil {
-					return completeErr
-				}
-				return nil
-			}
-
-			timedOut := ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "deadline exceeded")
-			if timedOut {
-				run.Status = SQLTaskStatusTimeout
-			} else {
-				run.Status = SQLTaskStatusFailed
-			}
-			if _, completeErr := e.finishRun(ctx, &run, err, timedOut); completeErr != nil {
-				return completeErr
-			}
-			lastErr = err
+			freezeSQLTaskRun(&run, nil, false)
+			return e.publishSQLTaskResult(recovery, credit, claim, run, sqlTaskReceiptTerminal, nil)
 		}
+		if err != nil {
+			run.GateResult = false
+		} else if err = ctx.Err(); err == nil {
+			run.RowsAffected, err = e.executeStatements(ctx, sqlTask)
+		}
+		if err == nil {
+			run.Status = SQLTaskStatusSuccess
+			freezeSQLTaskRun(&run, nil, false)
+			return e.publishSQLTaskResult(recovery, credit, claim, run, sqlTaskReceiptTerminal, nil)
+		}
+		if unknown := sqlTaskUnknownCommit(err); unknown != nil {
+			run.ErrorCode, run.ErrorMessage = int(unknown.ErrorCode()), util.Abbreviate(err.Error(), 4093)
+			if pending := e.publishSQLTaskResult(recovery, credit, claim, run, sqlTaskReceiptUnknown, err); pending != nil {
+				return sqlTaskUnknownCommitResult(pending, unknown)
+			}
+			return sqlTaskUnknownCommitResult(err, unknown)
+		}
+		timedOut := ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "deadline exceeded")
+		run.Status = SQLTaskStatusFailed
+		freezeSQLTaskRun(&run, err, timedOut)
+		if attempt <= sqlTask.RetryLimit && ctx.Err() == nil {
+			next := run
+			next.RunID, next.Status, next.AttemptNumber = 0, SQLTaskStatusRunning, attempt+1
+			next.StartedAt, next.FinishedAt = time.Now(), time.Time{}
+			next.DurationSeconds, next.RowsAffected, next.ErrorCode, next.ErrorMessage, next.GateResult = 0, 0, 0, "", true
+			guard := recovery.tryGuard(sqlTaskGuardKey{account: run.AccountID, value: run.TaskName}, 512)
+			if guard != nil {
+				metaCtx, cancel := context.WithTimeout(recovery.ctx, 5*time.Second)
+				id, continued, transitionErr := transitionSQLTaskRun(metaCtx, service.store, sqlTaskRetry{previous: run, next: next, claim: claim})
+				cancel()
+				recovery.releaseGuard(guard)
+				if transitionErr == nil && continued {
+					next.RunID = id
+					nextRun = &next
+					continue
+				}
+				if transitionErr == nil {
+					recovery.release(credit)
+					return err
+				}
+				if id != 0 {
+					next.RunID, next.Status = id, SQLTaskStatusFailed
+					freezeSQLTaskRun(&next, moerr.NewInternalErrorNoCtx("retry admission was uncertain; SQL did not start"), false)
+					receipt := &sqlTaskReceipt{class: class, kind: sqlTaskReceiptRetryAdmission, run: run, nextRun: next, credit: credit, endAt: time.Now().UnixMilli()}
+					if claim != nil {
+						receipt.claim = *claim
+					}
+					queued := recovery.enqueue(receipt)
+					if !queued {
+						recovery.release(credit)
+					}
+					return &SQLTaskMetadataPendingError{RunID: id, Recovering: queued, Cause: err}
+				}
+			}
+		}
+		if pending := e.publishSQLTaskResult(recovery, credit, claim, run, sqlTaskReceiptTerminal, err); pending != nil {
+			return pending
+		}
+		return err
+	}
+	return nil
+}
 
-		if attempt > sqlTask.RetryLimit {
-			break
+// SQLTaskMetadataPendingError reports a known business result whose metadata
+// has not yet been confirmed. Cause is nil only when the SQL body succeeded.
+type SQLTaskMetadataPendingError struct {
+	RunID      uint64
+	Status     string
+	Recovering bool
+	Cause      error
+}
+
+func (e *SQLTaskMetadataPendingError) Error() string {
+	message := fmt.Sprintf("SQL task run %d metadata is pending", e.RunID)
+	if e.Recovering {
+		message += "; the running task service will retry when storage recovers"
+	} else {
+		message += "; automatic recovery could not be scheduled"
+	}
+	if e.Cause != nil {
+		return e.Cause.Error() + "; " + message
+	}
+	return message
+}
+
+func (e *SQLTaskMetadataPendingError) Unwrap() error { return e.Cause }
+
+// publishSQLTaskResult returns nil once the frozen metadata result is known to
+// be durable. Otherwise it transfers its reserved credit to the service worker.
+func (e *SQLTaskExecutor) publishSQLTaskResult(recovery *sqlTaskRecovery, credit *sqlTaskCredit, claim *sqlTaskAsyncClaim, run SQLTaskRun, kind sqlTaskReceiptKind, execErr error) error {
+	receipt := &sqlTaskReceipt{class: credit.class, kind: kind, run: run, credit: credit, endAt: time.Now().UnixMilli()}
+	if claim != nil {
+		receipt.claim = *claim
+	}
+	guard := recovery.tryGuard(sqlTaskGuardKey{account: run.AccountID, value: run.TaskName}, 512)
+	if guard != nil {
+		ctx, cancel := context.WithTimeout(recovery.ctx, 5*time.Second)
+		resolved, err := publishSQLTaskReceipt(ctx, e.taskService.GetStorage(), receipt)
+		cancel()
+		recovery.releaseGuard(guard)
+		if err == nil && resolved {
+			recovery.release(credit)
+			return nil
 		}
 	}
-	return lastErr
+	queued := recovery.enqueue(receipt)
+	if !queued {
+		recovery.release(credit)
+	}
+	return &SQLTaskMetadataPendingError{RunID: run.RunID, Status: run.Status, Recovering: queued, Cause: execErr}
+}
+
+func sqlTaskUnknownCommit(err error) *moerr.Error {
+	if moErr, ok := err.(*moerr.Error); ok && moErr.ErrorCode() == moerr.ErrTxnUnknown {
+		return moErr
+	}
+	if custom, ok := err.(interface{ As(any) bool }); ok {
+		var moErr *moerr.Error
+		if custom.As(&moErr) && moErr != nil && moErr.ErrorCode() == moerr.ErrTxnUnknown {
+			return moErr
+		}
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, cause := range e.Unwrap() {
+			if unknown := sqlTaskUnknownCommit(cause); unknown != nil {
+				return unknown
+			}
+		}
+	case interface{ Unwrap() error }:
+		return sqlTaskUnknownCommit(e.Unwrap())
+	}
+	return nil
+}
+
+// Keep the unknown-commit identity visible to the SQL protocol even when an
+// earlier joined cleanup error has a different MatrixOne error code.
+func sqlTaskUnknownCommitResult(err error, unknown *moerr.Error) error {
+	var identity *moerr.Error
+	if errors.As(err, &identity) && identity != nil && identity.ErrorCode() == moerr.ErrTxnUnknown {
+		return err
+	}
+	return &sqlTaskUnknownCommitError{error: err, unknown: unknown}
+}
+
+type sqlTaskUnknownCommitError struct {
+	error
+	unknown *moerr.Error
+}
+
+func (e *sqlTaskUnknownCommitError) Unwrap() error { return e.error }
+
+func (e *sqlTaskUnknownCommitError) As(target any) bool {
+	if out, ok := target.(**moerr.Error); ok {
+		*out = e.unknown
+		return true
+	}
+	return false
 }
 
 func attachSQLTaskContext(ctx context.Context, sqlTask SQLTask) context.Context {
@@ -221,19 +489,20 @@ func execSQLTaskStatement(ctx context.Context, exec ie.InternalExecutor, sql str
 	return ie.InternalExecStatus{}, exec.Exec(ctx, sql, opts)
 }
 
-func (e *SQLTaskExecutor) finishRun(ctx context.Context, run *SQLTaskRun, execErr error, timedOut bool) (int, error) {
-	run.FinishedAt = time.Now()
-	run.DurationSeconds = run.FinishedAt.Sub(run.StartedAt).Seconds()
+func freezeSQLTaskRun(run *SQLTaskRun, execErr error, timedOut bool) {
+	now := time.Now()
+	run.FinishedAt = now.Truncate(time.Second)
+	run.DurationSeconds = now.Sub(run.StartedAt).Seconds()
 	if execErr != nil {
-		run.ErrorMessage = execErr.Error()
-		if moErr, ok := execErr.(*moerr.Error); ok {
+		run.ErrorMessage = util.Abbreviate(execErr.Error(), 4093)
+		var moErr *moerr.Error
+		if errors.As(execErr, &moErr) {
 			run.ErrorCode = int(moErr.ErrorCode())
 		}
 	}
 	if timedOut {
 		run.Status = SQLTaskStatusTimeout
 	}
-	return e.taskService.GetStorage().CompleteSQLTaskRun(ctx, *run)
 }
 
 func toBool(value any) (bool, error) {
