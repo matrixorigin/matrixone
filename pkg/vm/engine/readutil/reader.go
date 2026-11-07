@@ -1032,7 +1032,7 @@ func (r *reader) read(
 	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
-		policy |= fileservice.SkipMemoryCacheWrites
+		policy |= fileservice.MemoryCacheNoEvict
 	}
 	r.readBlockCnt++
 
