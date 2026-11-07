@@ -54,6 +54,9 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	if hashBuild.DirectInput && (!hashBuild.NeedBatches || hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec != nil) {
 		return moerr.NewInternalError(proc.Ctx, "invalid direct hash build")
 	}
+	// Validate before touching the previous generation. A valid reuse ends any
+	// unpublished named-file ownership before resetting generation fields.
+	hashBuild.cleanupSpillFiles(proc)
 	// A HashBuild can be reused after Reset.  The terminal gate belongs to the
 	// new execution generation; the old MessageBoard is reset by the pipeline
 	// before this generation's consumers are started.
@@ -275,8 +278,7 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 				BudgetRef: ctr.hashmapBuilder.budget,
 			}
 			if err := jm.SetSpillBuildPayload(payload); err != nil {
-				_ = payload.Close()
-				return moerr.NewInternalError(proc.Ctx, err.Error())
+				return errors.Join(moerr.NewInternalError(proc.Ctx, err.Error()), payload.Close())
 			}
 			ctr.spillBundle = nil
 		}

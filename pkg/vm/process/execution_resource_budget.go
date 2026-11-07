@@ -90,7 +90,7 @@ type executionResourceBudgetObserver func(amount uint64)
 
 func newExecutionResourceBudgetObservers() map[executionResourceBudgetMetricKey]executionResourceBudgetObserver {
 	components := [...]string{"memory", "recovery_memory", "spill_disk", "spill_fd"}
-	events := [...]string{"reserve", "release", "reconcile", "reject"}
+	events := [...]string{"reserve", "release", "reconcile", "reject", "abandon"}
 	scopes := [...]string{"query", "cn"}
 	observers := make(map[executionResourceBudgetMetricKey]executionResourceBudgetObserver, len(components)*len(events)*len(scopes))
 	for _, component := range components {
@@ -1654,6 +1654,7 @@ type executionSpillReservationCore struct {
 const (
 	executionSpillReservationActive uint32 = iota
 	executionSpillReservationReleased
+	executionSpillReservationAbandoned
 )
 
 // ExecutionSpillDiskReservation owns query and CN spill-disk bytes.
@@ -1799,6 +1800,24 @@ func (g *ExecutionResourceGeneration) ReserveSpillFD(size uint64) (*ExecutionSpi
 	observeExecutionResourceBudget("spill_fd", "reserve", "query", size)
 	observeExecutionResourceBudget("spill_fd", "reserve", "cn", size)
 	return &ExecutionSpillFDReservation{budget: b, generation: g, core: &executionSpillReservationCore{size: size}}, nil
+}
+
+// Abandon terminates a surviving file's token without refunding its charge.
+// Only a fenced scratch-root failure may choose this outcome. Shared core state
+// prevents copied tokens from refunding later. No root/queue retains the query;
+// recovery requires fresh process accounting after physical startup cleanup.
+func (r *ExecutionSpillDiskReservation) Abandon() bool {
+	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
+		return false
+	}
+	r.budget.mu.Lock()
+	defer r.budget.mu.Unlock()
+	if !r.core.state.CompareAndSwap(executionSpillReservationActive, executionSpillReservationAbandoned) {
+		return false
+	}
+	observeExecutionResourceBudget("spill_disk", "abandon", "query", r.core.size)
+	observeExecutionResourceBudget("spill_disk", "abandon", "cn", r.core.size)
+	return true
 }
 
 func (r *ExecutionSpillDiskReservation) Release() bool {
