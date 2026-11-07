@@ -44,6 +44,7 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -279,7 +280,7 @@ func integerDivUnsignedMixedTypes(left, right types.Type) (types.Type, types.Typ
 	}
 
 	switch {
-	case right.Oid.IsSignedInt():
+	case right.Oid.IsSignedInt() || right.Oid == types.T_year:
 		return types.T_uint64.ToType(), types.T_int64.ToType(), true
 	case right.Oid.IsDecimal():
 		target := types.T_decimal256.ToType()
@@ -293,13 +294,22 @@ func integerDivUnsignedMixedTypes(left, right types.Type) (types.Type, types.Typ
 // integerDivExactTypes selects lossless physical domains for mixed integer
 // operands. DIV must not use the generic floating-point coercion table for
 // integer inputs because that can round BIGINT values before division.
+// YEAR stores a small signed integer, so it joins the signed-integer family
+// here: integral x YEAR, YEAR x integral and YEAR x YEAR resolve to
+// (INT64, INT64) like other exact signed pairs instead of falling through to
+// the rule-2 FLOAT64 corridor that rounds BIGINT dividends before division
+// (#31902). Unsigned-mixed combinations still belong to
+// integerDivUnsignedMixedTypes and fixedTypeCastRule2; unsigned x YEAR pairs
+// join the mixed/exact families here, away from the FLOAT64 corridor.
 func integerDivExactTypes(left, right types.Type) (types.Type, types.Type, bool) {
+	leftSigned := left.Oid.IsSignedInt() || left.Oid == types.T_year
+	rightSigned := right.Oid.IsSignedInt() || right.Oid == types.T_year
 	switch {
 	case left.Oid.IsUnsignedInt() && right.Oid.IsUnsignedInt():
 		return types.T_uint64.ToType(), types.T_uint64.ToType(), true
-	case left.Oid.IsSignedInt() && right.Oid.IsSignedInt():
+	case leftSigned && rightSigned:
 		return types.T_int64.ToType(), types.T_int64.ToType(), true
-	case left.Oid.IsSignedInt() && right.Oid.IsUnsignedInt():
+	case leftSigned && right.Oid.IsUnsignedInt():
 		return types.T_decimal256.ToType(), types.T_decimal256.ToType(), true
 	default:
 		return types.Type{}, types.Type{}, false
@@ -464,6 +474,10 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32], selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64], selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, int64](parameters, result, proc, length, func(v1, v2 types.MoYear) int64 {
+			return int64(v1) + int64(v2)
+		}, selectList)
 	}
 	panic("unreached code")
 }

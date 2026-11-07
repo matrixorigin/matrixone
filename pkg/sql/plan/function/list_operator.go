@@ -1712,6 +1712,9 @@ var supportedOperators = []FuncNew{
 					if parameters[0].Oid.IsDecimal() {
 						return decimalAddSubReturnType(parameters)
 					}
+					if parameters[0].Oid == types.T_year {
+						return types.T_int64.ToType()
+					}
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
