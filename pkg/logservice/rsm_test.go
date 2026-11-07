@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -377,4 +378,100 @@ func TestRequiredLsnUpdate(t *testing.T) {
 	assert.Equal(t, sm.Result{Value: 300}, result)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(300), tsm.state.RequiredLsn)
+}
+
+func TestRequiredLsnOwnerFencesResetAndDelayedAdvance(t *testing.T) {
+	s := newStateMachine(1, 2).(*stateMachine)
+	term := uint64(1)
+	s.entryTerm = func(uint64) (uint64, error) { return term, nil }
+	index := uint64(1)
+	apply := func(cmd []byte) sm.Result {
+		index++
+		result, err := s.Update(sm.Entry{Index: index, Cmd: cmd})
+		assert.NoError(t, err)
+		return result
+	}
+
+	assert.Zero(t, apply(getSetRequiredLsnCmd(100)).Value)
+	assert.Zero(t, apply(getClaimRequiredLsnCmd(100, 1, 11, 1, 2)).Value)
+	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(120, 100, 2, 11)).Value)
+	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 100, 2, 11)).Value)
+	assert.Equal(t, uint64(120), s.state.RequiredLsn)
+	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 120, 3, 11)).Value)
+	assert.Equal(t, uint64(0), s.state.RequiredLsn)
+	term = 2
+	assert.Zero(t, apply(getClaimRequiredLsnCmd(0, 4, 22, 2, 3)).Value)
+	assert.NotZero(t, apply(getClaimRequiredLsnCmd(0, 5, 11, 1, 2)).Value)
+	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(500, 0, 4, 11)).Value)
+	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(500, 0, 5, 11)).Value)
+	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(1, 0, 5, 22)).Value)
+	assert.NotEmpty(t, apply(getSetRequiredLsnCmd(500)).Data)
+	assert.Equal(t, uint64(1), s.state.RequiredLsn)
+
+	var buf bytes.Buffer
+	assert.NoError(t, s.SaveSnapshot(&buf, nil, nil))
+	restored := newStateMachine(1, 3).(*stateMachine)
+	assert.NoError(t, restored.RecoverFromSnapshot(&buf, nil, nil))
+	assert.Equal(t, s.state.RequiredLsn, restored.state.RequiredLsn)
+	assert.Equal(t, s.state.RequiredLsnRevision, restored.state.RequiredLsnRevision)
+	assert.Equal(t, s.state.RequiredLsnOwner, restored.state.RequiredLsnOwner)
+	assert.Equal(t, s.state.RequiredLsnLeaderTerm, restored.state.RequiredLsnLeaderTerm)
+}
+
+func TestRequiredLsnRejectsStaleOwnerAtCommittedTerm(t *testing.T) {
+	s := newStateMachine(1, 2).(*stateMachine)
+	term := uint64(1)
+	s.entryTerm = func(uint64) (uint64, error) { return term, nil }
+	index := uint64(1)
+	apply := func(cmd []byte) sm.Result {
+		index++
+		result, err := s.Update(sm.Entry{Index: index, Cmd: cmd})
+		require.NoError(t, err)
+		return result
+	}
+	require.Zero(t, apply(getClaimRequiredLsnCmd(0, 0, 11, 1, 2)).Value)
+	require.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(100, 0, 1, 11)).Value)
+	term = 2 // election after the RPC's leader check but before Raft commit
+	require.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 100, 2, 11)).Value)
+	require.NotZero(t, apply(getClaimRequiredLsnCmd(100, 2, 12, 1, 2)).Value)
+	require.Equal(t, uint64(100), s.state.RequiredLsn)
+	require.Zero(t, apply(getClaimRequiredLsnCmd(100, 2, 22, 2, 3)).Value)
+	require.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 100, 3, 22)).Value)
+	require.Zero(t, s.state.RequiredLsn)
+}
+
+func TestRequiredLsnTermLookupFailureDoesNotApplyClaim(t *testing.T) {
+	s := newStateMachine(1, 2).(*stateMachine)
+	s.entryTerm = func(uint64) (uint64, error) { return 0, errors.New("log reader unavailable") }
+	_, err := s.Update(sm.Entry{Index: 2, Cmd: getClaimRequiredLsnCmd(0, 0, 11, 1, 2)})
+	require.ErrorContains(t, err, "log reader unavailable")
+	require.Zero(t, s.state.RequiredLsnOwner)
+}
+
+func TestWALTruncatePreservesCheckpointedDSN(t *testing.T) {
+	s := newStateMachine(1, 2).(*stateMachine)
+	index := uint64(100)
+	apply := func(cmd []byte) sm.Result {
+		index++
+		result, err := s.Update(sm.Entry{Index: index, Cmd: cmd})
+		assert.NoError(t, err)
+		return result
+	}
+	assert.NotZero(t, apply(getWALTruncateCmd(0, 0)).Value)
+	assert.NotZero(t, apply(getWALTruncateCmd(1, 0)).Value)
+	assert.NotZero(t, apply(getWALTruncateCmd(index+1, 7)).Value)
+	assert.Zero(t, apply(getWALTruncateCmd(10, 7)).Value)
+	assert.NotZero(t, apply(getWALTruncateCmd(9, 8)).Value)
+	assert.NotZero(t, apply(getWALTruncateCmd(11, 6)).Value)
+	assert.Equal(t, walTruncateState{10, 7}, walTruncateState{s.state.TruncatedLsn, s.state.CheckpointedDSN})
+	assert.Zero(t, apply(getWALTruncateCmd(11, 8)).Value)
+	assert.NotZero(t, apply(getSetTruncatedLsnCmd(12)).Value)
+	assert.Equal(t, uint64(8), s.state.CheckpointedDSN)
+
+	var buf bytes.Buffer
+	assert.NoError(t, s.SaveSnapshot(&buf, nil, nil))
+	restored := newStateMachine(1, 3).(*stateMachine)
+	assert.NoError(t, restored.RecoverFromSnapshot(&buf, nil, nil))
+	assert.Equal(t, walTruncateState{11, 8},
+		walTruncateState{restored.state.TruncatedLsn, restored.state.CheckpointedDSN})
 }
