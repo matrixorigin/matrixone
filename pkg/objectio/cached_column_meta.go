@@ -42,8 +42,14 @@ func TryCachedColumnMeta(ctx context.Context, location Location, seq uint16, max
 	if ctx == nil || len(location) != LocationLen || location.IsEmpty() || maxBlocks <= 0 || context.Cause(ctx) != nil {
 		return CachedColumnMeta{}, false
 	}
-	raw, ok := metaCache.TryGet(ctx, encodeCacheKey(*location.ShortName(), cacheKeyTypeMeta))
-	if !ok || len(raw) < IOEntryHeaderSize+metaHeaderLen {
+	raw, _, ok, _ := metaCache.TryGet(encodeCacheKey(*location.ShortName(), cacheKeyTypeMeta), nil)
+	if !ok {
+		return CachedColumnMeta{}, false
+	}
+	// metaBytes is Go-managed and Release is a no-op; the view's slice keeps
+	// its immutable backing alive even after the cache evicts the entry.
+	defer raw.Release()
+	if len(raw) < IOEntryHeaderSize+metaHeaderLen {
 		return CachedColumnMeta{}, false
 	}
 	header := DecodeIOEntryHeader(raw)
