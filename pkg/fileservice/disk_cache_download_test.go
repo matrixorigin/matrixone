@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -231,4 +232,67 @@ func TestDiskCacheReadWaitsWhenItWouldDuplicateTheDownload(t *testing.T) {
 	require.False(t, vec.downloadDeclined)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
+}
+
+// Bytes a read takes from a download count as read from the cached file once the
+// download publishes it.
+func TestDiskCacheDownloadReadsCountAsCachedFileReads(t *testing.T) {
+	rangeReadsCost(t, time.Hour)
+	cache, pw, filled := downloading(t)
+	_, err := pw.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.True(t, waitVector(t, readRange(context.Background(), cache, 1, 3)).Entries[0].done)
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+
+	cache.preloads.mu.Lock()
+	served, ok := cache.preloads.served[cache.pathForFile("obj")]
+	cache.preloads.mu.Unlock()
+	require.True(t, ok)
+	require.Equal(t, int64(3), served)
+}
+
+// Caching content already in memory is not a download: it does not feed the download
+// rate, while a fill from a reader does.
+func TestDiskCacheContentFillIsNotADownload(t *testing.T) {
+	ctx := context.Background()
+	rate0 := downloadRates.bytesPerS
+	t.Cleanup(func() { downloadRates.bytesPerS = rate0 })
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(64<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	content := make([]byte, 4<<20)
+
+	downloadRates.bytesPerS = 1
+	require.NoError(t, cache.setFileContent(ctx, "content", content, false))
+	require.Equal(t, float64(1), downloadRates.bytesPerS)
+
+	require.NoError(t, cache.SetFile(ctx, "download", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(content)), nil
+	}))
+	require.NotEqual(t, float64(1), downloadRates.bytesPerS)
+}
+
+// A range read is timed only when the file service drains it itself.
+func TestS3FSRangeReadCostTimesOnlyDrainedReads(t *testing.T) {
+	ctx := context.Background()
+	latency0, bytesPerS0 := rangeReadCosts.latency, rangeReadCosts.bytesPerS
+	t.Cleanup(func() { rangeReadCosts.latency, rangeReadCosts.bytesPerS = latency0, bytesPerS0 })
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()},
+		DisabledCacheConfig, nil, false, false)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: 1 << 10, Data: make([]byte, 1<<10)}}}))
+	const sentinel = 1e6
+	rangeReadCosts.latency = sentinel
+
+	var streamed io.ReadCloser
+	require.NoError(t, fs.Read(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100, ReadCloserForRead: &streamed}}}))
+	_, err = io.ReadAll(streamed)
+	require.NoError(t, err)
+	require.NoError(t, streamed.Close())
+	require.Equal(t, float64(sentinel), rangeReadCosts.latency, "a read streamed to the caller")
+
+	require.NoError(t, fs.Read(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1, Size: 100}}}))
+	require.NotEqual(t, float64(sentinel), rangeReadCosts.latency, "a read the file service drains")
 }

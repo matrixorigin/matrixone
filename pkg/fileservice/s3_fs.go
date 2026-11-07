@@ -676,9 +676,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	if writeDiskCache {
 		content := diskCacheBuf.Bytes()
 		diskCacheStart := time.Now()
-		if err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(content)), nil
-		}, s.asyncUpdate); err != nil {
+		if err := s.diskCache.setFileContent(ctx, vector.FilePath, content, s.asyncUpdate); err != nil {
 			return 0, err
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
@@ -1128,6 +1126,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		readFullObject = false
 	}
 
+	// A range read is timed only when this function drains it.
+	timeRangeReads := true
+	for i := range vector.Entries {
+		if vector.Entries[i].WriterForRead != nil || vector.Entries[i].ReadCloserForRead != nil {
+			timeRangeReads = false
+			break
+		}
+	}
+
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
 		LogEvent(ctx, str_get_reader_begin)
@@ -1152,8 +1159,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			closeFunc: func() error {
 				LogEvent(ctx, str_reader_close)
 				metric.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
-				if max != nil {
-					rangeReadCosts.observe(bytesCounter.Load(), time.Since(t0))
+				if max != nil && timeRangeReads {
+					size := *max
+					if min != nil {
+						size -= *min
+					}
+					if n := bytesCounter.Load(); n == size {
+						rangeReadCosts.observe(n, time.Since(t0))
+					}
 				}
 				return r.Close()
 			},
@@ -1379,9 +1392,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		!vector.Policy.Any(SkipDiskCacheWrites) {
 		t0 := time.Now()
 		LogEvent(ctx, str_disk_cache_setfile_begin)
-		err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(contentBytes)), nil
-		}, s.asyncUpdate)
+		err := s.diskCache.setFileContent(ctx, vector.FilePath, contentBytes, s.asyncUpdate)
 		LogEvent(ctx, str_disk_cache_setfile_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 		if err != nil {
@@ -1490,10 +1501,17 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	defer func() { metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds()) }()
 
 	// The download outlives ctx once the reader returned in async mode; until then ctx
-	// cancels it.
+	// cancels it. It keeps ctx's deadline and ends when the disk cache closes.
 	fillCtx, cancelFill := context.WithCancel(context.WithoutCancel(ctx))
+	if deadline, ok := ctx.Deadline(); ok {
+		fillCtx, cancelFill = context.WithDeadline(fillCtx, deadline)
+	}
 	stopCancelFill := context.AfterFunc(ctx, cancelFill)
 	defer stopCancelFill()
+	stopOnClose := func() bool { return false }
+	if closing := s.diskCache.async.ctx; closing != nil {
+		stopOnClose = context.AfterFunc(closing, cancelFill)
+	}
 	diskPath := s.diskCache.pathForFile(file)
 	started := make(chan *objectDownload, 1)
 	setDone := make(chan error, 1)
@@ -1517,6 +1535,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		if !setFinished {
 			setErr, setFinished = <-setDone, true
 		}
+		stopOnClose()
 		cancelFill()
 		return setErr
 	}
@@ -1560,7 +1579,10 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		default:
 		}
 	}
-	if err := waitSet(); err != nil {
+	if err := waitSet(); err != nil && !(captured && s.asyncUpdate) {
+		return true, err
+	}
+	if err := ctx.Err(); err != nil {
 		return true, err
 	}
 	if !captured {

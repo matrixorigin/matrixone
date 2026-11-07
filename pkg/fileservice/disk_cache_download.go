@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -38,6 +39,9 @@ type objectDownload struct {
 	file     *os.File // closed once the download is retired and no reader holds it
 	readers  int
 	retired  bool
+	// served is the bytes readers took from the download, counted as read from the
+	// cached file once it is published.
+	served atomic.Int64
 }
 
 func newObjectDownload(tempPath string) *objectDownload {
@@ -191,6 +195,9 @@ func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
 	}
 	d.downloads.mu.Unlock()
 	o.retire()
+	if n := o.served.Load(); n > 0 {
+		d.preloads.read(diskPath, n)
+	}
 }
 
 func (d *DiskCache) download(diskPath string) *objectDownload {
@@ -238,6 +245,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}
+	o.served.Add(entry.Size)
 	return true, true, nil
 }
 

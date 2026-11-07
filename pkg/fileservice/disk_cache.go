@@ -1417,13 +1417,36 @@ func (d *DiskCache) setFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 ) error {
+	return d.fillFile(ctx, filePath, openReader, asyncFinalize, true)
+}
+
+// setFileContent caches content as the whole file of filePath without tracking it as a
+// download.
+func (d *DiskCache) setFileContent(
+	ctx context.Context,
+	filePath string,
+	content []byte,
+	asyncFinalize bool,
+) error {
+	return d.fillFile(ctx, filePath, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(content)), nil
+	}, asyncFinalize, false)
+}
+
+func (d *DiskCache) fillFile(
+	ctx context.Context,
+	filePath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	trackDownload bool,
+) error {
 	path, err := ParsePath(filePath)
 	if err != nil {
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
 	d.wholeFills.Add(1)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, true)
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, trackDownload)
 	d.wholeFills.Add(-1)
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
