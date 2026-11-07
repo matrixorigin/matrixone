@@ -1,8 +1,7 @@
 # Ordered pagination: one-shot scan cutoff
 
-Status: design proposed for review before implementation
+Status: approved for implementation
 Issue: [#32061](https://github.com/matrixorigin/matrixone/issues/32061)
-Implementation: a PR will link the approved revision of this document.
 Design baseline: MatrixOne `ee2ba4185dd5b0a3c1678ab8f188a48ee81efb64`.
 
 ## Problem and goals
@@ -29,6 +28,8 @@ The planner's existing Top-to-scan lineage owns the association between the firs
 
 `compileSort` already owns LIMIT/OFFSET evaluation and the choice between small resident Top and external Order. Reuse a previously proven constant result, and generalize the existing prepared-pagination bound parser rather than evaluating a second expression. Parameter bounds must be derived freshly for each execution, use checked decimal arithmetic and every signed/unsigned source-domain limit, and never suppress the existing error or conversion path. NULL, zero, negative, noncanonical, overflow, unknown conversion or unbound values fall back. Preserve the existing resident Top threshold and existing Top behavior.
 
+Prepared TP pipelines can be cached by parameter category and reused for different values. They therefore retain the existing path; AP prepared executions compile statement-owned physical scopes and may derive a fresh bound on each execution. Supporting cached TP plans later requires binding the hint during each execution, not retaining the first K in the reusable operator.
+
 For an admitted external `Order`, carry K and the existing message tag as an optional execution hint to the exact scan scope. Construct a fresh scope-owned summary before its workers start and share it only among `Order` clones for that scan generation. A single-worker scope gets the same semantics. Readers keep the existing `SetFilterZM` and zone-map pruning path. Arrange a single tag/broadcast that is received by all associated workers without disturbing the existing per-worker `Top` tags; prove unique producer and matching receivers. Initialize ASC/DESC direction before a reader can consume a cutoff. Do not mutate shared range lists or cache a cutoff in the reusable logical plan.
 
 For multiple CNs, each actual scan scope has its own summary, tag receivers and snapshot-bound witnesses. A remote `Order` must receive the optional checked K/tag through existing compatible `Instruction` fields; decoding must validate the hint and cannot make a query depend on it. `TopValueMessage` remains CN-local and is never serialized. Unknown, combined, partitioned, sharded or otherwise unproved source topology falls back. The current repository supports shutdown upgrades; this does not change persisted formats. Remote enablement is conditional on round-trip, remote-reader, cancellation/failure, and multi-CN snapshot tests, including cases with fewer than K candidates in one CN.
@@ -52,5 +53,3 @@ A gate-only `Top(K)` change retains K references per worker and does not help wh
 - Lifecycle and race tests cover one/many workers, skew, each worker < K but scope >= K, scope < K, concurrent publish/board close, error, cancellation, partial construction, reset/retry and prepared reuse. Validate cleanup after the last worker, not just no panic.
 - Local and distributed SQL tests cover both coordinator placements, independently scoped CNs, committed/in-memory/workspace deletes, old snapshots and compaction, remote tombstones and unknown blocks. Include remote encode/decode and actual local/remote reader consumers. Fault injection must prove failure propagates rather than returning a partial page.
 - Derive final incremental SCA and UT/race scope from the full delivery diff. Run focused and owning-package checks, affected consumers and public-path tests with terminal statuses; record selection, toolchain and source fingerprint. Compare paired performance with identical data and config, recording latency distribution, rows/blocks/bytes, allocations, peak memory, spill and metadata I/O. A loaded host's exploratory samples are not release-quality latency proof.
-
-Pre-design evidence: local experiments with an intentionally nonshipping fixed-K/int32/tag prototype showed lower real `Order` input on PK and correlated unindexed columns, no pruning on random values, and exact results on one and two CNs; two-CN old/new snapshots and workspace deletes were also checked. An exploratory 12-pair loaded-host run showed potential benefit and a noisy random-key control. These experiments support feasibility only: they do not prove production admission, type handling, ownership, failure, remote encoding, or final performance. The prototype must not be copied into the production implementation.

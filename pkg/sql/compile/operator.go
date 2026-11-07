@@ -302,6 +302,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*order.Order)
 		op := order.NewArgument()
 		op.OrderBySpec = t.OrderBySpec
+		op.ScanCutoffLimit = t.ScanCutoffLimit
+		op.ScanCutoffTag = t.ScanCutoffTag
+		op.ScanCutoff = t.ScanCutoff
 		op.SetInfo(&info)
 		return op
 	case vm.Product:

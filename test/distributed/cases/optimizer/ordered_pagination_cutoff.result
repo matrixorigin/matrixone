@@ -1,0 +1,213 @@
+drop database if exists ordered_pagination_cutoff;
+create database ordered_pagination_cutoff;
+use ordered_pagination_cutoff;
+set @saved_optimizer_hints = @@optimizer_hints;
+create table pages (id int primary key, k int not null, nullable_k int, b varbinary(64) not null,
+d decimal(12,2) not null, dt datetime not null);
+insert into pages select result, (result-1) div 4, if(result%17=0, null, result),
+concat(lpad(result, 8, '0'), repeat('x', 40)), cast(result as decimal(12,2)),
+date_add('2020-01-01 00:00:00', interval result second) from generate_series(1, 20000) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.pages');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.pages)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into pages select result, (result-1) div 4, if(result%17=0, null, result),
+concat(lpad(result, 8, '0'), repeat('x', 40)), cast(result as decimal(12,2)),
+date_add('2020-01-01 00:00:00', interval result second) from generate_series(20001, 40000) g;
+select mo_ctl('dn', 'flush', 'ordered_pagination_cutoff.pages');
+➤ mo_ctl(dn, flush, ordered_pagination_cutoff.pages)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set session optimizer_hints = 'execType=2';
+select id, k from pages order by k, id desc limit 5 offset 17000;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+17004  ¦  4250  𝄀
+17003  ¦  4250  𝄀
+17002  ¦  4250  𝄀
+17001  ¦  4250  𝄀
+17008  ¦  4251
+select id, k from pages order by k desc, id limit 5 offset 17000;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+22997  ¦  5749  𝄀
+22998  ¦  5749  𝄀
+22999  ¦  5749  𝄀
+23000  ¦  5749  𝄀
+22993  ¦  5748
+select id from pages where k < 8000 order by id desc limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+15000  𝄀
+14999  𝄀
+14998  𝄀
+14997  𝄀
+14996
+select id from pages order by b desc limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+23000  𝄀
+22999  𝄀
+22998  𝄀
+22997  𝄀
+22996
+select id from pages order by d desc limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+23000  𝄀
+22999  𝄀
+22998  𝄀
+22997  𝄀
+22996
+select id from pages order by dt limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003  𝄀
+17004  𝄀
+17005
+select id from pages where id % 2 = 0 order by id limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+34002  𝄀
+34004  𝄀
+34006  𝄀
+34008  𝄀
+34010
+select id, nullable_k from pages order by nullable_k, id desc limit 5 offset 17000;
+➤ id[4,32,0]  ¦  nullable_k[4,32,0]  𝄀
+15564  ¦  15564  𝄀
+15565  ¦  15565  𝄀
+15566  ¦  15566  𝄀
+15567  ¦  15567  𝄀
+15568  ¦  15568
+select id from pages order by id limit 5 offset 50000;
+➤ id[4,32,0]
+select sql_calc_found_rows id from pages order by id limit 3 offset 17000;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003
+select found_rows();
+➤ found_rows()[-5,64,0]  𝄀
+40000
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select id, k from pages order by k, id desc limit 5 offset 17000;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+17004  ¦  4250  𝄀
+17003  ¦  4250  𝄀
+17002  ¦  4250  𝄀
+17001  ¦  4250  𝄀
+17008  ¦  4251
+select id, k from pages order by k desc, id limit 5 offset 17000;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+22997  ¦  5749  𝄀
+22998  ¦  5749  𝄀
+22999  ¦  5749  𝄀
+23000  ¦  5749  𝄀
+22993  ¦  5748
+select id from pages where k < 8000 order by id desc limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+15000  𝄀
+14999  𝄀
+14998  𝄀
+14997  𝄀
+14996
+select id from pages order by b desc limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+23000  𝄀
+22999  𝄀
+22998  𝄀
+22997  𝄀
+22996
+select id from pages order by d desc limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+23000  𝄀
+22999  𝄀
+22998  𝄀
+22997  𝄀
+22996
+select id from pages order by dt limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003  𝄀
+17004  𝄀
+17005
+select id from pages where id % 2 = 0 order by id limit 5 offset 17000;
+➤ id[4,32,0]  𝄀
+34002  𝄀
+34004  𝄀
+34006  𝄀
+34008  𝄀
+34010
+select id, nullable_k from pages order by nullable_k, id desc limit 5 offset 17000;
+➤ id[4,32,0]  ¦  nullable_k[4,32,0]  𝄀
+15564  ¦  15564  𝄀
+15565  ¦  15565  𝄀
+15566  ¦  15566  𝄀
+15567  ¦  15567  𝄀
+15568  ¦  15568
+select id from pages order by id limit 5 offset 50000;
+➤ id[4,32,0]
+select sql_calc_found_rows id from pages order by id limit 3 offset 17000;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003
+select found_rows();
+➤ found_rows()[-5,64,0]  𝄀
+40000
+set session optimizer_hints = 'execType=1';
+prepare page_stmt from 'select id from pages order by id limit ? offset ?';
+set @lim = 3;
+set @off = 17000;
+execute page_stmt using @lim, @off;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003
+set @off = 25000;
+execute page_stmt using @lim, @off;
+➤ id[4,32,0]  𝄀
+25001  𝄀
+25002  𝄀
+25003
+set @off = 17000;
+execute page_stmt using @lim, @off;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003
+deallocate prepare page_stmt;
+set session optimizer_hints = 'execType=2';
+prepare page_stmt from 'select id from pages order by id limit ? offset ?';
+set @off = 17000;
+execute page_stmt using @lim, @off;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003
+set @off = 25000;
+execute page_stmt using @lim, @off;
+➤ id[4,32,0]  𝄀
+25001  𝄀
+25002  𝄀
+25003
+set @off = 17000;
+execute page_stmt using @lim, @off;
+➤ id[4,32,0]  𝄀
+17001  𝄀
+17002  𝄀
+17003
+deallocate prepare page_stmt;
+set session optimizer_hints = @saved_optimizer_hints;
+drop database ordered_pagination_cutoff;
