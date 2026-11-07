@@ -57,7 +57,7 @@ func TestInsertValuesExplicitBinaryCastKeepsConversionContract(t *testing.T) {
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return p
 	}
@@ -142,7 +142,7 @@ func TestInsertValuesExplicitNumericCastKeepsLegacyLiteralCoercion(t *testing.T)
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return p
 	}
@@ -199,7 +199,7 @@ func TestInsertValuesExplicitTextCastProtectsNestedBinaryLiterals(t *testing.T) 
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		var valueExpr *planpb.Expr
 		for _, n := range p.GetQuery().GetNodes() {
@@ -263,7 +263,7 @@ func TestInsertValuesExplicitBinaryCastProtectsNumericDestination(t *testing.T) 
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		var valueExpr *planpb.Expr
 		for _, n := range p.GetQuery().GetNodes() {
@@ -353,7 +353,10 @@ func (c *doubleDeptMockContext) retypeDeptno(tbl *planpb.TableDef) {
 	tbl.Cols[0].Typ = planpb.Type{Id: int32(doubleTyp.Oid), Width: doubleTyp.Width, Scale: doubleTyp.Scale}
 }
 
-func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*planpb.ObjectRef, *planpb.TableDef, error) {
+// The wrapper can change the descriptor, so neither resolver route publishes
+// an underlying borrowed relation as evidence for that descriptor.
+func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, outputs ...*plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	plan2.PrepareTableResolution(outputs...)
 	obj, tbl, err := c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
 	if err == nil && strings.EqualFold(tableName, "dept") {
 		c.retypeDeptno(tbl)
@@ -361,7 +364,8 @@ func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapsho
 	return obj, tbl, err
 }
 
-func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot) (*planpb.ObjectRef, *planpb.TableDef, error) {
+func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, outputs ...*plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	plan2.PrepareTableResolution(outputs...)
 	obj, tbl, err := c.MockCompilerContext.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot)
 	if err == nil && strings.EqualFold(tableName, "dept") {
 		c.retypeDeptno(tbl)
@@ -400,7 +404,7 @@ func TestInsertValuesNestedBinaryPreservingCastKeepsConversionContract(t *testin
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		var valueExpr *planpb.Expr
 		for _, n := range p.GetQuery().GetNodes() {
