@@ -450,7 +450,7 @@ func TestLoadObjectMetaChecksCachedAndLoadedHeader(t *testing.T) {
 					return
 				}
 				if cached {
-					metaCache.Set(ctx, encodeCacheKey(*name.Short(), cacheKeyTypeMeta), raw, int64(len(raw)))
+					metaCache.Set(encodeCacheKey(*name.Short(), cacheKeyTypeMeta), raw, int64(len(raw)))
 				} else {
 					require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{Data: raw, Size: int64(len(raw))}}}))
 				}

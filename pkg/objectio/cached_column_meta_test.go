@@ -53,10 +53,10 @@ func TestCachedColumnMetaBoundsAndCopies(t *testing.T) {
 	ctx := t.Context()
 	location, raw := cachedColumnFixture(t)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeMeta)
-	t.Cleanup(func() { metaCache.Delete(ctx, key) })
+	t.Cleanup(func() { metaCache.Delete(key) })
 	_, ok := TryCachedColumnMeta(ctx, location, 0, 2)
 	require.False(t, ok, "a miss never enters a loader")
-	metaCache.Set(ctx, key, raw, int64(len(raw)))
+	metaCache.Set(key, raw, int64(len(raw)))
 	view, ok := TryCachedColumnMeta(ctx, location, 0, 2)
 	require.True(t, ok)
 	require.EqualValues(t, 2, view.BlockCount())
@@ -87,11 +87,17 @@ func TestCachedColumnMetaBoundsAndCopies(t *testing.T) {
 		entered, release := make(chan struct{}), make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
-			_, _, _, err := metaCache.GetWithAdmission(ctx, key, func([]byte, int64) (func(), error) {
+			value, releaseAdmission, ok, err := metaCache.Get(key, func(int64) (func(), error) {
 				close(entered)
 				<-release
 				return nil, nil
 			})
+			if ok {
+				value.Release()
+			}
+			if releaseAdmission != nil {
+				releaseAdmission()
+			}
 			done <- err
 		}()
 		t.Cleanup(func() { close(release); require.NoError(t, <-done) })
@@ -107,8 +113,8 @@ func TestCachedColumnMetaBoundsAndCopies(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 100 {
-			metaCache.Delete(ctx, key)
-			metaCache.Set(ctx, key, raw, int64(len(raw)))
+			metaCache.Delete(key)
+			metaCache.Set(key, raw, int64(len(raw)))
 		}
 	}()
 	for range 100 {
@@ -152,8 +158,8 @@ func TestCachedColumnMetaDeclinesIncompleteMetadata(t *testing.T) {
 				data.BlockHeader().ShortName()[0] ^= 255
 			}
 			key := encodeCacheKey(*location.ShortName(), cacheKeyTypeMeta)
-			metaCache.Set(t.Context(), key, raw, int64(len(raw)))
-			t.Cleanup(func() { metaCache.Delete(t.Context(), key) })
+			metaCache.Set(key, raw, int64(len(raw)))
+			t.Cleanup(func() { metaCache.Delete(key) })
 			view, ok := TryCachedColumnMeta(t.Context(), location, 0, 2)
 			if ok {
 				_, ok = view.Object()
