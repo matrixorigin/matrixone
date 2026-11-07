@@ -322,7 +322,7 @@ func (zm ZM) FastContainsAny(keys *vector.Vector) (ok bool) {
 	var op containers.ItOpT[[]byte]
 	if zm.IsString() {
 		op = func(key []byte, isNull bool, _ int) (err error) {
-			if isNull || zm.containsString(key) {
+			if isNull || zm.containsString(key, false) {
 				err = moerr.GetOkExpectedEOB()
 				ok = true
 			}
@@ -349,9 +349,11 @@ func (zm ZM) containsBytes(k []byte) bool {
 		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
 }
 
-func (zm ZM) containsString(k []byte) bool {
+// byteEqualityProved lets a caller use the minimum even when the maximum is
+// ambiguous. Other callers retain the whole zone map in that case.
+func (zm ZM) containsString(k []byte, byteEqualityProved bool) bool {
 	if zm.MayHaveUnboundedByteMax() {
-		return true
+		return !byteEqualityProved || compute.CompareBytes(k, zm.GetMinBuf()) >= 0
 	}
 	return compute.CompareBytes(k, zm.GetMinBuf()) >= 0 &&
 		compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
@@ -363,7 +365,7 @@ func (zm ZM) Contains(k any) bool {
 		return false
 	}
 	if zm.IsString() {
-		return zm.containsString(k.([]byte))
+		return zm.containsString(k.([]byte), false)
 	}
 
 	t := types.T(zm[63])
@@ -376,7 +378,7 @@ func (zm ZM) ContainsKey(k []byte) bool {
 		return false
 	}
 	if zm.IsString() {
-		return zm.containsString(k)
+		return zm.containsString(k, false)
 	}
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t, 0, 0) >= 0 &&

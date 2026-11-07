@@ -15,7 +15,6 @@
 package index
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,16 +46,13 @@ func MakeScalarZoneMapMatcher(columnType types.Type, value []byte, valueType typ
 	switch op {
 	case types.ComparisonEqual:
 		if kind == types.T_varbinary && valueType.Oid == kind {
+			// Both operands use byte equality, so the stored minimum remains
+			// useful even if the maximum cannot exclude a value.
 			return func(zm ZM) ZoneMapMatch {
-				if zm.MayHaveUnboundedByteMax() {
-					if !RawZoneMapComparable(zm, kind) {
-						return ZoneMapMatch{}
-					}
-					// Both operands use byte equality. An unknown maximum cannot
-					// invalidate an exclusion proved by the stored minimum.
-					return ZoneMapMatch{Match: bytes.Compare(zm.GetMinBuf(), value) <= 0, Known: true}
+				if !RawZoneMapComparable(zm, kind) {
+					return ZoneMapMatch{}
 				}
-				return IntersectsBound(zm, value, bound, kind)
+				return ZoneMapMatch{Match: zm.containsString(value, true), Known: true}
 			}, bound, true
 		}
 		return func(zm ZM) ZoneMapMatch { return IntersectsBound(zm, value, bound, kind) }, bound, true
