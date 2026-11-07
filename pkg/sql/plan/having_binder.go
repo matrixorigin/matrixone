@@ -257,6 +257,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
+		if displayWrappedCorrColRef(expr) != nil {
+			// ENUM/SET keys bind to a display wrapper whose final argument is
+			// the only column link (#31568). Wrapping such a reference in
+			// any_value would leak a correlated expression into the aggregate
+			// list and break plan remapping downstream, so reject it here with
+			// the same error a bare correlated column gets in this mode.
+			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
+		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
@@ -275,12 +283,20 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
-				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-				b.corrColRefTargetsGroup(corr.Corr) ||
-				b.corrColRefAllowedByTargetQuery(corr.Corr) {
+		corrRef := expr.GetCorr()
+		if corrRef == nil {
+			// ENUM/SET keys bind to a display wrapper whose wrapped reference
+			// is the only column link (#31568): a correlated outer key stays
+			// nested there, so it must pass the same target-scope checks as a
+			// bare correlated reference in HAVING.
+			corrRef = displayWrappedCorrColRef(expr)
+		}
+		if corrRef != nil {
+			if b.corrColRefTargetsCurrentGroup(corrRef) ||
+				b.corrColRefTargetsAggregateInputParent(corrRef) ||
+				b.corrColRefAllowedByCurrentQuery(corrRef) ||
+				b.corrColRefTargetsGroup(corrRef) ||
+				b.corrColRefAllowedByTargetQuery(corrRef) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)
