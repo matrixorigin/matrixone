@@ -137,5 +137,58 @@ select id, k, `quoted_keys.k` from quoted_keys order by `quoted_keys.k` desc, id
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  quoted_keys.k[4,32,0]  𝄀
 2  ¦  8  ¦  90  𝄀
 1  ¦  9  ¦  1
+create table spatial_keys (id int not null, g geometry not null);
+insert into spatial_keys values (1, st_geomfromtext('POINT(1 1)'));
+select mo_ctl('dn', 'flush', 'top_leading_key_filter.spatial_keys');
+➤ mo_ctl(dn, flush, top_leading_key_filter.spatial_keys)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into spatial_keys values (2, st_geomfromtext('POINT(1 1)'));
+select mo_ctl('dn', 'flush', 'top_leading_key_filter.spatial_keys');
+➤ mo_ctl(dn, flush, top_leading_key_filter.spatial_keys)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+set session optimizer_hints = 'execType=1';
+select id from spatial_keys order by g desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+select id from spatial_keys order by g asc, id asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+set session optimizer_hints = 'execType=1,sendMessageFromTopToScan=1';
+select id from spatial_keys order by g desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+select id from spatial_keys order by g asc, id asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+set session optimizer_hints = 'execType=2';
+select id from spatial_keys order by g desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+select id from spatial_keys order by g asc, id asc limit 1;
+➤ id[4,32,0]  𝄀
+1
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select id from spatial_keys order by g desc, id desc limit 1;
+➤ id[4,32,0]  𝄀
+2
+select id from spatial_keys order by g asc, id asc limit 1;
+➤ id[4,32,0]  𝄀
+1
 set session optimizer_hints = @saved_optimizer_hints;
 drop database top_leading_key_filter;

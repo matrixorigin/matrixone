@@ -3056,17 +3056,24 @@ func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
 		nullable bool
 		offset   bool
 		quoted   bool
+		geometry types.T
 	}{
 		{name: "descending", flag: planpb.OrderBySpec_DESC},
 		{name: "mixed"},
 		{name: "offset", offset: true},
 		{name: "nullable_fallback", nullable: true},
 		{name: "quoted_column_fallback", quoted: true},
+		{name: "geometry_fallback", geometry: types.T_geometry},
+		{name: "geometry32_fallback", geometry: types.T_geometry32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, rootID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
 			scan, sort := builder.qry.Nodes[0], builder.qry.Nodes[1]
 			sort.OrderBy[0].Expr.Typ.NotNullable = !tc.nullable
+			if tc.geometry != 0 {
+				sort.OrderBy[0].Expr.Typ.Id = int32(tc.geometry)
+				scan.TableDef.Cols[1].Typ = sort.OrderBy[0].Expr.Typ
+			}
 			if tc.quoted {
 				scan.TableDef.Cols[1].Name = "k.part"
 			}
@@ -3080,9 +3087,11 @@ func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
 			builder.handleMessageFromTopToScan(rootID)
 			require.Equal(t, original, sort.OrderBy[0].Expr, "多键不能改写为单键索引截断顺序")
 			require.Nil(t, scan.IndexReaderParam, "不能按首键截断掉次键胜者")
-			if tc.nullable || tc.quoted {
+			if tc.nullable || tc.quoted || tc.geometry != 0 {
 				require.Empty(t, sort.SendMsgList)
+				require.Empty(t, scan.RecvMsgList)
 				require.Empty(t, scan.OrderBy)
+				require.Len(t, sort.OrderBy, 2)
 				return
 			}
 			require.Len(t, sort.SendMsgList, 1)

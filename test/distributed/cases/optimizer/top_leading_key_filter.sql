@@ -50,5 +50,24 @@ select id, k, `quoted_keys.k` from quoted_keys order by `quoted_keys.k` desc, id
 set session optimizer_hints = 'execType=2';
 select id, k, `quoted_keys.k` from quoted_keys order by k desc, id desc limit 2;
 select id, k, `quoted_keys.k` from quoted_keys order by `quoted_keys.k` desc, id desc limit 2;
+-- 空间首键的普通 Top 支持字节序，但存储 zonemap 比较器不支持，必须全扫描回退。
+-- 同一 geometry 跨两个持久化对象，次键赢家必须保留。
+create table spatial_keys (id int not null, g geometry not null);
+insert into spatial_keys values (1, st_geomfromtext('POINT(1 1)'));
+select mo_ctl('dn', 'flush', 'top_leading_key_filter.spatial_keys');
+insert into spatial_keys values (2, st_geomfromtext('POINT(1 1)'));
+select mo_ctl('dn', 'flush', 'top_leading_key_filter.spatial_keys');
+set session optimizer_hints = 'execType=1';
+select id from spatial_keys order by g desc, id desc limit 1;
+select id from spatial_keys order by g asc, id asc limit 1;
+set session optimizer_hints = 'execType=1,sendMessageFromTopToScan=1';
+select id from spatial_keys order by g desc, id desc limit 1;
+select id from spatial_keys order by g asc, id asc limit 1;
+set session optimizer_hints = 'execType=2';
+select id from spatial_keys order by g desc, id desc limit 1;
+select id from spatial_keys order by g asc, id asc limit 1;
+set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
+select id from spatial_keys order by g desc, id desc limit 1;
+select id from spatial_keys order by g asc, id asc limit 1;
 set session optimizer_hints = @saved_optimizer_hints;
 drop database top_leading_key_filter;
