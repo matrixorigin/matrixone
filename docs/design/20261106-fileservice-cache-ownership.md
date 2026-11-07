@@ -16,8 +16,8 @@ v2 was approved and merged with #32275. v3 adds the contracts of the fixes that 
 the merged code found: a download keeps its reader's deadline and ends when the disk
 cache closes; the cost estimates use only downloads from object storage and range reads
 read to the end; reads of a downloading object count toward its read share; an item
-larger than the disk cache's capacity is evicted first; and an item is not evicted
-before its insert notification returns.
+larger than the disk cache's capacity is evicted first; and an item is neither evicted
+nor counted toward eviction before its insert notification returns.
 
 ## Problem
 
@@ -105,8 +105,9 @@ results; a general-purpose cache library; tuning the policy per workload at runt
   checks again when it stops, so a burst cannot lose a wakeup. Eviction removes
   bounded batches and runs every removal callback outside all locks, so a callback may
   use the cache; if a callback panics, the remaining removals still complete. An item
-  is not evicted before its insert notification returns, so the notifications of one
-  item arrive in order. The
+  is neither evicted nor counted toward eviction before its insert notification
+  returns, so the notifications of one inserted item arrive in order and an item
+  larger than the capacity evicts no other while it waits. The
   index of a file and its bytes on disk stay in step through the existing disk-cache
   update protocol.
 
@@ -137,7 +138,7 @@ downloads count as read from its cached file.
 - A wait is bounded by the predicted time plus the margin, after which the read falls
   back to a range read.
 - A download that fails after a read got its bytes does not fail that read, and caches
-  nothing. Until the read that started a download returns, cancelling it cancels the
+  nothing. A read that waits for its download still fails when its own context ends. Until the read that started a download returns, cancelling it cancels the
   download; afterwards the download no longer depends on it. The download keeps that
   read's deadline and ends when the disk cache closes.
 - Ranges read while their object is downloading are not cached separately.

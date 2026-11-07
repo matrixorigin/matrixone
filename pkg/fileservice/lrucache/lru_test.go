@@ -453,10 +453,56 @@ func TestNotEvictedBeforePostSet(t *testing.T) {
 	<-entered
 	c.Set(ctx, "b", 1, 10)
 	require.True(t, c.Contains("a"))
+	mu.Lock()
+	require.Empty(t, evicted, "nothing is evicted for a pending item")
+	mu.Unlock()
 	close(release)
 	<-setDone
 	require.Equal(t, int64(10), c.Used())
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, []string{"b"}, evicted)
+	require.Equal(t, []string{"a"}, evicted, "the least recently used, once postSet returned")
+}
+
+// While an item larger than the capacity waits for its postSet, other inserts evict
+// nothing for it; the item is evicted alone once postSet returns.
+func TestPendingOversizedItemEvictsNothingElse(t *testing.T) {
+	ctx := context.Background()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var evicted []string
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(100),
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			if key == "big" {
+				close(entered)
+				<-release
+			}
+		},
+		nil,
+		func(string, int, int64, uint64) func() { return func() {} },
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			mu.Lock()
+			evicted = append(evicted, key)
+			mu.Unlock()
+		},
+	)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	setDone := make(chan struct{})
+	go func() {
+		c.Set(ctx, "big", 2, 150)
+		close(setDone)
+	}()
+	<-entered
+	c.Set(ctx, "c", 3, 10)
+	mu.Lock()
+	require.Empty(t, evicted)
+	mu.Unlock()
+	close(release)
+	<-setDone
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"big"}, evicted)
+	require.Equal(t, int64(90), c.Used())
 }

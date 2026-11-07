@@ -42,6 +42,7 @@ type Cache[K comparable, V any] struct {
 	seed     maphash.Seed
 	shards   [numShards]shard[K, V]
 	used     atomic.Int64
+	pending  atomic.Int64 // bytes of the items whose postSet has not returned
 	nextSeq  atomic.Uint64
 	newest   atomic.Int64  // last stamp given to a use
 	added    atomic.Uint64 // count of Sets and of Replaces that grew an item
@@ -152,6 +153,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldes
 	}
 	s.updateTail()
 	c.used.Add(size)
+	c.pending.Add(size)
 	c.added.Add(1)
 	seq := it.seq
 	s.mu.Unlock()
@@ -161,6 +163,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldes
 	s.mu.Lock()
 	it.pending = false
 	s.mu.Unlock()
+	c.pending.Add(-size)
 	c.added.Add(1)
 	c.evictOver(ctx)
 	return true
@@ -279,10 +282,16 @@ func (c *Cache[K, V]) Capacity() int64 {
 	return c.capacity()
 }
 
+// settled returns the bytes used by the items eviction may remove: an item whose postSet
+// has not returned is neither evicted nor evicted for.
+func (c *Cache[K, V]) settled() int64 {
+	return c.used.Load() - c.pending.Load()
+}
+
 // evictTo removes the least recently used evictable items until at most target bytes
 // are used, and returns the bytes used after.
 func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
-	for c.used.Load() > target {
+	for c.settled() > target {
 		c.evictor.Lock()
 		evictions := c.removeTo(target)
 		c.evictor.Unlock()
@@ -300,7 +309,7 @@ func (c *Cache[K, V]) evictTo(ctx context.Context, target int64) int64 {
 // checks again once it is done. It stops when nothing is evictable and nothing was added
 // meanwhile.
 func (c *Cache[K, V]) evictOver(ctx context.Context) {
-	for c.used.Load() > c.capacity() {
+	for c.settled() > c.capacity() {
 		if !c.evictor.TryLock() {
 			return
 		}
@@ -318,7 +327,7 @@ func (c *Cache[K, V]) evictOver(ctx context.Context) {
 // once at most target bytes are used. The caller holds c.evictor.
 func (c *Cache[K, V]) removeTo(target int64) []item[K, V] {
 	var evictions []item[K, V]
-	for len(evictions) < evictBatch && c.used.Load() > target {
+	for len(evictions) < evictBatch && c.settled() > target {
 		it, ok := c.removeOldest()
 		if !ok {
 			break
