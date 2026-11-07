@@ -11123,3 +11123,10 @@ func TestExtensionPlansAreNotSupported(t *testing.T) {
 		})
 	}
 }
+
+// Only internal SQL may name the index of a CENTROIDX join, whose operator writes it.
+func TestCentroidxIndexParametersAreInternal(t *testing.T) {
+	mock := NewMockOptimizer(false, nil)
+	_, err := runOneStmt(mock, t, "SELECT N_NAME FROM NATION CENTROIDX('vector_l2_ops', '{}', '{\"ignored\":\"t\"}') JOIN REGION ON N_REGIONKEY = R_REGIONKEY")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+}

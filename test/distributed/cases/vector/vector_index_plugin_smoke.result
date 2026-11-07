@@ -42,6 +42,7 @@ order by algo_table_type;
   ¦    𝄀
 ivfflat  ¦  centroids  𝄀
 ivfflat  ¦  entries  𝄀
+ivfflat  ¦  ignored  𝄀
 ivfflat  ¦  metadata
 show create table f;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
