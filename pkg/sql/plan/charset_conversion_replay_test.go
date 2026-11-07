@@ -19,11 +19,73 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBinaryConversionRetainsSessionBoundComputation(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCVersion129)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	build := func(increment int64, sql string) *planpb.Plan {
+		t.Helper()
+		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(divPrecisionCompilerContext{CompilerContext: compiler, increment: increment}, stmt, false)
+		require.NoError(t, err)
+		return p
+	}
+	source := build(10, "create table t(a decimal(10,2),b decimal(10,2),g varchar(64) generated always as(a/b) stored)").GetDdl().GetCreateTable().TableDef
+	source.Name2ColIndex = make(map[string]int32, len(source.Cols))
+	for i, col := range source.Cols {
+		col.ColId = uint64(i + 1)
+		source.Name2ColIndex[col.Name] = int32(i)
+	}
+	compiler.tables["t"] = source
+	compiler.objects["t"] = &ObjectRef{SchemaName: "tpch", ObjName: "t"}
+	before := proto.Clone(source)
+	var division func(*planpb.Expr) *planpb.Expr
+	division = func(expr *planpb.Expr) *planpb.Expr {
+		if f := expr.GetF(); f != nil {
+			if f.Func.GetObjName() == "/" {
+				return expr
+			}
+			for _, arg := range f.Args {
+				if found := division(arg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	oldDivision := division(FindColumn(source.Cols, "g").GeneratedCol.Expr)
+	require.NotNil(t, oldDivision)
+	require.EqualValues(t, 12, oldDivision.Typ.Scale)
+	alter := build(0, "alter table t convert to character set binary").GetDdl().GetAlterTable()
+	check := func(table *planpb.TableDef) {
+		t.Helper()
+		g := FindColumn(table.Cols, "g")
+		require.Equal(t, int32(types.T_varbinary), g.Typ.Id)
+		require.Equal(t, "cast_strict", g.GeneratedCol.Expr.GetF().Func.ObjName)
+		require.Equal(t, g.Typ.Id, g.GeneratedCol.Expr.Typ.Id)
+		require.Equal(t, g.Typ.Width, g.GeneratedCol.Expr.Typ.Width)
+		require.True(t, proto.Equal(oldDivision, division(g.GeneratedCol.Expr)), "CONVERT must retain the persisted division, including scale 12")
+	}
+	check(alter.CopyTableDef)
+	// Exercise the reconstructed CREATE consumed by COPY as well as CONVERT.
+	ctx, err := WithAlterTableDDLReplay(compiler.GetContext(), "tpch", source, alter.CopyTableDef)
+	require.NoError(t, err)
+	compiler.SetContext(ctx)
+	check(build(0, alter.CreateTmpTableSql).GetDdl().GetCreateTable().TableDef)
+	require.True(t, proto.Equal(before, source))
+	compiler.SetContext(t.Context())
+	modified := build(0, "alter table t modify column g varchar(64) generated always as(a/b) stored").GetDdl().GetAlterTable().CopyTableDef
+	require.EqualValues(t, 2, division(FindColumn(modified.Cols, "g").GeneratedCol.Expr).Typ.Scale, "authored MODIFY uses the current session")
+}
 
 func TestCharsetConversionRetainsTypedComputation(t *testing.T) {
 	databaseDefaultsProtocol(t, defines.MORPCVersion118)
