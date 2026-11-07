@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -239,4 +240,95 @@ func TestInsertValuesExplicitTextCastProtectsNestedBinaryLiterals(t *testing.T) 
 	require.False(t, isNull)
 	require.Equal(t, "12", value, "numeric-target nested cast keeps legacy pre-coercion of the hex literal")
 	require.Empty(t, codes)
+}
+
+// review5809254373: the binary-domain source protection must also cover a
+// NULLABLE NUMERIC destination. Previously only hex/bit NumVal leaves skipped
+// the INSERT/REPLACE destination pre-coercion (numValDefaultBindType); the
+// _binary introducer forms (_binary X'FF' / _binary 'FF') went through
+// returnBinaryIntroducerExpr, which appended the destination column cast to
+// the nonempty default bind type and erased the binary domain before the
+// explicit text cast could apply its invalid-UTF-8 -> NULL + Warning 1300
+// contract. The charset-explicit form (CHAR CHARACTER SET utf8mb4) bound its
+// CONVERT source outside the protected scope with the same effect. Numeric
+// coercion is irreversible, so the explicit non-binary-text source subtree —
+// including the charset path — must be protected at the leaf.
+func TestInsertValuesExplicitBinaryCastProtectsNumericDestination(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := plan2.NewMockCompilerContext(true, proc)
+
+	evalCol0 := func(sql string) (bool, uint32, []uint16) {
+		t.Helper()
+		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		p, err := plan2.BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		var valueExpr *planpb.Expr
+		for _, n := range p.GetQuery().GetNodes() {
+			if n.RowsetData != nil {
+				valueExpr = n.RowsetData.Cols[0].Data[0].Expr
+			}
+		}
+		require.NotNil(t, valueExpr, "plan has no rowset data")
+		sink := &dmlCastWarningSink{}
+		proc.WarningSink = sink
+		exec, err := colexec.NewExpressionExecutor(proc, valueExpr)
+		require.NoError(t, err)
+		defer exec.Free()
+		vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		// The evaluated vector is borrowed: the executor owns and frees it.
+		if vec.GetNulls().Contains(0) {
+			return true, 0, sink.codes
+		}
+		return false, vector.MustFixedColNoTypeCheck[uint32](vec)[0], sink.codes
+	}
+
+	// _binary X'FF' under explicit CHAR cast into nullable numeric deptno:
+	// the explicit cast must own the conversion -> NULL + exactly Warning 1300.
+	isNull, _, codes := evalCol0("insert into dept values (CAST(_binary X'FF' AS CHAR),'n','l')")
+	require.True(t, isNull, "binary-introducer hex under explicit text cast must yield NULL, not a coerced number")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// _binary '<raw 0xFF>' string form: same contract.
+	isNull, _, codes = evalCol0("insert into dept values (CAST(_binary '\xff' AS CHAR),'n','l')")
+	require.True(t, isNull, "binary-introducer string under explicit text cast must yield NULL")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// Charset-explicit form: the CONVERT source binding is equally protected.
+	isNull, _, codes = evalCol0("insert into dept values (CAST(_binary X'FF' AS CHAR CHARACTER SET utf8mb4),'n','l')")
+	require.True(t, isNull, "charset-explicit text cast must keep the NULL + 1300 contract")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// REPLACE shares the INSERT value binder: same contract.
+	isNull, _, codes = evalCol0("replace into dept values (CAST(_binary X'FF' AS CHAR),'n','l')")
+	require.True(t, isNull, "REPLACE nullable numeric destination keeps NULL + 1300")
+	require.Equal(t, []uint16{1300}, codes)
+
+	// Warning-then-next-statement closure: after the actual Warning 1300 path
+	// above, the next statement is planned and evaluated fresh (a new
+	// BuildPlan plus a new expression executor) on the same process and still
+	// produces the correct value. This is native in-process verification of
+	// binder/executor state only — it is not a real client connection,
+	// prepared-statement, or session reuse check.
+	isNull, num, codes := evalCol0("insert into dept values (CAST(_binary X'3132' AS CHAR),'n','l')")
+	require.False(t, isNull, "valid UTF-8 binary source converts and assigns")
+	require.Equal(t, uint32(12), num, "valid bytes '12' reach the numeric destination as 12")
+	require.Empty(t, codes)
+
+	// Plain numeric literal control: historical destination coercion intact.
+	isNull, num, codes = evalCol0("insert into dept values (12,'n','l')")
+	require.False(t, isNull)
+	require.Equal(t, uint32(12), num)
+	require.Empty(t, codes)
+
+	// NULL control: untyped NULL under the explicit cast stays NULL silently.
+	isNull, _, codes = evalCol0("insert into dept values (CAST(NULL AS CHAR),'n','l')")
+	require.True(t, isNull)
+	require.Empty(t, codes)
+
+	// Implicit control: a bare _binary introducer literal (no explicit cast)
+	// keeps historical assignment binding and emits no Warning 1300.
+	_, _, codes = evalCol0("insert into dept values (_binary X'3132','n','l')")
+	require.Empty(t, codes, "implicit assignment must not produce Warning 1300")
 }

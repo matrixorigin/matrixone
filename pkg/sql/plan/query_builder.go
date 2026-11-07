@@ -8579,10 +8579,15 @@ func rollupWindowOutputAliasWithProvenance(selectExpr tree.SelectExpr) (*tree.CS
 		expr = parenExpr.Expr
 	}
 	if heading, ok := tree.NameConstHeading(expr); ok {
-		return tree.NewCStr(heading, 1), headingProvenance{}
+		return tree.NewCStr(legalUTF8GeneratedHeading(heading), 1), headingProvenance{}
 	}
 	heading, provenance := formatSelectExpressionHeading(expr)
-	return tree.NewCStr(heading, 1), provenance
+	// This alias is the rewrite-GENERATED output heading: the rewritten outer
+	// SELECT consumes it through the genuine-alias branch, which copies
+	// As.Origin verbatim and bypasses the general generated-heading sanitizer.
+	// Enforce the wire contract here, at the real producer of the generated
+	// name; explicit user aliases and catalog column names above stay intact.
+	return tree.NewCStr(legalUTF8GeneratedHeading(heading), 1), provenance
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {

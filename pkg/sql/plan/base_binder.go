@@ -228,7 +228,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			// width validation and preserves the engine's admitted charset aliases.
 			charsetName := castType.InternalType.CastCharsetName
 			charsetLiteral := tree.NewNumVal(charsetName, charsetName, false, tree.P_char)
+			// A charset-explicit CAST into non-binary text is the same
+			// semantic boundary as the non-charset explicit cast below: bind
+			// the CONVERT source subtree under the same leaf-level protection
+			// so INSERT/REPLACE destination pre-coercion cannot erase the
+			// binary domain before conversion (NULL + Warning 1300).
+			suppressBinarySourceGuard := b.binaryLiteralUnderExplicitTextCast
+			b.binaryLiteralUnderExplicitTextCast = explicitCastTargetsNonBinaryText(typ)
 			expr, err = b.bindFuncExprImplByAstExpr("convert", []tree.Expr{exprImpl.Expr, charsetLiteral}, depth)
+			b.binaryLiteralUnderExplicitTextCast = suppressBinarySourceGuard
 			if err != nil {
 				return
 			}
@@ -266,18 +274,20 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			// A user-written explicit CAST into non-binary-charset text is a
 			// semantic boundary for binary-domain literals: without
-			// protection, an INSERT/REPLACE value binder pre-coerces a hex or
-			// bit source literal (x'FF', b'...') to the destination column
-			// type, erasing the binary domain before the explicit cast can
-			// apply its own conversion contract (invalid UTF-8 -> NULL +
-			// Warning 1300) — including literals nested inside source
-			// expressions such as IFNULL/COALESCE/CONCAT. Protection is a
-			// leaf-level gate (numValDefaultBindType): only hex/bit NumVal
-			// leaves skip pre-coercion, so string literals, plain numeric
-			// literals, columns and non-literal expressions bind identically
-			// either way and keep the historical pre-coercion (CAST(X'3132'
-			// AS SIGNED) in VALUES stays 12, plain numeric text defaults keep
-			// folding). The innermost explicit cast owns its source subtree.
+			// protection, an INSERT/REPLACE value binder pre-coerces a binary
+			// source literal (x'FF', b'...', _binary X'FF', _binary '...') to
+			// the destination column type, erasing the binary domain before
+			// the explicit cast can apply its own conversion contract
+			// (invalid UTF-8 -> NULL + Warning 1300) — including literals
+			// nested inside source expressions such as IFNULL/COALESCE/CONCAT.
+			// Protection is a leaf-level gate (numValDefaultBindType): only
+			// binary-domain NumVal leaves (hex, bit and the _binary
+			// introducer forms) skip pre-coercion, so string literals, plain
+			// numeric literals, columns and non-literal expressions bind
+			// identically either way and keep the historical pre-coercion
+			// (CAST(X'3132' AS SIGNED) in VALUES stays 12, plain numeric text
+			// defaults keep folding). The innermost explicit cast owns its
+			// source subtree.
 			suppress := b.binaryLiteralUnderExplicitTextCast
 			b.binaryLiteralUnderExplicitTextCast = explicitCastTargetsNonBinaryText(typ)
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
@@ -498,17 +508,23 @@ func explicitCastTargetsNonBinaryText(typ Type) bool {
 }
 
 // numValDefaultBindType applies the INSERT/REPLACE destination-column
-// pre-coercion to numeric literals, except that a hex or bit literal bound in
-// the source subtree of an explicit CAST into non-binary-charset text keeps
-// its raw binary bytes: defaultValueBindType would rewrite those leaves to
-// the destination column type and erase the binary domain before the explicit
-// cast's conversion contract (invalid UTF-8 -> NULL + Warning 1300) could
-// apply. Plain numeric literals, string literals and non-literal expressions
-// are unaffected, so folded text defaults and numeric-target casts keep the
-// historical coercion.
+// pre-coercion to numeric literals, except that a binary-domain literal
+// (hex, bit, or a _binary introducer form) bound in the source subtree of an
+// explicit CAST into non-binary-charset text keeps its raw binary bytes:
+// defaultValueBindType would rewrite those leaves to the destination column
+// type and erase the binary domain before the explicit cast's conversion
+// contract (invalid UTF-8 -> NULL + Warning 1300) could apply. Plain numeric
+// literals, string literals and non-literal expressions are unaffected, so
+// folded text defaults and numeric-target casts keep the historical coercion.
 func (b *baseBinder) numValDefaultBindType(astExpr *tree.NumVal) Type {
 	if b.binaryLiteralUnderExplicitTextCast &&
-		(astExpr.ValType == tree.P_hexnum || astExpr.ValType == tree.P_bit) {
+		(astExpr.ValType == tree.P_hexnum || astExpr.ValType == tree.P_bit ||
+			astExpr.ValType == tree.P_ScoreBinary || astExpr.ValType == tree.P_ScoreBinaryHexnum) {
+		// The _binary introducer forms share the hex/bit raw-bytes contract:
+		// pre-coercing them to the destination column type (including a
+		// nullable NUMERIC destination) is irreversible and would erase the
+		// binary domain before the explicit cast's NULL + Warning 1300
+		// conversion contract could apply.
 		return Type{}
 	}
 	return b.defaultValueBindType()
