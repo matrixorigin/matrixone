@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -963,8 +962,8 @@ func (s *TableChangeStream) isAuxiliaryError(err error, errType string) bool {
 
 // determineRetryable determines if an error is retryable based on error type and context
 func (s *TableChangeStream) determineRetryable(err error) bool {
-	if err == nil {
-		return false
+	if retryable, classified := ClassifyRetryableError(err); classified {
+		return retryable
 	}
 
 	errMsg := err.Error()
@@ -973,17 +972,6 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 	if IsPauseOrCancelError(errMsg) {
 		return false
 	}
-
-	// Check for MatrixOne system/network errors first (before string matching)
-	// Use morpc.GetStatusCategory for unified error classification
-	status := morpc.GetStatusCategory(err)
-	if status == morpc.StatusTransient || status == morpc.StatusUnavailable {
-		return true
-	}
-	if status == morpc.StatusCancelled {
-		return false // Client closing/closed should not retry
-	}
-	// StatusUnknown: continue to check other error types below
 
 	// StaleRead/FileNotFound errors are retryable if recovery is possible
 	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) || moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -1389,6 +1377,16 @@ func (s *TableChangeStream) processWithTxn(
 			}
 		}
 
+		// Capture statistics before ProcessChange transfers batch ownership to
+		// the sink, which may release it before this goroutine resumes.
+		var rows uint64
+		if changeData.InsertBatch != nil {
+			rows = uint64(changeData.InsertBatch.RowCount())
+		}
+		if changeData.DeleteBatch != nil {
+			rows += uint64(changeData.DeleteBatch.RowCount())
+		}
+
 		// Process change
 		if err = s.dataProcessor.ProcessChange(ctx, changeData); err != nil {
 			s.progressTracker.EndRound(false, err)
@@ -1398,13 +1396,6 @@ func (s *TableChangeStream) processWithTxn(
 		// Track batch processing
 		if changeData.Type != ChangeTypeNoMoreData {
 			batchCount++
-			var rows uint64
-			if changeData.InsertBatch != nil {
-				rows = uint64(changeData.InsertBatch.RowCount())
-			}
-			if changeData.DeleteBatch != nil {
-				rows += uint64(changeData.DeleteBatch.RowCount())
-			}
 
 			// Record batch with estimated size
 			s.progressTracker.RecordBatch(rows, rows*100) // Rough estimate: 100 bytes per row
