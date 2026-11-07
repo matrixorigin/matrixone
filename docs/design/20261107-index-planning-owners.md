@@ -36,58 +36,6 @@ permission to access a hidden relation or place a scan, and `ForceOneCN` alone
 does not prove the selected CN is the current coordinator. Statistics can
 choose a path but cannot authorize dropping rows.
 
-## Final ownership of observation and resolution
-
-An observation is an optional cost input; its prerequisites must be the ones
-used by that input. The existing planner and relation owners establish the
-original scan, pinned placement, unrestricted session row limit, bounded work,
-authorized borrowed read and transaction identity. These conditions apply to
-both ordinary and necessary-range observations. A raw integer literal does not
-depend on the statement clock or session time zone. It can therefore select the
-ordinary BASE or INDEX plan even if either changes during resolver reentry or
-observation. The comparison owner requires the captured clock and time zone for
-an inverse temporal comparison before and after observation; the publication,
-frontend compile and compile-retry checks retain their existing full execution
-snapshot and placement proof for a physical necessary-range index scan. This
-also preserves BASE-to-INDEX replanning for a later temporal statement. Neither
-kind of observation adds a persistent dependency, cache or second read path.
-
-The comparison owner produces the cost ranges and the executable necessary
-predicate from the same classified comparison. The common scorer receives only
-bounded numeric range arms and a success/error result; it does not derive
-temporal endpoints or reinterpret a sampled scalar as an executable predicate.
-Invalid, full, empty or unproved ranges decline cost credit. Range union,
-cardinality statistics, work budgets and cancellation remain with their existing
-common owners. The physical hint still leaves the original SQL residual in
-place. Construction prepays bounded work before copying expressions.
-
-Each ordinary resolver method accepts one explicit optional `TableResolution`
-output. A nil output requests only the ordinary descriptor. A non-nil output is
-cleared on every attempt, including failed resolution and access denial; it is
-populated only after the same resolver has completed its authorization and read
-identity checks. Wrappers whose namespace, descriptor or visibility differs
-clear and decline the borrow; a wrapper may forward only when it preserves the
-same relation and transaction contract. There is no variadic compatibility form,
-second resolver implementation or extra relation ownership.
-
-The relevant alternatives are retaining the blanket time check, which needlessly
-couples ordinary integer costing to temporal state, and adding a generic
-dependency registry or separate resolver path, which would add state and
-dispatch without another concrete producer. The selected owner-local checks and
-single resolver contract require mechanical caller migration but no new storage,
-wire field, background work or long-lived state. The stopped 4.2 upgrade and
-saved-plan authorization contracts are unchanged; rolling mixed-version upgrade
-and downgrade remain out of scope.
-
-Validation must cover integer selection with clock and zone drift at both
-resolver and observation boundaries, temporal rejection and rebuild on the
-same changes, session-limit and transaction drift, cancellation and optional
-metadata errors. Exercise resolver output reuse on success, error, access
-denial and wrappers, and compile the complete caller closure. Re-run the
-affected planner/frontend/compiler normal and race tests, public SQL parity,
-static checks and matched performance controls. Existing upgrade and reader
-evidence is reusable only where its source and dependencies remain unchanged.
-
 ## Original-plan proof and lifetime
 
 The builder traces a SELECT's bounded unary project/filter path to the original
@@ -143,14 +91,15 @@ reuse fact; no retained dependency tree or general visitor framework is added.
 
 ## Authorized resolution and read identity
 
-Ordinary `Resolve`, its namespace variant and `ResolveIndexTableByRef` accept
-an optional caller-owned `TableResolution` output. A call without the output
+Ordinary `Resolve`, its namespace variant and `ResolveIndexTableByRef` each
+accept one explicit nullable caller-owned `TableResolution` output. A nil output
 does not add stamp capture, native lookup, subscription or allocation for this
-optimization. A requested output is cleared before work and filled only after
-the ordinary resolution and its temporary-table, subscription, snapshot and
-borrow checks succeed. Wrapper overrides remain the routes actually called;
-wrappers with different authority or visibility can decline the optional
-borrow without changing their normal descriptor and error behavior.
+optimization. A requested output is cleared before work, including on failure
+or denial, and filled only after ordinary resolution and its temporary-table,
+subscription, snapshot and borrow checks succeed. Wrapper overrides remain the
+routes actually called; wrappers with different authority, descriptor or
+visibility clear and decline the borrow without changing their normal result.
+There is no variadic compatibility form, second resolver or extra relation owner.
 
 User scans pass through existing physical-index authorization. Generated SHOW
 and index-maintenance sources use their existing authorized routes and parent
@@ -178,15 +127,23 @@ stores a native relation, transaction operator, callback or statement owner.
 ## Selection, observation and publication
 
 The comparison owner classifies oriented column/bound pairs as raw, losslessly
-normalized, inverse necessary range or unsupported. The type inverse supplies
-logical arms to the common direct or serialized physical-leaf lowering.
+normalized, inverse necessary range or unsupported. It produces the bounded
+numeric cost arms and executable necessary predicate from that classification;
+invalid, full, empty or unproved ranges decline cost credit. The common scorer
+owns range union and statistics, and never turns a sampled scalar into an
+executable predicate. The type inverse supplies logical arms to the common
+direct or serialized physical-leaf lowering.
 Ordinary exact serialization and equality-pinning callers retain their stricter
 requirements. The selector owns enumeration and one scorer; existing FORCE,
 small-table, sorted-scan and spatial policies keep their normal priority.
-The generic observation gate checks the captured execution and placement, but
-does not impose a type-specific zone rule. The necessary comparison owner admits
-the current temporal inverse only for a proved fixed zone. Its lifetime fact
-must already have been recorded before folding, including when BASE wins.
+Observation requires the original scan, pinned placement, unrestricted session
+row limit, bounded work, an authorized borrowed read and matching transaction
+identity. A raw integer literal does not depend on the statement clock or zone,
+so either may change during resolution or observation. An inverse temporal
+comparison requires the captured clock and fixed zone before and after
+observation; its lifetime fact must already have been recorded before folding,
+including when BASE wins. Publication and compile retain their full captured
+execution and placement proof for a physical necessary-range scan.
 
 A necessary-range candidate is considered after ordinary matching owns neither
 a winner nor a fallback. Its private mapping, bind tag, full residual and block
@@ -282,6 +239,9 @@ ordinary resolver and single selector; none is a compatibility alias.
 
 Blanket invalidation for every indexed query with an incomplete proof is
 rejected because unrelated ordinary plans would stop reusing their generation.
+Similarly, a blanket clock/zone check would unnecessarily couple integer
+costing to temporal state, while a generic dependency registry or separate
+resolver would add state and dispatch without another concrete producer.
 Moving index/base selection into the reader is also rejected: hidden-index
 resolution, authorization, snapshots and distributed pipeline construction
 would require a second execution path without evidence that it pays for its
@@ -373,7 +333,10 @@ authorization compatibility, but is not a live stopped-upgrade test.
 Validation must exercise the real owners and entry points: comparison
 boundaries and full SQL results against BASE controls; sparse/dense clock
 transitions; ordinary and prepared reuse; authorization and schema changes;
-read-identity drift, contention, cancellation, retries and failed publication;
+integer clock/zone drift at resolution and observation, temporal rejection and
+rebuild on drift, session-limit and transaction changes, read-identity drift,
+contention, cancellation, retries and failed publication; resolver-output
+reuse after success, failure and denial, including wrappers;
 marker copy/fold/transport; malformed, unknown and unsupported reader/PK
 inputs; and saved-plan privilege allow/deny. Compare complete live proofs with
 the frozen old decision, including typed NULL, both orientations, a temporal
