@@ -120,6 +120,17 @@ func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower in
 	return p.lexer.stmts, nil
 }
 
+// ParseWithSQLModeAndFragments returns the statements and their source spans
+// from the same parse. The caller owns the statements just as for ParseWithSQLMode;
+// the fragments do not refer to the parser's reusable lexer state.
+func (p *MySQLParser) ParseWithSQLModeAndFragments(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, []SQLFragment, error) {
+	stmts, err := p.ParseWithSQLMode(ctx, sql, lower, sqlMode)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stmts, statementFragments(&p.lexer, sql, sqlMode), nil
+}
+
 // ParseFirstWithSQLMode parses the first top-level statement and returns the
 // byte offset immediately after its delimiter. It stops the lexer as soon as
 // the first statement is reduced, so compound statements are scanned once.
@@ -752,6 +763,10 @@ func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, lo
 		}
 	}()
 
+	return statementFragments(lexer, sql, sqlMode), nil
+}
+
+func statementFragments(lexer *Lexer, sql string, sqlMode string) []SQLFragment {
 	// Grammar semicolons are real AST boundaries even inside executable comments.
 	// Preserve their raw spans, but balance wrappers so each SQL fragment can be
 	// reparsed independently. Only the final inner delimiter extends to the close.
@@ -787,7 +802,7 @@ func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, lo
 	if len(lexer.topLevelSemicolonEnds) == 0 || tail != "" {
 		appendFragment(len(sql), false)
 	}
-	return fragments, nil
+	return fragments
 }
 
 // validateSelectIntoStatements is the final parser boundary for SELECT INTO
