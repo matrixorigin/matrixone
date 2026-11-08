@@ -42,6 +42,15 @@ func TestFulltext2JSONProbeAfterAlterTail(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		var executor *iscp.ISCPTaskExecutor
+		paused := false
+		defer func() {
+			if paused {
+				if err := executor.Resume(); err != nil {
+					t.Errorf("resume fixture ISCP executor: %v", err)
+				}
+			}
+		}()
 		const schema = "ft2_json_alter_tail"
 		exec := func(statement string) {
 			t.Helper()
@@ -86,18 +95,13 @@ func TestFulltext2JSONProbeAfterAlterTail(t *testing.T) {
 		require.Eventually(t, func() bool {
 			return conn.QueryRowContext(ctx, chunkQuery).Scan(&chunk) == nil && chunk > baseline
 		}, 90*time.Second, 100*time.Millisecond, "post-rebuild write must reach the index")
-		var executor *iscp.ISCPTaskExecutor
 		require.Eventually(t, func() bool {
 			var ok bool
 			executor, ok = iscp.GetExecutorRuntime(cn.ServiceID())
 			return ok
 		}, 30*time.Second, 100*time.Millisecond, "ISCP executor must be ready")
 		require.NoError(t, executor.Pause())
-		defer func() {
-			if err := executor.Resume(); err != nil {
-				t.Errorf("resume fixture ISCP executor: %v", err)
-			}
-		}()
+		paused = true
 		require.NoError(t, conn.QueryRowContext(ctx, metaQuery).Scan(&built))
 		require.Positive(t, built)
 		exec(`insert into t values (4,'{"foo":"needle"}',9),(5,'{"foo":"hay"}',9)`)
@@ -121,18 +125,22 @@ func TestFulltext2JSONProbeAfterAlterTail(t *testing.T) {
 		changes := fmt.Sprintf("select c.id from table_changes('%s','t','%d-0','%s') c where c.change_type='insert' and json_extract_string(c.j,'$.foo')='needle' order by c.id", schema, built, until)
 		require.Equal(t, []int64{4}, queryIDs(changes), "the gap must fit the rebuilt schema")
 		const query = "select id from t where json_extract_string(j,'$.foo')='needle' order by id"
-		rows, err := conn.QueryContext(ctx, "explain verbose "+query)
-		require.NoError(t, err)
-		defer rows.Close()
-		var plan []string
-		for rows.Next() {
-			var line string
-			require.NoError(t, rows.Scan(&line))
-			plan = append(plan, line)
+		explain := func() string {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, "explain verbose "+query)
+			require.NoError(t, err)
+			defer rows.Close()
+			var plan []string
+			for rows.Next() {
+				var line string
+				require.NoError(t, rows.Scan(&line))
+				plan = append(plan, line)
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			return strings.Join(plan, "\n")
 		}
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
-		explained := strings.Join(plan, "\n")
+		explained := explain()
 		require.Contains(t, explained, "Fulltext Index Scan")
 		require.Contains(t, explained, "Fulltext Index: ftj")
 		require.Contains(t, explained, "table_changes(", "the stopped index must require a tail")
@@ -140,5 +148,23 @@ func TestFulltext2JSONProbeAfterAlterTail(t *testing.T) {
 		var after int64
 		require.NoError(t, conn.QueryRowContext(ctx, metaQuery).Scan(&after))
 		require.Equal(t, built, after, "the new row must not have entered the index")
+
+		// A later schema change makes the same gap unsafe for table_changes.
+		// The indexed probe must fall back and still return the new row.
+		exec("create index extra_idx on t(extra)")
+		require.NoError(t, conn.QueryRowContext(ctx, metaQuery).Scan(&after))
+		require.Equal(t, built, after, "secondary index creation must not rebuild ftj")
+		require.NoError(t, conn.QueryRowContext(ctx, "select watermark from change_watermark() w").Scan(&until))
+		changes = fmt.Sprintf("select c.id from table_changes('%s','t','%d-0','%s') c where c.change_type='insert' order by c.id", schema, built, until)
+		rows, err := conn.QueryContext(ctx, changes)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+			}
+			err = rows.Err()
+		}
+		require.ErrorContains(t, err, "requires a single source schema version")
+		require.Contains(t, explain(), "Fulltext Index Scan")
+		require.Equal(t, []int64{1, 3, 4}, queryIDs(query))
 	})
 }
