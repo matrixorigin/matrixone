@@ -82,17 +82,20 @@ show variables like 'wait%';
 show variables like 'wait_timeout';
 set wait_timeout = 33600;
 show variables like 'wait_timeout';
-set wait_timeout = 10;
-show variables like 'wait_timeout';
+-- Capture short timeouts and restore a safe value in the same request, so
+-- time spent on another session cannot expire this test's connection.
+set wait_timeout = 10, @bvt_wait_timeout = @@wait_timeout, wait_timeout = 33600;
+select @bvt_wait_timeout;
 -- boundary tests
 set wait_timeout = 0;
-set wait_timeout = 1;
-show variables like 'wait_timeout';
+set wait_timeout = 1, @bvt_wait_timeout = @@wait_timeout, wait_timeout = 86400;
+select @bvt_wait_timeout;
+set @bvt_wait_timeout = null;
 set wait_timeout = 86400;
 show variables like 'wait_timeout';
 set wait_timeout = 86401;
 show variables like 'wait_timeout';
-set wait_timeout = 10;
+set wait_timeout = 33600;
 
 
 drop table if exists t;
