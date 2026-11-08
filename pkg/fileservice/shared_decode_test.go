@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"runtime"
@@ -26,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -37,6 +39,10 @@ type decodedTestResult struct {
 	data  fscache.Data
 	lease *decodedReadLease
 	err   error
+}
+
+func sharedTestBytes(data []byte) *Bytes {
+	return DefaultCacheDataAllocator().CopyToCacheData(context.Background(), data).(*Bytes)
 }
 
 func testDecode(r *decodedReadRegistry, ctx context.Context, key decodedReadKey, convert func() (fscache.Data, error)) decodedTestResult {
@@ -75,7 +81,7 @@ func TestSharedDecodeConcurrentLifetime(t *testing.T) {
 		calls.Add(1)
 		close(entered)
 		<-unblock
-		return NewBytes([]byte("payload")), nil
+		return sharedTestBytes([]byte("payload")), nil
 	}
 	results := make(chan decodedTestResult, 8)
 	go func() { results <- testDecode(r, ctx, key, convert) }()
@@ -83,7 +89,7 @@ func TestSharedDecodeConcurrentLifetime(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		waitCtx := &waitStartedContext{Context: ctx, started: make(chan struct{})}
 		go func() {
-			results <- testDecode(r, waitCtx, key, func() (fscache.Data, error) { calls.Add(1); return NewBytes([]byte("unexpected")), nil })
+			results <- testDecode(r, waitCtx, key, func() (fscache.Data, error) { calls.Add(1); return sharedTestBytes([]byte("unexpected")), nil })
 		}()
 		select {
 		case <-waitCtx.started:
@@ -119,13 +125,14 @@ func TestSharedDecodeConcurrentLifetime(t *testing.T) {
 }
 
 func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
-	for _, kind := range []string{"follower", "leader", "timeout", "close", "error"} {
+	for _, kind := range []string{"follower", "leader", "timeout", "close", "error", "independent error"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			r := newDecodedReadRegistry(128)
 			key := decodedReadKey{path: "column"}
 			wantError := errors.New("invalid compressed column")
+			followerError := errors.New("follower conversion failed")
 			leaderCtx, cancelLeader := context.WithCancel(ctx)
 			defer cancelLeader()
 			entered, unblock := make(chan struct{}), make(chan struct{})
@@ -138,10 +145,10 @@ func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
 					close(entered)
 					select {
 					case <-unblock:
-						if kind == "error" {
+						if kind == "error" || kind == "independent error" {
 							return nil, wantError
 						}
-						return NewBytes([]byte("leader")), nil
+						return sharedTestBytes([]byte("leader")), nil
 					case <-leaderCtx.Done():
 						return nil, leaderCtx.Err()
 					}
@@ -153,7 +160,12 @@ func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
 			waiting := &waitStartedContext{Context: followerCtx, started: make(chan struct{})}
 			follower := make(chan decodedTestResult, 1)
 			go func() {
-				follower <- testDecode(r, waiting, key, func() (fscache.Data, error) { return NewBytes([]byte("fallback")), nil })
+				follower <- testDecode(r, waiting, key, func() (fscache.Data, error) {
+					if kind == "independent error" {
+						return nil, followerError
+					}
+					return sharedTestBytes([]byte("fallback")), nil
+				})
 			}()
 			<-waiting.started
 			var retired atomic.Int32
@@ -164,7 +176,7 @@ func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
 				cancelLeader()
 			case "close":
 				r.close(func() { retired.Add(1) })
-			case "error":
+			case "error", "independent error":
 				unblockLeader()
 			}
 			var result decodedTestResult
@@ -176,8 +188,8 @@ func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
 			}
 			if kind == "follower" {
 				require.ErrorIs(t, result.err, context.Canceled)
-			} else if kind == "error" {
-				require.ErrorIs(t, result.err, wantError)
+			} else if kind == "independent error" {
+				require.ErrorIs(t, result.err, followerError)
 			} else if kind == "close" {
 				require.ErrorContains(t, result.err, "closed")
 				require.Zero(t, retired.Load())
@@ -191,7 +203,7 @@ func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
 			result = <-leader
 			if kind == "leader" {
 				require.ErrorIs(t, result.err, context.Canceled)
-			} else if kind == "error" {
+			} else if kind == "error" || kind == "independent error" {
 				require.ErrorIs(t, result.err, wantError)
 			} else if kind == "close" {
 				require.ErrorContains(t, result.err, "closed")
@@ -212,7 +224,7 @@ func TestSharedDecodeCancellationAndTimeout(t *testing.T) {
 func TestSharedDecodeAdmissionFailureAndGenerations(t *testing.T) {
 	ctx := context.Background()
 	key := decodedReadKey{path: "column"}
-	convert := func() (fscache.Data, error) { return NewBytes([]byte("payload")), nil }
+	convert := func() (fscache.Data, error) { return sharedTestBytes([]byte("payload")), nil }
 	t.Run("bytes and oversize", func(t *testing.T) {
 		r := newDecodedReadRegistry(8)
 		v := testDecode(r, ctx, key, convert)
@@ -221,7 +233,7 @@ func TestSharedDecodeAdmissionFailureAndGenerations(t *testing.T) {
 		releaseDecodedTestResult(v)
 		requireDecodeDrained(t, r)
 		r = newDecodedReadRegistry(128)
-		v = testDecode(r, ctx, key, func() (fscache.Data, error) { return NewBytes(make([]byte, 17)), nil })
+		v = testDecode(r, ctx, key, func() (fscache.Data, error) { return sharedTestBytes(make([]byte, 17)), nil })
 		require.NoError(t, v.err)
 		require.Nil(t, v.lease)
 		releaseDecodedTestResult(v)
@@ -281,7 +293,7 @@ func TestSharedDecodeAdmissionFailureAndGenerations(t *testing.T) {
 		old, leader, err := r.acquire(key, 16)
 		require.NoError(t, err)
 		require.True(t, leader)
-		r.finish(old.entry, nil, errors.New("old failure"))
+		r.finish(old.entry, nil)
 		v := testDecode(r, ctx, key, convert)
 		require.NotNil(t, v.lease)
 		old.release()
@@ -305,10 +317,69 @@ func TestSharedDecodeAdmissionFailureAndGenerations(t *testing.T) {
 	})
 }
 
+type measuredSharedData struct {
+	fscache.Data
+	logical, backing int64
+	bytesCalls       int
+}
+
+func (d *measuredSharedData) Bytes() []byte {
+	d.bytesCalls++
+	return d.Data.Bytes()
+}
+
+func (d *measuredSharedData) Size() int64        { return d.logical }
+func (d *measuredSharedData) BackingSize() int64 { return d.backing }
+
+type unknownSharedData struct{ fscache.Data }
+
+func TestSharedDecodeBackingAccounting(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		logical, backing int64
+		unknown, unsized bool
+		shared           bool
+	}{
+		{name: "bounded backing", logical: 9, backing: 16, shared: true},
+		{name: "oversized backing", logical: 9, backing: 32},
+		{name: "oversized result", logical: 17, backing: 32},
+		{name: "unknown backing", unknown: true},
+		{name: "unsized data", unsized: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDecodedReadRegistry(32)
+			length, capacity := 9, 16
+			if tc.logical > 0 {
+				length, capacity = int(tc.logical), int(tc.backing)
+			}
+			base := NewBytes(make([]byte, length, capacity))
+			measured := &measuredSharedData{Data: base, logical: tc.logical, backing: tc.backing}
+			var value fscache.Data = measured
+			if tc.unknown {
+				value = base
+			} else if tc.unsized {
+				value = &unknownSharedData{Data: base}
+			}
+			data, lease, err := r.decode(t.Context(), decodedReadKey{path: "column"}, 9,
+				func() (fscache.Data, error) { return value, nil })
+			require.NoError(t, err)
+			require.Same(t, value, data)
+			require.Equal(t, tc.shared, lease != nil)
+			require.Zero(t, measured.bytesCalls, "size checks must not read or clone the payload")
+			if tc.shared {
+				require.Equal(t, int64(16), r.bytes, "charge the allocator size class")
+			}
+			releaseDecodedTestResult(decodedTestResult{data: data, lease: lease})
+			requireDecodeDrained(t, r)
+		})
+	}
+}
+
 func TestSharedDecodeKeyIsolation(t *testing.T) {
 	r := newDecodedReadRegistry(1024)
 	base := decodedReadKey{path: "a", offset: 1, size: 2, decoded: 16, codec: DecodeSharing{Codec: "x"}}
-	keys := []decodedReadKey{base}
+	keys := make([]decodedReadKey, 1, 8)
+	keys[0] = base
 	for _, change := range []func(*decodedReadKey){func(k *decodedReadKey) { k.path = "b" }, func(k *decodedReadKey) { k.offset++ }, func(k *decodedReadKey) { k.size++ }, func(k *decodedReadKey) { k.decoded++ }, func(k *decodedReadKey) { k.policy = SkipFullFilePreloads }, func(k *decodedReadKey) { k.codec.Codec = "y" }, func(k *decodedReadKey) { k.codec.Parameters[0]++ }} {
 		k := base
 		change(&k)
@@ -317,7 +388,7 @@ func TestSharedDecodeKeyIsolation(t *testing.T) {
 	held := make([]decodedTestResult, 0, len(keys))
 	calls := 0
 	for _, key := range keys {
-		v := testDecode(r, context.Background(), key, func() (fscache.Data, error) { calls++; return NewBytes([]byte("data")), nil })
+		v := testDecode(r, context.Background(), key, func() (fscache.Data, error) { calls++; return sharedTestBytes([]byte("data")), nil })
 		require.NoError(t, v.err)
 		held = append(held, v)
 	}
@@ -421,7 +492,8 @@ func TestSharedDecodeFillAdmissionAndKeyIsolation(t *testing.T) {
 
 	t.Run("key and properties", func(t *testing.T) {
 		r := newDecodedReadRegistry(1024)
-		keys := []decodedReadKey{base}
+		keys := make([]decodedReadKey, 1, 8)
+		keys[0] = base
 		for _, change := range []func(*decodedReadKey){
 			func(k *decodedReadKey) { k.path = "b" },
 			func(k *decodedReadKey) { k.offset++ },
@@ -499,6 +571,9 @@ func TestSharedDecodeFillWaitCancellationAndClose(t *testing.T) {
 		r.close(func() { retired.Add(1) })
 		require.ErrorContains(t, follower.wait(context.Background(), time.Second), "closed")
 		require.ErrorContains(t, follower.waitResult(context.Background()), "closed")
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.ErrorIs(t, follower.waitResult(canceled), context.Canceled)
 		_, err = r.acquireFill(key, true)
 		require.ErrorContains(t, err, "closed")
 		require.Zero(t, retired.Load())
@@ -583,9 +658,11 @@ func TestS3FSSharedDecodeEligibility(t *testing.T) {
 			v := IOVector{FilePath: "column", Entries: []IOEntry{{Size: 3, CachedDataSize: 3,
 				DecodeSharing: DecodeSharing{Codec: "test"}, ToCacheData: CacheOriginalData}}}
 			tc.change(&v)
-			finish, err := fs.prepareSharedDecode(&v)
+			scope, ticket, attempted, err := fs.prepareSharedDecodeForRead(&v)
 			require.NoError(t, err)
-			require.Nil(t, finish)
+			require.Nil(t, scope)
+			require.Nil(t, ticket)
+			require.False(t, attempted)
 			require.Zero(t, r.reads)
 			requireDecodeDrained(t, r)
 		})
@@ -599,8 +676,7 @@ func TestS3FSSelectedDecodeReadPaths(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			ctx := t.Context()
 			fs := newSelectedDecodeFS(t, path == "stream")
-			pinned := fs.AllocateCacheData(ctx, 128<<10)
-			defer pinned.Release()
+			admission := rejectSharedDecodeMemoryAdmission(t, fs)
 			for selected := range 3 {
 				t.Run(string(rune('0'+selected)), func(t *testing.T) {
 					if path == "stream" {
@@ -623,11 +699,13 @@ func TestS3FSSelectedDecodeReadPaths(t *testing.T) {
 					read := func(v *IOVector) {
 						original := reflect.ValueOf(v.Entries[selected].ToCacheData).Pointer()
 						if path == "individual" {
-							finish, err := fs.prepareSharedDecode(v)
+							scope, ticket, attempted, err := fs.prepareSharedDecodeForRead(v)
 							require.NoError(t, err)
-							require.NotNil(t, finish)
+							require.NotNil(t, scope)
+							require.Nil(t, ticket)
+							require.False(t, attempted)
 							err = fs.readEntriesIndividually(ctx, v)
-							finish()
+							scope.finish()
 							require.NoError(t, err)
 						} else {
 							if path == "stream" {
@@ -640,8 +718,12 @@ func TestS3FSSelectedDecodeReadPaths(t *testing.T) {
 					first, second := makeVector(), makeVector()
 					defer first.ReleaseReadResultOnError()
 					defer second.ReleaseReadResultOnError()
+					beforeRejections := admission.rejected.Load()
 					read(&first)
 					read(&second)
+					if path != "individual" {
+						require.Greater(t, admission.rejected.Load(), beforeRejections)
+					}
 					owner := first.Entries[selected].CachedData
 					for i := range first.Entries {
 						require.Equal(t, []byte("abcdefghi")[3*i:3*i+3], second.Entries[i].CachedData.Bytes())
@@ -666,9 +748,43 @@ func TestS3FSSelectedDecodeReadPaths(t *testing.T) {
 	}
 }
 
+type observedAdmissionCache struct {
+	fscache.DataCache
+	rejected atomic.Int32
+	afterGet func(bool)
+}
+
+func (c *observedAdmissionCache) Get(ctx context.Context, key fscache.CacheKey) (fscache.Data, bool) {
+	data, ok := c.DataCache.Get(ctx, key)
+	if c.afterGet != nil {
+		c.afterGet(ok)
+	}
+	return data, ok
+}
+
+func (c *observedAdmissionCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+	err := c.DataCache.Set(ctx, key, data)
+	if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
+		c.rejected.Add(1)
+	}
+	return err
+}
+
+// Reject publication through the real FIFO pressure admission path. A unique
+// owner and cleanup keep this process-wide target scoped to the test.
+func rejectSharedDecodeMemoryAdmission(t *testing.T, fs *S3FS) *observedAdmissionCache {
+	t.Helper()
+	cache := &observedAdmissionCache{DataCache: fs.memCache.cache}
+	fs.memCache.cache = cache
+	owner := t.Name()
+	SetMemoryCachePressureTargetPercentByOwner(owner, 1, time.Now().Add(10*time.Minute))
+	t.Cleanup(func() { ClearMemoryCachePressureTargetByOwner(owner) })
+	return cache
+}
+
 func newSelectedDecodeFS(t *testing.T, disk bool) *S3FS {
 	t.Helper()
-	config := CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 << 10)}
+	config := CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128)}
 	if disk {
 		config.DiskPath = ptrTo(t.TempDir())
 		config.DiskCapacity = ptrTo[toml.ByteSize](1 << 20)
@@ -710,7 +826,7 @@ func holdSharedDecodeQuota(t *testing.T, fs *S3FS) []decodedTestResult {
 	for i := 0; i < sharedDecodeMaxEntries; i++ {
 		key := decodedReadKey{path: "quota", offset: int64(i)}
 		result := testDecode(fs.decodedReads, context.Background(), key, func() (fscache.Data, error) {
-			return NewBytes([]byte("held")), nil
+			return sharedTestBytes([]byte("held")), nil
 		})
 		require.NoError(t, result.err)
 		require.NotNil(t, result.lease)
@@ -737,59 +853,78 @@ func TestS3FSSharedDecodeDiskFillEligibility(t *testing.T) {
 }
 
 func TestS3FSSharedDecodeDiskFillMemoryEligibility(t *testing.T) {
-	for _, kind := range []string{"reserved", "used", "pressure"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		size     int64
+		used     bool
+		pressure bool
+		want     bool
+	}{
+		{name: "available", size: 3, want: true},
+		{name: "evictable cache", size: 3, used: true, want: true},
+		{name: "oversized", size: 128<<10 + 1},
+		{name: "pressure", size: 3, pressure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			fs, _ := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
 			t.Cleanup(func() { requireDecodeDrained(t, fs.decodedReads) })
 			m := fs.memCache
 			const capacity = 128 << 10
-			switch kind {
-			case "reserved", "used":
+			if tc.used {
 				v := IOVector{FilePath: "occupied", Entries: []IOEntry{{Size: capacity,
-					CachedData: m.AllocateCacheData(t.Context(), capacity)}}}
+					CachedData: DefaultCacheDataAllocator().AllocateCacheData(t.Context(), capacity)}}}
 				t.Cleanup(v.ReleaseReadResultOnError)
-				if kind == "used" {
-					require.NoError(t, m.Update(t.Context(), &v, false))
-					v.ReleaseReadResultOnError()
-				}
-			case "pressure":
+				require.NoError(t, m.Update(t.Context(), &v, false))
+				v.ReleaseReadResultOnError()
+				require.Equal(t, int64(capacity), m.cache.Used())
+			}
+			if tc.pressure {
 				owner := t.Name()
 				t.Cleanup(func() { ClearMemoryCachePressureTargetByOwner(owner) })
 				SetMemoryCachePressureTargetPercentByOwner(owner, 50, time.Now().Add(time.Minute))
 			}
-			m.capacityMu.Lock()
-			reserved := m.reservedBytes
-			m.capacityMu.Unlock()
 			used := m.cache.Used()
-			if kind == "reserved" {
-				require.Equal(t, int64(capacity), reserved)
-				require.Zero(t, used)
-			} else {
-				require.Zero(t, reserved)
-				if kind == "used" {
-					require.Equal(t, int64(capacity), used)
-				}
-			}
-			require.Equal(t, kind == "used", sharedDecodeFillMayStart(m, 3))
+			require.Equal(t, tc.want, sharedDecodeFillMayStart(m, tc.size))
 			v := selectedDecodeVector(1)
-			finish, ticket, attempted, err := fs.prepareSharedDecodeForRead(&v)
-			if finish != nil {
-				t.Cleanup(finish)
+			v.Entries[1].CachedDataSize = tc.size
+			scope, ticket, attempted, err := fs.prepareSharedDecodeForRead(&v)
+			if scope != nil {
+				t.Cleanup(scope.finish)
 			}
 			t.Cleanup(ticket.finish)
 			require.NoError(t, err)
-			require.Equal(t, kind == "used", attempted)
-			if kind == "used" {
+			require.Equal(t, tc.want, attempted)
+			if tc.want {
 				require.NotNil(t, ticket)
 				require.True(t, ticket.leader)
 			} else {
 				require.Nil(t, ticket)
 			}
-			m.capacityMu.Lock()
-			afterReserved := m.reservedBytes
-			m.capacityMu.Unlock()
-			require.Equal(t, reserved, afterReserved, "the hint must not reserve capacity")
 			require.Equal(t, used, m.cache.Used(), "the hint must not evict data")
+		})
+	}
+}
+
+func TestS3FSCacheAllocationEvictsBeforeAllocating(t *testing.T) {
+	for _, withHint := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hint=%t", withHint), func(t *testing.T) {
+			ctx := t.Context()
+			m := NewMemCache(fscache.ConstCapacity(8), nil, nil, t.Name())
+			t.Cleanup(func() { m.Close(ctx) })
+			v := IOVector{FilePath: "column", Entries: []IOEntry{{Size: 8, CachedData: NewBytes([]byte("12345678"))}}}
+			t.Cleanup(v.ReleaseReadResultOnError)
+			require.NoError(t, m.Update(ctx, &v, false))
+			v.ReleaseReadResultOnError()
+			require.Equal(t, int64(8), m.cache.Used())
+			fs := &S3FS{memCache: m}
+			var allocated fscache.Data
+			if withHint {
+				allocated = fs.AllocateCacheDataWithHint(ctx, 8, malloc.NoClear)
+			} else {
+				allocated = fs.AllocateCacheData(ctx, 8)
+			}
+			t.Cleanup(allocated.Release)
+			require.Zero(t, m.cache.Used())
 		})
 	}
 }
@@ -1058,6 +1193,9 @@ func TestS3FSSharedDecodeDiskFillClose(t *testing.T) {
 	decodeEntered, releaseDecode := make(chan struct{}), make(chan struct{})
 	var decodeStarted, releaseDecodeOnce sync.Once
 	fs, counters := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
+	storage := &blockingReadObjectStorage{ObjectStorage: fs.storage, readStarted: make(chan struct{}), releaseRead: make(chan struct{})}
+	fs.storage = storage
+	releaseStorage := sync.OnceFunc(func() { close(storage.releaseRead) })
 	decode := func(ctx context.Context, _ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 		decodeStarted.Do(func() { close(decodeEntered) })
 		<-releaseDecode
@@ -1078,6 +1216,7 @@ func TestS3FSSharedDecodeDiskFillClose(t *testing.T) {
 	closeStarted := false
 	t.Cleanup(func() {
 		releaseDecodeOnce.Do(func() { close(releaseDecode) })
+		releaseStorage()
 		workers.Wait()
 		if closeStarted {
 			<-closeDone
@@ -1114,7 +1253,8 @@ func TestS3FSSharedDecodeDiskFillClose(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("close waited for active disk-fill read")
 	}
-	require.False(t, fs.memCache.closed.Load())
+	_, registered := allMemoryCaches.Load(fs.memCache)
+	require.True(t, registered)
 	select {
 	case err := <-secondDone:
 		require.ErrorContains(t, err, "closed")
@@ -1124,11 +1264,88 @@ func TestS3FSSharedDecodeDiskFillClose(t *testing.T) {
 	require.Equal(t, beforeDisk, counters.FileService.Cache.Disk.Read.Load())
 	require.Equal(t, beforeS3, counters.FileService.S3.Get.Load())
 	releaseDecodeOnce.Do(func() { close(releaseDecode) })
-	require.ErrorContains(t, <-firstDone, "closed")
+	select {
+	case err := <-firstDone:
+		require.ErrorContains(t, err, "closed")
+	case <-storage.readStarted:
+		releaseStorage()
+		<-firstDone
+		t.Fatal("closed disk decode fell back to object storage")
+	case <-time.After(5 * time.Second):
+		t.Fatal("closed disk decode did not return")
+	}
 	workers.Wait()
-	require.True(t, fs.memCache.closed.Load())
+	require.Zero(t, storage.readCount.Load())
+	require.Equal(t, beforeS3, counters.FileService.S3.Get.Load())
+	_, registered = allMemoryCaches.Load(fs.memCache)
+	require.False(t, registered)
 	releaseVectors()
 	requireDecodeDrained(t, fs.decodedReads)
+}
+
+func TestS3FSSharedDecodeDiskCanceledDoesNotFallback(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "cancel"
+		if deadline {
+			name = "deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			fs, counters := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
+			storage := &blockingReadObjectStorage{ObjectStorage: fs.storage, readStarted: make(chan struct{}), releaseRead: make(chan struct{})}
+			fs.storage = storage
+			releaseStorage := sync.OnceFunc(func() { close(storage.releaseRead) })
+			entered, release := make(chan struct{}), make(chan struct{})
+			releaseDecode := sync.OnceFunc(func() { close(release) })
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if deadline {
+				ctx, cancel = context.WithTimeout(t.Context(), 2*time.Second)
+			} else {
+				ctx, cancel = context.WithCancel(t.Context())
+			}
+			v := selectedDecodeVector(1)
+			v.Entries[1].ToCacheData = func(ctx context.Context, _ io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
+				close(entered)
+				<-release
+				return a.CopyToCacheData(ctx, data), nil
+			}
+			done := make(chan error, 1)
+			workerFinished := make(chan struct{})
+			go func() { defer close(workerFinished); done <- fs.Read(ctx, &v) }()
+			t.Cleanup(func() {
+				cancel()
+				releaseDecode()
+				releaseStorage()
+				<-workerFinished
+				v.ReleaseReadResultOnError()
+			})
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("disk decode did not start")
+			}
+			if !deadline {
+				cancel()
+			}
+			<-ctx.Done()
+			beforeS3 := counters.FileService.S3.Get.Load()
+			releaseDecode()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, ctx.Err())
+			case <-storage.readStarted:
+				releaseStorage()
+				<-done
+				t.Fatal("canceled disk decode fell back to object storage")
+			case <-time.After(5 * time.Second):
+				t.Fatal("canceled disk decode did not return")
+			}
+			require.Zero(t, storage.readCount.Load())
+			require.Equal(t, beforeS3, counters.FileService.S3.Get.Load())
+			v.ReleaseReadResultOnError()
+			requireDecodeDrained(t, fs.decodedReads)
+		})
+	}
 }
 
 func TestS3FSSharedDecodeDiskFillSkipsColdPaths(t *testing.T) {
@@ -1198,6 +1415,33 @@ func TestS3FSSharedDecodeDiskFillSkipsColdPaths(t *testing.T) {
 	}
 }
 
+func TestS3FSSharedDecodeFallbackDoesNotRejoin(t *testing.T) {
+	fs, counters := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
+	beforeS3 := counters.FileService.S3.Get.Load()
+	calls, generationsOnFallback := 0, -1
+	v := IOVector{FilePath: "columns", Entries: []IOEntry{{
+		Size: 3, CachedDataSize: 3, DecodeSharing: DecodeSharing{Codec: "test-retry"},
+		ToCacheData: func(ctx context.Context, _ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("injected disk conversion failure")
+			}
+			fs.decodedReads.mu.Lock()
+			generationsOnFallback = fs.decodedReads.count
+			fs.decodedReads.mu.Unlock()
+			return allocator.CopyToCacheData(ctx, data), nil
+		},
+	}}}
+	t.Cleanup(v.ReleaseReadResultOnError)
+	require.NoError(t, fs.Read(t.Context(), &v))
+	require.Equal(t, 2, calls)
+	require.Equal(t, 0, generationsOnFallback, "storage fallback must not join another decode generation")
+	require.Greater(t, counters.FileService.S3.Get.Load(), beforeS3)
+	require.Equal(t, []byte("abc"), v.Entries[0].CachedData.Bytes())
+	v.ReleaseReadResultOnError()
+	requireDecodeDrained(t, fs.decodedReads)
+}
+
 func selectedDecodeVector(selected int) IOVector {
 	v := IOVector{FilePath: "columns", Policy: SkipFullFilePreloads, Entries: make([]IOEntry, 3)}
 	for i := range v.Entries {
@@ -1249,11 +1493,11 @@ func (f *failingDecodeCache) Set(context.Context, fscache.CacheKey, fscache.Data
 
 func TestS3FSSelectedDecodeFailureIsolation(t *testing.T) {
 	fs := newSelectedDecodeFS(t, false)
-	pinned := fs.AllocateCacheData(t.Context(), 128<<10)
-	defer pinned.Release()
+	admission := rejectSharedDecodeMemoryAdmission(t, fs)
 	first := selectedDecodeVector(1)
 	defer first.ReleaseReadResultOnError()
 	require.NoError(t, fs.Read(t.Context(), &first))
+	require.Positive(t, admission.rejected.Load())
 	owner := first.Entries[1].CachedData
 	for _, failed := range []int{0, 2} {
 		v := selectedDecodeVector(1)
@@ -1329,13 +1573,87 @@ func TestS3FSSelectedDecodeCloseDuringSibling(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("close waited for sibling conversion")
 	}
-	require.False(t, fs.memCache.closed.Load())
+	_, registered := allMemoryCaches.Load(fs.memCache)
+	require.True(t, registered)
 	unblockSibling()
 	<-done
 	require.NoError(t, readErr)
-	require.True(t, fs.memCache.closed.Load())
+	_, registered = allMemoryCaches.Load(fs.memCache)
+	require.False(t, registered)
 	require.Equal(t, []byte("def"), v.Entries[1].CachedData.Bytes())
 	require.NotNil(t, v.Entries[1].decodeLease)
+	v.ReleaseReadResultOnError()
+	requireDecodeDrained(t, fs.decodedReads)
+}
+
+func TestS3FSSelectedDecodeDiskSiblingFallbackAfterClose(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	fs, counters := newSharedDecodeDiskFillFS(t, CacheCallbacks{}, true)
+	beforeS3 := counters.FileService.S3.Get.Load()
+	beforeDiskHits := counters.FileService.Cache.Disk.Hit.Load()
+	entered, release := make(chan struct{}), make(chan struct{})
+	releaseSibling := sync.OnceFunc(func() { close(release) })
+	v := selectedDecodeVector(0)
+	calls := 0
+	v.Entries[1].ToCacheData = func(ctx context.Context, _ io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
+		calls++
+		if calls == 1 {
+			close(entered)
+			<-release
+			return nil, errors.New("injected sibling disk conversion failure")
+		}
+		return a.CopyToCacheData(ctx, data), nil
+	}
+	done, finished := make(chan error, 1), make(chan struct{})
+	closeDone := make(chan struct{})
+	closeStarted := false
+	go func() { defer close(finished); done <- fs.Read(ctx, &v) }()
+	t.Cleanup(func() {
+		releaseSibling()
+		cancel()
+		select {
+		case <-finished:
+			v.ReleaseReadResultOnError()
+		case <-time.After(5 * time.Second):
+			t.Error("read did not stop during cleanup")
+		}
+		if closeStarted {
+			select {
+			case <-closeDone:
+			case <-time.After(5 * time.Second):
+				t.Error("close did not stop during cleanup")
+			}
+		}
+	})
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("disk read did not reach the sibling conversion")
+	}
+	// The selected column was already decoded from disk before the sibling
+	// failed. Closing must not erase it or prevent the sibling's normal retry.
+	closeStarted = true
+	go func() { fs.Close(ctx); close(closeDone) }()
+	select {
+	case <-closeDone:
+	case <-ctx.Done():
+		t.Fatal("close waited for the active read")
+	}
+	releaseSibling()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("sibling fallback did not complete")
+	}
+	require.Equal(t, 2, calls)
+	require.Greater(t, counters.FileService.Cache.Disk.Hit.Load(), beforeDiskHits)
+	require.Greater(t, counters.FileService.S3.Get.Load(), beforeS3)
+	require.NotNil(t, v.Entries[0].decodeLease)
+	for i := range v.Entries {
+		require.Equal(t, []byte("abcdefghi")[3*i:3*i+3], v.Entries[i].CachedData.Bytes())
+	}
 	v.ReleaseReadResultOnError()
 	requireDecodeDrained(t, fs.decodedReads)
 }
@@ -1356,12 +1674,7 @@ func TestS3FSSharedDecodeDiskHits(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "column", Entries: []IOEntry{{Size: int64(n), Data: compressed}}, Policy: SkipAllCache}))
 	require.NoError(t, fs.PrefetchFile(ctx, "column"))
 	fs.FlushCache(ctx)
-	pinned := fs.AllocateCacheData(ctx, 128<<10)
-	t.Cleanup(func() {
-		if pinned != nil {
-			pinned.Release()
-		}
-	})
+	admission := rejectSharedDecodeMemoryAdmission(t, fs)
 	var calls atomic.Int32
 	decode := func(ctx context.Context, _ io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
 		calls.Add(1)
@@ -1379,7 +1692,20 @@ func TestS3FSSharedDecodeDiskHits(t *testing.T) {
 	before := counters.FileService.S3.Get.Load()
 	beforeDisk := counters.FileService.Cache.Disk.Read.Load()
 	vectors := make([]IOVector, 8)
+	ready, proceed := make(chan struct{}, len(vectors)), make(chan struct{})
+	releaseReads := sync.OnceFunc(func() { close(proceed) })
+	var memoryHits atomic.Int32
+	admission.afterGet = func(hit bool) {
+		if hit {
+			memoryHits.Add(1)
+		}
+		ready <- struct{}{}
+		<-proceed
+	}
+	var workers sync.WaitGroup
 	t.Cleanup(func() {
+		releaseReads()
+		workers.Wait()
 		for i := range vectors {
 			vectors[i].ReleaseReadResultOnError()
 		}
@@ -1387,11 +1713,27 @@ func TestS3FSSharedDecodeDiskHits(t *testing.T) {
 	done := make(chan error, 8)
 	for i := range vectors {
 		vectors[i] = makeVector()
-		go func(i int) { done <- fs.Read(ctx, &vectors[i]) }(i)
+		workers.Add(1)
+		go func(i int) {
+			defer workers.Done()
+			done <- fs.Read(ctx, &vectors[i])
+		}(i)
 	}
+	for range vectors {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			t.Fatal("readers did not reach the memory-cache barrier")
+		}
+	}
+	require.Zero(t, memoryHits.Load())
+	releaseReads()
 	for range vectors {
 		require.NoError(t, <-done)
 	}
+	workers.Wait()
+	admission.afterGet = nil
+	require.Positive(t, admission.rejected.Load())
 	require.Equal(t, int32(1), calls.Load())
 	require.Equal(t, before, counters.FileService.S3.Get.Load())
 	require.Equal(t, beforeDisk+8, counters.FileService.Cache.Disk.Read.Load())
@@ -1403,8 +1745,7 @@ func TestS3FSSharedDecodeDiskHits(t *testing.T) {
 	}
 	require.Zero(t, owner.(*Bytes).refs.Load())
 	requireDecodeDrained(t, fs.decodedReads)
-	pinned.Release()
-	pinned = nil
+	ClearMemoryCachePressureTargetByOwner(t.Name())
 	// The cache can now admit the result. A later memory hit must not decode or
 	// acquire a sharing lease, and uses the same original converter contract.
 	v := makeVector()
@@ -1426,6 +1767,9 @@ type finalReleaseBarrier struct {
 	unblock chan struct{}
 }
 
+func (d *finalReleaseBarrier) Size() int64        { return d.base.Size() }
+func (d *finalReleaseBarrier) BackingSize() int64 { return d.base.BackingSize() }
+
 func (d *finalReleaseBarrier) Release() {
 	if d.base.refs.Load() == 1 {
 		close(d.entered)
@@ -1436,7 +1780,7 @@ func (d *finalReleaseBarrier) Release() {
 
 func TestSharedDecodeQuotaWaitsForFinalRelease(t *testing.T) {
 	r := newDecodedReadRegistry(16)
-	base := NewBytes([]byte("data"))
+	base := sharedTestBytes([]byte("data"))
 	data := &finalReleaseBarrier{Data: base, base: base, entered: make(chan struct{}), unblock: make(chan struct{})}
 	unblockRelease := sync.OnceFunc(func() { close(data.unblock) })
 	t.Cleanup(unblockRelease)

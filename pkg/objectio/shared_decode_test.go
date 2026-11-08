@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -33,7 +34,7 @@ import (
 
 func TestSharedDecodedColumnTopNIsolation(t *testing.T) {
 	ctx := context.Background()
-	capacity := toml.ByteSize(128 << 10)
+	capacity := toml.ByteSize(4 << 10)
 	fs, err := fileservice.NewS3FS(ctx,
 		fileservice.ObjectStorageArguments{Name: "shared-column", Endpoint: "disk", Bucket: t.TempDir()},
 		fileservice.CacheConfig{MemoryCapacity: &capacity}, nil, false, false)
@@ -61,8 +62,9 @@ func TestSharedDecodedColumnTopNIsolation(t *testing.T) {
 	require.NoError(t, err)
 	dataMeta := meta.MustGetMeta(SchemaData)
 	fs.FlushCache(ctx)
-	pinned := fs.AllocateCacheData(ctx, int(capacity))
-	t.Cleanup(pinned.Release)
+	pressureOwner := t.Name()
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(pressureOwner, 1, time.Now().Add(10*time.Minute))
+	t.Cleanup(func() { fileservice.ClearMemoryCachePressureTargetByOwner(pressureOwner) })
 	read := func(share bool) fileservice.IOVector {
 		var options []ReadOneBlockOption
 		if share {
@@ -76,6 +78,12 @@ func TestSharedDecodedColumnTopNIsolation(t *testing.T) {
 	}
 	first, second := read(true), read(true)
 	owner := first.Entries[0].CachedData
+	require.Greater(t, owner.(interface{ Size() int64 }).Size(), int64(capacity)/100)
+	probe := fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{
+		Offset: first.Entries[0].Offset, Size: first.Entries[0].Size,
+	}}}
+	require.NoError(t, fs.ReadCache(ctx, &probe))
+	require.Nil(t, probe.Entries[0].CachedData, "pressure must reject memory-cache admission")
 	require.Same(t, owner, second.Entries[0].CachedData)
 	require.True(t, isValidatedVectorCacheData(owner), "sharing must preserve the concrete validation marker")
 	backing := owner.(validatedVectorCacheDataMarker).validatedVectorBackingForScope()

@@ -18,10 +18,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/require"
@@ -31,7 +34,7 @@ import (
 // and payload are identical. Independent reads have no overlapping lifetimes;
 // overlapping reads hold their results until every participant has completed.
 func BenchmarkS3FSSharedDecode(b *testing.B) {
-	for _, mode := range []string{"memory_hit", "independent", "independent_keys", "overlapping"} {
+	for _, mode := range []string{"memory_hit", "independent", "independent_keys", "overlapping", "warm_fill"} {
 		b.Run(mode, func(b *testing.B) {
 			for _, share := range []bool{false, true} {
 				name := "off"
@@ -40,8 +43,9 @@ func BenchmarkS3FSSharedDecode(b *testing.B) {
 				}
 				b.Run(name, func(b *testing.B) {
 					ctx := context.Background()
+					var counters perfcounter.CounterSet
 					fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "decode-bench", Endpoint: "disk", Bucket: b.TempDir()},
-						CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(b.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](2 << 20)}, nil, false, false)
+						CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(b.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](2 << 20)}, []*perfcounter.CounterSet{&counters}, false, false)
 					require.NoError(b, err)
 					b.Cleanup(func() { fs.Close(ctx) })
 					raw := bytes.Repeat([]byte("abcdef0123456789"), 32<<10)
@@ -59,9 +63,10 @@ func BenchmarkS3FSSharedDecode(b *testing.B) {
 						}
 					}
 					fs.FlushCache(ctx)
-					if mode != "memory_hit" {
-						pinned := fs.AllocateCacheData(ctx, 1<<20)
-						b.Cleanup(pinned.Release)
+					if mode != "memory_hit" && mode != "warm_fill" {
+						owner := b.Name()
+						SetMemoryCachePressureTargetPercentByOwner(owner, 1, time.Now().Add(time.Hour))
+						b.Cleanup(func() { ClearMemoryCachePressureTargetByOwner(owner) })
 					}
 					var calls atomic.Int64
 					convert := func(ctx context.Context, _ io.Reader, data []byte, a CacheDataAllocator) (fscache.Data, error) {
@@ -84,20 +89,46 @@ func BenchmarkS3FSSharedDecode(b *testing.B) {
 					warm := makeRead()
 					require.NoError(b, fs.Read(ctx, &warm))
 					warm.Release()
+					if mode == "warm_fill" {
+						fs.FlushCache(ctx)
+					}
+					if mode != "memory_hit" {
+						require.Positive(b, calls.Load())
+						probe := makeRead()
+						require.NoError(b, fs.ReadCache(ctx, &probe))
+						require.Nil(b, probe.Entries[0].CachedData, "benchmark must miss memory")
+					}
 					calls.Store(0)
+					beforeDisk := counters.FileService.Cache.Disk.Read.Load()
+					beforeMemory := counters.FileService.Cache.Memory.Hit.Load()
+					beforeS3 := counters.FileService.S3.Get.Load()
 					b.ReportAllocs()
 					b.ResetTimer()
-					if mode == "overlapping" || mode == "independent_keys" {
+					if mode == "overlapping" || mode == "independent_keys" || mode == "warm_fill" {
 						for b.Loop() {
+							if mode == "warm_fill" {
+								b.StopTimer()
+								fs.FlushCache(ctx)
+								b.StartTimer()
+							}
 							var reads [8]IOVector
 							done := make(chan error, len(reads))
+							start := make(chan struct{})
+							var ready sync.WaitGroup
 							for i := range reads {
 								reads[i] = makeRead()
 								if mode == "independent_keys" {
 									reads[i].FilePath = paths[i]
 								}
-								go func(i int) { done <- fs.Read(ctx, &reads[i]) }(i)
+								ready.Add(1)
+								go func(i int) {
+									ready.Done()
+									<-start
+									done <- fs.Read(ctx, &reads[i])
+								}(i)
 							}
+							ready.Wait()
+							close(start)
 							for range reads {
 								require.NoError(b, <-done)
 							}
@@ -116,6 +147,9 @@ func BenchmarkS3FSSharedDecode(b *testing.B) {
 						}
 					}
 					b.ReportMetric(float64(calls.Load())/float64(b.N), "decodes/op")
+					b.ReportMetric(float64(counters.FileService.Cache.Disk.Read.Load()-beforeDisk)/float64(b.N), "disk_reads/op")
+					b.ReportMetric(float64(counters.FileService.Cache.Memory.Hit.Load()-beforeMemory)/float64(b.N), "mem_hits/op")
+					b.ReportMetric(float64(counters.FileService.S3.Get.Load()-beforeS3)/float64(b.N), "s3_gets/op")
 				})
 			}
 		})

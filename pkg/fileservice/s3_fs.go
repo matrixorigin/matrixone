@@ -270,14 +270,14 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		return s.memCache.AllocateCacheData(ctx, size)
+		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		return s.memCache.AllocateCacheDataWithHint(ctx, size, hints)
+		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
@@ -632,7 +632,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	var finishDecode func()
+	var decodeScope *decodedReadScope
 	var decodePrepared bool
 	var fillTicket *decodedFillTicket
 	var fillAttempted bool
@@ -642,8 +642,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		ticket.finish()
 	}
 	defer func() {
-		if finishDecode != nil {
-			finishDecode()
+		if decodeScope != nil {
+			decodeScope.finish()
 		}
 	}()
 	defer finishFill()
@@ -740,7 +740,7 @@ read_memory_cache:
 read_disk_cache:
 	if !decodePrepared {
 		decodePrepared = true
-		finishDecode, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
+		decodeScope, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
 		if err != nil {
 			return err
 		}
@@ -796,6 +796,18 @@ read_disk_cache:
 		}
 		if vector.allDone() {
 			return nil
+		}
+		if decodeScope != nil {
+			// A disk-cache conversion error is normally a miss. A caller stop or
+			// an observed close is terminal for this read, before any other tier.
+			if err = ctx.Err(); err != nil {
+				finishFill()
+				return err
+			}
+			if decodeScope.closedDuringDecode {
+				finishFill()
+				return sharedDecodeClosed()
+			}
 		}
 
 		// try to cache IOEntry if not caching the full file

@@ -30,7 +30,7 @@ var (
 	SharedDecodeAbandoned   = sharedDecodeCounter.WithLabelValues("bypass_abandoned")
 	SharedDecodeClosed      = sharedDecodeCounter.WithLabelValues("closed")
 	SharedDecodeActive      = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "mo", Subsystem: "fs", Name: "shared_decode_active", Help: "Live decoded-read generations, including cleanup."})
-	SharedDecodeReserved    = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "mo", Subsystem: "fs", Name: "shared_decode_reserved_bytes", Help: "Backing bytes reserved for active decoded-read sharing."})
+	SharedDecodeReserved    = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "mo", Subsystem: "fs", Name: "shared_decode_reserved_bytes", Help: "Addressable backing bytes reserved for active decoded-read sharing."})
 )
 
 var (

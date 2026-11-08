@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -31,66 +30,12 @@ import (
 )
 
 type MemCache struct {
-	closed        atomic.Bool
-	cache         fscache.DataCache
-	counterSets   []*perfcounter.CounterSet
-	callbacksMu   [256]sync.Mutex
-	capacityMu    sync.Mutex
-	reservedBytes int64
+	cache       fscache.DataCache
+	counterSets []*perfcounter.CounterSet
+	callbacksMu [256]sync.Mutex
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
-
-// reservedCacheData marks cache data charged against MemCache.reservedBytes
-// until the entry is published into the memory cache. This carries main's
-// fill-admission reservation accounting onto the 4.2-dev MemCache.
-type reservedCacheData struct {
-	fscache.Data
-	m        *MemCache
-	size     int64
-	released sync.Once
-}
-
-// publish releases the pending reservation exactly once, when the wrapped
-// data becomes a published cache entry.
-func (d *reservedCacheData) publish() {
-	d.released.Do(func() {
-		d.m.capacityMu.Lock()
-		d.m.reservedBytes -= d.size
-		d.m.capacityMu.Unlock()
-	})
-}
-
-// AllocateCacheData allocates cache data and charges its size as a pending
-// reservation against the memory cache. The reservation is released once the
-// data is published through MemCache.Update, so concurrent readers can treat
-// it as committed memory when deciding whether a new fill may start.
-func (m *MemCache) AllocateCacheData(ctx context.Context, size int) fscache.Data {
-	data := &reservedCacheData{
-		Data: DefaultCacheDataAllocator().AllocateCacheData(ctx, size),
-		m:    m,
-		size: int64(size),
-	}
-	m.capacityMu.Lock()
-	m.reservedBytes += int64(size)
-	m.capacityMu.Unlock()
-	return data
-}
-
-// AllocateCacheDataWithHint is AllocateCacheData for hint-aware callers.
-// The pending reservation accounting is identical: the charge is released
-// when the data is published through MemCache.Update.
-func (m *MemCache) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
-	data := &reservedCacheData{
-		Data: DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints),
-		m:    m,
-		size: int64(size),
-	}
-	m.capacityMu.Lock()
-	m.reservedBytes += int64(size)
-	m.capacityMu.Unlock()
-	return data
-}
 
 var (
 	memCachePressureMu                sync.Mutex
@@ -418,9 +363,6 @@ func (m *MemCache) Update(
 		if err != nil {
 			return err
 		}
-		if reserved, ok := entry.CachedData.(*reservedCacheData); ok {
-			reserved.publish()
-		}
 	}
 	return nil
 }
@@ -461,7 +403,6 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 }
 
 func (m *MemCache) Close(ctx context.Context) {
-	m.closed.Store(true)
 	m.Flush(ctx)
 	allMemoryCaches.Delete(m)
 }

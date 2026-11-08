@@ -16,12 +16,12 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -32,6 +32,8 @@ import (
 // caller must consume every borrowed decoded view before releasing the complete
 // IOVector; only owned results may escape that scope.
 // A zero descriptor is ignored. Only write-once, non-reused paths are eligible.
+// Results without trustworthy logical and retained-size information use the
+// ordinary unshared path.
 type DecodeSharing struct {
 	Codec      string
 	Parameters [2]uint64
@@ -58,7 +60,6 @@ type decodedRead struct {
 	key          decodedReadKey
 	done         chan struct{}
 	finished     bool
-	err          error
 	data         fscache.Data // one registry reference, never a wrapper/copy
 	participants int
 	bytes        int64
@@ -88,6 +89,29 @@ type decodedReadLease struct {
 	registry *decodedReadRegistry
 	entry    *decodedRead
 	released atomic.Bool
+}
+
+// decodedReadScope owns the selected entry's temporary converter and lease for
+// one guarded S3FS read. It exists only after that read opts into sharing.
+type decodedReadScope struct {
+	registry           *decodedReadRegistry
+	vector             *IOVector
+	index              int
+	original           func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error)
+	lease              *decodedReadLease
+	bypassSharing      bool
+	closedDuringDecode bool
+}
+
+func (scope *decodedReadScope) finish() {
+	entry := &scope.vector.Entries[scope.index]
+	entry.ToCacheData = scope.original
+	if entry.CachedData != nil {
+		entry.decodeLease = scope.lease
+	} else {
+		scope.lease.release()
+	}
+	scope.registry.endRead()
 }
 
 type decodedFillTicket struct {
@@ -241,7 +265,7 @@ func (r *decodedReadRegistry) close(retire func()) {
 	for key, entry := range r.entries {
 		delete(r.entries, key)
 		if !entry.finished {
-			entry.finished, entry.err = true, sharedDecodeClosed()
+			entry.finished = true
 			close(entry.done)
 		}
 	}
@@ -289,15 +313,15 @@ func (r *decodedReadRegistry) acquire(key decodedReadKey, bytes int64) (lease *d
 	return &decodedReadLease{registry: r, entry: entry}, true, nil
 }
 
-// finish seals one generation. A nil data/nil error result means bypass; it
-// also retires an abandoned conversion while unwinding a panic, without recover.
-func (r *decodedReadRegistry) finish(entry *decodedRead, data fscache.Data, err error) bool {
+// finish seals one generation. Nil data wakes followers to perform their own
+// conversion, including when a leader fails or unwinds a panic.
+func (r *decodedReadRegistry) finish(entry *decodedRead, data fscache.Data) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if entry.finished {
 		return false
 	}
-	entry.finished, entry.err = true, err
+	entry.finished = true
 	if data != nil {
 		data.Retain()
 		entry.data = data
@@ -337,25 +361,42 @@ func (lease *decodedReadLease) release() {
 	r.mu.Unlock()
 }
 
+func (r *decodedReadRegistry) convert(ctx context.Context, convert func() (fscache.Data, error)) (fscache.Data, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if closed {
+		return nil, sharedDecodeClosed()
+	}
+	metric.SharedDecodeConversions.Inc()
+	return convert()
+}
+
 func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, bytes int64, convert func() (fscache.Data, error)) (data fscache.Data, lease *decodedReadLease, err error) {
 	if err = ctx.Err(); err != nil {
 		return
 	}
-	run := func() (fscache.Data, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		r.mu.Lock()
-		closed := r.closed
-		r.mu.Unlock()
-		if closed {
-			return nil, sharedDecodeClosed()
-		}
-		metric.SharedDecodeConversions.Inc()
-		return convert()
+	run := func() (fscache.Data, error) { return r.convert(ctx, convert) }
+	// The default allocator uses power-of-two classes (or an allocation no
+	// larger than that class). Charge the class until the shared reference is
+	// released, and bypass sharing if a result cannot prove its retained size.
+	backing, ok := malloc.ClassAllocationSize(uint64(max(bytes, 0)))
+	if !ok {
+		metric.SharedDecodeAdmission.Inc()
+		data, err = run()
+		return
 	}
-	lease, leader, err := r.acquire(key, bytes)
+	lease, leader, err := r.acquire(key, int64(backing))
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
 		metric.SharedDecodeClosed.Inc()
 		return
 	}
@@ -374,7 +415,7 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 	entry := lease.entry
 	if leader {
 		metric.SharedDecodeLeaders.Inc()
-		defer r.finish(entry, nil, nil)
+		defer r.finish(entry, nil)
 		data, err = run()
 		if err == nil {
 			err = ctx.Err()
@@ -384,19 +425,26 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 				data.Release()
 				data = nil
 			}
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				r.finish(entry, nil, nil)
-			} else {
-				r.finish(entry, nil, err)
+			r.finish(entry, nil)
+			return
+		}
+		logicalSize, retainedSize := int64(-1), int64(-1)
+		if sized, ok := data.(interface {
+			Size() int64
+			BackingSize() int64
+		}); ok {
+			retainedSize = sized.BackingSize()
+			if retainedSize >= 0 {
+				logicalSize = sized.Size()
 			}
-			return
 		}
-		if data == nil || int64(len(data.Bytes())) > bytes {
+		if logicalSize < 0 || logicalSize > bytes ||
+			retainedSize < logicalSize || retainedSize > int64(backing) {
 			metric.SharedDecodeAdmission.Inc()
-			r.finish(entry, nil, nil)
+			r.finish(entry, nil)
 			return
 		}
-		if !r.finish(entry, data, nil) {
+		if !r.finish(entry, data) {
 			data.Release()
 			data = nil
 			err = sharedDecodeClosed()
@@ -421,13 +469,12 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 	case <-entry.done:
 	}
 	r.mu.Lock()
-	if r.closed {
-		err = sharedDecodeClosed()
-	} else if ctx.Err() != nil {
+	if ctx.Err() != nil {
 		err = ctx.Err()
+	} else if r.closed {
+		err = sharedDecodeClosed()
 	} else {
-		err = entry.err
-		if err == nil && entry.data != nil {
+		if entry.data != nil {
 			data = entry.data
 			data.Retain()
 		}
@@ -449,16 +496,12 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 	return
 }
 
-// This is only an admission hint. Used cache data may be evicted. 4.2-dev
-// MemCache accounts reserved bytes, so admission requires headroom for
-// the decoded payload and no active memory-pressure target. Existing fills
-// still accept joins.
+// This is only an admission hint: used cache data may be evicted, and a
+// later update can still be rejected. Existing fills may accept joins even
+// when pressure starts after the leader was admitted.
 func sharedDecodeFillMayStart(m *MemCache, decodedSize int64) bool {
-	m.capacityMu.Lock()
 	capacity := m.cache.Capacity()
-	available := capacity - m.reservedBytes
-	m.capacityMu.Unlock()
-	if decodedSize > available {
+	if decodedSize <= 0 || decodedSize > capacity {
 		return false
 	}
 	_, pressureActive := memoryCachePressureTarget(capacity)
@@ -475,20 +518,11 @@ func sharedDecodeDiskFillAvailable(d *DiskCache, path string, vector *IOVector) 
 	return len(vector.Entries) == 1 && d.cache.Contains(d.pathForIOEntry(path, vector.Entries[0]))
 }
 
-// prepareSharedDecode is called only after a memory-cache miss. The wrapper
+// prepareSharedDecodeForRead is called only after a memory-cache miss. The wrapper
 // shares conversion, not I/O or cache-update outcomes. Its finalizer runs after
 // the enclosing read's deferred cache updates and transfers the ticket to the
 // final entry (which helper reads may have replaced).
-func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
-	finish, _, _, err := s.prepareSharedDecodeInternal(vector, false)
-	return finish, err
-}
-
-func (s *S3FS) prepareSharedDecodeForRead(vector *IOVector) (func(), *decodedFillTicket, bool, error) {
-	return s.prepareSharedDecodeInternal(vector, true)
-}
-
-func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool) (func(), *decodedFillTicket, bool, error) {
+func (s *S3FS) prepareSharedDecodeForRead(vector *IOVector) (*decodedReadScope, *decodedFillTicket, bool, error) {
 	if s.decodedReads == nil || len(vector.Caches) != 0 || vector.Policy.Any(SkipMemoryCache) {
 		return nil, nil, false, nil
 	}
@@ -525,7 +559,7 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 	key := decodedReadKey{path: path.File, offset: entry.Offset, size: entry.Size, decoded: entry.CachedDataSize, policy: vector.Policy, codec: sharing}
 	var fill *decodedFillTicket
 	fillAttempted := false
-	if coordinateFill && !vector.Policy.Any(SkipDiskCacheReads) &&
+	if !vector.Policy.Any(SkipDiskCacheReads) &&
 		sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) {
 		mayStart := sharedDecodeFillMayStart(s.memCache, entry.CachedDataSize)
 		fill, err = s.decodedReads.acquireFill(key, mayStart)
@@ -535,27 +569,30 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 			return nil, nil, false, err
 		}
 	}
-	original := entry.ToCacheData
-	var lease *decodedReadLease
+	scope := &decodedReadScope{registry: s.decodedReads, vector: vector, index: index, original: entry.ToCacheData}
 	entry.ToCacheData = func(ctx context.Context, reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-		if int64(len(data)) != key.size {
-			return original(ctx, reader, data, allocator)
+		var result fscache.Data
+		var err error
+		if scope.bypassSharing {
+			result, err = scope.registry.convert(ctx, func() (fscache.Data, error) { return scope.original(ctx, reader, data, allocator) })
+		} else if int64(len(data)) != key.size {
+			result, err = scope.original(ctx, reader, data, allocator)
+		} else {
+			var ticket *decodedReadLease
+			result, ticket, err = scope.registry.decode(ctx, key, key.decoded, func() (fscache.Data, error) { return scope.original(ctx, reader, data, allocator) })
+			scope.lease = ticket
+			// A timeout, failure, or admission bypass must not rejoin and wait
+			// again if this read falls through to a different storage tier.
+			scope.bypassSharing = ticket == nil
 		}
-		// 4.2's MemCache has no per-cache byte allocators, so charge the
-		// logical decoded size as the shared-fill reservation estimate.
-		bytes := key.decoded
-		result, ticket, err := s.decodedReads.decode(ctx, key, bytes, func() (fscache.Data, error) { return original(ctx, reader, data, allocator) })
-		lease = ticket
+		if err != nil {
+			// DiskCache treats conversion errors as misses. Remember a close
+			// observed by this failed conversion so S3FS does not start another tier.
+			scope.registry.mu.Lock()
+			scope.closedDuringDecode = scope.closedDuringDecode || scope.registry.closed
+			scope.registry.mu.Unlock()
+		}
 		return result, err
 	}
-	return func() {
-		entry := &vector.Entries[index]
-		entry.ToCacheData = original
-		if entry.CachedData != nil {
-			entry.decodeLease = lease
-		} else {
-			lease.release()
-		}
-		s.decodedReads.endRead()
-	}, fill, fillAttempted, nil
+	return scope, fill, fillAttempted, nil
 }
