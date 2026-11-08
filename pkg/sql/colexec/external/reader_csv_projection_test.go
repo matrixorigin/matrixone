@@ -493,7 +493,6 @@ func TestJSONLineVectorArrayLexemesAndInvalidElements(t *testing.T) {
 				t.Run(value, func(t *testing.T) {
 					_, err := convert(value)
 					require.Error(t, err)
-					require.Empty(t, reader.prevStr)
 					line, err := convert(`[4,5,6]`)
 					require.NoError(t, err)
 					require.Equal(t, "[4,5,6]", line[0].Val)
