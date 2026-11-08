@@ -5338,10 +5338,11 @@ func TestValidateHistoricalSubscriptionUsesCapturedAlias(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			changed, validated, err := validateCapturedPrepareSchemas(7, []*plan.ObjectRef{expected},
-				func(database, table string, got *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+				func(database, table string, got *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 					calls++
 					require.Equal(t, "sub", database)
 					require.Equal(t, "src", table)
+					require.Nil(t, borrowOutput)
 					if got == nil {
 						return nil, nil, moerr.NewInternalError(t.Context(), "unrelated current publication is denied")
 					}
