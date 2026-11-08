@@ -148,9 +148,20 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldes
 		return false
 	}
 	it := &item[K, V]{key: key, value: value, size: size, seq: c.nextSeq.Add(1), pending: true, oversized: oversized}
-	if oldest {
-		it.stamp = c.oldest.Add(-1)
+	if oversized {
+		it.stamp = c.oldest.Add(-1) + math.MinInt64/2
 		s.items[key] = s.order.PushBack(it)
+	} else if oldest {
+		it.stamp = c.oldest.Add(-1)
+		e := s.order.Back()
+		for e != nil && e.Value.(*item[K, V]).oversized {
+			e = e.Prev()
+		}
+		if e == nil {
+			s.items[key] = s.order.PushFront(it)
+		} else {
+			s.items[key] = s.order.InsertAfter(it, e)
+		}
 	} else {
 		it.stamp = c.newest.Add(1)
 		s.items[key] = s.order.PushFront(it)
