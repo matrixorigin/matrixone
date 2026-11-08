@@ -421,7 +421,7 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 
 				want := policy
 				if read > 0 {
-					want |= fileservice.SkipMemoryCacheWrites
+					want |= fileservice.MemoryCacheNoEvict
 				}
 				columnReads := 0
 				for _, got := range observed.policies {
