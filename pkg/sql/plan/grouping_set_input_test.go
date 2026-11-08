@@ -550,7 +550,7 @@ func TestGroupingSetDeclaredRowSize(t *testing.T) {
 		{name: "empty schema", ok: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, ok := materializedDeclaredRowSize(test.typs)
+			got, ok := MaterializedDeclaredRowSize(test.typs)
 			require.Equal(t, test.ok, ok)
 			require.Equal(t, test.want, got)
 		})

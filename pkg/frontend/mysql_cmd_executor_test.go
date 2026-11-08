@@ -259,6 +259,31 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 	require.ErrorContains(t, err, "first statement failed")
 }
 
+func TestDoComQueryRecordsSanitizedSchedulingFragments(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(nil)
+	ses.SetCmd(COM_QUERY)
+	execCtx.reqCtx = ctx
+
+	stop := errors.New("stop after recording")
+	var recorded string
+	stubs := gostub.Stub(&RecordStatement, func(ctx context.Context, _ *Session, _ *process.Process,
+		_ ComputationWrapper, _ time.Time, sql, _ string, _ bool) (context.Context, error) {
+		recorded = sql
+		return ctx, stop
+	})
+	defer stubs.Reset()
+
+	input := &UserInput{sql: "/* cloud_user */ create user test_record identified by 'dummy'"}
+	err := doComQuery(ses, execCtx, input)
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, "create user test_record identified by '******'", recorded)
+	require.Nil(t, input.recordFragments)
+}
+
 func TestDoComQueryStageCatalogErrorOverridesStaleCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	ctrl := gomock.NewController(t)
@@ -4328,6 +4353,9 @@ func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T)
 			records, err := sqlForRecordByStatement(ctx, input.sql)
 			require.NoError(t, err)
 			require.Len(t, records, len(cws))
+			actualRecords, err := input.sqlForRecord(ctx, sessionSQLModeForParser(ses), len(cws))
+			require.NoError(t, err)
+			require.Equal(t, records, actualRecords)
 			for i, cw := range cws {
 				text := cw.(interface{ SchedulingSQL() string }).SchedulingSQL()
 				stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, text, 1)
@@ -10127,7 +10155,7 @@ func Test_getSqlType(t *testing.T) {
 			{wrapNativePrepareSQL("s", "/* cloud_nonuser */ select 1"), []string{constant.CloudNoUserSql}},
 		} {
 			t.Run(tc.sql, func(t *testing.T) {
-				fragments, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, "", false)
+				fragments, sources, _, err := schedulingSQLByStatementWithSQLMode(context.Background(), tc.sql, "", false, nil)
 				require.NoError(t, err)
 				require.Len(t, fragments, len(tc.want))
 				require.Equal(t, tc.want, sources)
@@ -10156,7 +10184,7 @@ func Test_getSqlType(t *testing.T) {
 				ses.SetTenantInfo(tc.tenant)
 				input := &UserInput{sql: tc.sql, isInternalInput: tc.internal}
 				require.True(t, input.isInternalSQLSource(ses))
-				_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* save_result */ select 1; /* cloud_nonuser */ select 2", "", input.isInternalSQLSource(ses))
+				_, sources, _, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* save_result */ select 1; /* cloud_nonuser */ select 2", "", input.isInternalSQLSource(ses), nil)
 				require.NoError(t, err)
 				require.Equal(t, []string{constant.InternalSql, constant.InternalSql}, sources)
 				input.genSqlSourceType(ses)
@@ -10193,7 +10221,7 @@ func Test_getSqlType(t *testing.T) {
 				_, err := sqlSourcesByFragment(context.Background(), "select 1", "", []mysql.SQLFragment{span}, internal)
 				require.ErrorContains(t, err, "SQL fragment is not in its input")
 			}
-			_, sources, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* benign */;", "", internal)
+			_, sources, _, err := schedulingSQLByStatementWithSQLMode(context.Background(), "/* benign */;", "", internal, nil)
 			require.NoError(t, err)
 			want := constant.ExternSql
 			if internal {

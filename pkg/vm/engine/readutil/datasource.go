@@ -64,6 +64,19 @@ type orderedRemoteBlock struct {
 	zm    objectio.ZoneMap
 }
 
+// UsableOrderZoneMap reports whether a block bound can safely participate in
+// ordered pruning. Missing or incompatible metadata must leave the block in
+// the scan. A truncated string maximum can be smaller than an actual value.
+func UsableOrderZoneMap(zm objectio.ZoneMap, typ plan.Type, desc bool) bool {
+	if !zm.IsInited() || int32(zm.GetType()) != typ.Id || (desc && zm.MaxTruncated()) {
+		return false
+	}
+	if zm.GetType() == types.T_decimal64 || zm.GetType() == types.T_decimal128 {
+		return zm.GetScale() == int32(uint8(typ.Scale)&0x3f)
+	}
+	return true
+}
+
 func (rs *RemoteDataSource) String() string {
 	return "RemoteDataSource"
 }
@@ -250,7 +263,7 @@ func (rs *RemoteDataSource) descending() bool {
 }
 
 func (rs *RemoteDataSource) SetFilterZM(zm objectio.ZoneMap) {
-	if len(rs.orderBy) == 0 || !zm.IsInited() || int32(zm.GetType()) != rs.orderBy[0].Expr.Typ.Id {
+	if len(rs.orderBy) == 0 || !UsableOrderZoneMap(zm, rs.orderBy[0].Expr.Typ, rs.descending()) {
 		return
 	}
 	if !rs.filterZM.IsInited() ||
@@ -290,6 +303,10 @@ func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colT
 			return err
 		}
 		blk := rs.data.GetBlockInfo(i)
+		blocks[i].index = i
+		if blk.IsAppendable() {
+			continue
+		}
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			loaded, err := objectio.FastLoadObjectMeta(ctx, &location, false, rs.fs)
@@ -298,10 +315,12 @@ func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colT
 			}
 			meta = loaded.MustDataMeta()
 		}
-		blocks[i].index = i
 		blockMeta := meta.GetBlockMeta(uint32(location.ID()))
 		if seqNums[col] <= blockMeta.GetMaxSeqnum() {
-			blocks[i].zm = blockMeta.ColumnMeta(seqNums[col]).ZoneMap()
+			zm := blockMeta.ColumnMeta(seqNums[col]).ZoneMap()
+			if UsableOrderZoneMap(zm, orderExpr.Typ, rs.descending()) {
+				blocks[i].zm = zm
+			}
 		}
 	}
 	slices.SortFunc(blocks, func(a, b orderedRemoteBlock) int {

@@ -784,6 +784,36 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A set-operation column that combines DATE and TIME inputs must keep both
+// domains: MySQL types it as DATETIME so the time-of-day survives, while
+// coalesce-style scoring prefers DATE and silently discards it. Null-only
+// branches are already filtered out of source. Any non-temporal input keeps
+// the existing resolution, and a DATETIME or TIMESTAMP input contributes
+// only its fractional-second precision. The result carries the widest
+// fractional-second precision of the temporal inputs.
+func setOperationDateTimeCommonType(source []types.Type) (types.Type, bool) {
+	hasDate, hasTime := false, false
+	var scale int32
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_date:
+			hasDate = true
+		case types.T_time:
+			hasTime = true
+		case types.T_datetime, types.T_timestamp:
+		default:
+			return types.Type{}, false
+		}
+		if typ.Scale > scale {
+			scale = typ.Scale
+		}
+	}
+	if !hasDate || !hasTime {
+		return types.Type{}, false
+	}
+	return types.New(types.T_datetime, scale, scale), true
+}
+
 // Fixed-width binary branches must share one padded representation before a
 // set operation compares or materializes their rows. A nonpositive width
 // denotes an unspecified bound, so it must remain unbounded rather than
@@ -4903,7 +4933,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			var targetArgType types.Type
 			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
-			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+			if temporalType, ok := setOperationDateTimeCommonType(tmpArgsType); ok {
+				targetArgType = temporalType
+			} else if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
 			} else if pureFixedBinary {
 				targetArgType = pureBinaryType
@@ -13878,10 +13910,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
-		// Published View SQL keeps its creation namespace. Only its implicit
-		// source lookup uses the subscriber name for catalog routing.
+		// Published View SQL keeps its creation namespace. Both qualified and
+		// implicit references to that source use the subscriber alias for the
+		// database probe; resolving a publisher spelling in the subscriber's
+		// catalog would incorrectly require a same-named local database.
 		catalogDatabase := schema
-		if tbl.SchemaName == "" && len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
+		if len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
 			view := ctx.viewPath[len(ctx.viewPath)-1]
 			if view.SubscriptionName != "" {
 				if sub := builder.compCtx.GetQueryingSubscription(); sub != nil &&

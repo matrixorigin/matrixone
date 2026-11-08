@@ -1699,7 +1699,8 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	// executed in a cloned historical transaction, not another user root.
 	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	historical := plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS)
+	if historical {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -1707,7 +1708,9 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
-	if tcc.viewSchemaRead && plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(tcc.GetTxnHandler().GetTxn().SnapshotTS()) {
+	// The subscription alias belongs to data T even on the ordinary SELECT
+	// path. checkSubscriptionValid separately admits its publication at A.
+	if historical {
 		ses := tcc.GetSession()
 		bh := ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
 		if back, ok := bh.(*backExec); ok {
