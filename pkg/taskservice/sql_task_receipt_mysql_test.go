@@ -34,22 +34,19 @@ func TestSQLTaskMySQLReceiptCommitAndReconcile(t *testing.T) {
 		StartedAt: finished.Add(-time.Second), FinishedAt: finished, DurationSeconds: 1,
 		RowsAffected: 4, GateResult: true,
 	}
-	receipt := &sqlTaskReceipt{
-		kind: sqlTaskReceiptTerminal, run: run, endAt: finished.UnixMilli(),
-		claim: sqlTaskAsyncClaim{id: 9, runner: "cn1", epoch: 4},
-	}
+	receipt := SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: run, EndAt: finished.UnixMilli(), Claim: SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 4}}
 	for _, loseCommit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lost_commit_response=%t", loseCommit), func(t *testing.T) {
 			store, mock := newMockStorage(t)
 			mock.ExpectExec("BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
-			mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(receipt.claim.id).
+			mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(receipt.Claim.ID).
 				WillReturnRows(sqlmock.NewRows([]string{"status", "runner", "epoch", "run"}).AddRow(int32(task.TaskStatus_Running), "cn2", 5, run.RunID))
 			mock.ExpectExec(completeSQLTaskRun+" and task_id=? and account_id=?").
 				WithArgs(run.FinishedAt, run.DurationSeconds, run.Status, run.RowsAffected, run.ErrorCode, nil, 1,
 					run.RunID, SQLTaskStatusRunning, run.RunnerCN, run.AttemptNumber, run.TaskID, run.AccountID).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(completeSQLTaskAsync).
-				WithArgs(task.TaskStatus_Completed, task.ResultCode_Success, nil, receipt.endAt, receipt.claim.id, task.TaskStatus_Running, run.RunID).
+				WithArgs(task.TaskStatus_Completed, task.ResultCode_Success, nil, receipt.EndAt, receipt.Claim.ID, task.TaskStatus_Running, run.RunID).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			commitErr := errors.New("commit acknowledgement lost")
 			if loseCommit {
@@ -58,7 +55,7 @@ func TestSQLTaskMySQLReceiptCommitAndReconcile(t *testing.T) {
 			} else {
 				mock.ExpectExec("COMMIT").WillReturnResult(sqlmock.NewResult(0, 0))
 			}
-			resolved, err := store.publishSQLTaskReceipt(context.Background(), receipt)
+			resolved, err := store.PublishSQLTaskReceipt(context.Background(), receipt)
 			if loseCommit {
 				require.ErrorIs(t, err, commitErr)
 				require.False(t, resolved)
@@ -75,7 +72,7 @@ func TestSQLTaskMySQLReceiptCommitAndReconcile(t *testing.T) {
 	t.Run("retry confirms existing result", func(t *testing.T) {
 		store, mock := newMockStorage(t)
 		mock.ExpectExec("BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(receipt.claim.id).
+		mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(receipt.Claim.ID).
 			WillReturnRows(sqlmock.NewRows([]string{"status", "runner", "epoch", "run"}).AddRow(int32(task.TaskStatus_Completed), "cn2", 5, run.RunID))
 		mock.ExpectExec(completeSQLTaskRun + " and task_id=? and account_id=?").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(selectSQLTaskRun + " AND run_id=? for update").WithArgs(run.RunID).
@@ -85,7 +82,7 @@ func TestSQLTaskMySQLReceiptCommitAndReconcile(t *testing.T) {
 			}).AddRow(run.RunID, run.TaskID, run.TaskName, run.AccountID, nil, run.StartedAt, run.FinishedAt, run.DurationSeconds,
 				run.Status, run.TriggerType, run.AttemptNumber, run.RowsAffected, run.ErrorCode, nil, 1, run.RunnerCN))
 		mock.ExpectExec("COMMIT").WillReturnResult(sqlmock.NewResult(0, 0))
-		resolved, err := store.publishSQLTaskReceipt(context.Background(), receipt)
+		resolved, err := store.PublishSQLTaskReceipt(context.Background(), receipt)
 		require.NoError(t, err)
 		require.True(t, resolved)
 		mock.ExpectClose()

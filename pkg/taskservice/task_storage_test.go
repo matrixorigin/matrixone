@@ -485,7 +485,7 @@ func TestAddUpdateQuerySQLTaskRun(t *testing.T) {
 
 			running := mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunStatus(EQ, SQLTaskStatusRunning))[0]
 			running.Status = SQLTaskStatusSuccess
-			resolved, err := publishSQLTaskReceipt(context.Background(), s, &sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: running})
+			resolved, err := s.PublishSQLTaskReceipt(context.Background(), SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: running})
 			require.NoError(t, err)
 			require.True(t, resolved)
 			assert.Equal(t, SQLTaskStatusSuccess, mustGetTestSQLTaskRun(t, s, 1, WithSQLTaskRunIDCond(EQ, running.RunID))[0].Status)
@@ -661,7 +661,7 @@ func TestSQLTaskRunBarrierSurvivesAgeAndRecreation(t *testing.T) {
 			require.ErrorIs(t, err, ErrSQLTaskOverlap)
 
 			oldRun.Status = SQLTaskStatusSuccess
-			resolved, err := publishSQLTaskReceipt(ctx, store, &sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: oldRun})
+			resolved, err := store.PublishSQLTaskReceipt(ctx, SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: oldRun})
 			require.NoError(t, err)
 			require.True(t, resolved)
 			_, err = store.AcquireSQLTaskRun(ctx, recreated, newRun, testSQLTaskAdmission(nil, 0))
@@ -743,7 +743,7 @@ func TestAcquireAndCompleteSQLTaskRun(t *testing.T) {
 			run.StartedAt = run.StartedAt.Add(time.Hour)
 			run.ScheduledAt = run.ScheduledAt.Add(time.Hour)
 			run.TriggerType = SQLTaskTriggerScheduled
-			resolved, err := publishSQLTaskReceipt(context.Background(), s, &sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: run})
+			resolved, err := s.PublishSQLTaskReceipt(context.Background(), SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: run})
 			require.NoError(t, err)
 			require.True(t, resolved)
 
@@ -997,11 +997,11 @@ func newTestSQLTaskRun(taskID uint64, taskName, status string) SQLTaskRun {
 	}
 }
 
-func testSQLTaskAdmission(claim *sqlTaskAsyncClaim, sequence uint64) *SQLTaskRunAdmission {
+func testSQLTaskAdmission(claim *SQLTaskClaim, sequence uint64) *SQLTaskRunAdmission {
 	admission := &SQLTaskRunAdmission{TriggerSequence: sequence, Reserve: func(uint32, string) bool { return true }}
 	if claim != nil {
-		admission.AsyncTaskID, admission.RunnerCN, admission.Epoch = claim.id, claim.runner, claim.epoch
-		admission.ParentTaskID, admission.MetadataID = claim.parent, claim.metadata
+		admission.AsyncTaskID, admission.RunnerCN, admission.Epoch = claim.ID, claim.Runner, claim.Epoch
+		admission.ParentTaskID, admission.MetadataID = claim.ParentTaskID, claim.MetadataID
 	}
 	return admission
 }

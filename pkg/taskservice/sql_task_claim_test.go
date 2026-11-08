@@ -90,8 +90,8 @@ func TestSQLTaskScheduledAdmissionClaimsExactRun(t *testing.T) {
 				mustAddTestAsyncTask(t, store, 1, value)
 				return mustGetTestAsyncTask(t, store, 1, WithTaskMetadataId(EQ, value.Metadata.ID))[0]
 			}
-			claimFor := func(value task.AsyncTask) *sqlTaskAsyncClaim {
-				return &sqlTaskAsyncClaim{id: value.ID, runner: value.TaskRunner, epoch: value.Epoch, parent: value.ParentTaskID, metadata: value.Metadata.ID}
+			claimFor := func(value task.AsyncTask) *SQLTaskClaim {
+				return &SQLTaskClaim{ID: value.ID, Runner: value.TaskRunner, Epoch: value.Epoch, ParentTaskID: value.ParentTaskID, MetadataID: value.Metadata.ID}
 			}
 			run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 			run.TriggerType = SQLTaskTriggerScheduled
@@ -189,7 +189,7 @@ func TestSQLTaskReceiptPublishesOnlyItsExactRun(t *testing.T) {
 	}
 	mustAddTestAsyncTask(t, store, 1, value)
 	value = mustGetTestAsyncTask(t, store, 1)[0]
-	claim := sqlTaskAsyncClaim{id: value.ID, epoch: value.Epoch, runner: value.TaskRunner, parent: value.ParentTaskID, metadata: value.Metadata.ID}
+	claim := SQLTaskClaim{ID: value.ID, Epoch: value.Epoch, Runner: value.TaskRunner, ParentTaskID: value.ParentTaskID, MetadataID: value.Metadata.ID}
 	run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 	run.TriggerType = SQLTaskTriggerScheduled
 	run.StartedAt = time.Now()
@@ -197,13 +197,13 @@ func TestSQLTaskReceiptPublishesOnlyItsExactRun(t *testing.T) {
 	id, err := store.AcquireSQLTaskRun(ctx, definition, run, admission)
 	require.NoError(t, err)
 	run.RunID, run.Status, run.FinishedAt, run.RowsAffected = id, SQLTaskStatusSuccess, time.Now(), 4
-	receipt := &sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: run, claim: claim, endAt: run.FinishedAt.UnixMilli()}
+	receipt := SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: run, Claim: claim, EndAt: run.FinishedAt.UnixMilli()}
 
 	// The owner's pointer remains authoritative even after allocation changes.
 	value.Epoch++
 	value.TaskRunner = "cn2"
 	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{value}, WithTaskIDCond(EQ, value.ID))
-	resolved, err := store.publishSQLTaskReceipt(ctx, receipt)
+	resolved, err := store.PublishSQLTaskReceipt(ctx, receipt)
 	require.NoError(t, err)
 	require.True(t, resolved)
 	got := mustGetTestSQLTaskRun(t, store, 1)[0]
@@ -214,12 +214,12 @@ func TestSQLTaskReceiptPublishesOnlyItsExactRun(t *testing.T) {
 	require.Equal(t, task.ResultCode_Success, completed.ExecuteResult.Code)
 
 	// A lost acknowledgement can be retried without rewriting the outcome.
-	resolved, err = store.publishSQLTaskReceipt(ctx, receipt)
+	resolved, err = store.PublishSQLTaskReceipt(ctx, receipt)
 	require.NoError(t, err)
 	require.True(t, resolved)
-	conflicting := *receipt
-	conflicting.run.RowsAffected++
-	resolved, err = store.publishSQLTaskReceipt(ctx, &conflicting)
+	conflicting := receipt
+	conflicting.Run.RowsAffected++
+	resolved, err = store.PublishSQLTaskReceipt(ctx, conflicting)
 	require.ErrorIs(t, err, errSQLTaskReceiptConflict)
 	require.False(t, resolved)
 	require.EqualValues(t, 4, mustGetTestSQLTaskRun(t, store, 1)[0].RowsAffected)
@@ -235,7 +235,7 @@ func TestSQLTaskNoClaimCannotFinishClaimedRun(t *testing.T) {
 	store.Lock()
 	store.sqlTaskClaims[value.ID] = 88
 	store.Unlock()
-	err := finishSQLTaskUnclaimed(ctx, store, sqlTaskAsyncClaim{id: value.ID, runner: "cn1", epoch: 3}, task.ExecuteResult{}, time.Now().UnixMilli())
+	err := store.FinishSQLTaskUnclaimed(ctx, SQLTaskClaim{ID: value.ID, Runner: "cn1", Epoch: 3}, task.ExecuteResult{}, time.Now().UnixMilli())
 	require.NoError(t, err)
 	require.Equal(t, task.TaskStatus_Running, mustGetTestAsyncTask(t, store, 1)[0].Status)
 }
@@ -247,9 +247,9 @@ func TestSQLTaskNoClaimCannotFinishAnotherTaskType(t *testing.T) {
 	value := task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Epoch: 3, Metadata: task.TaskMetadata{ID: "other", Executor: task.TaskCode_TestOnly}}
 	mustAddTestAsyncTask(t, store, 1, value)
 	value = mustGetTestAsyncTask(t, store, 1)[0]
-	claim := sqlTaskAsyncClaim{id: value.ID, runner: value.TaskRunner, epoch: value.Epoch}
-	require.NoError(t, finishSQLTaskUnclaimed(ctx, store, claim, task.ExecuteResult{}, time.Now().UnixMilli()))
-	resolved, err := store.publishSQLTaskReceipt(ctx, &sqlTaskReceipt{kind: sqlTaskReceiptAdmission, run: SQLTaskRun{RunID: 999}, claim: claim})
+	claim := SQLTaskClaim{ID: value.ID, Runner: value.TaskRunner, Epoch: value.Epoch}
+	require.NoError(t, store.FinishSQLTaskUnclaimed(ctx, claim, task.ExecuteResult{}, time.Now().UnixMilli()))
+	resolved, err := store.PublishSQLTaskReceipt(ctx, SQLTaskReceiptRequest{Kind: SQLTaskReceiptAdmission, Run: SQLTaskRun{RunID: 999}, Claim: claim})
 	require.NoError(t, err)
 	require.True(t, resolved)
 	require.Equal(t, task.TaskStatus_Running, mustGetTestAsyncTask(t, store, 1)[0].Status)
@@ -291,7 +291,7 @@ func TestSQLTaskNoClaimAndAdmissionAreMutuallyExclusive(t *testing.T) {
 					Metadata:     BuildSQLTaskMetadata(&task.SQLTaskContext{TaskId: definition.TaskID, TriggerCount: 1})}
 				mustAddTestAsyncTask(t, store, 1, firing)
 				firing = mustGetTestAsyncTask(t, store, 1)[0]
-				claim := sqlTaskAsyncClaim{id: firing.ID, runner: firing.TaskRunner, epoch: firing.Epoch, parent: firing.ParentTaskID, metadata: firing.Metadata.ID}
+				claim := SQLTaskClaim{ID: firing.ID, Runner: firing.TaskRunner, Epoch: firing.Epoch, ParentTaskID: firing.ParentTaskID, MetadataID: firing.Metadata.ID}
 				run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 				run.TriggerType = SQLTaskTriggerScheduled
 				admit := func() error {
@@ -299,7 +299,7 @@ func TestSQLTaskNoClaimAndAdmissionAreMutuallyExclusive(t *testing.T) {
 					return err
 				}
 				finish := func() error {
-					return finishSQLTaskUnclaimed(ctx, store, claim, task.ExecuteResult{Code: task.ResultCode_Success}, time.Now().UnixMilli())
+					return store.FinishSQLTaskUnclaimed(ctx, claim, task.ExecuteResult{Code: task.ResultCode_Success}, time.Now().UnixMilli())
 				}
 				if claimFirst {
 					require.NoError(t, admit())
@@ -330,7 +330,7 @@ func TestSQLTaskMySQLAdmissionClaimsRunAtomically(t *testing.T) {
 			run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 			run.TriggerType = SQLTaskTriggerScheduled
 			reserved := 0
-			admission := testSQLTaskAdmission(&sqlTaskAsyncClaim{id: value.ID, runner: value.TaskRunner, epoch: value.Epoch, parent: value.ParentTaskID, metadata: value.Metadata.ID}, 2)
+			admission := testSQLTaskAdmission(&SQLTaskClaim{ID: value.ID, Runner: value.TaskRunner, Epoch: value.Epoch, ParentTaskID: value.ParentTaskID, MetadataID: value.Metadata.ID}, 2)
 			admission.Reserve = func(account uint32, name string) bool {
 				reserved++
 				return account == definition.AccountID && name == definition.TaskName

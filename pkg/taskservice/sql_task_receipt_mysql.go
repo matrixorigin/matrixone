@@ -37,64 +37,65 @@ type sqlTaskReceiptAsyncState struct {
 	pointer uint64
 }
 
-func (m *mysqlTaskStorage) publishSQLTaskReceipt(ctx context.Context, receipt *sqlTaskReceipt) (bool, error) {
-	if receipt.kind != sqlTaskReceiptTerminal && receipt.kind != sqlTaskReceiptUnknown && receipt.kind != sqlTaskReceiptAdmission && receipt.kind != sqlTaskReceiptRetryAdmission {
+func (m *mysqlTaskStorage) PublishSQLTaskReceipt(ctx context.Context, request SQLTaskReceiptRequest) (bool, error) {
+	receipt := &request
+	if receipt.Kind != SQLTaskReceiptTerminal && receipt.Kind != SQLTaskReceiptUnknown && receipt.Kind != SQLTaskReceiptAdmission && receipt.Kind != SQLTaskReceiptRetryAdmission {
 		return false, ErrNotReady
 	}
 	resolved := false
 	_, err := runSQLTaskMetadataTransaction(ctx, m.db, func(ctx context.Context, conn *sql.Conn) error {
-		if receipt.kind == sqlTaskReceiptAdmission || receipt.kind == sqlTaskReceiptRetryAdmission {
+		if receipt.Kind == SQLTaskReceiptAdmission || receipt.Kind == SQLTaskReceiptRetryAdmission {
 			// Serialize with the original admission before deciding that an
 			// absent run means its COMMIT did not persist.
 			var taskID uint64
 			err := conn.QueryRowContext(ctx,
 				"select task_id from sql_task where task_id=? and account_id=? and task_name=? for update",
-				receipt.run.TaskID, receipt.run.AccountID, receipt.run.TaskName).Scan(&taskID)
+				receipt.Run.TaskID, receipt.Run.AccountID, receipt.Run.TaskName).Scan(&taskID)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 		}
 		var async sqlTaskReceiptAsyncState
 		asyncExists := false
-		if receipt.claim.id != 0 {
-			err := conn.QueryRowContext(ctx, lockSQLTaskReceiptAsync, receipt.claim.id).
+		if receipt.Claim.ID != 0 {
+			err := conn.QueryRowContext(ctx, lockSQLTaskReceiptAsync, receipt.Claim.ID).
 				Scan(&async.status, &async.runner, &async.epoch, &async.pointer)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 			asyncExists = err == nil
 		}
-		if receipt.kind == sqlTaskReceiptRetryAdmission {
-			previous, previousExists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.run.RunID)
+		if receipt.Kind == SQLTaskReceiptRetryAdmission {
+			previous, previousExists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.Run.RunID)
 			if err != nil {
 				return err
 			}
-			_, nextExists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.nextRun.RunID)
+			_, nextExists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.NextRun.RunID)
 			if err != nil {
 				return err
 			}
 			selected := *receipt
-			selected.kind = sqlTaskReceiptTerminal
+			selected.Kind = SQLTaskReceiptTerminal
 			if nextExists {
-				if !previousExists || !sameSQLTaskReceiptResult(previous, receipt.run) {
+				if !previousExists || !sameSQLTaskReceiptResult(previous, receipt.Run) {
 					return errSQLTaskReceiptConflict
 				}
-				selected.run = receipt.nextRun
+				selected.Run = receipt.NextRun
 			}
 			receipt = &selected
 		}
 		result := sqlTaskReceiptAsyncResult(receipt)
-		if receipt.kind == sqlTaskReceiptAdmission {
-			_, exists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.run.RunID)
+		if receipt.Kind == SQLTaskReceiptAdmission {
+			_, exists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.Run.RunID)
 			if err != nil {
 				return err
 			}
 			if !exists {
 				if asyncExists && async.status.Int64 == int64(task.TaskStatus_Running) &&
-					async.runner.String == receipt.claim.runner && async.epoch.Int64 == int64(receipt.claim.epoch) && async.pointer == 0 {
+					async.runner.String == receipt.Claim.Runner && async.epoch.Int64 == int64(receipt.Claim.Epoch) && async.pointer == 0 {
 					updated, err := conn.ExecContext(ctx, completeSQLTaskUnclaimed,
-						task.TaskStatus_Completed, result.Code, nullString(result.Error), receipt.endAt,
-						receipt.claim.id, task.TaskStatus_Running, receipt.claim.runner, receipt.claim.epoch, task.TaskCode_SQLTask)
+						task.TaskStatus_Completed, result.Code, nullString(result.Error), receipt.EndAt,
+						receipt.Claim.ID, task.TaskStatus_Running, receipt.Claim.Runner, receipt.Claim.Epoch, task.TaskCode_SQLTask)
 					if err != nil {
 						return err
 					}
@@ -111,10 +112,10 @@ func (m *mysqlTaskStorage) publishSQLTaskReceipt(ctx context.Context, receipt *s
 			}
 		}
 
-		run := receipt.run
+		run := receipt.Run
 		var updated sql.Result
 		var err error
-		if receipt.kind == sqlTaskReceiptUnknown {
+		if receipt.Kind == SQLTaskReceiptUnknown {
 			updated, err = conn.ExecContext(ctx, markSQLTaskUnknown,
 				run.ErrorCode, nullString(run.ErrorMessage), sqlTaskEnabledValue(run.GateResult),
 				run.RunID, run.TaskID, run.AccountID, SQLTaskStatusRunning, run.RunnerCN, run.AttemptNumber)
@@ -146,8 +147,8 @@ func (m *mysqlTaskStorage) publishSQLTaskReceipt(ctx context.Context, receipt *s
 		}
 		if asyncExists && async.status.Int64 == int64(task.TaskStatus_Running) && async.pointer == run.RunID {
 			updated, err := conn.ExecContext(ctx, completeSQLTaskAsync,
-				task.TaskStatus_Completed, result.Code, nullString(result.Error), receipt.endAt,
-				receipt.claim.id, task.TaskStatus_Running, run.RunID)
+				task.TaskStatus_Completed, result.Code, nullString(result.Error), receipt.EndAt,
+				receipt.Claim.ID, task.TaskStatus_Running, run.RunID)
 			if err != nil {
 				return err
 			}
@@ -174,14 +175,14 @@ func execOwnedSQLTaskRunResult(ctx context.Context, conn *sql.Conn, run SQLTaskR
 
 // Re-read the exact run when an UPDATE affected no rows. In particular, a
 // lost COMMIT acknowledgement must not be mistaken for a fresh success.
-func reconcileSQLTaskRunReceipt(ctx context.Context, conn *sql.Conn, receipt *sqlTaskReceipt) (same, superseded bool, err error) {
-	existing, exists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.run.RunID)
+func reconcileSQLTaskRunReceipt(ctx context.Context, conn *sql.Conn, receipt *SQLTaskReceiptRequest) (same, superseded bool, err error) {
+	existing, exists, err := lockSQLTaskRunReceipt(ctx, conn, receipt.Run.RunID)
 	if err != nil {
 		return false, false, err
 	}
 	if !exists {
 		var account uint32
-		err := conn.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_id=?", receipt.run.AccountID).Scan(&account)
+		err := conn.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_id=?", receipt.Run.AccountID).Scan(&account)
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, true, nil
 		}
@@ -190,18 +191,18 @@ func reconcileSQLTaskRunReceipt(ctx context.Context, conn *sql.Conn, receipt *sq
 		}
 		return false, false, nil
 	}
-	if existing.TaskID != receipt.run.TaskID || existing.AccountID != receipt.run.AccountID || existing.TaskName != receipt.run.TaskName {
+	if existing.TaskID != receipt.Run.TaskID || existing.AccountID != receipt.Run.AccountID || existing.TaskName != receipt.Run.TaskName {
 		return false, false, nil
 	}
 	if existing.Status == SQLTaskStatusUnknown {
 		return false, true, nil
 	}
-	if receipt.kind == sqlTaskReceiptUnknown {
-		return existing.Status == SQLTaskStatusRunning && existing.RunnerCN == receipt.run.RunnerCN &&
-			existing.AttemptNumber == receipt.run.AttemptNumber && existing.ErrorCode == receipt.run.ErrorCode &&
-			existing.ErrorMessage == receipt.run.ErrorMessage && existing.GateResult == receipt.run.GateResult, false, nil
+	if receipt.Kind == SQLTaskReceiptUnknown {
+		return existing.Status == SQLTaskStatusRunning && existing.RunnerCN == receipt.Run.RunnerCN &&
+			existing.AttemptNumber == receipt.Run.AttemptNumber && existing.ErrorCode == receipt.Run.ErrorCode &&
+			existing.ErrorMessage == receipt.Run.ErrorMessage && existing.GateResult == receipt.Run.GateResult, false, nil
 	}
-	return sameSQLTaskReceiptResult(existing, receipt.run), false, nil
+	return sameSQLTaskReceiptResult(existing, receipt.Run), false, nil
 }
 
 func lockSQLTaskRunReceipt(ctx context.Context, conn *sql.Conn, runID uint64) (SQLTaskRun, bool, error) {

@@ -42,7 +42,7 @@ func TestDeleteStaleSQLTaskBatchPreservesClaimsAndNewGeneration(t *testing.T) {
 			owned := makeFiring(metadataID(1))
 			mustAddTestAsyncTask(t, store, 1, owned)
 			owned = mustGetTestAsyncTask(t, store, 1)[0]
-			claim := &sqlTaskAsyncClaim{id: owned.ID, runner: owned.TaskRunner, epoch: owned.Epoch, parent: parent, metadata: owned.Metadata.ID}
+			claim := &SQLTaskClaim{ID: owned.ID, Runner: owned.TaskRunner, Epoch: owned.Epoch, ParentTaskID: parent, MetadataID: owned.Metadata.ID}
 			run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 			run.TriggerType = SQLTaskTriggerScheduled
 			_, err := store.AcquireSQLTaskRun(ctx, definition, run, testSQLTaskAdmission(claim, 1))

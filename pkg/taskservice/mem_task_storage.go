@@ -455,38 +455,39 @@ func (s *memTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask,
 	return run.RunID, nil
 }
 
-func (s *memTaskStorage) publishSQLTaskReceipt(ctx context.Context, receipt *sqlTaskReceipt) (bool, error) {
+func (s *memTaskStorage) PublishSQLTaskReceipt(ctx context.Context, request SQLTaskReceiptRequest) (bool, error) {
+	receipt := &request
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	s.Lock()
 	defer s.Unlock()
-	if receipt.kind == sqlTaskReceiptRetryAdmission {
-		previous, previousExists := s.sqlTaskRuns[receipt.run.RunID]
-		_, nextExists := s.sqlTaskRuns[receipt.nextRun.RunID]
+	if receipt.Kind == SQLTaskReceiptRetryAdmission {
+		previous, previousExists := s.sqlTaskRuns[receipt.Run.RunID]
+		_, nextExists := s.sqlTaskRuns[receipt.NextRun.RunID]
 		resolved := *receipt
-		resolved.kind = sqlTaskReceiptTerminal
+		resolved.Kind = SQLTaskReceiptTerminal
 		if nextExists {
-			if !previousExists || !sameSQLTaskReceiptResult(previous, receipt.run) {
+			if !previousExists || !sameSQLTaskReceiptResult(previous, receipt.Run) {
 				return false, errSQLTaskReceiptConflict
 			}
-			resolved.run = receipt.nextRun
+			resolved.Run = receipt.NextRun
 		}
 		receipt = &resolved
 	}
 
-	if receipt.kind != sqlTaskReceiptTerminal && receipt.kind != sqlTaskReceiptUnknown && receipt.kind != sqlTaskReceiptAdmission {
+	if receipt.Kind != SQLTaskReceiptTerminal && receipt.Kind != SQLTaskReceiptUnknown && receipt.Kind != SQLTaskReceiptAdmission {
 		return false, ErrNotReady
 	}
-	frozen := receipt.run
+	frozen := receipt.Run
 	existing, exists := s.sqlTaskRuns[frozen.RunID]
 	if !exists {
-		if receipt.kind == sqlTaskReceiptAdmission {
-			if async, ok := s.asyncTasks[receipt.claim.id]; ok && async.Metadata.Executor == task.TaskCode_SQLTask && async.Status == task.TaskStatus_Running &&
-				async.TaskRunner == receipt.claim.runner && async.Epoch == receipt.claim.epoch && s.sqlTaskClaims[async.ID] == 0 {
+		if receipt.Kind == SQLTaskReceiptAdmission {
+			if async, ok := s.asyncTasks[receipt.Claim.ID]; ok && async.Metadata.Executor == task.TaskCode_SQLTask && async.Status == task.TaskStatus_Running &&
+				async.TaskRunner == receipt.Claim.Runner && async.Epoch == receipt.Claim.Epoch && s.sqlTaskClaims[async.ID] == 0 {
 				async.Status = task.TaskStatus_Completed
 				result := sqlTaskReceiptAsyncResult(receipt)
-				async.ExecuteResult, async.CompletedAt = &result, receipt.endAt
+				async.ExecuteResult, async.CompletedAt = &result, receipt.EndAt
 				s.asyncTasks[async.ID] = async
 			}
 			return true, nil
@@ -500,24 +501,24 @@ func (s *memTaskStorage) publishSQLTaskReceipt(ctx context.Context, receipt *sql
 		return true, nil
 	}
 	if existing.Status != SQLTaskStatusRunning {
-		if receipt.kind == sqlTaskReceiptUnknown || !sameSQLTaskReceiptResult(existing, frozen) {
+		if receipt.Kind == SQLTaskReceiptUnknown || !sameSQLTaskReceiptResult(existing, frozen) {
 			return false, errSQLTaskReceiptConflict
 		}
 	} else if existing.RunnerCN != frozen.RunnerCN || existing.AttemptNumber != frozen.AttemptNumber {
 		return false, errSQLTaskReceiptConflict
-	} else if receipt.kind == sqlTaskReceiptUnknown {
+	} else if receipt.Kind == SQLTaskReceiptUnknown {
 		existing.ErrorCode, existing.ErrorMessage, existing.GateResult = frozen.ErrorCode, frozen.ErrorMessage, frozen.GateResult
 		s.sqlTaskRuns[frozen.RunID] = existing
 	} else {
 		s.sqlTaskRuns[frozen.RunID] = applySQLTaskRunOutcome(existing, frozen)
 	}
-	if receipt.claim.id != 0 {
-		async, exists := s.asyncTasks[receipt.claim.id]
+	if receipt.Claim.ID != 0 {
+		async, exists := s.asyncTasks[receipt.Claim.ID]
 		if exists && async.Status == task.TaskStatus_Running && s.sqlTaskClaims[async.ID] == frozen.RunID {
 			async.Status = task.TaskStatus_Completed
 			result := sqlTaskReceiptAsyncResult(receipt)
 			async.ExecuteResult = &result
-			async.CompletedAt = receipt.endAt
+			async.CompletedAt = receipt.EndAt
 			s.asyncTasks[async.ID] = async
 		}
 	}
@@ -525,40 +526,41 @@ func (s *memTaskStorage) publishSQLTaskReceipt(ctx context.Context, receipt *sql
 }
 
 // Finish the old attempt and acquire the new one under the same store lock.
-func (s *memTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTaskRetry) (uint64, bool, error) {
+func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTaskRetryRequest) (uint64, bool, error) {
+	retry = snapshotSQLTaskRetry(retry)
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
 	s.Lock()
 	defer s.Unlock()
-	old, ok := s.sqlTaskRuns[retry.previous.RunID]
-	if !ok || old.Status != SQLTaskStatusRunning || old.TaskID != retry.previous.TaskID ||
-		old.AccountID != retry.previous.AccountID || old.RunnerCN != retry.previous.RunnerCN ||
-		old.AttemptNumber != retry.previous.AttemptNumber {
+	old, ok := s.sqlTaskRuns[retry.Previous.RunID]
+	if !ok || old.Status != SQLTaskStatusRunning || old.TaskID != retry.Previous.TaskID ||
+		old.AccountID != retry.Previous.AccountID || old.RunnerCN != retry.Previous.RunnerCN ||
+		old.AttemptNumber != retry.Previous.AttemptNumber {
 		return 0, false, errSQLTaskReceiptConflict
 	}
 	definition, exists := s.sqlTasks[old.TaskID]
 	var async task.AsyncTask
 	var pointer uint64
-	if retry.claim != nil {
-		async, pointer = s.asyncTasks[retry.claim.id], s.sqlTaskClaims[retry.claim.id]
+	if retry.Claim != nil {
+		async, pointer = s.asyncTasks[retry.Claim.ID], s.sqlTaskClaims[retry.Claim.ID]
 	}
 	allowed := canRetrySQLTask(definition, exists, retry, async, pointer)
-	old = applySQLTaskRunOutcome(old, retry.previous)
+	old = applySQLTaskRunOutcome(old, retry.Previous)
 	s.sqlTaskRuns[old.RunID] = old
 	if !allowed {
-		if retry.claim != nil && async.ID != 0 && async.Status == task.TaskStatus_Running && pointer == old.RunID {
-			result := sqlTaskReceiptAsyncResult(&sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: old})
+		if retry.Claim != nil && async.ID != 0 && async.Status == task.TaskStatus_Running && pointer == old.RunID {
+			result := sqlTaskReceiptAsyncResult(&SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: old})
 			async.Status, async.ExecuteResult, async.CompletedAt = task.TaskStatus_Completed, &result, old.FinishedAt.UnixMilli()
 			s.asyncTasks[async.ID] = async
 		}
 		return 0, false, nil
 	}
-	next := retry.next
+	next := retry.Next
 	next.RunID = s.nextIDLocked()
 	s.sqlTaskRuns[next.RunID] = next
-	if retry.claim != nil {
-		s.sqlTaskClaims[retry.claim.id] = next.RunID
+	if retry.Claim != nil {
+		s.sqlTaskClaims[retry.Claim.ID] = next.RunID
 	}
 	return next.RunID, true, nil
 }

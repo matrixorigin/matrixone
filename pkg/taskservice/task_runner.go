@@ -380,8 +380,11 @@ func (r *taskRunner) fetch(ctx context.Context) {
 			if taskFrameworkDisabled() {
 				continue
 			}
-			tasks, err := r.doFetch()
+			tasks, err := r.doFetch(ctx)
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				if r.sqlFetch.active {
 					sqlTaskFetchFailed.Warn(zap.Error(err))
 				} else {
@@ -399,8 +402,11 @@ func (r *taskRunner) fetch(ctx context.Context) {
 	}
 }
 
-func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), r.options.fetchTimeout, moerr.CauseDoFetch)
+func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
+	if err := parent.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeoutCause(parent, r.options.fetchTimeout, moerr.CauseDoFetch)
 	var tasks []task.AsyncTask
 	var err error
 	if service := sqlTaskServiceOwner(r.service); service != nil && r.useSQLTaskFairFetch(service) {
@@ -414,7 +420,7 @@ func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 	}
 	cancel()
 	if err != nil {
-		if sqlTaskServiceOwner(r.service) != nil && !r.sqlFetch.active {
+		if parent.Err() == nil && sqlTaskServiceOwner(r.service) != nil && !r.sqlFetch.active {
 			r.sqlDeferred.Add(1)
 		}
 		return nil, moerr.AttachCause(ctx, err)
@@ -592,7 +598,7 @@ func (r *taskRunner) run(rt runningTask) {
 				// Never use generic completion: another invocation may have claimed it.
 				sqlTaskExecutorEarly.Warn(zap.Uint64("task-id", rt.task.ID), zap.Error(err))
 				owner := sqlTaskServiceOwner(r.service)
-				claim := sqlTaskAsyncClaim{id: rt.task.ID, runner: rt.task.TaskRunner, epoch: rt.task.Epoch}
+				claim := SQLTaskClaim{ID: rt.task.ID, Runner: rt.task.TaskRunner, Epoch: rt.task.Epoch}
 				if owner == nil || !owner.finishUnclaimedSQLTask(execCtx, claim, err, 0) {
 					disposition.deferred = true
 				}

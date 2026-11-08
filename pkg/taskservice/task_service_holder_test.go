@@ -1099,7 +1099,7 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.AcquireSQLTaskRun(ctx, newTestSQLTask("task-1", 1), newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning), testSQLTaskAdmission(nil, 0))
 	require.ErrorIs(t, err, ErrNotReady)
-	_, err = publishSQLTaskReceipt(ctx, s, &sqlTaskReceipt{run: newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
+	_, err = s.PublishSQLTaskReceipt(ctx, SQLTaskReceiptRequest{Run: newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.TriggerSQLTask(ctx, newTestSQLTask("task-1", 1), newTestAsyncTask("task-1:1"))
 	require.ErrorIs(t, err, ErrNotReady)
@@ -1487,7 +1487,7 @@ func TestSQLTaskFetchRecoversAfterInitialStorageOutage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
 	runner := NewTaskRunner("cn1", service, nil, WithRunnerFetchLimit(1), WithRunnerFetchTimeout(time.Second)).(*taskRunner)
 	require.Eventually(t, func() bool {
-		values, err := runner.doFetch()
+		values, err := runner.doFetch(context.Background())
 		return err == nil && len(values) == 1 && values[0].Metadata.ID == "ready"
 	}, 3*time.Second, 5*time.Millisecond, "periodic fetch must reconnect without another task-store operation")
 	require.GreaterOrEqual(t, calls.Load(), int32(3))

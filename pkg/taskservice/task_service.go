@@ -121,21 +121,21 @@ func NewTaskService(
 }
 
 func (s *taskService) recoverSQLTaskReceipt(ctx context.Context, receipt *sqlTaskReceipt) bool {
-	resolved, err := publishSQLTaskReceipt(ctx, s.store, receipt)
+	resolved, err := s.store.PublishSQLTaskReceipt(ctx, receipt.SQLTaskReceiptRequest)
 	if err != nil {
 		v2.SQLTaskReceiptRetryCounter.Inc()
 		s.rt.Logger().WarnEventLazy(sqlTaskReceiptRetry, func() []zap.Field {
-			return []zap.Field{zap.Uint64("run-id", receipt.run.RunID), zap.Uint64("async-id", receipt.claim.id),
+			return []zap.Field{zap.Uint64("run-id", receipt.Run.RunID), zap.Uint64("async-id", receipt.Claim.ID),
 				zap.String("error", util.Abbreviate(err.Error(), 997))}
 		})
 	}
 	return err == nil && resolved
 }
 
-func (s *taskService) finishUnclaimedSQLTask(caller context.Context, claim sqlTaskAsyncClaim, cause error, cleanupTaskID uint64) bool {
+func (s *taskService) finishUnclaimedSQLTask(caller context.Context, claim SQLTaskClaim, cause error, cleanupTaskID uint64) bool {
 	// Only the runner participates in the CAS. Parent/metadata can be invalid
 	// multibyte strings and are not retained by this path.
-	if claim.id == 0 || len(claim.runner) > 512 {
+	if claim.ID == 0 || len(claim.Runner) > 512 {
 		return false
 	}
 	guard := s.sqlRecovery.tryGuard(sqlTaskGuardKey{kind: 3, value: "unclaimed"}, 50)
@@ -155,11 +155,11 @@ func (s *taskService) finishUnclaimedSQLTask(caller context.Context, claim sqlTa
 		}
 		v2.SQLTaskUnclaimedFailureCounter.Inc()
 		s.rt.Logger().WarnEventLazy(sqlTaskUnclaimedRetry, func() []zap.Field {
-			return []zap.Field{zap.Uint64("async-id", claim.id), zap.String("error", util.Abbreviate(err.Error(), 997))}
+			return []zap.Field{zap.Uint64("async-id", claim.ID), zap.String("error", util.Abbreviate(err.Error(), 997))}
 		})
 		return false
 	}
-	if err := finishSQLTaskUnclaimed(ctx, s.store, claim, result, time.Now().UnixMilli()); err != nil {
+	if err := s.store.FinishSQLTaskUnclaimed(ctx, claim, result, time.Now().UnixMilli()); err != nil {
 		return logFailure(err)
 	}
 	if cleanupTaskID != 0 {

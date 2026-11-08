@@ -139,8 +139,11 @@ rejected by a full runner queue. Late allocations/commits are revisited on a
 later pass. Rotate lanes by
 attempt even for a fetch limit of one, empty results or errors. If a selective
 fast query times out, fall back to a bounded primary-key page that advances.
-Service and storage decorators preserve the caller's context. Since a decorator
-can filter after LIMIT, a short decorated page is not proof of exhaustion; use
+Each fetch derives its deadline from the runner context and the configured
+fetch timeout, so stopping the runner cancels in-flight queries. Cancellation
+does not turn into a storage failure or move a cursor past an uninspected or
+unqueued candidate. Service and storage decorators preserve that context.
+Since a decorator can filter after LIMIT, a short decorated page is not proof of exhaustion; use
 the raw-ID fallback unless the queried store is known to apply LIMIT last.
 Query limits,
 contexts and runner queue limits remain bounded even when the configured fetch

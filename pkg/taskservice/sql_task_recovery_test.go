@@ -71,14 +71,14 @@ func TestSQLTaskRecoveryCreditsAndGuards(t *testing.T) {
 func TestSQLTaskRecoveryDoesNotLetOneBadReceiptBlockOthers(t *testing.T) {
 	attemptedBad, completed := make(chan struct{}, 1), make(chan uint64, 2)
 	r := newSQLTaskRecovery(16, 9, func(_ context.Context, receipt *sqlTaskReceipt) bool {
-		if receipt.run.RunID == 1 {
+		if receipt.Run.RunID == 1 {
 			select {
 			case attemptedBad <- struct{}{}:
 			default:
 			}
 			return false
 		}
-		completed <- receipt.run.RunID
+		completed <- receipt.Run.RunID
 		return true
 	})
 	t.Cleanup(r.close)
@@ -90,7 +90,7 @@ func TestSQLTaskRecoveryDoesNotLetOneBadReceiptBlockOthers(t *testing.T) {
 	} {
 		credit := r.reserve(item.class, 1, fmt.Sprintf("task-%d", item.id))
 		require.NotNil(t, credit)
-		require.True(t, r.enqueue(&sqlTaskReceipt{class: item.class, credit: credit, run: SQLTaskRun{RunID: item.id}}))
+		require.True(t, r.enqueue(&sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Run: SQLTaskRun{RunID: item.id}}, credit: credit}))
 		if item.id == 1 {
 			<-attemptedBad
 		}
@@ -112,7 +112,7 @@ func TestSQLTaskRecoveryKeepsDifferentRunsOfSameFiring(t *testing.T) {
 	release := make(chan struct{})
 	completed := make(chan uint64, 1)
 	r := newSQLTaskRecovery(16, 9, func(ctx context.Context, receipt *sqlTaskReceipt) bool {
-		if receipt.run.RunID == 1 {
+		if receipt.Run.RunID == 1 {
 			select {
 			case <-entered:
 			default:
@@ -125,22 +125,20 @@ func TestSQLTaskRecoveryKeepsDifferentRunsOfSameFiring(t *testing.T) {
 				return true
 			}
 		}
-		completed <- receipt.run.RunID
+		completed <- receipt.Run.RunID
 		return true
 	})
 	t.Cleanup(r.close)
-	claim := sqlTaskAsyncClaim{id: 9, runner: "cn1", epoch: 1}
+	claim := SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 1}
 	first := r.reserve(sqlTaskScheduledReceipt, 1, "task")
 	second := r.reserve(sqlTaskScheduledReceipt, 1, "task")
 	require.NotNil(t, first)
 	require.NotNil(t, second)
 	// A's admission may have rolled back despite a lost COMMIT reply. The
 	// same firing can then acquire B and finish before A reconciles.
-	require.True(t, r.enqueue(&sqlTaskReceipt{class: sqlTaskScheduledReceipt, kind: sqlTaskReceiptAdmission,
-		claim: claim, run: SQLTaskRun{RunID: 1}, credit: first}))
+	require.True(t, r.enqueue(&sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Kind: SQLTaskReceiptAdmission, Claim: claim, Run: SQLTaskRun{RunID: 1}}, credit: first}))
 	<-entered
-	require.True(t, r.enqueue(&sqlTaskReceipt{class: sqlTaskScheduledReceipt, kind: sqlTaskReceiptTerminal,
-		claim: claim, run: SQLTaskRun{RunID: 2}, credit: second}))
+	require.True(t, r.enqueue(&sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Claim: claim, Run: SQLTaskRun{RunID: 2}}, credit: second}))
 	close(release)
 	select {
 	case id := <-completed:
@@ -161,7 +159,7 @@ func TestSQLTaskRecoveryShutdownReleasesPendingGauge(t *testing.T) {
 	before := testutil.ToFloat64(v2.SQLTaskManualPendingGauge)
 	credit := r.reserve(sqlTaskManualReceipt, 1, "task")
 	require.NotNil(t, credit)
-	require.True(t, r.enqueue(&sqlTaskReceipt{class: sqlTaskManualReceipt, credit: credit}))
+	require.True(t, r.enqueue(&sqlTaskReceipt{credit: credit}))
 	<-entered
 	require.Equal(t, before+1, testutil.ToFloat64(v2.SQLTaskManualPendingGauge))
 	r.close()
@@ -352,7 +350,7 @@ func TestSQLTaskRecoveryRetriesAndRotatesShares(t *testing.T) {
 				return false
 			}
 		}
-		attempts <- receipt.class
+		attempts <- receipt.credit.class
 		return recovered.Load()
 	})
 	t.Cleanup(r.close)
@@ -360,7 +358,7 @@ func TestSQLTaskRecoveryRetriesAndRotatesShares(t *testing.T) {
 	for class := sqlTaskManualReceipt; class < sqlTaskReceiptClasses; class++ {
 		credit := r.reserve(class, 1, "task")
 		require.NotNil(t, credit)
-		receipt := &sqlTaskReceipt{class: class, credit: credit, claim: sqlTaskAsyncClaim{id: uint64(class) + 1}}
+		receipt := &sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Claim: SQLTaskClaim{ID: uint64(class) + 1}}, credit: credit}
 		require.True(t, r.enqueue(receipt))
 		require.False(t, r.enqueue(receipt), "a credit can be transferred only once")
 		if class == sqlTaskManualReceipt {
@@ -398,7 +396,7 @@ func TestSQLTaskRecoveryRetriesAndRotatesShares(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	credit := r.reserve(sqlTaskManualReceipt, 1, "later-task")
 	require.NotNil(t, credit)
-	require.True(t, r.enqueue(&sqlTaskReceipt{class: sqlTaskManualReceipt, credit: credit}))
+	require.True(t, r.enqueue(&sqlTaskReceipt{credit: credit}))
 	select {
 	case got := <-attempts:
 		require.Equal(t, sqlTaskManualReceipt, got)

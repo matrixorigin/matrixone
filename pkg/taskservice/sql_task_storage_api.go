@@ -62,59 +62,14 @@ type SQLTaskRetryRequest struct {
 	Claim    *SQLTaskClaim
 }
 
-func (c sqlTaskAsyncClaim) request() SQLTaskClaim {
-	return SQLTaskClaim{ID: c.id, Epoch: c.epoch, Runner: c.runner, ParentTaskID: c.parent, MetadataID: c.metadata}
-}
-
-func (c SQLTaskClaim) internal() sqlTaskAsyncClaim {
-	return sqlTaskAsyncClaim{id: c.ID, epoch: c.Epoch, runner: c.Runner, parent: c.ParentTaskID, metadata: c.MetadataID}
-}
-
-func (r *sqlTaskReceipt) request() SQLTaskReceiptRequest {
-	return SQLTaskReceiptRequest{Kind: SQLTaskReceiptKind(r.kind), Run: r.run, NextRun: r.nextRun, Claim: r.claim.request(), EndAt: r.endAt}
-}
-
-func (r SQLTaskReceiptRequest) internal() sqlTaskReceipt {
-	return sqlTaskReceipt{kind: sqlTaskReceiptKind(r.Kind), run: r.Run, nextRun: r.NextRun, claim: r.Claim.internal(), endAt: r.EndAt}
-}
-
-func (r sqlTaskRetry) request() SQLTaskRetryRequest {
-	request := SQLTaskRetryRequest{Previous: r.previous, Next: r.next}
-	if r.claim != nil {
-		claim := r.claim.request()
+// snapshotSQLTaskRetry keeps the caller's claim independent of a storage
+// decorator, and the storage transaction independent of the decorator.
+func snapshotSQLTaskRetry(request SQLTaskRetryRequest) SQLTaskRetryRequest {
+	if request.Claim != nil {
+		claim := *request.Claim
 		request.Claim = &claim
 	}
 	return request
-}
-
-func (r SQLTaskRetryRequest) internal() sqlTaskRetry {
-	retry := sqlTaskRetry{previous: r.Previous, next: r.Next}
-	if r.Claim != nil {
-		claim := r.Claim.internal()
-		retry.claim = &claim
-	}
-	return retry
-}
-
-func publishSQLTaskReceiptRequest(ctx context.Context, store sqlTaskReceiptStore, request SQLTaskReceiptRequest) (bool, error) {
-	receipt := request.internal()
-	return store.publishSQLTaskReceipt(ctx, &receipt)
-}
-
-func (m *mysqlTaskStorage) PublishSQLTaskReceipt(ctx context.Context, request SQLTaskReceiptRequest) (bool, error) {
-	return publishSQLTaskReceiptRequest(ctx, m, request)
-}
-
-func (s *memTaskStorage) PublishSQLTaskReceipt(ctx context.Context, request SQLTaskReceiptRequest) (bool, error) {
-	return publishSQLTaskReceiptRequest(ctx, s, request)
-}
-
-func (m *mysqlTaskStorage) TransitionSQLTaskRun(ctx context.Context, request SQLTaskRetryRequest) (uint64, bool, error) {
-	return m.transitionSQLTaskRun(ctx, request.internal())
-}
-
-func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, request SQLTaskRetryRequest) (uint64, bool, error) {
-	return s.transitionSQLTaskRun(ctx, request.internal())
 }
 
 func (m *mysqlTaskStorage) ForceRecoverSQLTaskRun(ctx context.Context, account uint32, name string, runID uint64, actor string) (bool, error) {
@@ -123,14 +78,6 @@ func (m *mysqlTaskStorage) ForceRecoverSQLTaskRun(ctx context.Context, account u
 
 func (s *memTaskStorage) ForceRecoverSQLTaskRun(ctx context.Context, account uint32, name string, runID uint64, actor string) (bool, error) {
 	return s.forceRecoverSQLTaskRun(ctx, account, name, runID, actor)
-}
-
-func (m *mysqlTaskStorage) FinishSQLTaskUnclaimed(ctx context.Context, claim SQLTaskClaim, result task.ExecuteResult, endAt int64) error {
-	return m.finishSQLTaskUnclaimed(ctx, claim.internal(), result, endAt)
-}
-
-func (s *memTaskStorage) FinishSQLTaskUnclaimed(ctx context.Context, claim SQLTaskClaim, result task.ExecuteResult, endAt int64) error {
-	return s.finishSQLTaskUnclaimed(ctx, claim.internal(), result, endAt)
 }
 
 func (m *mysqlTaskStorage) DeleteStaleSQLTaskBatch(ctx context.Context, taskID uint64) (int, error) {

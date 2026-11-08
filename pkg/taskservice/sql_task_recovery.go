@@ -47,31 +47,8 @@ var sqlTaskPendingGauges = [sqlTaskReceiptClasses]prometheus.Gauge{
 // A receipt is metadata only: it must never retain an SQL body, session,
 // execution context, or unrestricted error chain.
 type sqlTaskReceipt struct {
-	class   sqlTaskReceiptClass
-	run     SQLTaskRun
-	claim   sqlTaskAsyncClaim
-	kind    sqlTaskReceiptKind
-	nextRun SQLTaskRun
-	credit  *sqlTaskCredit
-	endAt   int64
-}
-
-type sqlTaskReceiptKind uint8
-
-const (
-	sqlTaskReceiptTerminal sqlTaskReceiptKind = iota
-	sqlTaskReceiptUnknown
-	sqlTaskReceiptAdmission
-	sqlTaskReceiptRetryAdmission
-)
-
-// Only bounded identifiers from the async row are retained for recovery.
-type sqlTaskAsyncClaim struct {
-	id       uint64
-	epoch    uint32
-	runner   string
-	parent   string
-	metadata string
+	SQLTaskReceiptRequest
+	credit *sqlTaskCredit
 }
 
 type sqlTaskNameKey struct {
@@ -255,20 +232,20 @@ func (r *sqlTaskRecovery) releaseGuard(guard *sqlTaskGuard) {
 func (r *sqlTaskRecovery) enqueue(receipt *sqlTaskReceipt) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || receipt.credit == nil || receipt.credit.released || receipt.credit.queued || receipt.credit.class != receipt.class {
+	if r.closed || receipt.credit == nil || receipt.credit.released || receipt.credit.queued {
 		return false
 	}
-	if len(receipt.run.TaskName) > 512 || len(receipt.run.RunnerCN) > sqlTaskRunnerMaxBytes || len(receipt.run.ErrorMessage) > 4096 ||
-		len(receipt.nextRun.TaskName) > 512 || len(receipt.nextRun.RunnerCN) > sqlTaskRunnerMaxBytes || len(receipt.nextRun.ErrorMessage) > 4096 ||
-		len(receipt.claim.runner) > sqlTaskAsyncRunnerMaxBytes || len(receipt.claim.parent) > 50 || len(receipt.claim.metadata) > 50 {
+	if len(receipt.Run.TaskName) > 512 || len(receipt.Run.RunnerCN) > sqlTaskRunnerMaxBytes || len(receipt.Run.ErrorMessage) > 4096 ||
+		len(receipt.NextRun.TaskName) > 512 || len(receipt.NextRun.RunnerCN) > sqlTaskRunnerMaxBytes || len(receipt.NextRun.ErrorMessage) > 4096 ||
+		len(receipt.Claim.Runner) > sqlTaskAsyncRunnerMaxBytes || len(receipt.Claim.ParentTaskID) > 50 || len(receipt.Claim.MetadataID) > 50 {
 		return false
 	}
 	receipt.credit.queued = true
-	sqlTaskPendingGauges[receipt.class].Inc()
-	receipt.run.TaskName, receipt.run.RunnerCN, receipt.run.ErrorMessage = strings.Clone(receipt.run.TaskName), strings.Clone(receipt.run.RunnerCN), strings.Clone(receipt.run.ErrorMessage)
-	receipt.nextRun.TaskName, receipt.nextRun.RunnerCN, receipt.nextRun.ErrorMessage = strings.Clone(receipt.nextRun.TaskName), strings.Clone(receipt.nextRun.RunnerCN), strings.Clone(receipt.nextRun.ErrorMessage)
-	receipt.claim.runner, receipt.claim.parent, receipt.claim.metadata = strings.Clone(receipt.claim.runner), strings.Clone(receipt.claim.parent), strings.Clone(receipt.claim.metadata)
-	r.pending[receipt.class].PushBack(receipt)
+	sqlTaskPendingGauges[receipt.credit.class].Inc()
+	receipt.Run.TaskName, receipt.Run.RunnerCN, receipt.Run.ErrorMessage = strings.Clone(receipt.Run.TaskName), strings.Clone(receipt.Run.RunnerCN), strings.Clone(receipt.Run.ErrorMessage)
+	receipt.NextRun.TaskName, receipt.NextRun.RunnerCN, receipt.NextRun.ErrorMessage = strings.Clone(receipt.NextRun.TaskName), strings.Clone(receipt.NextRun.RunnerCN), strings.Clone(receipt.NextRun.ErrorMessage)
+	receipt.Claim.Runner, receipt.Claim.ParentTaskID, receipt.Claim.MetadataID = strings.Clone(receipt.Claim.Runner), strings.Clone(receipt.Claim.ParentTaskID), strings.Clone(receipt.Claim.MetadataID)
+	r.pending[receipt.credit.class].PushBack(receipt)
 	if !r.started {
 		r.started = true
 		r.done = make(chan struct{})
@@ -354,7 +331,7 @@ func (r *sqlTaskRecovery) run(done chan struct{}) {
 				r.releaseLocked(receipt.credit)
 				succeeded = true
 			} else {
-				r.pending[receipt.class].PushBack(receipt)
+				r.pending[receipt.credit.class].PushBack(receipt)
 				failed = true
 			}
 			closed := r.closed

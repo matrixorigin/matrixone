@@ -27,11 +27,7 @@ import (
 
 const sqlTaskStaleBatchSize = 128
 
-func finishSQLTaskUnclaimed(ctx context.Context, store TaskStorage, claim sqlTaskAsyncClaim, result task.ExecuteResult, endAt int64) error {
-	return store.FinishSQLTaskUnclaimed(ctx, claim.request(), result, endAt)
-}
-
-func (m *mysqlTaskStorage) finishSQLTaskUnclaimed(ctx context.Context, claim sqlTaskAsyncClaim, result task.ExecuteResult, endAt int64) error {
+func (m *mysqlTaskStorage) FinishSQLTaskUnclaimed(ctx context.Context, claim SQLTaskClaim, result task.ExecuteResult, endAt int64) error {
 	conn, err := m.db.Conn(ctx)
 	if err != nil {
 		return err
@@ -40,7 +36,7 @@ func (m *mysqlTaskStorage) finishSQLTaskUnclaimed(ctx context.Context, claim sql
 	defer func() { closeSQLTaskMetadataConn(conn, discard) }()
 	updated, err := conn.ExecContext(ctx, completeSQLTaskUnclaimed,
 		task.TaskStatus_Completed, result.Code, nullString(util.Abbreviate(result.Error, 997)), endAt,
-		claim.id, task.TaskStatus_Running, claim.runner, claim.epoch, task.TaskCode_SQLTask)
+		claim.ID, task.TaskStatus_Running, claim.Runner, claim.Epoch, task.TaskCode_SQLTask)
 	if err != nil {
 		return err
 	}
@@ -55,15 +51,15 @@ func (m *mysqlTaskStorage) finishSQLTaskUnclaimed(ctx context.Context, claim sql
 	return nil // zero means it was completed, removed, reassigned, or claimed
 }
 
-func (s *memTaskStorage) finishSQLTaskUnclaimed(ctx context.Context, claim sqlTaskAsyncClaim, result task.ExecuteResult, endAt int64) error {
+func (s *memTaskStorage) FinishSQLTaskUnclaimed(ctx context.Context, claim SQLTaskClaim, result task.ExecuteResult, endAt int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.Lock()
 	defer s.Unlock()
-	async, exists := s.asyncTasks[claim.id]
-	if !exists || async.Metadata.Executor != task.TaskCode_SQLTask || async.Status != task.TaskStatus_Running || async.TaskRunner != claim.runner ||
-		async.Epoch != claim.epoch || s.sqlTaskClaims[async.ID] != 0 {
+	async, exists := s.asyncTasks[claim.ID]
+	if !exists || async.Metadata.Executor != task.TaskCode_SQLTask || async.Status != task.TaskStatus_Running || async.TaskRunner != claim.Runner ||
+		async.Epoch != claim.Epoch || s.sqlTaskClaims[async.ID] != 0 {
 		return nil
 	}
 	result.Error = util.Abbreviate(result.Error, 997)

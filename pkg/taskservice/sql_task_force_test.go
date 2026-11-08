@@ -73,7 +73,7 @@ func TestForceRecoverSQLTaskRun(t *testing.T) {
 				Metadata:     BuildSQLTaskMetadata(&task.SQLTaskContext{TaskId: definition.TaskID, TriggerCount: 1})}
 			mustAddTestAsyncTask(t, store, 1, firing)
 			firing = mustGetTestAsyncTask(t, store, 1)[0]
-			claim := &sqlTaskAsyncClaim{id: firing.ID, runner: firing.TaskRunner, epoch: firing.Epoch, parent: firing.ParentTaskID, metadata: firing.Metadata.ID}
+			claim := &SQLTaskClaim{ID: firing.ID, Runner: firing.TaskRunner, Epoch: firing.Epoch, ParentTaskID: firing.ParentTaskID, MetadataID: firing.Metadata.ID}
 			run := newTestSQLTaskRun(definition.TaskID, definition.TaskName, SQLTaskStatusRunning)
 			run.TriggerType = SQLTaskTriggerScheduled
 			run.ErrorMessage = "original reason"
@@ -103,7 +103,7 @@ func TestForceRecoverSQLTaskRun(t *testing.T) {
 			// A late owner receipt cannot overwrite UNKNOWN, and replaying FORCE
 			// cannot suspend the task a second time or mutate a successor run.
 			run.Status, run.FinishedAt = SQLTaskStatusSuccess, time.Now()
-			resolved, err := publishSQLTaskReceipt(ctx, store, &sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: run, claim: *claim})
+			resolved, err := store.PublishSQLTaskReceipt(ctx, SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: run, Claim: *claim})
 			require.NoError(t, err)
 			require.True(t, resolved)
 			resumed := current

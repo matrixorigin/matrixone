@@ -15,26 +15,16 @@
 package taskservice
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
-type sqlTaskReceiptStore interface {
-	publishSQLTaskReceipt(context.Context, *sqlTaskReceipt) (bool, error)
-}
-
-func publishSQLTaskReceipt(ctx context.Context, store TaskStorage, receipt *sqlTaskReceipt) (bool, error) {
-	return store.PublishSQLTaskReceipt(ctx, receipt.request())
-}
-
-func sqlTaskReceiptAsyncResult(receipt *sqlTaskReceipt) task.ExecuteResult {
+func sqlTaskReceiptAsyncResult(receipt *SQLTaskReceiptRequest) task.ExecuteResult {
 	result := task.ExecuteResult{Code: task.ResultCode_Success}
-	if receipt.kind == sqlTaskReceiptUnknown || receipt.run.Status == SQLTaskStatusFailed || receipt.run.Status == SQLTaskStatusTimeout {
+	if receipt.Kind == SQLTaskReceiptUnknown || receipt.Run.Status == SQLTaskStatusFailed || receipt.Run.Status == SQLTaskStatusTimeout {
 		result.Code = task.ResultCode_Failed
-		result.Error = util.Abbreviate(receipt.run.ErrorMessage, 997)
+		result.Error = util.Abbreviate(receipt.Run.ErrorMessage, 997)
 	}
 	return result
 }

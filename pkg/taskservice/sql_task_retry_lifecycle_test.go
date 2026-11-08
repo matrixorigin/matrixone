@@ -16,8 +16,10 @@ package taskservice
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +37,91 @@ type lostRetryCommitStore struct {
 	committed bool
 }
 
+type mutatingRetryStore struct {
+	TaskStorage
+	seen SQLTaskClaim
+}
+
+func (s *mutatingRetryStore) TransitionSQLTaskRun(_ context.Context, request SQLTaskRetryRequest) (uint64, bool, error) {
+	if request.Claim != nil {
+		s.seen = *request.Claim
+		request.Claim.ID++
+	}
+	return 0, false, nil
+}
+
+type blockingRetryArgument struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a blockingRetryArgument) Match(value driver.Value) bool {
+	close(a.entered)
+	<-a.release
+	return value == int64(7)
+}
+
+func TestSQLTaskRetrySnapshotsClaimAtStorageBoundaries(t *testing.T) {
+	t.Run("decorator cannot change caller identity", func(t *testing.T) {
+		claim := SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 4}
+		store := &mutatingRetryStore{}
+		_, _, err := transitionSQLTaskRun(context.Background(), store, SQLTaskRetryRequest{Claim: &claim})
+		require.NoError(t, err)
+		require.Equal(t, SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 4}, store.seen)
+		require.Equal(t, store.seen, claim)
+	})
+
+	t.Run("transaction cannot observe later decorator changes", func(t *testing.T) {
+		store, mock := newMockStorage(t)
+		t.Cleanup(func() { _ = store.Close() })
+		old := newTestSQLTaskRun(7, "owned", SQLTaskStatusFailed)
+		old.RunID, old.FinishedAt = 42, time.Now().Truncate(time.Second)
+		next := newTestSQLTaskRun(7, "owned", SQLTaskStatusRunning)
+		next.AttemptNumber = 2
+		claim := &SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 4}
+		barrier := blockingRetryArgument{entered: make(chan struct{}), release: make(chan struct{})}
+		release := sync.OnceFunc(func() { close(barrier.release) })
+		t.Cleanup(release)
+		mock.ExpectExec("BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery(lockOwnedSQLTaskAdmission).WithArgs(barrier, old.AccountID, old.TaskName).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "account", "name", "enabled", "generation", "count"}).AddRow(7, 1, "owned", 1, 1, 2))
+		mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(uint64(9)).
+			WillReturnRows(sqlmock.NewRows([]string{"status", "runner", "epoch", "run"}).AddRow(int32(task.TaskStatus_Running), "cn1", 4, old.RunID))
+		mock.ExpectExec(completeSQLTaskRun + " and task_id=? and account_id=?").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(insertSQLTaskRun).WillReturnResult(sqlmock.NewResult(43, 1))
+		mock.ExpectExec("update sys_async_task set sql_task_run_id=? where task_id=? and sql_task_run_id=? and task_status=? and task_runner=? and task_epoch=?").
+			WithArgs(uint64(43), uint64(9), old.RunID, task.TaskStatus_Running, "cn1", uint32(4)).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("COMMIT").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectClose()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		result := make(chan error, 1)
+		t.Cleanup(func() {
+			release()
+			cancel()
+			<-done
+		})
+		go func() {
+			defer close(done)
+			id, continued, err := store.TransitionSQLTaskRun(ctx, SQLTaskRetryRequest{Previous: old, Next: next, Claim: claim})
+			if err == nil && (id != 43 || !continued) {
+				err = fmt.Errorf("unexpected transition result: id=%d continued=%t", id, continued)
+			}
+			result <- err
+		}()
+		select {
+		case <-barrier.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry transaction did not start")
+		}
+		*claim = SQLTaskClaim{ID: 99, Runner: "other", Epoch: 9}
+		release()
+		require.NoError(t, <-result)
+		require.NoError(t, store.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
 func TestSQLTaskMySQLRetryTransition(t *testing.T) {
 	for _, loseCommit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lost_commit_response=%t", loseCommit), func(t *testing.T) {
@@ -43,17 +130,17 @@ func TestSQLTaskMySQLRetryTransition(t *testing.T) {
 			old.RunID, old.FinishedAt = 42, time.Now().Truncate(time.Second)
 			next := newTestSQLTaskRun(7, "owned", SQLTaskStatusRunning)
 			next.AttemptNumber = 2
-			claim := &sqlTaskAsyncClaim{id: 9, runner: "cn1", epoch: 4}
-			retry := sqlTaskRetry{previous: old, next: next, claim: claim}
+			claim := &SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 4}
+			retry := SQLTaskRetryRequest{Previous: old, Next: next, Claim: claim}
 			mock.ExpectExec("BEGIN").WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectQuery(lockOwnedSQLTaskAdmission).WithArgs(old.TaskID, old.AccountID, old.TaskName).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "account", "name", "enabled", "generation", "count"}).AddRow(7, 1, "owned", 1, 1, 2))
-			mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(claim.id).
-				WillReturnRows(sqlmock.NewRows([]string{"status", "runner", "epoch", "run"}).AddRow(int32(task.TaskStatus_Running), claim.runner, claim.epoch, old.RunID))
+			mock.ExpectQuery(lockSQLTaskReceiptAsync).WithArgs(claim.ID).
+				WillReturnRows(sqlmock.NewRows([]string{"status", "runner", "epoch", "run"}).AddRow(int32(task.TaskStatus_Running), claim.Runner, claim.Epoch, old.RunID))
 			mock.ExpectExec(completeSQLTaskRun + " and task_id=? and account_id=?").WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(insertSQLTaskRun).WillReturnResult(sqlmock.NewResult(43, 1))
 			mock.ExpectExec("update sys_async_task set sql_task_run_id=? where task_id=? and sql_task_run_id=? and task_status=? and task_runner=? and task_epoch=?").
-				WithArgs(uint64(43), claim.id, old.RunID, task.TaskStatus_Running, claim.runner, claim.epoch).
+				WithArgs(uint64(43), claim.ID, old.RunID, task.TaskStatus_Running, claim.Runner, claim.Epoch).
 				WillReturnResult(sqlmock.NewResult(0, 1))
 			problem := errors.New("commit acknowledgement lost")
 			if loseCommit {
@@ -62,7 +149,7 @@ func TestSQLTaskMySQLRetryTransition(t *testing.T) {
 			} else {
 				mock.ExpectExec("COMMIT").WillReturnResult(sqlmock.NewResult(0, 0))
 			}
-			id, continued, err := store.transitionSQLTaskRun(context.Background(), retry)
+			id, continued, err := store.TransitionSQLTaskRun(context.Background(), retry)
 			require.Equal(t, uint64(43), id)
 			require.True(t, continued)
 			if loseCommit {

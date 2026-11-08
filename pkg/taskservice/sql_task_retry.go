@@ -23,20 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
-type sqlTaskRetry struct {
-	previous SQLTaskRun
-	next     SQLTaskRun
-	claim    *sqlTaskAsyncClaim
-}
-
-func (m *mysqlTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTaskRetry) (uint64, bool, error) {
+func (m *mysqlTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTaskRetryRequest) (uint64, bool, error) {
+	retry = snapshotSQLTaskRetry(retry)
 	var nextID uint64
 	continued := false
 	commitAttempted, err := runSQLTaskMetadataTransaction(ctx, m.db, func(ctx context.Context, conn *sql.Conn) error {
 		var definition SQLTask
 		var enabled uint8
 		err := conn.QueryRowContext(ctx, lockOwnedSQLTaskAdmission,
-			retry.previous.TaskID, retry.previous.AccountID, retry.previous.TaskName,
+			retry.Previous.TaskID, retry.Previous.AccountID, retry.Previous.TaskName,
 		).Scan(&definition.TaskID, &definition.AccountID, &definition.TaskName, &enabled, &definition.ScheduleGeneration, &definition.TriggerCount)
 		exists := err == nil
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -45,18 +40,18 @@ func (m *mysqlTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTa
 		definition.Enabled = enabled != 0
 		var state sqlTaskReceiptAsyncState
 		var async task.AsyncTask
-		if retry.claim != nil {
-			err = conn.QueryRowContext(ctx, lockSQLTaskReceiptAsync, retry.claim.id).
+		if retry.Claim != nil {
+			err = conn.QueryRowContext(ctx, lockSQLTaskReceiptAsync, retry.Claim.ID).
 				Scan(&state.status, &state.runner, &state.epoch, &state.pointer)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
 			if err == nil {
-				async.ID, async.Status, async.TaskRunner, async.Epoch = retry.claim.id, task.TaskStatus(state.status.Int64), state.runner.String, uint32(state.epoch.Int64)
+				async.ID, async.Status, async.TaskRunner, async.Epoch = retry.Claim.ID, task.TaskStatus(state.status.Int64), state.runner.String, uint32(state.epoch.Int64)
 			}
 		}
 		continued = canRetrySQLTask(definition, exists, retry, async, state.pointer)
-		updated, err := execOwnedSQLTaskRunResult(ctx, conn, retry.previous)
+		updated, err := execOwnedSQLTaskRunResult(ctx, conn, retry.Previous)
 		if err != nil {
 			return err
 		}
@@ -68,10 +63,10 @@ func (m *mysqlTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTa
 			return errSQLTaskReceiptConflict
 		}
 		if !continued {
-			if async.ID != 0 && async.Status == task.TaskStatus_Running && state.pointer == retry.previous.RunID {
-				result := sqlTaskReceiptAsyncResult(&sqlTaskReceipt{kind: sqlTaskReceiptTerminal, run: retry.previous})
+			if async.ID != 0 && async.Status == task.TaskStatus_Running && state.pointer == retry.Previous.RunID {
+				result := sqlTaskReceiptAsyncResult(&SQLTaskReceiptRequest{Kind: SQLTaskReceiptTerminal, Run: retry.Previous})
 				updated, err = conn.ExecContext(ctx, completeSQLTaskAsync, task.TaskStatus_Completed, result.Code, nullString(result.Error),
-					retry.previous.FinishedAt.UnixMilli(), async.ID, task.TaskStatus_Running, retry.previous.RunID)
+					retry.Previous.FinishedAt.UnixMilli(), async.ID, task.TaskStatus_Running, retry.Previous.RunID)
 				if err != nil {
 					return err
 				}
@@ -85,7 +80,7 @@ func (m *mysqlTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTa
 			}
 			return nil
 		}
-		next := retry.next
+		next := retry.Next
 		inserted, err := conn.ExecContext(ctx, insertSQLTaskRun,
 			next.TaskID, next.TaskName, next.AccountID, nullTime(next.ScheduledAt), nullTime(next.StartedAt),
 			nullTime(next.FinishedAt), next.DurationSeconds, next.Status, next.TriggerType, next.AttemptNumber,
@@ -101,10 +96,10 @@ func (m *mysqlTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTa
 			return moerr.NewInternalErrorNoCtx("SQL task retry did not return a run ID")
 		}
 		nextID = uint64(id)
-		if retry.claim != nil {
+		if retry.Claim != nil {
 			updated, err = conn.ExecContext(ctx,
 				"update sys_async_task set sql_task_run_id=? where task_id=? and sql_task_run_id=? and task_status=? and task_runner=? and task_epoch=?",
-				nextID, retry.claim.id, retry.previous.RunID, task.TaskStatus_Running, retry.claim.runner, retry.claim.epoch)
+				nextID, retry.Claim.ID, retry.Previous.RunID, task.TaskStatus_Running, retry.Claim.Runner, retry.Claim.Epoch)
 			if err != nil {
 				return err
 			}
@@ -124,21 +119,21 @@ func (m *mysqlTaskStorage) transitionSQLTaskRun(ctx context.Context, retry sqlTa
 	return nextID, continued, err
 }
 
-func transitionSQLTaskRun(ctx context.Context, store TaskStorage, retry sqlTaskRetry) (uint64, bool, error) {
-	return store.TransitionSQLTaskRun(ctx, retry.request())
+func transitionSQLTaskRun(ctx context.Context, store TaskStorage, retry SQLTaskRetryRequest) (uint64, bool, error) {
+	return store.TransitionSQLTaskRun(ctx, snapshotSQLTaskRetry(retry))
 }
 
-func canRetrySQLTask(definition SQLTask, exists bool, retry sqlTaskRetry, async task.AsyncTask, pointer uint64) bool {
-	if !exists || definition.TaskID != retry.previous.TaskID || definition.AccountID != retry.previous.AccountID ||
-		definition.TaskName != retry.previous.TaskName {
+func canRetrySQLTask(definition SQLTask, exists bool, retry SQLTaskRetryRequest, async task.AsyncTask, pointer uint64) bool {
+	if !exists || definition.TaskID != retry.Previous.TaskID || definition.AccountID != retry.Previous.AccountID ||
+		definition.TaskName != retry.Previous.TaskName {
 		return false
 	}
-	if retry.claim == nil {
+	if retry.Claim == nil {
 		return true
 	}
-	claim := retry.claim
+	claim := retry.Claim
 	// Schedule changes invalidate unclaimed firings, not the remaining retry
 	// attempts of an execution that already owns this async row.
-	return async.ID == claim.id && async.Status == task.TaskStatus_Running && async.TaskRunner == claim.runner &&
-		async.Epoch == claim.epoch && pointer == retry.previous.RunID
+	return async.ID == claim.ID && async.Status == task.TaskStatus_Running && async.TaskRunner == claim.Runner &&
+		async.Epoch == claim.Epoch && pointer == retry.Previous.RunID
 }
