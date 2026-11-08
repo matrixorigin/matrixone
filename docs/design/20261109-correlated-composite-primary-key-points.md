@@ -21,6 +21,13 @@ only the two matching rows. A 50-identity prepared UPDATE showed the same
 access-path problem. This is an optimization issue, not a demonstrated wrong
 result.
 
+A further prepared-plan control has a complete point-shaped predicate but
+selects a secondary-index backfill. The eager implementation marked the plan
+value dependent even though no point filter survived; the baseline plan was
+otherwise eligible for the frontend's type-keyed cache. This is a cache-eligibility
+regression for the observed execution, not proof that index selection is
+independent of every possible binding.
+
 For original scan predicate `F` and derived point predicate `C`, a candidate is
 legal only when **every row where `F` is SQL TRUE also satisfies `C`**. It is a
 necessary condition, not a replacement for `F`. Pruning must not suppress or
@@ -70,7 +77,13 @@ Each selected OR arm must, together with inherited conjunctions, imply one
 complete tuple for the same scan. Select one independently sufficient OR; do
 not multiply separate ORs. Incomplete arms, unsupported expressions, malformed
 metadata, absent proof, or exhausted budget leave the established access path
-in place. Keep original parameter ordinals and literal provenance.
+in place. This phase must not inspect execution values or change prepared-binding
+state. Before copying, charge the shape and metadata. Freeze one independently
+owned typed copy per distinct source expression, and let tuple positions refer
+to those copies. Capture every recognized equality that may be skipped, not
+just selected tuple facts. Preserve original parameter ordinals, type/collation,
+casts, and literal provenance; do not retain mutable original-expression
+pointers as the frozen shape.
 
 Accept only exact, total and effect-free equality values and comparison domains
 whose serialization is a safe necessary condition. Reuse the existing resolved
@@ -84,16 +97,35 @@ cannot truncate or warn; explicit or unproved casts fall back.
 
 The proposal stays outside the plan while early vector selection, join/cost
 passes and normal secondary-index selection run. It records the source scan
-identity, relation/snapshot and key metadata, candidate, and exact serialized
-predicate witnesses including parameter ordinal and literal source. Before an
-existing late composite-key lowering, validate the old witnesses; only an
-already valid proposal can take new witnesses after that owner performs its
-semantics-preserving rewrite. Before publication, require the same surviving
-scan, metadata and witnesses, and prove any added conjunct is safe to skip.
-An untracked scan copy, replacement, changed witness, or failed proof falls
-back; do not infer validity from table identity alone. The original logical and
-physical predicates remain. Publication adds the existing hidden-key `IN`
-filter after access decisions, with the existing block-filter rules and hint.
+identity, relation/snapshot and key metadata, frozen shape, and exact serialized
+predicate witnesses including parameter ordinal and literal source. The
+existing early lowering is the semantic bridge between the original frozen
+values and the resulting witnesses. Before an existing late composite-key
+lowering, validate the old witnesses; only an already valid proposal can take
+new witnesses after that owner performs its semantics-preserving rewrite.
+Before publication, require the same surviving scan, metadata and witnesses,
+and prove any added conjunct is safe to skip. An untracked scan copy,
+replacement, changed witness, or failed proof falls back; do not infer validity
+from table identity alone.
+
+Only a surviving proposal may inspect current parameter bytes and bind an
+executable candidate. First reject value-independent impossibilities such as an
+existing complete-key `IN` or a budget below the known minimum. Check all
+selected and unselected skippable equality values, then charge actual encoded
+sizes and packers. Bind each tuple through the existing `SERIAL` owner with
+independent semantic copies, and append the complete hidden-key `IN` only when
+all checks and bindings succeed. Retain the original logical and physical
+predicates and the existing block-filter rules and hint. An optional proof,
+marshal or bind failure falls back; cancellation and deadline errors remain with
+the planner's existing cancellation owner.
+
+The general binder is stateful. Deferred binding is restricted to the admitted
+`SERIAL` scalar forms for which ordinary binding, including failure, does not
+publish prepared diagnostic, field, temporal or warning state. Reject a form if
+that contract cannot be established. Never restore a saved shared flag or
+truncate shared diagnostic lists after speculative work. The frozen copy also
+preserves the existing `DeepCopyExpr` treatment of execution-owned auxiliary
+IDs; decoding a wire witness is not a substitute for that copy contract.
 
 The reader may prefer exact `IN` over a simultaneous prefix for `AND` only when
 all valid points are inside the prefix. It keeps the existing merge fallback
@@ -110,14 +142,23 @@ by the executor—not declared width or a potentially different user-variable
 representation. A bound NULL remains subject to SQL three-valued semantics.
 Each occurrence is charged, including shared parameters.
 
-First reject shapes that can never form a safe complete candidate without
-reading execution values. For an otherwise eligible candidate, both admission
-and value-dependent rejection mark the existing prepared-binding state as
-value dependent. The frontend therefore does not retain a type-only plan that
-would hide a later smaller binding after an oversized one. Existing unrelated
-value-dependency flags are not cleared. Retry uses its existing execution
-binding snapshot; candidate analysis adds no new retry, transaction or durable
-state.
+First reject shapes and eliminated scans without reading execution values. For
+a surviving potentially eligible candidate, set the existing prepared-binding
+value-dependency flag before the first execution-value inspection. This covers
+both admission and a value-dependent rejection, so an oversized fallback cannot
+be cached by type and hide a later small binding. Never clear a flag set by
+another owner. Retry uses its existing execution binding snapshot; candidate
+analysis adds no new retry, transaction or durable state.
+
+If access selection removes the proposed scan or its proof, the candidate must
+not change the ordinary plan or prepared-binding state; the existing cache key,
+diagnostic guards and invalidation rules then decide whether that ordinary plan
+is reusable. This does not prove access selection is value-invariant. A later
+same-key cache hit may retain the ordinary index plan even if a fresh plan
+would select a scan eligible for points. That is an accepted missed optimization
+under the existing cache policy, not a claim that every future value chooses the
+same access path. Finding every later opportunity would require a separate
+cache-key proof or revalidation mechanism.
 
 The proposal and witnesses are query-planning-local. If planning errors or is
 cancelled, their Go-owned memory becomes unreachable with the planning attempt;
@@ -128,9 +169,11 @@ bounded as described below rather than creating a new context or deadline.
 ## Resource and performance policy
 
 The query shares an 8 MiB **admission charge** across its steps and scans. It
-accounts for actual string bytes with worst-case escaping, tuple and expression
-copies, witness and metadata sizes, and the existing serial executor's minimum
-packer and capacity-growth bound, with a four-copy allowance. The traversal
+accounts for the frozen shape and metadata before copying, each retained
+witness and temporary comparison work, and at admission actual string bytes with
+worst-case escaping, tuple and expression copies, and the existing serial
+executor's minimum packer and capacity-growth bound, with a four-copy allowance.
+Reservations are not charged twice. The traversal
 limits are 2,048 visited nodes, depth 256, and 128 tuples per candidate. The
 budget is conservative and monotonic for one planning attempt: rejection or a
 later discarded proposal need not refund previously consumed charge. It is not
@@ -141,9 +184,11 @@ parameter bytes. No candidate is required for correctness.
 
 Candidate construction is proportional to the admitted expression/tuple size;
 witness matching is bounded by the admitted filters and can be quadratic in
-filter count. Additional binding, exact witness serialization, candidate copies
-and value-dependent replanning cost CPU and allocations. No-OR and ineligible
-paths should remain cheap, and ineligible shapes must retain normal prepared
+filter count. Frozen copies, additional binding, exact witness serialization,
+candidate copies and value-dependent replanning cost CPU and allocations.
+Deferring binding avoids that work for eliminated scans but adds frozen-shape
+copies for surviving scans; matched measurements must assess both effects.
+No-OR and ineligible paths should remain cheap, and ineligible shapes must retain normal prepared
 plan-cache reuse. Additional performance changes must preserve the same proof,
 resource charge, and binder/error contracts rather than replacing them with an
 unverified shortcut.
@@ -174,17 +219,19 @@ Acceptance evidence must cover:
 - Correlated/shared facts, incomplete and sibling ORs, duplicates, NULLs,
   unsafe residuals, exact witnesses, relation/snapshot changes, scan copies,
   late lowering, and all resource limits with fail-open behavior.
-- SQL and binary prepared reuse with changed bindings, over-budget then small
-  values, warnings/errors, rollback and committed DML; retry must retain the
-  same binding snapshot.
+- Actual frontend cache installation and reuse for forced and automatic index
+  paths; SQL and binary prepared reuse with small/large/NULL transitions in
+  both orders, selected and unselected cast bounds, warnings/errors, rollback
+  and committed DML. Retry must retain the same binding snapshot.
 - CHAR padding, Unicode overrides, float signed zero, binary/NUL, decimal and
   temporal controls; nullable outer joins, forced/ignored secondary indexes,
   early IVF paths, and block-filter-disabled behavior.
 - Reader IN/prefix operand orders, partial overlap, vector lifetime, cached
   searches and cleanup; normal and race tests for affected owners.
-- The real persisted 2- and 50-point workloads, scan rows and blocks, planner
-  overhead and incremental static checks. Compare performance on matched inputs
-  and report setup, sampling and limits rather than promising general speedups.
+- The real persisted 2- and 50-point workloads, scan rows and blocks, and
+  matched planner measurements for surviving and eliminated candidates, no-OR
+  and unsafe controls. Report setup, sampling and limits rather than promising
+  general speedups. Run incremental static checks for the affected closure.
 
 Remaining limitation: execution fan-out and multi-CN performance were not
 bounded or benchmarked by the local one-CN admission charge and measurements.
