@@ -259,8 +259,8 @@ func (rt *Routine) cancelRequestCtx() {
 }
 
 // beginClose seals new lifecycle work and cancels current request/lifecycle
-// contexts without waiting for them. Resource cleanup remains owned by
-// cleanup's closeOnce path.
+// contexts. It does not wait for operations to finish, but it may wait for
+// their mutexes. Resource cleanup remains owned by cleanup's closeOnce path.
 func (rt *Routine) beginClose() {
 	rt.mu.Lock()
 	rt.closing.Store(true)
@@ -507,8 +507,7 @@ func (rt *Routine) cleanup() {
 	//step 1: cancel the query if there is a running query.
 	//step 2: close the connection.
 	rt.closeOnce.Do(func() {
-		// Seal and cancel before waiting. beginClose itself never waits, so it is
-		// safe to call from the connection-liveness control path.
+		// Seal and cancel before waiting for lifecycle operations to finish.
 		rt.beginClose()
 		rt.mc.waitAndClose()
 		rt.killQuery(false, "")

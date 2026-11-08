@@ -132,6 +132,10 @@ func (monitor *terminalConnectionMonitor) scan(now time.Time) {
 			delete(monitor.probes, conn)
 		}
 	}
+	// Gradual eviction can leave an empty map holding its peak buckets.
+	if len(monitor.probes) == 0 {
+		monitor.probes = nil
+	}
 	clear(monitor.requests)
 	if cap(monitor.requests) > terminalRequestScratchLimit {
 		monitor.requests = nil
