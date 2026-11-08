@@ -160,7 +160,7 @@ func TestDiskCacheReadPrefersWholeFileOverContainingRange(t *testing.T) {
 	cache.preloads.mu.Lock()
 	served := cache.preloads.served[cache.pathForFile("123obj")]
 	cache.preloads.mu.Unlock()
-	require.Equal(t, int64(30), served.served)
+	require.Equal(t, int64(30), served)
 }
 
 // A read that no single cached range contains is served from cached ranges that hold it

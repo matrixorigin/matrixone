@@ -1126,9 +1126,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		readFullObject = false
 	}
 
-	// A narrow range read of a group that reads ranges is a sample of its range cost.
-	narrowRanges := s.diskCache != nil && vector.Policy.Any(NarrowRead) && vector.Policy.Any(SkipFullFilePreloads)
-
 	// A range read is timed only when this function drains it.
 	timeRangeReads := true
 	for i := range vector.Entries {
@@ -1153,13 +1150,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		r, err := s.storage.Read(ctx, key, min, max)
 		if err != nil {
 			return nil, err
-		}
-		if narrowRanges && max != nil {
-			n := *max
-			if min != nil {
-				n -= *min
-			}
-			s.diskCache.preloads.rangeRead(s.diskCache.pathForFile(path.File), GetPreloadGroup(ctx), n, s.diskCache.wholeObjectSize())
 		}
 		return &readCloser{
 			r: &countingReader{
@@ -1205,17 +1195,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	// A range read may take its bytes from cached prefetch ranges and reads of them
 	// under way, reading only the missing blocks around it.
 	var prefetchContent []byte
+	var prefetchReads int
 	if !readFullObject && s.diskCache != nil && min != nil && max != nil {
 		if unit, ok := s.diskCache.prefetchUnit(vector); ok {
-			fetch := func(ctx context.Context, start, end int64) ([]byte, error) {
-				r, err := getReader(ctx, &start, &end)
-				if err != nil {
-					return nil, err
-				}
-				defer r.Close()
-				return io.ReadAll(r)
+			open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+				return getReader(ctx, &start, &end)
 			}
-			if content, ok := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, fetch); ok {
+			content, reads, ok := s.diskCache.prefetchRead(ctx, path.File, vector.Policy, vector.Entries, *min, *max, unit, open)
+			prefetchReads = reads
+			if ok {
 				prefetchContent = content
 			}
 		}
@@ -1266,7 +1254,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	numNotDoneEntries := 0
 	defer func() {
-		if prefetchContent == nil {
+		if prefetchContent == nil || prefetchReads > 0 {
 			metric.FSReadS3Counter.Add(float64(numNotDoneEntries))
 		}
 	}()

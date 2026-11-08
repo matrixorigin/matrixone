@@ -158,9 +158,22 @@ func (c *cachedRanges) covering(key string, offset, size int64) ([]cachedRange, 
 func (c *cachedRanges) containing(key string, offset, size int64, tried []string) (cachedRange, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return smallestContaining(c.byObject[key], offset, size, tried)
+}
+
+// of returns a copy of the cached ranges of the object with key.
+func (c *cachedRanges) of(key string) []cachedRange {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.byObject[key])
+}
+
+// smallestContaining returns the smallest of ranges that contains size bytes at offset,
+// passing over the range files in tried.
+func smallestContaining(ranges []cachedRange, offset, size int64, tried []string) (cachedRange, bool) {
 	var found cachedRange
 	ok := false
-	for _, r := range c.byObject[key] {
+	for _, r := range ranges {
 		if r.offset <= offset && offset+size <= r.offset+r.size && (!ok || r.size < found.size) &&
 			!slices.Contains(tried, r.diskPath) {
 			found, ok = r, true

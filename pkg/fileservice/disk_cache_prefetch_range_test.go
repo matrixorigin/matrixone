@@ -211,9 +211,15 @@ func addFlight(d *DiskCache, diskPath string, start, end int64, began time.Time)
 	if f.m == nil {
 		f.m = make(map[string][]*prefetchFlight)
 	}
-	fl := &prefetchFlight{start: start, end: end, began: began, done: make(chan struct{})}
+	fl := newPrefetchFlight(start, end, began)
 	f.m[diskPath] = append(f.m[diskPath], fl)
 	return fl
+}
+
+// deliver publishes content as the next bytes of the flight.
+func deliver(fl *prefetchFlight, content []byte) {
+	copy(fl.buf[len(fl.content()):], content)
+	fl.wrote(len(content))
 }
 
 // A reader of a failed prefetch range reads its own range.
@@ -226,7 +232,7 @@ func TestS3FSPrefetchRangeWaiterFallsBackOnFailure(t *testing.T) {
 	go func() { done <- readRangeOf(t, fs, 0, 5000, 2) }()
 	time.Sleep(20 * time.Millisecond)
 	require.Zero(t, storage.reads.Load(), "waits for the range being read")
-	fs.diskCache.endPrefetch(diskPath, fl, nil, io.ErrUnexpectedEOF)
+	fs.diskCache.endPrefetch(diskPath, fl)
 	require.Equal(t, data[5000:5002], <-done)
 	require.Equal(t, int64(1), storage.reads.Load())
 	require.Equal(t, int64(2), storage.bytes.Load())
@@ -265,7 +271,8 @@ func TestS3FSPrefetchRangeNeverReadsABlockTwice(t *testing.T) {
 	go func() { done <- readRangeOf(t, fs, 0, 6000, 4000) }()
 	require.Eventually(t, func() bool { return storage.reads.Load() == 1 }, diskCacheLifecycleTestTimeout, time.Millisecond)
 	require.Equal(t, int64(4096), storage.bytes.Load(), "only the unit not being read")
-	fs.diskCache.endPrefetch(diskPath, fl, data[4096:8192], nil)
+	deliver(fl, data[4096:8192])
+	fs.diskCache.endPrefetch(diskPath, fl)
 	require.Equal(t, data[6000:10000], <-done)
 	require.Equal(t, int64(1), storage.reads.Load())
 }
@@ -287,8 +294,8 @@ func TestPrefetchFastestFlight(t *testing.T) {
 	require.Less(t, eta, time.Second)
 	_, ok := d.fastestPrefetch("p", 9000, 9010)
 	require.True(t, ok, "only the slow flight contains it")
-	d.endPrefetch("p", fast, nil, nil)
-	d.endPrefetch("p", slow, nil, nil)
+	d.endPrefetch("p", fast)
+	d.endPrefetch("p", slow)
 	_, ok = d.fastestPrefetch("p", 9000, 9010)
 	require.False(t, ok)
 	require.Empty(t, d.prefetchFlights.m)
@@ -308,4 +315,118 @@ func TestS3FSPrefetchRangeSkipsGapsBetweenEntries(t *testing.T) {
 	require.Equal(t, int64(4096+8192), storage.bytes.Load())
 	require.Equal(t, data[41000:41100], readRangeOf(t, fs, 0, 41000, 100))
 	require.Equal(t, int64(2), storage.reads.Load())
+}
+
+// A reader waiting on a flight takes its bytes once they arrive, before the flight ends.
+func TestS3FSPrefetchRangeServesBytesAsTheyArrive(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 8192, false, 64<<10)
+	diskPath := fs.diskCache.pathForFile("object")
+	fl := addFlight(fs.diskCache, diskPath, 0, 8192, time.Now())
+	done := make(chan []byte, 1)
+	go func() { done <- readRangeOf(t, fs, 0, 100, 10) }()
+	deliver(fl, data[:4096])
+	require.Equal(t, data[100:110], <-done)
+	require.Zero(t, storage.reads.Load())
+	fs.diskCache.endPrefetch(diskPath, fl)
+}
+
+// A flight returns false to a reader of bytes it finished without.
+func TestPrefetchFlightWaitFor(t *testing.T) {
+	fl := newPrefetchFlight(100, 200, time.Now())
+	copy(fl.buf, make([]byte, 50))
+	fl.wrote(50)
+	content, ok := fl.waitFor(context.Background(), 150)
+	require.True(t, ok)
+	require.Len(t, content, 50)
+	fl.finish()
+	_, ok = fl.waitFor(context.Background(), 151)
+	require.False(t, ok)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, ok = newPrefetchFlight(0, 10, time.Now()).waitFor(ctx, 5)
+	require.False(t, ok)
+}
+
+// Objects whose paths have a separator read their ranges alone: the range index does
+// not hold their range files.
+func TestS3FSPrefetchRangeSkipsPathsWithSeparator(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	_, ok := fs.diskCache.prefetchUnit(&IOVector{FilePath: "dir/object", Policy: SkipFullFilePreloads,
+		Entries: []IOEntry{{Offset: 0, Size: 10}}})
+	require.False(t, ok)
+	_, ok = fs.diskCache.prefetchUnit(&IOVector{FilePath: "object", Policy: SkipFullFilePreloads,
+		Entries: []IOEntry{{Offset: 0, Size: 10}}})
+	require.True(t, ok)
+}
+
+// A prefetch read is a sample of the latency of range reads.
+func TestS3FSPrefetchRangeSamplesLatency(t *testing.T) {
+	latency0 := rangeReadCosts.latency
+	t.Cleanup(func() { rangeReadCosts.latency = latency0 })
+	rangeReadCosts.latency = 10
+	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	readRangeOf(t, fs, 0, 5000, 2)
+	require.Less(t, rangeReadCosts.latency, 10.0)
+}
+
+type trackedReader struct {
+	ctx   context.Context
+	r     io.ReadCloser
+	eof   bool
+	gate  chan struct{} // closed to let reads past the first chunk through
+	first bool
+	ended *atomic.Int64 // readers closed after their end
+}
+
+func (t *trackedReader) Read(p []byte) (int, error) {
+	if t.first && t.gate != nil {
+		<-t.gate
+		if err := t.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
+	t.first = true
+	n, err := t.r.Read(p)
+	if err == io.EOF {
+		t.eof = true
+	}
+	return n, err
+}
+
+func (t *trackedReader) Close() error {
+	if t.eof {
+		t.ended.Add(1)
+	}
+	return t.r.Close()
+}
+
+// A prefetch read reads each range to its end, and finishes after the read that started
+// it returns and its context ends.
+func TestPrefetchReadOutlivesItsReader(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 128<<10, false, 256<<10)
+	d := fs.diskCache
+	gate := make(chan struct{})
+	var opened, ended atomic.Int64
+	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		opened.Add(1)
+		r, err := fs.storage.Read(ctx, "object", &start, &end)
+		if err != nil {
+			return nil, err
+		}
+		return &trackedReader{ctx: ctx, r: r, gate: gate, ended: &ended}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	entries := []IOEntry{{Offset: 100, Size: 10}}
+	content, reads, ok := d.prefetchRead(ctx, "object", SkipFullFilePreloads, entries, 100, 110, 128<<10, open)
+	require.True(t, ok)
+	require.Equal(t, 1, reads)
+	require.Equal(t, data[100:110], content)
+	cancel()
+	close(gate)
+	d.prefetchFlights.reads.Wait()
+	require.Equal(t, int64(1), opened.Load())
+	require.Equal(t, int64(1), ended.Load(), "read to its end")
+	r, ok := d.ranges.containing(d.rangeObjectKey("object"), 0, 128<<10, nil)
+	require.True(t, ok, "cached after its reader's context ended")
+	require.Equal(t, int64(128<<10), r.size)
 }

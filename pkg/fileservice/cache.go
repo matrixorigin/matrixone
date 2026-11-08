@@ -51,22 +51,6 @@ type CacheConfig struct {
 	// storage requests and slower reads; 0 makes the fastest reads. Default
 	// DefaultDiskDownloadMaxExtraWait.
 	DiskDownloadMaxExtraWait *toml.Duration `toml:"disk-download-max-extra-wait"`
-	// DiskPreloadRangeMargin: a table whose whole-object files are evicted partly read
-	// switches to range reads once their reads cost less as range reads than the
-	// downloads divided by this margin. Larger values keep whole-object fills longer.
-	// Default DefaultDiskPreloadRangeMargin.
-	DiskPreloadRangeMargin *float64 `toml:"disk-preload-range-margin"`
-	// DiskPreloadWholeMargin: a table that reads ranges fills whole objects again once
-	// its range reads cost more than this margin times downloading each object it reads
-	// once per DiskPreloadChargeWindow. Smaller values return to whole-object fills
-	// sooner. Default DefaultDiskPreloadWholeMargin.
-	DiskPreloadWholeMargin *float64 `toml:"disk-preload-whole-margin"`
-	// DiskPreloadChargeWindow is how often a table that reads ranges is charged the
-	// download of an object it reads. Default DefaultDiskPreloadChargeWindow.
-	DiskPreloadChargeWindow *toml.Duration `toml:"disk-preload-charge-window"`
-	// DiskPreloadCostHalfLife is the half life of the costs the margins compare.
-	// Default DefaultDiskPreloadCostHalfLife.
-	DiskPreloadCostHalfLife *toml.Duration `toml:"disk-preload-cost-half-life"`
 	// DiskPrefetchRangeMin is the least size of a range read from object storage that
 	// the disk cache keeps: a smaller read fetches the aligned range of this size around
 	// it and caches that range, which serves later reads within it. 0 reads the range
@@ -208,7 +192,6 @@ func newFileServiceCaches(
 			config.MetricScope,
 			diskCacheOptions{
 				downloadMaxExtraWait: config.diskDownloadMaxExtraWait(),
-				preloadCost:          config.diskPreloadCost(),
 				prefetchRange:        config.diskPrefetchRange(),
 			},
 		)
@@ -254,25 +237,6 @@ func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
 		return DefaultDiskDownloadMaxExtraWait
 	}
 	return c.DiskDownloadMaxExtraWait.Duration
-}
-
-// diskPreloadCost returns the configured cost rules; unset or non-positive values take
-// defaults.
-func (c *CacheConfig) diskPreloadCost() preloadCostConfig {
-	var ret preloadCostConfig
-	if c.DiskPreloadRangeMargin != nil {
-		ret.rangeMargin = *c.DiskPreloadRangeMargin
-	}
-	if c.DiskPreloadWholeMargin != nil {
-		ret.wholeMargin = *c.DiskPreloadWholeMargin
-	}
-	if c.DiskPreloadChargeWindow != nil {
-		ret.chargeWindow = c.DiskPreloadChargeWindow.Duration
-	}
-	if c.DiskPreloadCostHalfLife != nil {
-		ret.halfLife = c.DiskPreloadCostHalfLife.Duration
-	}
-	return ret.withDefaults()
 }
 
 func (c *CacheConfig) diskPrefetchRange() prefetchRangeConfig {

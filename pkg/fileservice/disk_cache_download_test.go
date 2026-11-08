@@ -249,8 +249,7 @@ func TestDiskCacheDownloadReadsCountAsCachedFileReads(t *testing.T) {
 	served, ok := cache.preloads.served[cache.pathForFile("obj")]
 	cache.preloads.mu.Unlock()
 	require.True(t, ok)
-	require.Equal(t, int64(3), served.served)
-	require.Equal(t, int64(1), served.reads)
+	require.Equal(t, int64(3), served)
 }
 
 // Caching content already in memory does not feed the download rate, while a fill from

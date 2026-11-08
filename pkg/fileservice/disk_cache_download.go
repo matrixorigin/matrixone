@@ -40,7 +40,6 @@ type objectDownload struct {
 	readers  int
 	retired  bool
 	served   int64         // bytes readers took from the download before credited
-	reads    int64         // reads that took them
 	credited bool          // the cached file counts the bytes readers take
 	credit   func(n int64) // counts n bytes read toward the published file
 }
@@ -51,7 +50,6 @@ func (o *objectDownload) serve(n int64) {
 	o.mu.Lock()
 	if !o.credited {
 		o.served += n
-		o.reads++
 		o.mu.Unlock()
 		return
 	}
@@ -61,15 +59,15 @@ func (o *objectDownload) serve(n int64) {
 	}
 }
 
-// takeServed returns the bytes readers took so far and the reads that took them;
-// readers count later bytes themselves.
-func (o *objectDownload) takeServed() (n, reads int64) {
+// takeServed returns the bytes readers took so far; readers count later bytes
+// themselves.
+func (o *objectDownload) takeServed() int64 {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.credited = true
-	n, reads = o.served, o.reads
-	o.served, o.reads = 0, 0
-	return n, reads
+	n := o.served
+	o.served = 0
+	return n
 }
 
 func newObjectDownload(tempPath string, measured bool) *objectDownload {
@@ -206,7 +204,7 @@ type diskCacheDownloads struct {
 
 func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool) *objectDownload {
 	o := newObjectDownload(tempPath, measured)
-	o.credit = func(n int64) { d.preloads.read(diskPath, n, 1) }
+	o.credit = func(n int64) { d.preloads.read(diskPath, n) }
 	d.downloads.mu.Lock()
 	if d.downloads.m == nil {
 		d.downloads.m = make(map[string]*objectDownload)
@@ -236,7 +234,7 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 // are written, or will be no more than the max extra wait later than a range read could
 // fetch them, or are more than an eighth of what the download writes before them. It reports whether
 // a download covers the object, and whether it filled entry.
-func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry) (downloading, filled bool, err error) {
+func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
 	o := d.download(diskPath)
 	if o == nil {
 		return false, false, nil
@@ -246,7 +244,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
-		if eta, ok := d.fastestPrefetch(diskPath, entry.Offset, end); ok && eta < wait {
+		if eta, ok := d.fastestPrefetch(diskPath, entry.Offset, end); ok && eta < wait && d.canPrefetch(vector) {
 			// A prefetch range being read delivers the bytes sooner.
 			return true, false, nil
 		}
@@ -340,11 +338,15 @@ func (m *rangeReadCostModel) observe(n int64, d time.Duration) {
 	}
 }
 
-// seconds estimates the time of reads range reads of n bytes in all.
-func (m *rangeReadCostModel) seconds(reads, n int64) float64 {
+// observeLatency adds a sample of the latency of range reads: the time until a range
+// read starts to return bytes.
+func (m *rangeReadCostModel) observeLatency(d time.Duration) {
+	if d <= 0 {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return float64(reads)*m.latency + float64(n)/m.bytesPerS
+	m.latency = (1-costWeight)*m.latency + costWeight*d.Seconds()
 }
 
 // bandwidthDelay returns the bytes a range read could take in the time of its latency.

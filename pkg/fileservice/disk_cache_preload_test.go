@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +47,7 @@ func evict(p *preloadUsage, group uint64, i int, served, size int64) {
 	path := fmt.Sprintf("/cache/00%d/full%d-%d.mofscache", i%10, group, i)
 	p.narrowRead(path, group, roomFor)
 	p.cached(path)
-	p.read(path, served, 1)
+	p.read(path, served)
 	p.removed(path, size)
 }
 
@@ -62,19 +61,7 @@ func TestPreloadUsageGroupThrashesAfterMinSamples(t *testing.T) {
 	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
 }
 
-// costModels sets the range-read latency and bandwidth and the download rate.
-func costModels(t *testing.T, latency time.Duration, bandwidth, download float64) {
-	latency0, bandwidth0, download0 := rangeReadCosts.latency, rangeReadCosts.bytesPerS, downloadRates.bytesPerS
-	t.Cleanup(func() {
-		rangeReadCosts.latency, rangeReadCosts.bytesPerS, downloadRates.bytesPerS = latency0, bandwidth0, download0
-	})
-	rangeReadCosts.latency, rangeReadCosts.bytesPerS, downloadRates.bytesPerS = latency.Seconds(), bandwidth, download
-}
-
-// A partly read group thrashes after more evictions once its reads cost less as range
-// reads than its downloads.
-func TestPreloadUsagePartlyUsedGroupThrashesByCost(t *testing.T) {
-	costModels(t, 0, 100, 100)
+func TestPreloadUsagePartlyUsedGroupNeedsMoreSamples(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	for i := 0; i < preloadUsageMoreSamples-1; i++ {
 		evict(p, 1, i, 20, 100)
@@ -82,91 +69,6 @@ func TestPreloadUsagePartlyUsedGroupThrashesByCost(t *testing.T) {
 	}
 	evict(p, 1, preloadUsageMoreSamples, 20, 100)
 	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
-}
-
-// A partly read group whose reads cost more as range reads keeps whole objects.
-func TestPreloadUsagePartlyUsedGroupKeepsWholeObjectsWhenRangesCostMore(t *testing.T) {
-	costModels(t, time.Second, 100, 100)
-	p, _ := newTestPreloadUsage()
-	for i := 0; i < 2*preloadUsageMoreSamples; i++ {
-		evict(p, 1, i, 20, 100)
-	}
-	require.False(t, p.narrowRead("/cache/x", 1, roomFor))
-}
-
-// thrash makes group thrash by evicting unread whole-object files of it.
-func thrash(t *testing.T, p *preloadUsage, group uint64) {
-	for i := 0; i < preloadUsageMinSamples; i++ {
-		evict(p, group, i, 0, 100)
-	}
-	require.True(t, p.narrowRead("/cache/x", group, noRoom))
-}
-
-// A thrashing group fills whole objects again once its range reads cost more than
-// downloading each object it reads once per window, without room for one.
-func TestPreloadUsageRangeReadsCostingMoreEndThrashing(t *testing.T) {
-	costModels(t, time.Second, 100, 100)
-	p, clock := newTestPreloadUsage()
-	thrash(t, p, 1)
-	for i := 0; i < preloadUsageMinSamples; i++ {
-		p.rangeRead("/cache/x", 1, 10, 100)
-		clock.t = clock.t.Add(time.Second)
-	}
-	require.False(t, p.narrowRead("/cache/x", 1, noRoom))
-}
-
-// Cheap range reads of a thrashing group keep it reading ranges.
-func TestPreloadUsageCheapRangeReadsKeepThrashing(t *testing.T) {
-	costModels(t, 0, 1000, 100)
-	p, clock := newTestPreloadUsage()
-	thrash(t, p, 1)
-	for i := 0; i < 4*preloadUsageMinSamples; i++ {
-		p.rangeRead("/cache/x", 1, 10, 100)
-		clock.t = clock.t.Add(time.Second)
-	}
-	require.True(t, p.narrowRead("/cache/x", 1, noRoom))
-}
-
-// An object's download is charged once per window.
-func TestPreloadUsageRangeReadsChargeAnObjectOncePerWindow(t *testing.T) {
-	costModels(t, 0, 1<<40, 100)
-	p, clock := newTestPreloadUsage()
-	thrash(t, p, 1)
-	whole := func() float64 {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.groups[1].wholeCost
-	}
-	p.rangeRead("/cache/x", 1, 10, 100)
-	first := whole()
-	require.Greater(t, first, 0.0)
-	p.rangeRead("/cache/x", 1, 10, 100)
-	require.Equal(t, first, whole())
-	clock.t = clock.t.Add(DefaultDiskPreloadChargeWindow + time.Second)
-	p.rangeRead("/cache/x", 1, 10, 100)
-	require.Greater(t, whole(), first/2)
-}
-
-// Range reads of a group that fills whole objects are not samples.
-func TestPreloadUsageRangeReadsOfWholeObjectGroupsAreIgnored(t *testing.T) {
-	costModels(t, time.Second, 100, 100)
-	p, _ := newTestPreloadUsage()
-	evict(p, 1, 0, 90, 100)
-	costs := func() (float64, float64, int) {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		g := p.groups[1]
-		return g.rangeCost, g.wholeCost, g.costN
-	}
-	rangeCost, wholeCost, n := costs()
-	p.rangeRead("/cache/x", 1, 10, 100)
-	rangeCost2, wholeCost2, n2 := costs()
-	require.Equal(t, rangeCost, rangeCost2)
-	require.Equal(t, wholeCost, wholeCost2)
-	require.Equal(t, n, n2)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	require.Empty(t, p.charged)
 }
 
 func TestPreloadUsageGroupsAreSeparate(t *testing.T) {
@@ -366,7 +268,7 @@ func TestPreloadUsageIgnoresEntryFiles(t *testing.T) {
 func TestPreloadUsageNilIsSafe(t *testing.T) {
 	var p *preloadUsage
 	p.cached("/cache/001/full.mofscache")
-	p.read("/cache/001/full.mofscache", 1, 1)
+	p.read("/cache/001/full.mofscache", 1)
 	p.deleted("/cache/001/full.mofscache")
 	p.removed("/cache/001/full.mofscache", 1)
 	require.False(t, p.narrowRead("/cache/001/full.mofscache", 1, roomFor))
@@ -505,46 +407,4 @@ func TestS3FSWholeObjectPreloadSkippedByGroup(t *testing.T) {
 	require.Equal(t, Policy(NarrowRead), read(WithPreloadGroup(ctx, 2), NarrowRead))
 	require.Equal(t, Policy(NarrowRead), read(ctx, NarrowRead), "a read of no group")
 	require.Equal(t, Policy(0), read(thrashing, 0), "a scan")
-}
-
-// Unset or non-positive cost options take defaults.
-func TestDiskPreloadCostConfig(t *testing.T) {
-	var c CacheConfig
-	require.Equal(t, defaultPreloadCostConfig(), c.diskPreloadCost())
-	rangeMargin, wholeMargin, zero := 3.0, 0.5, 0.0
-	c.DiskPreloadRangeMargin = &rangeMargin
-	c.DiskPreloadWholeMargin = &wholeMargin
-	c.DiskPreloadChargeWindow = &toml.Duration{Duration: 10 * time.Second}
-	c.DiskPreloadCostHalfLife = &toml.Duration{Duration: 0}
-	got := c.diskPreloadCost()
-	require.Equal(t, 3.0, got.rangeMargin)
-	require.Equal(t, 0.5, got.wholeMargin)
-	require.Equal(t, 10*time.Second, got.chargeWindow)
-	require.Equal(t, DefaultDiskPreloadCostHalfLife, got.halfLife)
-	c.DiskPreloadRangeMargin = &zero
-	require.Equal(t, DefaultDiskPreloadRangeMargin, c.diskPreloadCost().rangeMargin)
-}
-
-// A larger range margin keeps a partly read group on whole objects.
-func TestPreloadUsageRangeMarginKeepsWholeObjects(t *testing.T) {
-	costModels(t, 0, 100, 100)
-	p, _ := newTestPreloadUsage()
-	p.cost.rangeMargin = 1e9
-	for i := 0; i < 2*preloadUsageMoreSamples; i++ {
-		evict(p, 1, i, 20, 100)
-	}
-	require.False(t, p.narrowRead("/cache/x", 1, roomFor))
-}
-
-// A smaller whole margin returns a thrashing group to whole objects sooner.
-func TestPreloadUsageWholeMarginEndsThrashingSooner(t *testing.T) {
-	costModels(t, 0, 1000, 100)
-	p, clock := newTestPreloadUsage()
-	p.cost.wholeMargin = 0.001
-	thrash(t, p, 1)
-	for i := 0; i < preloadUsageMinSamples; i++ {
-		p.rangeRead("/cache/x", 1, 10, 100)
-		clock.t = clock.t.Add(time.Second)
-	}
-	require.False(t, p.narrowRead("/cache/x", 1, noRoom))
 }

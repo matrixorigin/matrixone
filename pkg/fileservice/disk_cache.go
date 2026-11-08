@@ -156,8 +156,6 @@ type diskCacheOptions struct {
 	downloadMaxExtraWait time.Duration
 	// prefetchRange sets the prefetch ranges of range reads.
 	prefetchRange prefetchRangeConfig
-	// preloadCost holds the cost rules of whole-object fills; zero fields take defaults.
-	preloadCost preloadCostConfig
 }
 
 func newDiskCache(
@@ -205,13 +203,12 @@ func newDiskCache(
 		prefetchRange:        opts.prefetchRange,
 		preloads:             newPreloadUsage(),
 	}
-	ret.preloads.cost = opts.preloadCost.withDefaults()
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.cached(path)
 		if o := ret.download(path); o != nil {
-			if n, reads := o.takeServed(); n > 0 {
-				ret.preloads.read(path, n, reads)
+			if n := o.takeServed(); n > 0 {
+				ret.preloads.read(path, n)
 			}
 		}
 		ret.ranges.add(ret.path, path)
@@ -512,6 +509,14 @@ func (d *DiskCache) Read(
 		return opened, true, true
 	}
 
+	var rangeKey string
+	objectKey := func() string {
+		if rangeKey == "" {
+			rangeKey = d.rangeObjectKey(path.File)
+		}
+		return rangeKey
+	}
+
 	fillEntry := func(entry *IOEntry) error {
 		LogEvent(ctx, str_disk_cache_fill_entry_begin)
 		defer LogEvent(ctx, str_disk_cache_fill_entry_end)
@@ -555,7 +560,7 @@ func (d *DiskCache) Read(
 			// try full file
 			diskPath = d.pathForFile(path.File)
 			var filled bool
-			downloading, filled, err = d.readFromDownload(ctx, diskPath, entry)
+			downloading, filled, err = d.readFromDownload(ctx, diskPath, entry, vector)
 			if err != nil {
 				return err
 			}
@@ -585,7 +590,7 @@ func (d *DiskCache) Read(
 		// starts in it
 		var rangeOffset int64
 		for tried := []string(nil); !openedOK; {
-			r, ok := d.ranges.containing(d.rangeObjectKey(path.File), entry.Offset, entry.Size, tried)
+			r, ok := d.ranges.containing(objectKey(), entry.Offset, entry.Size, tried)
 			if !ok {
 				break
 			}
@@ -609,7 +614,7 @@ func (d *DiskCache) Read(
 
 		// try cached ranges that hold the entry together
 		if !openedOK {
-			if rs, ok := d.ranges.covering(d.rangeObjectKey(path.File), entry.Offset, entry.Size); ok && len(rs) > 1 {
+			if rs, ok := d.ranges.covering(objectKey(), entry.Offset, entry.Size); ok && len(rs) > 1 {
 				readers := make([]io.Reader, 0, len(rs))
 				pos, end := entry.Offset, entry.Offset+entry.Size
 				for _, r := range rs {
@@ -626,7 +631,7 @@ func (d *DiskCache) Read(
 					if newlyOpened {
 						numOpenIOEntry++
 					}
-					next := minInt64(r.offset+r.size, end)
+					next := min(r.offset+r.size, end)
 					readers = append(readers, io.NewSectionReader(f.file, pos-r.offset, next-pos))
 					pos = next
 				}
@@ -682,7 +687,7 @@ func (d *DiskCache) Read(
 		readOffset, readSize := rangeOffset, entry.Size
 		if diskPath == d.pathForFile(path.File) {
 			readOffset = entry.Offset
-			d.preloads.read(diskPath, entry.Size, 1)
+			d.preloads.read(diskPath, entry.Size)
 		}
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
