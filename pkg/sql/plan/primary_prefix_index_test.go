@@ -173,7 +173,7 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 				if tc.indexed {
 					require.Empty(t, parts, "fresh deferred scans must not take discarded early snapshots")
 				}
-				builder.mergeFiltersOnCompositeKey(0, true)
+				builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
 				builder.retainConsumedCompositePartBlockFilters(parts)
 				builder.appendCompoundKeyBlockFilters(0)
 				builder.appendCompositePartBlockFilters(parts)
@@ -189,7 +189,7 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 			for range 2 {
 				componentFilters, needsLate := builder.collectCompositePartBlockFilters(0, true)
 				require.Equal(t, tc.indexed, needsLate)
-				builder.mergeFiltersOnCompositeKey(0, false)
+				builder.mergeFiltersOnCompositeKey(0, false, nil)
 				builder.retainConsumedCompositePartBlockFilters(componentFilters)
 				builder.appendCompoundKeyBlockFilters(0)
 				builder.appendCompositePartBlockFilters(componentFilters)
@@ -640,7 +640,7 @@ func TestDeferredLogicalNormalization(t *testing.T) {
 		node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{expr}, Stats: &pb.Stats{HashmapStats: chosen}}
 		builder.qry.Nodes = []*pb.Node{node}
 		for range 2 {
-			builder.mergeFiltersOnCompositeKey(0, true)
+			builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
 		}
 		var check func(*pb.Expr)
 		check = func(e *pb.Expr) {
@@ -667,7 +667,7 @@ func TestDeferredLogicalNormalization(t *testing.T) {
 			require.True(t, needsLate)
 			require.Len(t, late[0], 1)
 			require.Equal(t, "in", late[0][0].copy.GetF().Func.ObjName)
-			builder.mergeFiltersOnCompositeKey(0, false)
+			builder.mergeFiltersOnCompositeKey(0, false, nil)
 			builder.retainConsumedCompositePartBlockFilters(late)
 			builder.appendCompoundKeyBlockFilters(0)
 			builder.appendCompositePartBlockFilters(late)
@@ -679,7 +679,7 @@ func TestDeferredLogicalNormalization(t *testing.T) {
 	candidates, needsLate := builder.collectCompositePartBlockFilters(0, true)
 	require.True(t, needsLate)
 	require.Empty(t, candidates)
-	builder.mergeFiltersOnCompositeKey(0, false)
+	builder.mergeFiltersOnCompositeKey(0, false, nil)
 	requireFuncNames(t, builder.qry.Nodes[0].FilterList, "prefix_eq")
 	table.Indexes = nil
 	candidates, needsLate = builder.collectCompositePartBlockFilters(0, true)

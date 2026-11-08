@@ -2642,6 +2642,69 @@ func TestMergeFiltersRejectsNaNOperands(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestMergeFiltersPrefersExactPointsToPrefix(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	points := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"a1", "a2"} {
+		require.NoError(t, vector.AppendBytes(points, []byte(value), false, mp))
+	}
+	points.SetSorted(true)
+	defer func() {
+		points.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	prefix := BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}
+	exact := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: points}
+	for _, reverse := range []bool{false, true} {
+		left, right := prefix, exact
+		if reverse {
+			left, right = right, left
+		}
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, function.IN, merged.Op)
+		require.Same(t, points, merged.Vec)
+
+		block, err := ConstructBlockPKFilter(false, merged, nil)
+		require.NoError(t, err)
+		func() {
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(mp)
+			for _, value := range []string{"a1", "a2", "b1"} {
+				require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+			}
+			require.Equal(t, []int64{0, 1}, block.DecideSearchFunc(true)(containers.Vectors{*input}))
+		}()
+	}
+	// If the set extends beyond the prefix, its selectivity is unknown. Keep
+	// the existing fallback rather than always preferring either operand.
+	outside := vector.NewVec(types.T_varchar.ToType())
+	defer outside.Free(mp)
+	for _, value := range []string{"a1", "b1"} {
+		require.NoError(t, vector.AppendBytes(outside, []byte(value), false, mp))
+	}
+	outside.SetSorted(true)
+	partial := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: outside}
+	for _, reverse := range []bool{false, true} {
+		left, right := prefix, partial
+		if reverse {
+			left, right = right, left
+		}
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, left.Op, merged.Op)
+	}
+	bad := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bad, int64(1), false, mp))
+	defer bad.Free(mp)
+	invalid := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: bad}
+	merged, err := mergeFilters(&prefix, &invalid, function.AND, mp)
+	require.NoError(t, err)
+	require.False(t, merged.Valid, "invalid point vectors must fail open")
+}
+
 func TestCombineOffsetFuncsDeduplicatesAndRejectsInvalidOffsets(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	vec := vector.NewVec(types.T_int64.ToType())

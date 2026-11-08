@@ -842,7 +842,7 @@ func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.
 	}}
 
 	parts, _ := builder.collectCompositePartBlockFilters(0, false)
-	builder.mergeFiltersOnCompositeKey(0, true)
+	builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	builder.appendCompoundKeyBlockFilters(0)
 	builder.appendCompositePartBlockFilters(parts)
@@ -881,7 +881,7 @@ func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *test
 	}}
 
 	candidates, _ := builder.collectCompositePartBlockFilters(0, false)
-	builder.mergeFiltersOnCompositeKey(0, true)
+	builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
 	builder.retainConsumedCompositePartBlockFilters(candidates)
 	require.Empty(t, candidates, "an in-place canonicalized predicate was not consumed")
 }

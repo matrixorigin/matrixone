@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -105,7 +106,9 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				// stable rather than emitting binary into the plan text.
 				buf.WriteString("'" + geometryLiteralText(expr.Typ.Id, val.Sval) + "'")
 			} else {
-				buf.WriteString("'" + val.Sval + "'")
+				buf.WriteByte('\'')
+				writeExplainText(buf, val.Sval)
+				buf.WriteByte('\'')
 			}
 		case *plan.Literal_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
@@ -194,11 +197,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			//don't display too long data in explain
 			originalLen := vec.Length()
 			vec.SetLength(16)
-			buf.WriteString(vec.String())
+			writeExplainText(buf, vec.String())
 			s := fmt.Sprintf("... %v values", originalLen)
 			buf.WriteString(s)
 		} else {
-			buf.WriteString(vec.String())
+			writeExplainText(buf, vec.String())
 		}
 		vec.Free(nil)
 	case *plan.Expr_T:
@@ -212,6 +215,17 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		panic("unsupported expr")
 	}
 	return nil
+}
+
+// EXPLAIN is text even when a literal or a folded vector contains encoded
+// bytes. Preserve ordinary printable output and escape control/invalid bytes.
+func writeExplainText(buf *bytes.Buffer, value string) {
+	if utf8.ValidString(value) && strings.IndexFunc(value, func(r rune) bool { return !strconv.IsPrint(r) }) < 0 {
+		buf.WriteString(value)
+		return
+	}
+	quoted := strconv.Quote(value)
+	buf.WriteString(quoted[1 : len(quoted)-1])
 }
 
 // geometryLiteralText renders a geometry literal's WKB payload as WKT so

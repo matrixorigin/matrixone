@@ -3243,10 +3243,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
+		deferredPoints := make(map[int32]struct{})
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID = builder.optimizeFilters(rootID, deferredPoints)
 		builder.pushdownLimitToTableScan(rootID)
 
 		colRefCnt := make(map[[2]int32]int)
@@ -3292,6 +3293,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 		builder.prepareSpecialIndexGuards(rootID)
+		// Preserve correlated key points across index rewrites that may move a
+		// component predicate into the index and remove it from the base scan.
+		if builder.addCompositePointCandidates(rootID, deferredPoints) {
+			clear(colRefCnt)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 		idxColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
 		if err == nil {
@@ -3305,7 +3312,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.qry.Steps[i] = rootID
 		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
 		if needsLate {
-			builder.mergeFiltersOnCompositeKey(rootID, false)
+			builder.mergeFiltersOnCompositeKey(rootID, false, nil)
 			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
