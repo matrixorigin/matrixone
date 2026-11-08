@@ -3310,7 +3310,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// 标量向量选择器会替换根节点，后续 remap 必须使用新根。
 		builder.qry.Steps[i] = rootID
-		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true, nil)
 		if needsLate {
 			builder.mergeFiltersOnCompositeKey(rootID, false, nil)
 			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)

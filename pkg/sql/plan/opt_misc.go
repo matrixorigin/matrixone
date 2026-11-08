@@ -1250,7 +1250,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32, deferredPoints map[in
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false, deferredPoints)
 	builder.mergeFiltersOnCompositeKey(rootID, true, deferredPoints)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)

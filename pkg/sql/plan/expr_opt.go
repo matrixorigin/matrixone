@@ -48,12 +48,10 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeInde
 	if hasCompositePointFilter(node) {
 		return
 	}
-	if beforeIndexSelection && compositePointCandidate(node) != nil {
-		// Join planning can add predicates before the candidate is published.
-		// Record this scan so ordinary lowering can be restored if that makes
-		// the candidate unsafe or unsupported.
-		deferredPoints[nodeID] = struct{}{}
-		return
+	if beforeIndexSelection {
+		if _, deferred := deferredPoints[nodeID]; deferred {
+			return
+		}
 	}
 
 	deferred := compositeKeyFiltersNeedIndexSelection(node.TableDef)
@@ -117,11 +115,14 @@ func compositeKeyFiltersNeedIndexSelection(table *plan.TableDef) bool {
 	return false
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool) (map[int32][]compositePartBlockFilter, bool) {
+// When deferredPoints is provided, resolve early point deferrals before taking
+// snapshots. A scan whose compound rewrite is deferred does not consume its
+// component filters in this phase.
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool, deferredPoints map[int32]struct{}) (map[int32][]compositePartBlockFilter, bool) {
 	var ret map[int32][]compositePartBlockFilter
 	needsLate := false
 	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
-	if blockDisabled && !deferredOnly {
+	if blockDisabled && !deferredOnly && deferredPoints == nil {
 		return nil, false
 	}
 	visited := make(map[int32]struct{})
@@ -137,6 +138,18 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, defe
 				visit(childID)
 			}
 			return
+		}
+
+		if !deferredOnly && deferredPoints != nil && node.TableDef != nil && node.TableDef.Pkey != nil &&
+			len(node.TableDef.Pkey.Names) > 1 && !hasCompositePointFilter(node) {
+			if compositePointCandidate(node) != nil {
+				deferredPoints[id] = struct{}{}
+				if !hasCompoundKeyFilter(node.FilterList, node) {
+					// No compound rewrite runs for this scan in the early phase, so
+					// retainConsumedCompositePartBlockFilters would discard these copies.
+					return
+				}
+			}
 		}
 
 		if deferredOnly {

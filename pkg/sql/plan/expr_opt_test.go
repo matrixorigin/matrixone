@@ -524,7 +524,7 @@ func TestCompositeKeyFoldedInVectorRetainsPartBlockFilters(t *testing.T) {
 		FilterList:  []*planpb.Expr{aEq, bIn},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(true, tableDef, tag, aEq, bIn)
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, true)
@@ -765,7 +765,7 @@ func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
 		FilterList:  []*planpb.Expr{aEq, bGt, bLt},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(true, tableDef, tag, aEq, bGt, bLt)
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, 0, true)
@@ -787,7 +787,7 @@ func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
 
 	// Rebuilding statistics must not lose constituent filters from an
 	// indexed scan whose row filter is already compounded.
-	parts, _ = builder.collectCompositePartBlockFilters(0, false)
+	parts, _ = builder.collectCompositePartBlockFilters(0, false, nil)
 	require.Len(t, parts[0], 3, "consumed predicates survive only in the block filters")
 	for _, candidate := range parts[0] {
 		require.NotSame(t, candidate.original, candidate.copy)
@@ -820,7 +820,7 @@ func TestCompositeKeyPartBlockFiltersRespectDisableHint(t *testing.T) {
 		},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	require.Empty(t, parts)
 	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(true,
 		tableDef, tag, builder.qry.Nodes[0].FilterList...)
@@ -841,7 +841,7 @@ func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.
 		FilterList:  []*planpb.Expr{aEq},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	builder.appendCompoundKeyBlockFilters(0)
@@ -862,7 +862,7 @@ func TestCompositeKeyPartBlockFiltersDoNotRestoreUnchangedPredicates(t *testing.
 		FilterList:  []*planpb.Expr{filter},
 	}}
 
-	candidates, _ := builder.collectCompositePartBlockFilters(0, false)
+	candidates, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.retainConsumedCompositePartBlockFilters(candidates)
 	require.Empty(t, candidates, "unchanged predicates must be left to later rewrites and stats")
 }
@@ -880,7 +880,7 @@ func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *test
 		FilterList:  []*planpb.Expr{filter},
 	}}
 
-	candidates, _ := builder.collectCompositePartBlockFilters(0, false)
+	candidates, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
 	builder.retainConsumedCompositePartBlockFilters(candidates)
 	require.Empty(t, candidates, "an in-place canonicalized predicate was not consumed")

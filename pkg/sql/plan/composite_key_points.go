@@ -312,24 +312,34 @@ func (a *compositePointAnalysis) conjunction(exprs []*plan.Expr, inherited []*pl
 }
 
 func (a *compositePointAnalysis) disjunction(fn *plan.Function, inherited []*plan.Expr, depth int) ([][]*plan.Expr, bool) {
-	if !a.step(depth) {
+	var points [][]*plan.Expr
+	if !a.appendDisjunction(fn, inherited, depth, &points) {
 		return nil, false
 	}
-	var points [][]*plan.Expr
-	for _, arg := range fn.Args {
-		var branch [][]*plan.Expr
-		var ok bool
-		if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "or" {
-			branch, ok = a.disjunction(f, inherited, depth+1)
-		} else {
-			branch, ok = a.conjunction([]*plan.Expr{arg}, inherited, true, depth+1)
-		}
-		if !ok || len(points)+len(branch) > maxCompositePoints {
-			return nil, false
-		}
-		points = append(points, branch...)
-	}
 	return points, len(points) > 0
+}
+
+// appendDisjunction flattens directly nested ORs into one result. Conjunctions
+// keep their own alternatives and point limit, as in the ordinary analysis.
+func (a *compositePointAnalysis) appendDisjunction(fn *plan.Function, inherited []*plan.Expr, depth int, points *[][]*plan.Expr) bool {
+	if !a.step(depth) {
+		return false
+	}
+	start := len(*points)
+	for _, arg := range fn.Args {
+		if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "or" {
+			if !a.appendDisjunction(f, inherited, depth+1, points) {
+				return false
+			}
+			continue
+		}
+		branch, ok := a.conjunction([]*plan.Expr{arg}, inherited, true, depth+1)
+		if !ok || len(*points)+len(branch) > maxCompositePoints {
+			return false
+		}
+		*points = append(*points, branch...)
+	}
+	return len(*points) > start
 }
 
 func hasCompositePointFilter(node *plan.Node) bool {
@@ -382,7 +392,7 @@ func (builder *QueryBuilder) addCompositePointCandidates(nodeID int32, deferredP
 				changed = builder.normalizeCompositeKeyFiltersForIndex(node) || changed
 				return
 			}
-			partFilters, _ := builder.collectCompositePartBlockFilters(id, false)
+			partFilters, _ := builder.collectCompositePartBlockFilters(id, false, nil)
 			node.FilterList = builder.doMergeFiltersOnCompositeKey(true, node.TableDef, node.BindingTags[0], node.FilterList...)
 			builder.retainConsumedCompositePartBlockFilters(partFilters)
 			builder.appendCompositePartBlockFilters(partFilters)

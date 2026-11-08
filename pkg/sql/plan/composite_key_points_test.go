@@ -73,6 +73,7 @@ func TestCompositePointCandidate(t *testing.T) {
 		{"incomplete branch", []*pb.Expr{eq(0, 1), or(first, eq(1, 4))}, nil},
 		{"foreign column", []*pb.Expr{eq(0, 1), or(first, and(foreign, eq(2, 5)))}, nil},
 		{"independent ORs are not multiplied", []*pb.Expr{eq(0, 1), or(eq(1, 2), eq(1, 4)), or(eq(2, 3), eq(2, 5))}, nil},
+		{"failed OR does not leak points into later OR", []*pb.Expr{eq(0, 1), or(first, eq(1, 4)), or(point(6, 7), point(8, 9))}, [][]int64{{1, 6, 7}, {1, 8, 9}}},
 		{"unproven residual", []*pb.Expr{eq(0, 1), or(first, second), rangeFilter}, nil},
 		{"dynamic folded literal", []*pb.Expr{eq(0, 1), or(first, and(dynamicLiteral, eq(2, 5)))}, nil},
 		{"existing single point", []*pb.Expr{eq(0, 1), eq(1, 2), eq(2, 3), or(eq(1, 2), eq(1, 4))}, nil},
@@ -112,6 +113,11 @@ func TestCompositePointCandidate(t *testing.T) {
 		require.Len(t, compositePointCandidate(node), maxCompositePoints, "the parser can produce a left-deep OR")
 		node.FilterList[1] = or(arms...)
 		require.Nil(t, compositePointCandidate(node))
+		node.FilterList = append(node.FilterList, or(point(200, 201), point(202, 203)))
+		got := compositePointCandidate(node)
+		require.Len(t, got, 2, "an oversized alternative must not contaminate a later bounded one")
+		require.EqualValues(t, 200, got[0][1].GetLit().GetI64Val())
+		require.EqualValues(t, 202, got[1][1].GetLit().GetI64Val())
 	})
 	t.Run("encoded byte budget", func(t *testing.T) {
 		folded := makePlan2StringConstExprWithType("ab\x00cd")
@@ -174,6 +180,9 @@ func TestCompositePointCandidate(t *testing.T) {
 			builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
 			builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, TableDef: &testTable, BindingTags: []int32{tag}, FilterList: original}}
 			deferred := make(map[int32]struct{})
+			snapshots, _ := builder.collectCompositePartBlockFilters(0, false, deferred)
+			require.Contains(t, deferred, int32(0))
+			require.Empty(t, snapshots, "a deferred scan does not consume its component filters")
 			for range 2 {
 				builder.mergeFiltersOnCompositeKey(0, true, deferred)
 			}
@@ -200,12 +209,47 @@ func TestCompositePointCandidate(t *testing.T) {
 			require.InDelta(t, without, with, 1e-12)
 		})
 	}
+	t.Run("deferred scan preserves existing compound block filters", func(t *testing.T) {
+		compound := &pb.Expr{Typ: table.Cols[3].Typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: tag, ColPos: 3}}}
+		compoundFilter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*pb.Expr{compound, makePlan2StringConstExprWithType("key")})
+		require.NoError(t, err)
+		blockOnly := eq(0, 9)
+		builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
+		node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag},
+			FilterList: []*pb.Expr{eq(0, 1), or(first, second), compoundFilter}, BlockFilterList: []*pb.Expr{blockOnly}}
+		builder.qry.Nodes = []*pb.Node{node}
+		deferred := make(map[int32]struct{})
+		snapshots, _ := builder.collectCompositePartBlockFilters(0, false, deferred)
+		require.Contains(t, deferred, int32(0))
+		builder.mergeFiltersOnCompositeKey(0, true, deferred)
+		builder.retainConsumedCompositePartBlockFilters(snapshots)
+		node.BlockFilterList = nil // A later statistics pass rebuilds this list.
+		builder.appendCompositePartBlockFilters(snapshots)
+		require.Len(t, node.BlockFilterList, 1)
+		require.True(t, proto.Equal(blockOnly, node.BlockFilterList[0]))
+	})
+	t.Run("unproven residual keeps ordinary early lowering", func(t *testing.T) {
+		builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
+		node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag},
+			FilterList: []*pb.Expr{eq(0, 1), or(first, second), rangeFilter}}
+		builder.qry.Nodes = []*pb.Node{node}
+		deferred := make(map[int32]struct{})
+		snapshots, _ := builder.collectCompositePartBlockFilters(0, false, deferred)
+		require.NotContains(t, deferred, int32(0))
+		builder.mergeFiltersOnCompositeKey(0, true, deferred)
+		builder.retainConsumedCompositePartBlockFilters(snapshots)
+		builder.appendCompositePartBlockFilters(snapshots)
+		requireFuncNames(t, node.FilterList, "prefix_eq", "or", ">")
+		require.NotEmpty(t, node.BlockFilterList)
+	})
 	t.Run("deferred fallback without candidate", func(t *testing.T) {
 		testTable := *table
 		testTable.Indexes = []*pb.IndexDef{{IndexName: "idx", TableExist: true}}
 		builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
 		builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, TableDef: &testTable, BindingTags: []int32{tag}, FilterList: []*pb.Expr{eq(0, 1), or(point(2, 3), point(4, 5))}}}
-		builder.mergeFiltersOnCompositeKey(0, true, make(map[int32]struct{}))
+		deferred := make(map[int32]struct{})
+		builder.collectCompositePartBlockFilters(0, false, deferred)
+		builder.mergeFiltersOnCompositeKey(0, true, deferred)
 		// If candidate construction cannot publish a filter, the existing late
 		// index phase must still lower the shared primary-key prefix.
 		builder.mergeFiltersOnCompositeKey(0, false, nil)
@@ -224,6 +268,8 @@ func TestCompositePointCandidate(t *testing.T) {
 			builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
 			builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, TableDef: &testTable, BindingTags: []int32{tag}, FilterList: []*pb.Expr{eq(0, 1), or(point(2, 3), point(4, 5))}}}
 			deferred := make(map[int32]struct{})
+			snapshots, _ := builder.collectCompositePartBlockFilters(0, false, deferred)
+			require.Empty(t, snapshots)
 			builder.mergeFiltersOnCompositeKey(0, true, deferred)
 			require.Contains(t, deferred, int32(0))
 			// Join planning can deduce an equality between two columns. It is
@@ -247,7 +293,12 @@ func TestCompositePointCandidate(t *testing.T) {
 		builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
 		builder.optimizerHints = &OptimizerHints{blockFilter: 2}
 		builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{eq(0, 1), or(point(2, 3), point(4, 5))}}}
-		builder.addCompositePointCandidates(0, nil)
+		deferred := make(map[int32]struct{})
+		snapshots, _ := builder.collectCompositePartBlockFilters(0, false, deferred)
+		require.Contains(t, deferred, int32(0))
+		require.Empty(t, snapshots)
+		builder.mergeFiltersOnCompositeKey(0, true, deferred)
+		builder.addCompositePointCandidates(0, deferred)
 		require.Len(t, builder.qry.Nodes[0].FilterList, 3)
 		require.Empty(t, builder.qry.Nodes[0].BlockFilterList)
 	})
