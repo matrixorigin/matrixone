@@ -34,21 +34,24 @@ const (
 
 // prefetchRangeConfig sets the prefetch ranges of range reads.
 type prefetchRangeConfig struct {
-	// min is the least size of a cached range read.
-	min int64
-	// auto raises the unit to the bandwidth-delay product of range reads.
-	auto bool
+	// on enables prefetch ranges.
+	on bool
+	// fixed, when positive, is the unit instead of the bandwidth-delay product of range
+	// reads.
+	fixed int64
 	// narrowOnly limits prefetch ranges to narrow reads of groups that read ranges.
 	narrowOnly bool
 }
 
 // unit returns the size of prefetch ranges, 0 when they are off.
 func (c prefetchRangeConfig) unit() int64 {
-	unit := c.min
-	if c.auto {
-		unit = max(unit, autoPrefetchUnit(rangeReadCosts.bandwidthDelay()))
+	if !c.on {
+		return 0
 	}
-	return unit
+	if c.fixed > 0 {
+		return c.fixed
+	}
+	return autoPrefetchUnit(rangeReadCosts.bandwidthDelay())
 }
 
 func autoPrefetchUnit(bdp int64) int64 {
@@ -133,7 +136,7 @@ func (d *DiskCache) prefetchRead(
 	lo, hi, unit int64,
 	open func(ctx context.Context, start, end int64) (io.ReadCloser, error),
 ) ([]byte, int, bool) {
-	if lo < 0 || hi <= lo {
+	if lo < 0 || hi <= lo || ctx.Err() != nil {
 		return nil, 0, false
 	}
 	block := int64(prefetchBlockMax)

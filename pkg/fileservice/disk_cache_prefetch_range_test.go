@@ -51,12 +51,10 @@ func newPrefetchRangeFS(t *testing.T, unit int64, narrowOnly bool, size int) (*S
 	ctx := context.Background()
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
 		DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
-		MemoryCapacity:              ptrTo[toml.ByteSize](0),
-		DiskPrefetchRangeMin:        ptrTo(toml.ByteSize(unit)),
-		DiskPrefetchRangeAuto:       ptrTo(false),
-		DiskPrefetchRangeNarrowOnly: narrowOnly,
+		MemoryCapacity: ptrTo[toml.ByteSize](0),
 	}, nil, false, false)
 	require.NoError(t, err)
+	fs.diskCache.prefetchRange = prefetchRangeConfig{on: unit > 0, fixed: unit, narrowOnly: narrowOnly}
 	fs.SetAsyncUpdate(false)
 	t.Cleanup(func() { fs.Close(ctx) })
 	data := make([]byte, size)
@@ -104,6 +102,23 @@ func TestS3FSPrefetchRangeStartsAtTheNeededBlock(t *testing.T) {
 	require.Equal(t, int64(256<<10), storage.bytes.Load())
 	require.Equal(t, data[10:20], readRangeOf(t, fs, 0, 10, 10))
 	require.Equal(t, int64(2), storage.reads.Load())
+}
+
+// A read whose context is done starts no prefetch range.
+func TestS3FSPrefetchRangeSkipsCanceledRead(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 4096, false, 64<<10)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var opens atomic.Int64
+	_, reads, ok := fs.diskCache.prefetchRead(ctx, "object", 0, []IOEntry{{Offset: 5000, Size: 2}}, 5000, 5002, 4096,
+		func(context.Context, int64, int64) (io.ReadCloser, error) {
+			opens.Add(1)
+			return nil, context.Canceled
+		})
+	fs.diskCache.prefetchFlights.reads.Wait()
+	require.False(t, ok)
+	require.Zero(t, reads)
+	require.Zero(t, opens.Load())
 }
 
 // The entries inside a prefetch range are not cached again as ranges of their own.
@@ -161,13 +176,12 @@ func TestS3FSPrefetchRangeNarrowOnly(t *testing.T) {
 
 func TestDiskPrefetchRangeConfig(t *testing.T) {
 	var c CacheConfig
-	require.Equal(t, prefetchRangeConfig{auto: true}, c.diskPrefetchRange())
-	c.DiskPrefetchRangeAuto = ptrTo(false)
+	require.Equal(t, prefetchRangeConfig{on: true}, c.diskPrefetchRange())
+	c.DiskPrefetchRangeAligned = ptrTo(false)
 	require.Equal(t, prefetchRangeConfig{}, c.diskPrefetchRange())
-	c.DiskPrefetchRangeMin = ptrTo(toml.ByteSize(1 << 20))
 	c.DiskPrefetchRangeNarrowOnly = true
-	c.DiskPrefetchRangeAuto = ptrTo(true)
-	require.Equal(t, prefetchRangeConfig{min: 1 << 20, auto: true, narrowOnly: true}, c.diskPrefetchRange())
+	c.DiskPrefetchRangeAligned = ptrTo(true)
+	require.Equal(t, prefetchRangeConfig{on: true, narrowOnly: true}, c.diskPrefetchRange())
 }
 
 func TestAutoPrefetchUnit(t *testing.T) {
@@ -180,9 +194,9 @@ func TestAutoPrefetchUnit(t *testing.T) {
 	latency0, bytesPerS0 := rangeReadCosts.latency, rangeReadCosts.bytesPerS
 	t.Cleanup(func() { rangeReadCosts.latency, rangeReadCosts.bytesPerS = latency0, bytesPerS0 })
 	rangeReadCosts.latency, rangeReadCosts.bytesPerS = 0.025, 100<<20
-	require.Equal(t, int64(4<<20), prefetchRangeConfig{auto: true}.unit())
-	require.Equal(t, int64(16<<20), prefetchRangeConfig{min: 16 << 20, auto: true}.unit())
-	require.Equal(t, int64(0), prefetchRangeConfig{}.unit())
+	require.Equal(t, int64(4<<20), prefetchRangeConfig{on: true}.unit())
+	require.Equal(t, int64(16<<20), prefetchRangeConfig{on: true, fixed: 16 << 20}.unit())
+	require.Equal(t, int64(0), prefetchRangeConfig{fixed: 16 << 20}.unit())
 }
 
 type blockingStorage struct {

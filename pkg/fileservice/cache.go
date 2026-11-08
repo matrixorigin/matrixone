@@ -51,16 +51,11 @@ type CacheConfig struct {
 	// storage requests and slower reads; 0 makes the fastest reads. Default
 	// DefaultDiskDownloadMaxExtraWait.
 	DiskDownloadMaxExtraWait *toml.Duration `toml:"disk-download-max-extra-wait"`
-	// DiskPrefetchRangeMin is the least size of a range read from object storage that
-	// the disk cache keeps: a smaller read fetches the aligned range of this size around
-	// it and caches that range, which serves later reads within it. 0 reads the range
-	// alone. Default 0.
-	DiskPrefetchRangeMin *toml.ByteSize `toml:"disk-prefetch-range-min"`
-	// DiskPrefetchRangeAuto raises the prefetch range to the bytes object storage
-	// delivers in the latency of a range read, a power of two from 64KiB to 8MiB.
-	// It reads more bytes and, for scattered reads, more requests from object storage.
-	// Default true.
-	DiskPrefetchRangeAuto *bool `toml:"disk-prefetch-range-auto"`
+	// DiskPrefetchRangeAligned makes a range read fetch and cache the aligned ranges
+	// around it, of the bytes object storage delivers in the latency of a range read, a
+	// power of two from 64KiB to 8MiB, which serve later reads within them. It reads more
+	// bytes and, for scattered reads, more requests from object storage. Default true.
+	DiskPrefetchRangeAligned *bool `toml:"disk-prefetch-range-aligned"`
 	// DiskPrefetchRangeNarrowOnly limits prefetch ranges to the narrow reads of tables
 	// that read ranges instead of whole objects.
 	DiskPrefetchRangeNarrowOnly bool         `toml:"disk-prefetch-range-narrow-only"`
@@ -242,13 +237,10 @@ func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
 }
 
 func (c *CacheConfig) diskPrefetchRange() prefetchRangeConfig {
-	var ret prefetchRangeConfig
-	if c.DiskPrefetchRangeMin != nil && *c.DiskPrefetchRangeMin > 0 {
-		ret.min = int64(*c.DiskPrefetchRangeMin)
+	return prefetchRangeConfig{
+		on:         c.DiskPrefetchRangeAligned == nil || *c.DiskPrefetchRangeAligned,
+		narrowOnly: c.DiskPrefetchRangeNarrowOnly,
 	}
-	ret.auto = c.DiskPrefetchRangeAuto == nil || *c.DiskPrefetchRangeAuto
-	ret.narrowOnly = c.DiskPrefetchRangeNarrowOnly
-	return ret
 }
 
 // indexFileDiskCapacity returns the capacity of the index-file cache, 0 when the cache is

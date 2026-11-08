@@ -160,7 +160,8 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 				Name: "s3", Endpoint: "disk", Bucket: t.TempDir(),
 			}, CacheConfig{
 				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20),
-				MemoryCapacity: ptrTo[toml.ByteSize](0),
+				MemoryCapacity:           ptrTo[toml.ByteSize](0),
+				DiskPrefetchRangeAligned: ptrTo(false),
 			}, nil, false, false)
 			require.NoError(t, err)
 			unblock := func() {}
