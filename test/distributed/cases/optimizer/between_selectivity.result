@@ -1,0 +1,114 @@
+drop database if exists between_selectivity;
+create database between_selectivity;
+use between_selectivity;
+create table ranges(id int primary key, v int, d decimal(18,2), wide decimal(30,3));
+insert into ranges values (1,0,0,0), (2,19,19,19), (3,81,81,81), (4,100,100,100);
+select mo_ctl('dn', 'flush', 'between_selectivity.ranges');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, between_selectivity.ranges)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+analyze table ranges(v,d,wide) fullscan;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+between_selectivity.ranges  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  3  ¦  4  ¦  1  ¦  4  ¦  2  ¦  432  ¦  OK  ¦  q=1/1
+explain verbose select id from ranges where v between -50 and -10;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.v BETWEEN -50 AND -10  𝄀
+        Block Filter Cond: ranges.v BETWEEN -50 AND -10
+select count(*) as matches from ranges where v between -50 and -10;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from ranges where d between -50.00 and -10.00;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.d BETWEEN -50.00 AND -10.00  𝄀
+        Block Filter Cond: ranges.d BETWEEN -50.00 AND -10.00
+select count(*) as matches from ranges where d between -50.00 and -10.00;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from ranges where wide between -50.000 and -10.000;
+-- @regex("Table Scan.*selectivity=0[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'wide') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.wide BETWEEN -50.000 AND -10.000  𝄀
+        Block Filter Cond: ranges.wide BETWEEN -50.000 AND -10.000
+select count(*) as matches from ranges where wide between -50.000 and -10.000;
+➤ matches[-5,64,0]  𝄀
+0
+explain verbose select id from ranges where v between -20 and 19;
+-- @regex("Table Scan.*selectivity=0[.]2000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.80 outcnt=0.80 selectivity=0.2000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=4.00 outcnt=0.80 selectivity=0.2000 dop=0 blockNum=2 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.v BETWEEN -20 AND 19  𝄀
+        Block Filter Cond: ranges.v BETWEEN -20 AND 19
+select id from ranges where v between -20 and 19 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+explain verbose select id from ranges where v between -20 and 120;
+-- @regex("Table Scan.*selectivity=1[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=4.00 outcnt=4.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=4.00 outcnt=4.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'v') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.v BETWEEN -20 AND 120  𝄀
+        Block Filter Cond: ranges.v BETWEEN -20 AND 120
+select count(*) as matches from ranges where v between -20 and 120;
+➤ matches[-5,64,0]  𝄀
+4
+explain verbose select id from ranges where d between -20.00 and 19.00;
+-- @regex("Table Scan.*selectivity=0[.]2000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=0.80 outcnt=0.80 selectivity=0.2000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=4.00 outcnt=0.80 selectivity=0.2000 dop=0 blockNum=2 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'d') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.d BETWEEN -20.00 AND 19.00  𝄀
+        Block Filter Cond: ranges.d BETWEEN -20.00 AND 19.00
+select id from ranges where d between -20.00 and 19.00 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+explain verbose select id from ranges where wide between -20.000 and 120.000;
+-- @regex("Table Scan.*selectivity=1[.]0000.*", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[1] (cost=4.00 outcnt=4.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=100.00)  𝄀
+  Output: ranges.id  𝄀
+  ->  Table Scan[0] on between_selectivity.ranges (cost=4.00 outcnt=4.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=49.50)  𝄀
+        Output: ranges.id  𝄀
+        Table: 'ranges' (0:'id', 1:'wide') shuffle: hash(id)  𝄀
+        Filter Cond: ranges.wide BETWEEN -20.000 AND 120.000  𝄀
+        Block Filter Cond: ranges.wide BETWEEN -20.000 AND 120.000
+select count(*) as matches from ranges where wide between -20.000 and 120.000;
+➤ matches[-5,64,0]  𝄀
+4
+drop database between_selectivity;

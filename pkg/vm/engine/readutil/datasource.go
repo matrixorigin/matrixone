@@ -18,6 +18,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -51,6 +52,29 @@ type RemoteDataSource struct {
 	batchPrefetchCursor int
 	cursor              int
 	data                engine.RelData
+
+	orderBy []*plan.OrderBySpec
+	// The permutation belongs to this reader; never reorder shared RelData.
+	orderedBlocks []orderedRemoteBlock
+	filterZM      objectio.ZoneMap
+}
+
+type orderedRemoteBlock struct {
+	index int
+	zm    objectio.ZoneMap
+}
+
+// UsableOrderZoneMap reports whether a block bound can safely participate in
+// ordered pruning. Missing or incompatible metadata must leave the block in
+// the scan. A truncated string maximum can be smaller than an actual value.
+func UsableOrderZoneMap(zm objectio.ZoneMap, typ plan.Type, desc bool) bool {
+	if !zm.IsInited() || int32(zm.GetType()) != typ.Id || (desc && zm.MaxTruncated()) {
+		return false
+	}
+	if zm.GetType() == types.T_decimal64 || zm.GetType() == types.T_decimal128 {
+		return zm.GetScale() == int32(uint8(typ.Scale)&0x3f)
+	}
+	return true
 }
 
 func (rs *RemoteDataSource) String() string {
@@ -59,8 +83,8 @@ func (rs *RemoteDataSource) String() string {
 
 func (rs *RemoteDataSource) Next(
 	ctx context.Context,
-	_ []string,
-	_ []types.Type,
+	cols []string,
+	colTypes []types.Type,
 	seqNums []uint16,
 	_ int32,
 	_ any,
@@ -68,14 +92,40 @@ func (rs *RemoteDataSource) Next(
 	_ *batch.Batch,
 ) (*objectio.BlockInfo, engine.DataState, error) {
 
-	rs.batchPrefetch(ctx, seqNums)
-
+	if err := ctx.Err(); err != nil {
+		return nil, engine.End, err
+	}
+	if len(rs.orderBy) > 0 && rs.orderedBlocks == nil {
+		if err := rs.orderBlocks(ctx, cols, colTypes, seqNums); err != nil {
+			return nil, engine.End, err
+		}
+	}
+	for rs.cursor < rs.data.DataCnt() {
+		if rs.orderedBlocks == nil || !rs.filterZM.IsInited() {
+			break
+		}
+		zm := rs.orderedBlocks[rs.cursor].zm
+		if !zm.IsInited() ||
+			(rs.descending() && rs.filterZM.CompareMax(zm) <= 0) ||
+			(!rs.descending() && rs.filterZM.CompareMin(zm) >= 0) {
+			break
+		}
+		rs.cursor++
+	}
 	if rs.cursor >= rs.data.DataCnt() {
 		return nil, engine.End, nil
 	}
+	rs.batchPrefetch(ctx, seqNums)
+	cur := rs.blockAt(rs.cursor)
 	rs.cursor++
-	cur := rs.data.GetBlockInfo(rs.cursor - 1)
 	return &cur, engine.Persisted, nil
+}
+
+func (rs *RemoteDataSource) blockAt(i int) objectio.BlockInfo {
+	if rs.orderedBlocks != nil {
+		i = rs.orderedBlocks[i].index
+	}
+	return rs.data.GetBlockInfo(i)
 }
 
 func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
@@ -90,18 +140,18 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 
 	bathSize := min(BatchPrefetchSize, rs.data.DataCnt()-rs.cursor)
 
-	begin := rs.batchPrefetchCursor
+	begin := rs.cursor
 	end := begin + bathSize
 
 	bids := make([]objectio.Blockid, end-begin)
 	blks := make([]*objectio.BlockInfo, end-begin)
 	for idx := begin; idx < end; idx++ {
-		blk := rs.data.GetBlockInfo(idx)
+		blk := rs.blockAt(idx)
 		blks[idx-begin] = &blk
 		bids[idx-begin] = blk.BlockID
 	}
 
-	if !fileservice.FullFilePreloadsSkipped(ctx, rs.fs) {
+	if !ioutil.PrefetchSkipped(ctx, rs.fs, fileservice.GetFileServicePolicy(ctx), blks[0]) {
 		err := ioutil.Prefetch(
 			rs.proc.GetService(), rs.fs, blks[0].MetaLocation())
 		if err != nil {
@@ -119,6 +169,9 @@ func (rs *RemoteDataSource) batchPrefetch(ctx context.Context, seqNums []uint16)
 
 func (rs *RemoteDataSource) Close() {
 	rs.cursor = 0
+	rs.batchPrefetchCursor = 0
+	rs.orderedBlocks = nil
+	rs.filterZM = nil
 }
 
 func (rs *RemoteDataSource) applyInMemTombstones(
@@ -192,15 +245,105 @@ func (rs *RemoteDataSource) GetTombstones(
 	return
 }
 
-func (rs *RemoteDataSource) SetOrderBy(_ []*plan.OrderBySpec) {
+func (rs *RemoteDataSource) SetOrderBy(orderBy []*plan.OrderBySpec) {
+	// Zonemaps alone cannot exclude a block containing a better NULL key.
+	rs.orderBy = nil
+	if len(orderBy) > 0 && orderBy[0] != nil && orderBy[0].Expr != nil &&
+		orderBy[0].Expr.GetCol() != nil && orderBy[0].Expr.Typ.NotNullable {
+		rs.orderBy = orderBy
+	}
 }
 
 func (rs *RemoteDataSource) GetOrderBy() []*plan.OrderBySpec {
-	return nil
+	return rs.orderBy
 }
 
-func (rs *RemoteDataSource) SetFilterZM(_ objectio.ZoneMap) {
+func (rs *RemoteDataSource) descending() bool {
+	return rs.orderBy[0].Flag&plan.OrderBySpec_DESC != 0
+}
 
+func (rs *RemoteDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	if len(rs.orderBy) == 0 || !UsableOrderZoneMap(zm, rs.orderBy[0].Expr.Typ, rs.descending()) {
+		return
+	}
+	if !rs.filterZM.IsInited() ||
+		(rs.descending() && rs.filterZM.CompareMax(zm) < 0) ||
+		(!rs.descending() && rs.filterZM.CompareMin(zm) > 0) {
+		rs.filterZM = zm.Clone()
+	}
+}
+
+func (rs *RemoteDataSource) orderBlocks(ctx context.Context, cols []string, colTypes []types.Type, seqNums []uint16) error {
+	// A literal dotted column can alias another column's qualified name.
+	// Without an unambiguous mapping, never use either column's zonemap.
+	if slices.ContainsFunc(cols, func(name string) bool { return strings.Contains(name, ".") }) {
+		rs.orderBy = nil
+		rs.filterZM = nil
+		return nil
+	}
+	orderExpr := rs.orderBy[0].Expr
+	name := strings.ToLower(orderExpr.GetCol().Name)
+	// ColPos is relative to the compiled projection, not the storage schema.
+	// Match the schema's lower-case normalization, not broader Unicode folding.
+	col := slices.IndexFunc(cols, func(candidate string) bool { return strings.ToLower(candidate) == name })
+	if col < 0 {
+		name = name[strings.LastIndex(name, ".")+1:]
+		col = slices.IndexFunc(cols, func(candidate string) bool { return strings.ToLower(candidate) == name })
+	}
+	if col < 0 || col >= len(seqNums) || col >= len(colTypes) || int32(colTypes[col].Oid) != orderExpr.Typ.Id {
+		rs.orderBy = nil
+		rs.filterZM = nil
+		return nil
+	}
+
+	blocks := make([]orderedRemoteBlock, rs.data.DataCnt())
+	var meta objectio.ObjectDataMeta
+	for i := range blocks {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		blk := rs.data.GetBlockInfo(i)
+		blocks[i].index = i
+		if blk.IsAppendable() {
+			continue
+		}
+		location := blk.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, meta) {
+			loaded, err := objectio.FastLoadObjectMeta(ctx, &location, false, rs.fs)
+			if err != nil {
+				return err
+			}
+			meta = loaded.MustDataMeta()
+		}
+		blockMeta := meta.GetBlockMeta(uint32(location.ID()))
+		if seqNums[col] <= blockMeta.GetMaxSeqnum() {
+			zm := blockMeta.ColumnMeta(seqNums[col]).ZoneMap()
+			if UsableOrderZoneMap(zm, orderExpr.Typ, rs.descending()) {
+				blocks[i].zm = zm
+			}
+		}
+	}
+	slices.SortFunc(blocks, func(a, b orderedRemoteBlock) int {
+		ai, bi := a.zm.IsInited(), b.zm.IsInited()
+		if !ai && !bi {
+			return 0
+		}
+		if !ai {
+			return -1
+		}
+		if !bi {
+			return 1
+		}
+		if rs.descending() {
+			return b.zm.CompareMax(a.zm)
+		}
+		return a.zm.CompareMin(b.zm)
+	})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	rs.orderedBlocks = blocks
+	return nil
 }
 
 func NewRemoteDataSource(

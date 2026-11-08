@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -331,8 +332,7 @@ func (ctr *container) appendBatchAccounted(
 		}
 		if err != nil {
 			for j := range ctr.batWaitForSort.Vecs {
-				ctr.batWaitForSort.Vecs[j].RollbackAppend(
-					checkpoints[j], bat.Vecs[j].Length())
+				err = vector.JoinAppendRollbackError(err, ctr.batWaitForSort.Vecs[j].RollbackAppend(checkpoints[j], bat.Vecs[j].Length()))
 			}
 			return err
 		}
@@ -629,6 +629,17 @@ func (order *Order) Call(proc *process.Process) (
 				return vm.CancelResult, orderTerminalCapacityError(proc.Ctx,
 					orderPhaseError("append", err,
 						ctr.batWaitForSort, input.Batch))
+			}
+			if order.ScanCutoff != nil && !order.ScanCutoff.Done() {
+				var key *vector.Vector
+				if len(order.OrderBySpec) != 0 && order.OrderBySpec[0] != nil && order.OrderBySpec[0].Expr != nil {
+					if col := order.OrderBySpec[0].Expr.GetCol(); col != nil && col.ColPos >= 0 && int(col.ColPos) < len(input.Batch.Vecs) {
+						key = input.Batch.Vecs[col.ColPos]
+					}
+				}
+				if bound, ok := order.ScanCutoff.Observe(key, input.Batch.RowCount()); ok {
+					message.SendMessage(message.TopValueMessage{TopValueZM: bound, Tag: order.ScanCutoffTag}, proc.GetMessageBoard())
+				}
 			}
 			if !enoughToSend {
 				enoughToSend, err = ctr.shouldSortCurrentRun()

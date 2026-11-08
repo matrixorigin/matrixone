@@ -46,7 +46,7 @@ type CsvReader struct {
 	param      *ExternalParam
 	plh        *ParseLineHandler
 	reader     io.ReadCloser
-	prevStr    string
+	pending    jsonLinePending
 	ignoreLine int
 	ignoreTag  int
 }
@@ -68,6 +68,7 @@ func NewCsvReader(param *ExternalParam, proc *process.Process) (*CsvReader, erro
 }
 
 func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
+	r.pending = jsonLinePending{}
 	r.param = param
 	r.ignoreLine = r.ignoreTag
 
@@ -112,7 +113,7 @@ func (r *CsvReader) ReadBatch(
 }
 
 func (r *CsvReader) Close() error {
-	r.prevStr = ""
+	r.pending = jsonLinePending{}
 	r.plh = nil
 	if r.reader != nil {
 		err := r.reader.Close()
@@ -128,6 +129,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	if bat == nil || bat.VectorCount() == 0 {
 		return false, moerr.NewInternalError(proc.Ctx, "external CSV reader requires at least one materialized column")
 	}
+	defer func() {
+		if err != nil {
+			r.pending = jsonLinePending{}
+		}
+	}()
 	param := r.param
 	ctx := proc.Ctx
 	csvReader := r.plh.csvReader
@@ -138,7 +144,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
 		case <-ctx.Done():
-			finish = true
+			return false, ctx.Err()
 		default:
 		}
 		if !finish {
@@ -162,11 +168,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			r.reader = nil
 			r.plh = nil
 			fileFinished = true
-			if r.prevStr != "" && param.Extern.Format == tree.JSONLINE && !param.ErrorMode.Tolerate {
+			if len(r.pending.data) != 0 && param.Extern.Format == tree.JSONLINE && !param.ErrorMode.Tolerate {
 				// A record still held over at end of file never completed:
 				// the file is truncated or the record is malformed. Fail
 				// instead of silently dropping it.
-				r.prevStr = ""
+				r.pending = jsonLinePending{}
 				return false, moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
 			}
 			break
@@ -193,56 +199,62 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		rowIdx := i
 		if param.Extern.Format == tree.JSONLINE {
 			raw := row[0].Val
-			if param.ErrorMode.Tolerate {
-				// The text this record is parsed from, so a failure reports
-				// the source line rather than the decoded fields.
-				param.ErrorMode.RawText = r.prevStr + raw
+			open := byte('{')
+			if param.Extern.JsonData == tree.ARRAY {
+				open = '['
 			}
-			row, err = r.transJson2Lines(proc.Ctx, raw, param.Attrs, param.Cols, param.Extern.JsonData)
+			if param.ErrorMode.Tolerate {
+				param.ErrorMode.RawText = raw
+			}
+			if len(r.pending.data) != 0 {
+				if err = r.pending.append(raw, csvReader.MaxRecordSize()); err != nil {
+					return false, err
+				}
+				if !r.pending.closed {
+					if curBatchSize >= param.maxBatchSize {
+						break
+					}
+					continue
+				}
+				raw = string(r.pending.data)
+			}
+			row, err = r.transJson2Lines(ctx, raw, param.Attrs, param.Cols, param.Extern.JsonData)
 			if err != nil {
-				// transJson2Lines holds the text over in prevStr only when the
-				// record is genuinely truncated; that -- not the EOF error
-				// alone -- is what makes this a continuation.
-				truncated := r.prevStr != ""
+				truncated := jsonLineTruncated(err, raw, open)
 				if truncated && !param.ErrorMode.Tolerate {
-					// Held over for the next line. Nothing is appended for
-					// this record, so there is no partial row to trim once
-					// the batch ends. (Rows used to be written into
-					// pre-allocated slots, which is why the batch tail was
-					// trimmed here; they are appended now.)
-					logutil.Infof("unexpected EOF, wait for next batch")
+					if len(r.pending.data) == 0 {
+						if err = r.pending.append(raw, csvReader.MaxRecordSize()); err != nil {
+							return false, err
+						}
+						if r.pending.closed {
+							r.pending.closed = false
+							r.pending.sealed = true
+						}
+					} else {
+						// A closed root reported as truncated cannot be repaired by a suffix.
+						r.pending.closed = false
+						r.pending.sealed = true
+					}
+					if curBatchSize >= param.maxBatchSize {
+						break
+					}
 					continue
 				}
 				if !param.ErrorMode.Tolerate {
 					return false, err
 				}
 				if truncated {
-					// Under tolerance a truncated object is THIS line's
-					// failure, not a claim on the lines after it. Holding it
-					// over would append every following line to it and report
-					// one failure at EOF, losing every good record in between
-					// -- and it would buy nothing: a continuation line that
-					// starts with a quote makes the CSV splitter fail the
-					// whole scan, so a multi-line object is not reliably
-					// readable in the first place.
-					r.prevStr = ""
-					err = moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
+					err = moerr.NewInvalidInput(ctx, "incomplete json record")
 				}
-				// A line that is not valid JSON is reported as a failed record
-				// rather than failing the query.
 				if err = appendErrorRow(proc, bat, nil, i, param, err); err != nil {
 					return false, err
 				}
-				// A reject row is a row: the batch has to be handed on at the
-				// same size limit as a row that parsed. Skipping this check let
-				// a run of malformed records build one batch far past
-				// maxBatchSize -- each carrying a copy of its source text in
-				// __mo_error_text -- defeating the transport and memory bound.
 				if curBatchSize >= param.maxBatchSize {
 					break
 				}
 				continue
 			}
+			r.pending = jsonLinePending{}
 		}
 
 		if err = getOneRowData(proc, bat, row, rowIdx, param); err != nil {
@@ -261,7 +273,7 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 // jsonLineTruncated reports whether a failed parse means "truncated" rather
 // than "malformed": the parser ran off the end of the text, and the text opens
 // the expected value, so appending the next line can still complete it. Only
-// such text is held over in prevStr. The prefix test matters because the
+// such text may be held over. The prefix test matters because the
 // parser reports a bare word ("this is not json") as an unexpected EOF too,
 // and holding that over would glue it onto the following line.
 func jsonLineTruncated(err error, str string, open byte) bool {
@@ -273,7 +285,6 @@ func jsonLineTruncated(err error, str string, open byte) bool {
 }
 
 // transJson2Lines converts JSON string to CSV fields.
-// Uses r.prevStr instead of param.prevStr.
 func (r *CsvReader) transJson2Lines(ctx context.Context, str string, attrs []plan.ExternAttr, cols []*plan.ColDef, jsonData string) ([]csvparser.Field, error) {
 	switch jsonData {
 	case tree.OBJECT:
@@ -317,15 +328,10 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		}
 	}
 	res := make([]csvparser.Field, resultSize)
-	if r.prevStr != "" {
-		str = r.prevStr + str
-		r.prevStr = ""
-	}
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
 		if jsonLineTruncated(err, str, '{') {
-			r.prevStr = str
 			return nil, err
 		}
 		return nil, moerr.NewInvalidInput(ctx, "the line is not a well-formed json object")
@@ -370,6 +376,12 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			res[attr.ColFieldIndex] = csvparser.Field{Val: string(data)}
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res[attr.ColFieldIndex] = csvparser.Field{Val: text}
+			continue
+		}
 
 		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
@@ -385,14 +397,9 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		err error
 		res = make([]csvparser.Field, 0, len(attrs))
 	)
-	if r.prevStr != "" {
-		str = r.prevStr + str
-		r.prevStr = ""
-	}
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		if jsonLineTruncated(err, str, '[') {
-			r.prevStr = str
 			return nil, err
 		}
 		return nil, moerr.NewInvalidInput(ctx, "the line is not a well-formed json array")
@@ -430,6 +437,12 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			res = append(res, csvparser.Field{Val: string(data)})
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res = append(res, csvparser.Field{Val: text})
+			continue
+		}
 
 		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
@@ -438,6 +451,61 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		res = append(res, csvparser.Field{Val: val})
 	}
 	return res, nil
+}
+
+// vecBlockJSONText returns the JSON text of an object value of a vecf8/vecf4 column, the
+// exact form of the cell.
+func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
+	if !types.T(tp).IsBlockScaledArray() {
+		return "", false, nil
+	}
+	if g, ok := valN.V.(*bytejson.Group); !ok || !g.Obj {
+		return "", false, nil
+	}
+	var text strings.Builder
+	if err := writeJSONLexemes(&text, valN); err != nil {
+		return "", false, err
+	}
+	return text.String(), true, nil
+}
+
+// writeJSONLexemes writes a parsed JSON value as JSON text, numbers as their original
+// lexemes (-0 stays -0).
+func writeJSONLexemes(text *strings.Builder, node bytejson.Node) error {
+	switch v := node.V.(type) {
+	case *bytejson.Group:
+		lb, rb := byte('['), byte(']')
+		if v.Obj {
+			lb, rb = '{', '}'
+		}
+		text.WriteByte(lb)
+		for i, child := range v.Values {
+			if i > 0 {
+				text.WriteByte(',')
+			}
+			if v.Obj {
+				key, err := json.Marshal(v.Keys[i])
+				if err != nil {
+					return err
+				}
+				text.Write(key)
+				text.WriteByte(':')
+			}
+			if err := writeJSONLexemes(text, child); err != nil {
+				return err
+			}
+		}
+		text.WriteByte(rb)
+	case json.Number:
+		text.WriteString(v.String())
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		text.Write(b)
+	}
+	return nil
 }
 
 func (r *CsvReader) legacyJSONBinary() bool {
@@ -449,7 +517,7 @@ func (r *CsvReader) legacyJSONBinary() bool {
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
 func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T, legacyBinary bool) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
-	if !typ.IsArrayRelate() || !ok || group.Obj {
+	if !(typ.IsArrayRelate() || typ.IsBlockScaledArray()) || !ok || group.Obj {
 		//#30635: JSONLINE OUTFILE writes binary columns wrapped as
 		// {"$binary":"<base64>"} objects so the loader can tell MO-encoded
 		// binary payloads apart from plain-text JSON strings. Only the

@@ -6239,6 +6239,7 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 			}
 		}
 		require.NotNil(t, aggregate)
+		require.NotZero(t, uint64(aggregate.AggList[0].GetF().Func.Obj)&function.Distinct, sql)
 		var hasCanonicalArgument bool
 		for _, arg := range aggregate.AggList[0].GetF().Args {
 			if isCastOverload(arg, 2) {
@@ -6247,6 +6248,36 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 			}
 		}
 		require.True(t, hasCanonicalArgument, sql)
+	}
+}
+
+func TestDistinctMinMaxPreservePromotedCharArgument(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, name := range []string{"min", "max"} {
+		t.Run(name, func(t *testing.T) {
+			arguments := make([]*plan.Expr, 0, 2)
+			for _, distinct := range []string{"", "distinct "} {
+				sql := "select " + name + "(" + distinct + value + ") from nation"
+				logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+				require.NoError(t, err)
+				var aggregate *plan.Expr
+				for _, node := range logicPlan.GetQuery().Nodes {
+					if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+						aggregate = node.AggList[0]
+						break
+					}
+				}
+				require.NotNil(t, aggregate, sql)
+				f := aggregate.GetF()
+				require.NotNil(t, f, sql)
+				require.Zero(t, uint64(f.Func.Obj)&function.Distinct, sql)
+				require.Len(t, f.Args, 1, sql)
+				require.NotNil(t, f.Args[0].GetF(), sql)
+				require.Equal(t, "coalesce", f.Args[0].GetF().Func.ObjName, sql)
+				arguments = append(arguments, f.Args[0])
+			}
+			require.True(t, proto.Equal(arguments[0], arguments[1]), "DISTINCT must not change the MIN/MAX input")
+		})
 	}
 }
 
@@ -7054,6 +7085,12 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			notNullable: false,
 		},
 		{
+			// Explicit casts of non-NULL literals with exactly known valid
+			// UTF-8 bytes can never hit the Warning 1300 NULL guard, so the
+			// corrected inference is precisely NOT NULL and the common VALUES
+			// type stays NOT NULL for these rows. Unknown/runtime-binary
+			// sources (and string-to-DATETIME casts, see above) still infer
+			// conservative nullable.
 			name:        "char width grows",
 			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
 			oid:         types.T_char,

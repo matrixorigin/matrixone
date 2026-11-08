@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -479,7 +478,6 @@ func validateSpillFileSize(file *os.File, expected uint64) error {
 }
 
 type HashBuild struct {
-	LocalFilter *runtimefilter.LocalShuffleFilter
 	// DirectInput consumes a same-lane batch-only build through ExecYield
 	// checkpoints. Hash and spill builds keep their existing pipeline contract.
 	DirectInput                   bool
@@ -743,7 +741,8 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
 		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
-		len(builder.UniqueJoinKeys) != 0 ||
+		len(builder.uniqueKeys.first.vecs) != 0 ||
+		len(builder.uniqueKeys.rest) != 0 || builder.uniqueKeys.directory != nil ||
 		builder.IgnoreRows != nil || builder.DelRows != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
@@ -812,11 +811,6 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 		}
 	}
 
-	if producer := hashBuild.ctr.hashmapBuilder.localFilterProducer; producer != nil {
-		_ = producer.Complete(true)
-		hashBuild.ctr.hashmapBuilder.localFilterProducer = nil
-		hashBuild.ctr.runtimeFilterDone = true
-	}
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
 	hashBuild.ctr.dropSpillScratchBuffers()
 	// Only clean up build files when the join map was NOT successfully sent.

@@ -121,6 +121,19 @@ func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	assert.Contains(t, InformationSchemaViewsDDL, "JOIN __mo_visible_tables visible_tbl")
 	assert.Contains(t, InformationSchemaViewsDDL, "coalesce(mo_view_check_option(tbl.viewdef), 'NONE')")
 	assert.Contains(t, InformationSchemaPartitionsDDL, "FROM `__mo_visible_tables` `tbl`")
+	// issue #31927: outer joins keep one row per ordinary base table (with
+	// NULL partition fields) and one per physical partition; the joined rows
+	// are guarded against partition sub-tables, views, sequences, temporary
+	// tables and internal index tables; stats resolve to the real base or
+	// physical partition identity exactly once per row.
+	assert.Contains(t, InformationSchemaPartitionsDDL, "LEFT JOIN `mo_catalog`.`mo_partition_metadata` `meta`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "LEFT JOIN `mo_catalog`.`mo_partition_tables` `pt`")
+	assert.NotContains(t, InformationSchemaPartitionsDDL, "INNER JOIN")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `TABLE_ROWS`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "coalesce(`pt`.`partition_table_name`, `tbl`.`relname`)) AS `DATA_LENGTH`")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND "+catalog.NonIndexRelationSQLPredicate("tbl"))
+	assert.NotContains(t, InformationSchemaPartitionsDDL, "NOT LIKE '__mo_index_%'")
+	assert.Contains(t, InformationSchemaPartitionsDDL, "AND `tbl`.`relkind` NOT IN ('partition', 'v', 'S')")
 	assert.Contains(t, InformationSchemaSchemataDDL, "FROM __mo_visible_databases")
 	assert.Contains(t, InformationSchemaSchemataDDL, "cast(NULL as char(0)) AS SQL_PATH")
 	assert.Contains(t, InformationSchemaSchemataDDL, "db.owner IN (SELECT role_id FROM __mo_active_roles)")
@@ -229,165 +242,10 @@ func TestInformationSchemaTableConstraintsLegacyDDL_DoesNotUseCheckConstraints(t
 	}
 }
 
-func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
-	legacy := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion15)
-	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
-	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
-	assert.Contains(t, legacy,
-		informationSchemaMetadataVisibilityCompatibilityDDL(InformationSchemaTableConstraintsLegacyDDL))
-	assert.Contains(t, legacy, InformationSchemaCollationCharacterSetApplicabilityDDL)
-	for _, sql := range legacy {
-		assert.NotContains(t, sql, "mo_check_constraints()")
-		assert.NotContains(t, sql, "mo_current_roles()")
-		assertInformationSchemaInitSQLParses(t, sql)
-	}
-
-	for _, protocol := range []int64{
-		defines.MORPCVersion16,
-		defines.MORPCVersion32,
-		defines.MORPCVersion34,
-		defines.MORPCVersion35,
-	} {
-		t.Run(fmt.Sprintf("compatibility-v%d", protocol), func(t *testing.T) {
-			compatibility := InitInformationSchemaSysTablesForProtocol(protocol)
-			assert.Len(t, compatibility, len(InitInformationSchemaSysTables))
-			assert.Contains(t, compatibility,
-				informationSchemaMetadataVisibilityCompatibilityDDL(InformationSchemaCheckConstraintsDDL))
-			assert.Contains(t, compatibility,
-				informationSchemaMetadataVisibilityCompatibilityDDL(InformationSchemaTableConstraintsDDL))
-			for _, sql := range compatibility {
-				assert.NotContains(t, sql, "mo_current_roles()")
-				assertInformationSchemaInitSQLParses(t, sql)
-			}
-			assert.Contains(t, strings.Join(compatibility, "\n"), "FROM mo_catalog.mo_role_grant rg")
-		})
-	}
-
-	for _, protocol := range []int64{
-		defines.MORPCVersion41,
-		defines.MORPCVersion42,
-		defines.MORPCVersion43,
-		defines.MORPCVersion44,
-		defines.MORPCVersion45,
-	} {
-		t.Run(fmt.Sprintf("local-catalog-v%d", protocol), func(t *testing.T) {
-			localCatalog := InitInformationSchemaSysTablesForProtocol(protocol)
-			assert.Len(t, localCatalog, len(InitInformationSchemaSysTables))
-			assert.Contains(t, localCatalog, InformationSchemaTablesV41DDL)
-			assert.Contains(t, localCatalog, InformationSchemaColumnsV41DDL)
-			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 1 then 'utf8' WHEN 2 then 'binary'")
-			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8'")
-			assert.Contains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8_bin'")
-			assert.NotContains(t, InformationSchemaColumnsV41DDL, "WHEN 3 then 'utf8mb4'")
-			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_tables()")
-			assert.NotContains(t, strings.Join(localCatalog, "\n"), "mo_subscription_columns()")
-			assert.Contains(t, strings.Join(localCatalog, "\n"), "mo_current_roles()")
-			for _, sql := range localCatalog {
-				assertInformationSchemaInitSQLParses(t, sql)
-			}
-		})
-	}
-
-	for _, protocol := range []int64{defines.MORPCVersion46, defines.MORPCVersion47, defines.MORPCVersion48, defines.MORPCVersion49, defines.MORPCVersion57} {
-		t.Run(fmt.Sprintf("subscription-legacy-identity-v%d", protocol), func(t *testing.T) {
-			subscriptionLegacyIdentity := InitInformationSchemaSysTablesForProtocol(protocol)
-			assert.Len(t, subscriptionLegacyIdentity, len(InitInformationSchemaSysTables))
-			assert.Contains(t, subscriptionLegacyIdentity, InformationSchemaTablesDDL)
-			assert.Contains(t, subscriptionLegacyIdentity, InformationSchemaColumnsV46DDL)
-			joined := strings.Join(subscriptionLegacyIdentity, "\n")
-			assert.Contains(t, joined, "mo_subscription_tables()")
-			assert.Contains(t, joined, "mo_subscription_columns()")
-			assert.Contains(t, joined, "WHEN 3 then 'utf8'")
-			assert.Contains(t, joined, "WHEN 3 then 'utf8_bin'")
-			assert.NotContains(t, joined, "WHEN 3 then 'utf8mb4'")
-			for _, sql := range subscriptionLegacyIdentity {
-				assertInformationSchemaInitSQLParses(t, sql)
-			}
-		})
-	}
-
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
-	assert.Len(t, latest, len(InitInformationSchemaSysTables))
-	for _, ddl := range latest {
+func TestCurrentInformationSchemaInitDefinitionsParse(t *testing.T) {
+	for _, ddl := range InitInformationSchemaSysTables {
 		assertInformationSchemaInitSQLParses(t, ddl)
 	}
-	assert.Contains(t, latest, InformationSchemaColumnsV58DDL())
-	assert.Contains(t, latest, InformationSchemaViewsLegacyDDL)
-	assert.NotContains(t, strings.Join(latest, "\n"), "mo_view_definition(")
-	assert.NotContains(t, strings.Join(latest, "\n"), "mo_subscription_view_columns")
-	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
-	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, defines.MORPCVersion99} {
-		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
-		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"), "mo_subscription_view_columns")
-		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaViewsLegacyDDL)
-	}
-	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), InformationSchemaColumnsV100DDL())
-	assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), "\n"),
-		InformationSchemaColumnsDDL)
-	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), InformationSchemaColumnsDDL)
-	for _, protocol := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117} {
-		definitions := InitInformationSchemaSysTablesForProtocol(protocol)
-		require.Contains(t, definitions, InformationSchemaSchemataLegacyDDL)
-		// Every rung at or above the metadata ladder selects the corrected
-		// current identities: unconditional publication through the
-		// grandfathered rungs (design 5.1, I2).
-		require.Contains(t, definitions, InformationSchemaColumnsDDL)
-		require.Contains(t, definitions, InformationSchemaStatisticsPrefixSubPartDDL)
-		require.NotContains(t, strings.Join(definitions, "\n"), InformationSchemaStatisticsDDL)
-		require.Contains(t, definitions, InformationSchemaTablesDDL)
-		require.NotContains(t, strings.Join(definitions, "\n"), "mo_database_defaults")
-		require.NotContains(t, definitions, InformationSchemaTablesV118DDL)
-	}
-	definitions := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion118)
-	require.Contains(t, definitions, InformationSchemaSchemataDDL)
-	require.Contains(t, definitions, InformationSchemaTablesV118DDL)
-	require.Contains(t, definitions, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, definitions, InformationSchemaViewsDDL)
-	require.Contains(t, definitions, InformationSchemaColumnsDDL)
-	require.Contains(t, definitions, InformationSchemaStatisticsPrefixSubPartDDL)
-	predecessor := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion119)
-	require.Contains(t, predecessor, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor, InformationSchemaColumnsDDL)
-	predecessor120 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion120)
-	require.Contains(t, predecessor120, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor120, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor120, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor120, InformationSchemaColumnsDDL)
-	predecessor121 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion121)
-	require.Contains(t, predecessor121, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor121, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor121, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor121, InformationSchemaColumnsDDL)
-	predecessor122 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion122)
-	require.Contains(t, predecessor122, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor122, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor122, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor122, InformationSchemaColumnsDDL)
-	predecessor123 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion123)
-	require.Contains(t, predecessor123, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor123, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor123, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor123, InformationSchemaColumnsDDL)
-	predecessor124 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion124)
-	require.Contains(t, predecessor124, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor124, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor124, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor124, InformationSchemaColumnsDDL)
-	predecessor125 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion125)
-	require.Contains(t, predecessor125, InformationSchemaViewsLegacyDDL)
-	require.NotContains(t, predecessor125, InformationSchemaViewsDDL)
-	require.Contains(t, predecessor125, InformationSchemaTablesV118DDL)
-	require.Contains(t, predecessor125, InformationSchemaColumnsDDL)
-
-	// The current list is the unconditional publication set every bootstrap
-	// uses once the negotiated floor reaches the base early-return floor.
-	current := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion126)
-	assert.Equal(t, InitInformationSchemaSysTables, current)
-	assert.Contains(t, current, InformationSchemaColumnsDDL)
-	assert.Contains(t, current, InformationSchemaStatisticsPrefixSubPartDDL)
-	assert.Contains(t, strings.Join(current, "\n"), "mo_view_definition(")
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -415,11 +273,9 @@ func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T)
 	require.NotContains(t, legacy, "AND NOT (mc.relkind = 'v'")
 
 	current := InformationSchemaColumnsDDL
-	protocol100 := InformationSchemaColumnsV100DDL()
 	require.Contains(t, current, "from mo_subscription_columns() mc")
 	require.Contains(t, current, "AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN")
 	require.Contains(t, current, "mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)")
-	require.Equal(t, protocol100, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100)[1])
 	// All four current branches must share the native selector mapping, not just
 	// the publisher/local and physical subscription paths.
 	require.Equal(t, 4, strings.Count(current,
@@ -428,9 +284,6 @@ func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T)
 		"WHEN 1 then 'utf8mb4_bin' WHEN 2 then NULL WHEN 3 then 'utf8mb4_general_ci' WHEN 4 then 'utf8_unicode_ci' WHEN 5 then 'utf8mb4_unicode_ci' else NULL end) AS COLLATION_NAME,"))
 	require.NotContains(t, legacy, "WHEN 4 then")
 	require.NotContains(t, legacy, "WHEN 5 then")
-	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion99), current)
-	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), current)
-	require.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion109), current)
 }
 
 func TestInformationSchemaColumnsDDL_UnsignedDecimalLocalBranchOnly(t *testing.T) {
@@ -487,6 +340,31 @@ func TestInformationSchemaColumnsDDL_UnsignedDecimalAncientConstructs(t *testing
 	require.Equal(t, 1, strings.Count(window, "cast("))
 	require.True(t, strings.HasPrefix(window, "cast(concat("))
 	require.Contains(t, window, "as varchar(65535))")
+}
+
+// TestInformationSchemaColumnsDDL_DefaultGeneratedExtraArm pins the
+// expression-default EXTRA publication (issue #31161): every current
+// branch marks expression defaults DEFAULT_GENERATED through the mode-7
+// mo_show_visible_bin classifier, layered after the generated-column arm
+// so auto-increment and generated columns keep precedence, while the
+// varchar(24) EXTRA cast still bounds the result. The frozen pre-change
+// identity keeps the previous EXTRA projection byte-stably.
+func TestInformationSchemaColumnsDDL_DefaultGeneratedExtraArm(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	require.Equal(t, 4, strings.Count(current,
+		"when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') "+
+			"when length(mo_show_visible_bin(mc.att_default, 7)) > 0 then 'DEFAULT_GENERATED' "+
+			"else '' end as varchar(24)) as EXTRA,"))
+	preChange := InformationSchemaColumnsPreDefaultGeneratedDDL()
+	require.Equal(t, 4, strings.Count(preChange,
+		"when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"))
+	require.NotContains(t, preChange, "mo_show_visible_bin(mc.att_default, 7)")
+	// The frozen-template rule: the arm composes only length, a literal
+	// comparison and the two-argument mo_show_visible_bin form the
+	// historical templates already use, so a persisted definition never
+	// depends on a builtin introduced after the historical template fence.
+	assertInformationSchemaInitSQLParses(t, current)
+	assertInformationSchemaInitSQLParses(t, preChange)
 }
 
 // TestInformationSchemaColumnsDDL_DeclaredLabelMetadataProjections pins the
@@ -961,4 +839,61 @@ func TestInformationSchemaTablesLiteralIndexPrefix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInformationSchemaCurrentTablesOnlyAddsListingFilter(t *testing.T) {
+	predicate := catalog.NonIndexRelationSQLPredicate("tbl")
+	addition := " and " + predicate
+	for _, tc := range []struct {
+		name, current, historical string
+		branches                  int
+	}{
+		{"local", InformationSchemaTablesLocalCurrentDDL, InformationSchemaTablesV41DDL, 1},
+		{"subscription", InformationSchemaTablesCurrentDDL, InformationSchemaTablesV118DDL, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NotContains(t, tc.historical, predicate)
+			require.Equal(t, tc.branches, strings.Count(tc.current, addition))
+			require.Equal(t, tc.historical, strings.ReplaceAll(tc.current, addition, ""), "columns, authorization, and all other view text stay unchanged")
+			statements, err := mysql.Parse(context.Background(), tc.current, 1)
+			require.NoError(t, err)
+			for _, stmt := range statements {
+				stmt.Free()
+			}
+		})
+	}
+	branches := strings.Split(InformationSchemaTablesCurrentDDL, " UNION ALL ")
+	require.Len(t, branches, 2)
+	require.Contains(t, branches[0], "FROM __mo_visible_tables tbl")
+	require.Contains(t, branches[1], "FROM mo_subscription_tables() tbl")
+	for _, branch := range branches {
+		require.Equal(t, 1, strings.Count(branch, predicate))
+	}
+	require.NotContains(t, InformationSchemaTablesLocalCurrentDDL, "mo_subscription_tables()")
+}
+
+func TestInformationSchemaCurrentColumnsFiltersPhysicalIndexes(t *testing.T) {
+	current := InformationSchemaColumnsDDL
+	local := catalog.NonIndexRelationSQLPredicate("tbl")
+	subscription := catalog.NonIndexRelationSQLPredicateForColumns("mc.att_relname", "mc.relkind", "mc.extra_info")
+	subscriptionViews := catalog.NonIndexRelationSQLPredicate("mt")
+	require.Equal(t, 1, strings.Count(current, local))
+	require.Equal(t, 1, strings.Count(current, subscription))
+	require.Equal(t, 1, strings.Count(current, subscriptionViews))
+	// Filter the left side before describing local or published view columns.
+	require.Less(t, strings.Index(current, local), strings.Index(current, "cross apply mo_view_columns"))
+	require.Less(t, strings.Index(current, subscriptionViews), strings.Index(current, "cross apply mo_subscription_view_columns"))
+	require.NotContains(t, InformationSchemaColumnsV41DDL, "mo_is_physical_index")
+	require.NotContains(t, InformationSchemaColumnsV46DDL, "mo_is_physical_index")
+	require.NotContains(t, InformationSchemaColumnsV110DDL(), "mo_is_physical_index")
+	// Cloning must preserve the local-only V41 projection and its history,
+	// while applying the same physical-index filter as the current view.
+	localClone := InformationSchemaColumnsLocalCurrentDDL
+	require.Equal(t, 1, strings.Count(localClone, local))
+	require.Equal(t, InformationSchemaColumnsV41DDL, strings.Replace(localClone, " AND "+local, "", 1))
+	require.NotContains(t, localClone, "mo_subscription_columns()")
+	statements, err := mysql.Parse(context.Background(), current, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	statements[0].Free()
 }

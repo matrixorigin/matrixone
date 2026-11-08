@@ -1,5 +1,15 @@
 # Bounded single-CN shuffle Bloom filters
 
+Historical design, superseded on 2026-11-09 by the approved early-domain plan:
+[early complete runtime domains, reviewed revision adebe845cb4](https://github.com/matrixorigin/matrixone/blob/adebe845cb4a77d97cf7dd0ae4b2efaf87dc224a/docs/design/20261109-early-runtime-filter-domains.md).
+The implementation now collects one complete filtered source-scan domain and
+applies it in eligible local scans, including necessary equality components of
+composite joins. The earlier private-per-producer shuffle hook is removed.
+Current acceptance requires a confirmed Q9 gain at SF10 and SF100, all-query
+and Total regression checks, and no spill. SF1000 is outside this replacement's
+acceptance scope. The text below records the original implementation decision
+and its former acceptance rule; it does not describe the replacement.
+
 Owner: #30844. Base: main 38f4ba680442ec00be281cbeb707dbfbe1d18bc7.
 Status: design approved by the user's “Implement the plan” instruction on 2026-11-03.
 Risk: R3 (hot path, resource ownership and generation lifecycle).

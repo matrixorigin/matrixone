@@ -38,6 +38,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -288,8 +289,6 @@ type scopeContext struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	localShuffleFilters     []*runtimefilter.LocalShuffleFilter
-	localShuffleFilterBytes uint64
 	// Unprepared source metadata owners, never scheduled or run.
 	dependentSourceScopes []*Scope
 	scopes                []*Scope
@@ -302,7 +301,10 @@ type Compile struct {
 	// nil for every native statement.
 	siriusRead *siriusReadOwner
 
-	pn *plan.Plan
+	pn                       *plan.Plan
+	indexMaintenanceSpec     *executor.IndexMaintenanceSpec
+	indexMaintenanceLiterals []string
+	indexMaintenanceNodeID   int32
 	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
 	// alone cannot recover the source type of each original parameter.
 	preparedParamValues []any
@@ -428,6 +430,7 @@ type Compile struct {
 	// Non-owning, compileQuery-generation evidence for optional deep filters.
 	deepRuntimeFilterTags           map[int32]bool
 	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
+	localRuntimeDomains             []*runtimefilter.LocalDomain
 
 	needLockMeta bool
 	needBlock    bool

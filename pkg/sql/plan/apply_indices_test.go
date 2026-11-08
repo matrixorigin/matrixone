@@ -6862,6 +6862,183 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForFloatSortKey(t *testing.T
 	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
+func TestEncodedOrderMatchesSQLOrderCaseInsensitiveCollation(t *testing.T) {
+	colExpr := func(typ planpb.Type) *planpb.Expr {
+		return GetColExpr(typ, 100, 1)
+	}
+	// Non-string scalars and byte-ordered string identities keep the encoded
+	// order; floats are rejected for their NaN identity semantics.
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{Id: int32(types.T_int64)})))
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{Id: int32(types.T_float64)})))
+	require.False(t, encodedOrderMatchesSQLOrder(nil))
+
+	// Case-insensitive collations order by folded collation weights, which the
+	// serialized hidden keys and raw storage zonemaps do not share.
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)})))
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)})))
+	require.False(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB3UnicodeCI)})))
+
+	// Byte-ordered identities stay eligible.
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4Bin)})))
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar), Charset: uint32(types.CharsetBinary)})))
+	require.True(t, encodedOrderMatchesSQLOrder(colExpr(planpb.Type{
+		Id: int32(types.T_varchar)})))
+}
+
+func TestHandleMessageFromTopToScanSkipsOrderedLimitForCaseInsensitiveSortKey(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	ciType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+	scanNode.TableDef.Cols[1].Typ = ciType
+	sortNode.OrderBy[0].Expr.Typ = ciType
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	// The hidden key and block zonemaps order utf8mb4_general_ci values by raw
+	// bytes, while SQL ordering folds case: keep the logical Sort and send no
+	// TopValue threshold to the scan.
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, scanNode.RecvMsgList)
+	require.Empty(t, sortNode.SendMsgList)
+	require.Equal(t, int32(types.T_varchar), sortNode.OrderBy[0].Expr.Typ.Id)
+	require.Equal(t, int32(1), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestHandleMessageFromTopToScanKeepsOrderedLimitForBinaryCollationSortKey(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	binType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4Bin)}
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+	scanNode.TableDef.Cols[1].Typ = binType
+	sortNode.OrderBy[0].Expr.Typ = binType
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	// utf8mb4_bin orders by raw bytes, exactly the order the serialized hidden
+	// key and storage zonemaps use, so the rewrite and TopValue stay enabled.
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	assert.Equal(t, catalog.IndexTableIndexColName, scanNode.OrderBy[0].Expr.GetCol().Name)
+}
+
+func TestApplyIndicesForProjectSkipsOrderedLimitForCaseInsensitiveSortKey(t *testing.T) {
+	ciType := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(ciType, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[2]
+	scanNode.TableDef.Cols[1].Typ = ciType
+	sortNode.OrderBy[0].Expr.Typ = ciType
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	// Same gate as the float case: a general_ci sort key cannot be replaced
+	// by the byte-ordered hidden key, so the index is only an access path.
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, scanNode.RecvMsgList)
+	require.Empty(t, sortNode.SendMsgList)
+	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	assert.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestHandleMessageFromTopToScanMultiKey(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		flag     planpb.OrderBySpec_OrderByFlag
+		nullable bool
+		offset   bool
+		quoted   bool
+	}{
+		{name: "descending", flag: planpb.OrderBySpec_DESC},
+		{name: "mixed"},
+		{name: "offset", offset: true},
+		{name: "nullable_fallback", nullable: true},
+		{name: "quoted_column_fallback", quoted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, rootID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+			scan, sort := builder.qry.Nodes[0], builder.qry.Nodes[1]
+			sort.OrderBy[0].Expr.Typ.NotNullable = !tc.nullable
+			if tc.quoted {
+				scan.TableDef.Cols[1].Name = "k.part"
+			}
+			sort.OrderBy = append(sort.OrderBy, &planpb.OrderBySpec{
+				Expr: GetColExpr(scan.TableDef.Cols[0].Typ, scan.BindingTags[0], 0), Flag: tc.flag,
+			})
+			if tc.offset {
+				sort.Offset = makePlan2Uint64ConstExprWithType(1)
+			}
+			original := DeepCopyExpr(sort.OrderBy[0].Expr)
+			builder.handleMessageFromTopToScan(rootID)
+			require.Equal(t, original, sort.OrderBy[0].Expr, "多键不能改写为单键索引截断顺序")
+			require.Nil(t, scan.IndexReaderParam, "不能按首键截断掉次键胜者")
+			if tc.nullable || tc.quoted {
+				require.Empty(t, sort.SendMsgList)
+				require.Empty(t, scan.OrderBy)
+				return
+			}
+			require.Len(t, sort.SendMsgList, 1)
+			require.Equal(t, sort.SendMsgList, scan.RecvMsgList)
+			require.Len(t, scan.OrderBy, 1)
+			require.Equal(t, original, scan.OrderBy[0].Expr)
+			require.Len(t, sort.OrderBy, 2)
+		})
+	}
+}
+
+func TestHandleMessageFromTopToScanUnsupportedLeadingKey(t *testing.T) {
+	for _, typ := range []types.T{types.T_json, types.T_geometry, types.T_geometry32, types.T_int64} {
+		for _, flag := range []planpb.OrderBySpec_OrderByFlag{0, planpb.OrderBySpec_DESC} {
+			for _, multi := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/flag=%d/multi=%t", typ, flag, multi), func(t *testing.T) {
+					builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+					tag := builder.genNewBindTag()
+					keyType := planpb.Type{Id: int32(typ), NotNullable: true}
+					idType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+					scan := &planpb.Node{
+						NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{tag},
+						TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "k", Typ: keyType}, {Name: "id", Typ: idType}}},
+					}
+					order := []*planpb.OrderBySpec{{Expr: GetColExpr(keyType, tag, 0), Flag: flag}}
+					if multi {
+						order = append(order, &planpb.OrderBySpec{Expr: GetColExpr(idType, tag, 1), Flag: planpb.OrderBySpec_DESC})
+					}
+					sort := &planpb.Node{
+						NodeType: planpb.Node_SORT, NodeId: 1, Children: []int32{0},
+						OrderBy: order, Limit: makePlan2Uint64ConstExprWithType(1),
+					}
+					builder.qry.Nodes = []*planpb.Node{scan, sort}
+					builder.handleMessageFromTopToScan(1)
+					require.Equal(t, order, sort.OrderBy)
+					require.Nil(t, scan.IndexReaderParam)
+					if typ != types.T_int64 {
+						require.Empty(t, sort.SendMsgList, "leading-key pruning requires compatible SQL and zonemap comparators")
+						require.Empty(t, scan.RecvMsgList)
+						require.Empty(t, scan.OrderBy)
+					} else {
+						require.Len(t, sort.SendMsgList, 1)
+						require.Equal(t, sort.SendMsgList, scan.RecvMsgList)
+						require.Len(t, scan.OrderBy, 1)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
@@ -7091,6 +7268,21 @@ func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *test
 	require.Len(t, scanNode.IndexReaderParam.OrderBy, 1)
 	require.Equal(t, pkPos, scanNode.IndexReaderParam.OrderBy[0].Expr.GetCol().ColPos)
 	require.Equal(t, uint64(1000), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
+
+	// Multi-key support adds dynamic bounds, not another static-limit path.
+	multiBuilder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	multiScan, multiSort := DeepCopyNode(scanNode), DeepCopyNode(sortNode)
+	multiScan.OrderBy, multiScan.RecvMsgList, multiScan.IndexReaderParam = nil, nil, nil
+	multiSort.SendMsgList = nil
+	multiSort.OrderBy[0].Expr.Typ.NotNullable = true
+	multiSort.OrderBy = append(multiSort.OrderBy, &planpb.OrderBySpec{
+		Expr: GetColExpr(scanNode.TableDef.Cols[0].Typ, tag, 0), Flag: planpb.OrderBySpec_DESC,
+	})
+	multiBuilder.qry.Nodes = []*planpb.Node{multiScan, multiSort}
+	multiBuilder.handleMessageFromTopToScan(1)
+	require.Len(t, multiScan.OrderBy, 1)
+	require.Len(t, multiSort.SendMsgList, 1)
+	require.Nil(t, multiScan.IndexReaderParam)
 
 	// A column-independent function is a runtime constant to the SQL executor,
 	// but it is not necessarily compiled into the storage PK filter. It must not

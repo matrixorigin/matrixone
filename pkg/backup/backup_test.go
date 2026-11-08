@@ -124,6 +124,7 @@ func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 				nil,
 				nil,
 				nil,
+				backupFileCopier{},
 			)
 			require.ErrorContains(t, err, testCase.want)
 		})
@@ -190,7 +191,7 @@ func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 	// file must be present in the backup.
 	files := selectBackupObjects(objects, checkpointStart, nil, nil)
 	require.Contains(t, files, objectName.String())
-	_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
+	_, err = (backupFileCopier{}).parallelCopyData(ctx, src, dst, files, 1, nil)
 	require.NoError(t, err)
 	var restoredLive bool
 	rewrittenLocation, _, _, err := logtail.ReWriteCheckpointAndBlockFromKey(
@@ -355,7 +356,7 @@ func TestBackupData(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -508,7 +509,7 @@ func TestBackupData2(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	require.NoError(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -577,7 +578,7 @@ func TestBackupData3(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -679,7 +680,7 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 			}
 		}
 		var files []*taeFile
-		require.NoError(t, execBackup(ctx, "", opts.Fs, dstFs, locations, 1, types.TS{}, "full", &files, nil, nil))
+		require.NoError(t, execBackup(ctx, "", opts.Fs, dstFs, locations, 1, types.TS{}, "full", &files, nil, nil, backupFileCopier{}))
 		var backup *checkpoint.CheckpointEntry
 		metadataFiles, err := fileservice.SortedList(dstFs.List(ctx, ioutil.GetCheckpointDir()))
 		require.NoError(t, err)
@@ -866,7 +867,7 @@ func TestBackupData4(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -991,7 +992,7 @@ func TestBackupData5(t *testing.T) {
 			},
 		},
 	})
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil, backupFileCopier{})
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -1428,12 +1429,14 @@ func TestBackup(t *testing.T) {
 					TaeDir:     nil,
 					HAkeeper:   &dumpHakeeper{},
 					Metas:      NewMetas(),
+					copyFiles:  backupFileCopier{statSource: true},
 				},
 			},
 			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
 				cfg := i[0].(*Config)
 				assert.NoError(t, err)
 				assert.NotNil(t, cfg)
+				assert.False(t, cfg.copyFiles.statSource, "local backup must reset MinIO-only copy policy")
 
 				//checkup config files
 				list, err2 := fileservice.SortedList(cfg.GeneralDir.List(context.Background(), configDir))

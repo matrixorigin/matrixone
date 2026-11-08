@@ -10,7 +10,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 publish_subscribe
@@ -76,7 +75,6 @@ Database
 db1
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 publish_subscribe
@@ -400,7 +398,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 publish_subscribe
@@ -467,7 +464,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 publish_subscribe
@@ -543,7 +539,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 publish_subscribe

@@ -5305,11 +5305,7 @@ func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
 		databaseName, tableName string, gotSnapshot *plan.Snapshot,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		calls++
-		if calls == 1 {
-			require.Nil(t, gotSnapshot)
-		} else {
-			require.Equal(t, snapshot, gotSnapshot)
-		}
+		require.Same(t, snapshot, gotSnapshot)
 		return &plan.ObjectRef{
 				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
 				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
@@ -5318,7 +5314,55 @@ func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
 	}, expected)
 	require.NoError(t, err)
 	require.False(t, changed)
-	require.Equal(t, 2, calls)
+	require.Equal(t, 1, calls)
+}
+
+func TestValidateHistoricalSubscriptionUsesCapturedAlias(t *testing.T) {
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11}, Snapshot: snapshot,
+	}
+	stableRef := &plan.ObjectRef{
+		Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	for _, tc := range []struct {
+		name    string
+		ref     *plan.ObjectRef
+		def     *plan.TableDef
+		err     error
+		changed bool
+	}{
+		{"current alias is unrelated and denied", stableRef, &plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil, false},
+		{"historical publication is withdrawn", nil, nil, assert.AnError, false},
+		{"historical relation is missing", nil, nil, nil, true},
+		{"admitted historical source changed", stableRef, &plan.TableDef{DbId: 2, TblId: 5, Version: 4}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			changed, validated, err := validateCapturedPrepareSchemas(7, []*plan.ObjectRef{expected},
+				func(database, table string, got *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+					calls++
+					require.Equal(t, "sub", database)
+					require.Equal(t, "src", table)
+					if got == nil {
+						return nil, nil, moerr.NewInternalError(t.Context(), "unrelated current publication is denied")
+					}
+					require.Same(t, snapshot, got)
+					return tc.ref, tc.def, tc.err
+				}, nil, timestamp.Timestamp{}, true, false)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err, "captured T must not bypass the corresponding publication's current authorization")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.changed, changed)
+			require.True(t, validated)
+			require.Equal(t, 1, calls)
+			require.Equal(t, int64(42), snapshot.TS.PhysicalTime, "borrowed snapshot must remain unchanged")
+		})
+	}
 }
 
 func TestPreparedSubscriptionsNeedValidation(t *testing.T) {
@@ -6624,6 +6668,19 @@ func TestPreparedViewMetadataUdfRebuildsEveryExecute(t *testing.T) {
 	require.True(t, shouldRebuildPreparePlan(false, udfPlan))
 	ordinaryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	require.False(t, shouldRebuildPreparePlan(false, ordinaryPlan))
+}
+
+func TestPreparedTemporaryDDLRebuildsEveryExecute(t *testing.T) {
+	for _, temporary := range []bool{false, true} {
+		create := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{Temporary: temporary}},
+		}}}
+		alter := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_AlterTable{AlterTable: &plan.AlterTable{TableDef: &plan.TableDef{IsTemporary: temporary}}},
+		}}}
+		require.Equal(t, temporary, shouldRebuildPreparePlan(false, create))
+		require.Equal(t, temporary, shouldRebuildPreparePlan(false, alter))
+	}
 }
 
 func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {

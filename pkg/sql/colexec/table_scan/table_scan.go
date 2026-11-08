@@ -102,6 +102,9 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if tableScan.OutputAllocation != nil {
 		err = tableScan.ctr.buf.SetAllocationAccount(tableScan.OutputAllocation)
 	}
+	if err == nil {
+		err = tableScan.prepareLocalDomains(proc)
+	}
 	return
 }
 
@@ -117,6 +120,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
+	}
+	if err := tableScan.waitLocalDomains(proc); err != nil {
+		return vm.CancelResult, err
+	}
+	if tableScan.ctr.domainEmpty {
+		return vm.CancelResult, nil
 	}
 
 	for {
@@ -142,6 +151,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		if tableScan.ReadPolicy != 0 {
 			newCtx = fileservice.WithFileServicePolicy(newCtx, fileservice.GetFileServicePolicy(newCtx)|tableScan.ReadPolicy)
+			newCtx = fileservice.WithPreloadGroup(newCtx, tableScan.TableID)
 		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
@@ -152,6 +162,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		// Record ReadSize metrics when scan completes all blocks (isEnd == true)
 		// This matches explain analyze output which shows total read size for the entire scan
 		if isEnd {
+			for _, source := range tableScan.ctr.domainSources {
+				source.producer.Complete(false)
+			}
 			if analyzer != nil {
 				opStats := analyzer.GetOpStats()
 				// GetOpStats() will panic if opStats is nil, so we can safely access it here
@@ -199,6 +212,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if err = tableScan.applyLocalDomains(proc); err != nil {
+			return vm.CancelResult, err
+		}
+		if tableScan.ctr.buf.IsEmpty() {
+			continue
+		}
 		break
 	}
 

@@ -67,6 +67,7 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"hll_add_agg", HLL_ADD_AGG, aggexec.AggIdOfHllAdd},
 		{"hll_merge_agg", HLL_MERGE_AGG, aggexec.AggIdOfHllMerge},
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
+		{"vector_matmul", VECTOR_MATMUL, aggexec.AggIdOfVectorMatmul},
 		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
 		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
 		{"quantileExactWeighted", QUANTILE_EXACT_WEIGHTED, aggexec.AggIdOfQuantileExactWeighted},
@@ -80,6 +81,41 @@ func TestAggregateExecutorIDs(t *testing.T) {
 				encodeOverloadID(int32(test.functionID), int32(overloads[0].overloadId)),
 				test.executorID)
 		})
+	}
+}
+
+// These functions were allocated on concurrent branches. Verify name binding
+// still selects each distinct registry entry after the branches are combined.
+func TestPhysicalIndexAndBuiltinFunctionRegistration(t *testing.T) {
+	varchar := types.T_varchar.ToType()
+	int64Type := types.T_int64.ToType()
+	vec := types.New(types.T_array_float8, 4, 0)
+	tests := []struct {
+		name      string
+		args      []types.Type
+		id        int32
+		result    types.T
+		aggregate bool
+	}{
+		{"vector_matmul", []types.Type{int64Type, int64Type, vec, varchar}, VECTOR_MATMUL, types.T_json, true},
+		{"vecblock_json", []types.Type{vec}, VECBLOCK_JSON, types.T_text, false},
+		{"vecblock_binary", []types.Type{vec}, VECBLOCK_BINARY, types.T_blob, false},
+		{"unzip_file", []types.Type{varchar}, UNZIP_FILE, types.T_blob, false},
+		{"mo_is_physical_index", []types.Type{varchar, varchar, varchar}, MO_IS_PHYSICAL_INDEX, types.T_bool, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			id, _ := DecodeOverloadID(fn.GetEncodedOverloadID())
+			require.Equal(t, tc.id, id)
+			require.Equal(t, tc.result, fn.GetReturnType().Oid)
+			require.Equal(t, tc.aggregate, GetFunctionIsAggregateByName(tc.name))
+		})
+	}
+	for i, overload := range allSupportedFunctions[UNZIP_FILE].Overloads {
+		require.True(t, overload.CannotFold(), "unzip_file overload %d", i)
+		require.False(t, GetFunctionIsProvenPureFoldableById(encodeOverloadID(UNZIP_FILE, int32(i))), "unzip_file overload %d", i)
 	}
 }
 
@@ -880,12 +916,17 @@ var predefinedFunids = map[int]int{
 	MO_INDEX_SUB_PART:                 623,
 	// Exponentially weighted window statistics (issue #29945); renumbered
 	// above main's 605..623 allocation during the PR rebase.
-	EWM_MEAN:            624,
-	EWM_VAR:             625,
-	EWM_STD:             626,
-	EWM_COV:             627,
-	EWM_CORR:            628,
-	FUNCTION_END_NUMBER: 629,
+	EWM_MEAN:             624,
+	EWM_VAR:              625,
+	EWM_STD:              626,
+	EWM_COV:              627,
+	EWM_CORR:             628,
+	VECTOR_MATMUL:        629,
+	VECBLOCK_JSON:        630,
+	VECBLOCK_BINARY:      631,
+	UNZIP_FILE:           632,
+	MO_IS_PHYSICAL_INDEX: 633,
+	FUNCTION_END_NUMBER:  634,
 }
 
 func Test_funids(t *testing.T) {

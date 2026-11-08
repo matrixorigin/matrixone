@@ -50,6 +50,7 @@ func init() {
 		"begin":                      BEGIN,
 		"between":                    BETWEEN,
 		"bigint":                     BIGINT,
+		"serial":                     SERIAL,
 		"bindings":                   BINDINGS,
 		"binary":                     BINARY,
 		"_binary":                    UNDERSCORE_BINARY,
@@ -215,8 +216,10 @@ func init() {
 		"first":                      FIRST,
 		"after":                      AFTER,
 		"float":                      FLOAT_TYPE,
-		"float4":                     UNUSED,
-		"float8":                     UNUSED,
+		"float4":                     FLOAT4,
+		"float8":                     FLOAT8,
+		"bf16":                       BF16,
+		"float16":                    FLOAT16,
 		"for":                        FOR,
 		"of":                         OF,
 		"force":                      FORCE,
@@ -790,5 +793,7 @@ func init() {
 		"pick":                     PICK,
 		"conflict":                 CONFLICT,
 		"output":                   OUTPUT,
+		"vecf8":                    VECF8,
+		"vecf4":                    VECF4,
 	}
 }
