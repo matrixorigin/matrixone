@@ -179,7 +179,7 @@ func TestTemporalScanBorrowDeclinesDuplicatesAndOverflow(t *testing.T) {
 			require.True(t, builder.borrowResolutionDisabled)
 			require.Empty(t, builder.scanBorrows)
 			require.Same(t, input, builder.planningInput)
-			require.True(t, builder.borrowResolutionAllowed)
+			require.Same(t, builder.compCtx, builder.borrowingCompiler())
 			_, _, ok := builder.scanBorrow(0)
 			require.False(t, ok)
 			builder.qry.Nodes = builder.qry.Nodes[:1]

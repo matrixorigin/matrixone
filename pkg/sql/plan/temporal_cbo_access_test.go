@@ -186,7 +186,6 @@ func newIndexCostFixture(t *testing.T) (*QueryBuilder, *indexCostRelationFixture
 	compiler := &indexCostCompilerFixture{encodedIndexCostTestContext: builder.compCtx.(*encodedIndexCostTestContext), hidden: &indexCostRelationFixture{}, read: read}
 	builder.compCtx = compiler
 	builder.planningInput = &PlanningInput{intent: intent, owner: compiler}
-	builder.borrowResolutionAllowed = true
 	builder.rememberScanBorrow(0, ref, base, &BorrowedTable{Relation: source, Read: read})
 	steps := builder.qry.Steps
 	builder.qry.Steps = nil

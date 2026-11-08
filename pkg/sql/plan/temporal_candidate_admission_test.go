@@ -199,7 +199,6 @@ func TestTemporalOriginalLifetimeAndAdmissionAreIndependent(t *testing.T) {
 				builder.isPrepareStatement = true
 			case "no resolver":
 				builder.planningInput.owner = nil
-				builder.borrowResolutionAllowed = false
 			}
 			builder.collectOriginalIndexOwner(root)
 			require.Equal(t, tc.replan, builder.qry.ExecutionDependentAccess)

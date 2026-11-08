@@ -120,7 +120,7 @@ func samePlanningCompiler(owner, current CompilerContext) bool {
 }
 
 func (builder *QueryBuilder) borrowingCompiler() CompilerContext {
-	if builder.planningInput == nil || !builder.borrowResolutionAllowed || !samePlanningCompiler(builder.planningInput.owner, builder.compCtx) {
+	if builder.planningInput == nil || !samePlanningCompiler(builder.planningInput.owner, builder.compCtx) {
 		return nil
 	}
 	return builder.compCtx
@@ -129,5 +129,4 @@ func (builder *QueryBuilder) borrowingCompiler() CompilerContext {
 func (builder *QueryBuilder) finishPlanningInput() {
 	builder.clearScanBorrows()
 	builder.planningInput = nil
-	builder.borrowResolutionAllowed = false
 }

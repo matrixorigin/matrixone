@@ -402,7 +402,6 @@ type QueryBuilder struct {
 	planningInput            *PlanningInput
 	scanBorrows              []scanBorrow
 	borrowResolutionDisabled bool
-	borrowResolutionAllowed  bool
 	originalIndexScan        originalIndexScan
 	integerPrecision         *integerPrecisionBuilder
 	correlationRouteNodes    map[int32]bool

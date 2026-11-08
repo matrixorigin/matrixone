@@ -104,9 +104,8 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	defer builder.finishPlanningInput()
-	if planningInput.claim(stmt) && ProcessAllowsIndexObservation(ctx.GetProcess()) {
+	if planningInput.claim(stmt) && ProcessAllowsIndexObservation(ctx.GetProcess()) && samePlanningCompiler(planningInput.owner, ctx) {
 		builder.planningInput = planningInput
-		builder.borrowResolutionAllowed = samePlanningCompiler(planningInput.owner, ctx)
 	}
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget

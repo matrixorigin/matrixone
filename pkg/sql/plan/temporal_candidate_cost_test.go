@@ -40,7 +40,7 @@ func TestTemporalIndexSelectionRequiresOriginalAndExecutionProof(t *testing.T) {
 			case "unmarked lifetime":
 				builder.qry.ExecutionDependentAccess = false
 			case "missing scope":
-				builder.borrowResolutionAllowed = false
+				builder.planningInput.owner = nil
 			case "missing original owner":
 				builder.originalIndexScan = originalIndexScan{}
 			case "other original scan":

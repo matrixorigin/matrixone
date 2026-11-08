@@ -62,7 +62,7 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 			validate := func(*Query) error {
 				require.NotNil(t, builder)
 				require.Same(t, input, builder.planningInput)
-				require.True(t, builder.borrowResolutionAllowed)
+				require.Same(t, compiler, builder.borrowingCompiler())
 				require.Len(t, builder.scanBorrows, 1, "the real bind must have retained the borrow")
 				backing = builder.scanBorrows
 				switch outcome {
@@ -87,7 +87,7 @@ func TestTemporalPlanningBorrowReleasedOnBuilderExit(t *testing.T) {
 			}
 			require.NotNil(t, builder)
 			require.Nil(t, builder.planningInput, "the AST and resolver must not survive the attempt")
-			require.False(t, builder.borrowResolutionAllowed)
+			require.Nil(t, builder.borrowingCompiler())
 			require.Equal(t, fixture.planningInput.intent, input.intent)
 			require.Same(t, compiler, input.owner)
 			require.False(t, input.claim(root), "cleanup must not reset the one-shot claim")
