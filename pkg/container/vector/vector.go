@@ -656,6 +656,8 @@ func (v *Vector) SetTypeScale(scale int32) {
 	v.typ.Scale = scale
 }
 
+// GetNulls exposes logical row validity. A dictionary's returned bitmap is
+// read-only; materialize with EnsureWritable before changing it directly.
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
@@ -665,6 +667,7 @@ func (v *Vector) GetGrouping() *nulls.Nulls {
 }
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
+	v.requirePhysical()
 	v.nsp.Clear()
 	if nsp == nil {
 		return

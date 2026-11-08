@@ -64,6 +64,7 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	require.True(t, dict.gsp.Contains(2))
 	require.Panics(t, func() { _ = MustFixedColNoTypeCheck[int64](dict) })
 	require.Panics(t, func() { _ = dict.GetData() })
+	require.Panics(t, func() { dict.SetNulls(nil) }, "clearing validity requires writable payload")
 	_, err = dict.MarshalBinary()
 	require.Error(t, err, "dictionary class must never reach the old wire format")
 	var legacy bytes.Buffer
