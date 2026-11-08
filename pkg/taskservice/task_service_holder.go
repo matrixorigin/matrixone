@@ -586,13 +586,56 @@ func (s *refreshableTaskStorage) withSQLTaskStore(ctx context.Context, fn func(T
 		return ErrNotReady
 	}
 	err := fn(s.mu.store)
-	if err != nil && err != ErrSQLTaskOverlap && err != ErrSQLTaskNotFound && err != ErrSQLTaskClaimed &&
-		err != ErrSQLTaskStaleFiring && err != ErrSQLTaskRecoveryCapacity &&
-		!moerr.IsMoErrCode(err, moerr.ErrInvalidInput) &&
-		(refreshAll || sqlTaskFetchConnectionError(ctx, err)) {
+	if err != nil && (refreshAll && !expectedSQLTaskMetadataError(err) ||
+		!refreshAll && sqlTaskFetchConnectionError(ctx, err)) {
 		s.signalSQLTaskRefreshLocked()
 	}
 	return err
+}
+
+// Only a single chain of known semantic errors proves that reconnecting cannot
+// help. A joined error may also contain a rollback failure, even when one of
+// its causes is a known semantic error. Limit traversal so cyclic or overly
+// deep chains are treated as unknown.
+func expectedSQLTaskMetadataError(err error) bool {
+	for range 32 {
+		if err == nil {
+			return false
+		}
+		if _, ok := err.(net.Error); ok {
+			return false
+		}
+		switch err {
+		case ErrSQLTaskOverlap, ErrSQLTaskNotFound, ErrSQLTaskClaimed,
+			ErrSQLTaskStaleFiring, ErrSQLTaskRecoveryCapacity,
+			ErrSQLTaskSequenceExhausted, errSQLTaskReceiptConflict:
+			return true
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return true
+		}
+		// Custom identity hooks can expose an independent connection or commit
+		// error even when the unwrapped cause is an expected business error.
+		if _, ok := err.(interface{ Is(error) bool }); ok {
+			return false
+		}
+		if _, ok := err.(interface{ As(any) bool }); ok {
+			return false
+		}
+		switch cause := err.(type) {
+		case interface{ Unwrap() []error }:
+			errs := cause.Unwrap()
+			if len(errs) != 1 {
+				return false
+			}
+			err = errs[0]
+		case interface{ Unwrap() error }:
+			err = cause.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // Caller holds the read lock, so Close cannot close refreshC while signaling.

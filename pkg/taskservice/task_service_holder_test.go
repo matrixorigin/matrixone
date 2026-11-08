@@ -19,6 +19,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	goruntime "runtime"
@@ -1433,6 +1434,98 @@ func TestSQLTaskMetadataHolderDoesNotWaitForRefresh(t *testing.T) {
 		t.Fatal("canceled metadata operation called storage")
 		return nil
 	}), context.Canceled)
+}
+
+type cyclicSQLTaskMetadataError struct{}
+
+func (e *cyclicSQLTaskMetadataError) Error() string { return "cyclic metadata error" }
+func (e *cyclicSQLTaskMetadataError) Unwrap() error { return e }
+
+type badConnectionSQLTaskMetadataError struct{ cause error }
+
+func (e *badConnectionSQLTaskMetadataError) Error() string        { return "bad connection" }
+func (e *badConnectionSQLTaskMetadataError) Unwrap() error        { return e.cause }
+func (e *badConnectionSQLTaskMetadataError) Is(target error) bool { return target == driver.ErrBadConn }
+
+type timeoutSQLTaskMetadataError struct{ cause error }
+
+func (e *timeoutSQLTaskMetadataError) Error() string { return "timeout" }
+func (e *timeoutSQLTaskMetadataError) Unwrap() error { return e.cause }
+func (e *timeoutSQLTaskMetadataError) Is(target error) bool {
+	return target == context.DeadlineExceeded
+}
+
+type hiddenNetworkSQLTaskMetadataError struct{ cause error }
+
+func (e *hiddenNetworkSQLTaskMetadataError) Error() string { return "hidden network failure" }
+func (e *hiddenNetworkSQLTaskMetadataError) Unwrap() error { return e.cause }
+func (e *hiddenNetworkSQLTaskMetadataError) As(target any) bool {
+	if out, ok := target.(*net.Error); ok {
+		*out = &net.OpError{Op: "read", Err: errors.New("network failure")}
+		return true
+	}
+	return false
+}
+
+func TestSQLTaskMetadataHolderRefreshClassification(t *testing.T) {
+	base := NewMemTaskStorage()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	s := &refreshableTaskStorage{refreshC: make(chan string, 1)}
+	s.mu.store, s.mu.lastAddress = base, "ready"
+
+	// Exercise a real semantic conflict through the public holder method.
+	_, err := s.PublishSQLTaskReceipt(context.Background(), SQLTaskReceiptRequest{Run: SQLTaskRun{RunID: 999}})
+	require.ErrorIs(t, err, errSQLTaskReceiptConflict)
+	require.Empty(t, s.refreshC)
+
+	invalid := moerr.NewInvalidInputNoCtx("invalid task input")
+	deep := error(errSQLTaskReceiptConflict)
+	for range 33 {
+		deep = fmt.Errorf("wrapper: %w", deep)
+	}
+	for _, tc := range []struct {
+		name    string
+		err     error
+		refresh bool
+	}{
+		{"overlap", ErrSQLTaskOverlap, false},
+		{"not found", ErrSQLTaskNotFound, false},
+		{"claimed", ErrSQLTaskClaimed, false},
+		{"stale firing", ErrSQLTaskStaleFiring, false},
+		{"capacity", ErrSQLTaskRecoveryCapacity, false},
+		{"sequence exhausted", ErrSQLTaskSequenceExhausted, false},
+		{"wrapped conflict", fmt.Errorf("wrapper: %w", errSQLTaskReceiptConflict), false},
+		{"wrapped overlap", fmt.Errorf("wrapper: %w", ErrSQLTaskOverlap), false},
+		{"single joined conflict", errors.Join(errSQLTaskReceiptConflict), false},
+		{"invalid input", invalid, false},
+		{"wrapped invalid input", fmt.Errorf("wrapper: %w", invalid), false},
+		{"other invalid state", moerr.NewInvalidStateNoCtx("other state"), true},
+		{"unknown", errors.New("metadata unavailable"), true},
+		{"wrapped connection", fmt.Errorf("connection: %w", driver.ErrBadConn), true},
+		{"network wrapper", &net.OpError{Op: "read", Err: errSQLTaskReceiptConflict}, true},
+		{"connection matcher", &badConnectionSQLTaskMetadataError{cause: errSQLTaskReceiptConflict}, true},
+		{"timeout matcher", &timeoutSQLTaskMetadataError{cause: errSQLTaskReceiptConflict}, true},
+		{"network As wrapper", &hiddenNetworkSQLTaskMetadataError{cause: errSQLTaskReceiptConflict}, true},
+		{"unknown commit As wrapper", &sqlTaskUnknownCommitError{error: errSQLTaskReceiptConflict, unknown: moerr.NewTxnUnknown(context.Background(), "txn-test")}, true},
+		{"conflict and connection", errors.Join(errSQLTaskReceiptConflict, driver.ErrBadConn), true},
+		{"connection and conflict", errors.Join(driver.ErrBadConn, errSQLTaskReceiptConflict), true},
+		{"two semantic causes", errors.Join(errSQLTaskReceiptConflict, ErrSQLTaskStaleFiring), true},
+		{"wrapped rollback failure", fmt.Errorf("transaction: %w", errors.Join(errSQLTaskReceiptConflict, errors.New("rollback failed"))), true},
+		{"cyclic wrapper", &cyclicSQLTaskMetadataError{}, true},
+		{"deep wrapper", deep, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.withSQLTaskMetadataStore(context.Background(), func(TaskStorage) error { return tc.err })
+			require.Same(t, tc.err, got, "refresh classification must not replace the original error")
+			select {
+			case address := <-s.refreshC:
+				require.True(t, tc.refresh, "unexpected storage refresh")
+				require.Equal(t, "ready", address)
+			default:
+				require.False(t, tc.refresh, "storage refresh was not requested")
+			}
+		})
+	}
 }
 
 type sqlTaskNetworkError struct{}
