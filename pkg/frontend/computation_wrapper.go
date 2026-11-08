@@ -405,14 +405,30 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				execCtx.reqCtx, mysql.HasSQLMode(sessionSQLMode(cwft.ses), "NO_UNSIGNED_SUBTRACTION"))
 			bindingCtx = function.WithDivPrecisionIncrement(
 				bindingCtx, sessionDivPrecisionIncrement(cwft.ses))
-			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecialization(
-				bindingCtx, cwft.plan, preparedExprRetry.paramVals)
+			// Claim the freshly built generation's prepared-CTAS ledger copy
+			// BEFORE entering the execute window (issue #30938, decision log
+			// entries 64 (ii) and 68 (iv)): BuildPlan just ran on the session
+			// compile-context process, so its stash rides that process's
+			// read-once claim slot, and the fresh generation install below
+			// discards an unclaimed slot; this prepared-expression channel
+			// stores no PrepareStmt carrier, so the claimed copy forwards
+			// directly and leaves no residue.
+			retryProc := cwft.ses.GetTxnCompileCtx().GetProcess()
+			retryLedger, _ := retryProc.ClaimDecimalBoundaryEvidence()
+			releaseBoundary := process.EnterDecimalBoundaryGeneration(retryProc)
+			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecializationAndProcess(
+				bindingCtx, retryProc, cwft.plan, preparedExprRetry.paramVals,
+				sessionDivPrecisionIncrement(cwft.ses))
 			if specializationErr != nil {
+				releaseBoundary()
 				return nil, specializationErr
 			}
-			if err = plan2.RefreshPreparedCTASInferredColumns(execCtx.reqCtx, runtimePlan, cwft.plan, cwft.stmt); err != nil {
+			mergedLedger := mergeDecimalBoundaryExecuteLedger(retryLedger, retryProc)
+			if err = plan2.RefreshPreparedCTASInferredColumns(execCtx.reqCtx, runtimePlan, cwft.plan, cwft.stmt, mergedLedger, sessionDivPrecisionIncrement(cwft.ses)); err != nil {
+				releaseBoundary()
 				return nil, err
 			}
+			releaseBoundary()
 			cwft.plan = runtimePlan
 		}
 	}
@@ -1517,6 +1533,11 @@ func initExecuteStmtParamWithResolverInSession(
 			if resetTemporalTypes {
 				prepareStmt.temporalTypesResetPending = true
 			}
+			// Release the carrier this execute scope claimed (issue #30938,
+			// decision log 65 (ii)(c)): the scope failed after committing the
+			// rebuild, and the re-marked next execute rebuilds a fresh
+			// generation and re-claims its own evidence.
+			prepareStmt.releaseDecimalBoundaryEvidence()
 		}
 	}()
 
@@ -1557,6 +1578,14 @@ func initExecuteStmtParamWithResolverInSession(
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
 		rebuildCommitted = true
+		// Claim the rebuilt generation's prepared-CTAS ledger copy into the
+		// stored carrier (issue #30938, decision log 65 (i)): ordered after
+		// the replacement commit and before the specialization-cache clearing
+		// below, replacing — never accumulating with — the displaced carrier.
+		// No plan generation installs between the rebuild build and this
+		// claim, so the stash is always claimable here; the stale-slot miss
+		// stands as the defensive bound and keeps the prior carrier.
+		prepareStmt.claimDecimalBoundaryEvidence(executionSes.GetTxnCompileCtx().GetProcess())
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.jsonComparisonParamPositions =
 			plan2.PreparedJSONComparisonParamPositions(executionPlan)
@@ -1921,13 +1950,28 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 	} else if numParams > 0 && (executionPlan.GetDdl().GetQuery() != nil || executionPlan.GetDcl().GetSetVariables() != nil) {
-		executionPlan, _, err = plan2.FillValuesOfParamsInPlanWithSpecialization(reqCtx, executionPlan, cwft.paramVals)
+		// Enter the execute scope's generation around fill and refresh
+		// (issue #30938, design decision log entry 68 (iv)): rebound
+		// coercive decisions record into a registry the refresh consults as
+		// an overlay on the stored PrepareStmt carrier (entry 65 (i)); the
+		// carrier's content never mutates.
+		executeProc := cwft.proc
+		releaseBoundary := process.EnterDecimalBoundaryGeneration(executeProc)
+		executionPlan, _, err = plan2.FillValuesOfParamsInPlanWithSpecializationAndProcess(reqCtx, executeProc, executionPlan, cwft.paramVals, sessionDivPrecisionIncrement(executionSes))
 		if err != nil {
+			releaseBoundary()
 			return nil, nil, nil, originSQL, false, err
 		}
-		if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, executionPlan, preparePlan.Plan, prepareStmt.PrepareStmt); err != nil {
+		// Forward the carrier this seed plan's generation published, overlaid
+		// by the execute scope's rebound entries: this path runs no fresh
+		// planning generation of its own, so the merged view is the refresh's
+		// complete evidence channel.
+		mergedLedger := mergeDecimalBoundaryExecuteLedger(prepareStmt.retainedDecimalBoundaryLedger, executeProc)
+		if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, executionPlan, preparePlan.Plan, prepareStmt.PrepareStmt, mergedLedger, sessionDivPrecisionIncrement(executionSes)); err != nil {
+			releaseBoundary()
 			return nil, nil, nil, originSQL, false, err
 		}
+		releaseBoundary()
 		runtimePlanApplied = true
 	}
 	if binaryExecute && runtimePlanApplied && runtimeColDefData == nil {
@@ -3013,6 +3057,28 @@ func compileOutputCallback(
 	}
 }
 
+// mergeDecimalBoundaryExecuteLedger overlays the execute scope's active
+// decimal-boundary registry onto the retained evidence carrier (issue
+// #30938, design decision log entry 68 (iv)): an execute-time rebound
+// decision wins a content-key collision, an untouched position keeps the
+// retained entry, and an empty execute registry forwards the retained
+// carrier untouched so a fill that rebound nothing refreshes byte-
+// identically to the pre-window behavior.
+func mergeDecimalBoundaryExecuteLedger(retained map[string]any, proc *process.Process) map[string]any {
+	execDecisions := proc.DecimalBoundaryDecisions()
+	if len(execDecisions) == 0 {
+		return retained
+	}
+	merged := make(map[string]any, len(retained)+len(execDecisions))
+	for key, entry := range retained {
+		merged[key] = entry
+	}
+	for key, entry := range execDecisions {
+		merged[key] = entry
+	}
+	return merged
+}
+
 func buildPlanForCompileRetry(
 	ctx context.Context,
 	ses FeSession,
@@ -3089,11 +3155,26 @@ func buildPlanForCompileRetry(
 		return retryPlan, nil
 	}
 	if forcePrepare || retryPlan.GetDdl().GetQuery() != nil || retryPlan.GetDcl().GetSetVariables() != nil {
-		runtimePlan, _, err := plan2.FillValuesOfParamsInPlanWithSpecialization(ctx, retryPlan, preparedRetry.paramVals)
+		// Claim this retry generation's prepared-CTAS ledger copy BEFORE
+		// entering the execute window (issue #30938, decision log entries
+		// 64 (ii) and 68 (iv)): buildPlanWithPrepareMode just ran its own
+		// generation on compilerContext's process, so its stash rides that
+		// process's read-once claim slot, and the fresh generation install
+		// below discards an unclaimed slot; this channel stores no
+		// PrepareStmt carrier, so the claimed copy forwards directly and
+		// leaves no residue.
+		retryProc := compilerContext.GetProcess()
+		retryLedger, _ := retryProc.ClaimDecimalBoundaryEvidence()
+		releaseBoundary := process.EnterDecimalBoundaryGeneration(retryProc)
+		runtimePlan, _, err := plan2.FillValuesOfParamsInPlanWithSpecializationAndProcess(ctx, retryProc, retryPlan, preparedRetry.paramVals, sessionDivPrecisionIncrement(ses))
 		if err != nil {
+			releaseBoundary()
 			return nil, err
 		}
-		return runtimePlan, plan2.RefreshPreparedCTASInferredColumns(ctx, runtimePlan, retryPlan, stmt)
+		mergedLedger := mergeDecimalBoundaryExecuteLedger(retryLedger, retryProc)
+		refreshErr := plan2.RefreshPreparedCTASInferredColumns(ctx, runtimePlan, retryPlan, stmt, mergedLedger, sessionDivPrecisionIncrement(ses))
+		releaseBoundary()
+		return runtimePlan, refreshErr
 	}
 	if retryPlan.GetQuery() != nil {
 		return nil, moerr.NewInternalError(ctx, "prepared query retry has no source bindings")

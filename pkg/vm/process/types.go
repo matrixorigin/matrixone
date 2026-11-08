@@ -746,6 +746,32 @@ type Process struct {
 	// WarningSink is an immutable execution-attempt destination. Children inherit
 	// the pointer; remote callbacks retain it after a failed attempt is sealed.
 	WarningSink any
+
+	// decimalBoundaryRegistry carries the planner-owned statement-local
+	// decimal boundary decision registry (issue #30938): the coercive-decision
+	// ledger, the constant-fold decision barrier and the prepared-CTAS claim
+	// publication all ride this one generation-scoped carrier. Like
+	// planSnapshotTS it is a private in-memory pointer consulted during
+	// planning only — never serialized, never transmitted to remote
+	// pipelines (they build their own processes from the shipped plan) — and
+	// its lifecycle is owned exclusively by EnterDecimalBoundaryGeneration's
+	// enter/release pair in decimal_boundary_registry.go.
+	decimalBoundaryRegistry *DecimalBoundaryRegistry
+	// decimalBoundarySaved holds the registry field's exact prior value,
+	// captured at the outermost generation entry and restored when that
+	// entry's defer-registered release unwinds at depth zero (nil in
+	// production), on success, error and panic alike.
+	decimalBoundarySaved *DecimalBoundaryRegistry
+	// decimalBoundaryNonce counts the generations installed on this process
+	// so a prepared-CTAS evidence claim can detect a stale publication: the
+	// claim succeeds only while no fresh generation has installed since the
+	// stash.
+	decimalBoundaryNonce uint64
+	// decimalBoundaryClaim is the read-once claim slot publishing one
+	// completed prepared-CTAS generation's decision ledger from the
+	// outermost release to the PrepareStmt construction that stores the
+	// plan that generation built.
+	decimalBoundaryClaim *DecimalBoundaryClaimSlot
 }
 
 type sqlHelper interface {

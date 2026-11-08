@@ -15,6 +15,9 @@
 package rule
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -216,6 +219,18 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 
 		return expr
 	}
+	// The active planning generation's decision barrier pins the operand
+	// structure of recorded provenance-bearing coercive decisions: folding
+	// would erase the distinguishing pre-coercion syntax those decisions'
+	// ledger entries stand on (issue #30938, design decision log 55). A
+	// barrier-matched node skips the argument recursion and the destructive
+	// rewrite alike, so the recorded witness structure survives every
+	// post-recording fold; provenance-free statements answer from the empty
+	// set and fold base-identically.
+	if DecimalBoundaryBarrierHit(proc, expr) {
+		return expr
+	}
+
 	overloadID := fn.Func.GetObj()
 	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
 		return expr
@@ -285,6 +300,18 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	// Preserve diagnostic-bearing division subtrees through their parents;
 	// a later execution may use a different sql_mode or statement policy.
 	if ContainsSqlModeDependentDivision(expr) {
+		return expr
+	}
+
+	// A constant tree carrying widened decimal multiplication provenance
+	// keeps its executable expression shape across every destructive fold
+	// shape — valued scalar-vector materialization and the Isnull literal
+	// return alike — because the fold erases exactly the multiplication
+	// provenance the CTAS storage boundary's envelope recognition reads
+	// (issue #30938, design decision log 54). Constant trees without
+	// provenance fold unchanged, and the unaffected argument recursion above
+	// already gave them the base engine's results.
+	if CarriesWideDecimalMultiplicationProvenance(expr) {
 		return expr
 	}
 
@@ -553,6 +580,16 @@ func MaterializeDecimal256Constant(proc *process.Process, expr *plan.Expr, vec *
 	if !admitted {
 		return nil, nil
 	}
+	// A constant tree carried by a decimal multiplication published wider
+	// than the declared 65-digit SQL domain keeps its executable shape:
+	// materializing it as a scalar vector erases exactly the multiplication
+	// provenance the CTAS storage envelope keys on, and the folded width
+	// alone cannot distinguish a carrier product from a genuine wide
+	// literal (issue #30938 review round 9). Evaluation is unaffected: the
+	// un-folded expression computes the same constant at runtime.
+	if CarriesWideDecimalMultiplicationProvenance(expr) {
+		return nil, nil
+	}
 	constant, err := vector.NewConstFixed(*vec.GetType(),
 		vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0), 1, proc.Mp())
 	if constant != nil {
@@ -569,6 +606,24 @@ func MaterializeDecimal256Constant(proc *process.Process, expr *plan.Expr, vec *
 		Len: 1, Data: data, StringSource: uint32(vec.GetStringSourceAt(0)),
 		DecimalLiteralRequiresV82: true,
 	}, nil
+}
+
+// CarriesWideDecimalMultiplicationProvenance reports whether the expression
+// tree contains a decimal multiplication published wider than the declared
+// 65-digit SQL domain. Multiplication is the only operator publishing a
+// scalar wider than 65 digits (decimalAddSub and decimalDivision cap their
+// published widths at 65), so such a node marks CTAS storage provenance that
+// scalar-vector materialization must not erase (issue #30938 review round 9).
+func CarriesWideDecimalMultiplicationProvenance(expr *plan.Expr) bool {
+	carries := false
+	_ = plan.VisitExprTree(expr, func(input *plan.Expr) error {
+		if fn := input.GetF(); fn != nil && fn.Func.GetObjName() == "*" &&
+			types.T(input.Typ.Id).IsDecimal() && input.Typ.Width > 65 {
+			carries = true
+		}
+		return nil
+	})
+	return carries
 }
 
 // CanMaterializeConstantVector excludes recovery metadata that has no place in
@@ -1316,4 +1371,170 @@ func ContainsTruncatedFloatTextConversion(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+// DecimalBoundaryDecisionEntry is the planner-owned payload recorded for one
+// decimal coercive decision in the statement-local decision ledger (issue
+// #30938, design decision log entries 49 and 52). The carrier in
+// pkg/vm/process stores it opaquely; the binder's recorder authors it at the
+// alignment site and the storage-boundary evaluator, the retry funnel's
+// source-domain resolver and the prepared-CTAS replay read it.
+type DecimalBoundaryDecisionEntry struct {
+	// Overload is the bound overload identity of the decision node.
+	Overload int64
+	// Name is the binder-level function name of the decision.
+	Name string
+	// ArgCount is the decision's arity.
+	ArgCount int
+	// PreTypes holds each argument position's pre-coercion type exactly as
+	// the merge consumed it at binding.
+	PreTypes []plan.Type
+	// AlignedTypes holds each position's post-merge aligned target. A
+	// position the binder left uncast records its pre type verbatim (the
+	// same-OID same-scale alignment skip at base_binder.go's alignment loop
+	// leaves the physical argument untouched while the family still converges
+	// on the aligned target).
+	AlignedTypes []plan.Type
+	// ResultType is the converged published result type the binding authored.
+	ResultType plan.Type
+	// Provenance flags a decision whose recorded lineage carries a widened
+	// decimal multiplication publication: the decision itself publishes
+	// through the widened rule, or a recorded operand decision does.
+	Provenance bool
+	// Retried marks the entry as authored by the source-domain retry funnel
+	// (design decision log 56): the binding resolved over the operands'
+	// parent-published domains after the widened first lookup failed or
+	// silently degraded.
+	Retried bool
+}
+
+// DecimalBoundaryDerivedDomain is the channel-(b) payload of the design's
+// source-domain resolver (design decision log 56): at derived-producer
+// binding construction each output column whose producing expression carries
+// widened-multiplication provenance publishes its parent-published domain
+// under the key "b#<binding tag>#<column position>" in the statement
+// registry, so a consumer-side column reference to a derived table, view or
+// CTE resolves its parent domain without inspecting the producer's plan.
+// The planner authors and consumes the payload; the process carrier stores
+// it opaquely.
+type DecimalBoundaryDerivedDomain struct {
+	// Parent is the column's parent-published domain: the declared type the
+	// pre-change engine's own inference authored for the producing
+	// expression.
+	Parent plan.Type
+	// Provenance flags that the column's producing expression carries a
+	// widened decimal multiplication publication in its recorded lineage.
+	Provenance bool
+}
+
+// DecimalBoundaryFoldSignature computes the fold-observable content
+// signature of a function expression node: the overload identity, the
+// argument count, and each argument's observed type — the binder's implicit
+// alignment CASTs contribute their operand's observed type (they are
+// transparent at this seam), an authored fixed-domain cast contributes its
+// own declared type, and every other argument its own type.
+// The binder's decision-ledger recorder computes the same encoding when a
+// coercive decision is recorded, and both constant-fold engines recompute it
+// at their recursive entries, so folding evolution between the recording and
+// a later fold observes the identical signature (issue #30938, design
+// decision log entries 52 and 55).
+func DecimalBoundaryFoldSignature(expr *plan.Expr) string {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(strconv.FormatInt(fn.Func.GetObj(), 36))
+	sb.WriteByte('#')
+	sb.WriteString(strconv.Itoa(len(fn.Args)))
+	for i := range fn.Args {
+		sb.WriteByte('|')
+		writeDecimalBoundaryObservedType(&sb, fn.Args[i])
+	}
+	return sb.String()
+}
+
+// DecimalBoundaryDecisionLedgerKey computes the ledger content key of a
+// decision node (design decision log 52): the overload identity, the
+// argument count, and per position the pre-coercion observed type (the
+// binder's implicit alignment CAST operands contribute their operand's
+// observed type; an authored fixed-domain cast contributes its own declared
+// type) together with that position's post-merge aligned type (the argument
+// node's own published type). Twin decisions whose operand syntax alone distinguishes them —
+// identical observed pre types but different aligned targets — key
+// differently, and a deep copy of the decision subtree resolves its origin's
+// entry because every keyed component survives DeepCopyExpr.
+func DecimalBoundaryDecisionLedgerKey(expr *plan.Expr) string {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(strconv.FormatInt(fn.Func.GetObj(), 36))
+	sb.WriteByte('#')
+	sb.WriteString(strconv.Itoa(len(fn.Args)))
+	for i := range fn.Args {
+		sb.WriteByte('|')
+		writeDecimalBoundaryObservedType(&sb, fn.Args[i])
+		sb.WriteByte('>')
+		writeDecimalBoundaryType(&sb, &fn.Args[i].Typ)
+	}
+	return sb.String()
+}
+
+// writeDecimalBoundaryObservedType encodes one argument's observed
+// pre-coercion type: the binder's implicit alignment casts unwrap to their
+// operand, recursively, while an authored fixed-domain cast (a syntax-explicit
+// CAST, or any non-zero overload such as a decimal-to-decimal conversion the
+// user wrote) contributes its own declared type. Unwrapping an authored cast
+// would key the decision on the cast's operand instead of its declared
+// domain, so two merges whose defaults differ only inside authored casts
+// (CAST(d AS DECIMAL(34,0)) vs CAST(d AS DECIMAL(37,0))) would collide on one
+// ledger key and the registry's ownership check would keep the first-recorded
+// envelope for both columns (issue #30938 review round 17, F1; design
+// decision log 52's content keying and revision 40's fixed-domain barrier).
+// The encoding covers the components the binder's decimal coercive merges
+// consume: the type family, width and scale.
+func writeDecimalBoundaryObservedType(sb *strings.Builder, arg *plan.Expr) {
+	observed := arg
+	for fn := observed.GetF(); fn != nil && fn.Func != nil && len(fn.Args) >= 1; {
+		id, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if id != function.CAST {
+			break
+		}
+		if overload != 0 || fn.SyntaxExplicitCast {
+			// An authored cast fixes its own domain: the observed type is
+			// the cast's declared result, never its operand's type.
+			break
+		}
+		observed = fn.Args[0]
+		fn = observed.GetF()
+	}
+	writeDecimalBoundaryType(sb, &observed.Typ)
+}
+
+// writeDecimalBoundaryType encodes one plan type for the decision barrier,
+// the ledger key and the ledger payload.
+func writeDecimalBoundaryType(sb *strings.Builder, typ *plan.Type) {
+	sb.WriteString(strconv.Itoa(int(typ.Id)))
+	sb.WriteByte(':')
+	sb.WriteString(strconv.Itoa(int(typ.Width)))
+	sb.WriteByte(':')
+	sb.WriteString(strconv.Itoa(int(typ.Scale)))
+}
+
+// DecimalBoundaryBarrierHit reports whether the active planning generation's
+// decision barrier pins this node's operand structure against folding. A
+// statement whose recorded decisions carry no widened-multiplication
+// provenance — and every statement without an active generation — answers
+// from the empty-set check, so provenance-free statements fold
+// base-identically without paying the signature computation.
+func DecimalBoundaryBarrierHit(proc *process.Process, expr *plan.Expr) bool {
+	if !proc.DecimalBoundaryBarrierActive() {
+		return false
+	}
+	if expr.GetF() == nil {
+		return false
+	}
+	return proc.DecimalBoundaryBarrierContains(DecimalBoundaryFoldSignature(expr))
 }

@@ -3117,6 +3117,24 @@ func handlePrepareString(ses FeSession, execCtx *ExecCtx, st *tree.PrepareString
 	return doPrepareString(ses.(*Session), execCtx, st)
 }
 
+// claimPreparedDecimalBoundaryEvidence performs the read-once claim of the
+// prepared-CTAS ledger copy the session's most recent planning generation
+// published on its compile-context process (issue #30938, decision log 64
+// (i)). The nonce identifies the authoring generation so cached-plan
+// executes can assert evidence identity. A stale or absent slot claims
+// nothing and leaves the discard to the next generation's fresh install.
+func claimPreparedDecimalBoundaryEvidence(ses FeSession) (map[string]any, uint64) {
+	proc := ses.GetTxnCompileCtx().GetProcess()
+	if proc == nil {
+		return nil, 0
+	}
+	ledger, ok := proc.ClaimDecimalBoundaryEvidence()
+	if !ok {
+		return nil, 0
+	}
+	return ledger, proc.DecimalBoundaryGenerationNonce()
+}
+
 func createPrepareStmtInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -3210,6 +3228,14 @@ func createPrepareStmtInSession(
 
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
+	// Claim this PREPARE generation's prepared-CTAS ledger copy immediately
+	// before constructing the PrepareStmt that stores the very plan the
+	// generation produced (issue #30938, decision log 64 (i)): the build
+	// above ran its generation on this compile-context process, so its
+	// stash rides that process's read-once, nonce-keyed claim slot; a
+	// PREPARE failing before construction never claims, and an unclaimed
+	// slot is discarded by the next generation's fresh install.
+	retainedDecimalBoundaryLedger, retainedDecimalBoundaryNonce := claimPreparedDecimalBoundaryEvidence(executionSes)
 	prepareStmt := &PrepareStmt{
 		groupConcatMaxLenFloor:   groupConcatFloor,
 		Name:                     preparePlan.GetDcl().GetPrepare().GetName(),
@@ -3250,6 +3276,8 @@ func createPrepareStmtInSession(
 		getFromSendLongData:        make(map[int]struct{}),
 		schedulingSQLMode:          schedulingSQLMode,
 	}
+	prepareStmt.retainedDecimalBoundaryLedger = retainedDecimalBoundaryLedger
+	prepareStmt.retainedDecimalBoundaryNonce = retainedDecimalBoundaryNonce
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
 	if execCtx.input != nil && execCtx.input.rewritePolicy != nil &&
 		execCtx.input.rewritePolicy.captured {

@@ -346,10 +346,40 @@ select length(lg) as lg_length, length(ld) as ld_length,
        cast(cast(lg as char) as uuid) as lg_uuid, cast(cast(ld as char) as uuid) as ld_uuid from wuuid_copy;
 set session sql_mode = @wuuid_sql_mode;
 
--- 无损公共域超过 SQL 精度上限时拒绝绑定，不留下无法导出的目录类型。
-create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
-show tables like 'wdecimal_rejected';
-create table wdecimal_rejected as select lead(cast(0.1 as decimal(65,64)),0,cast(10 as decimal(3,1))) over () as v;
-show tables like 'wdecimal_rejected';
+-- 无损公共域不超过 Decimal256 物理精度（76 位）时按表达式域推导；超过物理精度上限仍拒绝绑定。
+-- 扩展带（pre-change 引擎在计划期拒绝的 66-76 位父域推导）持久化其调和派生标签（可超过 65 位，
+-- 与父引擎自身推导的超 65 记录同为不可 show create 的既有形态，desc 为合同观测面）；
+-- 越出持久化声明域的值（含越出窗口的默认值）在写入时按准入拒绝。
+create table wdecimal_wide as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
+desc wdecimal_wide;
+select v from wdecimal_wide;
+create table wdecimal_wide2 as select lead(cast(0.1 as decimal(65,64)),0,cast(10 as decimal(3,1))) over () as v;
+desc wdecimal_wide2;
+select v from wdecimal_wide2;
+create table wdecimal_oob_src(id int primary key, x decimal(65,65));
+insert into wdecimal_oob_src values (1, 0.1), (2, 0.2), (3, 0.3);
+create table wdecimal_oob_fit as select lag(x,1,0.5) over (order by id) as v from wdecimal_oob_src;
+show create table wdecimal_oob_fit;
+select v from wdecimal_oob_fit;
+create table wdecimal_oob_wide as select lag(x,1,2) over (order by id) as v from wdecimal_oob_src;
+create table wdecimal_oob_wide2 as select lead(x,1,2) over (order by id) as v from wdecimal_oob_src;
+drop table wdecimal_oob_src, wdecimal_oob_fit, wdecimal_oob_wide, wdecimal_oob_wide2;
+drop table wdecimal_wide;
+drop table wdecimal_wide2;
+select lag(cast(0.1 as decimal(65,65)),0,cast(9999999999999999999 as bigint)) over () as v;
+
+-- 类型匹配的宽默认值不引入新的调和域，保持父级已支持的宽类型与精确值；NULL 默认值不贡献值域。
+create table wdecimal_match_wide as select lag(999999999999999999999999999999999999999999999999999999999999999999, 0, 999999999999999999999999999999999999999999999999999999999999999999) over () as v;
+select v from wdecimal_match_wide;
+create table wdecimal_match_null as select lag(999999999999999999999999999999999999999999999999999999999999999999, 0, null) over () as v;
+select v from wdecimal_match_null;
+-- 扩展带的无来源 70 标度调和：pre-change 引擎计划期拒绝该派生，现引擎按扩展带准入并持久化
+-- 调和派生的 decimal(70,70) 标签（默认值被选中与未被选中两种情形值域一致）。
+create table wdecimal_hs_sel as select lag(cast(0.1 as decimal(65,65)), 0, 0.0000000000000000000000000000000000000000000000000000000000000000000001) over () as v;
+desc wdecimal_hs_sel;
+select v from wdecimal_hs_sel;
+create table wdecimal_hs_unsel as select x, lead(cast(0.1 as decimal(65,65)), 1, 0.0000000000000000000000000000000000000000000000000000000000000000000001) over (order by x) as v from (select 1 as x union all select 2) t;
+desc wdecimal_hs_unsel;
+select x, v from wdecimal_hs_unsel order by x;
 
 drop database window_lag_lead_default_type;

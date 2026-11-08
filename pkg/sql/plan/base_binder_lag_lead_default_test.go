@@ -107,6 +107,17 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				{"decimal integer column", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}, types.T_decimal128, 20, 1},
 				{"decimal uint64 column", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 10, Scale: 4}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}}, types.T_decimal128, 24, 4},
 				{"decimal256 promotion", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 30}}, makePlan2Int64ConstExprWithType(999999999999), types.T_decimal256, 42, 30},
+				// Widened multiplication publishes 76-digit values, so the
+				// shared LAG/LEAD result may reach the Decimal256
+				// expression domain while the exact merge fits it; only
+				// persisted-column admission keeps the declared 65-digit
+				// limit (issue #30938 review round 6).
+				{"year widened domain", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 62}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}, types.T_decimal256, 66, 62},
+				{"bit default widened domain", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 1}}, types.T_decimal256, 66, 65},
+				{"bool default widened domain", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2BoolConstExprWithType(true), types.T_decimal256, 66, 65},
+				{"bool value widened domain", makePlan2BoolConstExprWithType(true), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, types.T_decimal256, 66, 65},
+				{"nonzero integer widened domain", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Int64ConstExprWithType(1), types.T_decimal256, 66, 65},
+				{"aligned decimal widened domain", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 64}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 1}}, types.T_decimal256, 66, 64},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{tc.value, makePlan2Int64ConstExprWithType(1), tc.def})
@@ -135,14 +146,12 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				name       string
 				value, def *planpb.Expr
 			}{
-				{"year precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 62}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_year)}}},
-				{"bit default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 1}}},
+				// Only a lossless merge beyond the 76-digit Decimal256
+				// expression domain is rejected now (issue #30938 review
+				// round 6); the subcases above pin the boundary from the
+				// widened side.
 				{"bit source precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}},
-				{"bool default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2BoolConstExprWithType(true)},
-				{"bool value precision overflow", makePlan2BoolConstExprWithType(true), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}},
-				{"nonzero integer precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, makePlan2Int64ConstExprWithType(1)},
 				{"integer domain precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}},
-				{"aligned decimal SQL precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 64}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 1}}},
 				{"aligned decimal physical precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 0}}},
 				{"integer value decimal default precision overflow", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 65}}},
 			} {

@@ -2689,6 +2689,13 @@ func ParseDecimal256(x string, width, scale int32) (y Decimal256, err error) {
 	return ParseDecimal256WithContext(defaultParseContext, x, width, scale)
 }
 
+// Decimal256Pow10 returns 10^width for 0 <= width <= 76, the same bound
+// decimal256Pow10WithContext computes for ParseDecimal256WithContext's
+// coefficient-width check.
+func Decimal256Pow10(width int32) (Decimal256, error) {
+	return decimal256Pow10WithContext(defaultParseContext, width)
+}
+
 // ParseDecimal256WithContext parses with the caller's error reporting context.
 func ParseDecimal256WithContext(ctx context.Context, x string, width, scale int32) (y Decimal256, err error) {
 	if x == "" {

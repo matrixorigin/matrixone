@@ -22,6 +22,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 const (
@@ -157,6 +158,12 @@ func (builder *QueryBuilder) reusableCTEProducer(
 			storageStats = &planpb.Stats{Outcnt: stats.Outcnt, Rowsize: rowSize}
 		}
 	}
+	// Finalization can append one Decimal256 shadow column per exported slot
+	// whose producing expression carries widened-multiplication provenance
+	// (issue #30938, design decision log 50); estimate and reserve the
+	// shadow-expanded schema before the share commits so the runtime
+	// reservation never exceeds the charged bytes.
+	storageTypes = builder.cteShadowExpandedStorageTypes(producerRootID, first.types, storageTypes)
 	if !cteReuseFitsStorage(storageStats, storageTypes, spillEligible) {
 		discardProducerFilter()
 		return 0, nil, false
@@ -693,6 +700,255 @@ func fixedOutputRowSize(outputTypes []planpb.Type) (float64, bool) {
 		}
 	}
 	return float64(rowSize), rowSize > 0
+}
+
+// cteShadowExpandedStorageTypes implements the shadow-expanded admission
+// reservation (issue #30938, design decision log 50,
+// F-SHADOW-ADMISSION-ACCOUNTING): the shared producer's finalization can
+// append one fixed-width Decimal256 shadow column per exported slot whose
+// producing expression carries widened-multiplication provenance, so the
+// storage estimate and reservation charge those payloads before the share
+// commits. The allowance counts the producer's own exported slots,
+// independent of the currently demanded subset - a slot shadows at most once
+// per statement no matter how many consumers admit it, so the emitted schema
+// can never exceed the charged schema.
+func (builder *QueryBuilder) cteShadowExpandedStorageTypes(
+	producerRootID int32,
+	exportedTypes, storageTypes []planpb.Type,
+) []planpb.Type {
+	shadows := 0
+	for slot := range exportedTypes {
+		if builder.cteExportedSlotWideDecimalProvenance(producerRootID, int32(slot)) {
+			shadows++
+		}
+	}
+	if shadows == 0 {
+		return storageTypes
+	}
+	expanded := make([]planpb.Type, 0, len(storageTypes)+shadows)
+	expanded = append(expanded, storageTypes...)
+	shadowType := planpb.Type{Id: int32(types.T_decimal256), Width: 76, Scale: 0}
+	for i := 0; i < shadows; i++ {
+		expanded = append(expanded, shadowType)
+	}
+	return expanded
+}
+
+// cteExportedSlotWideDecimalProvenance reports whether the producer's
+// exported slot can carry widened-multiplication provenance. It follows the
+// same row-preserving bare-column mirrors the shadow finalization follows
+// (build_ddl.go's ensureShadowColumn) to the slot's producing expression;
+// where the chain ends at an unfollowable column it conservatively scans the
+// feeding branch, and where the slot cannot be mapped through the node's own
+// projection it conservatively scans the remaining subtree. The descent
+// starts with the replica gate armed: the first scalar producing expression
+// the mirror chain resolves is exactly the expression the finalization gates
+// on decimalShadowReplaySafe.
+func (builder *QueryBuilder) cteExportedSlotWideDecimalProvenance(producerRootID, slot int32) bool {
+	nodes := builder.qry.Nodes
+	if producerRootID < 0 || int(producerRootID) >= len(nodes) {
+		return false
+	}
+	return builder.cteSlotWideDecimalProvenance(producerRootID, slot, true, make(map[[2]int32]bool))
+}
+
+// cteSlotWideDecimalProvenance is the recursive worker of
+// cteExportedSlotWideDecimalProvenance; visited bounds the descent through
+// (node, slot) identities so a cyclic or diamond-shaped projection chain
+// cannot loop or re-explore a resolved slot. gateReplica mirrors the
+// finalization's replica-eligibility discipline (issue #30938 review round
+// 18, F2): ensureShadowColumn gates only the export's own resolved producing
+// expression on decimalShadowReplaySafe, and its admit/admitProducerSlot
+// chain then follows intermediate producing expressions gate-free. The walk
+// therefore gates the first scalar reached through the export's mirror chain
+// (the flag survives the bare-column and pass-through descents) and follows
+// every deeper producer with the gate released, so the charged set stays
+// exactly the set the finalization can shadow (design decision log 50's
+// cover invariant - the emitted schema can never exceed the charged
+// schema).
+func (builder *QueryBuilder) cteSlotWideDecimalProvenance(nodeID, pos int32, gateReplica bool, visited map[[2]int32]bool) bool {
+	nodes := builder.qry.Nodes
+	for {
+		if nodeID < 0 || int(nodeID) >= len(nodes) {
+			return false
+		}
+		key := [2]int32{nodeID, pos}
+		if visited[key] {
+			return false
+		}
+		visited[key] = true
+		node := nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		if pos >= 0 && int(pos) < len(node.ProjectList) {
+			entry := node.ProjectList[pos]
+			if rule.CarriesWideDecimalMultiplicationProvenance(entry) {
+				return true
+			}
+			c := entry.GetCol()
+			if c == nil {
+				// A scalar producing expression carries no syntactic
+				// multiplication, but its column operands can still resolve
+				// through the producer's lineage to a widened product. The
+				// finalization appends the shadow when the export's own
+				// resolved producing expression is replay-safe
+				// (decimalShadowReplaySafe) and its operands admit a
+				// widened product, following intermediate producing
+				// expressions gate-free (build_ddl.go's admit chain); the
+				// reservation must charge the same set before the share
+				// commits (issue #30938 review rounds 17 F2 and 18 F2;
+				// design decision log 50's cover invariant - the emitted
+				// schema can never exceed the charged schema). The gate
+				// therefore fires only while gateReplica is armed - the
+				// export's own mirror chain - and the operand resolution
+				// below releases it for every deeper producer.
+				if gateReplica && !decimalShadowReplaySafe(entry) {
+					return false
+				}
+				return builder.cteScalarOperandWideDecimalProvenance(entry, nodeID, visited)
+			}
+			// This helper runs before the builder's post-bind remap
+			// (build.go's reuseMultiReferenceCTEs), so a projection
+			// column's RelPos still names the feeding node's binding tag
+			// rather than a child ordinal (issue #30938 review round 16,
+			// F3): resolve the owner through the builder's tag map — the
+			// pre-remap equivalent of the finalization walk's
+			// Children[c.RelPos] step (build_ddl.go's ensureShadowColumn).
+			childID, ok := builder.tag2NodeID[c.RelPos]
+			if !ok || childID == nodeID || childID < 0 || int(childID) >= len(nodes) {
+				return false
+			}
+			if cteShadowRowChangingNode(nodes[childID]) {
+				// The finalization stops its mirror walk at the same
+				// boundary; the values rising through it still carry the
+				// branch's provenance.
+				return builder.cteSubtreeWideDecimalProvenance(childID, make(map[int32]bool))
+			}
+			nodeID, pos = childID, c.ColPos
+			continue
+		}
+		// Pass-through nodes without their own projection (the
+		// predicate-aware FILTER wrapper, SORT) mirror the single child's
+		// export slot.
+		if len(node.Children) == 1 && cteShadowPassThroughNode(node) {
+			childID := node.Children[0]
+			if childID == nodeID || childID < 0 || int(childID) >= len(nodes) {
+				return false
+			}
+			nodeID = childID
+			continue
+		}
+		return builder.cteSubtreeWideDecimalProvenance(nodeID, make(map[int32]bool))
+	}
+}
+
+// cteScalarOperandWideDecimalProvenance resolves the column operands of a
+// scalar producing expression through the producer's lineage (issue #30938
+// review rounds 17 F2 and 18 F2). It serves two callers: the gated export
+// scalar (the caller has already proven that expression replay-safe) and,
+// recursively, every intermediate producing expression the lineage reaches,
+// which the finalization's admit chain follows without re-gating - so the
+// recursion below always releases the replica gate. The walk only separates
+// literals (no lineage) from column references, which resolve through the
+// pre-remap binding-tag map exactly like the mirror descent above: a
+// row-changing feeding branch is scanned conservatively, every other hop
+// recurses the slot worker. Binder-produced target descriptors (Expr_T
+// arguments) are metadata, not value leaves, and are skipped.
+func (builder *QueryBuilder) cteScalarOperandWideDecimalProvenance(expr *planpb.Expr, ownerID int32, visited map[[2]int32]bool) bool {
+	switch e := expr.Expr.(type) {
+	case *planpb.Expr_Col:
+		nodes := builder.qry.Nodes
+		childID, ok := builder.tag2NodeID[e.Col.RelPos]
+		if !ok || childID == ownerID || childID < 0 || int(childID) >= len(nodes) {
+			return false
+		}
+		if cteShadowRowChangingNode(nodes[childID]) {
+			return builder.cteSubtreeWideDecimalProvenance(childID, make(map[int32]bool))
+		}
+		return builder.cteSlotWideDecimalProvenance(childID, e.Col.ColPos, false, visited)
+	case *planpb.Expr_F:
+		fn := e.F
+		if fn == nil {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if arg.GetT() != nil {
+				continue
+			}
+			if builder.cteScalarOperandWideDecimalProvenance(arg, ownerID, visited) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// cteSubtreeWideDecimalProvenance conservatively reports whether any
+// expression evaluated inside the subtree carries widened-multiplication
+// provenance. A shared inner producer (SINK_SCAN) hides its exports'
+// provenance from this walk and stays conservative.
+func (builder *QueryBuilder) cteSubtreeWideDecimalProvenance(nodeID int32, visited map[int32]bool) bool {
+	nodes := builder.qry.Nodes
+	if nodeID < 0 || int(nodeID) >= len(nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
+	node := nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if node.NodeType == planpb.Node_SINK_SCAN {
+		return true
+	}
+	for _, exprs := range [][]*planpb.Expr{
+		node.ProjectList, node.AggList, node.FilterList, node.OnList,
+		node.GroupBy, node.WinSpecList, node.BlockFilterList,
+	} {
+		for _, expr := range exprs {
+			if rule.CarriesWideDecimalMultiplicationProvenance(expr) {
+				return true
+			}
+		}
+	}
+	for _, child := range node.Children {
+		if builder.cteSubtreeWideDecimalProvenance(child, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+// cteShadowRowChangingNode mirrors the row-changing boundary classification
+// the decimal aggregate domain pass applies (build_ddl.go): the shadow
+// finalization's mirror walk stops at these nodes.
+func cteShadowRowChangingNode(node *planpb.Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case planpb.Node_AGG:
+		return len(node.GroupBy) > 0
+	case planpb.Node_UNION, planpb.Node_UNION_ALL, planpb.Node_INTERSECT,
+		planpb.Node_INTERSECT_ALL, planpb.Node_MINUS, planpb.Node_MINUS_ALL,
+		planpb.Node_WINDOW, planpb.Node_TIME_WINDOW:
+		return true
+	}
+	return false
+}
+
+// cteShadowPassThroughNode reports whether the node mirrors its single
+// child's output slots unchanged without projecting its own list.
+func cteShadowPassThroughNode(node *planpb.Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case planpb.Node_FILTER, planpb.Node_SORT:
+		return true
+	}
+	return false
 }
 
 func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, spillEligible bool) bool {
