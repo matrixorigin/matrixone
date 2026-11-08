@@ -759,7 +759,7 @@ func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
 		timestamp.Timestamp{PhysicalTime: 121},
 	).Return(frontier, nil)
 	workspace := mock_frontend.NewMockWorkspace(ctrl)
-	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
+	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), timestamp.Timestamp{PhysicalTime: 121}).Return(nil)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
 		Mode:      txn.TxnMode_Pessimistic,
@@ -774,6 +774,82 @@ func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
 	proc.Base.TxnOperator = txnOp
 
 	require.NoError(t, (&Compile{proc: proc}).advanceCreateIndexSnapshot())
+}
+
+func TestAdvanceCreateIndexSnapshotNeedsOnlyOneLegacyLogtailUpdate(t *testing.T) {
+	const service = "create-index-legacy-single-logtail-update"
+	minimum := timestamp.Timestamp{PhysicalTime: 121}
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil,
+		moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)))
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+
+	waiter := client.NewTimestampWaiter(rt.Logger())
+	defer waiter.Close()
+	waiter.NotifyLatestCommitTS(minimum)
+	ctrl := gomock.NewController(t)
+	lockService := mock_lock.NewMockLockService(ctrl)
+	lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), minimum).DoAndReturn(waiter.GetTimestamp)
+	var snapshot timestamp.Timestamp
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, frontier timestamp.Timestamp) error {
+			var err error
+			snapshot, err = waiter.GetTimestamp(ctx, frontier)
+			return err
+		})
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+	txnOp.EXPECT().SnapshotTS().DoAndReturn(func() timestamp.Timestamp { return snapshot })
+	proc := testutil.NewProcess(t)
+	proc.Base.LockService = lockService
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOp
+	var cancel context.CancelFunc
+	proc.Ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	require.NoError(t, (&Compile{proc: proc}).advanceCreateIndexSnapshot(),
+		"an already applied frontier must not require another logtail notification")
+}
+
+func TestCreateIndexLegacyFrontierFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		client    bool
+		applied   timestamp.Timestamp
+		waitErr   error
+		wantError string
+	}{
+		{name: "missing client", wantError: "missing transaction client"},
+		{name: "missing waiter", client: true, wantError: "did not reach"},
+		{name: "wait canceled", client: true, waitErr: context.Canceled, wantError: "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := t.Name()
+			rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil,
+				moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)))
+			moruntime.SetupServiceBasedRuntime(service, rt)
+			ctrl := gomock.NewController(t)
+			lockService := mock_lock.NewMockLockService(ctrl)
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+			proc := testutil.NewProcess(t)
+			proc.Base.LockService = lockService
+			if tc.client {
+				txnClient := mock_frontend.NewMockTxnClient(ctrl)
+				txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), timestamp.Timestamp{PhysicalTime: 121}).
+					Return(tc.applied, tc.waitErr)
+				proc.Base.TxnClient = txnClient
+			}
+			_, err := (&Compile{proc: proc}).createIndexLegacyLogtailFrontier()
+			require.ErrorContains(t, err, tc.wantError)
+		})
+	}
 }
 
 type testCreateIndexLogtailBarrier struct {

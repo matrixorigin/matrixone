@@ -2710,7 +2710,11 @@ func (c *Compile) createIndexLegacyLogtailFrontier() (timestamp.Timestamp, error
 		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
 			"CREATE INDEX snapshot refresh did not reach the required timestamp")
 	}
-	return applied, nil
+	// The waiter returns the next snapshot timestamp, not the applied logtail
+	// timestamp. Passing it back to AdvanceSnapshot would wait for another
+	// logtail update while holding the DDL locks. The required minimum has
+	// already been applied and is the correct lower bound for that wait.
+	return minimum, nil
 }
 
 func (s *Scope) doCreateIndex(

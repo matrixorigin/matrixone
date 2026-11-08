@@ -15,15 +15,24 @@
 package issues
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
@@ -69,18 +78,43 @@ func TestIssue28928ConcurrentCreateIndexNameIsUnique(t *testing.T) {
 				conn1, err := db1.Conn(ctx)
 				require.NoError(t, err)
 				defer conn1.Close()
+				var id0, id1 uint32
+				require.NoError(t, conn0.QueryRowContext(ctx, "select connection_id()").Scan(&id0))
+				require.NoError(t, conn1.QueryRowContext(ctx, "select connection_id()").Scan(&id1))
 
 				type ddlResult struct {
 					db  *sql.DB
 					err error
 				}
 				results := make(chan ddlResult, 2)
+				ddlCtx, cancelDDL := context.WithCancel(context.Background())
+				remaining := 2
+				defer func() {
+					defer cancelDDL()
+					if remaining > 0 {
+						cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						_, _ = db0.ExecContext(cleanup, fmt.Sprintf("kill query %d", id0))
+						_, _ = db1.ExecContext(cleanup, fmt.Sprintf("kill query %d", id1))
+						release()
+						for remaining > 0 {
+							select {
+							case <-results:
+								remaining--
+							case <-cleanup.Done():
+								t.Error("concurrent CREATE INDEX did not exit during cleanup")
+								return
+							}
+						}
+					}
+					release()
+				}()
 				go func() {
-					_, err := conn0.ExecContext(ctx, "create index ix_race on "+table+" (v)")
+					_, err := conn0.ExecContext(ddlCtx, "create index ix_race on "+table+" (v)")
 					results <- ddlResult{db: db0, err: err}
 				}()
 				go func() {
-					_, err := conn1.ExecContext(ctx, "create index ix_race on "+table+" ("+testCase.secondPart+")")
+					_, err := conn1.ExecContext(ddlCtx, "create index ix_race on "+table+" ("+testCase.secondPart+")")
 					results <- ddlResult{db: db1, err: err}
 				}()
 				waitForPlans()
@@ -90,7 +124,13 @@ func TestIssue28928ConcurrentCreateIndexNameIsUnique(t *testing.T) {
 				var rejected error
 				var observer *sql.DB
 				for range 2 {
-					result := <-results
+					var result ddlResult
+					select {
+					case result = <-results:
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+					remaining--
 					if result.err == nil {
 						succeeded++
 						observer = result.db
@@ -148,16 +188,10 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 			execSQLRequire(t, ctx, writerDB, "insert into "+table+" values (1, 'before'), (2, 'control')")
 			issue289WaitForTable(t, ctx, ddlDB, table, 2)
 
-			waitForPlan, release := issue289InstallPlanBarrier(t, ctx, issue289CreateIndexPlanCompiled, 1)
-			ddlDone := make(chan error, 1)
-			go func() {
-				_, err := ddlDB.ExecContext(ctx, "create index ix_payload on "+table+" (payload)")
-				ddlDone <- err
-			}()
+			waitForPlan, finishDDL := issue289StartPlanBlockedDDL(t, ctx, ddlDB, "create index ix_payload on "+table+" (payload)")
 			waitForPlan()
 			execSQLRequire(t, ctx, writerDB, "update "+table+" set payload = 'changed' where id = 1")
-			release()
-			require.NoError(t, <-ddlDone)
+			require.NoError(t, finishDDL())
 
 			var scannedCount, scannedSum, indexedCount, indexedSum int
 			require.NoError(t, writerDB.QueryRowContext(ctx,
@@ -170,6 +204,9 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 			require.Equal(t, 1, scannedSum)
 			require.Equal(t, scannedCount, indexedCount)
 			require.Equal(t, scannedSum, indexedSum)
+			syncAuthenticatedClusterCommit(t, ctx, cluster)
+			issue289AssertPhysicalIndex(t, ctx, writerDB, database, "regular_update", "ix_payload", "payload", false,
+				[]issue289IndexRow{{1, "changed"}, {2, "control"}})
 		})
 
 		t.Run("unique index rejects the stale conflicting update", func(t *testing.T) {
@@ -178,16 +215,10 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 			execSQLRequire(t, ctx, writerDB, "insert into "+table+" values (1, 1), (2, 2)")
 			issue289WaitForTable(t, ctx, ddlDB, table, 2)
 
-			waitForPlan, release := issue289InstallPlanBarrier(t, ctx, issue289CreateIndexPlanCompiled, 1)
-			ddlDone := make(chan error, 1)
-			go func() {
-				_, err := ddlDB.ExecContext(ctx, "create unique index uk_a on "+table+" (a)")
-				ddlDone <- err
-			}()
+			waitForPlan, finishDDL := issue289StartPlanBlockedDDL(t, ctx, ddlDB, "create unique index uk_a on "+table+" (a)")
 			waitForPlan()
 			execSQLRequire(t, ctx, writerDB, "update "+table+" set a = 1 where id = 2")
-			release()
-			issue289RequireMySQLError(t, <-ddlDone, 1062)
+			issue289RequireMySQLError(t, finishDDL(), 1062)
 
 			var rows, distinctValues int
 			require.NoError(t, writerDB.QueryRowContext(ctx,
@@ -201,6 +232,145 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 					"where table_schema = ? and table_name = 'unique_update' and index_name = 'uk_a'",
 				database).Scan(&published))
 			require.Zero(t, published)
+		})
+
+		// A different handoff: the writer has compiled without the index, but
+		// reaches its metadata lock only after CREATE INDEX has committed.
+		for _, tc := range []struct {
+			name, table, createIndex, update string
+			unique, rollback                 bool
+		}{
+			{"regular index", "late_regular", "create index ix_a on %s (a)", "update %s set a = 3 where id = 1", false, false},
+			{"unique conflict", "late_unique", "create unique index ix_a on %s (a)", "update %s set a = 1 where id = 2", true, false},
+			{"rollback", "late_rollback", "create index ix_a on %s (a)", "update %s set a = 3 where id = 1", false, true},
+		} {
+			t.Run("writer admitted after "+tc.name, func(t *testing.T) {
+				table := fmt.Sprintf("`%s`.`%s`", database, tc.table)
+				execSQLRequire(t, ctx, writerDB, "create table "+table+" (id int primary key, a int not null)")
+				execSQLRequire(t, ctx, writerDB, "insert into "+table+" values (1, 1), (2, 2)")
+				issue289WaitForTable(t, ctx, ddlDB, table, 2)
+
+				writer, err := writerDB.Conn(ctx)
+				require.NoError(t, err)
+				defer writer.Close()
+				if tc.rollback {
+					_, err = writer.ExecContext(ctx, "begin")
+					require.NoError(t, err)
+					defer func() {
+						cleanupCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						_, _ = writer.ExecContext(cleanupCtx, "rollback")
+					}()
+				}
+				writerCN, err := cluster.GetCNService(0)
+				require.NoError(t, err)
+				err = issue289RunStaleWriter(t, ctx, cluster, writerCN, writer, writerDB, ddlDB,
+					fmt.Sprintf(tc.update, table), fmt.Sprintf(tc.createIndex, table))
+				if tc.unique {
+					issue289RequireMySQLError(t, err, 1062)
+				} else {
+					require.NoError(t, err)
+				}
+				if tc.rollback {
+					_, err = writer.ExecContext(ctx, "rollback")
+					require.NoError(t, err)
+				}
+				syncAuthenticatedClusterCommit(t, ctx, cluster)
+				expected := []issue289IndexRow{{1, "1"}, {2, "2"}}
+				if !tc.unique && !tc.rollback {
+					expected[0].value = "3"
+				}
+				issue289AssertPhysicalIndex(t, ctx, ddlDB, database, tc.table, "ix_a", "a", tc.unique, expected)
+				if tc.unique {
+					execSQLRequire(t, ctx, writerDB, "update "+table+" set a = 3 where id = 2")
+					syncAuthenticatedClusterCommit(t, ctx, cluster)
+					expected[1].value = "3"
+					issue289AssertPhysicalIndex(t, ctx, ddlDB, database, tc.table, "ix_a", "a", true, expected)
+				}
+			})
+		}
+
+		t.Run("cancel index creation waiting for a writer", func(t *testing.T) {
+			const tableName = "cancel_build"
+			table := fmt.Sprintf("`%s`.`%s`", database, tableName)
+			execSQLRequire(t, ctx, writerDB, "create table "+table+" (id int primary key, a int not null)")
+			execSQLRequire(t, ctx, writerDB, "insert into "+table+" values (1, 1)")
+			issue289WaitForTable(t, ctx, ddlDB, table, 1)
+			writer, err := writerDB.Conn(ctx)
+			require.NoError(t, err)
+			defer writer.Close()
+			require.NoError(t, execIssue29715(ctx, writer, "begin"))
+			defer func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stop()
+				_, _ = writer.ExecContext(cleanup, "rollback")
+			}()
+			require.NoError(t, execIssue29715(ctx, writer, "update "+table+" set a = 2 where id = 1"))
+
+			var services []lockservice.LockService
+			cluster.ForeachServices(func(s embed.ServiceOperator) bool {
+				if s.ServiceType() == metadata.ServiceType_CN {
+					services = append(services, lockservice.GetLockServiceByServiceID(s.ServiceID()))
+				}
+				return true
+			})
+			var tableID uint64
+			require.NoError(t, writerDB.QueryRowContext(ctx,
+				"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?",
+				strings.ToLower(database), tableName).Scan(&tableID))
+			txnID := issue29715WriterTxn(services, tableID)
+			require.NotEmpty(t, txnID)
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeUint32(0)
+			packer.EncodeStringType([]byte(strings.ToLower(database)))
+			packer.EncodeStringType([]byte(tableName))
+			serial := bytes.Clone(packer.GetBuf())
+			packer.Reset()
+			packer.EncodeStringType(serial)
+			key := bytes.Clone(packer.GetBuf())
+			require.True(t, issue29715MetadataState(services, txnID, key, false, pblock.LockMode_Shared))
+
+			ddl, err := ddlDB.Conn(ctx)
+			require.NoError(t, err)
+			defer ddl.Close()
+			var ddlConnectionID uint32
+			require.NoError(t, ddl.QueryRowContext(ctx, "select connection_id()").Scan(&ddlConnectionID))
+			ddlCtx, cancelDDL := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			joined := false
+			defer func() {
+				if !joined {
+					cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+					defer stop()
+					_, _ = ddlDB.ExecContext(cleanup, fmt.Sprintf("kill query %d", ddlConnectionID))
+					select {
+					case <-done:
+					case <-cleanup.Done():
+						t.Error("canceled CREATE INDEX did not exit")
+					}
+				}
+				cancelDDL()
+			}()
+			go func() { _, err := ddl.ExecContext(ddlCtx, "create index ix_a on "+table+" (a)"); done <- err }()
+			require.Eventually(t, func() bool {
+				return issue29715MetadataState(services, txnID, key, true, pblock.LockMode_Shared)
+			}, 20*time.Second, 10*time.Millisecond, "CREATE INDEX must wait for the writer's metadata lock")
+			execSQLRequire(t, ctx, ddlDB, fmt.Sprintf("kill query %d", ddlConnectionID))
+			select {
+			case err := <-done:
+				joined = true
+				require.Error(t, err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			require.NoError(t, execIssue29715(ctx, writer, "rollback"))
+			var published int
+			require.NoError(t, writerDB.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_indexes where table_id=? and name='ix_a'", tableID).Scan(&published))
+			require.Zero(t, published)
+			execSQLRequire(t, ctx, writerDB, "create index ix_a on "+table+" (a)")
+			execSQLRequire(t, ctx, writerDB, "drop index ix_a on "+table)
 		})
 	})
 }
@@ -219,13 +389,171 @@ func issue289OpenCNs(t *testing.T, cluster embed.Cluster) (*sql.DB, *sql.DB) {
 	require.NoError(t, err)
 	cn1, err := cluster.GetCNService(1)
 	require.NoError(t, err)
-	db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
-	require.NoError(t, err)
-	db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
-	require.NoError(t, err)
+	db0 := openIssue29715DB(t, cn0.GetServiceConfig().CN.Frontend.Port)
+	db1 := openIssue29715DB(t, cn1.GetServiceConfig().CN.Frontend.Port)
 	db0.SetMaxOpenConns(4)
 	db1.SetMaxOpenConns(4)
 	return db0, db1
+}
+
+// Pause the actual writer's first metadata admission after it has compiled its
+// UPDATE, then publish the index. The result hook only observes real locks.
+func issue289RunStaleWriter(t *testing.T, ctx context.Context, cluster embed.Cluster,
+	writerCN embed.ServiceOperator, writer *sql.Conn, writerDB, ddlDB *sql.DB, update, createIndex string) error {
+	t.Helper()
+	sid := writerCN.ServiceID()
+	sessions := issue29715SessionManager(t, writerCN)
+	var connectionID uint32
+	require.NoError(t, writer.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
+
+	paused, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	var releaseOnce sync.Once
+	var owner atomic.Value
+	var admissions atomic.Int32
+	workCtx, cancel := context.WithCancel(context.Background())
+	testCtx := moruntime.MustGetTestingContext(sid)
+	testCtx.SetBeforeLockFunc(func(txnID []byte, tableID uint64) {
+		if tableID == catalog.MO_TABLES_ID &&
+			issue29715TxnBelongsToConnection(sessions.GetAllSessions(), sid, connectionID, txnID) &&
+			first.CompareAndSwap(false, true) {
+			owner.Store(bytes.Clone(txnID))
+			close(paused)
+			select {
+			case <-release:
+			case <-workCtx.Done():
+			}
+		}
+	})
+	testCtx.SetAdjustLockResultFunc(func(txnID []byte, tableID uint64, result *pblock.Result) {
+		id, ok := owner.Load().([]byte)
+		if ok && bytes.Equal(id, txnID) && tableID == catalog.MO_TABLES_ID && !result.Timestamp.IsEmpty() {
+			admissions.Add(1)
+		}
+	})
+	done := make(chan error, 1)
+	joined := false
+	defer func() {
+		if !joined {
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			_, _ = writerDB.ExecContext(cleanup, fmt.Sprintf("kill query %d", connectionID))
+			releaseOnce.Do(func() { close(release) })
+			select {
+			case <-done:
+			case <-cleanup.Done():
+				t.Error("writer did not exit during cleanup")
+			}
+		}
+		cancel()
+		releaseOnce.Do(func() { close(release) })
+		testCtx.SetBeforeLockFunc(nil)
+		testCtx.SetAdjustLockResultFunc(nil)
+	}()
+	go func() {
+		_, err := writer.ExecContext(workCtx, update)
+		done <- err
+	}()
+	select {
+	case <-paused:
+	case err := <-done:
+		joined = true
+		t.Fatalf("writer did not reach metadata admission: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	execSQLRequire(t, ctx, ddlDB, createIndex)
+	syncAuthenticatedClusterCommit(t, ctx, cluster)
+	releaseOnce.Do(func() { close(release) })
+	var err error
+	select {
+	case err = <-done:
+		joined = true
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.GreaterOrEqual(t, admissions.Load(), int32(2),
+		"stale writer must refresh metadata and be admitted again")
+	return err
+}
+
+// A blocked DDL must be released and joined even if its caller fails before
+// reaching the normal handoff. KILL QUERY cancels the server-side statement.
+func issue289StartPlanBlockedDDL(t *testing.T, ctx context.Context, db *sql.DB, statement string) (func(), func() error) {
+	t.Helper()
+	wait, release := issue289InstallPlanBarrier(t, ctx, issue289CreateIndexPlanCompiled, 1)
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	var id uint32
+	require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&id))
+	ddlCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	joined := false
+	t.Cleanup(func() {
+		if !joined {
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			_, _ = db.ExecContext(cleanup, fmt.Sprintf("kill query %d", id))
+			release()
+			select {
+			case <-done:
+			case <-cleanup.Done():
+				t.Error("CREATE INDEX did not exit during cleanup")
+			}
+		}
+		release()
+		cancel()
+	})
+	go func() { _, err := conn.ExecContext(ddlCtx, statement); done <- err }()
+	return wait, func() error {
+		release()
+		select {
+		case err := <-done:
+			joined = true
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+type issue289IndexRow struct {
+	id    int64
+	value string
+}
+
+func issue289AssertPhysicalIndex(t *testing.T, ctx context.Context, db *sql.DB,
+	database, table, index, column string, unique bool, expected []issue289IndexRow) {
+	t.Helper()
+	quote := func(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }
+	qualified := quote(database) + "." + quote(table)
+	var hidden string
+	require.NoError(t, db.QueryRowContext(ctx,
+		"select index_table_name from mo_catalog.mo_indexes where table_id=("+
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?) and name=?",
+		strings.ToLower(database), table, index).Scan(&hidden))
+	read := func(query string) []issue289IndexRow {
+		rows, err := db.QueryContext(ctx, query)
+		require.NoError(t, err)
+		defer rows.Close()
+		var result []issue289IndexRow
+		for rows.Next() {
+			var row issue289IndexRow
+			require.NoError(t, rows.Scan(&row.id, &row.value))
+			result = append(result, row)
+		}
+		require.NoError(t, rows.Err())
+		return result
+	}
+	require.Equal(t, expected, read("select id,"+quote(column)+" from "+qualified+" order by id"))
+	baseKey, indexKey := "hex(serial_full("+quote(column)+",id))", "hex(__mo_index_idx_col)"
+	if unique {
+		baseKey, indexKey = quote(column), "__mo_index_idx_col"
+	}
+	base := read("select id," + baseKey + " from " + qualified + " order by id")
+	actual := read("select __mo_index_pri_col," + indexKey + " from " + quote(database) + "." + quote(hidden) + " order by __mo_index_pri_col")
+	require.Equal(t, base, actual, "physical index must have exactly the current base-table keys")
 }
 
 func issue289InstallPlanBarrier(
