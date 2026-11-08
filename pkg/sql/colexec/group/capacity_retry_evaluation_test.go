@@ -127,6 +127,18 @@ func (e *retryIntExpression) Free() {
 	e.ExpressionExecutor.Free()
 }
 
+type observingBudgetController struct {
+	*process.ExecutionResourceGeneration
+	onAcquire func()
+}
+
+func (c *observingBudgetController) AcquireAllocationCapacity(size uint64) error {
+	if c.onAcquire != nil {
+		c.onAcquire()
+	}
+	return c.ExecutionResourceGeneration.AcquireAllocationCapacity(size)
+}
+
 func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -134,6 +146,7 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 		partial      bool
 		distinct     bool
 		borrowed     bool
+		adaptive     bool
 		failRecovery bool
 	}{
 		{name: "final"},
@@ -141,6 +154,7 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 		{name: "partial-and-merge", partial: true},
 		{name: "distinct-drain", distinct: true},
 		{name: "borrowed-input", borrowed: true},
+		{name: "adaptive-spill", adaptive: true},
 		{name: "capacity-exhausted-after-spill", rollup: true, failRecovery: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,7 +187,25 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 			var allocation groupTestAllocation
 			var accountInstalled bool
 			var runErr error
+			if tc.adaptive {
+				proc.Base.Lim.Size = 4 << 20
+			}
 			generation := installGroupTestResourceBudget(t, proc)
+			var otherParticipants []*process.ExecutionMemoryGrowthParticipant
+			if tc.adaptive {
+				// Other live operators reduce Group's adaptive share below the
+				// resident prefix without lowering the hard allocation budget.
+				t.Cleanup(func() {
+					for _, participant := range otherParticipants {
+						participant.Release()
+					}
+				})
+				for range 15 {
+					participant, err := generation.RegisterMemoryGrowthParticipant()
+					require.NoError(t, err)
+					otherParticipants = append(otherParticipants, participant)
+				}
+			}
 			t.Cleanup(func() {
 				g.Free(proc, runErr != nil, runErr)
 				if accountInstalled {
@@ -187,10 +219,18 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 			}
 			g.NeedEval = !tc.partial
 			g.SpillMem = 1 << 30
+			if tc.adaptive {
+				g.SpillMem = 0
+			}
 			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 			require.NoError(t, err)
 			controller := &rejectNextGroupAllocationController{}
-			account, err := registry.OpenWithController(64<<20, controller)
+			budgetController := &observingBudgetController{ExecutionResourceGeneration: generation}
+			var capacityController mpool.AllocationCapacityController = controller
+			if tc.adaptive {
+				capacityController = budgetController
+			}
+			account, err := registry.OpenWithController(64<<20, capacityController)
 			require.NoError(t, err)
 			require.NoError(t, g.ctr.setAllocationAccount(account))
 			allocation = groupTestAllocation{generation: generation, registry: registry, account: account}
@@ -211,17 +251,32 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 			g.ctr.aggArgEvaluate[0].Executor[0] = arg
 			rejectedAfterSpill := false
 			retainedSentinel := false
-			controller.rejectWhen = func() bool {
-				if !controller.rejected {
-					return !g.ctr.hr.IsEmpty() && g.ctr.hr.Hash.GroupCount() == 256
+			adaptivePressureReleased := false
+			if tc.adaptive {
+				budgetController.onAcquire = func() {
+					if !adaptivePressureReleased && g.ctr.hr.IsEmpty() &&
+						g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"] > 0 {
+						// Model the other operators finishing after the first spill,
+						// so reload does not repeatedly spill under artificial pressure.
+						for _, participant := range otherParticipants {
+							participant.Release()
+						}
+						adaptivePressureReleased = true
+					}
 				}
-				if tc.failRecovery && g.ctr.hr.IsEmpty() &&
-					g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"] > 0 {
-					rejectedAfterSpill = true
-					retainedSentinel = len(g.ctr.groupingRollup) > 1 && g.ctr.groupingRollup[1] != nil
-					return true
+			} else {
+				controller.rejectWhen = func() bool {
+					if !controller.rejected {
+						return !g.ctr.hr.IsEmpty() && g.ctr.hr.Hash.GroupCount() == 256
+					}
+					if tc.failRecovery && g.ctr.hr.IsEmpty() &&
+						g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"] > 0 {
+						rejectedAfterSpill = true
+						retainedSentinel = len(g.ctr.groupingRollup) > 1 && g.ctr.groupingRollup[1] != nil
+						return true
+					}
+					return false
 				}
-				return false
 			}
 			got := make(map[int]int64)
 			for {
@@ -247,7 +302,14 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 				}
 			}
 			_, rejected := controller.snapshot()
-			require.True(t, rejected)
+			if tc.adaptive {
+				require.Zero(t, generation.Snapshot().RejectCount)
+				require.True(t, adaptivePressureReleased)
+				stats := g.OpAnalyzer.GetOpStats().ExtraStats
+				require.Positive(t, stats["GroupAdaptiveSpillTriggers"], "%+v", stats)
+			} else {
+				require.True(t, rejected)
+			}
 			require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 			require.Equal(t, 1, key.calls)
 			require.Equal(t, 512, key.rows)
@@ -258,6 +320,27 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 				require.True(t, rejectedAfterSpill)
 				require.True(t, retainedSentinel)
 				require.Empty(t, got)
+
+				// The failed retry still owns evaluated input and spill files.
+				// Reset must release them before the operator is prepared again.
+				g.Reset(proc, true, runErr)
+				require.Zero(t, allocation.account.Snapshot().Used)
+				require.Zero(t, generation.Snapshot().SpillDiskUsed)
+				require.Zero(t, generation.Snapshot().SpillFDUsed)
+				controller.rejectWhen = nil
+				g.Children = nil
+				g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input, batch.EmptyBatch}))
+				runErr = g.Prepare(proc)
+				require.NoError(t, runErr)
+				result, err := vm.Exec(g, proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.Equal(t, 1, result.Batch.RowCount())
+				require.Empty(t, result.Batch.Vecs[0].GetBytesAt(0))
+				require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])[0])
+				result, err = vm.Exec(g, proc)
+				require.NoError(t, err)
+				require.True(t, result.Status == vm.ExecStop || result.Batch == nil)
 				return
 			}
 			require.NoError(t, runErr)
@@ -277,6 +360,80 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 	}
 }
 
+type armAfterSecondEvaluation struct {
+	colexec.ExpressionExecutor
+	controller *rejectNextGroupAllocationController
+	calls      int
+}
+
+func (e *armAfterSecondEvaluation) Eval(proc *process.Process, inputs []*batch.Batch, selected []bool) (*vector.Vector, error) {
+	result, err := e.ExpressionExecutor.Eval(proc, inputs, selected)
+	e.calls++
+	if err == nil && e.calls == 2 {
+		e.controller.arm()
+	}
+	return result, err
+}
+
+// H0 cannot spill a group hash. A capacity rejection during aggregate
+// preflight must drain the existing DISTINCT keys and reuse the current input.
+func TestH0DistinctCapacityRetryRetainsEvaluatedInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	first := batch.NewWithSize(1)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{0}, nil, proc.Mp())
+	first.SetRowCount(1)
+	values := make([]int32, 512)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	second := batch.NewWithSize(1)
+	second.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	second.SetRowCount(len(values))
+	t.Cleanup(func() {
+		first.Clean(proc.Mp())
+		second.Clean(proc.Mp())
+	})
+
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctAgg(0)})
+	g.SpillMem = 1 << 30
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second, batch.EmptyBatch}))
+	generation := installGroupTestResourceBudget(t, proc)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
+	require.NoError(t, err)
+	controller := &rejectNextGroupAllocationController{}
+	account, err := registry.OpenWithController(64<<20, controller)
+	require.NoError(t, err)
+	require.NoError(t, g.ctr.setAllocationAccount(account))
+	allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
+	var runErr error
+	t.Cleanup(func() {
+		g.Free(proc, runErr != nil, runErr)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, generation.Snapshot().SpillDiskUsed)
+		require.Zero(t, generation.Snapshot().SpillFDUsed)
+		finalizeGroupTestAllocation(t, g, allocation)
+	})
+	runErr = g.Prepare(proc)
+	require.NoError(t, runErr)
+	arg := &armAfterSecondEvaluation{ExpressionExecutor: g.ctr.aggArgEvaluate[0].Executor[0], controller: controller}
+	g.ctr.aggArgEvaluate[0].Executor[0] = arg
+
+	result, runErr := vm.Exec(g, proc)
+	require.NoError(t, runErr)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{513}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+	_, rejected := controller.snapshot()
+	require.True(t, rejected, "the second batch must encounter the injected capacity rejection")
+	require.Equal(t, 2, arg.calls)
+	stats := g.OpAnalyzer.GetOpStats().ExtraStats
+	require.Positive(t, stats["GroupDistinctSpillKeys"])
+	require.Zero(t, stats["GroupSpillRecords"], "H0 must not use generic group spill")
+}
+
 type failOnceRetryExpression struct {
 	colexec.ExpressionExecutor
 	calls  int
@@ -290,8 +447,19 @@ func (e *failOnceRetryExpression) Eval(proc *process.Process, inputs []*batch.Ba
 	}
 	return e.ExpressionExecutor.Eval(proc, inputs, selectList)
 }
-func TestGroupCapacityErrorDuringInputEvaluationIsNotReplayed(t *testing.T) {
-	for _, failure := range []string{"group", "aggregate"} {
+
+type failPublishedAggregate struct {
+	aggexec.GroupAggFuncExec
+	calls int
+}
+
+func (a *failPublishedAggregate) BatchFill(int, []uint64, []*vector.Vector) error {
+	a.calls++
+	return mpool.ErrAllocationAccountCapacity
+}
+
+func TestGroupCapacityErrorIsNotReplayedAcrossBoundaries(t *testing.T) {
+	for _, failure := range []string{"group", "aggregate", "after-publication"} {
 		t.Run(failure, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(func() {
@@ -324,15 +492,28 @@ func TestGroupCapacityErrorDuringInputEvaluationIsNotReplayed(t *testing.T) {
 			require.NoError(t, g.Prepare(proc))
 			key := &failOnceRetryExpression{ExpressionExecutor: g.ctr.groupByEvaluate.Executor[0]}
 			arg := &failOnceRetryExpression{ExpressionExecutor: g.ctr.aggArgEvaluate[0].Executor[0]}
-			if failure == "group" {
+			var published *failPublishedAggregate
+			switch failure {
+			case "group":
 				key.failAt = 2
-			} else {
+			case "aggregate":
 				arg.failAt = 2
+			case "after-publication":
+				published = &failPublishedAggregate{GroupAggFuncExec: g.ctr.aggList[0]}
+				g.ctr.aggList[0] = published
 			}
 			g.ctr.groupByEvaluate.Executor[0] = key
 			g.ctr.aggArgEvaluate[0].Executor[0] = arg
 			_, err := vm.Exec(g, proc)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			if published != nil {
+				require.Equal(t, 1, key.calls)
+				require.Equal(t, 1, arg.calls)
+				require.Equal(t, 1, published.calls)
+				require.EqualValues(t, 256, g.ctr.hr.Hash.GroupCount())
+				require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+				return
+			}
 			require.Equal(t, 2, key.calls)
 			if failure == "group" {
 				require.Equal(t, 1, arg.calls)
