@@ -40,6 +40,12 @@ func TestDatalinkError(t *testing.T) {
 		moerr.NewNYINoCtx("unsupported url scheme ftp"),
 		moerr.NewInternalErrorNoCtx("docx: not a zip file"),
 		errors.New("pdf: malformed header"),
+		&smithy.OperationError{ServiceID: "S3", OperationName: "GetObject", Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusBadRequest}},
+				Err:      &smithy.GenericAPIError{Code: "InvalidRequest", Message: "bad range"},
+			},
+		}},
 	} {
 		got := DatalinkError(url, err)
 		require.True(t, moerr.IsMoErrCode(got, moerr.ErrIndexDatalink), "%v", err)
@@ -59,6 +65,12 @@ func TestDatalinkError(t *testing.T) {
 			ResponseError: &smithyhttp.ResponseError{
 				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}},
 				Err:      errors.New("api error SlowDown"),
+			},
+		}},
+		&smithy.OperationError{ServiceID: "S3", OperationName: "GetObject", Err: &awshttp.ResponseError{
+			ResponseError: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusBadRequest}},
+				Err:      &smithy.GenericAPIError{Code: "RequestTimeout", Message: "idle timeout"},
 			},
 		}},
 	} {
