@@ -2,7 +2,16 @@
 
 Status: design review pending
 
-- Design revision: r1, 2026-11-08.
+- Design revision: r2, 2026-11-08. Supersedes r1 (2026-11-08, SHA256
+  `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`), which
+  received a design-only REQUEST_CHANGES for two resource-contract findings;
+  the record section at the end carries the decision and the resolutions.
+  r2 changes only design contracts: the preserved implementation head
+  `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates the two resolutions,
+  whose production deltas (fold-rewrite deduplication plus the resource-limit
+  error, and the LIKE search work bound with shared cancellation accounting)
+  are planned for the post-approval implementation turn together with their
+  tests.
 - Owner: gouhongshen (implementation agent), issue group owner per the tracker.
 - Owning issue: [#31175](https://github.com/matrixorigin/matrixone/issues/31175)
   (consolidates [#31179](https://github.com/matrixorigin/matrixone/issues/31179)).
@@ -116,28 +125,54 @@ Secondary defects of the same boundary, found while tracing the owner paths:
    by a wildcard. Malformed bytes share one synthetic weight above every real
    weight; characters with no table weight compare by code-point identity
    (MySQL `my_uca_charcmp`).
-5. **Full-fold REGEXP equivalence.** Under case-insensitive matching, maximal
-   unquantified literal runs match exactly the subject strings whose full
-   Unicode case fold equals the run's fold image (ICU parity: `ss` matches
-   `ß`, `STRASSE` matches `Straße`). Quantified atoms keep their
-   per-character orbit; character classes keep their syntax and members and,
-   on the case-insensitive regexp2 route, gain the fold-orbit members the
-   engine's simple-fold class closure misses.
-6. **Admission is never widened by the rewrite.** The case-fold expansion is
-   an optimization of expression, never a reason to reject or accept a
-   pattern: both engines take malformed-pattern verdicts from the source
-   pattern as written, and when an expanded form exceeds a downstream
-   admission bound the compile retries with the unexpanded form and keeps the
-   base verdict (compared through the engine's per-character caseless orbit).
-7. **Bounded rewrite and matching work.** LIKE tokenization, segment search,
-   and literal comparison check the context every 1024 steps; the bit-parallel
-   segment search is capped at 256 KiB of masks with a longest-literal anchor
-   plus verification fallback; FIND_IN_SET member scans probe cancellation
-   every 1024 members. The fold rewrite is bounded per run (64 enumerated
-   alternatives, 128 KiB emission), per pattern (1 MiB emission enforced
-   during emission), and per rewrite work (16 MiB including discarded
-   attempts); exhaustion emits the pattern verbatim, preserving prior
-   behavior for that corner instead of failing the query.
+5. **Full-fold REGEXP equivalence, with an exactness boundary.** Under
+   case-insensitive matching, maximal unquantified literal runs match exactly
+   the subject strings whose full Unicode case fold equals the run's fold
+   image (ICU parity: `ss` matches `ß`, `STRASSE` matches `Straße`).
+   Quantified atoms keep their per-character orbit; character classes keep
+   their syntax and members and, on the case-insensitive regexp2 route, gain
+   the fold-orbit members the engine's simple-fold class closure misses. The
+   match set is never silently narrowed: identical sibling alternatives are
+   deduplicated before and during expansion (alternation is idempotent on
+   both engines), and when the faithful full-fold form still exceeds a budget
+   the operator raises a bounded resource-limit error instead of falling back
+   to per-character matching (invariant 7).
+6. **Admission verdicts stay with the source pattern.** The case-fold
+   expansion is an optimization of expression, never a reason to declare a
+   pattern valid or invalid: both engines take malformed-pattern verdicts
+   from the source pattern as written (the regexp2 route validates the
+   source form, so a rewrite can never launder a malformed pattern). When a
+   well-formed, source-admitted pattern's faithful expansion exceeds a
+   rewrite budget or a downstream admission bound, the outcome is the
+   bounded resource-limit error of invariant 7 — a resource verdict, not a
+   pattern verdict — and never a silent retry that matches through the
+   weaker per-character caseless orbit.
+7. **Bounded rewrite and matching work, with errors at the semantic
+   boundary.** One shared search budget threads each LIKE call: every
+   weight comparison in KMP scans, the Shift-And scan, and anchor-fallback
+   verification — including `_` positions and one-character literals —
+   charges one shared step, and the context is checked every 1024 shared
+   steps, so no token shape or candidate count can delay cancellation
+   beyond that gap. The bit-parallel segment search is capped at 256 KiB of
+   masks; over-budget segments use the longest-literal anchor plus
+   verification fallback under a deterministic total-work bound of
+   `max(1<<20, 4 × words × subject_chars)` comparisons, with
+   `words = ceil((width+1)/64)` — a small multiple of the Shift-And cost
+   model the segment would have used had its masks fit — and exhaustion
+   raises the bounded resource-limit error. FIND_IN_SET member scans probe
+   cancellation every 1024 members. The fold rewrite is bounded per run (64
+   enumerated alternatives, 128 KiB emission), per pattern (1 MiB emission
+   enforced during emission), and per rewrite work (16 MiB including
+   discarded attempts); identical-alternative deduplication runs before and
+   during expansion, and exhaustion of any fold budget for fold-relevant
+   content raises the same bounded resource-limit error. Verbatim emission
+   survives only where no full-fold promise exists (fold-irrelevant runs
+   and non-UTF-8 patterns). The error mirrors MySQL's own regexp resource
+   limits (`regexp_stack_limit`, `regexp_time_limit`): at a resource
+   boundary MySQL fails the evaluation rather than narrowing
+   case-insensitive semantics, and the issue's acceptance matrix sits
+   orders of magnitude inside these budgets, so no accepted behavior
+   changes.
 8. **Plan/execution agreement.** Under a case-insensitive collation the
    planner keeps the folding LIKE predicate (no byte-ordered `=`/`prefix_eq`
    rewrite), so index and scan paths return the same rows; under byte-ordered
@@ -208,7 +243,16 @@ Alternatives considered:
    recorded in the code), each segment found by KMP over weight streams, a
    budgeted bit-parallel Shift-And when literals mix with `_`, or the
    longest-literal anchor-plus-verify fallback when masks exceed the 256 KiB
-   word budget.
+   word budget. One per-call search budget is shared by every segment
+   search: all weight comparisons (KMP scans, the Shift-And scan, and
+   per-candidate verification, including `_` positions and one-character
+   literals) charge it, cancellation is observed every 1024 shared steps,
+   and the anchor fallback's cumulative comparisons are capped at
+   `max(1<<20, 4 × words × subject_chars)`; crossing the cap raises the
+   bounded resource-limit error, so an adversarial fragmented pattern
+   (thousands of one-character literals separated by `_`) cannot multiply
+   candidates by verification width into hundreds of millions of
+   uncancellable comparisons.
 2. `pkg/sql/plan/function/func_builtin_regexp.go` owns LIKE/REGEXP dispatch:
    `likeFoldModeFor` selects the fold from the subject operand's resolved
    charset; `generalCILikeFold` maps values to the 1:1 general_ci weight-rune
@@ -224,12 +268,24 @@ Alternatives considered:
    subtraction), literal-run segmentation into single-rune blocks and
    fold-image alternations with case-sensitive source alternatives, class
    fold-orbit augmentation, literal-carrying escape decoding, named-reference
-   preservation, and the emission/work budgets with verbatim fallback.
+   preservation, alternative deduplication, and the emission/work budgets.
+   Deduplication drops byte-identical sibling alternatives within one
+   alternation before expansion and identical expanded alternatives during
+   emission (bounded by the existing alternative and work budgets); it
+   preserves the match set because alternation is idempotent on both
+   engines, and it keeps equivalent patterns with redundant alternatives
+   inside the budgets. Exhaustion of any fold budget for fold-relevant
+   content raises the bounded resource-limit error; verbatim emission
+   remains only for fold-irrelevant runs and non-UTF-8 patterns, where no
+   full-fold promise exists.
 4. `regexp_icu.go` and the RE2 cache path in `func_builtin_regexp.go` own
-   engine admission: each compiles the expanded form first and retries
-   unexpanded when expansion pushed the pattern over an admission bound; the
-   regexp2 path additionally validates the source form so a rewrite can never
-   launder a malformed pattern; cache keys, bounds, and eviction are
+   engine admission: each compiles the expanded form first; when the
+   expanded form exceeds an admission bound, the source pattern's own
+   verdict stands (malformed stays malformed with its own error, and the
+   regexp2 path validates the source form so a rewrite can never launder a
+   malformed pattern), while a well-formed, source-admitted pattern raises
+   the bounded resource-limit error because its faithful expansion cannot
+   be evaluated within bounds. Cache keys, bounds, and eviction are
    unchanged.
 5. `pkg/sql/plan/collation_expression.go` owns resolution coverage:
    aggregation indexes for the matchers, the binary-domain guard that keeps a
@@ -252,9 +308,13 @@ bind: aggregate operands -> resolve collation (tie restoration if needed)
 evaluate: binary domain? -> byte path (3995 for text mix on regexp)
   -> match_type resolution (explicit c/i beats collation default)
   -> engine admission on the source pattern (RE2 scanner / regexp2 scanner)
-  -> case-fold expansion when ci applies (budgeted; verbatim on exhaustion)
-  -> compile expanded; on admission error with expansion applied, retry
-     unexpanded and keep the base verdict
+  -> case-fold expansion when ci applies (deduplicate identical
+     alternatives, then expand; fold-irrelevant content stays verbatim)
+  -> on fold-budget exhaustion for fold-relevant content: bounded
+     resource-limit error
+  -> compile expanded; on admission error with expansion applied, take the
+     source verdict when the source itself is inadmissible, else the
+     bounded resource-limit error
   -> cache install only after all steps succeed (unchanged contract)
   -> match with existing per-engine deadlines and budgets (unchanged)
 ```
@@ -265,11 +325,13 @@ The change adds no long-lived state: fold tables are static, the folder is an
 immutable `cases.Caser`, per-batch LIKE tokenization is discarded with the
 batch, and the regexp caches pre-date this change with unchanged ownership.
 Unhappy paths: invalid ESCAPE (existing error), malformed patterns (verdict
-always from the source), budget exhaustion (verbatim fallback for LIKE mask
-overflow via anchor search; verbatim pattern for fold-rewrite overflow;
-existing bounded errors for the regexp2 budgets), context cancellation
-(checked every 1024 steps/members), and cache eviction (subject-independent
-metadata only, unchanged).
+always from the source), budget exhaustion (LIKE mask overflow enters the
+bounded anchor search, whose total-work cap raises the bounded
+resource-limit error; fold-rewrite overflow for fold-relevant content
+raises the same error; existing bounded errors for the regexp2 budgets),
+context cancellation (observed every 1024 shared search steps in LIKE,
+every 1024 steps/members elsewhere), and cache eviction
+(subject-independent metadata only, unchanged).
 
 ## Compatibility, delivery, and operations
 
@@ -287,39 +349,56 @@ metadata only, unchanged).
   folding LIKE/REGEXP on ci data returns different rows on old and new CNs;
   the rollout rule is to upgrade every CN that may receive the workload
   before relying on the folded behavior, matching the ICU design's rule.
+- Two designed resource boundaries are new SQL-visible outcomes, both
+  confined to pathological inputs outside the acceptance matrix: a LIKE
+  pattern whose anchored verification exceeds the total-work bound, and a ci
+  REGEXP whose faithful full-fold form exceeds a rewrite or admission budget
+  even after alternative deduplication, each raise a bounded resource-limit
+  error. The pre-change server answered the REGEXP shapes through the
+  engines' per-character caseless orbit; that answer was already wrong for
+  fold-spanning subjects under the semantics the caller requested (MySQL
+  `i` is ICU full folding), and MySQL itself fails evaluations that exceed
+  `regexp_stack_limit`/`regexp_time_limit` rather than narrowing semantics,
+  so the error is the compatibility-preserving boundary. The r1-era
+  silent-fallback test pins are replaced by the boundary tests in the
+  validation map.
 - Hot-path cost: unchanged fast paths for binary and `_bin` domains; ASCII
   general_ci fold is `bytes.ToUpper`; the weighted matcher runs only for the
   unicode_ci family; the fold rewrite runs once per compiled pattern inside
   the existing cache, bounded by the budgets above. No new allocation on
   constant-pattern rows beyond the prepared form.
-- Observability: budget and admission failures surface as the existing
-  bounded SQL errors; no new metric or log schema, and user patterns/subjects
-  are not logged.
+- Observability: budget and admission failures surface as bounded SQL
+  errors (the fold/LIKE resource-limit error included); no new metric or
+  log schema, and user patterns/subjects are not logged.
 
 ## Verification and open decisions
 
-Acceptance mapping (all tests exist on the implementation head and pass in
-CI on Ubuntu/x86 UT, coverage, and BVT compose/proxy jobs at head
-`b554558f`):
+Acceptance mapping (the r1-era tests exist on the implementation head and
+pass in CI on Ubuntu/x86 UT, coverage, and BVT compose/proxy jobs at head
+`b554558f`; rows marked planned-r2 are the boundary tests the two review
+resolutions add in the post-approval implementation turn):
 
 | Invariant | Cheapest deterministic evidence |
 | --- | --- |
 | Collation-routed LIKE/REGEXP/FIND_IN_SET (1, 2) | `pkg/sql/plan/function` fold-mode and routing UTs; BVT `issue_31175_pattern_collation.sql` (410 statements, MySQL-oracle values) covering literals, columns, both operand orders, prepared parameters, user variables |
 | Binary-mix rules (3) | `collation_binary_tie_test.go`, admission-matrix UTs, BVT `_binary`/HEX/BIT/CAST rows incl. error 3995 both orders |
 | Per-character LIKE weights (4) | `pkg/common/collation/wildcard_test.go` (weights, malformed bytes, supplementary identity, sigma/dotless-i), `wildcard_segments_test.go` anchor fallback |
-| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, verbatim fallbacks, source-verdict preservation), `func_builtin_regexp_test.go` retry and error-shape tests |
-| Bounded work (7) | cancellation and bounded-work UTs in both packages; budget-exhaustion tests asserting verbatim emission and retry-unexpanded |
+| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned-r2 boundary tests on both engines: redundant-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, the 328-byte four-alternative shape folding fully after dedup so forty `ß` match eighty `s` under `i`), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
+| Bounded work (7) | cancellation and bounded-work UTs in both packages; planned-r2 tests: the fragmented-pattern counterexample (`%` + 15,000 `a_` pairs + a 92-distinct-weight alphabet interleaved with `_` + `%` against 60,000 `a` characters) terminating at the total-work bound with the resource-limit error and an instrumented comparison count at or under the bound, cancellation observed after subject preparation within the shared-step gap, and deterministic work-bound checks straddling the 256 KiB mask-budget transition |
 | Plan/execution agreement (8) | `TestLikePrefixCaseInsensitiveKeepsFoldedPredicate` (pkg/tests/sqlintegration) proving scan, forced-index, and computed-subject paths return the folded rows; prefix fixtures pinned to `utf8mb4_bin` |
 | Domain/coercibility preservation (9) | `pkg/sql/plan` and `rule` UTs for folded `CAST(x AS BINARY)`/`BINARY 'x'`/`binary()` stamping, negative-width casts, folded-domain preservation; `operator/mysql_compat_string_binary_comparison` BVT unchanged |
-| Cache contract (10) | existing cache/eviction tests plus retry tests proving install only after success |
+| Cache contract (10) | existing cache/eviction tests plus admission-error tests proving install only after success |
 
 Drawbacks and accepted tradeoffs: the fold rewrite enlarges ci patterns
-(bounded, verbatim above budgets with per-character-orbit semantics — an
-accepted, test-pinned divergence from full folding for pathological runs);
-the unicode_ci LIKE matcher is slower per row than the byte path (accepted:
-correctness per the resolved collation; byte domains keep the fast path);
-FIND_IN_SET keys value+sentinel per member comparison (needle prepared once
-per row).
+(bounded; above budgets the query raises the bounded resource-limit error
+rather than silently narrowing the match set — exactness is never traded
+for completion); the unicode_ci LIKE matcher is slower per row than the
+byte path (accepted: correctness per the resolved collation; byte domains
+keep the fast path); FIND_IN_SET keys value+sentinel per member comparison
+(needle prepared once per row); the LIKE total-work bound can error an
+adversarial fragmented pattern that an uncapped matcher would eventually
+answer (accepted: a deterministic bound and prompt cancellation over
+unbounded per-call work).
 
 Open decisions: none blocking. Non-blocking: the pre-existing equality/IN
 pure-literal parity gap under explicit `utf8mb4_general_ci` is owned by a
@@ -334,7 +413,32 @@ budget-dependent fallbacks, and a compatibility-contract change across both
 regexp engines and the planner). The gate was raised by the mo-bot
 implementation review at head `b554558f9d3c191244f01b0e162a83d6af88ba8d`.
 
-- Design revision under review: r1, 2026-11-08 (this document).
+Revision history:
+
+- r1, 2026-11-08, SHA256
+  `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`:
+  initial submission. The independent design-only review returned
+  REQUEST_CHANGES with two P2 findings: (1) preserve REGEXP semantics when
+  rewrite budgets are exhausted — the silent per-character fallback
+  contradicted invariant 5 and was reachable by a short supported pattern
+  (four identical 80-`s` alternatives plus a comment, 328 bytes, pinned
+  returning false for forty `ß` under `i`); (2) close the LIKE fallback's
+  CPU and cancellation bounds — the anchor fallback had no total
+  verification-work bound, and its cancellation accounting skipped `_`
+  positions and one-character literals (a fragmented counterexample needs
+  hundreds of millions of comparisons with millions between checks).
+- r2, 2026-11-08 (this document): resolves (1) with match-set-preserving
+  alternative deduplication plus a bounded resource-limit error for any
+  residual over-budget faithful expansion (invariants 5-7, ownership items
+  3-4, per-call flow, unhappy paths, compatibility note); resolves (2) with
+  one shared per-call search budget (every comparison charged, cancellation
+  every 1024 shared steps) and a deterministic total-work bound of
+  `max(1<<20, 4 × words × subject_chars)` for the anchor fallback
+  (invariant 7, ownership item 1). The preserved implementation head
+  `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates both resolutions;
+  their production deltas and the planned-r2 boundary tests named in the
+  validation map land in the post-approval implementation turn.
+- Design revision under review: r2, 2026-11-08 (this document).
 - Implementation review remains blocked until the review of this revision
   records a PASS or REQUEST_CHANGES decision bound to this document's SHA256;
   material implementation deviations require updating this document and
