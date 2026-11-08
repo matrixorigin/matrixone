@@ -131,16 +131,17 @@ set wait_timeout = 33600;
 show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    33600
-set wait_timeout = 10;
-show variables like 'wait_timeout';
-Variable_name    Value
-wait_timeout    10
+set wait_timeout = 10, @bvt_wait_timeout = @@wait_timeout, wait_timeout = 33600;
+select @bvt_wait_timeout;
+@bvt_wait_timeout
+10
 set wait_timeout = 0;
 internal error: convert to the system variable int type failed
-set wait_timeout = 1;
-show variables like 'wait_timeout';
-Variable_name    Value
-wait_timeout    1
+set wait_timeout = 1, @bvt_wait_timeout = @@wait_timeout, wait_timeout = 86400;
+select @bvt_wait_timeout;
+@bvt_wait_timeout
+1
+set @bvt_wait_timeout = null;
 set wait_timeout = 86400;
 show variables like 'wait_timeout';
 Variable_name    Value
@@ -150,7 +151,7 @@ invalid input: wait_timeout must be <= 86400
 show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    86400
-set wait_timeout = 10;
+set wait_timeout = 33600;
 drop table if exists t;
 create table t(
 a int,
@@ -439,7 +440,7 @@ Variable_name    Value
 max_allowed_packet    67108864
 show variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    10
+wait_timeout    33600
 set wait_timeout = 10000;
 show variables like 'wait_timeout';
 Variable_name    Value
