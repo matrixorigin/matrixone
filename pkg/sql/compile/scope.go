@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -365,6 +366,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err = resolveSenderPipelineError(s, err)
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -608,7 +610,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			// the unsubmitted scope through the ordinary start-failure cleanup so
 			// that receiver has a terminal signal to drain.
 			claimedPreScopes[i] = true
-			cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
+			cause = cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
 			if completions != nil {
 				completions[i].finish(newScopeRunResult(cause, scope))
 			}
@@ -622,7 +624,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// Ordinary branches were initialized serially by Compile.Run. Repeating
 		// initialization here would rebuild DOP clones' filters concurrently.
 		if initErr := s.initLazyPreScope(scope, c); initErr != nil {
-			cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
+			initErr = cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
 			s.cancelMergeSiblingsOnError(initErr)
 			publishPreScopeResult(i, newScopeRunResult(initErr, scope))
 			return initErr
@@ -643,7 +645,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = scope.RemoteRun(c)
 				default:
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-					cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
+					err = cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
 				publishPreScopeResult(i, newScopeRunResult(err, scope))
@@ -652,7 +654,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
+			submitPreScope = cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
 			publishPreScopeResult(i, newScopeRunResult(submitPreScope, scope))
 		}
@@ -663,12 +665,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.LazyPreScopes {
 		if len(s.PreScopes) < 2 || len(s.RemoteReceivRegInfos) != 0 {
 			err = moerr.NewInternalErrorNoCtx("invalid lazy union all scope topology")
-			cleanScopeTreeWithStartFail(s, err, c.isPrepare)
+			err = cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 			return err
 		}
 		clearStarter, deferFirst, installErr := installSequentialBranchStarter(s.RootOp, startPreScope, waitPreScope)
 		if installErr != nil {
-			cleanScopeTreeWithStartFail(s, installErr, c.isPrepare)
+			installErr = cleanScopeTreeWithStartFail(s, installErr, c.isPrepare)
 			return installErr
 		}
 		defer clearStarter()
@@ -680,7 +682,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			for i := range claimedPreScopes {
 				if !claimedPreScopes[i] {
 					claimedPreScopes[i] = true
-					cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+					cleanupErr := cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+					if err == nil && cleanupErr != nil && !process.IsPipelineCancellationError(cleanupErr) {
+						err = cleanupErr
+					}
 				}
 			}
 		}()
@@ -833,16 +838,24 @@ func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
 // Its input producers (including DOP clones and remote notifiers) may never
 // exist. Disable input waits, but still reset every operator to release owned
 // resources and publish the actual outcome to the containing scope's consumers.
-func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
+func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) error {
 	if sp == nil {
-		return
+		return fail
 	}
 	if fail == process.ErrPipelineStopped {
 		fail = nil
+		if sp.Proc != nil && sp.Proc.Base != nil {
+			fail = sp.Proc.GetQueryContextError()
+		}
 	}
+	result := fail
 	for _, preScope := range sp.PreScopes {
-		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+		childErr := cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+		if result == nil && childErr != nil && !process.IsPipelineCancellationError(childErr) {
+			result = childErr
+		}
 	}
+	fail = resolveSenderPipelineError(sp, result)
 	_ = vm.HandleAllOp(sp.RootOp, func(_ vm.Operator, op vm.Operator) error {
 		if m, ok := op.(*merge.Merge); ok {
 			m.DisableReceiverWaitForStartFailure(sp.Proc)
@@ -854,6 +867,28 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 	}
 	p := pipeline.New(0, nil, sp.RootOp)
 	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
+	return fail
+}
+
+// An owned local exchange sits immediately below its Dispatch. Resolve its
+// pool outcome before the sender publishes a terminal signal and before the
+// scope result is collected. Query-level cancellation remains authoritative.
+func resolveSenderPipelineError(s *Scope, err error) error {
+	if s == nil || s.Proc == nil || s.Proc.Base == nil {
+		return err
+	}
+	sender, ok := s.RootOp.(*dispatch.Dispatch)
+	if !ok || sender.GetOperatorBase().NumChildren() != 1 {
+		return err
+	}
+	router, ok := sender.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	if !ok || !router.OwnedOutput {
+		return err
+	}
+	if s.Proc.GetQueryContextError() != nil {
+		return err
+	}
+	return router.ResolvePipelineError(err)
 }
 
 // The original sender's Reset publishes one End. Before DOP workers exist,
@@ -955,8 +990,7 @@ func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
 	if c != nil && c.proc != nil && c.proc.Cancel != nil {
 		c.proc.Cancel(err)
 	}
-	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
-	return err
+	return cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 }
 
 func validateRemoteRunAddress(scopeAddr, localAddr string) error {
@@ -1073,6 +1107,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 				s.Proc.Ctx,
 				queryCtx,
 			)
+			err = resolveSenderPipelineError(s, err)
 			if process.IsPipelineCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
 			}
