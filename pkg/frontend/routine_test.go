@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -852,4 +853,118 @@ func TestMigrateConnectionFromRejectsForeignConns(t *testing.T) {
 	require.NoError(t, removed.Close())
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))
+}
+
+func TestTerminalRetirementPreservesLifecycleOwnership(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+	routine.setCancelRequestFunc(cancelRequest)
+	require.True(t, routine.setInProcessRequest(true))
+	require.True(t, routine.mc.beginOperation())
+
+	require.False(t, routine.retireTerminalConnection(), "an active lifecycle operation retains ownership")
+	require.NoError(t, requestCtx.Err())
+	require.False(t, routine.isTerminalRetired())
+	routine.mc.endOperation()
+
+	require.True(t, routine.retireTerminalConnection())
+	require.ErrorIs(t, requestCtx.Err(), context.Canceled)
+	require.True(t, routine.isTerminalRetired())
+	require.False(t, routine.mc.tryBeginOperation(), "retirement seals new lifecycle operations")
+	require.False(t, routine.setInProcessRequest(true), "a buffered request cannot be admitted")
+	require.True(t, routine.setInProcessRequest(false))
+
+	lateCtx, cancelLate := context.WithCancel(context.Background())
+	defer cancelLate()
+	routine.setCancelRequestFunc(cancelLate)
+	require.ErrorIs(t, lateCtx.Err(), context.Canceled, "a late request context must also be canceled")
+	require.False(t, routine.retireTerminalConnection())
+
+	// An explicit KILL CONNECTION must retain its existing semantics even
+	// after terminal retirement; the fast path does not claim its flag.
+	routineCtx := routine.getCancelRoutineCtx()
+	routine.killConnection(false)
+	require.ErrorIs(t, routineCtx.Err(), context.Canceled)
+}
+
+func TestTerminalRetirementLeavesFINAdmissionUnchanged(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.beginClose()
+	require.False(t, routine.isTerminalRetired())
+	require.True(t, routine.setInProcessRequest(true), "existing FIN behavior is unchanged")
+	require.True(t, routine.setInProcessRequest(false))
+	require.False(t, routine.retireTerminalConnection())
+}
+
+func TestTerminalRetirementRejectsHandlerBeforeExecution(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	conn := &Conn{}
+	manager := &RoutineManager{ctx: context.Background(), clients: map[*Conn]*Routine{conn: routine}}
+	require.True(t, routine.retireTerminalConnection())
+	require.ErrorIs(t, manager.Handler(conn, []byte{0}), io.EOF)
+}
+
+func TestTerminalRetirementRacesLifecycleAdmission(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	start := make(chan struct{})
+	lifecycle := make(chan bool, 1)
+	retired := make(chan bool, 1)
+	go func() { <-start; lifecycle <- routine.mc.beginOperation() }()
+	go func() { <-start; retired <- routine.retireTerminalConnection() }()
+	close(start)
+	var admitted, wasRetired bool
+	select {
+	case admitted = <-lifecycle:
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle admission blocked")
+	}
+	if admitted {
+		defer routine.mc.endOperation()
+	}
+	select {
+	case wasRetired = <-retired:
+	case <-time.After(time.Second):
+		t.Fatal("terminal retirement blocked")
+	}
+	require.NotEqual(t, admitted, wasRetired, "lifecycle admission and retirement must be exclusive")
+}
+
+func TestTerminalRetirementSkipsBusyLocks(t *testing.T) {
+	for _, target := range []string{"routine", "lifecycle"} {
+		t.Run(target, func(t *testing.T) {
+			routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+			t.Cleanup(routine.cancelRoutineFunc)
+			var unlock func()
+			if target == "routine" {
+				routine.mu.Lock()
+				unlock = routine.mu.Unlock
+			} else {
+				routine.mc.Lock()
+				unlock = routine.mc.Unlock
+			}
+			started := make(chan struct{})
+			done := make(chan bool, 1)
+			go func() { close(started); done <- routine.retireTerminalConnection() }()
+			<-started
+			completed := false
+			var retired bool
+			select {
+			case retired = <-done:
+				completed = true
+			case <-time.After(time.Second):
+			}
+			unlock()
+			if !completed {
+				<-done
+				t.Fatal("a busy lock blocked the terminal monitor")
+			}
+			require.False(t, retired)
+			require.True(t, routine.retireTerminalConnection(), "the monitor must be able to retry after contention")
+		})
+	}
 }

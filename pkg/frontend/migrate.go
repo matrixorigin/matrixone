@@ -58,8 +58,7 @@ func (mc *migrateController) waitAndClose() {
 }
 
 // startClose seals lifecycle admission and cancels the active operation. It
-// does not wait, so connection-liveness control paths can remain independent
-// of the operation they are stopping.
+// does not wait for the operation to finish, but acquiring its mutex can wait.
 func (mc *migrateController) startClose() {
 	mc.Lock()
 	mc.closed = true
@@ -69,6 +68,21 @@ func (mc *migrateController) startClose() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// tryStartCloseWhenIdle prevents new lifecycle operations without waiting for
+// or interrupting one that has already started.
+func (mc *migrateController) tryStartCloseWhenIdle() bool {
+	if !mc.TryLock() {
+		return false
+	}
+	defer mc.Unlock()
+	if mc.inProgress {
+		return false
+	}
+	mc.closed = true
+	mc.cond.Broadcast()
+	return true
 }
 
 // beginOperation starts a lifecycle operation unless the routine is closed or
