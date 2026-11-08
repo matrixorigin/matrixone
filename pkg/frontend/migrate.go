@@ -71,6 +71,21 @@ func (mc *migrateController) startClose() {
 	}
 }
 
+// tryStartCloseWhenIdle prevents new lifecycle operations without waiting for
+// or interrupting one that has already started.
+func (mc *migrateController) tryStartCloseWhenIdle() bool {
+	if !mc.TryLock() {
+		return false
+	}
+	defer mc.Unlock()
+	if mc.inProgress {
+		return false
+	}
+	mc.closed = true
+	mc.cond.Broadcast()
+	return true
+}
+
 // beginOperation starts a lifecycle operation unless the routine is closed or
 // another operation is already running.
 func (mc *migrateController) beginOperation() bool {

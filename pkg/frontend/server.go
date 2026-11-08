@@ -120,6 +120,7 @@ func (mo *MOServer) Start() error {
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
 	mo.startConnectionLivenessMonitor()
+	mo.startTerminalConnectionMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil

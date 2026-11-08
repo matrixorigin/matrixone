@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -197,10 +198,13 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 }
 
 func (rm *RoutineManager) longRunningRequests(now time.Time, minimum time.Duration) []activeClientRequest {
+	return rm.appendLongRunningRequests(nil, now, minimum)
+}
+
+func (rm *RoutineManager) appendLongRunningRequests(requests []activeClientRequest, now time.Time, minimum time.Duration) []activeClientRequest {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	nowValue := clientRequestClockValue(now)
-	var requests []activeClientRequest
 	for conn, routine := range rm.clients {
 		if conn != nil && routine != nil && routine.requestRunningLongerThan(nowValue, minimum) {
 			requests = append(requests, activeClientRequest{conn: conn, routine: routine})
@@ -418,7 +422,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
-	routine.setInProcessRequest(true)
+	if !routine.setInProcessRequest(true) {
+		return io.EOF
+	}
 	defer routine.setInProcessRequest(false)
 	payload := msg
 
@@ -427,6 +433,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 	req := ToRequest(payload)
 	//handle request
 	err = routine.handleRequest(req)
+	if routine.isTerminalRetired() && (err == nil || skipClientQuit(err.Error())) {
+		return io.EOF
+	}
 	if err != nil {
 		if !skipClientQuit(err.Error()) {
 			ses.Error(ctx,
