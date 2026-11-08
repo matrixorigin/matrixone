@@ -13,7 +13,7 @@ set @meta = (select index_table_name from mo_catalog.mo_indexes where name = 'ft
 set @wait_meta_sql = concat('select coalesce(max(build_ts), 0) > 0 as ready from `', database(), '`.`', @meta, '`');
 prepare wait_meta from @wait_meta_sql;
 execute wait_meta;
-➤ ready[-7,1,0]  𝄀
+➤ ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_meta;
 insert into t values (4, '{"foo":"needle"}', 9), (5, '{"foo":"hay"}', 9);
