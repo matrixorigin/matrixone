@@ -115,9 +115,12 @@ selected and unselected skippable equality values, then charge actual encoded
 sizes and packers. Bind each tuple through the existing `SERIAL` owner with
 independent semantic copies, and append the complete hidden-key `IN` only when
 all checks and bindings succeed. Retain the original logical and physical
-predicates and the existing block-filter rules and hint. An optional proof,
-marshal or bind failure falls back; cancellation and deadline errors remain with
-the planner's existing cancellation owner.
+predicates and the existing block-filter rules and hint. An ordinary optional
+proof, marshal or bind failure falls back. The last existing planner checkpoint
+precedes this phase: cancellation or deadline failure observed during deferred
+proof or binding must propagate from publication through the planner's return
+path, including the final query step. It must not be converted into a normal
+candidate fallback.
 
 The general binder is stateful. Deferred binding is restricted to the admitted
 `SERIAL` scalar forms for which ordinary binding, including failure, does not
@@ -218,7 +221,17 @@ Acceptance evidence must cover:
 
 - Correlated/shared facts, incomplete and sibling ORs, duplicates, NULLs,
   unsafe residuals, exact witnesses, relation/snapshot changes, scan copies,
-  late lowering, and all resource limits with fail-open behavior.
+  late lowering, and all resource limits with fail-open behavior. Mutate
+  selected and unselected source expressions after capture, including parameter
+  ordinals, cast metadata and literal provenance; the frozen proof must retain
+  its meaning or publication must fall back.
+- Successful and failed ordinary `SERIAL` binding must preserve existing
+  value-dependency, diagnostics, field/temporal state and warnings, apart from
+  the intentional candidate dependency mark. Deterministically cancel after the
+  earlier checkpoint and require propagation; an ordinary binding failure must
+  retain the fallback. A multi-scan or multi-step budget test must include
+  frozen copies and temporary witness comparison and distinguish rejection
+  before parameter inspection from value-dependent rejection afterward.
 - Actual frontend cache installation and reuse for forced and automatic index
   paths; SQL and binary prepared reuse with small/large/NULL transitions in
   both orders, selected and unselected cast bounds, warnings/errors, rollback
@@ -228,10 +241,13 @@ Acceptance evidence must cover:
   early IVF paths, and block-filter-disabled behavior.
 - Reader IN/prefix operand orders, partial overlap, vector lifetime, cached
   searches and cleanup; normal and race tests for affected owners.
-- The real persisted 2- and 50-point workloads, scan rows and blocks, and
-  matched planner measurements for surviving and eliminated candidates, no-OR
-  and unsafe controls. Report setup, sampling and limits rather than promising
-  general speedups. Run incremental static checks for the affected closure.
+- In the persisted 100,001-row fixture, admitted two- and 50-point queries must
+  preserve results while reducing scan input to 2 and 50 rows respectively.
+  Observed eliminated-index cases must regain frontend cache installation and
+  reuse when otherwise eligible. Measure planner cost on matched surviving and
+  eliminated candidates, no-OR and unsafe controls without concurrent heavy
+  tests. Report setup, sampling and limits rather than promising general
+  speedups. Run incremental static checks for the affected closure.
 
 Remaining limitation: execution fan-out and multi-CN performance were not
 bounded or benchmarked by the local one-CN admission charge and measurements.
