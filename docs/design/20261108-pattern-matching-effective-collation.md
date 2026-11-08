@@ -2,11 +2,13 @@
 
 Status: design review pending
 
-- Design revision: r3, 2026-11-08. Supersedes r2 (2026-11-08, SHA256
-  `c309345e456cf92c06446cd6bb12a0fb94b7c49637214e743ee71a4f47a95e9a`) and r1
-  (SHA256 `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`),
-  each of which received a design-only REQUEST_CHANGES; the record section at
-  the end carries the decisions and the resolutions. r3 changes only design
+- Design revision: r4, 2026-11-08. Supersedes r3 (2026-11-08, SHA256
+  `590a0eabdfeab02f21b7b8d708d27ced42652747e76997a10135e72ced11a4f6`), r2
+  (SHA256 `c309345e456cf92c06446cd6bb12a0fb94b7c49637214e743ee71a4f47a95e9a`),
+  and r1 (SHA256
+  `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`), each of
+  which received a design-only REQUEST_CHANGES; the record section at the end
+  carries the decisions and the resolutions. r4 changes only design
   contracts: the preserved implementation head
   `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates the resolutions, whose
   production deltas (eligibility-checked fold-rewrite deduplication plus the
@@ -134,8 +136,9 @@ Secondary defects of the same boundary, found while tracing the owner paths:
    their syntax and members and, on the case-insensitive regexp2 route, gain
    the fold-orbit members the engine's simple-fold class closure misses. The
    match set is never silently narrowed: dedup-eligible sibling alternatives
-   (byte-identical, free of captures, backreferences and unscoped option
-   setters; first occurrence kept) are deduplicated before expansion, and
+   (byte-identical at equal effective inline-option state, free of captures,
+   backreferences and unscoped option setters; first occurrence kept) are
+   deduplicated before expansion, and
    identical rewrite-generated fold-image alternatives during emission, and
    when the faithful full-fold form still exceeds a budget the operator
    raises a bounded resource-limit error instead of falling back to
@@ -275,10 +278,22 @@ Alternatives considered:
    preservation, eligibility-checked alternative deduplication, and the
    emission/work budgets. Deduplication is conservative: a sibling
    alternative is dedup-eligible only when it is byte-identical to an
-   earlier sibling in the same alternation and contains no capturing group
+   earlier sibling in the same alternation, contains no capturing group
    (numbered or named), no backreference or named/relative reference, and
-   no unscoped inline-option setter; the first occurrence is kept so branch
-   order and positional inline-option state are preserved. Source capture
+   no unscoped inline-option setter, and is evaluated under the same
+   effective inline-option state as the kept occurrence — the case (`i`)
+   and free-spacing (`x`) letters this rewrite tracks. An unscoped option
+   setter applies from its point to the end of the enclosing group, so it
+   changes the ambient state of every later sibling: in
+   `^(?:ss|(?i)a|ss)$` under a case-sensitive ambient mode only the second
+   `ss` inherits `(?i)` and matches `SS` and `ß`, and deleting it silently
+   narrows the match set. Conservatively, any unscoped option setter
+   between the kept occurrence and the duplicate in the enclosing group
+   makes the duplicate ineligible, even when the intervening setters would
+   net out; scoped `(?flags:...)` groups restore the prior state at group
+   end and do not affect their siblings. The first occurrence is kept so
+   branch order and positional inline-option state are preserved. Source
+   capture
    numbering, names, and participation are user-observable (regexp2
    backreferences such as `\3`, `REGEXP_REPLACE` replacement references,
    and the `regexp2CaptureMapping` contract of the ICU design's
@@ -286,7 +301,8 @@ Alternatives considered:
    option-setting branches are always retained; alternation idempotence
    alone never justifies deleting them. During emission, dedup applies to
    identical fold-image alternatives, which the rewrite itself generates as
-   non-capturing forms, so eligibility holds by construction. Ineligible
+   non-capturing forms at one position under one option state, so
+   eligibility holds by construction. Ineligible
    redundant branches stay in the pattern; when the faithful expansion
    still exceeds a budget the resource-limit error contract applies.
    Exhaustion of any fold budget for fold-relevant content raises the
@@ -410,9 +426,9 @@ resolutions add in the post-approval implementation turn):
 | Collation-routed LIKE/REGEXP/FIND_IN_SET (1, 2) | `pkg/sql/plan/function` fold-mode and routing UTs; BVT `issue_31175_pattern_collation.sql` (410 statements, MySQL-oracle values) covering literals, columns, both operand orders, prepared parameters, user variables |
 | Binary-mix rules (3) | `collation_binary_tie_test.go`, admission-matrix UTs, BVT `_binary`/HEX/BIT/CAST rows incl. error 3995 both orders |
 | Per-character LIKE weights (4) | `pkg/common/collation/wildcard_test.go` (weights, malformed bytes, supplementary identity, sigma/dotless-i), `wildcard_segments_test.go` anchor fallback |
-| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned boundary tests on both engines: redundant-literal-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, the 328-byte four-alternative shape folding fully after dedup so forty `ß` match eighty `s` under `i`), dedup-eligibility counterexamples (capture-bearing duplicates retained — `^((ss)|(ss))\3$` keeps group 3 valid and matches `ssss` through the second branch with group-3 participation; `REGEXP_REPLACE` `$3` replacement identity preserved; backreference-bearing and unscoped-`(?i)`-bearing duplicates retained; capture-free duplicates still deduped), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
+| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned boundary tests on both engines: redundant-literal-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, the 328-byte four-alternative shape folding fully after dedup so forty `ß` match eighty `s` under `i`), dedup-eligibility counterexamples (capture-bearing duplicates retained — `^((ss)|(ss))\3$` keeps group 3 valid and matches `ssss` through the second branch with group-3 participation; `REGEXP_REPLACE` `$3` replacement identity preserved; backreference-bearing and unscoped-`(?i)`-bearing duplicates retained; intervening-option duplicates retained on both engine routes — `^(?:ss|(?i)a|ss)$` under an ambient case-sensitive mode keeps both `ss` branches, so `SS` and `ß` still match through the second `ss` on the RE2 route and on the lookahead-prefixed regexp2 route, while the same shape with a scoped `(?i:...)` setter between the occurrences still dedups; capture-free duplicates at equal option state still deduped), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
 | Bounded work (7) | cancellation and bounded-work UTs in both packages; planned tests: the fragmented-pattern counterexample (`%` + 15,000 `a_` pairs + a 92-distinct-weight alphabet interleaved with `_` + `%` against 60,000 `a` characters) terminating at the total-work bound with the resource-limit error and an instrumented comparison count at or under the bound, cancellation observed after subject preparation within the shared-step gap, and deterministic work-bound checks straddling the 256 KiB mask-budget transition |
-| Resource-boundary SQL proof (5, 7) | planned BVT (public-path proof per the testing contract, since both boundaries are new SQL-visible errors): update `issue_31175_pattern_collation.sql`'s round-14/15 sections — the 999-nested-capture `'i'` statements currently pinned `1`/`1`/`0` with "never an error" comments become the bounded resource-limit error, the 997-nest accept side and the `'c'` control stay unchanged, and the four-alternative section gains a forty-`ß` subject now returning `1` after dedup; add `issue_31175_pattern_resource_limits.sql` covering regexp2 translated-size exhaustion, RE2 height-bound exhaustion, LIKE total-work-bound exhaustion, below-bound controls just under each bound returning normal folded results, and malformed-source patterns keeping their own error verdicts. The error is pinned by its stable class and message prefix (`internal error: regexp case-fold resource limit exceeded: <bound>` / `internal error: LIKE pattern resource limit exceeded: <bound>`) using `@regex` on the prefix per BVT quality rules; expected results are hand-written from this contract and independently reviewed before normal comparison execution (generated results are a draft, never accepted merely because generated) |
+| Resource-boundary SQL proof (5, 7) | planned BVT (public-path proof per the testing contract, since both boundaries are new SQL-visible errors): update `issue_31175_pattern_collation.sql`'s round-14/15 sections — the 999-nested-capture `'i'` statements currently pinned `1`/`1`/`0` with "never an error" comments become the bounded resource-limit error, the 997-nest accept side and the `'c'` control stay unchanged, and the four-alternative section gains a forty-`ß` subject now returning `1` after dedup plus a public intervening-option proof — `REGEXP_LIKE(subject, '^(?:ss|(?i)a|ss)$', 'c')` returns `1` for `SS` and for `ß` because the second `ss` branch is retained (the deduplicated form would reject both); add `issue_31175_pattern_resource_limits.sql` covering regexp2 translated-size exhaustion, RE2 height-bound exhaustion, LIKE total-work-bound exhaustion, below-bound controls just under each bound returning normal folded results, and malformed-source patterns keeping their own error verdicts. The error is pinned by its stable class and message prefix (`internal error: regexp case-fold resource limit exceeded: <bound>` / `internal error: LIKE pattern resource limit exceeded: <bound>`) using `@regex` on the prefix per BVT quality rules; expected results are hand-written from this contract and independently reviewed before normal comparison execution (generated results are a draft, never accepted merely because generated) |
 | Plan/execution agreement (8) | `TestLikePrefixCaseInsensitiveKeepsFoldedPredicate` (pkg/tests/sqlintegration) proving scan, forced-index, and computed-subject paths return the folded rows; prefix fixtures pinned to `utf8mb4_bin` |
 | Domain/coercibility preservation (9) | `pkg/sql/plan` and `rule` UTs for folded `CAST(x AS BINARY)`/`BINARY 'x'`/`binary()` stamping, negative-width casts, folded-domain preservation; `operator/mysql_compat_string_binary_comparison` BVT unchanged |
 | Cache contract (10) | existing cache/eviction tests plus admission-error tests proving install only after success |
@@ -470,25 +486,42 @@ Revision history:
   while the errors are SQL-visible, the existing BVT pins `1`/`1`/`0` with
   "never an error" comments for shapes the r2 contract turns into errors,
   and no stable error class/diagnostic was defined.
-- r3, 2026-11-08 (this document): resolves (1) with the conservative
-  dedup-eligibility rule (byte-identical siblings only, no captures, no
-  backreferences, no unscoped option setters, first occurrence kept;
-  emission-level dedup safe by construction; ineligible branches retained
-  with the resource-limit contract as the fallback) plus planned
-  capture/backreference/replacement/inline-option counterexample tests
-  (invariant 5, ownership item 3, validation map); resolves (2) with the
-  error contract (internal-error family, stable bound-naming message
-  prefixes, invalid-input family reserved for source-pattern verdicts) and
-  a planned resource-boundary BVT: the flipped round-14/15 statements in
-  `issue_31175_pattern_collation.sql` are updated, a new
-  `issue_31175_pattern_resource_limits.sql` covers both engines' exhaustion
-  errors, LIKE work-bound exhaustion, below-bound controls and
-  source-pattern errors, with expected results independently reviewed
-  before comparison execution (validation map, compatibility section). The
+- r3, 2026-11-08, SHA256
+  `590a0eabdfeab02f21b7b8d708d27ced42652747e76997a10135e72ced11a4f6`:
+  resolved r2's findings with the conservative dedup-eligibility rule
+  (byte-identical siblings only, no captures, no backreferences, no
+  unscoped option setters, first occurrence kept; emission-level dedup safe
+  by construction; ineligible branches retained with the resource-limit
+  contract as the fallback) plus planned
+  capture/backreference/replacement/inline-option counterexample tests, and
+  with the error contract (internal-error family, stable bound-naming
+  message prefixes, invalid-input family reserved for source-pattern
+  verdicts) plus a planned resource-boundary BVT with independently
+  reviewed expected results. The independent design-only review returned
+  REQUEST_CHANGES with one P2 finding: require equal effective options
+  before deduplicating alternatives — the r3 rule checked only the
+  duplicate branch itself for option setters, missing that an intervening
+  sibling's unscoped setter changes the duplicate's ambient state
+  (`^(?:ss|(?i)a|ss)$` under a case-sensitive ambient mode: only the second
+  `ss` inherits `(?i)`, so the permitted deduplicated form `^(?:ss|(?i)a)$`
+  rejects `SS` and `ß` that the original matches; an independent ICU 78.3
+  probe confirmed the divergence on both engine routes).
+- r4, 2026-11-08 (this document): resolves the finding by extending the
+  eligibility rule with an equal-effective-option-state condition
+  (invariant 5, ownership item 3): a duplicate must be evaluated under the
+  same effective inline-option state as the kept occurrence, and
+  conservatively any unscoped option setter between the two occurrences in
+  the enclosing group makes the duplicate ineligible, while scoped
+  `(?flags:...)` groups restore state at group end and do not affect
+  siblings. The validation plan gains intervening-option counterexamples on
+  both engine routes (RE2 and the lookahead-prefixed regexp2 route,
+  including the scoped-setter control that still dedups) and a public
+  `REGEXP_LIKE(..., 'c')` BVT case in the planned
+  `issue_31175_pattern_collation.sql` update (validation map). The
   preserved implementation head `b554558f9d3c191244f01b0e162a83d6af88ba8d`
-  predates the r2/r3 resolutions; their production deltas and the planned
+  predates the r2-r4 resolutions; their production deltas and the planned
   UT/BVT proof land in the post-approval implementation turn.
-- Design revision under review: r3, 2026-11-08 (this document).
+- Design revision under review: r4, 2026-11-08 (this document).
 - Implementation review remains blocked until the review of this revision
   records a PASS or REQUEST_CHANGES decision bound to this document's SHA256;
   material implementation deviations require updating this document and
