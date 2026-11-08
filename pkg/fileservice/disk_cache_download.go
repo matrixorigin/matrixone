@@ -40,6 +40,7 @@ type objectDownload struct {
 	readers  int
 	retired  bool
 	served   int64         // bytes readers took from the download before credited
+	reads    int64         // reads that took them
 	credited bool          // the cached file counts the bytes readers take
 	credit   func(n int64) // counts n bytes read toward the published file
 }
@@ -50,6 +51,7 @@ func (o *objectDownload) serve(n int64) {
 	o.mu.Lock()
 	if !o.credited {
 		o.served += n
+		o.reads++
 		o.mu.Unlock()
 		return
 	}
@@ -59,15 +61,15 @@ func (o *objectDownload) serve(n int64) {
 	}
 }
 
-// takeServed returns the bytes readers took so far; readers count later bytes
-// themselves.
-func (o *objectDownload) takeServed() int64 {
+// takeServed returns the bytes readers took so far and the reads that took them;
+// readers count later bytes themselves.
+func (o *objectDownload) takeServed() (n, reads int64) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.credited = true
-	n := o.served
-	o.served = 0
-	return n
+	n, reads = o.served, o.reads
+	o.served, o.reads = 0, 0
+	return n, reads
 }
 
 func newObjectDownload(tempPath string, measured bool) *objectDownload {
@@ -204,7 +206,7 @@ type diskCacheDownloads struct {
 
 func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool) *objectDownload {
 	o := newObjectDownload(tempPath, measured)
-	o.credit = func(n int64) { d.preloads.read(diskPath, n) }
+	o.credit = func(n int64) { d.preloads.read(diskPath, n, 1) }
 	d.downloads.mu.Lock()
 	if d.downloads.m == nil {
 		d.downloads.m = make(map[string]*objectDownload)
@@ -244,6 +246,10 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
+		if eta, ok := d.fastestPrefetch(diskPath, entry.Offset, end); ok && eta < wait {
+			// A prefetch range being read delivers the bytes sooner.
+			return true, false, nil
+		}
 		budget := rangeReadCosts.cost(entry.Size) + d.downloadMaxExtraWait
 		if wait > budget {
 			// A range read fetches these bytes again; it pays only when they are a small
@@ -332,6 +338,20 @@ func (m *rangeReadCostModel) observe(n int64, d time.Duration) {
 	if transfer := d.Seconds() - m.latency; transfer > 0 {
 		m.bytesPerS = (1-costWeight)*m.bytesPerS + costWeight*float64(n)/transfer
 	}
+}
+
+// seconds estimates the time of reads range reads of n bytes in all.
+func (m *rangeReadCostModel) seconds(reads, n int64) float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return float64(reads)*m.latency + float64(n)/m.bytesPerS
+}
+
+// bandwidthDelay returns the bytes a range read could take in the time of its latency.
+func (m *rangeReadCostModel) bandwidthDelay() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return int64(m.latency * m.bytesPerS)
 }
 
 func (m *rangeReadCostModel) cost(n int64) time.Duration {

@@ -65,6 +65,8 @@ type DiskCache struct {
 	diskFullEviction     atomic.Bool
 	downloads            diskCacheDownloads
 	downloadMaxExtraWait time.Duration
+	prefetchRange        prefetchRangeConfig
+	prefetchFlights      prefetchFlights
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
@@ -152,6 +154,10 @@ type diskCacheOptions struct {
 	// downloadMaxExtraWait is how much later than a range read a read may get its bytes
 	// by waiting for the download of their object.
 	downloadMaxExtraWait time.Duration
+	// prefetchRange sets the prefetch ranges of range reads.
+	prefetchRange prefetchRangeConfig
+	// preloadCost holds the cost rules of whole-object fills; zero fields take defaults.
+	preloadCost preloadCostConfig
 }
 
 func newDiskCache(
@@ -196,14 +202,16 @@ func newDiskCache(
 		capacityFunc:         capacityFunc,
 		dirEntries:           opts.dirEntries,
 		downloadMaxExtraWait: opts.downloadMaxExtraWait,
+		prefetchRange:        opts.prefetchRange,
 		preloads:             newPreloadUsage(),
 	}
+	ret.preloads.cost = opts.preloadCost.withDefaults()
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.cached(path)
 		if o := ret.download(path); o != nil {
-			if n := o.takeServed(); n > 0 {
-				ret.preloads.read(path, n)
+			if n, reads := o.takeServed(); n > 0 {
+				ret.preloads.read(path, n, reads)
 			}
 		}
 		ret.ranges.add(ret.path, path)
@@ -599,6 +607,44 @@ func (d *DiskCache) Read(
 			}
 		}
 
+		// try cached ranges that hold the entry together
+		if !openedOK {
+			if rs, ok := d.ranges.covering(d.rangeObjectKey(path.File), entry.Offset, entry.Size); ok && len(rs) > 1 {
+				readers := make([]io.Reader, 0, len(rs))
+				pos, end := entry.Offset, entry.Offset+entry.Size
+				for _, r := range rs {
+					if !d.cache.Contains(r.diskPath) {
+						d.ranges.remove(r.diskPath)
+						readers = nil
+						break
+					}
+					f, newlyOpened, ok := openPath(r.diskPath)
+					if !ok {
+						readers = nil
+						break
+					}
+					if newlyOpened {
+						numOpenIOEntry++
+					}
+					next := minInt64(r.offset+r.size, end)
+					readers = append(readers, io.NewSectionReader(f.file, pos-r.offset, next-pos))
+					pos = next
+				}
+				if readers != nil {
+					if err := entry.readFrom(ctx, io.MultiReader(readers...), d.cacheDataAllocator); err != nil {
+						return err
+					}
+					for _, r := range rs {
+						d.cache.Get(ctx, r.diskPath)
+					}
+					entry.done = true
+					entry.fromCache = d
+					numHit++
+					return nil
+				}
+			}
+		}
+
 		if !openedOK && downloading {
 			// A range read gets these bytes sooner than the download.
 			vector.downloadDeclined = true
@@ -636,7 +682,7 @@ func (d *DiskCache) Read(
 		readOffset, readSize := rangeOffset, entry.Size
 		if diskPath == d.pathForFile(path.File) {
 			readOffset = entry.Offset
-			d.preloads.read(diskPath, entry.Size)
+			d.preloads.read(diskPath, entry.Size, 1)
 		}
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
@@ -708,7 +754,7 @@ func (d *DiskCache) Update(
 			// ignore size unknown entry
 			continue
 		}
-		if entry.fromCache == d {
+		if entry.fromCache == d || entry.inPrefetchRange {
 			// no need to update
 			continue
 		}
@@ -1586,6 +1632,7 @@ func (d *DiskCache) Close(ctx context.Context) {
 	// reuse the cache directory for a new DiskCache generation until a later
 	// Close returns with a live context.
 	d.load.cancel()
+	d.closePrefetches(ctx)
 	d.closeAsyncUpdates(ctx)
 	select {
 	case <-d.load.done:

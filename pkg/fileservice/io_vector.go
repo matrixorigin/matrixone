@@ -69,6 +69,7 @@ func (i *IOVector) ReleaseReadResultOnError() {
 		entry.decodeLease = nil
 		entry.done = false
 		entry.fromCache = nil
+		entry.inPrefetchRange = false
 	}
 }
 

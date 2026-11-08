@@ -128,6 +128,31 @@ func (c *cachedRanges) remove(diskPath string) {
 	}
 }
 
+// covering returns cached ranges of the object with key that together hold size bytes
+// at offset, in order, each starting where the one before it ends or earlier, or false
+// if the cached ranges leave a gap.
+func (c *cachedRanges) covering(key string, offset, size int64) ([]cachedRange, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []cachedRange
+	end := offset + size
+	for pos := offset; pos < end; {
+		var best cachedRange
+		ok := false
+		for _, r := range c.byObject[key] {
+			if r.offset <= pos && pos < r.offset+r.size && (!ok || r.offset+r.size > best.offset+best.size) {
+				best, ok = r, true
+			}
+		}
+		if !ok {
+			return nil, false
+		}
+		out = append(out, best)
+		pos = best.offset + best.size
+	}
+	return out, true
+}
+
 // containing returns the smallest cached range of the object with key that contains
 // size bytes at offset, passing over the range files in tried.
 func (c *cachedRanges) containing(key string, offset, size int64, tried []string) (cachedRange, bool) {

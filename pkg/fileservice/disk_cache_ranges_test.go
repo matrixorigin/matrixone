@@ -160,5 +160,33 @@ func TestDiskCacheReadPrefersWholeFileOverContainingRange(t *testing.T) {
 	cache.preloads.mu.Lock()
 	served := cache.preloads.served[cache.pathForFile("123obj")]
 	cache.preloads.mu.Unlock()
-	require.Equal(t, int64(30), served)
+	require.Equal(t, int64(30), served.served)
+}
+
+// A read that no single cached range contains is served from cached ranges that hold it
+// together, and not when they leave a gap or one of them left the cache.
+func TestDiskCacheReadAcrossCachedRanges(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	data := rangeTestData(400)
+	require.NoError(t, cache.Update(ctx, &IOVector{FilePath: "123obj", Entries: []IOEntry{
+		{Offset: 0, Size: 100, Data: data[:100]},
+		{Offset: 80, Size: 120, Data: data[80:200]},
+		{Offset: 200, Size: 100, Data: data[200:300]},
+		{Offset: 350, Size: 50, Data: data[350:]},
+	}}, false))
+
+	e := readEntry(t, cache, 50, 220)
+	require.True(t, e.done)
+	require.Same(t, cache, e.fromCache)
+	require.Equal(t, data[50:270], e.Data)
+	e = readEntry(t, cache, 0, 300)
+	require.True(t, e.done, "the whole span")
+	require.Equal(t, data[:300], e.Data)
+	require.False(t, readEntry(t, cache, 250, 120).done, "a gap")
+
+	cache.cache.Delete(ctx, cache.pathForIOEntry("123obj", IOEntry{Offset: 200, Size: 100}))
+	require.False(t, readEntry(t, cache, 150, 100).done, "a range left the cache")
 }

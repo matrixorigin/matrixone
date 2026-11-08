@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,12 +33,20 @@ const wholeObjectSizeEstimate = 128 << 20
 const (
 	// A group is thrashing when the average share of its whole-object files read
 	// before their eviction falls below preloadUnusedShare over at least
-	// preloadUsageMinSamples evictions, or below preloadThrashingShare over at least
-	// preloadUsageMoreSamples evictions.
+	// preloadUsageMinSamples evictions.
 	preloadUsageMinSamples  = 4
 	preloadUsageMoreSamples = 16
 	preloadUnusedShare      = 0.1
-	preloadThrashingShare   = 0.4
+	// Over at least preloadUsageMoreSamples evictions, a group also thrashes when
+	// reading its files' bytes as range reads costs less than their downloads divided by
+	// the range margin. While it reads ranges, it fills whole objects again once its range
+	// reads cost more than downloading each object it reads once per charge window,
+	// times the whole margin, over at least preloadUsageMinSamples range reads. Costs
+	// halve every half life.
+	DefaultDiskPreloadRangeMargin  = 1.25
+	DefaultDiskPreloadWholeMargin  = 1.25
+	DefaultDiskPreloadChargeWindow = time.Minute
+	DefaultDiskPreloadCostHalfLife = time.Minute
 	// preloadUsageWeight is the weight of the newest eviction in the moving average.
 	preloadUsageWeight = 0.2
 	// A group's thrashing ends after its quiet period without an eviction of its
@@ -74,6 +83,11 @@ func GetPreloadGroup(ctx context.Context) uint64 {
 type groupUsage struct {
 	average   float64
 	samples   int
+	rangeCost float64   // seconds the narrow reads cost, or would cost, as range reads
+	wholeCost float64   // seconds they cost, or would cost, as whole-object downloads
+	costAt    time.Time // when the costs were last decayed
+	costN     int       // samples of the costs
+	size      float64   // average size of the evicted whole-object files
 	thrashing bool
 	lastEvict time.Time     // last eviction of one of the group's whole-object files
 	ended     time.Time     // when thrashing last ended
@@ -84,18 +98,56 @@ type groupUsage struct {
 // before the file is evicted, and reports per group whether that share is low.
 type preloadUsage struct {
 	mu       sync.Mutex
-	served   map[string]int64 // cached whole-object file -> bytes read from it
+	served   map[string]*wholeFileUse // cached whole-object file -> its reads
 	deleting map[string]struct{}
-	objects  map[string]uint64 // whole-object file -> group of the narrow reads of it
+	objects  map[string]uint64    // whole-object file -> group of the narrow reads of it
+	charged  map[string]time.Time // object -> when a range read last added its download
 	groups   map[uint64]*groupUsage
 	now      func() time.Time
+	cost     preloadCostConfig
+}
+
+// preloadCostConfig holds the margins, charge window and half life of the cost rules.
+type preloadCostConfig struct {
+	rangeMargin  float64
+	wholeMargin  float64
+	chargeWindow time.Duration
+	halfLife     time.Duration
+}
+
+func defaultPreloadCostConfig() preloadCostConfig {
+	return preloadCostConfig{
+		rangeMargin:  DefaultDiskPreloadRangeMargin,
+		wholeMargin:  DefaultDiskPreloadWholeMargin,
+		chargeWindow: DefaultDiskPreloadChargeWindow,
+		halfLife:     DefaultDiskPreloadCostHalfLife,
+	}
+}
+
+func (c preloadCostConfig) withDefaults() preloadCostConfig {
+	d := defaultPreloadCostConfig()
+	if c.rangeMargin > 0 {
+		d.rangeMargin = c.rangeMargin
+	}
+	if c.wholeMargin > 0 {
+		d.wholeMargin = c.wholeMargin
+	}
+	if c.chargeWindow > 0 {
+		d.chargeWindow = c.chargeWindow
+	}
+	if c.halfLife > 0 {
+		d.halfLife = c.halfLife
+	}
+	return d
 }
 
 func newPreloadUsage() *preloadUsage {
 	return &preloadUsage{
-		served:   make(map[string]int64),
+		cost:     defaultPreloadCostConfig(),
+		served:   make(map[string]*wholeFileUse),
 		deleting: make(map[string]struct{}),
 		objects:  make(map[string]uint64),
+		charged:  make(map[string]time.Time),
 		groups:   make(map[uint64]*groupUsage),
 		now:      time.Now,
 	}
@@ -114,20 +166,42 @@ func (p *preloadUsage) cached(diskPath string) {
 		return
 	}
 	p.mu.Lock()
-	p.served[diskPath] = 0
+	p.served[diskPath] = &wholeFileUse{}
 	p.mu.Unlock()
 }
 
-// read adds n bytes read from a cached whole-object file.
-func (p *preloadUsage) read(diskPath string, n int64) {
+type wholeFileUse struct {
+	served, reads int64
+}
+
+// read adds reads that took n bytes from a cached whole-object file.
+func (p *preloadUsage) read(diskPath string, n, reads int64) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
-	if v, ok := p.served[diskPath]; ok {
-		p.served[diskPath] = v + n
+	if u, ok := p.served[diskPath]; ok {
+		u.served += n
+		u.reads += reads
 	}
 	p.mu.Unlock()
+}
+
+// addCost decays the group's costs to now and adds a sample of each.
+func (g *groupUsage) addCost(now time.Time, halfLife time.Duration, rangeCost, wholeCost float64) {
+	if !g.costAt.IsZero() {
+		f := math.Exp2(-now.Sub(g.costAt).Seconds() / halfLife.Seconds())
+		g.rangeCost *= f
+		g.wholeCost *= f
+	}
+	g.costAt = now
+	g.rangeCost += rangeCost
+	g.wholeCost += wholeCost
+	g.costN++
+}
+
+func (g *groupUsage) resetCost() {
+	g.rangeCost, g.wholeCost, g.costAt, g.costN = 0, 0, time.Time{}, 0
 }
 
 // deleted marks diskPath as leaving the cache by an explicit delete, not an eviction.
@@ -138,6 +212,7 @@ func (p *preloadUsage) deleted(diskPath string) {
 	p.mu.Lock()
 	delete(p.served, diskPath)
 	delete(p.objects, diskPath)
+	delete(p.charged, diskPath)
 	p.deleting[diskPath] = struct{}{}
 	p.mu.Unlock()
 }
@@ -153,18 +228,19 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 		delete(p.deleting, diskPath)
 		return
 	}
-	served, ok := p.served[diskPath]
+	u, ok := p.served[diskPath]
 	if !ok {
 		return
 	}
 	delete(p.served, diskPath)
 	group, ok := p.objects[diskPath]
 	delete(p.objects, diskPath)
+	delete(p.charged, diskPath)
 	if !ok || size <= 0 {
 		return
 	}
 	now := p.now()
-	share := min(float64(served)/float64(size), 1)
+	share := min(float64(u.served)/float64(size), 1)
 	g := p.groups[group]
 	if g == nil {
 		if len(p.groups) >= preloadGroupsMax {
@@ -182,8 +258,17 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 	}
 	g.samples++
 	g.lastEvict = now
-	if !g.thrashing && (g.samples >= preloadUsageMinSamples && g.average < preloadUnusedShare ||
-		g.samples >= preloadUsageMoreSamples && g.average < preloadThrashingShare) {
+	if g.size == 0 {
+		g.size = float64(size)
+	} else {
+		g.size = (1-preloadUsageWeight)*g.size + preloadUsageWeight*float64(size)
+	}
+	if g.thrashing {
+		return
+	}
+	g.addCost(now, p.cost.halfLife, rangeReadCosts.seconds(u.reads, u.served), float64(size)/downloadRates.rate())
+	if g.samples >= preloadUsageMinSamples && g.average < preloadUnusedShare ||
+		g.samples >= preloadUsageMoreSamples && g.rangeCost*p.cost.rangeMargin < g.wholeCost {
 		g.thrashing = true
 		if !g.ended.IsZero() && now.Sub(g.ended) < 2*g.quiet {
 			g.quiet = min(2*g.quiet, preloadQuietPeriodMax)
@@ -194,8 +279,56 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 			zap.Uint64("group", group),
 			zap.Float64("average-read-share", g.average),
 			zap.Int("evictions", g.samples),
+			zap.Float64("range-cost-s", g.rangeCost),
+			zap.Float64("whole-object-cost-s", g.wholeCost),
 			zap.Duration("quiet-period", g.quiet),
 		)
+		g.resetCost()
+	}
+}
+
+// rangeRead records a range read of n bytes from object storage by a narrow read of
+// group from the object whose whole-object file is diskPath. While the group thrashes,
+// it adds the read's cost, and the object's download once per charge window;
+// objectSize is the object size assumed before the group's whole-object files were
+// evicted.
+func (p *preloadUsage) rangeRead(diskPath string, group uint64, n, objectSize int64) {
+	if p == nil || group == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	g := p.groups[group]
+	if g == nil || !g.thrashing {
+		return
+	}
+	now := p.now()
+	var wholeCost float64
+	if at, ok := p.charged[diskPath]; !ok || now.Sub(at) > p.cost.chargeWindow {
+		size := g.size
+		if size == 0 {
+			size = float64(objectSize)
+		}
+		wholeCost = size / downloadRates.rate()
+		if !ok && len(p.charged) >= preloadObjectsMax {
+			for path := range p.charged {
+				delete(p.charged, path)
+				break
+			}
+		}
+		p.charged[diskPath] = now
+	}
+	g.addCost(now, p.cost.halfLife, rangeReadCosts.seconds(1, n), wholeCost)
+	if g.costN >= preloadUsageMinSamples && g.rangeCost > g.wholeCost*p.cost.wholeMargin {
+		g.thrashing = false
+		g.ended = now
+		g.samples = 0
+		logutil.Info("disk cache: range reads of a group cost more than its whole objects, they fill again",
+			zap.Uint64("group", group),
+			zap.Float64("range-cost-s", g.rangeCost),
+			zap.Float64("whole-object-cost-s", g.wholeCost),
+		)
+		g.resetCost()
 	}
 }
 
@@ -238,6 +371,7 @@ func (p *preloadUsage) narrowRead(diskPath string, group uint64, fits func() boo
 		g.thrashing = false
 		g.ended = now
 		g.samples = 0
+		g.resetCost()
 		logutil.Info("disk cache: no eviction of a group's whole-object files for the quiet period and room for one, they fit again",
 			zap.Uint64("group", group),
 			zap.Duration("quiet-period", g.quiet),
@@ -273,6 +407,15 @@ func (d *DiskCache) wholeObjectFits() bool {
 		size = wholeObjectSizeEstimate
 	}
 	return d.cache.Used()+(d.wholeFills.Load()+1)*size <= d.capacityFunc()
+}
+
+// wholeObjectSize returns the size of the largest whole-object file written, or an
+// estimate before one is.
+func (d *DiskCache) wholeObjectSize() int64 {
+	if size := d.wholeFileMax.Load(); size > 0 {
+		return size
+	}
+	return wholeObjectSizeEstimate
 }
 
 // noteWholeFile records the size of a whole-object file written to the cache.
