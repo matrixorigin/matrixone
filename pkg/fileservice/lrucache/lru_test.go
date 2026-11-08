@@ -539,3 +539,32 @@ func TestOversizedItemStaysOldestWhenUsedWhilePending(t *testing.T) {
 	require.False(t, c.Contains("big"))
 	require.Equal(t, int64(80), c.Used())
 }
+
+func TestEvictionDoesNotCountPendingInsertion(t *testing.T) {
+	ctx := context.Background()
+	c := NewWithPrepareEvict[string, int](fscache.ConstCapacity(100), nil, nil, nil, nil)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.Evict(ctx, nil, 0)
+			}
+		}
+	}()
+	for i := 0; i < 20000 && c.Contains("a") && c.Contains("b"); i++ {
+		c.Set(ctx, "big", 2, 150)
+		c.Delete(ctx, "big")
+	}
+	close(stop)
+	wg.Wait()
+	require.True(t, c.Contains("a"))
+	require.True(t, c.Contains("b"))
+}
