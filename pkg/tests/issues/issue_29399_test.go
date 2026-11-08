@@ -510,6 +510,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		require.NoError(t, err, "a revoked primary role must not block role recovery")
 		require.ErrorContains(t, prepared.QueryRowContext(ctx, 1).Scan(&count), "do not have privilege")
 		execSQLRequire(t, ctx, admin, "grant reader to u")
+		syncAuthenticatedClusterCommit(t, ctx, c)
 		_, err = conn.ExecContext(ctx, "set role reader")
 		require.NoError(t, err)
 		require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
@@ -517,13 +518,17 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		t.Run("account restore removes current membership", func(t *testing.T) {
 			const snapshot = "issue_29399_scope_membership"
 			execSQLRequire(t, ctx, admin, "revoke reader from u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			execSQLRequire(t, ctx, sys, "create snapshot "+snapshot+" for account "+account)
 			defer func() { _, err := sys.ExecContext(ctx, "drop snapshot if exists "+snapshot); require.NoError(t, err) }()
 			execSQLRequire(t, ctx, admin, "grant reader to u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
 			execSQLRequire(t, ctx, sys, "restore account "+account+" {snapshot='"+snapshot+"'}")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.ErrorContains(t, prepared.QueryRowContext(ctx, 1).Scan(&count), "do not have privilege")
 			execSQLRequire(t, ctx, admin, "grant reader to u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
 		})
 		t.Run("dropped user cannot retain public privileges", func(t *testing.T) {

@@ -66,7 +66,17 @@ func (d *validatedVectorCacheData) Bytes() []byte {
 }
 
 func (d *validatedVectorCacheData) Size() int64 {
+	if sized, ok := d.data.(interface{ Size() int64 }); ok {
+		return sized.Size()
+	}
 	return int64(len(d.data.Bytes()))
+}
+
+func (d *validatedVectorCacheData) BackingSize() int64 {
+	if sized, ok := d.data.(interface{ BackingSize() int64 }); ok {
+		return sized.BackingSize()
+	}
+	return -1
 }
 
 func (d *validatedVectorCacheData) Slice(length int) fscache.Data {

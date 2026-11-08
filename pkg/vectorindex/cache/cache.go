@@ -15,9 +15,11 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +62,7 @@ const (
 var (
 	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
+	errIndexDestroyed                     = moerr.NewInvalidStateNoCtx("Index destroyed")
 )
 
 type retryableLoadError struct {
@@ -197,6 +200,43 @@ type VectorIndexSearch struct {
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting         atomic.Bool
 	invalidationOnce sync.Once
+	destroyed        chan struct{}
+	destroyOnce      sync.Once
+}
+
+func newVectorIndexSearch(algo VectorIndexSearchIf) *VectorIndexSearch {
+	s := &VectorIndexSearch{Algo: algo, destroyed: make(chan struct{})}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	return s
+}
+
+func (s *VectorIndexSearch) markDestroyed() {
+	if s.destroyed != nil {
+		s.destroyOnce.Do(func() { close(s.destroyed) })
+	}
+}
+
+func searchContext(proc *sqlexec.SqlProcess) context.Context {
+	if proc != nil && (proc.Proc != nil || proc.SqlCtx != nil) {
+		if ctx := proc.GetContext(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+// Only the creator of the wrapper may wait: other callers have their own
+// algorithm instances and do not need to wait for this one's destruction.
+func (s *VectorIndexSearch) awaitDestroyed(ctx context.Context) error {
+	if s.destroyed == nil {
+		return nil
+	}
+	select {
+	case <-s.destroyed:
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *VectorIndexSearch) Destroy() {
@@ -237,6 +277,7 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
 }
 
 // destroyFailedLoad releases an entry whose load failed after the caller has
@@ -252,6 +293,7 @@ func (s *VectorIndexSearch) destroyFailedLoad() {
 	}()
 	s.Algo.Destroy()
 	s.Status.Store(STATUS_DESTROYED)
+	s.markDestroyed()
 }
 
 func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
@@ -261,7 +303,7 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		s.Cond.Broadcast()
 	}()
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 
 	err := s.Algo.Load(sqlproc)
@@ -344,7 +386,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 		s.loadWaiters.Add(-1)
 	}
 	if s.evicting.Load() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+		return nil, nil, errIndexDestroyed
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -356,7 +398,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+			return nil, nil, errIndexDestroyed
 		} else {
 			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
 		}
@@ -367,7 +409,7 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	// here. Search is therefore pure-read under the shared read lock — no mutation of the
 	// cached algo, so concurrent searches on one entry cannot race on its config.
 	if !s.extendForSearch() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+		return nil, nil, errIndexDestroyed
 	}
 	return s.Algo.Search(sqlproc, query, rt)
 }
@@ -385,7 +427,7 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 		s.loadWaiters.Add(-1)
 	}
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -395,12 +437,12 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return moerr.NewInvalidStateNoCtx("Index destroyed")
+			return errIndexDestroyed
 		}
 		return moerr.NewInternalErrorNoCtx("Load index error")
 	}
 	if !s.extendForSearch() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
@@ -598,10 +640,10 @@ func (c *VectorIndexCache) Destroy() {
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
-		value, loaded := c.IndexMap.LoadOrStore(key, s)
+		value, loaded := c.IndexMap.Load(key)
+		if !loaded {
+			value, loaded = c.IndexMap.LoadOrStore(key, newVectorIndexSearch(newalgo))
+		}
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			// Remove only this exact failed entry, then destroy it without a
@@ -609,10 +651,19 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			err := algo.Load(sqlproc)
 			if err != nil {
 				if algo.evicting.Load() {
+					if !errors.Is(err, errIndexDestroyed) && !IsRetryableLoadError(err) {
+						return nil, nil, err
+					}
+					if waitErr := algo.awaitDestroyed(searchContext(sqlproc)); waitErr != nil {
+						return nil, nil, waitErr
+					}
 					continue
 				}
 				if IsRetryableLoadError(err) {
 					c.discardFailedLoad(key, algo)
+					if waitErr := algo.awaitDestroyed(searchContext(sqlproc)); waitErr != nil {
+						return nil, nil, waitErr
+					}
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -623,8 +674,16 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		}
 		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove() or HouseKeeping.  Retry!
+			if errors.Is(err, errIndexDestroyed) {
+				if !loaded && algo.evicting.Load() {
+					if waitErr := algo.awaitDestroyed(searchContext(sqlproc)); waitErr != nil {
+						return nil, nil, waitErr
+					}
+				} else if ctxErr := searchContext(sqlproc).Err(); ctxErr != nil {
+					return nil, nil, ctxErr
+				} else if loaded {
+					runtime.Gosched()
+				}
 				continue
 			}
 			return nil, nil, err
@@ -640,17 +699,27 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
 	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
-		value, loaded := c.IndexMap.LoadOrStore(key, s)
+		value, loaded := c.IndexMap.Load(key)
+		if !loaded {
+			value, loaded = c.IndexMap.LoadOrStore(key, newVectorIndexSearch(newalgo))
+		}
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			if err := algo.Load(sqlproc); err != nil {
 				if algo.evicting.Load() {
+					if !errors.Is(err, errIndexDestroyed) && !IsRetryableLoadError(err) {
+						return err
+					}
+					if waitErr := algo.awaitDestroyed(searchContext(sqlproc)); waitErr != nil {
+						return waitErr
+					}
 					continue
 				}
 				if IsRetryableLoadError(err) {
 					c.discardFailedLoad(key, algo)
+					if waitErr := algo.awaitDestroyed(searchContext(sqlproc)); waitErr != nil {
+						return waitErr
+					}
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -661,8 +730,17 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		}
 		err := algo.SearchInto(sqlproc, query, rt, out)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				continue // index destroyed by Remove()/HouseKeeping — retry
+			if errors.Is(err, errIndexDestroyed) {
+				if !loaded && algo.evicting.Load() {
+					if waitErr := algo.awaitDestroyed(searchContext(sqlproc)); waitErr != nil {
+						return waitErr
+					}
+				} else if ctxErr := searchContext(sqlproc).Err(); ctxErr != nil {
+					return ctxErr
+				} else if loaded {
+					runtime.Gosched()
+				}
+				continue
 			}
 			return err
 		}
