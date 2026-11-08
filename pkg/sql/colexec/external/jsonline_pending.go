@@ -26,17 +26,23 @@ type jsonLinePending struct {
 
 func (p *jsonLinePending) append(fragment string, limit int64) error {
 	n := int64(len(p.data))
-	if limit <= 0 || n > limit-1 || int64(len(fragment)) > limit-1-n {
+	maxInt := int64(^uint(0) >> 1)
+	if limit <= 0 || n > limit-1 || int64(len(fragment)) > limit-1-n || int64(len(fragment)) > maxInt-n {
 		return moerr.NewInvalidInputNoCtxf("json record size exceeds max record size %d (buffered %d bytes, incoming %d bytes), tunable by cn config 'largest-entry-limit'", limit, n, len(fragment))
 	}
 	required := len(p.data) + len(fragment)
 	if required > cap(p.data) {
 		capacity := required
-		if int64(cap(p.data)) <= (limit-1)/2 && cap(p.data)*2 > capacity {
-			capacity = cap(p.data) * 2
+		maxCapacity := limit - 1
+		if maxCapacity > maxInt {
+			maxCapacity = maxInt
 		}
-		if int64(capacity) > limit-1 {
-			capacity = int(limit - 1)
+		grown := maxCapacity
+		if int64(cap(p.data)) <= maxCapacity/2 {
+			grown = int64(cap(p.data)) * 2
+		}
+		if grown > int64(capacity) {
+			capacity = int(grown)
 		}
 		data := make([]byte, len(p.data), capacity)
 		copy(data, p.data)

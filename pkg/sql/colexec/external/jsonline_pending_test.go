@@ -46,6 +46,55 @@ func TestJSONLinePendingSplits(t *testing.T) {
 	}
 }
 
+func TestJSONLinePendingGrowthNearLimit(t *testing.T) {
+	const limit = 4096
+	for _, tc := range []struct {
+		name     string
+		initial  int
+		complete bool
+	}{
+		{"below-half-complete", 2047, true},
+		{"at-half-truncated", 2048, false},
+		{"above-half-complete", 2049, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var p jsonLinePending
+			first := `{"a":"` + strings.Repeat("x", tc.initial-len(`{"a":"`))
+			require.NoError(t, p.append(first, limit))
+			copied := 0
+			appendFragment := func(fragment string) {
+				oldLen, oldCap := len(p.data), cap(p.data)
+				require.NoError(t, p.append(fragment, limit))
+				if cap(p.data) != oldCap {
+					copied += oldLen
+				}
+				require.LessOrEqual(t, cap(p.data), limit-1)
+			}
+			end := limit - 1
+			if tc.complete {
+				end -= 2
+			}
+			for len(p.data) < end {
+				appendFragment("x")
+			}
+			if tc.complete {
+				appendFragment(`"}`)
+				require.True(t, p.closed)
+				node, err := bytejson.ParseNodeString(string(p.data))
+				require.NoError(t, err)
+				node.Free()
+			} else {
+				require.False(t, p.closed)
+			}
+			require.Len(t, p.data, limit-1)
+			require.LessOrEqual(t, copied, 2*limit)
+			before := string(p.data)
+			require.ErrorContains(t, p.append("x", limit), "max record size")
+			require.Equal(t, before, string(p.data))
+		})
+	}
+}
+
 func TestJSONLinePendingBudgetAndLimit(t *testing.T) {
 	for _, shape := range []string{tree.OBJECT, tree.ARRAY} {
 		for _, extra := range []int{0, 1} {
