@@ -287,6 +287,14 @@ func TestConnectionLivenessMonitorPrioritizesTerminalBeforeLegacyClose(t *testin
 	legacy.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
 	terminal.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
 	late.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
+	unsupported := &Routine{}
+	invalid := &Routine{}
+	unsupported.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
+	invalid.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
+	pipeServer, pipeClient := net.Pipe()
+	t.Cleanup(func() { _ = pipeServer.Close(); _ = pipeClient.Close() })
+	invalidTCP := &net.TCPConn{}
+	require.Nil(t, newTerminalTCPProbe(invalidTCP))
 
 	terminalServer, terminalClient := tcpConnectionPair(t)
 	lateServer, lateClient := tcpConnectionPair(t)
@@ -302,10 +310,15 @@ func TestConnectionLivenessMonitorPrioritizesTerminalBeforeLegacyClose(t *testin
 		return terminalSocketHasEvent(terminalServer.(*net.TCPConn), unix.POLLERR)
 	}, 3*time.Second, time.Millisecond)
 
+	legacyConn := &Conn{remoteAddr: "blocked legacy"}
+	unsupportedConn := &Conn{conn: pipeServer}
+	invalidConn := &Conn{conn: invalidTCP}
 	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
-		{remoteAddr: "blocked legacy"}: legacy,
-		{conn: terminalServer}:         terminal,
-		{conn: lateServer}:             late,
+		legacyConn:             legacy,
+		unsupportedConn:        unsupported,
+		invalidConn:            invalid,
+		{conn: terminalServer}: terminal,
+		{conn: lateServer}:     late,
 	}}}
 	legacy.mc.Lock()
 	var releaseOnce sync.Once
@@ -330,9 +343,15 @@ func TestConnectionLivenessMonitorPrioritizesTerminalBeforeLegacyClose(t *testin
 	}
 	require.ErrorIs(t, terminalCtx.Err(), context.Canceled, "the terminal pass must finish before a legacy close can block")
 	require.NoError(t, lateCtx.Err())
-	require.Len(t, monitor.requests, 1, "only legacy candidates remain during a blocked close")
-	for _, request := range monitor.requests[:cap(monitor.requests)] {
-		require.Empty(t, request, "processed and ineligible snapshot slots must release references")
+	require.Len(t, monitor.requests, 3, "all legacy candidates must survive terminal probe skips")
+	for _, request := range monitor.requests {
+		if request.conn != nil {
+			require.Contains(t, []*Conn{legacyConn, unsupportedConn, invalidConn}, request.conn)
+			require.True(t, request.legacyEligible)
+		}
+	}
+	for _, request := range monitor.requests[len(monitor.requests):cap(monitor.requests)] {
+		require.Empty(t, request, "ineligible snapshot slots must release references")
 	}
 
 	require.NoError(t, lateClient.(*net.TCPConn).SetLinger(0))

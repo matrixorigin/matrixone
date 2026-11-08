@@ -127,7 +127,11 @@ func (monitor *connectionLivenessMonitor) scan(now time.Time) {
 	if len(monitor.probes) > 1024 && len(monitor.requests)*4 < len(monitor.probes) {
 		monitor.probes = nil
 	}
+	legacy := monitor.requests[:0]
 	for _, request := range monitor.requests {
+		if request.legacyEligible {
+			legacy = append(legacy, request)
+		}
 		tcp := terminalTCPConn(request.conn.RawConn())
 		if tcp == nil {
 			continue
@@ -165,12 +169,6 @@ func (monitor *connectionLivenessMonitor) scan(now time.Time) {
 
 	// Legacy close may wait for a lifecycle lock. Finish the terminal pass
 	// first, and do not retain references to the other requests while waiting.
-	legacy := monitor.requests[:0]
-	for _, request := range monitor.requests {
-		if request.legacyEligible {
-			legacy = append(legacy, request)
-		}
-	}
 	clear(monitor.requests[len(legacy):])
 	monitor.requests = legacy
 	for i := range monitor.requests {
