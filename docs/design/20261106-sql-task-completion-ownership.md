@@ -32,9 +32,15 @@ SQL statements receive no additional query, RPC or per-statement check.
 * Persist the known run result and complete its exact async pointer in one
   transaction. Retry attempts atomically finish attempt A, insert RUNNING B,
   and, for scheduled tasks, move the pointer before B starts; manual retries
-  use the same transition without an async row. An uncertain transition is
-  reconciled against both run IDs without starting B. Ordinary SUSPEND and
-  SET SCHEDULE do not cancel retries of an already claimed firing. A late owner or scheduler completion
+  use the same transition without an async row. The already admitted executor,
+  not a new-request admission guard, owns the retry. It can retry a failed
+  metadata transition for at most five seconds while its execution and service
+  remain live. An uncertain COMMIT is reconciled against the frozen result,
+  both exact run IDs and, for a scheduled run, its runner, epoch and pointer.
+  Only that same live executor may start B after reconciliation proves its
+  ownership. No business SQL is run by the metadata receipt worker. Ordinary
+  SUSPEND and SET SCHEDULE do not cancel retries of an already claimed firing.
+  A late owner or scheduler completion
   must never update another run. A typed/wrapped/joined `ErrTxnUnknown` keeps
   the RUNNING barrier, preserves the original error, and does not rerun SQL.
   Once that unknown reason is durably recorded, release the receipt credit but
@@ -67,6 +73,20 @@ the user must not rerun the body. A known body error retains its original
 identity. Once storage recovers, the live TaskService publishes the exact saved
 result without executing SQL again. Service shutdown or process loss can leave
 a RUNNING barrier; no in-memory worker is a durable owner after process loss.
+Closing the service reports abandoned receipts with a fixed-key event and a
+fixed-label counter. An operator must isolate the old executor, reconcile its
+business effects and inspect the exact run before using FORCE. Automatic
+recovery across process loss would require a separate durable handoff; it is
+not guaranteed when durable storage is unavailable.
+
+A metadata transition failure does not consume a configured business retry.
+Retry and exact reconciliation share one five-second budget and stop on the
+execution context or service shutdown. If the budget or ownership ends before
+B can safely start, the invocation reports that the retry was not performed;
+the existing receipt worker repairs only metadata. A retry can repeat earlier
+successful statements in the task body: this protocol does not promise
+exactly-once business effects. Manual EXECUTE TASK retains the existing
+client-disconnect behavior; scheduled tasks retain their runner cancellation.
 
 Reserve a bounded receipt credit before inserting a run. Manual executions and
 scheduled executions use separate shares of 4096 and
@@ -118,6 +138,11 @@ expiry may complete or garbage-collect the async row; it is not proof that the
 body stopped and must never mark even its exact pointed-to run terminal on the
 basis of lost heartbeat. Generic heartbeat/allocation
 preserves the storage-only pointer.
+
+A runner without a SQL-task owner excludes SQL firings in its storage query
+before LIMIT so they cannot starve other tasks. This does not advertise CN
+capabilities to the scheduler or guarantee reassignment of an unsupported SQL
+firing; service decorators must preserve the query condition.
 
 ## Bounded recovery work and scheduling
 
@@ -183,9 +208,10 @@ repair that pre-existing scheduler data-corruption limitation. Use fixed-key
 rate-limited events and fixed-label aggregate metrics. Do not
 emit a log or metric series per failing task on each retry. Catalog-dependent
 or non-SQL fetch failure must not prevent the other lane from making progress.
-Repeated storage-refresh failures and scheduled-task internal statement errors
-share fixed-key log budgets; run history, statement accounting, and ordinary
-client SQL logging remain intact.
+Repeated storage-refresh failures and ordinary scheduled-task statement errors
+use fixed-key log budgets at their individual reporting sites. Panic,
+unknown-commit and rollback-failure diagnostics do not consume those budgets;
+run history, statement accounting, and ordinary client SQL logging remain intact.
 
 ## Operations and compatibility
 
@@ -222,6 +248,10 @@ metadata outage. Challenge stale batches with concurrent admission, malformed
 IDs, generation bounds, and large backlogs. Validate fresh and upgraded
 catalogs, SQL permission/warning behavior, one- and multi-CN operation,
 non-SQL isolation, fixed logging, queue bounds and no business replay.
+For the upgrade fixture, isolate the staging scheduler's storage and drain the
+CN task service before modifying task tables; restart with the normal stores
+before exercising the upgrade. Compare performance separately for normal work
+and for exceptional fetching; the result is pending a valid current-base run.
 
 Compare baseline and change in alternating runs for manual and scheduled task
 latency/throughput, realistic history and concurrent unrelated work. Target
