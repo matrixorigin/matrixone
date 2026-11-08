@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -67,6 +68,21 @@ func (d *reservedCacheData) publish() {
 func (m *MemCache) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	data := &reservedCacheData{
 		Data: DefaultCacheDataAllocator().AllocateCacheData(ctx, size),
+		m:    m,
+		size: int64(size),
+	}
+	m.capacityMu.Lock()
+	m.reservedBytes += int64(size)
+	m.capacityMu.Unlock()
+	return data
+}
+
+// AllocateCacheDataWithHint is AllocateCacheData for hint-aware callers.
+// The pending reservation accounting is identical: the charge is released
+// when the data is published through MemCache.Update.
+func (m *MemCache) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	data := &reservedCacheData{
+		Data: DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints),
 		m:    m,
 		size: int64(size),
 	}

@@ -270,14 +270,14 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		return s.memCache.AllocateCacheData(ctx, size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		s.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
+		return s.memCache.AllocateCacheDataWithHint(ctx, size, hints)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }

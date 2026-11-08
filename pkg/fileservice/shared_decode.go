@@ -450,10 +450,17 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 }
 
 // This is only an admission hint. Used cache data may be evicted. 4.2-dev
-// MemCache has no reservation accounting, so admission reduces to the
-// existing memory-pressure target check. Existing fills still accept joins.
+// MemCache accounts reserved bytes, so admission requires headroom for
+// the decoded payload and no active memory-pressure target. Existing fills
+// still accept joins.
 func sharedDecodeFillMayStart(m *MemCache, decodedSize int64) bool {
+	m.capacityMu.Lock()
 	capacity := m.cache.Capacity()
+	available := capacity - m.reservedBytes
+	m.capacityMu.Unlock()
+	if decodedSize > available {
+		return false
+	}
 	_, pressureActive := memoryCachePressureTarget(capacity)
 	return !pressureActive
 }
@@ -542,7 +549,7 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 		return result, err
 	}
 	return func() {
-		entry := &vector.Entries[0]
+		entry := &vector.Entries[index]
 		entry.ToCacheData = original
 		if entry.CachedData != nil {
 			entry.decodeLease = lease
