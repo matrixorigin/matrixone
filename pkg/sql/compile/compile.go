@@ -2206,7 +2206,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		ss, err = c.tryCompileOwnedSetMembership(curNodeIdx, node, left, right)
+		if err != nil {
+			return nil, err
+		}
+		if ss == nil {
+			ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
@@ -6410,9 +6416,6 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if keys, dop := c.parallelSetMembership(node, left, right); dop > 1 {
-		return c.compileParallelSetMembership(node, left, right, keys, dop)
-	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
