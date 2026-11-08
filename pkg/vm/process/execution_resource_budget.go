@@ -1589,7 +1589,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 
 	lock()
 	wasStopped := stopped()
-	err, aggregateRejected := g.acquireMemoryLocked(
+	err, _ = g.acquireMemoryLocked(
 		size,
 		true,
 		recoveryReserve,
@@ -1598,14 +1598,9 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 		return reject(err, wasStopped)
 	}
 	unlock()
-	if err == nil && !aggregateRejected {
-		observeExecutionResourceBudget("memory", "reserve", "query", size)
-		observeExecutionResourceBudget("memory", "reserve", "cn", size)
-	}
-	if aggregateRejected {
-		return err
-	}
-	return err
+	observeExecutionResourceBudget("memory", "reserve", "query", size)
+	observeExecutionResourceBudget("memory", "reserve", "cn", size)
+	return nil
 }
 
 // acquireMemoryLocked attempts one physical-memory admission. b.mu must be

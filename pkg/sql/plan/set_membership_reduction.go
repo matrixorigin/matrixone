@@ -206,8 +206,5 @@ func SetMembershipNodeEvaluationIsTotal(node *planpb.Node) bool {
 		unknown = true
 		return nil
 	})
-	if unknown {
-		return false
-	}
-	return true
+	return !unknown
 }

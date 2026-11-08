@@ -480,7 +480,7 @@ func TestOwnedSetMembershipConsolidatesCompleteInputs(t *testing.T) {
 	c := newDistinctSetTestCompile(t)
 	defer c.proc.Free()
 	c.isPrepare, c.addr, c.ncpu = false, "127.0.0.1:18000", 16
-	c.proc.Base.Lim.Size = 1 << 30
+	setOwnedSetMembershipTestBudget(t, c, 1<<30)
 	local := engine.Node{Addr: c.addr, Mcpu: 16}
 	c.cnList = engine.Nodes{local}
 	left, right := newDistinctSetTestScopes(c, 2), newDistinctSetTestScopes(c, 1)
@@ -542,7 +542,7 @@ func TestOwnedSetMembershipOwnerBoundaries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newDistinctSetTestCompile(t)
 			c.isPrepare, c.addr, c.ncpu = false, "127.0.0.1:18000", tc.cpus
-			c.proc.Base.Lim.Size = tc.headroom
+			setOwnedSetMembershipTestBudget(t, c, uint64(tc.headroom))
 			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: tc.cpus}}
 			typ := types.T_int64.ToType().PlanType()
 			scan := func() *plan.Node {
@@ -572,4 +572,14 @@ func TestOwnedSetMembershipOwnerBoundaries(t *testing.T) {
 			require.Len(t, result[0].PreScopes, tc.want)
 		})
 	}
+}
+
+func setOwnedSetMembershipTestBudget(t *testing.T, c *Compile, headroom uint64) {
+	t.Helper()
+	budget := process.MustNewExecutionResourceBudget(headroom, headroom)
+	t.Cleanup(func() { budget.Close() })
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(func() { generation.Close() })
+	require.NoError(t, c.proc.SetExecutionResourceBudgetForTesting(generation))
 }
