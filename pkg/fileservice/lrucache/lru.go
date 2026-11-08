@@ -156,18 +156,20 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64, oldes
 		s.items[key] = s.order.PushFront(it)
 	}
 	s.updateTail()
-	c.used.Add(size)
 	c.pending.Add(size)
+	c.used.Add(size)
 	c.added.Add(1)
 	seq := it.seq
 	s.mu.Unlock()
 	if c.postSet != nil {
 		c.postSet(ctx, key, value, size, seq)
 	}
+	c.evictor.Lock()
 	s.mu.Lock()
 	it.pending = false
 	s.mu.Unlock()
 	c.pending.Add(-size)
+	c.evictor.Unlock()
 	c.added.Add(1)
 	c.evictOver(ctx)
 	return true
@@ -335,7 +337,7 @@ func (c *Cache[K, V]) evictOver(ctx context.Context) {
 func (c *Cache[K, V]) removeTo(target int64) []item[K, V] {
 	var evictions []item[K, V]
 	for len(evictions) < evictBatch && c.settled() > target {
-		it, ok := c.removeOldest()
+		it, ok := c.removeOldest(target)
 		if !ok {
 			break
 		}
@@ -345,9 +347,9 @@ func (c *Cache[K, V]) removeTo(target int64) []item[K, V] {
 }
 
 // removeOldest removes the evictable item with the oldest stamp, and returns false when no
-// item is evictable. A shard whose oldest item changed since its stamp was read is read
-// again. The caller holds c.evictor.
-func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
+// item is evictable or at most target bytes are used. A shard whose oldest item changed
+// since its stamp was read is read again. The caller holds c.evictor.
+func (c *Cache[K, V]) removeOldest(target int64) (item[K, V], bool) {
 	for {
 		var oldest *shard[K, V]
 		stamp := int64(math.MaxInt64)
@@ -366,18 +368,22 @@ func (c *Cache[K, V]) removeOldest() (item[K, V], bool) {
 			continue
 		}
 		if c.canEvict(e) {
+			if c.settled() <= target {
+				oldest.mu.Unlock()
+				return item[K, V]{}, false
+			}
 			it := c.removeLocked(oldest, e)
 			oldest.mu.Unlock()
 			return it, true
 		}
 		oldest.mu.Unlock()
-		return c.scanOldest()
+		return c.scanOldest(target)
 	}
 }
 
 // scanOldest is removeOldest looking past the items that are not evictable. It scans again
 // when the oldest evictable item of the shard it picked changed meanwhile.
-func (c *Cache[K, V]) scanOldest() (item[K, V], bool) {
+func (c *Cache[K, V]) scanOldest(target int64) (item[K, V], bool) {
 	for {
 		var oldest *shard[K, V]
 		var stamp int64
@@ -396,6 +402,10 @@ func (c *Cache[K, V]) scanOldest() (item[K, V], bool) {
 		}
 		oldest.mu.Lock()
 		if e := c.oldestLocked(oldest); e != nil && e.Value.(*item[K, V]).stamp == stamp {
+			if c.settled() <= target {
+				oldest.mu.Unlock()
+				return item[K, V]{}, false
+			}
 			it := c.removeLocked(oldest, e)
 			oldest.mu.Unlock()
 			return it, true
@@ -424,10 +434,10 @@ func (c *Cache[K, V]) canEvict(e *list.Element) bool {
 
 func (c *Cache[K, V]) removeLocked(s *shard[K, V], e *list.Element) item[K, V] {
 	it := *e.Value.(*item[K, V])
+	c.used.Add(-it.size)
 	s.order.Remove(e)
 	delete(s.items, it.key)
 	s.updateTail()
-	c.used.Add(-it.size)
 	return it
 }
 
