@@ -33,7 +33,7 @@ func TestSQLTaskControlFailureMetricIsRegisteredWithFixedStages(t *testing.T) {
 			require.Equal(t, "stage", metric.Label[0].GetName())
 			stages = append(stages, metric.Label[0].GetValue())
 		}
-		require.ElementsMatch(t, []string{"discovery", "cron_add", "cron_query", "cron_parse", "cron_trigger", "sync_commit", "allocation", "expiry", "receipt_retry", "receipt_capacity", "unclaimed"}, stages)
+		require.ElementsMatch(t, []string{"discovery", "cron_add", "cron_query", "cron_parse", "cron_trigger", "sync_commit", "allocation", "expiry", "receipt_retry", "receipt_capacity", "receipt_abandoned", "unclaimed"}, stages)
 		return
 	}
 	t.Fatal("SQL task control failure metric is not registered")

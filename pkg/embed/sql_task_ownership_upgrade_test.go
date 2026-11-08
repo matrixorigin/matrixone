@@ -17,6 +17,7 @@ package embed
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,9 +27,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+type upgradeTaskStorageFactory struct {
+	store   taskservice.TaskStorage
+	created chan struct{}
+	once    sync.Once
+}
+
+func (f *upgradeTaskStorageFactory) Create(string) (taskservice.TaskStorage, error) {
+	f.once.Do(func() { close(f.created) })
+	return f.store, nil
+}
 
 // Stage the released 4.0.6 task schema on the current engine. This exercises
 // the real upgrade and restart path, but is not a test of an old binary.
@@ -36,10 +50,25 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c := newColumnsUpgradeCluster(t, t.Context(), columns46ShapeChain())
+	factory := &upgradeTaskStorageFactory{store: taskservice.NewMemTaskStorage(), created: make(chan struct{})}
+	var logOperator *operator
+	c.ForeachServices(func(svc ServiceOperator) bool {
+		if svc.ServiceType() == metadata.ServiceType_LOG {
+			logOperator = svc.(*operator)
+			logOperator.testingLogOptions = []logservice.Option{logservice.WithTaskStorageFactory(factory)}
+		}
+		return true
+	})
+	require.NotNil(t, logOperator)
 	start, cleanup := newRecoveryClusterStarterWithBudget(t.Context(), c.Start, time.Now, 3*time.Minute)
 	t.Cleanup(cleanup)
 	ctx, err := start()
 	require.NoError(t, err)
+	select {
+	case <-factory.created:
+	case <-ctx.Done():
+		t.Fatal("staging scheduler did not use the isolated task store")
+	}
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
 	db := recoverySQLClient(t, cn)
@@ -67,6 +96,19 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 	var before int
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_task.sql_task_run where task_name='existing_task' and status='SUCCESS'").Scan(&before))
 	require.Equal(t, 1, before)
+
+	// Stop the CN's real task writers before changing their table shapes. The
+	// HAKeeper scheduler uses the isolated store until the staging cluster stops.
+	cnService := cn.RawService().(cnservice.Service)
+	var runner taskservice.TaskRunner
+	require.Eventually(t, func() bool {
+		runner = cnService.GetTaskRunner()
+		return runner != nil
+	}, 30*time.Second, 100*time.Millisecond)
+	require.NoError(t, runner.Stop())
+	taskService, ok := cnService.GetTaskService()
+	require.True(t, ok)
+	require.NoError(t, taskService.Close())
 
 	// Obtain the private cluster's task-table user; never use external credentials.
 	hakeeper, err := logservice.NewCNHAKeeperClient(ctx, cn.GetServiceConfig().CN.UUID, cn.GetServiceConfig().HAKeeperClient)
@@ -140,6 +182,7 @@ func TestSQLTaskOwnershipUpgradeFromReleasedCatalog(t *testing.T) {
 	require.NoError(t, taskDB.Close())
 	require.NoError(t, db.Close())
 	require.NoError(t, c.Stop())
+	logOperator.testingLogOptions = nil
 
 	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), true)
 	for generation := 0; generation < 2; generation++ {

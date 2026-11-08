@@ -37,6 +37,58 @@ type failingSQLTaskFetchStore struct {
 type transparentSQLFetchService struct{ TaskService }
 type transparentSQLFetchStorage struct{ TaskStorage }
 
+type switchableSQLTaskOwner struct {
+	TaskService
+	enabled atomic.Bool
+}
+
+func (s *switchableSQLTaskOwner) SQLTaskService() TaskService {
+	if !s.enabled.Load() {
+		return nil
+	}
+	return s.TaskService
+}
+
+func TestUnsupportedSQLTaskOwnerDoesNotStarveOtherTasks(t *testing.T) {
+	store := NewMemTaskStorage()
+	owner := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, owner.Close()) })
+	service := &switchableSQLTaskOwner{TaskService: owner}
+	runner := NewTaskRunner("cn1", service, nil, WithRunnerParallelism(1),
+		WithRunnerFetchLimit(1), WithRunnerFetchInterval(time.Millisecond), WithRunnerFetchTimeout(time.Second)).(*taskRunner)
+	t.Cleanup(func() { require.NoError(t, runner.Stop()) })
+	mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1",
+		Metadata: task.TaskMetadata{ID: "sql", Executor: task.TaskCode_SQLTask}})
+	mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1",
+		Metadata: task.TaskMetadata{ID: "other", Executor: task.TaskCode_TestOnly}})
+
+	values, err := runner.doFetch(context.Background())
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	require.Equal(t, "other", values[0].Metadata.ID)
+	service.enabled.Store(true)
+	values, err = runner.doFetch(context.Background())
+	require.NoError(t, err)
+	require.Len(t, values, 1)
+	require.Equal(t, "sql", values[0].Metadata.ID, "a restored owner can fetch SQL work")
+	service.enabled.Store(false)
+
+	done := make(chan struct{}, 1)
+	runner.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	require.NoError(t, runner.Start())
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the unrelated task did not execute behind an unsupported SQL firing")
+	}
+}
+
 type blockingFetchService struct {
 	TaskService
 	entered chan context.Context

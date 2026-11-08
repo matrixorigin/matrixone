@@ -90,18 +90,32 @@ func TestSQLTaskSkippedPendingWarning(t *testing.T) {
 }
 
 func TestScheduledSQLTaskStatementErrorsAreRateLimited(t *testing.T) {
-	ses, logs := newObservedProtocolSession()
+	service := t.Name()
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+	writer := &accountingMysqlWriter{}
+	ses := NewSession(context.Background(), service, writer, nil)
+	t.Cleanup(ses.Close)
+	observed, logs := newObservedProtocolSession()
+	ses.logger, ses.logLevel = observed.logger, observed.logLevel
+	ses.loggerOnce.Do(func() {})
 	background := context.WithValue(context.Background(), defines.SQLTaskBackgroundKey{}, true)
+	problem := errors.New("scheduled failure")
 	for i := 0; i < 100; i++ {
-		ses.Error(background, "scheduled failure")
-		ses.Errorf(background, "scheduled failure %d", i)
+		logRolledBackStatement(background, ses, problem)
 	}
-	require.LessOrEqual(t, logs.Len(), 3)
+	require.LessOrEqual(t, logs.Len(), 6)
+	require.Equal(t, 100, writer.calls, "limiting logs must not skip statement accounting")
+	other, otherLogs := newObservedProtocolSession()
+	other.Error(background, "recover from panic")
+	other.Error(background, "rollback whole txn on error failed")
+	require.Equal(t, 2, otherLogs.Len(), "another task's critical diagnostics are independent")
 	before := logs.Len()
 	for range 4 {
-		ses.Error(context.Background(), "ordinary client failure")
+		logRolledBackStatement(context.Background(), ses, problem)
 	}
-	require.Equal(t, before+4, logs.Len(), "ordinary client failures keep their existing logging")
+	require.Equal(t, before+8, logs.Len(), "ordinary client failures keep both existing logs")
 }
 
 func TestSQLTaskUnknownCommitProtocolIdentity(t *testing.T) {

@@ -526,10 +526,10 @@ func (s *memTaskStorage) PublishSQLTaskReceipt(ctx context.Context, request SQLT
 }
 
 // Finish the old attempt and acquire the new one under the same store lock.
-func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTaskRetryRequest) (uint64, bool, error) {
+func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTaskRetryRequest) (SQLTaskRetryTransition, error) {
 	retry = snapshotSQLTaskRetry(retry)
 	if err := ctx.Err(); err != nil {
-		return 0, false, err
+		return SQLTaskRetryTransition{}, err
 	}
 	s.Lock()
 	defer s.Unlock()
@@ -537,7 +537,7 @@ func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTask
 	if !ok || old.Status != SQLTaskStatusRunning || old.TaskID != retry.Previous.TaskID ||
 		old.AccountID != retry.Previous.AccountID || old.RunnerCN != retry.Previous.RunnerCN ||
 		old.AttemptNumber != retry.Previous.AttemptNumber {
-		return 0, false, errSQLTaskReceiptConflict
+		return SQLTaskRetryTransition{}, errSQLTaskReceiptConflict
 	}
 	definition, exists := s.sqlTasks[old.TaskID]
 	var async task.AsyncTask
@@ -554,7 +554,7 @@ func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTask
 			async.Status, async.ExecuteResult, async.CompletedAt = task.TaskStatus_Completed, &result, old.FinishedAt.UnixMilli()
 			s.asyncTasks[async.ID] = async
 		}
-		return 0, false, nil
+		return SQLTaskRetryTransition{CommitAttempted: true}, nil
 	}
 	next := retry.Next
 	next.RunID = s.nextIDLocked()
@@ -562,7 +562,24 @@ func (s *memTaskStorage) TransitionSQLTaskRun(ctx context.Context, retry SQLTask
 	if retry.Claim != nil {
 		s.sqlTaskClaims[retry.Claim.ID] = next.RunID
 	}
-	return next.RunID, true, nil
+	return SQLTaskRetryTransition{RunID: next.RunID, Continued: true, CommitAttempted: true}, nil
+}
+
+func (s *memTaskStorage) ReconcileSQLTaskRetry(ctx context.Context, retry SQLTaskRetryRequest, nextID uint64) (SQLTaskRetryResolution, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	retry = snapshotSQLTaskRetry(retry)
+	s.RLock()
+	defer s.RUnlock()
+	previous, previousExists := s.sqlTaskRuns[retry.Previous.RunID]
+	next, nextExists := s.sqlTaskRuns[nextID]
+	var async task.AsyncTask
+	var pointer uint64
+	if retry.Claim != nil {
+		async, pointer = s.asyncTasks[retry.Claim.ID], s.sqlTaskClaims[retry.Claim.ID]
+	}
+	return resolveSQLTaskRetry(retry, nextID, previous, previousExists, next, nextExists, async, pointer)
 }
 
 func (s *memTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error) {

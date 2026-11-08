@@ -62,6 +62,22 @@ type SQLTaskRetryRequest struct {
 	Claim    *SQLTaskClaim
 }
 
+// SQLTaskRetryTransition distinguishes a failed transaction from an
+// uncertain COMMIT, including transitions that did not create a successor.
+type SQLTaskRetryTransition struct {
+	RunID           uint64
+	Continued       bool
+	CommitAttempted bool
+}
+
+type SQLTaskRetryResolution uint8
+
+const (
+	SQLTaskRetryRolledBack SQLTaskRetryResolution = iota
+	SQLTaskRetryAdmitted
+	SQLTaskRetryStopped
+)
+
 // snapshotSQLTaskRetry keeps the caller's claim independent of a storage
 // decorator, and the storage transaction independent of the decorator.
 func snapshotSQLTaskRetry(request SQLTaskRetryRequest) SQLTaskRetryRequest {
@@ -98,15 +114,24 @@ func (s *refreshableTaskStorage) PublishSQLTaskReceipt(ctx context.Context, requ
 	return resolved, err
 }
 
-func (s *refreshableTaskStorage) TransitionSQLTaskRun(ctx context.Context, request SQLTaskRetryRequest) (uint64, bool, error) {
-	var id uint64
-	var continued bool
+func (s *refreshableTaskStorage) TransitionSQLTaskRun(ctx context.Context, request SQLTaskRetryRequest) (SQLTaskRetryTransition, error) {
+	var result SQLTaskRetryTransition
 	err := s.withSQLTaskMetadataStore(ctx, func(store TaskStorage) error {
 		var err error
-		id, continued, err = store.TransitionSQLTaskRun(ctx, request)
+		result, err = store.TransitionSQLTaskRun(ctx, request)
 		return err
 	})
-	return id, continued, err
+	return result, err
+}
+
+func (s *refreshableTaskStorage) ReconcileSQLTaskRetry(ctx context.Context, request SQLTaskRetryRequest, nextID uint64) (SQLTaskRetryResolution, error) {
+	var result SQLTaskRetryResolution
+	err := s.withSQLTaskMetadataStore(ctx, func(store TaskStorage) error {
+		var err error
+		result, err = store.ReconcileSQLTaskRetry(ctx, request, nextID)
+		return err
+	})
+	return result, err
 }
 
 func (s *refreshableTaskStorage) ForceRecoverSQLTaskRun(ctx context.Context, account uint32, name string, runID uint64, actor string) (bool, error) {

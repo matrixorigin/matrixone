@@ -409,18 +409,24 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 	ctx, cancel := context.WithTimeoutCause(parent, r.options.fetchTimeout, moerr.CauseDoFetch)
 	var tasks []task.AsyncTask
 	var err error
-	if service := sqlTaskServiceOwner(r.service); service != nil && r.useSQLTaskFairFetch(service) {
+	service := sqlTaskServiceOwner(r.service)
+	if service != nil && r.useSQLTaskFairFetch(service) {
 		tasks, err = r.doSQLTaskFairFetch(ctx, service)
 	} else {
-		tasks, err = r.service.QueryAsyncTask(ctx,
+		conditions := []Condition{
 			WithTaskStatusCond(task.TaskStatus_Running),
 			WithLimitCond(r.options.queryLimit),
 			WithTaskRunnerCond(EQ, r.runnerID),
-			withSQLTaskUnclaimed())
+			withSQLTaskUnclaimed(),
+		}
+		if service == nil {
+			conditions = append(conditions, withSQLTaskLane(false))
+		}
+		tasks, err = r.service.QueryAsyncTask(ctx, conditions...)
 	}
 	cancel()
 	if err != nil {
-		if parent.Err() == nil && sqlTaskServiceOwner(r.service) != nil && !r.sqlFetch.active {
+		if parent.Err() == nil && service != nil && !r.sqlFetch.active {
 			r.sqlDeferred.Add(1)
 		}
 		return nil, moerr.AttachCause(ctx, err)

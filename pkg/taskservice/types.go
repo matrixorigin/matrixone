@@ -960,7 +960,12 @@ type TaskStorage interface {
 	// async claim; it must be safe to retry after an uncertain acknowledgement.
 	PublishSQLTaskReceipt(context.Context, SQLTaskReceiptRequest) (bool, error)
 	// TransitionSQLTaskRun atomically completes an attempt and admits its retry.
-	TransitionSQLTaskRun(context.Context, SQLTaskRetryRequest) (uint64, bool, error)
+	// The returned transition, including its commit flag and tentative run ID,
+	// must be preserved by decorators even when an error is returned.
+	TransitionSQLTaskRun(context.Context, SQLTaskRetryRequest) (SQLTaskRetryTransition, error)
+	// ReconcileSQLTaskRetry resolves an uncertain transition under the same
+	// storage locks, without starting any business SQL.
+	ReconcileSQLTaskRetry(context.Context, SQLTaskRetryRequest, uint64) (SQLTaskRetryResolution, error)
 	// ForceRecoverSQLTaskRun resolves exactly one run after the caller has
 	// isolated its old executor; it neither stops SQL nor rolls back effects.
 	ForceRecoverSQLTaskRun(context.Context, uint32, string, uint64, string) (bool, error)

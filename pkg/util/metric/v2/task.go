@@ -36,6 +36,7 @@ var (
 	SQLTaskExpiryFailureCounter      = sqlTaskControlFailureCounter.WithLabelValues("expiry")
 	SQLTaskReceiptRetryCounter       = sqlTaskControlFailureCounter.WithLabelValues("receipt_retry")
 	SQLTaskReceiptCapacityCounter    = sqlTaskControlFailureCounter.WithLabelValues("receipt_capacity")
+	SQLTaskReceiptAbandonedCounter   = sqlTaskControlFailureCounter.WithLabelValues("receipt_abandoned")
 	SQLTaskUnclaimedFailureCounter   = sqlTaskControlFailureCounter.WithLabelValues("unclaimed")
 
 	sqlTaskPendingGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{

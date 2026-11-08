@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -154,6 +156,9 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 		return ErrNotReady
 	}
 	recovery := service.sqlRecovery
+	ctx, cancelExecution := context.WithCancel(ctx)
+	stopExecution := context.AfterFunc(recovery.ctx, cancelExecution)
+	defer func() { stopExecution(); cancelExecution() }()
 	class := sqlTaskManualReceipt
 	if spec.TriggerType == SQLTaskTriggerScheduled {
 		class = sqlTaskScheduledReceipt
@@ -226,7 +231,7 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 				if runID != 0 && credit != nil {
 					freezeSQLTaskRun(&run, moerr.NewInternalErrorNoCtx("admission outcome was uncertain; SQL did not start"), false)
 					run.Status = SQLTaskStatusFailed
-					if pending := e.publishSQLTaskResult(recovery, credit, claim, run, SQLTaskReceiptAdmission, err); pending != nil {
+					if pending := e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptAdmission, err); pending != nil {
 						return pending
 					}
 					return err
@@ -251,7 +256,7 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 		if err := ctx.Err(); err != nil {
 			run.Status = SQLTaskStatusTimeout
 			freezeSQLTaskRun(&run, err, true)
-			if pending := e.publishSQLTaskResult(recovery, credit, claim, run, SQLTaskReceiptTerminal, err); pending != nil {
+			if pending := e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptTerminal, err); pending != nil {
 				return pending
 			}
 			return err
@@ -261,7 +266,7 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 			run.Status = SQLTaskStatusSkipped
 			run.GateResult = false
 			freezeSQLTaskRun(&run, nil, false)
-			return e.publishSQLTaskResult(recovery, credit, claim, run, SQLTaskReceiptTerminal, nil)
+			return e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptTerminal, nil)
 		}
 		if err != nil {
 			run.GateResult = false
@@ -271,11 +276,11 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 		if err == nil {
 			run.Status = SQLTaskStatusSuccess
 			freezeSQLTaskRun(&run, nil, false)
-			return e.publishSQLTaskResult(recovery, credit, claim, run, SQLTaskReceiptTerminal, nil)
+			return e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptTerminal, nil)
 		}
-		if unknown := sqlTaskUnknownCommit(err); unknown != nil {
+		if unknown := moerr.FindTxnUnknown(err); unknown != nil {
 			run.ErrorCode, run.ErrorMessage = int(unknown.ErrorCode()), util.Abbreviate(err.Error(), 4093)
-			if pending := e.publishSQLTaskResult(recovery, credit, claim, run, SQLTaskReceiptUnknown, err); pending != nil {
+			if pending := e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptUnknown, err); pending != nil {
 				return sqlTaskUnknownCommitResult(pending, unknown)
 			}
 			return sqlTaskUnknownCommitResult(err, unknown)
@@ -288,37 +293,41 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 			next.RunID, next.Status, next.AttemptNumber = 0, SQLTaskStatusRunning, attempt+1
 			next.StartedAt, next.FinishedAt = time.Now(), time.Time{}
 			next.DurationSeconds, next.RowsAffected, next.ErrorCode, next.ErrorMessage, next.GateResult = 0, 0, 0, "", true
-			guard := recovery.tryGuard(sqlTaskGuardKey{account: run.AccountID, value: run.TaskName}, 512)
-			if guard != nil {
-				metaCtx, cancel := context.WithTimeout(recovery.ctx, 5*time.Second)
-				id, continued, transitionErr := transitionSQLTaskRun(metaCtx, service.store, SQLTaskRetryRequest{Previous: run, Next: next, Claim: claim})
-				cancel()
-				recovery.releaseGuard(guard)
-				if transitionErr == nil && continued {
-					next.RunID = id
-					nextRun = &next
-					continue
-				}
-				if transitionErr == nil {
-					recovery.release(credit)
-					return err
-				}
-				if id != 0 {
-					next.RunID, next.Status = id, SQLTaskStatusFailed
-					freezeSQLTaskRun(&next, moerr.NewInternalErrorNoCtx("retry admission was uncertain; SQL did not start"), false)
-					receipt := &sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Kind: SQLTaskReceiptRetryAdmission, Run: run, NextRun: next, EndAt: time.Now().UnixMilli()}, credit: credit}
-					if claim != nil {
-						receipt.Claim = *claim
-					}
-					queued := recovery.enqueue(receipt)
-					if !queued {
-						recovery.release(credit)
-					}
-					return &SQLTaskMetadataPendingError{RunID: id, Recovering: queued, Cause: err}
-				}
+			result, transitionErr := retrySQLTaskTransition(ctx, service.store, SQLTaskRetryRequest{Previous: run, Next: next, Claim: claim})
+			if transitionErr == nil && result.Continued {
+				next.RunID = result.RunID
+				nextRun = &next
+				continue
 			}
+			if transitionErr == nil {
+				recovery.release(credit)
+				reason := moerr.NewInvalidStateNoCtx("SQL task retry was not executed because ownership changed")
+				service.rt.Logger().WarnEvent(sqlTaskRetryIncomplete, zap.Uint64("run-id", run.RunID), zap.Error(reason))
+				return errors.Join(err, reason)
+			}
+			transitionErr = fmt.Errorf("SQL task retry was not executed: %w", transitionErr)
+			service.rt.Logger().WarnEvent(sqlTaskRetryIncomplete, zap.Uint64("run-id", run.RunID),
+				zap.String("error", util.Abbreviate(transitionErr.Error(), 997)))
+			cause := errors.Join(err, transitionErr)
+			if result.CommitAttempted && result.RunID != 0 {
+				next.RunID, next.Status = result.RunID, SQLTaskStatusFailed
+				freezeSQLTaskRun(&next, moerr.NewInternalErrorNoCtx("retry admission was uncertain; SQL did not start"), false)
+				receipt := &sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Kind: SQLTaskReceiptRetryAdmission, Run: run, NextRun: next, EndAt: time.Now().UnixMilli()}, credit: credit}
+				if claim != nil {
+					receipt.Claim = *claim
+				}
+				queued := recovery.enqueue(receipt)
+				if !queued {
+					service.abandonSQLTaskReceipt(receipt)
+				}
+				return &SQLTaskMetadataPendingError{RunID: result.RunID, Recovering: queued, Cause: cause}
+			}
+			if pending := e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptTerminal, cause); pending != nil {
+				return pending
+			}
+			return cause
 		}
-		if pending := e.publishSQLTaskResult(recovery, credit, claim, run, SQLTaskReceiptTerminal, err); pending != nil {
+		if pending := e.publishSQLTaskResult(service, credit, claim, run, SQLTaskReceiptTerminal, err); pending != nil {
 			return pending
 		}
 		return err
@@ -352,7 +361,8 @@ func (e *SQLTaskMetadataPendingError) Unwrap() error { return e.Cause }
 
 // publishSQLTaskResult returns nil once the frozen metadata result is known to
 // be durable. Otherwise it transfers its reserved credit to the service worker.
-func (e *SQLTaskExecutor) publishSQLTaskResult(recovery *sqlTaskRecovery, credit *sqlTaskCredit, claim *SQLTaskClaim, run SQLTaskRun, kind SQLTaskReceiptKind, execErr error) error {
+func (e *SQLTaskExecutor) publishSQLTaskResult(service *taskService, credit *sqlTaskCredit, claim *SQLTaskClaim, run SQLTaskRun, kind SQLTaskReceiptKind, execErr error) error {
+	recovery := service.sqlRecovery
 	receipt := &sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Kind: kind, Run: run, EndAt: time.Now().UnixMilli()}, credit: credit}
 	if claim != nil {
 		receipt.Claim = *claim
@@ -370,32 +380,9 @@ func (e *SQLTaskExecutor) publishSQLTaskResult(recovery *sqlTaskRecovery, credit
 	}
 	queued := recovery.enqueue(receipt)
 	if !queued {
-		recovery.release(credit)
+		service.abandonSQLTaskReceipt(receipt)
 	}
 	return &SQLTaskMetadataPendingError{RunID: run.RunID, Status: run.Status, Recovering: queued, Cause: execErr}
-}
-
-func sqlTaskUnknownCommit(err error) *moerr.Error {
-	if moErr, ok := err.(*moerr.Error); ok && moErr.ErrorCode() == moerr.ErrTxnUnknown {
-		return moErr
-	}
-	if custom, ok := err.(interface{ As(any) bool }); ok {
-		var moErr *moerr.Error
-		if custom.As(&moErr) && moErr != nil && moErr.ErrorCode() == moerr.ErrTxnUnknown {
-			return moErr
-		}
-	}
-	switch e := err.(type) {
-	case interface{ Unwrap() []error }:
-		for _, cause := range e.Unwrap() {
-			if unknown := sqlTaskUnknownCommit(cause); unknown != nil {
-				return unknown
-			}
-		}
-	case interface{ Unwrap() error }:
-		return sqlTaskUnknownCommit(e.Unwrap())
-	}
-	return nil
 }
 
 // Keep the unknown-commit identity visible to the SQL protocol even when an

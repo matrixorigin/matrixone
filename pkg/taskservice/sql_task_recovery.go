@@ -188,12 +188,14 @@ func (r *sqlTaskRecovery) releaseLocked(credit *sqlTaskCredit) {
 	}
 }
 
-func (r *sqlTaskRecovery) release(credit *sqlTaskCredit) {
+func (r *sqlTaskRecovery) release(credit *sqlTaskCredit) bool {
 	r.mu.Lock()
-	if credit != nil && !credit.queued {
+	released := credit != nil && !credit.queued && !credit.released
+	if released {
 		r.releaseLocked(credit)
 	}
 	r.mu.Unlock()
+	return released
 }
 
 // tryGuard is a nonblocking resource guard, not authority to execute SQL.
@@ -327,7 +329,7 @@ func (r *sqlTaskRecovery) run(done chan struct{}) {
 			resolved := r.process(ctx, receipt)
 			cancel()
 			r.mu.Lock()
-			if resolved || r.closed {
+			if resolved {
 				r.releaseLocked(receipt.credit)
 				succeeded = true
 			} else {
@@ -358,7 +360,7 @@ func (r *sqlTaskRecovery) run(done chan struct{}) {
 	}
 }
 
-func (r *sqlTaskRecovery) close() {
+func (r *sqlTaskRecovery) close() (int, []uint64) {
 	r.mu.Lock()
 	r.closed = true
 	started := r.started
@@ -369,14 +371,21 @@ func (r *sqlTaskRecovery) close() {
 		<-done
 	}
 	r.mu.Lock()
+	var count int
+	var sample []uint64
 	for class := range r.pending {
 		queue := &r.pending[class]
 		for element := queue.Front(); element != nil; {
 			next := element.Next()
 			receipt := queue.Remove(element).(*sqlTaskReceipt)
+			count++
+			if receipt.Run.RunID != 0 && len(sample) < 4 {
+				sample = append(sample, receipt.Run.RunID)
+			}
 			r.releaseLocked(receipt.credit)
 			element = next
 		}
 	}
 	r.mu.Unlock()
+	return count, sample
 }

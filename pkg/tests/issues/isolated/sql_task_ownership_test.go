@@ -19,19 +19,72 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pbtask "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type retryTransitionFaultStore struct {
+	taskservice.TaskStorage
+	lostAck  bool
+	attempts atomic.Int32
+}
+
+func (*retryTransitionFaultStore) Close() error { return nil }
+
+func (s *retryTransitionFaultStore) TransitionSQLTaskRun(ctx context.Context, request taskservice.SQLTaskRetryRequest) (taskservice.SQLTaskRetryTransition, error) {
+	if s.attempts.Add(1) == 1 {
+		if !s.lostAck {
+			return taskservice.SQLTaskRetryTransition{}, errors.New("injected pre-commit failure")
+		}
+		result, err := s.TaskStorage.TransitionSQLTaskRun(ctx, request)
+		if err == nil {
+			return result, errors.New("injected lost acknowledgement after commit")
+		}
+		return result, err
+	}
+	return s.TaskStorage.TransitionSQLTaskRun(ctx, request)
+}
+
+type retryAdmissionGuard struct {
+	service    taskservice.TaskService
+	definition taskservice.SQLTask
+	calls      int
+	release    func()
+}
+
+type guardedRetryExecutor struct {
+	ie.InternalExecutor
+	guard *retryAdmissionGuard
+}
+
+func (e *guardedRetryExecutor) ExecWithStatus(ctx context.Context, statement string, opts ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
+	e.guard.calls++
+	status, err := e.InternalExecutor.(ie.InternalExecutorWithStatus).ExecWithStatus(ctx, statement, opts)
+	if err != nil {
+		return status, err
+	}
+	if e.guard.calls == 1 {
+		_, e.guard.release, err = taskservice.BeginSQLTaskManualAdmission(ctx, e.guard.service,
+			e.guard.definition.AccountID, e.guard.definition.TaskName)
+	} else if e.guard.calls == 3 {
+		e.guard.release()
+	}
+	return status, err
+}
 
 func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -391,6 +444,53 @@ func TestSQLTaskRunBarrierAcrossDropAndRecreate(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_task.sql_task_run where task_name='retry_once' and status='SUCCESS'").Scan(&succeeded))
 	require.Equal(t, 1, failed)
 	require.Equal(t, 1, succeeded)
+
+	for _, lostAck := range []bool{false, true} {
+		label := "precommit"
+		if lostAck {
+			label = "lostack"
+		}
+		t.Run("retry_"+label, func(t *testing.T) {
+			counterTable, sinkTable, taskName := "counter_"+label, "sink_"+label, "retry_"+label
+			execSQLRequire(t, ctx, db, "create table "+counterTable+"(n int)")
+			execSQLRequire(t, ctx, db, "insert into "+counterTable+" values (0)")
+			execSQLRequire(t, ctx, db, "create table "+sinkTable+"(v int primary key)")
+			execSQLRequire(t, ctx, db, "insert into "+sinkTable+" values (0)")
+			execSQLRequire(t, ctx, db, fmt.Sprintf(`create task %s retry 1 as begin
+				update %s set n=n+1;
+				insert into %s select case when n=1 then 0 else n end from %s;
+			end`, taskName, counterTable, sinkTable, counterTable))
+			definitions, err := storage.QuerySQLTask(ctx, taskservice.WithAccountID(taskservice.EQ, 0), taskservice.WithTaskName(taskservice.EQ, taskName))
+			require.NoError(t, err)
+			require.Len(t, definitions, 1)
+			definition := definitions[0]
+			fault := &retryTransitionFaultStore{TaskStorage: storage, lostAck: lostAck}
+			owner := taskservice.NewTaskService(runtime.DefaultRuntime(), fault)
+			t.Cleanup(func() { require.NoError(t, owner.Close()) })
+			guard := &retryAdmissionGuard{service: owner, definition: definition, release: func() {}}
+			t.Cleanup(func() { guard.release() })
+			cnID := cn.GetServiceConfig().CN.UUID
+			executor := taskservice.NewSQLTaskExecutor(func() ie.InternalExecutor {
+				return &guardedRetryExecutor{InternalExecutor: frontend.NewInternalExecutor(cnID), guard: guard}
+			}, owner, cnID)
+			spec := &pbtask.SQLTaskContext{TaskId: definition.TaskID, TaskName: definition.TaskName, AccountId: definition.AccountID,
+				DatabaseName: definition.DatabaseName, SQLBody: definition.SQLBody, RetryLimit: uint32(definition.RetryLimit),
+				Creator: definition.Creator, CreatorUserId: definition.CreatorUserID, CreatorRoleId: definition.CreatorRoleID,
+				TriggerType: taskservice.SQLTaskTriggerManual, ScheduledAt: time.Now().UnixMilli()}
+			require.NoError(t, executor.ExecuteContext(ctx, spec, true))
+			require.Equal(t, 4, guard.calls)
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx, "select n from "+counterTable).Scan(&count))
+			require.Equal(t, 2, count)
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+sinkTable+" where v=2").Scan(&count))
+			require.Equal(t, 1, count)
+			runs, err := storage.QuerySQLTaskRun(ctx, taskservice.WithTaskIDCond(taskservice.EQ, definition.TaskID))
+			require.NoError(t, err)
+			require.Len(t, runs, 2)
+			require.Equal(t, taskservice.SQLTaskStatusSuccess, runs[0].Status)
+			require.Equal(t, taskservice.SQLTaskStatusFailed, runs[1].Status)
+		})
+	}
 
 	execSQLRequire(t, ctx, db, "create table scheduled_counter(n int)")
 	execSQLRequire(t, ctx, db, "insert into scheduled_counter values (0)")

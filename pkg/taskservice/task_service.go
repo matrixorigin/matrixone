@@ -40,6 +40,14 @@ var sqlTaskReceiptRetry = logutil.Event{
 	Name: "task.sql.receipt.retry", Message: "SQL task metadata recovery will retry",
 }
 
+var sqlTaskRetryIncomplete = logutil.Event{
+	Name: "task.sql.retry.incomplete", Message: "SQL task business retry did not execute",
+}
+
+var sqlTaskReceiptAbandoned = logutil.Event{
+	Name: "task.sql.receipt.abandoned", Message: "SQL task metadata receipts abandoned during shutdown",
+}
+
 var sqlTaskUnclaimedRetry = logutil.Event{
 	Name: "task.sql.unclaimed.retry", Message: "unclaimed SQL task completion deferred",
 }
@@ -130,6 +138,20 @@ func (s *taskService) recoverSQLTaskReceipt(ctx context.Context, receipt *sqlTas
 		})
 	}
 	return err == nil && resolved
+}
+
+func (s *taskService) reportAbandonedSQLTaskReceipts(count int, sample []uint64) {
+	if count == 0 {
+		return
+	}
+	v2.SQLTaskReceiptAbandonedCounter.Add(float64(count))
+	s.rt.Logger().WarnEvent(sqlTaskReceiptAbandoned, zap.Int("count", count), zap.Uint64s("run-ids", sample))
+}
+
+func (s *taskService) abandonSQLTaskReceipt(receipt *sqlTaskReceipt) {
+	if s.sqlRecovery.release(receipt.credit) {
+		s.reportAbandonedSQLTaskReceipts(1, []uint64{receipt.Run.RunID})
+	}
 }
 
 func (s *taskService) finishUnclaimedSQLTask(caller context.Context, claim SQLTaskClaim, cause error, cleanupTaskID uint64) bool {
@@ -426,7 +448,8 @@ func (s *taskService) UpdateCDCTask(
 func (s *taskService) Close() error {
 	s.StopScheduleCronTask()
 	s.StopScheduleSQLTask()
-	s.sqlRecovery.close()
+	count, sample := s.sqlRecovery.close()
+	s.reportAbandonedSQLTaskReceipts(count, sample)
 	if s.store == nil {
 		return nil
 	}

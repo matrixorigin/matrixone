@@ -34,7 +34,7 @@ import (
 
 func TestSQLTaskRecoveryCreditsAndGuards(t *testing.T) {
 	r := newSQLTaskRecovery(16, 9, nil)
-	t.Cleanup(r.close)
+	t.Cleanup(func() { r.close() })
 
 	var credits []*sqlTaskCredit
 	for i := 0; i < sqlTaskNameCapacity; i++ {
@@ -81,7 +81,7 @@ func TestSQLTaskRecoveryDoesNotLetOneBadReceiptBlockOthers(t *testing.T) {
 		completed <- receipt.Run.RunID
 		return true
 	})
-	t.Cleanup(r.close)
+	t.Cleanup(func() { r.close() })
 	for _, item := range []struct {
 		class sqlTaskReceiptClass
 		id    uint64
@@ -128,7 +128,7 @@ func TestSQLTaskRecoveryKeepsDifferentRunsOfSameFiring(t *testing.T) {
 		completed <- receipt.Run.RunID
 		return true
 	})
-	t.Cleanup(r.close)
+	t.Cleanup(func() { r.close() })
 	claim := SQLTaskClaim{ID: 9, Runner: "cn1", Epoch: 1}
 	first := r.reserve(sqlTaskScheduledReceipt, 1, "task")
 	second := r.reserve(sqlTaskScheduledReceipt, 1, "task")
@@ -155,14 +155,16 @@ func TestSQLTaskRecoveryShutdownReleasesPendingGauge(t *testing.T) {
 		<-ctx.Done()
 		return false
 	})
-	t.Cleanup(r.close)
+	t.Cleanup(func() { r.close() })
 	before := testutil.ToFloat64(v2.SQLTaskManualPendingGauge)
 	credit := r.reserve(sqlTaskManualReceipt, 1, "task")
 	require.NotNil(t, credit)
-	require.True(t, r.enqueue(&sqlTaskReceipt{credit: credit}))
+	require.True(t, r.enqueue(&sqlTaskReceipt{SQLTaskReceiptRequest: SQLTaskReceiptRequest{Run: SQLTaskRun{RunID: 9}}, credit: credit}))
 	<-entered
 	require.Equal(t, before+1, testutil.ToFloat64(v2.SQLTaskManualPendingGauge))
-	r.close()
+	count, sample := r.close()
+	require.Equal(t, 1, count)
+	require.Equal(t, []uint64{9}, sample, "the canceled in-flight receipt must be reported")
 	require.Equal(t, before, testutil.ToFloat64(v2.SQLTaskManualPendingGauge))
 }
 
@@ -353,7 +355,7 @@ func TestSQLTaskRecoveryRetriesAndRotatesShares(t *testing.T) {
 		attempts <- receipt.credit.class
 		return recovered.Load()
 	})
-	t.Cleanup(r.close)
+	t.Cleanup(func() { r.close() })
 
 	for class := sqlTaskManualReceipt; class < sqlTaskReceiptClasses; class++ {
 		credit := r.reserve(class, 1, "task")
