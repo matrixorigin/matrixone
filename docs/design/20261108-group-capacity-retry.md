@@ -47,8 +47,9 @@ PK/FD assumptions, or expression replay elsewhere in the pipeline.
 
 Factor `container.resetForSpill` in `pkg/sql/colexec/group/types2.go` into a
 resident-state reset and an evaluated-input reset. Resident reset retains the
-existing `distinctGroupReset` transition and releases the hash/iterator,
-group-by batches, and resident and spill aggregate lists. Input reset resets
+existing `distinctGroupReset` transition, releases the hash and accounted
+iterator scratch, detaches the reusable iterator, and releases group-by batches and
+resident and spill aggregate lists. Input reset resets
 the group and aggregate-argument executors and frees the Group-owned rollup
 sentinels. Keep `resetForSpill` as the existing full-reset wrapper.
 
@@ -60,7 +61,7 @@ Preserve existing spill accounting, recovery floor, measurable-progress
 checks, hash reconstruction, and aggregate-list rebuild.
 
 In `Group.buildOneBatch` in `exec2.go`, return immediately if
-`evaluateBuildInput` fails. After it succeeds, keep `evaluated = true` through
+`evaluateBuildInput` fails. After it succeeds, retain the evaluated input through
 both adaptive-growth recovery and ordinary preflight recovery. Exact DISTINCT
 drain does not reset the evaluation. On a successful retaining spill, retry
 the same `i` with a fresh hash preview and the same evaluated vectors. Retain
