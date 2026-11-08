@@ -1,7 +1,8 @@
 # Preserve evaluated input during Group capacity recovery
 
+Tracking issue: [#32369](https://github.com/matrixorigin/matrixone/issues/32369).
+Implementation PR: [#32368](https://github.com/matrixorigin/matrixone/pull/32368).
 Discovery: [#32060](https://github.com/matrixorigin/matrixone/issues/32060).
-Implementation series: Group capacity retry correction (PR to be created).
 Reviewed baseline: `89ca3dbbf6d594d7614b8e1ca80f6b0300ed3cd2`.
 Design decision: **PASS** for the scope below; implementation and validation
 must be reviewed against this design.
