@@ -150,13 +150,16 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 	bat := entry.bat
 	txn.unaccountWorkspaceEntryLocked(entry)
 	delete(txn.batchSelectList, bat)
-	bat.Clean(txn.proc.GetMPool())
+	txn.releaseWorkspaceBatchLocked(bat)
 	entry.bat = nil
 }
 
 func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
 	entry := &txn.writes[idx]
 	if entry.bat == nil {
+		return
+	}
+	if txn.batchPinned(entry.bat) {
 		return
 	}
 	bat := entry.bat
@@ -310,9 +313,19 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+	e, err := txn.prepareWriteEntry(ctx, Entry{
+		typ: typ, note: note, accountId: accountId, databaseId: databaseId,
+		tableId: tableId, databaseName: databaseName, tableName: tableName,
+		bat: bat, tnStore: tnStore, autoIncrEpoch: autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+	})
+	if err != nil {
 		return nil, err
 	}
+	if err = txn.sortDeleteBatch(e); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -331,32 +344,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			time.Since(start),
 			nil)
 	}()
-
-	txn.readOnly.Store(false)
-
-	pkCheckPos := -1
-	pkCheckReady := false
-	if typ == INSERT || typ == DELETE {
-		// resolvePKCheckPosForWrite may reach Engine.Database, which can craft an
-		// internal SQL on the current txn and reenter txn.Lock via
-		// UpdateSnapshotWriteOffset. Resolve the PK position before taking txn.Lock.
-		pkCheckPos, pkCheckReady, err = txn.resolvePKCheckPosForWrite(
-			ctx,
-			typ,
-			accountId,
-			databaseName,
-			tableName,
-			tableId,
-			bat,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if typ == INSERT && pkCheckPos >= 0 {
-			// WriteBatch prepends rowid at attr 0 for inserts after this metadata lookup.
-			pkCheckPos++
-		}
-	}
 
 	txn.Lock()
 	defer txn.Unlock()
@@ -434,38 +421,52 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		}
 	}
 
-	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
-		bat != nil && bat.RowCount() > 1 {
+	txn.publishWriteEntryLocked(e)
 
-		// attr: row_id, pk
-		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
-			return nil, err
-		}
-
-		bat.Vecs[0].SetSorted(true)
-		bat.Vecs[1].SetSorted(true)
-	}
-
-	e := Entry{
-		typ:                typ,
-		accountId:          accountId,
-		bat:                bat,
-		tableId:            tableId,
-		databaseId:         databaseId,
-		tableName:          tableName,
-		databaseName:       databaseName,
-		tnStore:            tnStore,
-		autoIncrEpoch:      autoIncrEpoch,
-		autoIncrEpochKnown: autoIncrEpochKnown,
-		note:               note,
-		pkCheckPos:         pkCheckPos,
-		pkCheckReady:       pkCheckReady,
-	}
-	txn.appendWorkspaceEntryLocked(e)
-	txn.pkCount += bat.RowCount()
-
-	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return
+}
+
+// prepareWriteEntry resolves metadata outside txn.Lock: table lookup can run
+// internal SQL. Delete partitioning can then prepare only its residual TN rows
+// before publishing any workspace selection or object-delete state.
+func (txn *Transaction) prepareWriteEntry(ctx context.Context, e Entry) (Entry, error) {
+	if err := context.Cause(ctx); err != nil {
+		return e, err
+	}
+	if err := txn.requireAutoIncrEpochFenceCommit(e.autoIncrEpoch, e.autoIncrEpochKnown); err != nil {
+		return e, err
+	}
+	e.pkCheckPos = -1
+	if e.typ == INSERT || e.typ == DELETE {
+		var err error
+		e.pkCheckPos, e.pkCheckReady, err = txn.resolvePKCheckPosForWrite(ctx, e.typ,
+			e.accountId, e.databaseName, e.tableName, e.tableId, e.bat)
+		if err != nil {
+			return e, err
+		}
+		if e.typ == INSERT && e.pkCheckPos >= 0 {
+			e.pkCheckPos++ // The publisher prepends the generated RowID.
+		}
+	}
+	return e, context.Cause(ctx)
+}
+
+func (txn *Transaction) sortDeleteBatch(e Entry) error {
+	if e.typ == DELETE && !catalog.IsSystemTable(e.tableId) && e.bat != nil && e.bat.RowCount() > 1 {
+		if err := mergeutil.SortColumnsByIndex(e.bat.Vecs, 0, txn.proc.Mp()); err != nil {
+			return err
+		}
+		e.bat.Vecs[0].SetSorted(true)
+		e.bat.Vecs[1].SetSorted(true)
+	}
+	return nil
+}
+
+func (txn *Transaction) publishWriteEntryLocked(e Entry) {
+	txn.readOnly.Store(false)
+	txn.appendWorkspaceEntryLocked(e)
+	txn.pkCount += e.bat.RowCount()
+	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, e.tableId, typesNames[e.typ], e.bat)
 }
 
 func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
@@ -1025,6 +1026,9 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	skipTable := make(map[uint64]bool)
 
 	for i := offset; i < len(txn.writes); i++ {
+		if txn.batchPinned(txn.writes[i].bat) {
+			continue
+		}
 		if txn.writes[i].isCatalog() {
 			continue
 		}
@@ -1091,6 +1095,12 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			continue
 		}
 
+		if txn.batchPinned(txn.writes[i].bat) {
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
+			continue
+		}
+
 		keepElement := true
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			tbKey := workspaceTableKey{
@@ -1111,12 +1121,21 @@ func (txn *Transaction) dumpInsertBatchLocked(
 				bat := txn.writes[i].bat
 				*pkCount += bat.RowCount()
 				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
-				// skip rowid
-				newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
-				newBatch.SetAttributes(bat.Attrs[1:])
-				newBatch.Vecs = bat.Vecs[1:]
-				newBatch.SetRowCount(bat.Vecs[0].Length())
-				mp[tbKey] = append(mp[tbKey], newBatch)
+				// Rows deleted from this raw batch must not be resurrected in
+				// the object. The physical object does not store workspace
+				// rowids, so filter only the columns that will be written.
+				deleted := txn.batchSelectList[bat]
+				delete(txn.batchSelectList, bat)
+				if len(deleted) != bat.RowCount() {
+					newBatch := batch.NewWithSize(0)
+					newBatch.SetAttributes(bat.Attrs[1:])
+					newBatch.Vecs = bat.Vecs[1:]
+					newBatch.SetRowCount(bat.RowCount())
+					if len(deleted) != 0 {
+						newBatch.Shrink(deleted, true)
+					}
+					mp[tbKey] = append(mp[tbKey], newBatch)
+				}
 				defer bat.Clean(txn.proc.GetMPool())
 
 				keepElement = false
@@ -1226,6 +1245,12 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			writes[lastWriteIndex] = writes[i]
+			lastWriteIndex++
+			continue
+		}
+
+		if txn.batchPinned(txn.writes[i].bat) {
 			writes[lastWriteIndex] = writes[i]
 			lastWriteIndex++
 			continue
@@ -1846,6 +1871,38 @@ func (txn *Transaction) deleteBatch(
 	bat *batch.Batch,
 	databaseId, tableId uint64,
 ) *batch.Batch {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.deleteBatchLocked(bat, databaseId, tableId)
+}
+
+// deleteBatchLocked is also the user-table delete publication boundary. Catalog
+// callers retain their existing metadata-specific entry construction.
+func (txn *Transaction) deleteBatchLocked(
+	bat *batch.Batch,
+	databaseId, tableId uint64,
+) *batch.Batch {
+	partition := txn.partitionDeletesLocked(bat, databaseId, tableId)
+	defer vector.PutSels(partition.remaining)
+	txn.publishDeletePartitionLocked(partition)
+	bat.Shrink(partition.remaining, false)
+	return bat
+}
+
+type workspaceDeleteSelection struct {
+	batch   *batch.Batch
+	offsets []int64
+}
+
+type workspaceDeletePartition struct {
+	selections []workspaceDeleteSelection
+	cnDeletes  map[types.Blockid][]int64
+	remaining  []int64
+}
+
+// Partitioning is read-only under txn.Lock. The caller completes fallible
+// residual copying/sorting before atomically publishing this partition.
+func (txn *Transaction) partitionDeletesLocked(bat *batch.Batch, databaseId, tableId uint64) workspaceDeletePartition {
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -1868,16 +1925,16 @@ func (txn *Transaction) deleteBatch(
 	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
 
 	var (
-		mp             = make(map[types.Rowid]uint8)
-		deleteBlkId    = make(map[types.Blockid]bool)
-		rowids         = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
-		min1           = uint32(math.MaxUint32)
-		max1           = uint32(0)
-		cnRowIdOffsets = make([]int64, 0, len(rowids))
+		mp          = make(map[types.Rowid]uint8)
+		deleteBlkId = make(map[types.Blockid]bool)
+		rowids      = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
+		min1        = uint32(math.MaxUint32)
+		max1        = uint32(0)
 	)
+	partition := workspaceDeletePartition{remaining: vector.GetSels()}
 	server := colexec.MustGetServer(txn.engine.service)
 
-	for i, rowid := range rowids {
+	for _, rowid := range rowids {
 
 		blkid := rowid.CloneBlockID()
 		deleteBlkId[blkid] = true
@@ -1885,8 +1942,11 @@ func (txn *Transaction) deleteBatch(
 		rowOffset := rowid.GetRowOffset()
 
 		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
-			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
-			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
+			if partition.cnDeletes == nil {
+				partition.cnDeletes = make(map[types.Blockid][]int64)
+			}
+			partition.cnDeletes[blkid] = append(partition.cnDeletes[blkid], int64(rowOffset))
+			mp[rowid] = 1
 			continue
 		}
 
@@ -1899,25 +1959,22 @@ func (txn *Transaction) deleteBatch(
 		}
 		// update workspace
 	}
-	// cn rowId antiShrink
-	bat.Shrink(cnRowIdOffsets, true)
-	if bat.RowCount() == 0 {
-		return bat
-	}
-	sels := vector.GetSels()
-	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
-
-	sels = sels[:0]
-	rowids = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
+	partition.selections = txn.collectTableDeletesLocked(databaseId, tableId, deleteBlkId, min1, max1, mp)
 	for k, rowid := range rowids {
-		// put rowid to be deleted into sels.
-		if mp[rowid] != 0 {
-			sels = append(sels, int64(k))
+		if mp[rowid] == 0 {
+			partition.remaining = append(partition.remaining, int64(k))
 		}
 	}
-	bat.Shrink(sels, true)
-	vector.PutSels(sels)
-	return bat
+	return partition
+}
+
+func (txn *Transaction) publishDeletePartitionLocked(partition workspaceDeletePartition) {
+	for _, selection := range partition.selections {
+		txn.addBatchSelectionsLocked(selection.batch, selection.offsets)
+	}
+	for bid, offsets := range partition.cnDeletes {
+		txn.deletedBlocks.addDeletedBlocks(&bid, offsets)
+	}
 }
 
 func (txn *Transaction) addBatchSelectionsLocked(bat *batch.Batch, sels []int64) {
@@ -1935,17 +1992,13 @@ func (txn *Transaction) selectAllBatchRowsLocked(bat *batch.Batch) {
 }
 
 // Delete rows belongs to uncommitted raw data batch in txn's workspace.
-func (txn *Transaction) deleteTableWrites(
+func (txn *Transaction) collectTableDeletesLocked(
 	databaseId uint64,
 	tableId uint64,
-	sels []int64,
 	deleteBlkId map[types.Blockid]bool,
 	min, max uint32,
 	mp map[types.Rowid]uint8,
-) {
-	txn.Lock()
-	defer txn.Unlock()
-
+) (selections []workspaceDeleteSelection) {
 	// txn worksapce will have four batch type:
 	// 1.RawBatch 2.DN Block RowId(mixed rowid from different block)
 	// 3.CN block Meta batch(record block meta generated by cn insert write s3)
@@ -1967,7 +2020,7 @@ func (txn *Transaction) deleteTableWrites(
 			continue
 		}
 
-		sels = sels[:0]
+		var sels []int64
 		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 		if len(rowids) == 0 {
 			continue
@@ -1991,9 +2044,10 @@ func (txn *Transaction) deleteTableWrites(
 			}
 		}
 		if len(sels) > 0 {
-			txn.addBatchSelectionsLocked(entry.bat, sels)
+			selections = append(selections, workspaceDeleteSelection{batch: entry.bat, offsets: sels})
 		}
 	}
+	return selections
 }
 
 func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
@@ -2097,7 +2151,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	}()
 
 	for i, e := range txn.writes {
-		if e.bat == nil || e.bat.IsEmpty() ||
+		if e.bat == nil || txn.batchPinned(e.bat) || e.bat.IsEmpty() ||
 			e.bat.Attrs[0] == catalog.BlockMeta_BlockInfo || // inserts object
 			e.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats { // deletes object
 			continue
@@ -2198,7 +2252,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		var sortBuf []int64
 		var shuffleBuf []byte
 		for i := range txn.writes {
-			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
+			if txn.writes[i].typ == DELETE && !txn.batchPinned(txn.writes[i].bat) && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndexWithBuf(
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
 					return err
@@ -2229,6 +2283,9 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 		txn.deletedBlocks.iter(
 			func(blkId *types.Blockid, offsets []int64) bool {
 				summary := txn.cnObjsSummary[*blkId.Object()]
+				if txn.batchPinned(summary.objBat) {
+					return true
+				}
 				k := tableKey{
 					accountId: summary.accountId,
 					dbName:    summary.dbName,
@@ -2282,12 +2339,21 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	affectedBats := make(map[*batch.Batch]struct{})
 
 	defer func() {
-		txn.deletedBlocks.clean()
+		txn.deletedBlocks.Lock()
+		for _, blocks := range objBlkDeletion {
+			for bid := range blocks {
+				delete(txn.deletedBlocks.offsets, bid)
+			}
+		}
+		txn.deletedBlocks.Unlock()
 	}()
 
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
 			summary := txn.cnObjsSummary[*blkId.Object()]
+			if txn.batchPinned(summary.objBat) {
+				return true
+			}
 
 			affectedBats[summary.objBat] = struct{}{}
 
@@ -2934,6 +3000,10 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	txn.Lock()
+	txn.invalidateStatementKeyViewsLocked()
+	txn.Unlock()
+
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(
 			"Transaction.Rollback",
@@ -2959,6 +3029,8 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 }
 
 func (txn *Transaction) delTransaction() {
+	txn.Lock()
+	defer txn.Unlock()
 	if txn.removed {
 		return
 	}
@@ -2968,12 +3040,13 @@ func (txn *Transaction) delTransaction() {
 		txn.isCloneTxn = false
 	}
 
+	txn.invalidateStatementKeyViewsLocked()
+
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
-		txn.writes[i].bat.Clean(txn.proc.Mp())
+		txn.releaseWorkspaceEntryBatchLocked(i)
 	}
 	txn.assertWorkspaceAccountingLocked()
 

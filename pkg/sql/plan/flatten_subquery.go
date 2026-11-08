@@ -70,6 +70,9 @@ func (builder *QueryBuilder) flattenSubqueriesWithContext(
 	ctx *BindContext,
 	nullResultRejected bool,
 ) (int32, *plan.Expr, error) {
+	if builder.odkuValidationParams != nil {
+		return nodeID, expr, nil
+	}
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {

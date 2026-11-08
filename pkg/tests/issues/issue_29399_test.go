@@ -456,6 +456,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		} {
 			execSQLRequire(t, ctx, admin, stmt)
 		}
+		syncAuthenticatedClusterCommit(t, ctx, c)
 		user := open(account+"#u#reader", cn1.GetServiceConfig().CN.Frontend.Port)
 		conn, err := user.Conn(ctx)
 		require.NoError(t, err)
@@ -477,6 +478,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
 		_, err = conn.ExecContext(ctx, "create table allowed.owned(id int)")
 		require.NoError(t, err)
+		syncAuthenticatedClusterCommit(t, ctx, c)
 		execSQLRequire(t, ctx, admin, "insert into allowed.owned values(7)")
 		_, err = conn.ExecContext(ctx, "prepare text_scope from 'select count(*) from allowed.t'")
 		require.NoError(t, err)
@@ -534,11 +536,13 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		t.Run("dropped user cannot retain public privileges", func(t *testing.T) {
 			execSQLRequire(t, ctx, admin, "grant select on table allowed.t to public")
 			execSQLRequire(t, ctx, admin, "create user public_u identified by '111'")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			public, err := open(account+"#public_u#public", cn1.GetServiceConfig().CN.Frontend.Port).Conn(ctx)
 			require.NoError(t, err)
 			defer public.Close()
 			require.NoError(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count))
 			execSQLRequire(t, ctx, admin, "drop user public_u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.ErrorContains(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count), "do not have privilege")
 		})
 		t.Run("cross account restore cannot reuse authenticated numeric identities", func(t *testing.T) {
@@ -573,6 +577,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 				} else {
 					require.NoError(t, a.QueryRowContext(ctx, "select user_id from mo_catalog.mo_user where user_name = ?", userName).Scan(&targetUserID))
 					require.NoError(t, a.QueryRowContext(ctx, "select role_id from mo_catalog.mo_role where role_name = ?", roleName).Scan(&targetRoleID))
+					syncAuthenticatedClusterCommit(t, ctx, c)
 					for _, port := range []int64{cn1.GetServiceConfig().CN.Frontend.Port, cn2.GetServiceConfig().CN.Frontend.Port} {
 						conn, err := open(name+"#"+userName+"#"+roleName, port).Conn(ctx)
 						require.NoError(t, err)
@@ -628,6 +633,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			_, err = oldAdmin.ExecContext(ctx, "set @auth_native_probe=0")
 			require.NoError(t, err)
 			execSQLRequire(t, ctx, sys, restore)
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			for _, q := range native {
 				_, err = oldAdmin.ExecContext(ctx, q)
 				assert.ErrorContains(t, err, "do not have privilege", "replaced administrator ran native command: %s", q)
@@ -656,8 +662,10 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		t.Run("recreated creator is not historical owner", func(t *testing.T) {
 			var err error
 			execSQLRequire(t, ctx, admin, "grant create database on account * to reader")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			_, err = conn.ExecContext(ctx, "create database historical_parent")
 			require.NoError(t, err)
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			execSQLRequire(t, ctx, admin, "create table historical_parent.t(id int)")
 			execSQLRequire(t, ctx, admin, "insert into historical_parent.t values(9)")
 
@@ -665,6 +673,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			// reject reconstruction of the eligible admin-owned objects.
 			execSQLRequire(t, ctx, admin, "create database external_parent")
 			execSQLRequire(t, ctx, admin, "grant create table on database external_parent to reader")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			csv := filepath.Join(t.TempDir(), "external.csv")
 			require.NoError(t, os.WriteFile(csv, []byte("1\n"), 0600))
 			_, err = conn.ExecContext(ctx, "create external table external_parent.ext(id int) infile{'filepath'='"+csv+"'} fields terminated by ','")
@@ -690,10 +699,12 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			require.Equal(t, owner, restoredOwner)
 			execSQLRequire(t, ctx, admin, "create user replacement identified by '111'")
 			execSQLRequire(t, ctx, admin, "grant reader to replacement")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			namesake := open(account+"#replacement#reader", cn1.GetServiceConfig().CN.Frontend.Port)
 			_, err = namesake.ExecContext(ctx, "drop table allowed.owned")
 			require.ErrorContains(t, err, "do not have privilege")
 			execSQLRequire(t, ctx, admin, "drop user u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.ErrorContains(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count), "do not have privilege")
 			execSQLRequire(t, ctx, admin, "update external_parent.t set id = 12")
 			execSQLRequire(t, ctx, admin, "restore database external_parent {snapshot='"+snapshot+"'}")

@@ -86,11 +86,11 @@ func TestInsertMainPrimaryKeyLockIdentity(t *testing.T) {
 			query := logicPlan.GetQuery()
 			require.NotNil(t, query)
 			var lockKey *plan.Expr
-			var baseLock, updateJoin *plan.Node
+			var baseLock, actionOwner *plan.Node
 			for _, node := range query.Nodes {
-				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
-					node.OnDuplicateAction == plan.Node_UPDATE {
-					updateJoin = node
+				if node.PreInsertUkCtx.GetOdkuActions() != nil {
+					require.Nil(t, actionOwner, "expected one action owner")
+					actionOwner = node
 				}
 				if node.NodeType != plan.Node_LOCK_OP {
 					continue
@@ -118,26 +118,45 @@ func TestInsertMainPrimaryKeyLockIdentity(t *testing.T) {
 
 			// Evaluate the actual remapped lock expression against a tiny mixed
 			// input: UK conflict, no existing target, and PK conflict. Its target
-			// subexpression must stay NULL for the new row (the DEDUP INSERT marker).
+			// subexpression must stay NULL when no original row was prefetched.
 			require.NotNil(t, lockKey.GetF())
 			require.Equal(t, "coalesce", lockKey.GetF().Func.ObjName)
 			require.Len(t, lockKey.GetF().Args, 2)
 			resolved := lockKey.GetF().Args[0]
 			incoming := lockKey.GetF().Args[1]
-			require.NotNil(t, updateJoin)
-			require.Same(t, baseLock, query.Nodes[updateJoin.Children[1]])
-			dedupKey := updateJoin.OnList[0].GetF().Args[1].GetCol()
-			require.NotNil(t, dedupKey)
-			require.Equal(t, int32(1), dedupKey.RelPos)
-			forwardedKey := baseLock.ProjectList[dedupKey.ColPos].GetCol()
+			require.NotNil(t, actionOwner)
+			require.Same(t, baseLock, query.Nodes[actionOwner.Children[0]])
+			actions := actionOwner.PreInsertUkCtx.OdkuActions
+			require.Len(t, actionOwner.ProjectList, len(actions.SourceColumns)+len(actions.OldColumns))
+			for i, old := range actions.OldColumns {
+				output := actionOwner.ProjectList[len(actions.SourceColumns)+i]
+				require.Equal(t, old.GetCol(), output.GetCol(), "the original image has a single output position per column")
+			}
+			// The actual ordinary ODKU plan exposes the immutable direct keys
+			// used by the execution owner's delayed-original optimization.
+			require.Nil(t, actions.PriorData)
+			require.Empty(t, actions.ForeignKeyChecks)
+			require.Negative(t, actions.ActionFinalColumn)
+			for _, key := range actions.Constraints {
+				column := key.CurrentKey.GetCol()
+				require.NotNil(t, column)
+				require.Equal(t, int32(0), column.RelPos)
+				require.GreaterOrEqual(t, actions.InputColumns[column.ColPos], int32(0))
+				for _, updated := range actions.UpdateColumns {
+					require.NotEqual(t, updated, column.ColPos)
+				}
+			}
+			originalPK := actions.OldColumns[actions.PkColumn].GetCol()
+			require.NotNil(t, originalPK)
+			require.Equal(t, int32(0), originalPK.RelPos)
+			forwardedKey := baseLock.ProjectList[originalPK.ColPos].GetCol()
 			require.NotNil(t, forwardedKey)
-			require.Equal(t, resolved,
-				query.Nodes[baseLock.Children[0]].ProjectList[forwardedKey.ColPos],
-				"DEDUP must keep the original target identity, not the incoming-PK fallback")
-			require.NotNil(t, resolved.GetF())
-			require.Equal(t, "coalesce", resolved.GetF().Func.ObjName)
-			require.Len(t, resolved.GetF().Args, 2)
-			refs := []*plan.Expr{resolved.GetF().Args[0], resolved.GetF().Args[1], incoming}
+			originalDefinition := query.Nodes[baseLock.Children[0]].ProjectList[forwardedKey.ColPos].GetCol()
+			require.NotNil(t, originalDefinition)
+			require.Equal(t, resolved.GetCol().RelPos, originalDefinition.RelPos)
+			require.Equal(t, resolved.GetCol().ColPos, originalDefinition.ColPos, "the owner and lock must refer to the same prefetched original PK")
+			require.NotNil(t, resolved.GetCol())
+			refs := []*plan.Expr{resolved, incoming}
 			maxPos := int32(0)
 			for _, ref := range refs {
 				require.NotNil(t, ref.GetCol())
@@ -154,10 +173,11 @@ func TestInsertMainPrimaryKeyLockIdentity(t *testing.T) {
 					value, isNull := uint32(0), true
 					switch int32(pos) {
 					case refs[0].GetCol().ColPos:
-						value, isNull = 2, row != 2
+						value, isNull = 1, row == 1
+						if row == 2 {
+							value = 2
+						}
 					case refs[1].GetCol().ColPos:
-						value, isNull = 1, row != 0
-					case refs[2].GetCol().ColPos:
 						value, isNull = 10001, false
 					}
 					require.NoError(t, vector.AppendFixed(input.Vecs[pos], value, isNull, proc.Mp()))

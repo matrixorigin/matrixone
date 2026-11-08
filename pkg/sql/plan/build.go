@@ -100,15 +100,10 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 				return nil, returningNotSupported(builder, feature)
 			}
 		}
-		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
-		// never fall back to the legacy ODKU operator. Two exceptions still fall
-		// back: plain INSERT (e.g. inserting into a system index table); and the
-		// degenerate ODKU on a table with no primary/unique key (no dedup key to
-		// represent the upsert; legacy treats it as a plain INSERT and preserves
-		// the prepared-statement parameters).
+		// ON DUPLICATE KEY UPDATE is handled by the modern path. Plain INSERT
+		// into an unsupported target can still use the existing fallback.
 		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
-			(len(stmt.OnDuplicateUpdate) == 0 ||
-				err.Error() == noPkOnDupUpdateMsg) {
+			len(stmt.OnDuplicateUpdate) == 0 {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err

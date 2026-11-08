@@ -17,7 +17,6 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"sync"
@@ -48,6 +47,17 @@ const (
 	Rows          = 10     // default rows
 	BenchmarkRows = 100000 // default rows for benchmark
 )
+
+func TestDedupJoinRejectsUpdate(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(proc.Free)
+	arg := &DedupJoin{OnDuplicateAction: plan.Node_UPDATE}
+	err := arg.Prepare(proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.ErrorContains(t, err, "ODKU requires the ordered action operator")
+	require.Zero(t, proc.Mp().CurrNB())
+
+}
 
 // add unit tests for cases
 type joinTestCase struct {
@@ -107,30 +117,6 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	require.Nil(t, arg.ctr.buf)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	arg.Free(proc, false, nil)
-	require.Equal(t, baseline, proc.Mp().CurrNB())
-	proc.Free()
-}
-
-func TestWithRestoredJoinBat1VectorsRestoresOwnerOnError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	baseline := proc.Mp().CurrNB()
-	original := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	executorOwned := testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
-	joinBat := batch.NewWithSize(1)
-	joinBat.Vecs[0] = original
-	joinBat.SetRowCount(1)
-	ctr := container{joinBat1: joinBat}
-	wantErr := errors.New("injected update expression failure")
-
-	err := ctr.withRestoredJoinBat1Vectors([]int32{0}, func() error {
-		ctr.joinBat1.Vecs[0] = executorOwned
-		return wantErr
-	})
-
-	require.ErrorIs(t, err, wantErr)
-	require.Same(t, original, ctr.joinBat1.Vecs[0])
-	joinBat.Clean(proc.Mp())
-	executorOwned.Free(proc.Mp())
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
 }
@@ -366,22 +352,18 @@ func TestDedupPrepareFailureCanRetry(t *testing.T) {
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
 	arg := &DedupJoin{
-		Conditions:        [][]*plan.Expr{{valid}, {valid}},
-		UpdateColExprList: []*plan.Expr{valid, invalid},
+		Conditions: [][]*plan.Expr{{valid, invalid}, {valid}},
 	}
 	installTestAllocation(t, arg)
+	t.Cleanup(func() { arg.Free(proc, false, nil); proc.Free() })
 
 	require.Error(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.vecs)
 	require.Nil(t, arg.ctr.evecs)
-	require.Nil(t, arg.ctr.exprExecs)
 
-	arg.UpdateColExprList[1] = valid
+	arg.Conditions[0][1] = valid
 	require.NoError(t, arg.Prepare(proc))
-	require.Len(t, arg.ctr.evecs, 1)
-	require.Len(t, arg.ctr.exprExecs, 2)
-	arg.Free(proc, false, nil)
-	proc.Free()
+	require.Len(t, arg.ctr.evecs, 2)
 }
 
 var (

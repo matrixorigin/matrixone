@@ -362,6 +362,9 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
+	if b.builder != nil && b.builder.odkuValidationParams != nil {
+		b.builder.odkuValidationParams[param.GetP().Pos] = DeepCopyExpr(param)
+	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
@@ -2510,9 +2513,11 @@ func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
 	if err != nil {
 		return nil, err
 	}
-	return bindFuncExprAndConstFold(
-		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
-	)
+	return b.bindFunction(name, []*plan.Expr{arg})
+}
+
+func (b *baseBinder) bindFunction(name string, args []*plan.Expr) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldMode(b.GetContext(), b.builder.compCtx.GetProcess(), name, args, b.builder.odkuValidationParams != nil)
 }
 
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -2749,7 +2754,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	if b.builder != nil {
-		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		e, err := b.bindFunction(name, args)
 		if err == nil {
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
@@ -3088,6 +3093,10 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldMode(ctx, proc, name, args, false)
+}
+
+func bindFuncExprAndConstFoldMode(ctx context.Context, proc *process.Process, name string, args []*Expr, validationOnly bool) (*plan.Expr, error) {
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -3100,7 +3109,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
-		if proc != nil {
+		if proc != nil && !validationOnly {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
@@ -3116,6 +3125,9 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 
 	case "between":
+		if validationOnly {
+			break
+		}
 		if proc == nil {
 			goto between_fallback
 		}
@@ -3212,7 +3224,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 		}
 		if !rangeCheckVal.GetBval() {
 			retExpr = DeepCopyExpr(kAlwaysFalseExpr)
-		} else {
+		} else if !validationOnly {
 			retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
 		}
 	}

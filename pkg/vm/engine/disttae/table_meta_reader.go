@@ -152,7 +152,7 @@ func newTableMetaReader(
 		txnOffset = table.getTxn().GetSnapshotWriteOffset()
 	}
 
-	if pState, err = table.getPartitionState(ctx); err != nil {
+	if pState, err = table.getPartitionStateAt(ctx, snapshot.ToTimestamp()); err != nil {
 		return nil, err
 	}
 
@@ -458,6 +458,7 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	source, err := NewLocalDataSource(
 		ctx,
 		r.table,
+		r.snapshot,
 		r.txnOffset,
 		r.pState,
 		objRelData.GetBlockInfoSlice(),
@@ -469,10 +470,6 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	if err != nil {
 		return zap.Skip(), err
 	}
-	// Use the normal local data source so appendable object scans share the same
-	// txn visibility rules as regular table reads.
-	source.snapshotTS = r.snapshot
-
 	dataReader = readutil.SimpleReaderWithDataSource(
 		ctx, r.fs,
 		source, r.snapshot.ToTimestamp(),

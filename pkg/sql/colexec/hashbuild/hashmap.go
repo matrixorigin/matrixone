@@ -185,6 +185,11 @@ func (hb *HashmapBuilder) Prepare(
 	dedupDeleteKeepColIdxList []int32,
 	proc *process.Process,
 ) error {
+	if hb.IsDedup {
+		if err := colexec.ValidateDedupAction(hb.OnDuplicateAction); err != nil {
+			return err
+		}
+	}
 	if len(hb.executors) == 0 {
 		needDupVec := false
 		keyWidth := 0
@@ -706,14 +711,6 @@ buildUnits:
 			}
 		}
 		for k, v := range vals[:n] {
-			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
-				group := int32(v)
-				if zvals[k] == 0 || v == 0 {
-					group = 0
-				}
-				hb.Sels.Insert(group, int32(i+k))
-				continue
-			}
 
 			if zvals[k] == 0 || v == 0 {
 				continue
@@ -1029,7 +1026,10 @@ buildUnits:
 		hb.InputBatchRowCount = hb.Batches.RowCount()
 	}
 
-	return hb.Sels.Finalize(int(hb.GetGroupCount()), hb.InputBatchRowCount, proc.Mp())
+	if err := hb.Sels.Finalize(int(hb.GetGroupCount()), hb.InputBatchRowCount, proc.Mp()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {

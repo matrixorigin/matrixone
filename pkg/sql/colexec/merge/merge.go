@@ -76,7 +76,7 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		if !merge.MaterializedSingleBatch {
 			merge.cleanMaterializedBatch(proc)
 		}
-		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
+		bat, reservation, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -87,10 +87,14 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		if merge.MaterializedSingleBatch && merge.ctr.materializedBatch != nil {
 			bat.Clean(proc.Mp())
+			if reservation != nil {
+				reservation.Release()
+			}
 			return vm.CancelResult, moerr.NewInternalErrorNoCtx("scalar vector source exceeded one batch")
 		}
 		merge.ctr.materializedPosition++
 		merge.ctr.materializedBatch = bat
+		merge.ctr.materializedReservation = reservation
 		result.Batch = bat
 		return result, nil
 	}

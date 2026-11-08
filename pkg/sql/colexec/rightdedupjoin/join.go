@@ -46,6 +46,9 @@ func (rightDedupJoin *RightDedupJoin) OpType() vm.OpType {
 }
 
 func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error) {
+	if err := colexec.ValidateDedupAction(rightDedupJoin.OnDuplicateAction); err != nil {
+		return err
+	}
 	if rightDedupJoin.allocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -56,11 +59,8 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 	}
 	rightDedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(rightDedupJoin.SpillThreshold)
 
-	newEvalVectors := len(rightDedupJoin.ctr.vecs) == 0
-	newUpdateExecs := len(rightDedupJoin.ctr.exprExecs) == 0 && len(rightDedupJoin.UpdateColExprList) > 0
-	var evalExecs, updateExecs []colexec.ExpressionExecutor
-	if newEvalVectors {
-		evalExecs, err = hashbuild.NewExpressionExecutors(
+	if len(rightDedupJoin.ctr.vecs) == 0 {
+		evalExecs, err := hashbuild.NewExpressionExecutors(
 			proc,
 			rightDedupJoin.Conditions[0],
 			rightDedupJoin.allocationAccount,
@@ -68,21 +68,6 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 		if err != nil {
 			return err
 		}
-	}
-	if newUpdateExecs {
-		updateExecs, err = hashbuild.NewExpressionExecutors(
-			proc,
-			rightDedupJoin.UpdateColExprList,
-			rightDedupJoin.allocationAccount,
-		)
-		if err != nil {
-			for _, exec := range evalExecs {
-				exec.Free()
-			}
-			return err
-		}
-	}
-	if newEvalVectors {
 		evecs := make([]evalVector, len(evalExecs))
 		for i := range evalExecs {
 			evecs[i].executor = evalExecs[i]
@@ -90,11 +75,7 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 		rightDedupJoin.ctr.vecs = make([]*vector.Vector, len(evalExecs))
 		rightDedupJoin.ctr.evecs = evecs
 	}
-	if newUpdateExecs {
-		rightDedupJoin.ctr.exprExecs = updateExecs
-	}
-
-	return err
+	return nil
 }
 
 func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
@@ -394,10 +375,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 			case plan.Node_IGNORE:
 				// TODO
 				return moerr.NewNotSupported(proc.Ctx, "RIGHT DEDUP join not support IGNORE")
-
-			case plan.Node_UPDATE:
-				// TODO
-				return moerr.NewNotSupported(proc.Ctx, "RIGHT DEDUP join not support UPDATE")
 			}
 		}
 	}

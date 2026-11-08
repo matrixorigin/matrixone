@@ -29,8 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 // Source stores one producer's immutable batches so multiple dependent
@@ -43,7 +42,7 @@ type Source struct {
 	notify chan struct{}
 	mp     *mpool.MPool
 
-	batches            []*batch.Batch
+	batches            []storedBatch
 	bytes              int64
 	memoryLimit        int64
 	memoryBatchLimit   int
@@ -64,16 +63,19 @@ type Source struct {
 
 	readerReleased   []bool
 	producerReleased bool
+
+	// Immutable execution dependencies, configured before Begin. Completed
+	// inputs can share the existing source facility with streaming CTE readers.
+	completionSources []*Source
 }
 
 const sharedMaterializedSourceMaxBytes = int64(64 * mpool.MB)
 const sharedMaterializedSourceMaxInMemoryBatches = 4096
 
 const spillBatchHeaderSize = int64(8)
-const maxSpillBatchBytes = uint64(64 * mpool.MB)
 
 // SpillFileFactory creates an anonymous query-scoped file for overflow data.
-type SpillFileFactory func(string) (*os.File, error)
+type SpillFileFactory func(context.Context, string) (*os.File, error)
 
 // Reservation owns one query-scoped resource charge.
 type Reservation interface {
@@ -100,6 +102,21 @@ type SpillBudget struct {
 type SpillConfig struct {
 	FileFactory SpillFileFactory
 	Budget      SpillBudget
+	// Writer fences copy into the current attempt, independently of the
+	// producer's allocation selection. Streaming CTE sources leave this nil.
+	Allocation *vector.AllocationAccountSelection
+}
+
+type storedBatch struct {
+	batch    *batch.Batch
+	metadata Reservation
+}
+
+func (b storedBatch) clean(mp *mpool.MPool) {
+	b.batch.Clean(mp)
+	if b.metadata != nil {
+		b.metadata.Release()
+	}
 }
 
 // CTESinkOption marks a planner-approved bounded multi-consumer CTE source.
@@ -127,6 +144,10 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 	if s == nil {
 		return nil
 	}
+	if len(spillConfig) > 0 && spillConfig[0].Allocation != nil &&
+		spillConfig[0].Budget.ReserveMemory == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active && !s.allReleasedLocked() {
@@ -151,19 +172,63 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 	return nil
 }
 
-func (s *Source) Append(bat *batch.Batch) error {
+// RequireCompletionOf is configured by the compile owner before producer scopes
+// start. Each dependency publishes success/error through its existing Finish.
+func (s *Source) RequireCompletionOf(sources []*Source) { s.completionSources = sources }
+
+func (s *Source) waitForFinish(ctx context.Context) error {
+	s.mu.Lock()
+	generation := s.generation
+	s.mu.Unlock()
+	for {
+		s.mu.Lock()
+		if s.generation != generation {
+			s.mu.Unlock()
+			return moerr.NewInternalErrorNoCtx("materialized producer generation ended before its consumer")
+		}
+		if s.done {
+			err := s.err
+			s.mu.Unlock()
+			return err
+		}
+		if !s.active {
+			s.mu.Unlock()
+			return moerr.NewInternalErrorNoCtx("materialized producer is inactive")
+		}
+		notify := s.notify
+		s.mu.Unlock()
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+// Append checks the producer pipeline's context around owned copying and
+// publication. That context can end before the compile owner's context.
+func (s *Source) Append(ctx context.Context, bat *batch.Batch) error {
 	if s == nil || bat == nil {
 		return nil
 	}
 	reserved := int64(max(bat.Size(), bat.Allocated()))
 	s.mu.Lock()
 	if !s.active || s.done {
+		err := s.err
+		if err == nil {
+			err = moerr.NewInternalErrorNoCtx("materialized sink source is not accepting data")
+		}
 		s.mu.Unlock()
-		return moerr.NewInternalErrorNoCtx("materialized sink source is not accepting data")
+		return err
+	}
+	if err := context.Cause(ctx); err != nil {
+		s.failLocked(err)
+		s.mu.Unlock()
+		return err
 	}
 	if s.spillFile != nil || reserved < 0 || reserved > s.memoryLimit || s.bytes > s.memoryLimit-reserved ||
 		len(s.batches) >= s.memoryBatchLimit {
-		err := s.appendSpilledLocked(bat)
+		err := s.appendSpilledLocked(ctx, bat)
 		if err != nil {
 			s.failLocked(err)
 		}
@@ -173,9 +238,10 @@ func (s *Source) Append(bat *batch.Batch) error {
 	s.bytes += reserved
 	mp := s.mp
 	generation := s.generation
+	config := s.spillConfig
 	s.mu.Unlock()
 
-	cloned, err := bat.Dup(mp)
+	cloned, metadata, err := copyBatch(ctx, bat, mp, config)
 	if err != nil {
 		s.mu.Lock()
 		if s.generation == generation && s.active {
@@ -198,48 +264,60 @@ func (s *Source) Append(bat *batch.Batch) error {
 		if s.generation == generation && s.active {
 			s.bytes -= reserved
 		}
-		cloned.Clean(mp)
+		storedBatch{cloned, metadata}.clean(mp)
 		if s.generation == generation && s.err != nil {
 			return s.err
 		}
 		return moerr.NewInternalErrorNoCtx("materialized sink source stopped while copying data")
 	}
+	if err := context.Cause(ctx); err != nil {
+		s.bytes -= reserved
+		storedBatch{cloned, metadata}.clean(mp)
+		s.failLocked(err)
+		return err
+	}
 	if actual > reserved && (actual-reserved > s.memoryLimit || s.bytes > s.memoryLimit-(actual-reserved)) {
 		s.bytes -= reserved
-		cloned.Clean(mp)
-		err = s.appendSpilledLocked(bat)
+		storedBatch{cloned, metadata}.clean(mp)
+		err = s.appendSpilledLocked(ctx, bat)
 		if err != nil {
 			s.failLocked(err)
 		}
 		return err
 	}
 	s.bytes += actual - reserved
-	s.batches = append(s.batches, cloned)
+	s.batches = append(s.batches, storedBatch{cloned, metadata})
 	s.wakeLocked()
 	return nil
 }
 
 // Next returns a batch owned by the caller, or end=true after the producer
-// finishes. Every successful caller must clean the returned batch exactly once.
-func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.Batch, end bool, err error) {
+// finishes. The caller owns the batch and any returned reservation: clean
+// the batch before releasing its reservation, including on reset or reuse.
+func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.Batch, reservation Reservation, end bool, err error) {
 	if s == nil {
-		return nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source")
+		return nil, nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source")
+	}
+	for _, source := range s.completionSources {
+		if err := source.waitForFinish(ctx); err != nil {
+			return nil, nil, true, err
+		}
 	}
 	for {
 		s.mu.Lock()
 		if readerID < 0 || readerID >= len(s.readerReleased) || s.readerReleased[readerID] {
 			s.mu.Unlock()
-			return nil, true, moerr.NewInternalErrorNoCtx("invalid materialized sink reader")
+			return nil, nil, true, moerr.NewInternalErrorNoCtx("invalid materialized sink reader")
 		}
 		if position >= 0 && position < len(s.batches) {
-			bat, err = s.batches[position].Dup(s.mp)
+			bat, reservation, err = copyBatch(ctx, s.batches[position].batch, s.mp, s.spillConfig)
 			s.mu.Unlock()
-			return bat, false, err
+			return bat, reservation, false, err
 		}
 		if position >= s.spillStartPosition && position < s.spillStartPosition+s.spillBatchCount {
 			if s.spillReadersActive[readerID] || position != s.spillStartPosition+s.spillReadPositions[readerID] {
 				s.mu.Unlock()
-				return nil, true, moerr.NewInternalErrorNoCtx("materialized sink reader position is not sequential")
+				return nil, nil, true, moerr.NewInternalErrorNoCtx("materialized sink reader position is not sequential")
 			}
 			s.spillReadersActive[readerID] = true
 			file := s.spillFile
@@ -250,7 +328,7 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 			budget := s.spillConfig.Budget
 			s.mu.Unlock()
 
-			decoded, nextOffset, readErr := readSpilledBatch(file, offset, availableBytes, mp, budget)
+			decoded, reservation, nextOffset, readErr := readSpilledBatch(file, offset, availableBytes, mp, budget)
 
 			s.mu.Lock()
 			if s.generation == generation && readerID < len(s.spillReadersActive) {
@@ -258,22 +336,23 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 			}
 			if readErr != nil {
 				s.mu.Unlock()
-				return nil, true, readErr
+				return nil, nil, true, readErr
 			}
 			if s.generation != generation || !s.active || s.readerReleased[readerID] {
 				s.mu.Unlock()
 				decoded.Clean(mp)
-				return nil, true, moerr.NewInternalErrorNoCtx("materialized sink source stopped while reading spill data")
+				reservation.Release()
+				return nil, nil, true, moerr.NewInternalErrorNoCtx("materialized sink source stopped while reading spill data")
 			}
 			s.spillReadOffsets[readerID] = nextOffset
 			s.spillReadPositions[readerID]++
 			s.mu.Unlock()
-			return decoded, false, nil
+			return decoded, reservation, false, nil
 		}
 		if s.done {
 			err = s.err
 			s.mu.Unlock()
-			return nil, true, err
+			return nil, nil, true, err
 		}
 		notify := s.notify
 		s.mu.Unlock()
@@ -281,21 +360,36 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 		select {
 		case <-notify:
 		case <-ctx.Done():
-			return nil, true, context.Cause(ctx)
+			return nil, nil, true, context.Cause(ctx)
 		}
 	}
 }
 
-func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
+func (s *Source) appendSpilledLocked(ctx context.Context, bat *batch.Batch) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if s.spillConfig.FileFactory == nil || s.spillConfig.Budget.ReserveMemory == nil ||
 		s.spillConfig.Budget.ReserveDisk == nil || s.spillConfig.Budget.ReserveFD == nil {
 		return moerr.NewInternalErrorNoCtx("materialized sink source spill is unavailable")
 	}
-	serializedBytes, scratchBytes, err := spillBatchSize(bat)
+	encodedSize, err := bat.MarshalBinarySize()
 	if err != nil {
 		return err
 	}
-	memoryReservation, err := s.spillConfig.Budget.ReserveMemory(scratchBytes)
+	serializedBytes := uint64(encodedSize)
+	recordBytes := uint64(spillBatchHeaderSize) + serializedBytes
+	if recordBytes > math.MaxInt64 || s.spillBytes > math.MaxInt64-int64(recordBytes) || s.spillBatchCount == math.MaxInt {
+		return moerr.NewInternalErrorNoCtx("materialized sink spill position overflow")
+	}
+	scratch, err := bat.MarshalBinaryScratchSize()
+	if err != nil {
+		return err
+	}
+	if uint64(scratch) > math.MaxUint64-serializedBytes {
+		return moerr.NewInternalErrorNoCtx("materialized sink spill memory size overflow")
+	}
+	memoryReservation, err := s.spillConfig.Budget.ReserveMemory(serializedBytes + uint64(scratch))
 	if err != nil {
 		return err
 	}
@@ -303,17 +397,19 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 		return moerr.NewInternalErrorNoCtx("materialized sink spill memory reservation is nil")
 	}
 	defer memoryReservation.Release()
-	buf := bytes.NewBuffer(make([]byte, 0, int(serializedBytes)))
-	data, err := bat.MarshalBinaryWithBuffer(buf, false)
-	if err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+	buf := bytes.NewBuffer(make([]byte, 0, encodedSize))
+	if err := bat.MarshalBinaryTo(buf); err != nil {
+		return err
+	}
+	data := buf.Bytes()
 	if uint64(len(data)) != serializedBytes {
 		return moerr.NewInternalErrorNoCtxf("materialized sink spill batch size changed while serializing: expected=%d actual=%d", serializedBytes, len(data))
 	}
-	recordBytes := uint64(spillBatchHeaderSize) + serializedBytes
-	if recordBytes > math.MaxInt64 || s.spillBytes > math.MaxInt64-int64(recordBytes) || s.spillBatchCount == math.MaxInt {
-		return moerr.NewInternalErrorNoCtx("materialized sink spill position overflow")
+	if err := context.Cause(ctx); err != nil {
+		return err
 	}
 	newFile := s.spillFile == nil
 	if newFile {
@@ -327,6 +423,9 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 	if s.spillDisk == nil {
 		return moerr.NewInternalErrorNoCtx("materialized sink spill disk reservation is nil")
 	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if newFile {
 		s.spillFD, err = s.spillConfig.Budget.ReserveFD(1)
 		if err != nil {
@@ -339,7 +438,10 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 			s.spillDisk = nil
 			return moerr.NewInternalErrorNoCtx("materialized sink spill file reservation is nil")
 		}
-		file, fileErr := s.spillConfig.FileFactory(fmt.Sprintf("cte_materialized_%s", uuid.NewString()))
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		file, fileErr := s.spillConfig.FileFactory(ctx, fmt.Sprintf("cte_materialized_%s", uuid.NewString()))
 		if fileErr != nil || file == nil {
 			if file != nil {
 				_ = file.Close()
@@ -356,6 +458,9 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 		s.spillFile = file
 		s.spillStartPosition = len(s.batches)
 	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	var header [spillBatchHeaderSize]byte
 	binary.LittleEndian.PutUint64(header[:], uint64(len(data)))
 	if n, writeErr := s.spillFile.Write(header[:]); writeErr != nil {
@@ -363,10 +468,16 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 	} else if n != len(header) {
 		return io.ErrShortWrite
 	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if n, writeErr := s.spillFile.Write(data); writeErr != nil {
 		return writeErr
 	} else if n != len(data) {
 		return io.ErrShortWrite
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
 	}
 	s.spillBatchCount++
 	s.spillBytes += spillBatchHeaderSize + int64(len(data))
@@ -374,39 +485,81 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 	return nil
 }
 
-func readSpilledBatch(file *os.File, offset, availableBytes int64, mp *mpool.MPool, budget SpillBudget) (*batch.Batch, int64, error) {
-	if file == nil || offset < 0 || offset > availableBytes-spillBatchHeaderSize {
-		return nil, offset, moerr.NewInternalErrorNoCtx("invalid materialized sink spill offset")
+// A spill reader owns both its aliased frame and separately decoded metadata.
+// The consumer releases them together, after cleaning the returned batch.
+type spillReadReservation struct{ frame, metadata Reservation }
+
+func (r *spillReadReservation) Release() bool {
+	released := false
+	if r.metadata != nil {
+		released = r.metadata.Release() || released
+		r.metadata = nil
+	}
+	if r.frame != nil {
+		released = r.frame.Release() || released
+		r.frame = nil
+	}
+	return released
+}
+
+func readSpilledBatch(file *os.File, offset, availableBytes int64, mp *mpool.MPool, budget SpillBudget) (*batch.Batch, Reservation, int64, error) {
+	if file == nil || availableBytes < spillBatchHeaderSize || offset < 0 || offset > availableBytes-spillBatchHeaderSize {
+		return nil, nil, offset, moerr.NewInternalErrorNoCtx("invalid materialized sink spill offset")
 	}
 	var header [spillBatchHeaderSize]byte
 	if _, err := file.ReadAt(header[:], offset); err != nil {
-		return nil, offset, err
+		return nil, nil, offset, err
 	}
 	size := int64(binary.LittleEndian.Uint64(header[:]))
-	if size < 0 || size > availableBytes-offset-spillBatchHeaderSize || uint64(size) > maxSpillBatchBytes || size > int64(int(^uint(0)>>1)) {
-		return nil, offset, moerr.NewInternalErrorNoCtx("invalid materialized sink spill batch size")
+	if size < 0 || size > availableBytes-offset-spillBatchHeaderSize || size > int64(int(^uint(0)>>1)) {
+		return nil, nil, offset, moerr.NewInternalErrorNoCtx("invalid materialized sink spill batch size")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, nil, offset, err
+	}
+	if info.Size() < offset+spillBatchHeaderSize || size > info.Size()-offset-spillBatchHeaderSize {
+		return nil, nil, offset, io.ErrUnexpectedEOF
 	}
 	if budget.ReserveMemory == nil {
-		return nil, offset, moerr.NewInternalErrorNoCtx("materialized sink spill read budget is unavailable")
+		return nil, nil, offset, moerr.NewInternalErrorNoCtx("materialized sink spill read budget is unavailable")
 	}
 	memoryReservation, err := budget.ReserveMemory(uint64(size))
 	if err != nil {
-		return nil, offset, err
+		return nil, nil, offset, err
 	}
 	if memoryReservation == nil {
-		return nil, offset, moerr.NewInternalErrorNoCtx("materialized sink spill read reservation is nil")
+		return nil, nil, offset, moerr.NewInternalErrorNoCtx("materialized sink spill read reservation is nil")
 	}
-	defer memoryReservation.Release()
+	reservation := &spillReadReservation{frame: memoryReservation}
+	transferred := false
+	defer func() {
+		if !transferred {
+			reservation.Release()
+		}
+	}()
 	data := make([]byte, int(size))
 	if _, err := file.ReadAt(data, offset+spillBatchHeaderSize); err != nil {
-		return nil, offset, err
+		return nil, nil, offset, err
+	}
+	metadataBytes, err := batch.UnmarshalBinaryMetadataSize(data)
+	if err != nil {
+		return nil, nil, offset, err
+	}
+	reservation.metadata, err = budget.ReserveMemory(metadataBytes)
+	if err != nil {
+		return nil, nil, offset, err
+	}
+	if reservation.metadata == nil {
+		return nil, nil, offset, moerr.NewInternalErrorNoCtx("materialized sink spill metadata reservation is nil")
 	}
 	decoded := batch.NewWithSize(0)
 	if err := decoded.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
 		decoded.Clean(mp)
-		return nil, offset, err
+		return nil, nil, offset, err
 	}
-	return decoded, offset + spillBatchHeaderSize + size, nil
+	transferred = true
+	return decoded, reservation, offset + spillBatchHeaderSize + size, nil
 }
 
 func (s *Source) CurrentBytes() int64 {
@@ -506,7 +659,7 @@ func (s *Source) tryCleanLocked() {
 func (s *Source) cleanLocked() {
 	if s.mp != nil {
 		for _, bat := range s.batches {
-			bat.Clean(s.mp)
+			bat.clean(s.mp)
 		}
 	}
 	if s.spillFile != nil {
@@ -531,88 +684,4 @@ func (s *Source) cleanLocked() {
 	clear(s.spillReadersActive)
 	s.mp = nil
 	s.spillConfig = SpillConfig{}
-}
-
-func spillBatchSize(bat *batch.Batch) (serialized, scratch uint64, err error) {
-	if bat == nil {
-		return 0, 0, moerr.NewInternalErrorNoCtx("nil materialized sink spill batch")
-	}
-	serialized = 8 + 4 + 4 + 4 + 4 + 4
-	if len(bat.Vecs) > math.MaxInt32 || len(bat.Attrs) > math.MaxInt32 || len(bat.ExtraBuf) > math.MaxInt32 {
-		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds encoding limit")
-	}
-	for _, vec := range bat.Vecs {
-		if vec == nil || vec.Length() < 0 {
-			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector")
-		}
-		typeSize := vec.GetType().TypeSize()
-		if typeSize <= 0 || vec.Length() > math.MaxUint32 || len(vec.GetArea()) > math.MaxUint32 {
-			return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill vector exceeds encoding limit")
-		}
-		dataBytes := uint64(typeSize)
-		if !vec.IsConst() {
-			if uint64(vec.Length()) > math.MaxUint32/dataBytes {
-				return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch size overflow")
-			}
-			dataBytes *= uint64(vec.Length())
-		} else if vec.IsConstNull() {
-			dataBytes = 0
-		}
-		if dataBytes > uint64(len(vec.GetData())) {
-			return 0, 0, moerr.NewInternalErrorNoCtx("invalid materialized sink spill vector data")
-		}
-		nullBytes := uint64(0)
-		if !vec.GetNulls().EmptyByFlag() {
-			nullBytes = uint64(nulls.Size(vec.GetNulls())) + 24
-		}
-		if nullBytes > math.MaxUint32 {
-			return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill null bitmap exceeds encoding limit")
-		}
-		vectorBytes := uint64(4 + 1 + types.TSize + 4 + 4 + 4 + 4 + 1)
-		vectorBytes, err = checkedAdd(vectorBytes, dataBytes, uint64(len(vec.GetArea())), nullBytes)
-		if err != nil {
-			return 0, 0, err
-		}
-		serialized, err = checkedAdd(serialized, vectorBytes)
-		if err != nil {
-			return 0, 0, err
-		}
-		if nullBytes > 0 {
-			nullScratch, addErr := checkedAdd(nullBytes, nullBytes)
-			if addErr != nil {
-				return 0, 0, addErr
-			}
-			nullScratch = max(uint64(64), nullScratch)
-			scratch, err = checkedAdd(scratch, nullScratch)
-			if err != nil {
-				return 0, 0, err
-			}
-		}
-	}
-	for _, attr := range bat.Attrs {
-		if len(attr) > math.MaxInt32 {
-			return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill attribute exceeds encoding limit")
-		}
-		serialized, err = checkedAdd(serialized, 4, uint64(len(attr)))
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
-	if err != nil || serialized > maxSpillBatchBytes || serialized > uint64(math.MaxInt) {
-		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds runtime limit")
-	}
-	scratch, err = checkedAdd(scratch, serialized)
-	return serialized, scratch, err
-}
-
-func checkedAdd(values ...uint64) (uint64, error) {
-	var total uint64
-	for _, value := range values {
-		if value > math.MaxUint64-total {
-			return 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch size overflow")
-		}
-		total += value
-	}
-	return total, nil
 }

@@ -3876,13 +3876,22 @@ func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, pay
 		return v.UnionBatch(preserved, 0, cnt, flags, mp)
 	}
 
-	if err := extendWithBitmaps(
-		v,
-		addCnt,
-		mp,
-		w.IsConstNull() || !w.nsp.EmptyByFlag(),
-		w.IsGrouping() || !w.gsp.EmptyByFlag(),
-	); err != nil {
+	needNulls := w.IsConstNull() || !w.nsp.EmptyByFlag()
+	needGrouping := w.IsGrouping() || !w.gsp.EmptyByFlag()
+	if v.allocationAccount != nil && !w.IsConst() && flags == nil &&
+		offset >= 0 && cnt > 0 && offset <= int64(w.length) && int64(cnt) <= int64(w.length)-offset {
+		// Only selected rows can require output bitmaps. A whole vector can
+		// still have stale bitmap bits past its length after SetLength.
+		start, end := uint64(offset), uint64(offset)+uint64(cnt)
+		whole := offset == 0 && cnt == w.length
+		if needNulls && (!whole || w.nsp.GetBitmap().Len() > int64(w.length)) {
+			needNulls = w.nsp.GetBitmap().CountRange(start, end) != 0
+		}
+		if needGrouping && (!whole || w.gsp.GetBitmap().Len() > int64(w.length)) {
+			needGrouping = w.gsp.GetBitmap().CountRange(start, end) != 0
+		}
+	}
+	if err := extendWithBitmaps(v, addCnt, mp, needNulls, needGrouping); err != nil {
 		return err
 	}
 

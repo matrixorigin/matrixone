@@ -89,6 +89,130 @@ func newAccountedTestVector(
 	return vec
 }
 
+func TestUnionBatchAccountedSelectedBitmaps(t *testing.T) {
+	const limit = uint64(16 << 20)
+	for _, tc := range []struct {
+		name              string
+		nullRow, groupRow int
+		start, count      int
+		truncate          bool
+		headroom          uint64
+		wantCapacityErr   bool
+	}{
+		{name: "null outside range", nullRow: 8192, groupRow: -1, count: 8192, headroom: 256},
+		{name: "grouping outside range", nullRow: -1, groupRow: 8192, count: 8192, headroom: 256},
+		{name: "stale bits beyond whole vector", nullRow: 8192, groupRow: 8192, count: 8192, truncate: true, headroom: 256},
+		{name: "short bitmap before range", nullRow: 0, groupRow: -1, start: 1, count: 8192, headroom: 256},
+		{name: "selected null must be admitted", nullRow: 8191, groupRow: -1, count: 8192, headroom: 256, wantCapacityErr: true},
+		{name: "selected grouping must be admitted", nullRow: -1, groupRow: 8191, count: 8192, headroom: 256, wantCapacityErr: true},
+		{name: "selected null and grouping", nullRow: 100, groupRow: 101, count: 8192, headroom: 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := newTestVectorAllocationAccount(t, limit, 32)
+			mp := mpool.MustNewZero()
+			src := NewVec(types.T_int64.ToType())
+			dst := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			var filler []byte
+			defer func() {
+				if filler != nil {
+					mp.Free(filler)
+				}
+				dst.Free(mp)
+				src.Free(mp)
+				finalizeTestVectorAllocationAccount(t, state)
+				require.Zero(t, mp.CurrNB())
+			}()
+			for row := 0; row < 8193; row++ {
+				require.NoError(t, AppendFixed(src, int64(row), row == tc.nullRow, mp))
+			}
+			if tc.groupRow >= 0 {
+				src.GetGrouping().Set(uint64(tc.groupRow))
+			}
+			if tc.truncate {
+				src.SetLength(8192)
+			}
+			require.NoError(t, dst.PreExtend(tc.count, mp))
+			var err error
+			filler, err = mp.AllocAccounted(int(limit-state.account.Snapshot().Used-tc.headroom), state.account, testVectorAllocationOwner, testVectorDataAllocationSite)
+			require.NoError(t, err)
+			before := state.account.Snapshot().Used
+			err = dst.UnionBatch(src, int64(tc.start), tc.count, nil, mp)
+			if tc.wantCapacityErr {
+				require.Equal(t, mpool.AllocationFailureCapacity, mpool.AllocationFailureReasonOf(err))
+				require.Zero(t, dst.Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.count, dst.Length())
+			selectedNull := tc.nullRow >= tc.start && tc.nullRow < tc.start+tc.count
+			selectedGroup := tc.groupRow >= tc.start && tc.groupRow < tc.start+tc.count
+			if selectedNull {
+				require.True(t, dst.IsNull(uint64(tc.nullRow-tc.start)))
+			}
+			if selectedGroup {
+				require.True(t, dst.GetGrouping().Contains(uint64(tc.groupRow-tc.start)))
+			}
+			if !selectedNull && !selectedGroup {
+				require.Equal(t, before, state.account.Snapshot().Used, "unselected bits need no bitmap allocation")
+				require.False(t, dst.GetNulls().Any())
+				require.False(t, dst.GetGrouping().Any())
+			}
+			require.Equal(t, int64(tc.start), GetFixedAtNoTypeCheck[int64](dst, 0))
+		})
+	}
+}
+
+func TestUnionBatchAccountedOtherSelections(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 32)
+	mp := mpool.MustNewZero()
+	src := NewVec(types.T_int64.ToType())
+	dst := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	defer func() {
+		dst.Free(mp)
+		src.Free(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+		require.Zero(t, mp.CurrNB())
+	}()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, AppendFixed(src, int64(i), i == 3, mp))
+	}
+	src.GetGrouping().Set(4)
+	before := state.account.Snapshot().Used
+	require.NoError(t, dst.UnionBatch(src, 0, 0, []uint8{0, 0, 0, 0, 0}, mp))
+	require.Equal(t, before, state.account.Snapshot().Used)
+	// Aggregation callers can supply the selected count separately from the
+	// length of the selection flags.
+	require.NoError(t, dst.UnionBatch(src, 0, 2, []uint8{1, 0, 0, 0, 1}, mp))
+	require.Equal(t, []int64{0, 4}, MustFixedColWithTypeCheck[int64](dst))
+	require.False(t, dst.GetNulls().Any())
+	require.True(t, dst.GetGrouping().Contains(1))
+
+	dst.CleanOnlyData()
+	constant := NewConstNull(types.T_int64.ToType(), 5, mp)
+	defer constant.Free(mp)
+	require.NoError(t, dst.UnionBatch(constant, 2, 2, nil, mp))
+	require.True(t, dst.IsNull(0))
+	require.True(t, dst.IsNull(1))
+
+	dst.CleanOnlyData()
+	grouped, err := NewConstFixed(types.T_int64.ToType(), int64(7), 5, mp)
+	require.NoError(t, err)
+	defer grouped.Free(mp)
+	for i := uint64(0); i < 5; i++ {
+		grouped.GetGrouping().Set(i)
+	}
+	require.NoError(t, dst.UnionBatch(grouped, 1, 2, nil, mp))
+	require.Equal(t, []int64{7, 7}, MustFixedColWithTypeCheck[int64](dst))
+	require.True(t, dst.GetGrouping().Contains(0))
+	require.True(t, dst.GetGrouping().Contains(1))
+
+	dst.CleanOnlyData()
+	require.NoError(t, AppendFixedList(dst, []int64{9, 8, 7}, nil, mp))
+	require.NoError(t, dst.PreExtend(8, mp))
+	require.NoError(t, dst.UnionBatch(dst, 1, 2, nil, mp))
+	require.Equal(t, []int64{9, 8, 7, 8, 7}, MustFixedColWithTypeCheck[int64](dst))
+}
+
 func TestVectorAllocationAccountConfiguration(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
 	mp := mpool.MustNewZero()

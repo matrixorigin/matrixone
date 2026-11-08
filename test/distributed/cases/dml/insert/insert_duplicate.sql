@@ -7,7 +7,7 @@
 -- - 对于复合键，只要涉及其中任何一列都不支持更新
 -- - 任意唯一键（主键或唯一索引）冲突都会触发更新，对齐 MySQL：
 --   按主键 > 唯一键定义序，更新首个命中的已存在行
--- - 例外：同一 INSERT 批内多个新行命中相同的新唯一键值，仍保留确定性报错
+-- - 同一 INSERT 批内后续行命中先前成功插入的唯一键时，继续更新该行
 -- =====================================================
 
 -- =====================================================
@@ -181,7 +181,8 @@ CREATE TABLE indup_04_multi_uk(
 
 -- @ignore:0
 -- @regex("Multi Update", true)
--- @regex("Join Type: DEDUP", true)
+-- @regex("PreInsert UniqueKey", true)
+-- @regex("Join Type: DEDUP \(UPDATE\)", false)
 -- @regex("any_value", false)
 EXPLAIN INSERT INTO indup_04_multi_uk VALUES (99,10,20,999)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
@@ -252,7 +253,6 @@ ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
 
 -- 测试 3.9: 部分唯一键为 NULL 时，非 NULL 唯一键仍应命中对应旧行
--- @regex("Duplicate entry '10' for key",true)
 INSERT INTO indup_04_multi_uk_null VALUES (4,NULL,10,400)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;

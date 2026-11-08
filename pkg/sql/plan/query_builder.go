@@ -1395,10 +1395,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
 
-			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
-				increaseRefCnt(expr, 1, colRefCnt)
-			}
-
 			// OldColCaptureList: build_placeholder points to the build-side
 			// (right child) NULL column whose slot will receive the captured
 			// probe value; probe_source points to the probe-side (left child)
@@ -1464,15 +1460,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for i, col := range node.DedupJoinCtx.OldColList {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&node.DedupJoinCtx.OldColList[i], internalMap, &remapInfo)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			for idx, expr := range node.DedupJoinCtx.UpdateColExprList {
-				increaseRefCnt(expr, -1, colRefCnt)
-				remapInfo.srcExprIdx = idx
-				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -2617,9 +2604,27 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		deleteKeySource := step == builder.irregularMaintDeleteStep && nodeID == builder.qry.Steps[step]
+		if deleteKeySource {
+			colRefCnt[builder.irregularMaintDeletePkRef]++
+		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
+		}
+		if deleteKeySource {
+			colRefCnt[builder.irregularMaintDeletePkRef]--
+			pos, ok := childRemapping.globalToLocal[builder.irregularMaintDeletePkRef]
+			if !ok || pos[0] != 0 || pos[1] < 0 || int(pos[1]) >= len(childNode.ProjectList) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "irregular index delete key is missing from materialized image")
+			}
+			typ := childNode.ProjectList[pos[1]].Typ
+			want := builder.irregularMaintDeletePkTyp
+			if typ.Id != want.Id || typ.Width != want.Width || typ.Scale != want.Scale {
+				return nil, moerr.NewInternalError(builder.GetContext(), "irregular index delete key type changed during remapping")
+			}
+			builder.irregularMaintDeletePkPos = pos[1]
+			builder.irregularMaintDeletePkTyp = typ
 		}
 		var newProjList []*plan.Expr
 		for i, expr := range node.ProjectList {
@@ -3048,6 +3053,28 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_PRE_INSERT_UK:
+		c := node.PreInsertUkCtx
+		if c == nil || !c.OrderedOdku || c.OdkuActions == nil {
+			return nil, moerr.NewNotSupported(builder.GetContext(), "ODKU requires the ordered action operator")
+		}
+		exprs := append(append([]*plan.Expr{}, node.ProjectList...), odkuSourceExpressions(c.OdkuActions)...)
+		for _, expr := range exprs {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+		childMap, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+		for _, expr := range exprs {
+			increaseRefCnt(expr, -1, colRefCnt)
+			if err := builder.remapColRefForExpr(expr, childMap.globalToLocal, &remapInfo); err != nil {
+				return nil, err
+			}
+		}
+		for i := range node.ProjectList {
+			remapping.addColRef([2]int32{node.BindingTags[0], int32(i)})
+		}
 	case plan.Node_PRE_INSERT:
 		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
@@ -3368,9 +3395,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
 	}
 
-	// Expose the SINK column remap so irregular-index maintenance sub-plans built
-	// after createQuery can translate pre-prune positions into the materialized
-	// sink's post-prune layout.
+	// Keep the SINK metadata remap for ordinary logical SINK_SCAN consumers.
+	// Irregular maintenance separately resolved the physical child key above.
 	builder.sinkColRef = sinkColRef
 	for nodeID := range builder.positionalSinkScans {
 		node := builder.qry.Nodes[nodeID]

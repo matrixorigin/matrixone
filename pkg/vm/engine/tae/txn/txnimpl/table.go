@@ -116,8 +116,6 @@ type txnTable struct {
 	tombstoneTable *baseTable
 	transferedTS   types.TS
 
-	dedupTS types.TS
-
 	idx int
 
 	// expectedAutoIncrEpochs are the known CN allocator epochs this
@@ -1183,14 +1181,18 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
 		return
 	}
-	var zm index.ZM
+	if err = context.Cause(ctx); err != nil {
+		return err
+	}
 	dedupType := tbl.store.txn.GetDedupType()
+	checked := false
 	if !dedupType.SkipSourcePersisted() {
 		for _, stats := range baseTable.tableSpace.stats {
 			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
 			if err != nil {
 				return
 			}
+			checked = true
 		}
 	}
 
@@ -1202,31 +1204,23 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 		return
 	}
 
-	if baseTable.tableSpace.node == nil {
-		return
+	if node := baseTable.tableSpace.node; node != nil {
+		pkVec, e := node.WindowColumn(0, node.Rows(), baseTable.schema.GetSingleSortKeyIdx())
+		if e != nil {
+			return e
+		}
+		defer pkVec.Close()
+		if err = tbl.DoPrecommitDedupByPK(ctx, pkVec, isTombstone, phase, ts); err != nil {
+			return err
+		}
+		checked = true
 	}
-	node := baseTable.tableSpace.node
-	pkColPos := baseTable.schema.GetSingleSortKeyIdx()
-	pkVec, err := node.WindowColumn(0, node.Rows(), pkColPos)
-	if err != nil {
+	if err = context.Cause(ctx); err != nil {
 		return err
 	}
-	if zm.Valid() {
-		zm.ResetMinMax()
-	} else {
-		pkType := pkVec.GetType()
-		zm = index.NewZM(pkType.Oid, pkType.Scale)
+	if checked {
+		baseTable.dedupTS = ts
 	}
-	if err = index.BatchUpdateZM(zm, pkVec.GetDownstreamVector()); err != nil {
-		pkVec.Close()
-		return err
-	}
-	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone, phase, ts); err != nil {
-		pkVec.Close()
-		return err
-	}
-	pkVec.Close()
-	tbl.dedupTS = ts
 	return
 }
 
@@ -1296,7 +1290,9 @@ func (tbl *txnTable) findDeletes(
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
 		return
 	}
-	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
+	if err = tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator); err != nil {
+		return err
+	}
 
 	tbl.entry.WaitTombstoneObjectCommitted(to)
 	it := tbl.entry.MakeTombstoneObjectIt()
@@ -1333,25 +1329,26 @@ func (tbl *txnTable) findDeletes(
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(
+	ctx context.Context,
 	pks containers.Vector,
-	pksZM index.ZM,
 	isTombstone bool,
 	phase string,
 	ts types.TS,
 ) (err error) {
-	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
+	moprobe.WithRegion(ctx, moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		now := tbl.store.rt.Now()
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.txn.GetStartTS()
+		from := tbl.getBaseTable(isTombstone).dedupTS
+		if from.IsEmpty() {
+			from = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(tbl.store.ctx, pks, tbl.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, from.Next(), ts, phase == txnif.PrePreparePhase)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(tbl.store.ctx, rowIDs, tbl.dedupTS.Next(), now)
+			err = tbl.findDeletes(ctx, rowIDs, from.Next(), now)
 			if err != nil {
 				return
 			}
@@ -1368,7 +1365,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 					zap.String("table", tbl.dataTable.schema.Name),
 					zap.Bool("is tombstone", isTombstone),
 					zap.String("phase", phase),
-					zap.String("from", tbl.dedupTS.Next().ToString()),
+					zap.String("from", from.Next().ToString()),
 					zap.String("to", ts.ToString()),
 				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
@@ -1381,69 +1378,63 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 }
 
 func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.ObjectStats, isTombstone bool) (err error) {
-	//loaded := false
 	//TODO::load ZM/BF index first, then load PK column if necessary.
-
-	metaLocs := make([]objectio.Location, 0)
-	blkCount := stats.BlkCnt()
 	totalRow := stats.Rows()
-	schema := tbl.getBaseTable(isTombstone).schema
+	baseTable := tbl.getBaseTable(isTombstone)
+	schema := baseTable.schema
 	blkMaxRows := schema.Extra.BlockMaxRows
-	for i := uint16(0); i < uint16(blkCount); i++ {
-		var blkRow uint32
-		if totalRow > blkMaxRows {
-			blkRow = blkMaxRows
-		} else {
-			blkRow = totalRow
-		}
-		totalRow -= blkRow
-		metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
-
-		metaLocs = append(metaLocs, metaloc)
+	from := baseTable.dedupTS
+	if from.IsEmpty() {
+		from = tbl.store.txn.GetStartTS()
 	}
-
-	for _, loc := range metaLocs {
-		var vectors []containers.Vector
-		var closeFunc func()
-		vectors, closeFunc, err = ioutil.LoadColumns2(
-			ctx,
-			[]uint16{uint16(schema.GetSingleSortKeyIdx())},
-			nil,
-			tbl.store.rt.Fs,
-			loc,
-			fileservice.Policy(0),
-			false,
-			nil,
-		)
-		if err != nil {
+	for block := uint16(0); block < uint16(stats.BlkCnt()); block++ {
+		if err = context.Cause(ctx); err != nil {
 			return err
 		}
-		pks := vectors[0]
-		defer closeFunc()
-		defer pks.Close()
-		var rowIDs containers.Vector
-		now := tbl.store.rt.Now()
-		if tbl.dedupTS.IsEmpty() {
-			tbl.dedupTS = tbl.store.txn.GetStartTS()
-		}
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS.Next(), now, true)
-		if err != nil {
-			return
-		}
-		defer rowIDs.Close()
-		if !isTombstone {
-			err = tbl.findDeletes(ctx, rowIDs, tbl.dedupTS, now)
-		}
-		if err != nil {
-			return
-		}
-		for i := 0; i < rowIDs.Length(); i++ {
-			if !rowIDs.IsNull(i) {
-				colName := tbl.getSchema(false).GetPrimaryKey().Name
-				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
-				err = moerr.NewDuplicateEntryNoCtx(entry, colName)
-				return
+		blkRow := min(totalRow, blkMaxRows)
+		totalRow -= blkRow
+		loc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, block)
+		// Each block releases its vectors and object-cache reference before
+		// the next read, including on duplicate, cancellation and I/O error.
+		err = func() error {
+			vectors, closeFunc, e := ioutil.LoadColumns2(
+				ctx,
+				[]uint16{uint16(schema.GetSingleSortKeyIdx())},
+				nil,
+				tbl.store.rt.Fs,
+				loc,
+				fileservice.Policy(0),
+				false,
+				nil,
+			)
+			if e != nil {
+				return e
 			}
+			pks := vectors[0]
+			defer closeFunc()
+			defer pks.Close()
+			now := tbl.store.rt.Now()
+			rowIDs, e := baseTable.incrementalGetRowsByPK(ctx, pks, from.Next(), now, true)
+			if e != nil {
+				return e
+			}
+			defer rowIDs.Close()
+			if !isTombstone {
+				if e = tbl.findDeletes(ctx, rowIDs, from, now); e != nil {
+					return e
+				}
+			}
+			for i := 0; i < rowIDs.Length(); i++ {
+				if !rowIDs.IsNull(i) {
+					colName := tbl.getSchema(false).GetPrimaryKey().Name
+					entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
+					return moerr.NewDuplicateEntryNoCtx(entry, colName)
+				}
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
 	}
 	return
@@ -1842,8 +1833,11 @@ func (tbl *txnTable) contains(
 		idx := indexwrapper.NewImmutIndex(stats.SortKeyZoneMap(), bf, stats.ObjectLocation())
 		for i := uint16(0); i < uint16(blkCount); i++ {
 			sel, err := idx.BatchDedup(ctx, keys, keysZM, tbl.store.rt, true, uint32(i))
-			if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			if err == nil {
 				continue
+			}
+			if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+				return err
 			}
 
 			var blkRow uint32
@@ -1856,7 +1850,7 @@ func (tbl *txnTable) contains(
 			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
 
 			vectors, closeFunc, err := ioutil.LoadColumns2(
-				tbl.store.ctx,
+				ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
 				tbl.store.rt.Fs,
@@ -1868,23 +1862,29 @@ func (tbl *txnTable) contains(
 			if err != nil {
 				return err
 			}
-			data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
-			containers.ForeachVector(keys,
-				func(id types.Rowid, isNull bool, row int) error {
-					if keys.IsNull(row) {
+			err = func() error {
+				defer closeFunc()
+				defer vectors[0].Close()
+				data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
+				return containers.ForeachVector(keys,
+					func(id types.Rowid, isNull bool, row int) error {
+						if keys.IsNull(row) {
+							return nil
+						}
+						if _, existed := compute.GetOffsetWithFunc(
+							data,
+							id,
+							types.CompareRowidRowidAligned,
+							nil,
+						); existed {
+							keys.Update(row, nil, true)
+						}
 						return nil
-					}
-					if _, existed := compute.GetOffsetWithFunc(
-						data,
-						id,
-						types.CompareRowidRowidAligned,
-						nil,
-					); existed {
-						keys.Update(row, nil, true)
-					}
-					return nil
-				}, sel)
-			closeFunc()
+					}, sel)
+			}()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

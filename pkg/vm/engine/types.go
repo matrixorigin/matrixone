@@ -1058,6 +1058,17 @@ type RangesParam struct {
 	Policy             DataCollectPolicy
 	Rsp                *RangesShuffleParam
 	DontSupportRelData bool
+	// BlockAppender is process-local admission for selected blocks. It must
+	// append to the supplied collector only after reserving its storage.
+	BlockAppender func(*objectio.BlockInfoSlice, *objectio.BlockInfo) error
+}
+
+func (p RangesParam) AppendBlockInfo(out *objectio.BlockInfoSlice, block *objectio.BlockInfo) error {
+	if p.BlockAppender != nil {
+		return p.BlockAppender(out, block)
+	}
+	out.AppendBlockInfo(block)
+	return nil
 }
 
 var DefaultRangesParam RangesParam = RangesParam{

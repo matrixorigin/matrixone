@@ -255,11 +255,18 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 		return itr.values, itr.zValues, nil
 	}
 
+	// Find leaves an encoded key and its offsets in this iterator. Every
+	// insertion must start a fresh encoding, including the nullable guard.
+	keyCount := count
+	if itr.mp.hasNull {
+		keyCount++
+	}
+	activeKeys := itr.keys[:keyCount]
+	clear(activeKeys)
+	clear(itr.keyOffs[:count])
 	defer func() {
-		for i := 0; i < count; i++ {
-			itr.keys[i] = 0
-		}
-		copy(itr.keyOffs[:count], zeroUint32)
+		clear(activeKeys)
+		clear(itr.keyOffs[:count])
 	}()
 
 	copy(itr.zValues[:count], OneInt64s[:count])

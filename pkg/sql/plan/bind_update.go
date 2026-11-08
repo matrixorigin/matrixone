@@ -1242,18 +1242,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		builder.preserveLockProjection[lastNodeID] = struct{}{}
 
-		alias := dmlCtx.aliases[i]
-		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
+		pkPos := updateCtxList[i].DeleteCols[1].ColPos
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx,
 			lastNodeID,
 			finalProjTag,
 			pkPos,
-			finalProjList[pkPos].Typ,
 			indexes,
 			dmlCtx.tableDefs[i],
 			dmlCtx.objRefs[i],
 		)
+		if err != nil {
+			return 0, err
+		}
 		hasInlineIrregularMaintenance = true
 		// Multi-target UPDATE is routed to the legacy planner before this point,
 		// so at most one target can require inline irregular maintenance here.
