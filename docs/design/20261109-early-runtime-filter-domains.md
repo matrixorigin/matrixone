@@ -34,7 +34,7 @@ explicit complete-worker and colocated-delivery proofs for its pipeline scopes.
 
 ## Logical proof and plan annotation
 
-Analyze the optimized query before final column remapping. Reuse the existing
+Analyze the optimized, finalized query using structural column lineage. Reuse the existing
 deep-runtime-filter tree and truncation-safety checks. Track equality lineage by
 binding identity, never by table/column spelling. Start with a selective build
 domain already produced for an equijoin. An ancestor INNER join may apply a
@@ -50,10 +50,11 @@ positives, not false negatives. No SQL-specific names or values enter the rule.
 
 Store candidate domains in a new optional Query annotation, separate from
 RuntimeFilterProbeList/BuildList readiness messages. Each descriptor identifies
-the producer join, its key component and expression, the immutable key type, and
-the target scan/key expressions. Include these expressions in the common visitor,
-remap and deep-copy contracts. Recompute/revalidate endpoints after optimization;
-missing or changed nodes disable a candidate before physical execution.
+the originating join, source scan and source column, immutable integer key type,
+and target scan/column pairs. Column identities use the finalized scan schema,
+not a pre-remap expression slot. Include descriptors in deep-copy contracts.
+Recompute/revalidate endpoints before physical binding; missing or changed nodes
+disable a candidate before physical execution.
 
 Older readers ignore this annotation and therefore create no new wait. Old plans
 without it use ordinary execution. This is not a new runtime RPC message or a
@@ -68,7 +69,7 @@ statement generation and cannot be shared across tenants, snapshots or sessions.
 ## Delivery and readiness
 
 Compile binds a candidate only after actual scopes and placement exist. Verify
-one statement generation/message board, complete actual build-worker identities,
+one statement generation/message board, complete actual source-worker identities,
 colocated scan consumers, and an acyclic start/wait graph. The producer must be
 independent of every scan waiting for its domain and started concurrently before
 those waits. Reuse existing topology enumeration rather than inferring producer
@@ -79,6 +80,12 @@ Keep the existing shuffle readiness and HashJoin join-map contracts. Optional
 membership has its own completion; it does not replace a dependency notification
 or add a wait for unrelated/large hash builds. If natural readiness cannot be
 proven, disable the candidate. Do not add a global barrier or polling timer.
+
+Collect source keys in TableScan after its ordinary filters have accepted rows.
+The independent filtered source, rather than a downstream composite hash build,
+owns completion. Require that source to have no incoming runtime-filter wait or
+prerequisite probe; reject cycles between admitted domains. This makes filtered
+dimension keys available before unrelated large build/probe work finishes.
 
 Bind completed membership to TableScan before its first batch. PR1 applies it to
 eager scan output before shuffle/routing. Existing static/residual predicates
@@ -99,7 +106,7 @@ probe scratch before native allocation, within the execution-resource budget and
 Underestimated cardinality can reduce effectiveness but must not introduce false
 negatives. The actual allocated backing, not the nominal bit count, is charged.
 
-Producers add already evaluated keys to the common filter in bounded vector
+Source scan workers add already evaluated keys to the common filter in bounded vector
 chunks under the coordinator mutex. Native writes are never concurrent. Check
 cancellation between chunks; do not hold this mutex across RPC, channel waits or
 downstream execution. This serialization is a measured cost, not assumed free.
