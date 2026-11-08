@@ -58,7 +58,9 @@ type CacheConfig struct {
 	DiskPrefetchRangeMin *toml.ByteSize `toml:"disk-prefetch-range-min"`
 	// DiskPrefetchRangeAuto raises the prefetch range to the bytes object storage
 	// delivers in the latency of a range read, a power of two from 64KiB to 8MiB.
-	DiskPrefetchRangeAuto bool `toml:"disk-prefetch-range-auto"`
+	// It reads more bytes and, for scattered reads, more requests from object storage.
+	// Default true.
+	DiskPrefetchRangeAuto *bool `toml:"disk-prefetch-range-auto"`
 	// DiskPrefetchRangeNarrowOnly limits prefetch ranges to the narrow reads of tables
 	// that read ranges instead of whole objects.
 	DiskPrefetchRangeNarrowOnly bool         `toml:"disk-prefetch-range-narrow-only"`
@@ -244,7 +246,7 @@ func (c *CacheConfig) diskPrefetchRange() prefetchRangeConfig {
 	if c.DiskPrefetchRangeMin != nil && *c.DiskPrefetchRangeMin > 0 {
 		ret.min = int64(*c.DiskPrefetchRangeMin)
 	}
-	ret.auto = c.DiskPrefetchRangeAuto
+	ret.auto = c.DiskPrefetchRangeAuto == nil || *c.DiskPrefetchRangeAuto
 	ret.narrowOnly = c.DiskPrefetchRangeNarrowOnly
 	return ret
 }

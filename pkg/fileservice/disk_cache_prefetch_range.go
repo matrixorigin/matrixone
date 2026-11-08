@@ -192,6 +192,17 @@ func (d *DiskCache) prefetchRead(
 		f.mu.Unlock()
 		return nil, 0, false
 	}
+	addRun := func(first, last int, now time.Time) {
+		start := windowStart + int64(first)*block
+		end := windowStart + int64(last+1)*block
+		fl := newPrefetchFlight(start, end, now)
+		if f.m == nil {
+			f.m = make(map[string][]*prefetchFlight)
+		}
+		f.m[diskPath] = append(f.m[diskPath], fl)
+		runs = append(runs, run{first: first, last: last, flight: fl})
+		f.reads.Add(1)
+	}
 	now := time.Now()
 	for i := range blocks {
 		b := &blocks[i]
@@ -207,21 +218,18 @@ func (d *DiskCache) prefetchRead(
 			i++
 			continue
 		}
-		j, needed := i, false
+		j, first := i, -1
 		for j < len(blocks) && blocks[j].state == blockMissing && blocks[j].wanted {
-			needed = needed || blocks[j].needed
+			if first < 0 && blocks[j].needed {
+				first = j
+			}
 			j++
 		}
-		if needed {
-			start := windowStart + int64(i)*block
-			end := windowStart + int64(j)*block
-			fl := newPrefetchFlight(start, end, now)
-			if f.m == nil {
-				f.m = make(map[string][]*prefetchFlight)
+		if first >= 0 {
+			addRun(first, j-1, now)
+			if first > i {
+				addRun(i, first-1, now)
 			}
-			f.m[diskPath] = append(f.m[diskPath], fl)
-			runs = append(runs, run{first: i, last: j - 1, flight: fl})
-			f.reads.Add(1)
 		}
 		i = j
 	}

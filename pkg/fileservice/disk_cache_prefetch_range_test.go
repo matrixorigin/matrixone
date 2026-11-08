@@ -17,6 +17,8 @@ package fileservice
 import (
 	"context"
 	"io"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,12 +31,18 @@ type countingStorage struct {
 	ObjectStorage
 	reads atomic.Int64
 	bytes atomic.Int64
+
+	mu     sync.Mutex
+	starts []int64
 }
 
 func (c *countingStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
 	c.reads.Add(1)
 	if min != nil && max != nil {
 		c.bytes.Add(*max - *min)
+		c.mu.Lock()
+		c.starts = append(c.starts, *min)
+		c.mu.Unlock()
 	}
 	return c.ObjectStorage.Read(ctx, key, min, max)
 }
@@ -45,6 +53,7 @@ func newPrefetchRangeFS(t *testing.T, unit int64, narrowOnly bool, size int) (*S
 		DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
 		MemoryCapacity:              ptrTo[toml.ByteSize](0),
 		DiskPrefetchRangeMin:        ptrTo(toml.ByteSize(unit)),
+		DiskPrefetchRangeAuto:       ptrTo(false),
 		DiskPrefetchRangeNarrowOnly: narrowOnly,
 	}, nil, false, false)
 	require.NoError(t, err)
@@ -81,6 +90,20 @@ func TestS3FSPrefetchRangeServesLaterReads(t *testing.T) {
 	require.Equal(t, int64(1), storage.reads.Load(), "reads within the prefetch range")
 	require.Equal(t, data[9000:9010], readRangeOf(t, fs, 0, 9000, 10))
 	require.Equal(t, int64(2), storage.reads.Load(), "a read in another unit")
+}
+
+// A read near the end of a unit reads from its own block, and the blocks of the unit
+// before it in a range of their own.
+func TestS3FSPrefetchRangeStartsAtTheNeededBlock(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, false, 512<<10)
+	require.Equal(t, data[200<<10:200<<10+10], readRangeOf(t, fs, 0, 200<<10, 10))
+	storage.mu.Lock()
+	starts := slices.Clone(storage.starts)
+	storage.mu.Unlock()
+	require.ElementsMatch(t, []int64{192 << 10, 0}, starts)
+	require.Equal(t, int64(256<<10), storage.bytes.Load())
+	require.Equal(t, data[10:20], readRangeOf(t, fs, 0, 10, 10))
+	require.Equal(t, int64(2), storage.reads.Load())
 }
 
 // The entries inside a prefetch range are not cached again as ranges of their own.
@@ -138,10 +161,12 @@ func TestS3FSPrefetchRangeNarrowOnly(t *testing.T) {
 
 func TestDiskPrefetchRangeConfig(t *testing.T) {
 	var c CacheConfig
+	require.Equal(t, prefetchRangeConfig{auto: true}, c.diskPrefetchRange())
+	c.DiskPrefetchRangeAuto = ptrTo(false)
 	require.Equal(t, prefetchRangeConfig{}, c.diskPrefetchRange())
 	c.DiskPrefetchRangeMin = ptrTo(toml.ByteSize(1 << 20))
 	c.DiskPrefetchRangeNarrowOnly = true
-	c.DiskPrefetchRangeAuto = true
+	c.DiskPrefetchRangeAuto = ptrTo(true)
 	require.Equal(t, prefetchRangeConfig{min: 1 << 20, auto: true, narrowOnly: true}, c.diskPrefetchRange())
 }
 
