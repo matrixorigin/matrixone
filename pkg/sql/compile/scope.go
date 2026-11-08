@@ -404,7 +404,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
-				readers, err := s.buildReaders(c)
+				readers, _, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
 					return err
@@ -1153,29 +1153,43 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	defer func() {
 		stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 	}()
-	readers, err := s.buildReaders(c)
+	readers, cutoffDataSupported, err := s.buildReaders(c)
 	if err != nil {
 		return nil, err
+	}
+	orderedReaders := cutoffDataSupported && len(readers) != 0 && len(s.DataSource.RecvMsgList) == 1 && len(s.DataSource.OrderBy) == 1
+	for _, reader := range readers {
+		reader.SetOrderBy(s.DataSource.OrderBy)
+		reader.SetIndexParam(s.DataSource.IndexReaderParam)
+		if orderedReaders && !readutil.SupportsScanCutoff(reader) {
+			orderedReaders = false
+		}
+	}
+	var cutoffTag int32
+	if orderedReaders {
+		cutoffTag = initScanCutoff(s)
+	} else {
+		clearScanCutoffs(s.RootOp)
 	}
 	// only one scan reader, it can just run without any merge.
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
-		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 		return s, nil
 	}
 
 	ms, ss := newParallelScope(s)
+	if cutoffTag != 0 {
+		// The clones now own the only execution references. The source tree is
+		// retained for reuse/analysis and must not retain a prior generation.
+		clearScanCutoffs(s.RootOp)
+	}
 	for i := range ss {
 		recvMsgList := slices.Clone(s.DataSource.RecvMsgList)
 		for j := range recvMsgList {
-			if recvMsgList[j].MsgType == int32(message.MsgTopValue) {
+			if recvMsgList[j].MsgType == int32(message.MsgTopValue) && recvMsgList[j].MsgTag != cutoffTag {
 				recvMsgList[j].MsgTag += int32(i) << 16
 			}
 		}
-
-		readers[i].SetOrderBy(s.DataSource.OrderBy)
-		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
 			R:                  readers[i],
@@ -1929,11 +1943,11 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 	return nil
 }
 
-func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSupported bool, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
-		return emptyScanReaders(s.NodeInfo.Mcpu), nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), false, nil
 	}
 
 	// receive runtime filter and optimize the datasource.
@@ -1946,7 +1960,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		return
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
-		return s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
+		readers, err = s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
+		return
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
@@ -1958,7 +1973,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// DROP and constant-false predicates prove that this scan has no rows.
 		// Skipping only range collection still lets relation readers scan memory.
 		s.NodeInfo.Data = nil // No reader owns the assigned ranges or tombstones.
-		return emptyScanReaders(s.NodeInfo.Mcpu), nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), false, nil
 	}
 	blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
 	if err != nil {
@@ -1967,6 +1982,13 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	err = s.getRelData(c, blockFilterList)
 	if err != nil {
 		return
+	}
+	// Classify the actual ranges before readers take ownership and Data is
+	// cleared. Unknown and composite implementations have no proven ordering
+	// contract; calling their GetType can itself be unsupported.
+	switch s.NodeInfo.Data.(type) {
+	case *readutil.BlockListRelData, *readutil.ObjListRelData:
+		cutoffDataSupported = true
 	}
 
 	switch {
