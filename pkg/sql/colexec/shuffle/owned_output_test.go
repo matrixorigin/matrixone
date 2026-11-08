@@ -44,7 +44,7 @@ func TestOwnedCompleteKeyShuffle(t *testing.T) {
 		account, err := registry.OpenWithController(1<<20, budget)
 		require.NoError(t, err)
 		arg := NewArgument()
-		arg.BucketNum, arg.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+		arg.BucketNum, arg.ShuffleType = 8, int32(plan.ShuffleType_Hash)
 		arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
 		arg.OwnedColumnCount = 1
 		require.NoError(t, arg.SetAllocationAccount(account))
@@ -98,12 +98,15 @@ func TestOwnedShuffleSharedPoolLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(1<<20, budget)
 	require.NoError(t, err)
-	pool := NewOwnedShufflePool(4, 2, 1)
-	ops := []*Shuffle{NewArgument(), NewArgument()}
+	pool := NewOwnedShufflePool(8, 8, 1)
+	ops := make([]*Shuffle, 8)
+	for i := range ops {
+		ops[i] = NewArgument()
+	}
 	var wg sync.WaitGroup
 	errs := make([]error, len(ops))
 	for i, op := range ops {
-		op.BucketNum, op.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+		op.BucketNum, op.ShuffleType = 8, int32(plan.ShuffleType_Hash)
 		op.ShuffleKeyColumns, op.DrainAllBuckets, op.OwnedOutput = []int32{0}, true, true
 		op.OwnedColumnCount = 1
 		op.SetShufflePool(pool)
@@ -116,7 +119,7 @@ func TestOwnedShuffleSharedPoolLifecycle(t *testing.T) {
 		require.NoError(t, err)
 	}
 	firstUsage := budget.Used()
-	require.Greater(t, firstUsage, uint64(64<<10+4*2*4<<10), "shared and per-worker metadata must be charged")
+	require.Greater(t, firstUsage, uint64(64<<10+8*8*4<<10), "shared and per-worker metadata must be charged")
 	for _, op := range ops {
 		op.Reset(proc, false, nil)
 		op.Free(proc, false, nil)
@@ -128,6 +131,31 @@ func TestOwnedShuffleSharedPoolLifecycle(t *testing.T) {
 	}
 	require.Zero(t, budget.Used())
 	require.Zero(t, account.Snapshot().Used)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
+func TestOwnedShuffleRejectsTooManyBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<20, budget)
+	require.NoError(t, err)
+	arg := NewArgument()
+	arg.BucketNum, arg.ShuffleType = MaxOwnedBuckets+1, int32(plan.ShuffleType_Hash)
+	arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
+	arg.OwnedColumnCount = 1
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.Error(t, arg.Prepare(proc))
+	pool := NewOwnedShufflePool(MaxOwnedBuckets+1, 1, 1)
+	require.Error(t, pool.initOwned(proc, arg.outputAllocation))
+	require.Zero(t, budget.Used())
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	arg.Release()
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
@@ -156,13 +184,13 @@ func TestOwnedShuffleFailureReleasesReservations(t *testing.T) {
 			account, err := registry.OpenWithController(tc.accountCap, budget)
 			require.NoError(t, err)
 			arg := NewArgument()
-			arg.BucketNum, arg.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+			arg.BucketNum, arg.ShuffleType = 8, int32(plan.ShuffleType_Hash)
 			arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
 			arg.OwnedColumnCount = 1
 			require.NoError(t, arg.SetAllocationAccount(account))
 			var pressure *process.ExecutionTransientMemoryReservation
 			if tc.exhaustAfterPool {
-				pool := NewOwnedShufflePool(4, 1, 1)
+				pool := NewOwnedShufflePool(8, 1, 1)
 				arg.SetShufflePool(pool)
 				require.NoError(t, pool.initOwned(proc, arg.outputAllocation))
 				available, err := budget.AvailableMemory()

@@ -38,6 +38,9 @@ const (
 	shuffleProducerTailBlocksPerBucket = shuffleFixedBucketReadyLimit * shuffleBatchPoolShardSize
 )
 
+// MaxOwnedBuckets bounds the metadata and buffers of a statement-owned shuffle.
+const MaxOwnedBuckets = 8
+
 type shuffleMemoryShard struct {
 	sync.Mutex
 	tracked map[*batch.Batch]shuffleTrackedBatch
@@ -186,7 +189,7 @@ func (sp *ShufflePool) initOwned(proc *process.Process, selection *vector.Alloca
 			sp.ownedInitErr = err
 			return
 		}
-		if sp.bucketNum < 1 || sp.bucketNum > 4 || sp.maxHolders < 1 || sp.maxHolders > 8 || sp.ownedColumns < 1 || selection == nil {
+		if sp.bucketNum < 1 || sp.bucketNum > MaxOwnedBuckets || sp.maxHolders < 1 || sp.maxHolders > 8 || sp.ownedColumns < 1 || selection == nil {
 			sp.ownedInitErr = sp.ownedFailure(proc, mpool.ErrAllocationAccountInvalid)
 			return
 		}

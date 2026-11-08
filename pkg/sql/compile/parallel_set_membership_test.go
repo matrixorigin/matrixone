@@ -328,6 +328,23 @@ func TestSetMembershipProducerCount(t *testing.T) {
 	require.Equal(t, 16, count)
 	_, ok = setMembershipProducerCount(local, local.Addr, []*Scope{scan, scan})
 	require.False(t, ok, "shared scopes cannot be consumed twice")
+	t.Run("shared operator", func(t *testing.T) {
+		shared := top.NewArgument()
+		scan.RootOp.AppendChild(shared)
+		scan.RootOp.AppendChild(shared)
+		defer func() {
+			scan.RootOp.GetOperatorBase().ResetChildren()
+			shared.Release()
+		}()
+		_, ok := setMembershipProducerCount(local, local.Addr, []*Scope{scan})
+		require.False(t, ok, "shared operators cannot be consumed twice")
+	})
+	t.Run("cyclic operator", func(t *testing.T) {
+		scan.RootOp.AppendChild(scan.RootOp)
+		defer scan.RootOp.GetOperatorBase().ResetChildren()
+		_, ok := setMembershipProducerCount(local, local.Addr, []*Scope{scan})
+		require.False(t, ok, "cyclic operator graphs cannot be routed")
+	})
 	scan.Magic = Normal
 	_, ok = setMembershipProducerCount(local, local.Addr, []*Scope{scan})
 	require.False(t, ok, "Normal runs only one pipeline regardless of Mcpu")
@@ -486,7 +503,7 @@ func TestOwnedSetMembershipConsolidatesCompleteInputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	defer func() { result[0].FreeOperator(c); result[0].release() }()
-	require.Len(t, result[0].PreScopes, 4, "consolidating input routers must not reduce membership owners")
+	require.Len(t, result[0].PreScopes, 8, "consolidating input routers must not reduce membership owners")
 	feeders := result[0].PreScopes[0].PreScopes
 	require.Len(t, feeders, 2)
 	require.Len(t, feeders[0].PreScopes, 2)
@@ -500,5 +517,59 @@ func TestOwnedSetMembershipConsolidatesCompleteInputs(t *testing.T) {
 		for _, reg := range owner.Proc.Reg.MergeReceivers {
 			require.Equal(t, 1, reg.NilBatchCnt, "each consolidated feeder has one router")
 		}
+	}
+}
+
+func TestOwnedSetMembershipOwnerBoundaries(t *testing.T) {
+	// Eight direct routers and one nullable int64 column give U = 8 MiB +
+	// 2*8*8192*9 bytes. The observed query headroom must reach 16*U.
+	const eightOwnerHeadroom = 16 * ((8 << 20) + 2*8*8192*9)
+	for _, tc := range []struct {
+		name         string
+		cpus, maxDop int
+		left, right  int
+		headroom     int64
+		want         int
+	}{
+		{"eight at boundary", 16, 16, 4, 4, eightOwnerHeadroom, 8},
+		{"one byte below boundary", 16, 16, 4, 4, eightOwnerHeadroom - 1, 4},
+		{"five workers", 16, 16, 3, 2, 1 << 30, 4},
+		{"seven workers", 16, 16, 4, 3, 1 << 30, 4},
+		{"three workers", 16, 16, 2, 1, 1 << 30, 3},
+		{"seven cpus", 7, 16, 4, 4, 1 << 30, 4},
+		{"max dop seven", 16, 7, 4, 4, 1 << 30, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newDistinctSetTestCompile(t)
+			c.isPrepare, c.addr, c.ncpu = false, "127.0.0.1:18000", tc.cpus
+			c.proc.Base.Lim.Size = tc.headroom
+			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: tc.cpus}}
+			typ := types.T_int64.ToType().PlanType()
+			scan := func() *plan.Node {
+				return &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Typ: typ}}},
+					ProjectList: []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}, Stats: &plan.Stats{Rowsize: 8}}
+			}
+			node := &plan.Node{NodeType: plan.Node_INTERSECT_ALL, Children: []int32{0, 1}, Stats: &plan.Stats{Cost: 400000}, ProjectList: []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}}
+			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{MaxDop: int64(tc.maxDop), Steps: []int32{2}, Nodes: []*plan.Node{scan(), scan(), node}}}}
+			inputs := newDistinctSetTestScopes(c, 2)
+			for i, workers := range []int{tc.left, tc.right} {
+				inputs[i].RootOp.Release()
+				inputs[i].RootOp = table_scan.NewArgument()
+				inputs[i].Magic, inputs[i].NodeInfo = Remote, engine.Node{Addr: c.addr, Mcpu: workers}
+			}
+			result, err := c.tryCompileOwnedSetMembership(2, node, inputs[:1], inputs[1:])
+			t.Cleanup(func() {
+				if result != nil {
+					result[0].FreeOperator(c)
+					result[0].release()
+				} else {
+					ReleaseScopes(inputs)
+				}
+				c.proc.Free()
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			require.Len(t, result[0].PreScopes, tc.want)
+		})
 	}
 }

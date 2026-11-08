@@ -16,11 +16,13 @@ package compile
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,4 +97,17 @@ func TestSetMembershipInputsAreTotal(t *testing.T) {
 		literal.GetLit().StringSource = ^uint32(0)
 		require.False(t, setMembershipInputsAreTotal(query, 2))
 	})
+}
+
+func TestSetMembershipRejectedExpressionIsNotReported(t *testing.T) {
+	previous := errutil.GetReportErrorFunc()
+	var reports atomic.Int32
+	errutil.SetErrorReporter(func(context.Context, error, int) { reports.Add(1) })
+	defer errutil.SetErrorReporter(previous)
+
+	typ := types.T_int64.ToType().PlanType()
+	input := []*plan.Expr{plan2.GetColExpr(typ, 0, 0)}
+	invalid := plan2.GetColExpr(typ, 0, 1)
+	require.False(t, setMembershipExpressionsMatchInputs([]*plan.Expr{invalid}, [][]*plan.Expr{input}))
+	require.Zero(t, reports.Load(), "an optimizer fallback must not report an internal error")
 }

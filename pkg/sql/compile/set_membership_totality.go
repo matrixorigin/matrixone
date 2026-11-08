@@ -15,8 +15,7 @@
 package compile
 
 import (
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -145,7 +144,10 @@ func setMembershipOutputTypesMatch(output, input []*plan.Expr) bool {
 }
 
 func setMembershipExpressionsMatchInputs(exprs []*plan.Expr, inputs [][]*plan.Expr) bool {
-	invalid := errors.New("unproved set membership expression")
+	// Stop the visitor on rejection without reporting a normal plan fallback.
+	invalid := func() error {
+		return moerr.NewInternalError(moerr.NoReportContext(), "unproved set membership expression")
+	}
 	for _, expr := range exprs {
 		if expr == nil {
 			return false
@@ -154,19 +156,19 @@ func setMembershipExpressionsMatchInputs(exprs []*plan.Expr, inputs [][]*plan.Ex
 			if col := e.GetCol(); col != nil {
 				if col.RelPos < 0 || int(col.RelPos) >= len(inputs) || col.ColPos < 0 ||
 					int(col.ColPos) >= len(inputs[col.RelPos]) || inputs[col.RelPos][col.ColPos] == nil {
-					return invalid
+					return invalid()
 				}
 				got, err := types.TypeFromPlan(e.Typ)
 				if err != nil {
-					return invalid
+					return invalid()
 				}
 				want, err := types.TypeFromPlan(inputs[col.RelPos][col.ColPos].Typ)
 				if err != nil || !got.Eq(want) {
-					return invalid
+					return invalid()
 				}
 			}
 			if lit := e.GetLit(); lit != nil && !parallelUnionProjectionLiteralIsTotal(e.Typ, lit) {
-				return invalid
+				return invalid()
 			}
 			return nil
 		})

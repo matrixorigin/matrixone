@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -50,15 +51,16 @@ func (c *issue32069FailPeerClient) NewStream(ctx context.Context, backend string
 	return c.PipelineClient.NewStream(ctx, backend)
 }
 
-// The rows exceed the automatic parallel admission threshold and use repeated
-// keys, including NULL. Each assertion checks the bag, not merely its size.
+// The rows exceed the automatic parallel admission threshold and provide
+// enough scan workers for eight owners when CPUs allow. Each assertion checks
+// repeated keys, including NULL, as a bag rather than merely its size.
 func TestIssue32069SetMembershipOwners(t *testing.T) {
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(1))
 	if cluster != nil {
 		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	}
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cn, err := cluster.GetCNService(0)
 	require.NoError(t, err)
@@ -73,11 +75,11 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 	}
 	exec("create database issue32069_owners")
 	exec("use issue32069_owners")
-	exec("set max_dop=4")
+	exec("set max_dop=16")
 	exec("create table l(k bigint)")
 	exec("create table r(k bigint)")
-	exec("insert into l select case when result % 4 = 0 then null else result % 4 end from generate_series(0,262143) g")
-	exec("insert into r select case when result % 4 = 0 then null else result % 4 end from generate_series(0,131071) g")
+	exec("insert into l select case when result % 4 = 0 then null else result % 4 end from generate_series(0,1048575) g")
+	exec("insert into r select case when result % 4 = 0 then null else result % 4 end from generate_series(0,524287) g")
 	exec("create table ltext(k bigint, v varchar(8))")
 	exec("create table rtext(k bigint, v char(8))")
 	exec("insert into ltext select k, 'a ' from l")
@@ -90,6 +92,10 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 	t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
 	for _, cnCount := range []int{1, 2} {
 		t.Run(fmt.Sprintf("cn=%d", cnCount), func(t *testing.T) {
+			minOwners := 2
+			if cnCount == 1 && system.GoMaxProcs() >= 8 {
+				minOwners = 8
+			}
 			var peerAddr string
 			if cnCount == 2 {
 				require.NoError(t, cluster.StartNewCNService(1))
@@ -116,8 +122,8 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 				op   string
 				want int64
 			}{
-				{"intersect all", 32768},
-				{"except all", 32768},
+				{"intersect all", 131072},
+				{"except all", 131072},
 				{"intersect", 1},
 				{"except", 0},
 			} {
@@ -126,7 +132,7 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 					physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+set)
 					require.NoError(t, err)
 					operatorName := strings.Replace(tc.op, "except", "minus", 1)
-					require.GreaterOrEqual(t, strings.Count(strings.ToLower(physical.Text), operatorName), 2, physical.Text)
+					require.GreaterOrEqual(t, strings.Count(strings.ToLower(physical.Text), operatorName), minOwners, physical.Text)
 					if cnCount == 2 {
 						require.NotEmpty(t, peerAddr)
 						require.Contains(t, physical.Text, "addr:"+peerAddr, "a remote scan must participate")
@@ -134,7 +140,7 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 					query := "select k,count(*) from (" + set + ") s group by k"
 					groupedPlan, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 					require.NoError(t, err)
-					require.GreaterOrEqual(t, strings.Count(strings.ToLower(groupedPlan.Text), operatorName), 2, groupedPlan.Text)
+					require.GreaterOrEqual(t, strings.Count(strings.ToLower(groupedPlan.Text), operatorName), minOwners, groupedPlan.Text)
 					rows, err := db.QueryContext(ctx, query)
 					require.NoError(t, err)
 					defer rows.Close()
@@ -162,16 +168,16 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 				set := "select k,v from ltext " + op + " select k,v from rtext"
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+set)
 				require.NoError(t, err)
-				require.GreaterOrEqual(t, strings.Count(strings.ToLower(physical.Text), strings.Replace(op, "except", "minus", 1)), 2, physical.Text)
+				require.GreaterOrEqual(t, strings.Count(strings.ToLower(physical.Text), strings.Replace(op, "except", "minus", 1)), minOwners, physical.Text)
 				query := "select hex(v),count(*) from (" + set + ") s group by hex(v)"
 				groupedPlan, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
-				require.GreaterOrEqual(t, strings.Count(strings.ToLower(groupedPlan.Text), strings.Replace(op, "except", "minus", 1)), 2, groupedPlan.Text)
+				require.GreaterOrEqual(t, strings.Count(strings.ToLower(groupedPlan.Text), strings.Replace(op, "except", "minus", 1)), minOwners, groupedPlan.Text)
 				var hex string
 				var rows int64
 				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&hex, &rows))
 				require.Equal(t, "6120", hex)
-				require.Equal(t, int64(131072), rows)
+				require.Equal(t, int64(524288), rows)
 			}
 			var count int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select k from l intersect all select k from r limit 1) s").Scan(&count))
@@ -213,7 +219,7 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 				// The MySQL driver discards the cancelled connection, so restore
 				// the session state on its replacement before executing again.
 				exec("use issue32069_owners")
-				exec("set max_dop=4")
+				exec("set max_dop=16")
 				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select k from r except all select k from l) s").Scan(&count))
 				require.Zero(t, count)
 			}

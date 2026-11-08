@@ -73,7 +73,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle requires synchronous hash routing")
 	}
 	if shuffle.OwnedOutput && (!shuffle.DrainAllBuckets || len(shuffle.ShuffleKeyColumns) == 0 ||
-		shuffle.BucketNum > 4 || shuffle.OwnedColumnCount < 1 || shuffle.allocationAccount == nil || shuffle.outputAllocation == nil) {
+		shuffle.BucketNum > MaxOwnedBuckets || shuffle.OwnedColumnCount < 1 || shuffle.allocationAccount == nil || shuffle.outputAllocation == nil) {
 		return moerr.NewInternalError(proc.Ctx, "owned shuffle requires an allocation account and synchronous complete-key routing")
 	}
 	if shuffle.OpAnalyzer == nil {

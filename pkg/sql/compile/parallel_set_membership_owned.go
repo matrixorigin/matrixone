@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"errors"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,8 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-var errSetMembershipSharedScope = errors.New("shared set membership input scope")
 
 // tryCompileOwnedSetMembership changes no input scope until all admission and
 // graph checks pass. A nil result means the existing execution remains valid.
@@ -100,9 +97,14 @@ func (c *Compile) tryCompileOwnedSetMembership(nodeID int32, node *plan.Node, le
 	}
 	// Consolidation reduces router count, not the input work available to
 	// membership owners: each router can send to every owner.
-	dop := min(4, c.capFanoutByMaxDop(c.ncpu), inputWorkers)
+	workerLimit := c.capFanoutByMaxDop(c.ncpu)
+	dop := min(4, workerLimit, inputWorkers)
 	for dop > 1 && uint64(unit) > headroom/uint64(2*dop) {
 		dop--
+	}
+	if dop == 4 && workerLimit >= shuffle.MaxOwnedBuckets && inputWorkers >= shuffle.MaxOwnedBuckets &&
+		uint64(unit) <= headroom/(2*shuffle.MaxOwnedBuckets) {
+		dop = shuffle.MaxOwnedBuckets
 	}
 	if dop < 2 {
 		return nil, nil
@@ -115,19 +117,29 @@ func (c *Compile) tryCompileOwnedSetMembership(nodeID int32, node *plan.Node, le
 func setMembershipProducerCount(local engine.Node, addr string, sides ...[]*Scope) (int, bool) {
 	seenScopes := make(map[*Scope]bool)
 	seenOps := make(map[vm.Operator]bool)
+	var uniqueOp func(vm.Operator) bool
+	uniqueOp = func(op vm.Operator) bool {
+		if op == nil {
+			return true
+		}
+		if seenOps[op] {
+			return false
+		}
+		seenOps[op] = true
+		for _, child := range op.GetOperatorBase().Children {
+			if !uniqueOp(child) {
+				return false
+			}
+		}
+		return true
+	}
 	var unique func(*Scope) bool
 	unique = func(s *Scope) bool {
 		if s == nil || seenScopes[s] || s.RootOp == nil {
 			return false
 		}
 		seenScopes[s] = true
-		if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			if seenOps[op] {
-				return errSetMembershipSharedScope
-			}
-			seenOps[op] = true
-			return nil
-		}); err != nil {
+		if !uniqueOp(s.RootOp) {
 			return false
 		}
 		for _, child := range s.PreScopes {
