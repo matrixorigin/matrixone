@@ -116,7 +116,11 @@ func scanCutoffScopeMatches(s *Scope, scan *plan.Node) bool {
 		s.IsLoad || s.IsTbFunc || len(s.PreScopes) != 0 || s.RootOp == nil {
 		return false
 	}
-	for op := s.RootOp; op != nil; {
+	return scanCutoffInputMatches(s.RootOp)
+}
+
+func scanCutoffInputMatches(op vm.Operator) bool {
+	for op != nil {
 		switch op.OpType() {
 		case vm.TableScan:
 			_, ok := op.(*table_scan.TableScan)
@@ -153,39 +157,26 @@ func initScanCutoff(s *Scope) int32 {
 	if header.MsgType != int32(message.MsgTopValue) || header.MsgTag <= 0 {
 		return 0
 	}
-	var candidate *order.Order
-	seenOrder := false
 	for op := s.RootOp; op != nil; {
 		if o, ok := op.(*order.Order); ok {
-			if seenOrder || o.ScanCutoffLimit == 0 || o.ScanCutoffTag != header.MsgTag ||
+			if o.ScanCutoffLimit == 0 || o.ScanCutoffTag != header.MsgTag ||
 				len(o.OrderBySpec) == 0 || o.OrderBySpec[0] == nil || o.OrderBySpec[0].Expr == nil ||
 				o.OrderBySpec[0].Expr.GetCol() == nil || o.OrderBySpec[0].Expr.GetCol().RelPos != 0 ||
 				o.OrderBySpec[0].Expr.GetCol().ColPos < 0 ||
 				!sameScanCutoffType(o.OrderBySpec[0].Expr.Typ, s.DataSource.OrderBy[0].Expr.Typ) ||
-				(o.OrderBySpec[0].Flag&plan.OrderBySpec_DESC) != (s.DataSource.OrderBy[0].Flag&plan.OrderBySpec_DESC) {
+				(o.OrderBySpec[0].Flag&plan.OrderBySpec_DESC) != (s.DataSource.OrderBy[0].Flag&plan.OrderBySpec_DESC) ||
+				o.NumChildren() != 1 || !scanCutoffInputMatches(o.GetChildren(0)) {
 				return 0
 			}
-			candidate, seenOrder = o, true
-		} else if seenOrder {
-			switch op.OpType() {
-			case vm.TableScan:
-				if op.GetOperatorBase().NumChildren() != 0 {
-					return 0
-				}
-				candidate.ScanCutoff = order.NewScanCutoff(candidate.ScanCutoffLimit,
-					types.MustTypeFromPlan(candidate.OrderBySpec[0].Expr.Typ),
-					candidate.OrderBySpec[0].Flag&plan.OrderBySpec_DESC != 0)
-				return header.MsgTag
-			case vm.Filter, vm.Projection:
-			default:
-				return 0
-			}
-		} else {
-			switch op.OpType() {
-			case vm.Connector, vm.MergeOrder, vm.Offset, vm.Limit, vm.Projection, vm.Output:
-			default:
-				return 0
-			}
+			o.ScanCutoff = order.NewScanCutoff(o.ScanCutoffLimit,
+				types.MustTypeFromPlan(o.OrderBySpec[0].Expr.Typ),
+				o.OrderBySpec[0].Flag&plan.OrderBySpec_DESC != 0)
+			return header.MsgTag
+		}
+		switch op.OpType() {
+		case vm.Connector, vm.MergeOrder, vm.Offset, vm.Limit, vm.Projection, vm.Output:
+		default:
+			return 0
 		}
 		if op.GetOperatorBase().NumChildren() != 1 {
 			return 0

@@ -123,6 +123,11 @@ func (c *ScanCutoff) batchBound(v *vector.Vector, rows int, out *[index.ZMSize]b
 	if v.IsConst() {
 		min = v.GetRawBytesAt(0)
 		max = min
+	} else if v.GetSorted() {
+		// Reader metadata describes ascending values, including when the
+		// query requests DESC. Admitted types share SQL/storage ordering.
+		min = v.GetRawBytesAt(0)
+		max = v.GetRawBytesAt(rows - 1)
 	} else {
 		var ok bool
 		ok, min, max = v.GetMinMaxValue()

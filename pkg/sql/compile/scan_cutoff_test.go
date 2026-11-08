@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -214,6 +215,26 @@ func TestScanCutoffScopeGenerationAndPairing(t *testing.T) {
 	scope.DataSource.RecvMsgList = nil
 	require.Zero(t, initScanCutoff(scope))
 	require.Nil(t, op.ScanCutoff, "a rejected retry cannot retain old witnesses")
+
+	scope.DataSource.RecvMsgList = scan.RecvMsgList
+	project := projection.NewArgument()
+	defer project.Release()
+	project.AppendChild(tableOp)
+	op.SetChild(project, 0)
+	scope.RootOp = project
+	require.True(t, scanCutoffScopeMatches(scope, scan))
+	scope.RootOp = op
+	require.Equal(t, int32(42), initScanCutoff(scope), "a transparent projection preserves the input contract")
+
+	innerOrder := order.NewArgument()
+	defer innerOrder.Release()
+	innerOrder.AppendChild(tableOp)
+	op.SetChild(innerOrder, 0)
+	scope.RootOp = innerOrder
+	require.False(t, scanCutoffScopeMatches(scope, scan))
+	scope.RootOp = op
+	require.Zero(t, initScanCutoff(scope), "a second Order is not a transparent scan input")
+	require.Nil(t, op.ScanCutoff)
 }
 
 func TestScanCutoffReaderTopologyAfterRangeCollection(t *testing.T) {

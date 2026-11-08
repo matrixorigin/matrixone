@@ -1043,6 +1043,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
 		if t.ScanCutoffLimit > 0 && t.ScanCutoffTag > 0 {
+			// For Order, Limit is an optional witness-count hint, not an
+			// output limit. Only the executing scan scope may enable it.
 			in.Limit = plan2.MakePlan2Uint64ConstExprWithType(t.ScanCutoffLimit)
 			in.TopValueTag = t.ScanCutoffTag
 		}

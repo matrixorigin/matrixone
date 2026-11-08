@@ -16,6 +16,8 @@ package order
 
 import (
 	"bytes"
+	"encoding/binary"
+	"math"
 	"math/rand"
 	"sort"
 	"sync"
@@ -106,9 +108,15 @@ func TestScanCutoffSortedOracle(t *testing.T) {
 			end := min(len(values), i+1+rng.Intn(13))
 			if publishedAt == 0 {
 				v := vector.NewVec(types.T_int32.ToType())
-				for _, x := range values[i:end] {
-					require.NoError(t, vector.AppendFixed(v, x.key, false, mp))
+				keys := make([]int32, end-i)
+				for j, x := range values[i:end] {
+					keys[j] = x.key
 				}
+				if trial%3 == 0 {
+					sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+				}
+				require.NoError(t, vector.AppendFixedList(v, keys, nil, mp))
+				v.SetSorted(trial%3 == 0)
 				b, ok := cutoff.Observe(v, end-i)
 				v.Free(mp)
 				kept = append(kept, values[i:end]...)
@@ -193,30 +201,102 @@ func TestScanCutoffRepresentations(t *testing.T) {
 
 func TestScanCutoffOutwardStringBounds(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
 	typ := types.T_varbinary.ToType()
 	for _, desc := range []bool{false, true} {
-		value := append(bytes.Repeat([]byte{'x'}, 30), []byte("tail")...)
-		v, err := vector.NewConstBytes(typ, value, 3, mp)
-		require.NoError(t, err)
-		cutoff := NewScanCutoff(3, typ, desc)
-		bound, ok := cutoff.Observe(v, 3)
-		v.Free(mp)
-		require.True(t, ok)
-		if desc {
-			require.LessOrEqual(t, bytes.Compare(bound.GetMinBuf(), value), 0)
-		} else {
-			require.GreaterOrEqual(t, bytes.Compare(bound.GetMaxBuf(), value), 0)
+		for _, sorted := range []bool{false, true} {
+			name := map[bool]string{false: "constant", true: "sorted"}[sorted] + "/" +
+				map[bool]string{false: "ascending", true: "descending"}[desc]
+			t.Run(name, func(t *testing.T) {
+				value := append(bytes.Repeat([]byte{'x'}, 30), []byte("tail")...)
+				minimum := value
+				var v *vector.Vector
+				defer func() {
+					if v != nil {
+						v.Free(mp)
+					}
+				}()
+				if sorted {
+					v = vector.NewVec(typ)
+					require.NoError(t, vector.AppendBytesList(v, [][]byte{nil, []byte("small"), value}, nil, mp))
+					v.SetSorted(true)
+					minimum = nil
+				} else {
+					var err error
+					v, err = vector.NewConstBytes(typ, value, 3, mp)
+					require.NoError(t, err)
+				}
+				cutoff := NewScanCutoff(3, typ, desc)
+				bound, ok := cutoff.Observe(v, 3)
+				require.True(t, ok)
+				if desc {
+					require.LessOrEqual(t, bytes.Compare(bound.GetMinBuf(), minimum), 0)
+				} else {
+					require.GreaterOrEqual(t, bytes.Compare(bound.GetMaxBuf(), value), 0)
+				}
+			})
 		}
 	}
 	value := bytes.Repeat([]byte{0xff}, 31)
 	v, err := vector.NewConstBytes(typ, value, 1, mp)
 	require.NoError(t, err)
+	defer v.Free(mp)
 	cutoff := NewScanCutoff(1, typ, false)
 	_, ok := cutoff.Observe(v, 1)
-	v.Free(mp)
 	require.False(t, ok)
 	require.True(t, cutoff.Done())
-	require.Zero(t, mp.CurrNB())
+
+	sorted := vector.NewVec(typ)
+	defer sorted.Free(mp)
+	require.NoError(t, vector.AppendBytes(sorted, value, false, mp))
+	sorted.SetSorted(true)
+	cutoff = NewScanCutoff(1, typ, false)
+	_, ok = cutoff.Observe(sorted, 1)
+	require.False(t, ok, "sorted metadata cannot make an unbounded string maximum safe")
+	require.True(t, cutoff.Done())
+}
+
+func BenchmarkScanCutoffObserve(b *testing.B) {
+	const rows = 8192
+	for _, oid := range []types.T{types.T_int64, types.T_varbinary} {
+		b.Run(oid.String(), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			v := vector.NewVec(oid.ToType())
+			b.Cleanup(func() {
+				v.Free(mp)
+				require.Zero(b, mp.CurrNB())
+				mpool.DeleteMPool(mp)
+			})
+			for i := range rows {
+				if oid == types.T_int64 {
+					require.NoError(b, vector.AppendFixed(v, int64(i), false, mp))
+				} else {
+					value := binary.BigEndian.AppendUint64(bytes.Repeat([]byte{'x'}, 56), uint64(i))
+					require.NoError(b, vector.AppendBytes(v, value, false, mp))
+				}
+			}
+			for _, sorted := range []bool{false, true} {
+				name := "unmarked"
+				if sorted {
+					name = "sorted"
+				}
+				b.Run(name, func(b *testing.B) {
+					v.SetSorted(sorted)
+					cutoff := NewScanCutoff(math.MaxUint64, oid.ToType(), false)
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						cutoff.Observe(v, rows)
+					}
+					b.StopTimer()
+					require.False(b, cutoff.Done(), "benchmark must keep collecting without pruning")
+				})
+			}
+		})
+	}
 }
 
 func TestScanCutoffTypeAdmission(t *testing.T) {
