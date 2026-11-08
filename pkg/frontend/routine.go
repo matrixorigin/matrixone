@@ -165,11 +165,15 @@ func (rt *Routine) isTerminalRetired() bool {
 	return rt.terminalRetired.Load()
 }
 
-func (rt *Routine) requestRunningLongerThan(nowValue int64, minimum time.Duration) bool {
+func (rt *Routine) activeRequestStartedAt() int64 {
 	if rt.closing.Load() {
-		return false
+		return 0
 	}
-	startedAt := rt.requestStartedAt.Load()
+	return rt.requestStartedAt.Load()
+}
+
+func (rt *Routine) requestRunningLongerThan(nowValue int64, minimum time.Duration) bool {
+	startedAt := rt.activeRequestStartedAt()
 	if startedAt == 0 {
 		return false
 	}

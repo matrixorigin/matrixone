@@ -120,7 +120,6 @@ func (mo *MOServer) Start() error {
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
 	mo.startConnectionLivenessMonitor()
-	mo.startTerminalConnectionMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
@@ -135,12 +134,13 @@ func (mo *MOServer) startConnectionLivenessMonitor() {
 		defer mo.wg.Done()
 		ticker := time.NewTicker(clientDisconnectProbeInterval)
 		defer ticker.Stop()
+		monitor := connectionLivenessMonitor{rm: mo.rm}
 		for {
 			select {
 			case <-mo.rm.ctx.Done():
 				return
 			case now := <-ticker.C:
-				mo.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
+				monitor.scan(now)
 			}
 		}
 	}()

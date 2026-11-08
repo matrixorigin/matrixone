@@ -26,11 +26,9 @@ import (
 )
 
 const (
-	terminalConnectionProbeInterval = time.Second
 	// Bound retained memory even if the number of connections spikes. Entries
 	// beyond the cap are still probed, without retaining their probe objects.
 	terminalConnectionProbeCacheLimit = 1 << 17
-	terminalConnectionProbeIdlePasses = 5
 	terminalRequestScratchLimit       = 1 << 17
 	// TCP_CLOSE from Linux's include/net/tcp_states.h.
 	linuxTCPClosed = 7
@@ -45,7 +43,7 @@ type terminalTCPProbe struct {
 	pollFD  [1]unix.PollFd
 	err     error
 	closed  bool
-	seen    uint64
+	seen    bool
 }
 
 func terminalTCPConn(conn net.Conn) *net.TCPConn {
@@ -88,16 +86,42 @@ func (probe *terminalTCPProbe) terminal() bool {
 	return probe.raw.Control(probe.control) == nil && probe.err == nil && probe.closed
 }
 
-type terminalConnectionMonitor struct {
-	rm       *RoutineManager
-	requests []activeClientRequest
-	probes   map[*Conn]*terminalTCPProbe
-	pass     uint64
+type livenessRequest struct {
+	activeClientRequest
+	legacyEligible bool
 }
 
-func (monitor *terminalConnectionMonitor) scan(now time.Time) {
-	monitor.requests = monitor.rm.appendLongRunningRequests(monitor.requests[:0], now, 0)
-	monitor.pass++
+type connectionLivenessMonitor struct {
+	rm       *RoutineManager
+	requests []livenessRequest
+	probes   map[*Conn]*terminalTCPProbe
+}
+
+// snapshot records both policies against the ticker time and the same request
+// start. The legacy close path can then use its original age selection even if
+// the connection begins another request during the terminal pass.
+func (monitor *connectionLivenessMonitor) snapshot(now time.Time) {
+	monitor.requests = monitor.requests[:0]
+	nowValue := clientRequestClockValue(now)
+	monitor.rm.mu.RLock()
+	defer monitor.rm.mu.RUnlock()
+	for conn, routine := range monitor.rm.clients {
+		if conn == nil || routine == nil {
+			continue
+		}
+		startedAt := routine.activeRequestStartedAt()
+		if startedAt == 0 || nowValue-startedAt < 0 {
+			continue
+		}
+		monitor.requests = append(monitor.requests, livenessRequest{
+			activeClientRequest: activeClientRequest{conn: conn, routine: routine},
+			legacyEligible:      nowValue-startedAt >= clientDisconnectProbeGrace.Nanoseconds(),
+		})
+	}
+}
+
+func (monitor *connectionLivenessMonitor) scan(now time.Time) {
+	monitor.snapshot(now)
 	// A map retains its buckets after delete. Drop an oversized cache after a
 	// contraction instead of retaining the peak for the server's lifetime.
 	if len(monitor.probes) > 1024 && len(monitor.requests)*4 < len(monitor.probes) {
@@ -121,46 +145,42 @@ func (monitor *terminalConnectionMonitor) scan(now time.Time) {
 				monitor.probes[request.conn] = probe
 			}
 		}
-		probe.seen = monitor.pass
+		probe.seen = true
 		if probe.terminal() && request.routine.retireTerminalConnection() {
 			delete(monitor.probes, request.conn)
 			logutil.Infof("cancel active query after terminal client connection error: connection=%s", request.conn.RemoteAddress())
 		}
 	}
 	for conn, probe := range monitor.probes {
-		if monitor.pass-probe.seen >= terminalConnectionProbeIdlePasses {
+		if !probe.seen {
 			delete(monitor.probes, conn)
+		} else {
+			probe.seen = false
 		}
 	}
 	// Gradual eviction can leave an empty map holding its peak buckets.
 	if len(monitor.probes) == 0 {
 		monitor.probes = nil
 	}
-	clear(monitor.requests)
+
+	// Legacy close may wait for a lifecycle lock. Finish the terminal pass
+	// first, and do not retain references to the other requests while waiting.
+	legacy := monitor.requests[:0]
+	for _, request := range monitor.requests {
+		if request.legacyEligible {
+			legacy = append(legacy, request)
+		}
+	}
+	clear(monitor.requests[len(legacy):])
+	monitor.requests = legacy
+	for i := range monitor.requests {
+		request := monitor.requests[i].activeClientRequest
+		monitor.requests[i] = livenessRequest{}
+		cancelDisconnectedRequest(request, connectionPeerClosed)
+	}
 	if cap(monitor.requests) > terminalRequestScratchLimit {
 		monitor.requests = nil
 	} else {
 		monitor.requests = monitor.requests[:0]
 	}
-}
-
-func (mo *MOServer) startTerminalConnectionMonitor() {
-	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
-		return
-	}
-	mo.wg.Add(1)
-	go func() {
-		defer mo.wg.Done()
-		ticker := time.NewTicker(terminalConnectionProbeInterval)
-		defer ticker.Stop()
-		monitor := terminalConnectionMonitor{rm: mo.rm}
-		for {
-			select {
-			case <-mo.rm.ctx.Done():
-				return
-			case now := <-ticker.C:
-				monitor.scan(now)
-			}
-		}
-	}()
 }

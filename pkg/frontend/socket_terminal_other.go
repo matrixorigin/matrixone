@@ -16,4 +16,12 @@
 
 package frontend
 
-func (mo *MOServer) startTerminalConnectionMonitor() {}
+import "time"
+
+type connectionLivenessMonitor struct {
+	rm *RoutineManager
+}
+
+func (monitor *connectionLivenessMonitor) scan(now time.Time) {
+	monitor.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
+}

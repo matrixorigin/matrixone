@@ -198,13 +198,10 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 }
 
 func (rm *RoutineManager) longRunningRequests(now time.Time, minimum time.Duration) []activeClientRequest {
-	return rm.appendLongRunningRequests(nil, now, minimum)
-}
-
-func (rm *RoutineManager) appendLongRunningRequests(requests []activeClientRequest, now time.Time, minimum time.Duration) []activeClientRequest {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	nowValue := clientRequestClockValue(now)
+	var requests []activeClientRequest
 	for conn, routine := range rm.clients {
 		if conn != nil && routine != nil && routine.requestRunningLongerThan(nowValue, minimum) {
 			requests = append(requests, activeClientRequest{conn: conn, routine: routine})
@@ -222,14 +219,17 @@ func (rm *RoutineManager) cancelDisconnectedRequests(
 		return
 	}
 	for _, request := range rm.longRunningRequests(now, minimum) {
-		closed, err := probe(request.conn.RawConn())
-		if err != nil {
-			logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
-			continue
-		}
-		if !closed {
-			continue
-		}
+		cancelDisconnectedRequest(request, probe)
+	}
+}
+
+func cancelDisconnectedRequest(request activeClientRequest, probe func(net.Conn) (bool, error)) {
+	closed, err := probe(request.conn.RawConn())
+	if err != nil {
+		logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
+		return
+	}
+	if closed {
 		logutil.Infof("cancel active query after client disconnect: connection=%s", request.conn.RemoteAddress())
 		request.routine.beginClose()
 	}

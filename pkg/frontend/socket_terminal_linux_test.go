@@ -115,7 +115,7 @@ func TestTerminalConnectionMonitorCancelsWithoutConsumingInput(t *testing.T) {
 	routine.setCancelRequestFunc(cancel)
 	require.True(t, routine.setInProcessRequest(true))
 	conn := &Conn{conn: server}
-	monitor := terminalConnectionMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}}
+	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}}
 	_, err := client.Write([]byte("xy"))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -144,144 +144,211 @@ func TestTerminalConnectionMonitorReusesAndExpiresIdleProbe(t *testing.T) {
 	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 	t.Cleanup(routine.cancelRoutineFunc)
 	conn := &Conn{conn: server}
-	monitor := terminalConnectionMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}}
+	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}}
 	require.True(t, routine.setInProcessRequest(true))
 	monitor.scan(time.Now())
 	probe := monitor.probes[conn]
 	require.NotNil(t, probe)
-	require.True(t, routine.setInProcessRequest(false))
-	for i := 0; i < terminalConnectionProbeIdlePasses-1; i++ {
-		monitor.scan(time.Now())
-	}
-	require.True(t, routine.setInProcessRequest(true))
 	monitor.scan(time.Now())
-	require.Same(t, probe, monitor.probes[conn], "briefly idle connections should reuse the probe")
+	require.Same(t, probe, monitor.probes[conn], "active connections should reuse the probe")
 	require.True(t, routine.setInProcessRequest(false))
-	for i := 0; i < terminalConnectionProbeIdlePasses; i++ {
-		monitor.scan(time.Now())
-	}
+	monitor.scan(time.Now())
 	require.Nil(t, monitor.probes, "an empty cache must release its retained buckets")
 	require.True(t, routine.setInProcessRequest(true))
 	monitor.scan(time.Now())
 	require.NotNil(t, monitor.probes[conn], "a later request must recreate its probe")
 }
 
-func TestTerminalConnectionMonitorStopsWithRoutineManager(t *testing.T) {
+func TestTerminalConnectionMonitorReplacedSocketAtCacheLimit(t *testing.T) {
+	oldServer, oldClient := tcpConnectionPair(t)
+	newServer, newClient := tcpConnectionPair(t)
+	t.Cleanup(func() {
+		_ = oldServer.Close()
+		_ = oldClient.Close()
+		_ = newServer.Close()
+		_ = newClient.Close()
+	})
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
 	ctx, cancel := context.WithCancel(context.Background())
-	server := &MOServer{rm: &RoutineManager{ctx: ctx}}
-	server.startTerminalConnectionMonitor()
-	cancel()
-	stopped := make(chan struct{})
-	go func() {
-		server.wg.Wait()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-	case <-time.After(time.Second):
-		t.Fatal("terminal connection monitor did not stop")
+	t.Cleanup(cancel)
+	routine.setCancelRequestFunc(cancel)
+	now := time.Now()
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
+	conn := &Conn{conn: oldServer}
+	monitor := connectionLivenessMonitor{
+		rm:     &RoutineManager{clients: make(map[*Conn]*Routine)},
+		probes: make(map[*Conn]*terminalTCPProbe, terminalConnectionProbeCacheLimit),
+	}
+	monitor.rm.clients[conn] = routine
+	monitor.probes[conn] = newTerminalTCPProbe(oldServer.(*net.TCPConn))
+	unused := &terminalTCPProbe{}
+	for len(monitor.probes) < terminalConnectionProbeCacheLimit {
+		monitor.probes[&Conn{}] = unused
+	}
+	// Keep the cache full through the contraction check; only conn has a TCP
+	// socket, so the other entries do not affect the probe result.
+	for len(monitor.rm.clients) < terminalConnectionProbeCacheLimit/4 {
+		monitor.rm.clients[&Conn{}] = routine
+	}
+	conn.conn = newServer
+	require.NoError(t, newClient.(*net.TCPConn).SetLinger(0))
+	require.NoError(t, newClient.Close())
+	require.Eventually(t, func() bool {
+		return terminalSocketHasEvent(newServer.(*net.TCPConn), unix.POLLERR)
+	}, 3*time.Second, time.Millisecond)
+	monitor.scan(now)
+	require.ErrorIs(t, ctx.Err(), context.Canceled, "a full cache must not reuse the old socket's probe")
+	require.Nil(t, monitor.probes, "stale and retired probes must be evicted")
+}
+
+func TestConnectionLivenessMonitorSnapshotsRequestAge(t *testing.T) {
+	now := time.Now()
+	client := func(start time.Time, closing bool) (*Conn, *Routine) {
+		routine := &Routine{}
+		if !start.IsZero() {
+			routine.requestStartedAt.Store(clientRequestClockValue(start))
+		}
+		routine.closing.Store(closing)
+		return &Conn{}, routine
+	}
+	recentConn, recent := client(now.Add(-clientDisconnectProbeGrace+time.Nanosecond), false)
+	exactConn, exact := client(now.Add(-clientDisconnectProbeGrace), false)
+	oldConn, old := client(now.Add(-clientDisconnectProbeGrace-time.Second), false)
+	futureConn, future := client(now.Add(time.Nanosecond), false)
+	idleConn, idle := client(time.Time{}, false)
+	closingConn, closing := client(now.Add(-time.Minute), true)
+	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
+		recentConn: recent, exactConn: exact, oldConn: old,
+		futureConn: future, idleConn: idle, closingConn: closing,
+		nil: old, {}: nil,
+	}}}
+	monitor.snapshot(now)
+	eligible := make(map[*Conn]bool, len(monitor.requests))
+	for _, request := range monitor.requests {
+		eligible[request.conn] = request.legacyEligible
+	}
+	require.Len(t, eligible, 3)
+	require.Contains(t, eligible, recentConn)
+	require.False(t, eligible[recentConn])
+	require.True(t, eligible[exactConn])
+	require.True(t, eligible[oldConn])
+
+	// The old monitor also selected by the ticker time before probing sockets.
+	old.requestStartedAt.Store(clientRequestClockValue(now))
+	for _, request := range monitor.requests {
+		if request.conn == oldConn {
+			require.True(t, request.legacyEligible)
+		}
 	}
 }
 
-func TestTerminalConnectionMonitorProgressDuringBlockedLegacyClose(t *testing.T) {
+func TestConnectionLivenessMonitorPreservesFINGrace(t *testing.T) {
+	server, client := tcpConnectionPair(t)
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	routine.setCancelRequestFunc(cancel)
+	now := time.Now()
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace + time.Nanosecond)))
+	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
+		{conn: server}: routine,
+	}}}
+	require.NoError(t, client.(*net.TCPConn).CloseWrite())
+	require.Eventually(t, func() bool {
+		return terminalSocketHasEvent(server.(*net.TCPConn), unix.POLLRDHUP)
+	}, 3*time.Second, time.Millisecond)
+	monitor.scan(now)
+	require.NoError(t, ctx.Err(), "FIN before the request-age grace must not cancel the request")
+	monitor.scan(now.Add(time.Nanosecond))
+	require.ErrorIs(t, ctx.Err(), context.Canceled, "the existing FIN policy applies at the grace boundary")
+}
+
+func TestConnectionLivenessMonitorPrioritizesTerminalBeforeLegacyClose(t *testing.T) {
 	legacy := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 	terminal := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	late := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 	t.Cleanup(legacy.cancelRoutineFunc)
 	t.Cleanup(terminal.cancelRoutineFunc)
+	t.Cleanup(late.cancelRoutineFunc)
 
 	legacyCtx, cancelLegacy := context.WithCancel(context.Background())
 	terminalCtx, cancelTerminal := context.WithCancel(context.Background())
+	lateCtx, cancelLate := context.WithCancel(context.Background())
 	t.Cleanup(cancelLegacy)
 	t.Cleanup(cancelTerminal)
+	t.Cleanup(cancelLate)
 	legacy.setCancelRequestFunc(cancelLegacy)
 	terminal.setCancelRequestFunc(cancelTerminal)
-	require.True(t, legacy.setInProcessRequest(true))
-	require.True(t, terminal.setInProcessRequest(true))
+	late.setCancelRequestFunc(cancelLate)
 	now := time.Now()
 	legacy.requestStartedAt.Store(clientRequestClockValue(now.Add(-clientDisconnectProbeGrace - time.Second)))
-	terminal.requestStartedAt.Store(clientRequestClockValue(now))
+	terminal.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
+	late.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Second)))
 
-	server, client := tcpConnectionPair(t)
-	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
-	require.NoError(t, client.(*net.TCPConn).SetLinger(0))
-	require.NoError(t, client.Close())
+	terminalServer, terminalClient := tcpConnectionPair(t)
+	lateServer, lateClient := tcpConnectionPair(t)
+	t.Cleanup(func() {
+		_ = terminalServer.Close()
+		_ = terminalClient.Close()
+		_ = lateServer.Close()
+		_ = lateClient.Close()
+	})
+	require.NoError(t, terminalClient.(*net.TCPConn).SetLinger(0))
+	require.NoError(t, terminalClient.Close())
 	require.Eventually(t, func() bool {
-		return terminalSocketHasEvent(server.(*net.TCPConn), unix.POLLERR)
+		return terminalSocketHasEvent(terminalServer.(*net.TCPConn), unix.POLLERR)
 	}, 3*time.Second, time.Millisecond)
 
-	rm := &RoutineManager{ctx: ctx, clients: map[*Conn]*Routine{
+	monitor := connectionLivenessMonitor{rm: &RoutineManager{clients: map[*Conn]*Routine{
 		{remoteAddr: "blocked legacy"}: legacy,
-		{conn: server}:                 terminal,
-	}}
-	mo := &MOServer{rm: rm}
-	legacyProbed := make(chan struct{})
-	legacyDone := make(chan struct{})
+		{conn: terminalServer}:         terminal,
+		{conn: lateServer}:             late,
+	}}}
 	legacy.mc.Lock()
 	var releaseOnce sync.Once
 	releaseLegacy := func() { releaseOnce.Do(legacy.mc.Unlock) }
+	done := make(chan struct{})
 	t.Cleanup(func() {
 		releaseLegacy()
-		cancel()
 		select {
-		case <-legacyDone:
+		case <-done:
 		case <-time.After(3 * time.Second):
-			t.Error("legacy scan did not finish after releasing the lock")
-		}
-		stopped := make(chan struct{})
-		go func() { mo.wg.Wait(); close(stopped) }()
-		select {
-		case <-stopped:
-		case <-time.After(3 * time.Second):
-			t.Error("terminal monitor did not stop during cleanup")
+			t.Error("liveness pass did not finish after releasing the lock")
 		}
 	})
 	go func() {
-		defer close(legacyDone)
-		rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, func(net.Conn) (bool, error) {
-			close(legacyProbed)
-			return true, nil
-		})
+		defer close(done)
+		monitor.scan(now)
 	}()
-	select {
-	case <-legacyProbed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("legacy scan did not reach the blocked routine")
-	}
 	select {
 	case <-legacyCtx.Done():
 	case <-time.After(3 * time.Second):
-		t.Fatal("legacy close did not reach lifecycle cancellation")
+		t.Fatal("legacy close did not reach the blocked lifecycle lock")
 	}
-	select {
-	case <-legacyDone:
-		t.Fatal("legacy close finished while its lifecycle lock was held")
-	default:
-	}
-
-	mo.startTerminalConnectionMonitor()
-	select {
-	case <-terminalCtx.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("a blocked legacy close delayed terminal cancellation")
-	}
-	cancel()
-	fastStopped := make(chan struct{})
-	go func() { mo.wg.Wait(); close(fastStopped) }()
-	select {
-	case <-fastStopped:
-	case <-time.After(3 * time.Second):
-		t.Fatal("terminal monitor did not stop while the legacy close was blocked")
+	require.ErrorIs(t, terminalCtx.Err(), context.Canceled, "the terminal pass must finish before a legacy close can block")
+	require.NoError(t, lateCtx.Err())
+	require.Len(t, monitor.requests, 1, "only legacy candidates remain during a blocked close")
+	for _, request := range monitor.requests[:cap(monitor.requests)] {
+		require.Empty(t, request, "processed and ineligible snapshot slots must release references")
 	}
 
+	require.NoError(t, lateClient.(*net.TCPConn).SetLinger(0))
+	require.NoError(t, lateClient.Close())
+	require.Eventually(t, func() bool {
+		return terminalSocketHasEvent(lateServer.(*net.TCPConn), unix.POLLERR)
+	}, 3*time.Second, time.Millisecond)
+	require.NoError(t, lateCtx.Err(), "a reset after the terminal pass waits for the blocked legacy close")
 	releaseLegacy()
 	select {
-	case <-legacyDone:
+	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("legacy scan did not finish after releasing the lock")
+		t.Fatal("liveness pass did not finish after releasing the lock")
 	}
-	require.ErrorIs(t, legacyCtx.Err(), context.Canceled)
+	monitor.scan(time.Now())
+	require.ErrorIs(t, lateCtx.Err(), context.Canceled, "a later pass must retry the reset")
 }
 
 func TestTerminalTCPProbe(t *testing.T) {

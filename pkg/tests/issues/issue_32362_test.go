@@ -143,6 +143,7 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 			_, err = holder.ExecContext(ctx, "update "+dbName+".t set v=1 where id=1")
 			require.NoError(t, err)
 			holderDone := make(chan error, 1)
+			holderStarted := time.Now()
 			go func() {
 				var sleep, marker int
 				holderDone <- holder.QueryRowContext(ctx, "select sleep(60),323620993").Scan(&sleep, &marker)
@@ -169,6 +170,8 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 			}
 			require.NoError(t, raw.SetLinger(0))
 			require.NoError(t, raw.Close())
+			beforeLegacy := time.NewTimer(time.Until(holderStarted.Add(25 * time.Second)))
+			defer beforeLegacy.Stop()
 			select {
 			case err = <-holderDone:
 				require.Error(t, err)
@@ -180,8 +183,8 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 				require.NoError(t, r.err)
 				require.Equal(t, 0, r.value, "the disconnected transaction must roll back")
 				needKill = false
-			case <-time.After(8 * time.Second):
-				t.Fatal("reset connection retained its transaction lock")
+			case <-beforeLegacy.C:
+				t.Fatal("reset connection retained its transaction lock until the legacy grace")
 			}
 			_, err = waiter.ExecContext(ctx, "rollback")
 			require.NoError(t, err)
@@ -198,7 +201,7 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 			done := make(chan result, 1)
 			go func() {
 				var r result
-				r.err = conn.QueryRowContext(ctx, "select sleep(3),323620995").Scan(&r.sleep, &r.marker)
+				r.err = conn.QueryRowContext(ctx, "select sleep(6),323620995").Scan(&r.sleep, &r.marker)
 				done <- r
 			}()
 			visible(t, "323620995")
@@ -208,7 +211,7 @@ func TestIssue32362TerminalConnectionCancellation(t *testing.T) {
 				require.NoError(t, r.err)
 				require.Equal(t, 0, r.sleep)
 				require.Equal(t, 323620995, r.marker)
-			case <-time.After(10 * time.Second):
+			case <-time.After(15 * time.Second):
 				t.Fatal("half-closed client did not receive its result")
 			}
 		})
