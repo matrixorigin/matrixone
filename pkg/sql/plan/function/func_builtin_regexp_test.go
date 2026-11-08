@@ -225,6 +225,18 @@ func Test_BuiltIn_RegexpReplaceCaptureTemplate(t *testing.T) {
 	require.NoError(t, err, "an out-of-range occurrence does not evaluate the replacement")
 	require.Equal(t, "a", got)
 
+	// Issue #31175 design r4: capture-bearing duplicate alternatives are
+	// never deduplicated — group numbering is user-observable through
+	// replacement references. On the case-fold path the rewrite retains
+	// both (ss) branches, so $3 resolves and the unmatched group expands
+	// empty, exactly like the unrewritten engine verdict.
+	t.Run("dedup_retains_capture_numbering", func(t *testing.T) {
+		got, err := op.regMap.regularReplaceWithMatchType(
+			"((ss)|(ss))", "ss", "[$1][$2][$3]", 1, 1, false, "i")
+		require.NoError(t, err)
+		require.Equal(t, "[ss][ss][]", got)
+	})
+
 	binarySubject := string([]byte{0x00, 0xff, 0xc3, 0x28})
 	got, err = op.regMap.regularReplaceWithMatchType(
 		".", binarySubject, "[$0]", 1, 0, true, "")
@@ -3278,4 +3290,77 @@ func Test_BuiltIn_RegexpHonorsCollationCaseFolding(t *testing.T) {
 			},
 			[]bool{false}, []bool{true})
 	})
+}
+
+// Test_BuiltIn_UnicodeLikeResourceLimit pins the function-layer conversion
+// of the collation package's typed anchor-search work-bound error (issue
+// #31175 design, invariant 7): pkg/common/collation is stdlib-only and
+// reports *collation.LikeResourceLimitError, and unicodeLikeMatchFn
+// converts it to a moerr internal error whose message keeps the stable
+// SQL-visible prefix "LIKE pattern resource limit exceeded: ". The
+// fragmented pattern forces the over-mask-budget anchor fallback with a
+// one-character anchor against an all-'a' subject, crossing the
+// 4 x words x subjectChars total-work bound.
+func Test_BuiltIn_UnicodeLikeResourceLimit(t *testing.T) {
+	alphabet := "abcdefghijklmnopqrstuvwxyz0123456789" +
+		"αβγδεζηθικλμνξοπρστυφχψω" +
+		"абвгдежзийклмнопрстуфхцчшщъыьэюя"
+	var sb strings.Builder
+	sb.WriteByte('%')
+	sb.WriteString(strings.Repeat("a_", 15000))
+	for _, r := range alphabet {
+		sb.WriteRune(r)
+		sb.WriteByte('_')
+	}
+	sb.WriteByte('%')
+	matchFn := unicodeLikeMatchFn(context.Background(), false, '\\', true)
+	_, err := matchFn([]byte(strings.Repeat("a", 60000)), []byte(sb.String()))
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal),
+		"the resource-limit error must surface as a moerr internal error, got %v", err)
+	require.Contains(t, err.Error(),
+		"LIKE pattern resource limit exceeded: total anchor-search work bound")
+	// Below the bound the same matcher answers exactly: the pattern's exact
+	// occurrence matches and an anchor-free subject does not.
+	var middle strings.Builder
+	middle.WriteString(strings.Repeat("aX", 15000))
+	for _, r := range alphabet {
+		middle.WriteRune(r)
+		middle.WriteByte('X')
+	}
+	matched, err := matchFn([]byte("q"+middle.String()+"z"), []byte(sb.String()))
+	require.NoError(t, err)
+	require.True(t, matched)
+	matched, err = matchFn([]byte(strings.Repeat("b", 60000)), []byte(sb.String()))
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
+// Test_BuiltIn_LikeAllocationMeasurement records the representative
+// per-row allocations of the ci LIKE paths on constant patterns (the
+// independent r4 design review's P3 action): constant-pattern preparation
+// is cached per batch, and each row allocates O(subject length) storage —
+// the general_ci path's folded subject buffer and the unicode_ci path's
+// per-character subject weight slices. Informational: the figures back the
+// hot-path-cost contract in the design and carry no fixed byte bound.
+func Test_BuiltIn_LikeAllocationMeasurement(t *testing.T) {
+	subject := []byte("Die Strassenfestlichkeit")
+	asciiAllocs := testing.AllocsPerRun(200, func() {
+		if got := generalCILikeFold(subject); len(got) != len(subject) {
+			t.Fatalf("ASCII general_ci fold length drifted: %d", len(got))
+		}
+	})
+	t.Logf("general_ci LIKE subject fold: %.1f allocations/row for a %d-byte subject", asciiAllocs, len(subject))
+	unicodeSubject := []byte("Die Straßenfeste")
+	matchFn := unicodeLikeMatchFn(context.Background(), true, '\\', true)
+	if _, err := matchFn(unicodeSubject, []byte("%straßen%fest_")); err != nil {
+		t.Fatal(err)
+	}
+	unicodeAllocs := testing.AllocsPerRun(200, func() {
+		matched, err := matchFn(unicodeSubject, []byte("%straßen%fest_"))
+		if err != nil || !matched {
+			t.Fatalf("constant-pattern unicode_ci match must succeed: %v %v", matched, err)
+		}
+	})
+	t.Logf("unicode_ci LIKE constant-pattern match: %.1f allocations/row for a %d-byte subject", unicodeAllocs, len(unicodeSubject))
 }

@@ -23,6 +23,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/text/cases"
 )
 
@@ -77,11 +78,13 @@ import (
 //     run exactly as ICU folds the comment-stripped run. Quoted or escaped
 //     whitespace and '#' stay literal through the \x{..} re-emission above.
 //
-// The rewrite is deliberately conservative. A run is emitted verbatim when
-// it needs no expansion (the common case), when its exact expansion exceeds
-// the byte bound below, or when the pattern is not valid UTF-8; verbatim
-// emission keeps the engines' previous behavior for those corners instead
-// of risking a semantic change.
+// The rewrite is deliberately conservative. A run is emitted verbatim only
+// where no full-fold promise exists: when it needs no expansion (the common
+// case) or when the pattern is not valid UTF-8. When the faithful full-fold
+// form of fold-relevant content would exceed one of the byte bounds below —
+// even after eligible identical alternatives are deduplicated — the rewrite
+// fails with the bounded resource-limit error instead of silently narrowing
+// the match set (issue #31175 design, invariants 5 and 6).
 const (
 	// regexpCaseFoldMaxRunAlternatives bounds the segmentations a run's
 	// flat enumeration materializes before switching to the exact
@@ -89,13 +92,14 @@ const (
 	regexpCaseFoldMaxRunAlternatives = 64
 	// regexpCaseFoldMaxRunBytes bounds one run's total expanded emission.
 	// The exact divide-and-conquer form stays below this bound for any
-	// realistic run (a fully foldable run of roughly 250 characters); a
-	// larger pathological run keeps its verbatim bytes.
+	// realistic run (a fully foldable run of roughly 250 characters);
+	// a larger pathological run fails the rewrite with the bounded
+	// resource-limit error.
 	regexpCaseFoldMaxRunBytes = 128 << 10
 	// regexpCaseFoldMaxExpandedBytes bounds the whole rewritten pattern. The
 	// budget is enforced while the pattern is emitted (see
-	// regexpCaseFoldExpander.remain); on overflow the original pattern is
-	// used unchanged.
+	// regexpCaseFoldExpander.remain); on overflow the rewrite fails with
+	// the bounded resource-limit error.
 	regexpCaseFoldMaxExpandedBytes = 1 << 20
 	// regexpCaseFoldMaxWorkBytes bounds the emission-construction work one
 	// rewrite may perform. Every byte built while computing a run's
@@ -103,10 +107,19 @@ const (
 	// the run's expansion exceeded the per-run bound: the per-run and
 	// whole-pattern emission bounds multiply otherwise (10,000 discarded
 	// 100-s runs allocated about 25GB of intermediate concatenations before
-	// returning, round-14 pre-PR review). On exhaustion the original
-	// pattern is used unchanged.
+	// returning, round-14 pre-PR review). On exhaustion the rewrite fails
+	// with the bounded resource-limit error.
 	regexpCaseFoldMaxWorkBytes = 16 << 20
 )
+
+// regexpCaseFoldResourceLimitf builds the bounded resource-limit error a
+// case-insensitive pattern raises when its faithful full-fold form exceeds
+// one of the rewrite budgets above, or — at the engine admission layer —
+// one of the downstream engine bounds. The message prefix is stable: BVT
+// pins it with @regex (issue #31175 design error contract).
+func regexpCaseFoldResourceLimitf(format string, args ...any) error {
+	return moerr.NewInternalErrorNoCtxf("regexp case-fold resource limit exceeded: "+format, args...)
+}
 
 // regexpCaseFolder is the full Unicode case folder backing the fold images.
 // cases.Caser is immutable and safe for concurrent use.
@@ -161,23 +174,308 @@ func regexpPatternEnablesCaseFold(pat string) bool {
 
 // expandRegexpCaseFoldRuns rewrites the maximal literal runs of pat that sit
 // in case-insensitive scope, starting from ambientCI, so they match by full
-// case folding. It returns pat unchanged whenever expansion cannot be done
-// safely or would exceed the global size bound. The bound is enforced during
-// emission, so an overflowing pattern is abandoned as soon as the budget is
-// exhausted instead of after the complete oversized expansion was built; the
-// work bound likewise abandons the rewrite once the charged
-// emission-construction work is exhausted, so runs whose per-run expansions
-// are discarded cannot multiply the bounds.
-func expandRegexpCaseFoldRuns(pat string, ambientCI bool) string {
+// case folding. Eligible identical sibling alternatives are deduplicated
+// before expansion (invariant 5 of the issue #31175 design). When the
+// faithful expansion exceeds a rewrite budget, the rewrite fails and the
+// bounded resource-limit error is returned: the match set is never silently
+// narrowed by falling back to the engines' per-character caseless orbit.
+// The emission bound is enforced during emission, so an overflowing pattern
+// is abandoned as soon as the budget is exhausted instead of after the
+// complete oversized expansion was built; the work bound likewise abandons
+// the rewrite once the charged emission-construction work is exhausted, so
+// runs whose per-run expansions are discarded cannot multiply the bounds.
+// A pattern that is not valid UTF-8 carries no fold promise and is returned
+// unchanged.
+func expandRegexpCaseFoldRuns(pat string, ambientCI bool) (string, error) {
 	if !utf8.ValidString(pat) {
-		return pat
+		return pat, nil
 	}
-	exp := &regexpCaseFoldExpander{ci: ambientCI, regexp2: requiresRegexp2Pattern(pat), remain: regexpCaseFoldMaxExpandedBytes, workRemain: regexpCaseFoldMaxWorkBytes}
+	regexp2 := requiresRegexp2Pattern(pat)
+	pat = dedupRegexpIdenticalAlternatives(pat, regexp2)
+	exp := &regexpCaseFoldExpander{ci: ambientCI, regexp2: regexp2, remain: regexpCaseFoldMaxExpandedBytes, workRemain: regexpCaseFoldMaxWorkBytes}
 	out := exp.expand(pat)
-	if out == "" || len(out) > regexpCaseFoldMaxExpandedBytes {
+	if exp.failed {
+		return "", exp.failReason
+	}
+	if out == "" {
+		// Only an empty pattern expands to nothing without a failure.
+		return pat, nil
+	}
+	return out, nil
+}
+
+// dedupRegexpIdenticalAlternatives removes sibling alternatives that are
+// byte-identical to the first occurrence in the same alternation when the
+// duplicate is dedup-eligible (issue #31175 design, invariant 5): it
+// contains no capturing group (numbered or named), no backreference or
+// named/relative reference, and no unscoped inline-option setter, and no
+// unscoped option setter appears between the kept occurrence and the
+// duplicate at the alternation's own level. An unscoped setter applies
+// from its point to the end of the enclosing group, so it changes the
+// effective inline-option state of every later sibling — in
+// ^(?:ss|(?i)a|ss)$ under a case-sensitive ambient mode only the second
+// "ss" inherits (?i) and matches SS and ß, and deleting it would silently
+// narrow the match set. Conservatively any intervening unscoped setter
+// makes the duplicate ineligible, even when the setters would net out;
+// scoped (?flags:...) groups restore the prior state at group end and do
+// not affect siblings. The first occurrence is kept, so branch order and
+// positional inline-option state are preserved. Source capture numbering,
+// names and participation are user-observable (regexp2 backreferences,
+// REGEXP_REPLACE replacement references, the regexp2CaptureMapping
+// contract), so capture-bearing, reference-bearing, or option-setting
+// branches are always retained: alternation idempotence alone never
+// justifies deleting them.
+//
+// A pattern whose structure cannot be parsed cleanly — unbalanced groups,
+// an unterminated class, comment, group header or trailing escape, or a
+// group construct outside the recognized set — is returned unchanged, so
+// the engines keep their own verdicts byte for byte.
+func dedupRegexpIdenticalAlternatives(pat string, regexp2 bool) string {
+	type branch struct {
+		sep   int // offset of the '|' that opened the branch (-1 for the first)
+		start int // offset of the branch text
+		end   int
+		// capture/reference/setterAny record constructs anywhere in the
+		// branch text; setterTop records an unscoped inline-option setter
+		// directly at the alternation's own level, which changes the
+		// effective option state of every later sibling.
+		capture, reference, setterAny, setterTop bool
+	}
+	type frame struct {
+		branches []branch
+		cur      branch
+		x        bool // free-spacing state in effect inside this frame
+	}
+
+	frames := make([]frame, 1, 8)
+	frames[0].cur.sep, frames[0].cur.start = -1, 0
+	var deletions [][2]int
+
+	markCapture := func() {
+		for i := range frames {
+			frames[i].cur.capture = true
+		}
+	}
+	markReference := func() {
+		for i := range frames {
+			frames[i].cur.reference = true
+		}
+	}
+	markSetter := func() {
+		for i := range frames {
+			frames[i].cur.setterAny = true
+		}
+		frames[len(frames)-1].cur.setterTop = true
+	}
+	// closeAlternation analyzes one completed frame and records the
+	// deletions of its eligible duplicate branches.
+	closeAlternation := func(f *frame) {
+		all := f.branches
+		if len(all) < 2 {
+			return
+		}
+		kept := make(map[string]int, len(all))
+		for j := 0; j < len(all); j++ {
+			text := pat[all[j].start:all[j].end]
+			i, seen := kept[text]
+			if !seen {
+				kept[text] = j
+				continue
+			}
+			b := all[j]
+			if b.capture || b.reference || b.setterAny {
+				continue
+			}
+			blocked := false
+			for k := i + 1; k < j; k++ {
+				if all[k].setterTop {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
+				continue
+			}
+			deletions = append(deletions, [2]int{b.sep, b.end})
+		}
+	}
+
+	i := 0
+	for i < len(pat) {
+		switch pat[i] {
+		case '\\':
+			if n := scanRegexpNamedReference(pat[i:]); n > 0 {
+				markReference()
+				i += n
+				continue
+			}
+			if len(pat[i:]) < 2 {
+				// A trailing lone escape is malformed: keep the pattern
+				// unchanged for the engines' own verdict.
+				return pat
+			}
+			if c := pat[i+1]; c >= '1' && c <= '9' {
+				// A nonzero digit starts a decimal escape the engines may
+				// resolve as a backreference (the regexp2 scanDecimal
+				// consumes the complete digit run first, so \18 names
+				// group 18): never delete a branch carrying one.
+				markReference()
+				j := i + 2
+				for j < len(pat) && pat[j] >= '0' && pat[j] <= '9' {
+					j++
+				}
+				i = j
+				continue
+			}
+			i += skipRegexpEscape(pat[i:])
+		case '[':
+			n, closed := skipRegexpClass(pat[i:], regexp2)
+			if !closed {
+				return pat
+			}
+			i += n
+		case '|':
+			f := &frames[len(frames)-1]
+			f.cur.end = i
+			f.branches = append(f.branches, f.cur)
+			f.cur = branch{sep: i, start: i + 1}
+			i++
+		case ')':
+			if len(frames) == 1 {
+				// Unbalanced close parenthesis: malformed.
+				return pat
+			}
+			f := &frames[len(frames)-1]
+			f.cur.end = i
+			f.branches = append(f.branches, f.cur)
+			closeAlternation(f)
+			frames = frames[:len(frames)-1]
+			i++
+		case '#':
+			if frames[len(frames)-1].x {
+				// Free-spacing line comment: structural characters inside
+				// it are trivia.
+				if j := strings.IndexByte(pat[i:], '\n'); j >= 0 {
+					i += j + 1
+				} else {
+					i = len(pat)
+				}
+				continue
+			}
+			i++
+		case '(':
+			rest := pat[i:]
+			switch {
+			case strings.HasPrefix(rest, "(?#"):
+				// A (?#...) comment is trivia in every mode.
+				j := strings.IndexByte(rest[3:], ')')
+				if j < 0 {
+					return pat
+				}
+				i += 3 + j + 1
+			case strings.HasPrefix(rest, "(?:"), strings.HasPrefix(rest, "(?>"),
+				strings.HasPrefix(rest, "(?="), strings.HasPrefix(rest, "(?!"):
+				top := frames[len(frames)-1]
+				frames = append(frames, frame{x: top.x, cur: branch{sep: -1, start: i + 3}})
+				i += 3
+			case strings.HasPrefix(rest, "(?<="), strings.HasPrefix(rest, "(?<!"):
+				top := frames[len(frames)-1]
+				frames = append(frames, frame{x: top.x, cur: branch{sep: -1, start: i + 4}})
+				i += 4
+			case strings.HasPrefix(rest, "(?<"), strings.HasPrefix(rest, "(?'"), strings.HasPrefix(rest, "(?P<"):
+				// Named capturing group: scan the name to its terminator.
+				var nameStart int
+				var close byte
+				switch {
+				case strings.HasPrefix(rest, "(?<"):
+					nameStart, close = 3, '>'
+				case strings.HasPrefix(rest, "(?'"):
+					nameStart, close = 3, '\''
+				default:
+					nameStart, close = 4, '>'
+				}
+				j := strings.IndexByte(rest[nameStart:], close)
+				if j < 0 {
+					return pat
+				}
+				markCapture()
+				top := frames[len(frames)-1]
+				frames = append(frames, frame{x: top.x, cur: branch{sep: -1, start: i + nameStart + j + 1}})
+				i += nameStart + j + 1
+			case !strings.HasPrefix(rest, "(?"):
+				// Plain capturing group.
+				markCapture()
+				top := frames[len(frames)-1]
+				frames = append(frames, frame{x: top.x, cur: branch{sep: -1, start: i + 1}})
+				i++
+			default:
+				// (?flags) or (?flags:...): flags are ASCII letters with
+				// '-' and '+' transitions; only the free-spacing letter
+				// changes this scanner's state. Any other header shape is
+				// left for the engines' own verdict.
+				j := 2
+				negated := false
+				x := frames[len(frames)-1].x
+				handled := false
+				for j < len(rest) && !handled {
+					c := rest[j]
+					switch {
+					case c == '-':
+						negated = true
+					case c == '+':
+						negated = false
+					case c == 'x' || c == 'X':
+						x = !negated
+					case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+					case c == ')':
+						markSetter()
+						frames[len(frames)-1].x = x
+						i += j + 1
+						handled = true
+					case c == ':':
+						frames = append(frames, frame{x: x, cur: branch{sep: -1, start: i + j + 1}})
+						i += j + 1
+						handled = true
+					default:
+						return pat
+					}
+					j++
+				}
+				if !handled {
+					// Unterminated option header.
+					return pat
+				}
+			}
+		default:
+			i++
+		}
+	}
+	if len(frames) != 1 {
+		// Unclosed group: malformed.
 		return pat
 	}
-	return out
+	frames[0].cur.end = len(pat)
+	frames[0].branches = append(frames[0].branches, frames[0].cur)
+	closeAlternation(&frames[0])
+	if len(deletions) == 0 {
+		return pat
+	}
+	sort.Slice(deletions, func(a, b int) bool { return deletions[a][0] < deletions[b][0] })
+	var out strings.Builder
+	out.Grow(len(pat))
+	pos := 0
+	lastEnd := 0
+	for _, d := range deletions {
+		if d[0] < lastEnd {
+			// A span nested inside an already deleted outer branch.
+			continue
+		}
+		out.WriteString(pat[pos:d[0]])
+		pos = d[1]
+		lastEnd = d[1]
+	}
+	out.WriteString(pat[pos:])
+	return out.String()
 }
 
 // regexpCaseFoldExpander tracks the case-insensitive and free-spacing modes
@@ -208,13 +506,26 @@ type regexpCaseFoldExpander struct {
 	// seeded from regexpCaseFoldMaxWorkBytes. Every byte built while
 	// computing a run's expansion is charged against it, including
 	// attempts that are later discarded: a run whose exact expansion
-	// exceeds the per-run bound keeps its verbatim bytes, but the
-	// concatenations that attempt built are real work, and a pattern of
-	// many such runs otherwise multiplies the per-run cost without limit.
-	// Exhaustion sets failed, so the rewrite aborts and the caller uses
-	// the original pattern unchanged, exactly like the emission budget.
+	// exceeds the per-run bound fails the rewrite, but the concatenations
+	// that attempt built are real work, and a pattern of many such runs
+	// otherwise multiplies the per-run cost without limit. Exhaustion
+	// sets failed, so the rewrite aborts and the caller raises the bounded
+	// resource-limit error, exactly like the emission budget.
 	workRemain int
 	failed     bool
+	// failReason is the bounded resource-limit error naming the first
+	// budget whose exhaustion set failed.
+	failReason error
+}
+
+// fail marks the rewrite failed with the bounded resource-limit error
+// naming the exhausted budget. The first failure wins.
+func (e *regexpCaseFoldExpander) fail(err error) {
+	if e.failed {
+		return
+	}
+	e.failed = true
+	e.failReason = err
 }
 
 // regexpCaseFoldScope is one saved enclosing-group mode pair.
@@ -249,7 +560,7 @@ func (e *regexpCaseFoldExpander) write(out *strings.Builder, s string) {
 		return
 	}
 	if len(s) > e.remain {
-		e.failed = true
+		e.fail(regexpCaseFoldResourceLimitf("pattern emission budget of %d bytes", regexpCaseFoldMaxExpandedBytes))
 		return
 	}
 	out.WriteString(s)
@@ -262,7 +573,7 @@ func (e *regexpCaseFoldExpander) writeByte(out *strings.Builder, b byte) {
 		return
 	}
 	if e.remain < 1 {
-		e.failed = true
+		e.fail(regexpCaseFoldResourceLimitf("pattern emission budget of %d bytes", regexpCaseFoldMaxExpandedBytes))
 		return
 	}
 	out.WriteByte(b)
@@ -276,7 +587,7 @@ func (e *regexpCaseFoldExpander) writeRune(out *strings.Builder, r rune) {
 		return
 	}
 	if utf8.RuneLen(r) > e.remain {
-		e.failed = true
+		e.fail(regexpCaseFoldResourceLimitf("pattern emission budget of %d bytes", regexpCaseFoldMaxExpandedBytes))
 		return
 	}
 	out.WriteRune(r)
@@ -286,14 +597,14 @@ func (e *regexpCaseFoldExpander) writeRune(out *strings.Builder, r rune) {
 // chargeWork accounts n bytes of emission-construction work against the
 // shared work budget: bytes built while computing a run's expansion,
 // including attempts that are later discarded. Exhaustion sets failed, so
-// the rewrite aborts at the next check and the caller uses the original
-// pattern unchanged — the same fallback the emission budget has.
+// the rewrite aborts at the next check and the caller raises the bounded
+// resource-limit error — the same contract the emission budget has.
 func (e *regexpCaseFoldExpander) chargeWork(n int) {
 	if e.failed {
 		return
 	}
 	if n > e.workRemain {
-		e.failed = true
+		e.fail(regexpCaseFoldResourceLimitf("rewrite work budget of %d bytes", regexpCaseFoldMaxWorkBytes))
 		return
 	}
 	e.workRemain -= n
@@ -580,9 +891,13 @@ func (e *regexpCaseFoldExpander) emitCaseFoldRun(run []rune, ci, regexp2 bool) s
 		}
 		folded := regexpCaseFolder.String(string(r))
 		if utf8.RuneCountInString(folded) != 1 {
-			// A multi-rune fold the table does not know: keep the run
-			// verbatim rather than guess at its semantics.
-			return string(run)
+			// A multi-rune fold the generated table does not know. The
+			// table-consistency test pins this unreachable; if a future
+			// table change ever reaches it, failing the rewrite keeps the
+			// full-fold promise instead of silently narrowing the match
+			// set to the engines' per-character orbit.
+			e.fail(moerr.NewInternalErrorNoCtxf("regexp case-fold rewrite: unsupported multi-rune fold for U+%04X", r))
+			return ""
 		}
 		foldedRune, _ := utf8.DecodeRuneInString(folded)
 		foldRunes = append(foldRunes, foldedRune)
@@ -626,9 +941,12 @@ func (e *regexpCaseFoldExpander) caseFoldOrbitRunString(foldRunes []rune) string
 // strings whose per-character full case fold equals the run's fold image.
 // Runs with few enough segmentations are enumerated flat; beyond the
 // segmentation cap the exact divide-and-conquer emission factors the
-// alternation, which stays exact for any realistic run length. Only a run
-// whose exact emission would exceed regexpCaseFoldMaxRunBytes falls back to
-// the original run bytes. It returns an empty string when the shared work
+// alternation, which stays exact for any realistic run length. A run whose
+// exact emission would exceed regexpCaseFoldMaxRunBytes fails the whole
+// rewrite with the bounded resource-limit error: falling back to the
+// original run bytes would silently narrow the promised full-fold match
+// set to the engines' per-character caseless orbit (issue #31175 design,
+// invariant 5). It also returns an empty string when the shared work
 // budget is exhausted; the caller then aborts the whole rewrite.
 func (e *regexpCaseFoldExpander) enumerateCaseFoldRuns(run, foldRunes []rune, regexp2 bool) string {
 	if emissions, ok := e.enumerateCaseFoldSegmentations(foldRunes, regexp2); ok {
@@ -651,7 +969,8 @@ func (e *regexpCaseFoldExpander) enumerateCaseFoldRuns(run, foldRunes []rune, re
 	if e.failed {
 		return ""
 	}
-	return string(run)
+	e.fail(regexpCaseFoldResourceLimitf("literal-run emission budget of %d bytes", regexpCaseFoldMaxRunBytes))
+	return ""
 }
 
 // joinCaseFoldAlternation joins emissions into a (?:a|b) group, charging

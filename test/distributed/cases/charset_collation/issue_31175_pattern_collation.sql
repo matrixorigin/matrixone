@@ -481,24 +481,55 @@ SELECT 'ς' REGEXP '^ς$', 'Σ' REGEXP '^ς$', 's' REGEXP '^ς$';
 SELECT 'ſ' REGEXP '^ſ$', 'µ' REGEXP '^µ$', 'ᲀ' REGEXP '^ᲀ$';
 
 -- Round-14: the case-fold expansion composes with the regexp2 admission
--- limits. The expanded rule of this 328-byte pattern needs about 276,000
--- bytes and its translation exceeds the 1MiB translated bound, while the
--- unexpanded pattern is admitted; matching keeps the base verdict — a
--- caseless match through the engine's per-character comparison — instead
--- of raising an error.
+-- limits (design r5, invariants 5 and 7). The four identical 80-s
+-- alternatives deduplicate to two distinct branches — the trailing (?#x)
+-- comment joins the last one and forces the regexp2 route — but one 80-s
+-- fold run alone compiles past the engine's 4,096-track compiled
+-- backtracking-state bound, so the faithful expansion raises the bounded
+-- resource-limit error instead of trading down to the engine's
+-- per-character caseless comparison.
+-- @regex("regexp case-fold resource limit exceeded: .*backtracking state exceeds", true)
 SELECT REGEXP_LIKE(REPEAT('s', 80), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '(?#x)'), 'i');
+-- The case-sensitive control never rewrites and matches the identical text.
 SELECT REGEXP_LIKE(REPEAT('s', 80), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '(?#x)'), 'c');
+-- @regex("regexp case-fold resource limit exceeded: .*backtracking state exceeds", true)
 SELECT REPEAT('s', 80) REGEXP CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '(?#x)');
+-- Below the compiled-state bound the deduplicated form folds fully on the
+-- regexp2 route: four identical 12-s alternatives collapse to the
+-- comment-bearing pair, and six ß equal twelve s under ICU full case
+-- folding, exactly as the MySQL oracle.
+SELECT REGEXP_LIKE(REPEAT('ß', 6), CONCAT(REPEAT('s', 12), '|', REPEAT('s', 12), '|', REPEAT('s', 12), '|', REPEAT('s', 12), '(?#x)'), 'i');
+-- On the RE2 route (no comment) the same 328-byte-class shape deduplicates
+-- to a single branch whose expansion is admitted — RE2 has no compiled
+-- backtracking-state bound — so forty ß match eighty s under 'i'; the 'c'
+-- control matches its identical branch.
+SELECT REGEXP_LIKE(REPEAT('ß', 40), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80)), 'i');
+SELECT REGEXP_LIKE(REPEAT('s', 80), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80)), 'c');
+-- Public intervening-option proof (design r4/r5, invariant 5): the
+-- unscoped (?i) setter in the middle branch changes the ambient option
+-- state of the last branch, so the two byte-identical ss branches are not
+-- duplicates; both are kept, and SS and ß match through the
+-- case-insensitive second ss even under match_type 'c'. The (?=)-prefixed
+-- form forces the regexp2 route with the same verdicts.
+SELECT REGEXP_LIKE('SS', '^(?:ss|(?i)a|ss)$', 'c'), REGEXP_LIKE('ß', '^(?:ss|(?i)a|ss)$', 'c');
+SELECT REGEXP_LIKE('SS', '(?=)^(?:ss|(?i)a|ss)$', 'c'), REGEXP_LIKE('ß', '(?=)^(?:ss|(?i)a|ss)$', 'c');
+-- The scoped (?i:...) control restores the option state at group end, so
+-- both ss occurrences share one effective state and the duplicate is
+-- removed: ss still matches, SS and ß do not.
+SELECT REGEXP_LIKE('ss', '^(?:ss|(?i:a)|ss)$', 'c'), REGEXP_LIKE('SS', '^(?:ss|(?i:a)|ss)$', 'c'), REGEXP_LIKE('ß', '^(?:ss|(?i:a)|ss)$', 'c');
 
 -- Round-15: the case-fold expansion composes with the RE2 admission bound
 -- as well. 999 nested captures around the foldable run 'ss' parse at
 -- exactly the Go regexp parse-tree height bound unexpanded, and the
--- expansion's extra levels pushed the pattern over it, turning a
--- base-admitted pattern into 'expression nests too deeply'. The admission
--- retries without the expansion, so the pattern keeps the base verdict: a
--- caseless per-character match, never an error.
+-- expansion's extra levels push the pattern over it. The source pattern is
+-- admitted, so the retry reports the bounded resource-limit error instead
+-- of trading down to the per-character caseless orbit (design error
+-- contract); the 'c' control never rewrites and keeps its verdict.
+-- @regex("regexp case-fold resource limit exceeded: .*expression nests too deeply", true)
 SELECT REGEXP_LIKE('ss', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'i');
+-- @regex("regexp case-fold resource limit exceeded: .*expression nests too deeply", true)
 SELECT REGEXP_LIKE('SS', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'i');
+-- @regex("regexp case-fold resource limit exceeded: .*expression nests too deeply", true)
 SELECT REGEXP_LIKE('ß', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'i');
 SELECT REGEXP_LIKE('ss', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'c');
 -- The accept side of the nesting boundary keeps the full fold: 997 nested

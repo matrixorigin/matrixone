@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"regexp/syntax"
 	"slices"
@@ -383,7 +384,19 @@ func unicodeLikeMatchFn(ctx context.Context, constantPattern bool, escape rune, 
 			}
 			ready = true
 		}
-		return collation.MatchLikePattern(ctx, tokens, value, collation.UCA400CharWeight)
+		matched, err := collation.MatchLikePattern(ctx, tokens, value, collation.UCA400CharWeight)
+		if err != nil {
+			// pkg/common/collation is stdlib-only and cannot raise moerr, so
+			// the typed resource-limit error is converted here at the function
+			// layer. The message keeps the stable SQL-visible prefix
+			// "LIKE pattern resource limit exceeded: " (issue #31175 review).
+			var limitErr *collation.LikeResourceLimitError
+			if errors.As(err, &limitErr) {
+				return false, moerr.NewInternalErrorNoCtx(err.Error())
+			}
+			return false, err
+		}
+		return matched, nil
 	}
 }
 
@@ -2269,11 +2282,13 @@ func (rs *regexpSet) getRegularMatcherInfoForKey(key regexpCacheKey) (*regexp.Re
 		// The case-fold expansion (issue #31175) can push a pattern the
 		// unexpanded admission accepted over RE2's parse-tree height bound
 		// (for example deeply nested capture groups around a foldable
-		// literal run). Retry without the expansion then: the pattern keeps
-		// the verdict the base admission gave it, compared through the
-		// engine's per-character caseless orbit instead of the full-fold
-		// expansion — the expansion is never a reason to reject a pattern
-		// the unexpanded admission accepted.
+		// literal run), or exhaust a rewrite budget. The source pattern's
+		// own verdict stands when it has one (malformed stays malformed);
+		// a well-formed, source-admitted pattern raises the bounded
+		// resource-limit error, because its faithful full-fold expansion
+		// cannot be evaluated within bounds and falling back to the
+		// engine's per-character caseless orbit would silently narrow the
+		// promised match set (issue #31175 design, ownership item 4).
 		var (
 			parsed   *syntax.Regexp
 			expanded bool
@@ -2281,7 +2296,20 @@ func (rs *regexpSet) getRegularMatcherInfoForKey(key regexpCacheKey) (*regexp.Re
 		)
 		reg, parsed, expanded, err = buildRE2MatcherForKey(key, true)
 		if err != nil && expanded {
+			foldErr := err
 			reg, parsed, _, err = buildRE2MatcherForKey(key, false)
+			if err == nil {
+				// The source pattern is admissible: only its faithful
+				// expansion exceeds a bound. Keep the rewrite's own
+				// resource-limit error when it has one; otherwise name
+				// the engine admission bound the expanded form crossed.
+				if moerr.IsMoErrCode(foldErr, moerr.ErrInternal) {
+					err = foldErr
+				} else {
+					err = regexpCaseFoldResourceLimitf("expanded-pattern admission: %v", foldErr)
+				}
+				reg, parsed = nil, nil
+			}
 		}
 		if err != nil {
 			return nil, false, err
@@ -2300,17 +2328,24 @@ func (rs *regexpSet) getRegularMatcherInfoForKey(key regexpCacheKey) (*regexp.Re
 
 // buildRE2MatcherForKey runs the RE2 admission chain for one prepared form
 // of key.pattern: with expand set the case-fold literal expansion is applied
-// first, and the returned expanded reports whether that rewrite changed the
-// pattern bytes. The caller retries with expand=false when the expanded form
-// exceeds RE2's admission bounds. The returned parsed tree describes the
-// compiled expression and feeds the mayMatchEmpty property.
+// first, and the returned expanded reports whether that rewrite was applied
+// (changed bytes or a resource-limit failure). The caller checks the source
+// pattern's own admission verdict when the expanded form fails. The returned
+// parsed tree describes the compiled expression and feeds the mayMatchEmpty
+// property.
 func buildRE2MatcherForKey(key regexpCacheKey, expand bool) (*regexp.Regexp, *syntax.Regexp, bool, error) {
 	pattern := key.pattern
 	expanded := false
 	if expand && regexpCaseFoldApplies(pattern, key.matchType, key.binary) {
 		// Case-insensitive literal runs match by full case folding, the
 		// way MySQL's ICU engine evaluates them (issue #31175 review).
-		rewritten := expandRegexpCaseFoldRuns(pattern, strings.ContainsRune(key.matchType, 'i'))
+		// Exhaustion of a rewrite budget fails with the bounded
+		// resource-limit error; the caller decides whether the source
+		// pattern has its own verdict that stands instead.
+		rewritten, err := expandRegexpCaseFoldRuns(pattern, strings.ContainsRune(key.matchType, 'i'))
+		if err != nil {
+			return nil, nil, true, err
+		}
 		expanded = rewritten != pattern
 		pattern = rewritten
 	}
@@ -3372,9 +3407,9 @@ func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) (str
 // regexpPatternWithPureMatchTypeExpanded folds match_type into the regexp2
 // flag prefix. With expand set, a pattern the case-fold rewrite applies to
 // first gets its full-fold literal expansion (issue #31175), and the
-// returned expanded reports whether the rewrite changed the pattern bytes;
-// the regexp2 admission retries with expand=false when the expanded form
-// exceeds one of its downstream size limits.
+// returned expanded reports whether the rewrite was applied (changed bytes
+// or a resource-limit failure); the regexp2 admission checks the source
+// pattern's own verdict when the expanded form fails.
 func regexpPatternWithPureMatchTypeExpanded(pat, pureMatchType string, binary, expand bool) (string, bool, error) {
 	if len(pat) > regexp2MaxPatternBytes {
 		return "", false, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
@@ -3383,7 +3418,13 @@ func regexpPatternWithPureMatchTypeExpanded(pat, pureMatchType string, binary, e
 	if expand && regexpCaseFoldApplies(pat, pureMatchType, binary) {
 		// Same full-fold literal expansion as the RE2 path (issue #31175
 		// review); the prefix-size admission below bounds the result.
-		rewritten := expandRegexpCaseFoldRuns(pat, strings.ContainsRune(pureMatchType, 'i'))
+		// Exhaustion of a rewrite budget fails with the bounded
+		// resource-limit error; the caller decides whether the source
+		// pattern has its own verdict that stands instead.
+		rewritten, err := expandRegexpCaseFoldRuns(pat, strings.ContainsRune(pureMatchType, 'i'))
+		if err != nil {
+			return "", true, err
+		}
 		expanded = rewritten != pat
 		pat = rewritten
 	}

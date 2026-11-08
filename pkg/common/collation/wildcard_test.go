@@ -339,7 +339,7 @@ func TestMatchLikePatternLiteralStreamConsistency(t *testing.T) {
 	}
 	for _, pair := range pairs {
 		left, right := perChar(pair[0]), perChar(pair[1])
-		eq, eqErr := likeCharsEqual(context.Background(), right, left)
+		eq, eqErr := likeCharsEqual(&likeSearchBudget{ctx: context.Background()}, right, left)
 		if eqErr != nil {
 			t.Fatal(eqErr)
 		}
@@ -611,7 +611,7 @@ func naiveLikeMatch(tokens []LikeToken, chars [][]uint32) bool {
 		default:
 			width := len(token.Chars)
 			if ci+width <= len(chars) {
-				eq, err := likeCharsEqual(context.Background(), token.Chars, chars[ci:ci+width])
+				eq, err := likeCharsEqual(&likeSearchBudget{ctx: context.Background()}, token.Chars, chars[ci:ci+width])
 				if err != nil {
 					panic(err)
 				}

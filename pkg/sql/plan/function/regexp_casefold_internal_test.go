@@ -17,6 +17,7 @@ package function
 import (
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -286,17 +287,23 @@ func TestExpandRegexpCaseFoldRunsRows(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			require.Equal(t, row.want, expandRegexpCaseFoldRuns(row.pat, row.ci))
+			got, err := expandRegexpCaseFoldRuns(row.pat, row.ci)
+			require.NoError(t, err)
+			require.Equal(t, row.want, got)
 		})
 	}
-	// Invalid UTF-8 and oversized expansions return the input unchanged.
+	// Invalid UTF-8 stays opaque: the rewrite declines it unchanged so the
+	// engine reports its own verdict for the original bytes.
 	invalid := "ss\xffss"
-	require.Equal(t, invalid, expandRegexpCaseFoldRuns(invalid, true))
+	gotInvalid, err := expandRegexpCaseFoldRuns(invalid, true)
+	require.NoError(t, err)
+	require.Equal(t, invalid, gotInvalid)
 	// Round-6 F3: runs past the flat enumeration cap expand exactly (divide
 	// and conquer) instead of falling back to the verbatim bytes; the
 	// expanded pattern keeps the boundary-exact full-fold semantics.
 	longRun := strings.Repeat("s", 80)
-	expanded := expandRegexpCaseFoldRuns(longRun, true)
+	expanded, err := expandRegexpCaseFoldRuns(longRun, true)
+	require.NoError(t, err)
 	require.NotEqual(t, longRun, expanded)
 	require.LessOrEqual(t, len(expanded), regexpCaseFoldMaxRunBytes)
 	reg, err := regexp.Compile("(?i)^" + expanded + "$")
@@ -304,15 +311,21 @@ func TestExpandRegexpCaseFoldRunsRows(t *testing.T) {
 	require.True(t, reg.MatchString(strings.Repeat("ß", 40)))
 	require.False(t, reg.MatchString(strings.Repeat("ß", 39)+"s"))
 	require.False(t, reg.MatchString(strings.Repeat("ß", 40)+"s"))
-	// A run whose exact expansion would exceed the per-run byte bound still
-	// falls back to its verbatim bytes, documented in the issue contract.
+	// A run whose exact expansion would exceed the per-run byte bound fails
+	// the rewrite with the bounded resource-limit error: emitting the
+	// verbatim bytes would silently narrow the promised full-fold match set
+	// (issue #31175 design, invariant 5).
 	hugeRun := strings.Repeat("s", 20000)
-	require.Equal(t, hugeRun, expandRegexpCaseFoldRuns(hugeRun, true))
+	_, err = expandRegexpCaseFoldRuns(hugeRun, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: literal-run emission budget of 131072 bytes")
 	// Round-12 F2: the orbit class emission ([sſ], four bytes per position)
 	// keeps the regexp2 route's factored long-run expansion exact and within
 	// the per-run byte bound, just like the RE2 route above.
 	longRun2 := strings.Repeat("s", 80) + "(?#x)"
-	expanded2 := expandRegexpCaseFoldRuns(longRun2, true)
+	expanded2, err := expandRegexpCaseFoldRuns(longRun2, true)
+	require.NoError(t, err)
 	require.NotEqual(t, longRun2, expanded2)
 	require.LessOrEqual(t, len(expanded2), regexpCaseFoldMaxRunBytes)
 	t.Logf("regexp2-route 80-s expansion bytes: %d", len(expanded2))
@@ -345,7 +358,9 @@ func TestExpandRegexpCaseFoldRunsUnterminatedClass(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			require.Equal(t, row.want, expandRegexpCaseFoldRuns(row.pat, row.ci))
+			got, err := expandRegexpCaseFoldRuns(row.pat, row.ci)
+			require.NoError(t, err)
+			require.Equal(t, row.want, got)
 		})
 	}
 }
@@ -398,7 +413,9 @@ func TestExpandRegexpCaseFoldRunsUnicodeEscapeAtom(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			require.Equal(t, row.want, expandRegexpCaseFoldRuns(row.pat, row.ci))
+			got, err := expandRegexpCaseFoldRuns(row.pat, row.ci)
+			require.NoError(t, err)
+			require.Equal(t, row.want, got)
 		})
 	}
 }
@@ -451,157 +468,190 @@ func TestRegexpPatternEnablesCaseFold(t *testing.T) {
 }
 
 // TestExpandRegexpCaseFoldRunsTotalBudget pins the whole-pattern emission
-// budget (round-13 pre-PR review): the 1MiB bound is enforced while the
-// pattern is emitted, so a pattern of many medium runs is abandoned as soon
-// as the budget is exhausted instead of materializing the complete oversized
-// expansion before the deferred length check discards it (10,000 80-s runs
-// built 689,589,999 bytes, about 658MiB). The accept/reject boundary itself
-// is unchanged.
+// budget (round-13 pre-PR review, revised for the resource-limit error
+// contract): the 1MiB bound is enforced while the pattern is emitted, so a
+// pattern of many medium runs is abandoned as soon as the budget is
+// exhausted instead of materializing the complete oversized expansion
+// before the deferred length check discards it (10,000 80-s runs built
+// 689,589,999 bytes, about 658MiB). Exhaustion fails the rewrite with the
+// bounded resource-limit error; the sibling alternatives carry a distinct
+// numeric suffix because byte-identical eligible duplicates are removed
+// before expansion (design invariant 5), which would collapse the farm.
 func TestExpandRegexpCaseFoldRunsTotalBudget(t *testing.T) {
 	run80 := strings.Repeat("s", 80)
 	runs := func(k int) string {
 		parts := make([]string, k)
 		for i := range parts {
-			parts[i] = run80
+			parts[i] = run80 + strconv.Itoa(i)
 		}
 		return strings.Join(parts, "|") + "(?#x)"
 	}
-	// Boundary-exact acceptance, derived from the measured single-run
-	// emission so the pin stays exact if the emission shape changes: k runs
-	// expand to k*len(one)+(k-1) separator bytes (the trailing comment is
-	// trivia and emits nothing).
-	one := expandRegexpCaseFoldRuns(run80+"(?#x)", true)
-	require.NotEqual(t, run80+"(?#x)", one)
-	per := len(one) + 1
-	kAcc := (regexpCaseFoldMaxExpandedBytes + 1) / per
-	require.Greater(t, kAcc, 0)
-	require.LessOrEqual(t, kAcc*per-1, regexpCaseFoldMaxExpandedBytes)
-	require.Greater(t, (kAcc+1)*per-1, regexpCaseFoldMaxExpandedBytes)
+	// Boundary-exact acceptance, derived from the measured per-run emissions
+	// so the pin stays exact if the emission shape changes: the farm expands
+	// to the sum of the run emissions plus separator bytes (the trailing
+	// comment is trivia and emits nothing).
+	emission := func(k int) int {
+		total := k - 1
+		for i := 0; i < k; i++ {
+			out, err := expandRegexpCaseFoldRuns(run80+strconv.Itoa(i)+"(?#x)", true)
+			require.NoError(t, err)
+			total += len(out)
+		}
+		return total
+	}
+	kAcc := 1
+	for emission(kAcc+1) <= regexpCaseFoldMaxExpandedBytes {
+		kAcc++
+	}
+	require.Greater(t, kAcc, 1)
+	require.Greater(t, emission(kAcc+1), regexpCaseFoldMaxExpandedBytes)
 	accept := runs(kAcc)
-	expanded := expandRegexpCaseFoldRuns(accept, true)
+	expanded, err := expandRegexpCaseFoldRuns(accept, true)
+	require.NoError(t, err)
 	require.NotEqual(t, accept, expanded)
 	require.LessOrEqual(t, len(expanded), regexpCaseFoldMaxExpandedBytes)
-	// One more run crosses the bound: the input comes back verbatim, the
-	// documented whole-pattern fallback.
+	// One more run crosses the bound: the rewrite fails with the bounded
+	// resource-limit error naming the whole-pattern emission budget.
 	reject := runs(kAcc + 1)
-	require.Equal(t, reject, expandRegexpCaseFoldRuns(reject, true))
-	// The review counterexample: 10,000 medium runs (810,004 raw bytes,
-	// admitted by the 1MiB raw-pattern gate) must fall back with bounded
-	// emission work instead of building about 658MiB first. The returned
-	// value is still the verbatim fallback; the byte measurement bounds the
-	// work performed, not only the result.
+	_, err = expandRegexpCaseFoldRuns(reject, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: pattern emission budget of 1048576 bytes")
+	// The review counterexample: 10,000 medium distinct runs (848,894 raw
+	// bytes, admitted by the 1MiB raw-pattern gate) must fail with bounded
+	// emission work instead of building about 658MiB first. The byte
+	// measurement bounds the work performed, not only the result.
 	big := runs(10000)
-	require.Equal(t, 810004, len(big))
+	require.Equal(t, 848894, len(big))
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	got := expandRegexpCaseFoldRuns(big, true)
+	_, err = expandRegexpCaseFoldRuns(big, true)
 	runtime.ReadMemStats(&after)
-	require.Equal(t, big, got)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: pattern emission budget of 1048576 bytes")
 	t.Logf("10,000-run overflow expansion allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
 	require.LessOrEqual(t, after.TotalAlloc-before.TotalAlloc, uint64(32<<20))
 }
 
 // TestExpandRegexpCaseFoldRunsWorkBudget pins the emission-construction
-// work budget (round-14 pre-PR review): the per-run and whole-pattern
-// emission bounds multiply when a pattern carries many runs whose exact
-// per-run expansion is discarded — 10,000 100-s runs joined by '|' plus a
-// trailing comment (raw 1,010,004 bytes, admitted by the 1MiB raw-pattern
-// gate) allocated about 25GB of intermediate concatenations before
-// returning, because every discarded per-run attempt was free and the
-// emitted result (verbatim runs, comment trivia dropped) stayed below the
-// whole-pattern emission bound. The work budget charges every
-// emission-construction byte, including discarded attempts, so the rewrite
-// is abandoned with bounded work and the original pattern is used
-// unchanged. Below the budget the rewrite is byte-identical.
+// work budget (round-14 pre-PR review, revised for the resource-limit error
+// contract). Every byte built while computing a run's expansion is charged
+// against the shared 16MiB budget, including discarded attempts. Under the
+// fail-fast contract a run whose exact expansion exceeds the per-run
+// emission bound aborts the whole rewrite after that run's bounded charge:
+// the review counterexample (10,000 100-s runs whose discarded per-run
+// attempts allocated about 25GB of intermediates before the unbudgeted code
+// returned) can no longer multiply per-run costs, because the first
+// over-bound run fails the rewrite. The sibling alternatives carry a
+// distinct numeric suffix because byte-identical eligible duplicates are
+// removed before expansion (design invariant 5), which would collapse the
+// farm.
 func TestExpandRegexpCaseFoldRunsWorkBudget(t *testing.T) {
 	run100 := strings.Repeat("s", 100)
 	farm := func(k int) string {
 		parts := make([]string, k)
 		for i := range parts {
-			parts[i] = run100
+			parts[i] = run100 + strconv.Itoa(i)
 		}
 		return strings.Join(parts, "|") + "(?#x)"
 	}
-	// Below the budget each run keeps its verbatim bytes (its exact
-	// expansion exceeds the per-run bound) and the trailing comment trivia
-	// is dropped — byte-identical to the unbudgeted rewrite. One 100-s run
-	// charges 1,546,452 work bytes, so ten runs (15,464,520) still fit the
-	// 16MiB budget: this is the accept side of the work boundary.
-	small := farm(10)
-	require.Equal(t, 1014, len(small))
-	verbatimRuns := make([]string, 10)
-	for i := range verbatimRuns {
-		verbatimRuns[i] = run100
-	}
-	require.Equal(t, strings.Join(verbatimRuns, "|"), expandRegexpCaseFoldRuns(small, true))
-	// A foldable run after the discarded runs still folds exactly.
-	tail := `(?:[sſ][sſ]|(?:[sſ][sſ]|(?-i:ß)|(?-i:ẞ)))`
-	withTailParts := make([]string, 0, 11)
-	withTailParts = append(withTailParts, verbatimRuns...)
-	withTailParts = append(withTailParts, "ss")
-	withTail := strings.Join(withTailParts, "|") + "(?#x)"
-	wantTail := make([]string, 0, 11)
-	wantTail = append(wantTail, verbatimRuns...)
-	wantTail = append(wantTail, tail)
-	require.Equal(t, strings.Join(wantTail, "|"), expandRegexpCaseFoldRuns(withTail, true))
-	// The reject side of the work boundary: eleven runs would charge
-	// 17,010,972 bytes, so the budget runs out during the eleventh run and
-	// the whole-pattern fallback returns the input verbatim (the comment
-	// is preserved), where the unbudgeted code returned the 1,110-byte
-	// rewrite after building every discarded attempt.
-	eleven := farm(11)
-	require.Equal(t, 1115, len(eleven))
-	require.Equal(t, eleven, expandRegexpCaseFoldRuns(eleven, true))
-	// The review counterexample: 10,000 discarded per-run attempts must
-	// abandon the rewrite with bounded work instead of allocating about
-	// 25GB of intermediates. The whole-pattern fallback returns the input
-	// verbatim; the unbudgeted code returned the 1,009,999-byte rewrite
-	// (verbatim runs, comment dropped) after the full allocation.
-	big := farm(10000)
-	require.Equal(t, 1010004, len(big))
+	// Even one 100-s run fails: its exact expansion (about 1.5MB) exceeds
+	// the 128KiB per-run emission bound, so the rewrite raises the bounded
+	// resource-limit error instead of emitting the verbatim run bytes.
+	_, err := expandRegexpCaseFoldRuns(farm(1), true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: literal-run emission budget of 131072 bytes")
+	// The review counterexample: 9,000 distinct 100-s runs (943,894 raw
+	// bytes, admitted by the 1MiB raw-pattern gate) aborts at the first
+	// over-bound run with bounded work — about one run's exact-emission
+	// charge — instead of allocating about 25GB of discarded attempts.
+	big := farm(9000)
+	require.Equal(t, 943894, len(big))
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	got := expandRegexpCaseFoldRuns(big, true)
+	_, err = expandRegexpCaseFoldRuns(big, true)
 	runtime.ReadMemStats(&after)
-	require.Equal(t, big, got)
-	t.Logf("10,000-discarded-run expansion allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
-	require.LessOrEqual(t, after.TotalAlloc-before.TotalAlloc, uint64(256<<20))
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: literal-run emission budget of 131072 bytes")
+	t.Logf("9,000-distinct-run expansion allocated %d bytes", after.TotalAlloc-before.TotalAlloc)
+	require.LessOrEqual(t, after.TotalAlloc-before.TotalAlloc, uint64(32<<20))
+	// Below the budgets the rewrite stays exact: distinct 80-s runs and a
+	// trailing foldable run fold fully (the trailing comment is trivia and
+	// emits nothing).
+	run80 := strings.Repeat("s", 80)
+	got, err := expandRegexpCaseFoldRuns(run80+"0|"+run80+"1|ss(?#x)", true)
+	require.NoError(t, err)
+	exp80a, err := expandRegexpCaseFoldRuns(run80+"0(?#x)", true)
+	require.NoError(t, err)
+	exp80b, err := expandRegexpCaseFoldRuns(run80+"1(?#x)", true)
+	require.NoError(t, err)
+	tail := `(?:[sſ][sſ]|(?:[sſ][sſ]|(?-i:ß)|(?-i:ẞ)))`
+	require.Equal(t, exp80a+"|"+exp80b+"|"+tail, got)
+	// The shared work budget aborts the rewrite with the bounded error
+	// naming the work budget, and the first failure wins. Seeded directly
+	// because the public entry reaches the emission and per-run bounds
+	// first: the work budget is the backstop for construction paths whose
+	// cost outgrows their emission (discarded segmentation walks,
+	// quantified atoms, class augmentation).
+	exp := &regexpCaseFoldExpander{ci: true, remain: regexpCaseFoldMaxExpandedBytes, workRemain: 8}
+	exp.chargeWork(9)
+	require.True(t, exp.failed)
+	require.Error(t, exp.failReason)
+	require.Contains(t, exp.failReason.Error(),
+		"regexp case-fold resource limit exceeded: rewrite work budget of 16777216 bytes")
+	exp.chargeWork(1)
+	require.Contains(t, exp.failReason.Error(), "rewrite work budget of 16777216 bytes")
 }
 
-// TestRegexp2CaseFoldAdmissionFallback pins the composition of the
-// case-fold rewrite with the regexp2 admission limits (round-14 pre-PR
-// review): the expansion can push a pattern the unexpanded admission
-// accepted over a downstream size limit (the 1MiB translated bound here),
-// which turned a base-admitted REGEXP_LIKE into an error. The admission
-// retries without the expansion, so the pattern keeps the verdict the base
-// gave it — matching through the engine's per-character caseless
-// comparison instead of the full-fold expansion.
-func TestRegexp2CaseFoldAdmissionFallback(t *testing.T) {
+// TestRegexp2CaseFoldIdenticalAlternativesDedup pins invariant 5 of the
+// issue #31175 design (r5): byte-identical sibling alternatives free of
+// captures, references and unscoped option setters, evaluated under the
+// same effective inline-option state, are duplicates the rewrite removes
+// before expansion; alternation idempotence keeps the match set unchanged.
+// The binding engine bound for long fold runs on the regexp2 route is the
+// compiled backtracking-state limit (4096 tracks), not the translated-size
+// limit: one 80-s fold run expands to about 68,958 bytes and compiles past
+// the track bound (a 40-s run compiles at 1,439 tracks), so the round-14
+// four-alternative comment-bearing shape — deduplicated to two distinct
+// branches by the trailing (?#x) — raises the bounded resource-limit error
+// under 'i' even after deduplication. Below the bound the deduplicated
+// form folds fully.
+func TestRegexp2CaseFoldIdenticalAlternativesDedup(t *testing.T) {
 	alt := strings.Repeat("s", 80)
 	pat := alt + "|" + alt + "|" + alt + "|" + alt + "(?#x)"
 	require.Equal(t, 328, len(pat))
-	// The expanded rule needs about 4*68,958 bytes and its translation
-	// exceeds the 1MiB translated bound; unexpanded it is admitted.
-	// Case-insensitive matching keeps the base verdict: a match, no error.
+	// The duplicate alternatives are removed before expansion — the
+	// trailing comment joins the last branch, keeping it distinct — but
+	// the two remaining 80-s fold runs still compile past the regexp2
+	// backtracking-state bound, so the faithful expansion raises the
+	// bounded resource-limit error instead of trading down to the
+	// engine's per-character caseless comparison (design error contract).
 	rs := &regexpSet{}
-	matched, err := rs.regularLike(pat, alt, "i")
-	require.NoError(t, err)
-	require.True(t, matched)
-	// The fallback matches per character: a subject needing the full fold
-	// no longer matches. The expansion trades down to the base admission
-	// verdict, never to an error.
-	rsFold := &regexpSet{}
-	foldMatched, err := rsFold.regularLike(pat, strings.Repeat("ß", 40), "i")
-	require.NoError(t, err)
-	require.False(t, foldMatched)
-	// Case-sensitive control: identical text matches; the expansion never
+	_, err := rs.regularLike(pat, alt, "i")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "regexp case-fold resource limit exceeded:")
+	require.Contains(t, err.Error(), "backtracking state exceeds")
+	// Case-sensitive control: identical text matches; the rewrite never
 	// applies.
 	rsC := &regexpSet{}
 	matchedC, err := rsC.regularLike(pat, alt, "c")
 	require.NoError(t, err)
 	require.True(t, matchedC)
+	// Below the compiled-state bound the deduplicated form folds fully on
+	// the regexp2 route: four identical 12-s alternatives collapse to the
+	// comment-bearing pair, and six ß equal twelve s under ICU full case
+	// folding, exactly as the MySQL oracle.
+	short := strings.Repeat("s", 12)
+	shortPat := short + "|" + short + "|" + short + "|" + short + "(?#x)"
+	rsShort := &regexpSet{}
+	shortMatched, err := rsShort.regularLike(shortPat, strings.Repeat("ß", 6), "i")
+	require.NoError(t, err)
+	require.True(t, shortMatched)
 	// A pattern whose expansion stays inside the admission limits still
 	// folds fully.
 	rsSmall := &regexpSet{}
@@ -610,43 +660,197 @@ func TestRegexp2CaseFoldAdmissionFallback(t *testing.T) {
 	require.True(t, smallMatched)
 }
 
-// TestRE2CaseFoldAdmissionFallback pins the composition of the case-fold
-// rewrite with the RE2 admission bound (round-15 pre-PR review): nested
-// capture groups around a foldable run sit just inside Go regexp's
-// parse-tree height bound (regexp/syntax maxHeight=1000), and the
-// expansion's extra levels pushed the pattern over it, turning a
-// base-admitted REGEXP_LIKE into 'expression nests too deeply'. The
-// admission retries without the expansion, so the pattern keeps the verdict
-// the base gave it — matching through the engine's per-character caseless
-// comparison instead of the full-fold expansion. A pattern the unexpanded
-// admission rejects stays rejected, with the base error.
-func TestRE2CaseFoldAdmissionFallback(t *testing.T) {
+// TestRE2CaseFoldIdenticalAlternativesDedup pins the same deduplication
+// contract on the RE2 route, which has no compiled backtracking-state
+// bound: four identical 80-s alternatives collapse to a single branch
+// before expansion, the 44,502-byte expansion is admitted, and forty ß
+// match eighty s under 'i' — the MySQL-oracle outcome that the regexp2
+// route can only deliver below its 4096-track compiled-state bound
+// (design r5, invariant 5).
+func TestRE2CaseFoldIdenticalAlternativesDedup(t *testing.T) {
+	alt := strings.Repeat("s", 80)
+	pat := alt + "|" + alt + "|" + alt + "|" + alt
+	rs := &regexpSet{}
+	matched, err := rs.regularLike(pat, strings.Repeat("ß", 40), "i")
+	require.NoError(t, err)
+	require.True(t, matched)
+	rsC := &regexpSet{}
+	matchedC, err := rsC.regularLike(pat, alt, "c")
+	require.NoError(t, err)
+	require.True(t, matchedC)
+}
+
+// TestRegexp2CaseFoldExpandedAdmissionResourceLimit pins the flipped
+// round-14 silent-fallback pin on the regexp2 route: when the faithful
+// full-fold expansion of a caseless pattern exceeds a rewrite or engine
+// bound even after duplicate removal, the match raises the bounded
+// resource-limit error instead of trading down to the engine's
+// per-character caseless comparison (design error contract). Twenty
+// distinct 80-s alternatives expand past the 1MiB whole-pattern emission
+// budget while the raw pattern passes every gate without the expansion, so
+// the bounded error — never a narrowed per-character verdict — is the
+// outcome.
+func TestRegexp2CaseFoldExpandedAdmissionResourceLimit(t *testing.T) {
+	run80 := strings.Repeat("s", 80)
+	parts := make([]string, 20)
+	for i := range parts {
+		parts[i] = run80 + strconv.Itoa(i)
+	}
+	pat := strings.Join(parts, "|") + "(?#x)"
+	rs := &regexpSet{}
+	_, err := rs.regularLike(pat, run80+"0", "i")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "regexp case-fold resource limit exceeded:")
+	// The case-sensitive route never expands and keeps the base verdict.
+	rsC := &regexpSet{}
+	matchedC, err := rsC.regularLike(pat, run80+"0", "c")
+	require.NoError(t, err)
+	require.True(t, matchedC)
+}
+
+// TestDedupRegexpIdenticalAlternatives pins the exact eligibility and
+// deletion rules of the sibling-alternative deduplication (issue #31175
+// design r4, invariant 5): byte-identical branches under the same
+// effective inline-option state collapse with the first occurrence kept;
+// captures, references, unscoped option setters and any intervening
+// unscoped setter block the deletion; scoped setters do not; malformed
+// inputs return unchanged.
+func TestDedupRegexpIdenticalAlternatives(t *testing.T) {
+	rows := []struct {
+		name string
+		pat  string
+		want string
+	}{
+		{"top level pair", `a|a`, `a`},
+		{"top level triple", `a|a|a`, `a`},
+		{"first occurrence kept", `a|b|a`, `a|b`},
+		{"group pair", `(?:a|a)`, `(?:a)`},
+		{"distinct siblings kept", `a|b`, `a|b`},
+		{"anchors are branch text", `^a|^a`, `^a`},
+		{"class pipe is not a separator", `[a|]|[a|]`, `[a|]`},
+		{"comment pipe is not a separator", `(?#a|b)x|(?#a|b)x`, `(?#a|b)x`},
+		{"intervening unscoped setter retains", `^(?:ss|(?i)a|ss)$`, `^(?:ss|(?i)a|ss)$`},
+		{"scoped setter exempt", `^(?:ss|(?i:a)|ss)$`, `^(?:ss|(?i:a))$`},
+		{"setter before the group does not block", `(?i)(?:ss|ss)`, `(?i)(?:ss)`},
+		{"unscoped setter inside duplicate retains", `(?:(?i)a|(?i)a)`, `(?:(?i)a|(?i)a)`},
+		{"capture-bearing retained", `^((ss)|(ss))\3$`, `^((ss)|(ss))\3$`},
+		{"backreference-bearing retained", `(?:a|\1)`, `(?:a|\1)`},
+		{"named reference retained", `(?:(?<n>a)|\k<n>)`, `(?:(?<n>a)|\k<n>)`},
+		{"unterminated group bails", `(?:a|a`, `(?:a|a`},
+		{"unbalanced closer bails", `a|a)`, `a|a)`},
+		{"unterminated class bails", `[a|[a|`, `[a|[a|`},
+		{"free-spacing header before group", `(?x)(?:a|a)`, `(?x)(?:a)`},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			require.Equal(t, row.want,
+				dedupRegexpIdenticalAlternatives(row.pat, requiresRegexp2Pattern(row.pat)))
+		})
+	}
+}
+
+// TestRegexpCaseFoldDedupEligibility pins the invariant-5 eligibility
+// boundary on both engine routes (issue #31175 design r4): a duplicate is
+// removed only when it is byte-identical to the kept occurrence, free of
+// captures, backreferences and unscoped option setters, AND evaluated
+// under the same effective inline-option state. An intervening sibling's
+// unscoped setter changes the duplicate's ambient state: in
+// ^(?:ss|(?i)a|ss)$ under a case-sensitive ambient mode only the second
+// "ss" inherits (?i) and matches SS and ß, so deleting it would silently
+// narrow the match set. Scoped (?flags:...) groups restore the prior state
+// at group end, so the scoped control still deduplicates.
+func TestRegexpCaseFoldDedupEligibility(t *testing.T) {
+	// Intervening unscoped setter: the duplicate is retained, so SS and ß
+	// match through the second "ss" branch under match_type 'c' — on the
+	// RE2 route and on the lookahead-prefixed regexp2 route alike.
+	for _, pat := range []string{`^(?:ss|(?i)a|ss)$`, `(?=)^(?:ss|(?i)a|ss)$`} {
+		for _, subject := range []string{"ss", "SS", "ß"} {
+			rs := &regexpSet{}
+			matched, err := rs.regularLike(pat, subject, "c")
+			require.NoError(t, err, "pattern %q subject %q", pat, subject)
+			require.True(t, matched, "pattern %q subject %q", pat, subject)
+		}
+		rsNo := &regexpSet{}
+		matchedNo, err := rsNo.regularLike(pat, "b", "c")
+		require.NoError(t, err, "pattern %q", pat)
+		require.False(t, matchedNo, "pattern %q", pat)
+	}
+	// Scoped setter control: (?i:...) restores the enclosing state at group
+	// end, so both "ss" occurrences share one effective option state and
+	// the duplicate is removed — SS and ß do not match under 'c', exactly
+	// as for the single-occurrence form.
+	for _, pat := range []string{`^(?:ss|(?i:a)|ss)$`, `(?=)^(?:ss|(?i:a)|ss)$`} {
+		rsSS := &regexpSet{}
+		matchedSS, err := rsSS.regularLike(pat, "ss", "c")
+		require.NoError(t, err, "pattern %q", pat)
+		require.True(t, matchedSS, "pattern %q", pat)
+		for _, subject := range []string{"SS", "ß"} {
+			rs := &regexpSet{}
+			matched, err := rs.regularLike(pat, subject, "c")
+			require.NoError(t, err, "pattern %q subject %q", pat, subject)
+			require.False(t, matched, "pattern %q subject %q", pat, subject)
+		}
+	}
+	// Equal-state duplicates are removed without changing the match set:
+	// ss|ss|ss|ss behaves exactly like ss under 'i' over the fold matrix
+	// (the MySQL oracle matches ß, ẞ and STRAßE through the full fold).
+	subjects := map[string]bool{
+		"ss": true, "SS": true, "Ss": true, "s": false,
+		"ß": true, "ẞ": true, "STRASSE": true, "STRAßE": true, "STRASE": false,
+	}
+	for subject, want := range subjects {
+		rsDup := &regexpSet{}
+		gotDup, err := rsDup.regularLike("ss|ss|ss|ss", subject, "i")
+		require.NoError(t, err, "subject %q", subject)
+		require.Equal(t, want, gotDup, "deduplicated pattern, subject %q", subject)
+		rsOne := &regexpSet{}
+		gotOne, err := rsOne.regularLike("ss", subject, "i")
+		require.NoError(t, err, "subject %q", subject)
+		require.Equal(t, gotOne, gotDup, "subject %q", subject)
+	}
+	// Capture-bearing duplicates are retained: group numbering and
+	// participation are user-observable, so ^((ss)|(ss))\3$ keeps both
+	// groups and the backreference can match through the second one.
+	rsCap := &regexpSet{}
+	capMatched, err := rsCap.regularLike(`^((ss)|(ss))\3$`, "ssss", "c")
+	require.NoError(t, err)
+	require.True(t, capMatched)
+}
+
+// TestRE2CaseFoldAdmissionResourceLimit pins the composition of the
+// case-fold rewrite with the RE2 admission bound under the resource-limit
+// error contract (round-15 pre-PR review, revised): nested capture groups
+// around a foldable run sit just inside Go regexp's parse-tree height
+// bound (regexp/syntax maxHeight=1000), and the expansion's extra levels
+// push the pattern over it. The faithful full-fold form cannot be evaluated
+// within the engine bound, so the match raises the bounded resource-limit
+// error instead of silently trading down to the engine's per-character
+// caseless comparison (design error contract). A pattern the unexpanded
+// admission already rejects keeps the source verdict.
+func TestRE2CaseFoldAdmissionResourceLimit(t *testing.T) {
 	nested := func(n int) string {
 		return strings.Repeat("(", n) + "ss" + strings.Repeat(")", n)
 	}
 	// The measured boundary on Go 1.27.1: the unexpanded admission accepts
 	// 999 nested captures around 'ss' (parse-tree height 1000) and rejects
-	// from 1000; the expanded form was already rejected from 998.
+	// from 1000; the expanded form is already rejected from 998.
 	deep := nested(999)
 	require.Equal(t, 2000, len(deep))
-	// The deep pattern keeps the base verdict: a caseless match, no error.
+	// The faithful expansion exceeds the engine bound, so the caseless
+	// match raises the bounded resource-limit error: the stable prefix
+	// names the contract, the underlying admission detail follows it.
 	rs := &regexpSet{}
-	matched, err := rs.regularLike(deep, "ss", "i")
-	require.NoError(t, err)
-	require.True(t, matched)
-	rsUpper := &regexpSet{}
-	matchedUpper, err := rsUpper.regularLike(deep, "SS", "i")
-	require.NoError(t, err)
-	require.True(t, matchedUpper)
-	// The fallback matches per character: a subject needing the full fold
-	// no longer matches. The expansion trades down to the base admission
-	// verdict, never to an error.
+	_, err := rs.regularLike(deep, "ss", "i")
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: expanded-pattern admission:")
 	rsFold := &regexpSet{}
-	foldMatched, err := rsFold.regularLike(deep, "ß", "i")
-	require.NoError(t, err)
-	require.False(t, foldMatched)
+	_, err = rsFold.regularLike(deep, "ß", "i")
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"regexp case-fold resource limit exceeded: expanded-pattern admission:")
 	// Case-sensitive control: identical text matches; the expansion never
-	// applies.
+	// applies under 'c'.
 	rsC := &regexpSet{}
 	matchedC, err := rsC.regularLike(deep, "ss", "c")
 	require.NoError(t, err)
@@ -658,14 +862,15 @@ func TestRE2CaseFoldAdmissionFallback(t *testing.T) {
 	shallowMatched, err := rsShallow.regularLike(nested(997), "ß", "i")
 	require.NoError(t, err)
 	require.True(t, shallowMatched)
-	// A pattern the unexpanded admission already rejects stays rejected,
-	// and the surfaced error is the base admission's: it quotes the
-	// original pattern, never the expanded form.
+	// A pattern the unexpanded admission already rejects keeps the source
+	// verdict: the base admission's error quotes the original pattern,
+	// never the expanded form, and carries no resource-limit prefix.
 	rsDeep := &regexpSet{}
 	_, err = rsDeep.regularLike(nested(1000), "ss", "i")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nests too deeply")
 	require.NotContains(t, err.Error(), "(?-i:ß)")
+	require.NotContains(t, err.Error(), "resource limit")
 }
 
 // TestRegexp2CaseFoldSourceQuantifierVerdict pins the composition of the

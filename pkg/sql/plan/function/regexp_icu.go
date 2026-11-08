@@ -854,17 +854,24 @@ func translateRegexp2PatternWithGrapheme(
 	binary bool,
 	graphemePattern string,
 ) (string, error) {
-	if err := validateRegexp2TranslationBudget(pattern, graphemePattern); err != nil {
-		return "", err
-	}
+	// The translated-size bound is enforced exactly: every potentially
+	// large write goes through appendRegexp2TranslatedPart, and the loop
+	// rechecks the accumulated size at every token. A conservative
+	// bytes-per-source-byte estimate would reject patterns whose actual
+	// translation fits the bound — for example the case-fold expansion of
+	// a deduplicated alternation, which translates at roughly one output
+	// byte per source byte (issue #31175 design, resource contract).
 	var out strings.Builder
-	out.Grow(len(pattern) + 32)
+	out.Grow(min(regexp2MaxTranslatedPatternBytes, len(pattern)+32))
 	groupStarts := make([]int, 0, 8)
 	freeSpacing := false
 	freeSpacingStack := make([]bool, 0, 8)
 	lastAtomStart := -1
 
 	for i := 0; i < len(pattern); {
+		if out.Len() > regexp2MaxTranslatedPatternBytes {
+			return "", regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		}
 		if freeSpacing {
 			if isRegexpPatternWhitespace(pattern[i]) {
 				out.WriteByte(pattern[i])
@@ -876,7 +883,9 @@ func translateRegexp2PatternWithGrapheme(
 				for i < len(pattern) && pattern[i] != '\n' {
 					i++
 				}
-				out.WriteString(pattern[start:i])
+				if err := appendRegexp2TranslatedPart(&out, pattern[start:i]); err != nil {
+					return "", err
+				}
 				continue
 			}
 		}
@@ -928,7 +937,9 @@ func translateRegexp2PatternWithGrapheme(
 					literalEnd = i + 2 + end
 				}
 				hasLiteral := literalEnd > i+2
-				out.WriteString(regexp2QuoteLiteral(pattern[i+2:literalEnd], binary))
+				if err := appendRegexp2TranslatedPart(&out, regexp2QuoteLiteral(pattern[i+2:literalEnd], binary)); err != nil {
+					return "", err
+				}
 				if end >= 0 {
 					i = literalEnd + 2
 				} else {
@@ -1014,6 +1025,9 @@ func translateRegexp2PatternWithGrapheme(
 			if quantifierEnd < len(pattern) && pattern[quantifierEnd] == '+' && lastAtomStart >= 0 {
 				atom := out.String()[lastAtomStart:]
 				prefix := out.String()[:lastAtomStart]
+				if len(prefix)+len(atom)+quantifierEnd-i+4 > regexp2MaxTranslatedPatternBytes {
+					return "", regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+				}
 				out.Reset()
 				out.Grow(len(prefix) + len(atom) + quantifierEnd - i + 4)
 				out.WriteString(prefix)
@@ -1057,6 +1071,9 @@ func translateRegexp2PatternWithGrapheme(
 		i++
 	}
 
+	if out.Len() > regexp2MaxTranslatedPatternBytes {
+		return "", regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+	}
 	return out.String(), nil
 }
 
@@ -1083,28 +1100,6 @@ func translateRegexp2CharClass(pattern string, start, end int, binary bool) (str
 		i += length
 	}
 	return out.String(), nil
-}
-
-func validateRegexp2TranslationBudget(pattern, graphemePattern string) error {
-	// Quoted bytes and possessive rewrites expand the source, and binary
-	// encoding can add UTF-8 bytes for each mapped byte. Reserve a conservative
-	// upper bound before building the expression; in particular, do not create
-	// the same subject-specific \X expansion once per source token and only then
-	// discover that the result is too large.
-	perSourceByte := int64(8)
-	upper := int64(len(pattern))*perSourceByte + 64
-	if graphemePattern != "" {
-		count := int64(regexp2GraphemeTokenCount(pattern))
-		expansion := int64(len(graphemePattern)) - 2
-		if expansion > 0 && count > (int64(regexp2MaxTranslatedPatternBytes)-upper)/expansion {
-			return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
-		}
-		upper += count * expansion
-	}
-	if upper > int64(regexp2MaxTranslatedPatternBytes) {
-		return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
-	}
-	return nil
 }
 
 func regexpNamedBackreferenceEnd(pattern string, start int) (int, bool) {
@@ -1344,14 +1339,30 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	key.matchType = strings.Clone(pureMatchType)
 	// The case-fold expansion (issue #31175) can push a pattern the
 	// unexpanded admission accepted over one of the downstream size limits
-	// below. Retry without the expansion then: the pattern keeps the
-	// verdict the base admission gave it, compared through the engine's
-	// per-character caseless orbit instead of the full-fold expansion —
-	// the expansion is never a reason to reject a pattern the unexpanded
-	// admission accepted.
+	// below, or exhaust a rewrite budget. The source pattern's own verdict
+	// stands when it has one (malformed stays malformed; the build below
+	// already validates the source form on the expanded path); a
+	// well-formed, source-admitted pattern raises the bounded
+	// resource-limit error, because its faithful full-fold expansion
+	// cannot be evaluated within bounds and falling back to the engine's
+	// per-character caseless orbit would silently narrow the promised
+	// match set (issue #31175 design, ownership item 4).
 	matcher, expanded, err := rs.buildRegexp2MatcherWithMatchType(pat, pureMatchType, binary, true)
 	if err != nil && expanded {
+		foldErr := err
 		matcher, _, err = rs.buildRegexp2MatcherWithMatchType(pat, pureMatchType, binary, false)
+		if err == nil {
+			// The source pattern is admissible: only its faithful
+			// expansion exceeds a bound. Keep the rewrite's own
+			// resource-limit error when it has one; otherwise name the
+			// engine admission bound the expanded form crossed.
+			if moerr.IsMoErrCode(foldErr, moerr.ErrInternal) {
+				err = foldErr
+			} else {
+				err = regexpCaseFoldResourceLimitf("expanded-pattern admission: %v", foldErr)
+			}
+			matcher = nil
+		}
 	}
 	if err != nil {
 		return nil, err
