@@ -1,15 +1,31 @@
 # Pattern matching honors the effective collation (LIKE, ILIKE, REGEXP, FIND_IN_SET)
 
-Status: design review pending
+Status: design r5 submitted for independent design review (2026-11-08).
+Supersedes approved r4 (SHA256
+`c31aef6c201f712c72aca88c59149d6805f1b99fddad9d2a0cde724021edc098`) with one
+validation-contract correction measured during the post-approval
+implementation: the binding engine bound for long fold runs on the regexp2
+route is the engine's compiled backtracking-state limit (4,096 tracks), so
+the round-14 four-alternative comment-bearing shape raises the bounded
+resource-limit error under `i` even after deduplication; fold-fully proofs
+relocate to below-bound regexp2 shapes and to the RE2 route at the original
+scale. Implementation in progress on PR #32357 against this revision.
 
-- Design revision: r4, 2026-11-08. Supersedes r3 (2026-11-08, SHA256
+- Design revision: r5, 2026-11-08. Supersedes r4 (2026-11-08, SHA256
+  `c31aef6c201f712c72aca88c59149d6805f1b99fddad9d2a0cde724021edc098`,
+  design-only PASS with one non-blocking P3), r3 (2026-11-08, SHA256
   `590a0eabdfeab02f21b7b8d708d27ced42652747e76997a10135e72ced11a4f6`), r2
   (SHA256 `c309345e456cf92c06446cd6bb12a0fb94b7c49637214e743ee71a4f47a95e9a`),
   and r1 (SHA256
-  `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`), each of
-  which received a design-only REQUEST_CHANGES; the record section at the end
-  carries the decisions and the resolutions. r4 changes only design
-  contracts: the preserved implementation head
+  `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`); r1-r3
+  each received a design-only REQUEST_CHANGES and r4 a design-only PASS, and
+  the record section at the end carries the decisions and the resolutions.
+  r5 changes only design contracts: it corrects the validation map's
+  fold-fully expectations to the engine bounds measured during
+  implementation and names the regexp2 compiled backtracking-state bound
+  those measurements identified as the binding constraint for long fold
+  runs; no invariant, ownership decision, budget value, or error family
+  changes. The preserved implementation head
   `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates the resolutions, whose
   production deltas (eligibility-checked fold-rewrite deduplication plus the
   resource-limit error, and the LIKE search work bound with shared
@@ -172,7 +188,24 @@ Secondary defects of the same boundary, found while tracing the owner paths:
    discarded attempts); eligibility-checked identical-alternative
    deduplication (invariant 5) runs before and during expansion, and
    exhaustion of any fold budget for fold-relevant content raises the same
-   bounded resource-limit error. Verbatim emission
+   bounded resource-limit error. Engine-side admission bounds then apply to
+   the expanded form through the ICU design's regexp2 layer, unchanged by
+   this design: the translated-size bound (1 MiB) and the compiled
+   backtracking-state bound (4,096 tracks). Exact fold emission grows
+   quadratically with run length, so for long fold runs the
+   backtracking-state bound binds first on the regexp2 route — measured on
+   the implementation: a 40-rune `s` fold run expands to 17,918 bytes and
+   compiles at 1,439 tracks (admitted), while an 80-rune run compiles past
+   4,096 tracks and raises the bounded resource-limit error naming that
+   bound; the RE2 route has no compiled-state bound and admits the same
+   80-rune expansion (44,502 bytes). For multi-branch shapes whose distinct
+   alternatives each carry long fold runs, the rewrite's own per-pattern
+   emission budget (also 1 MiB) fires first — twenty distinct 80-`s`
+   branches emit about 1.38 MiB — and the translated-size bound remains the
+   engine-side backstop, with exact per-part enforcement in the regexp2
+   translation stage keeping the enforced bound exactly the documented one,
+   so the error always names the bound that actually rejects the expansion.
+   Verbatim emission
    survives only where no full-fold promise exists (fold-irrelevant runs
    and non-UTF-8 patterns). The error mirrors MySQL's own regexp resource
    limits (`regexp_stack_limit`, `regexp_time_limit`): at a resource
@@ -384,8 +417,10 @@ every 1024 steps/members elsewhere), and cache eviction
   confined to pathological inputs outside the acceptance matrix: a LIKE
   pattern whose anchored verification exceeds the total-work bound, and a ci
   REGEXP whose faithful full-fold form exceeds a rewrite or admission budget
-  even after alternative deduplication, each raise a bounded resource-limit
-  error. The pre-change server answered the REGEXP shapes through the
+  even after alternative deduplication (on the regexp2 route, long fold runs
+  reach the engine's compiled backtracking-state bound — 4,096 tracks —
+  well before the translated-size bound, because exact fold emission is
+  quadratic in run length), each raise a bounded resource-limit error. The pre-change server answered the REGEXP shapes through the
   engines' per-character caseless orbit; that answer was already wrong for
   fold-spanning subjects under the semantics the caller requested (MySQL
   `i` is ICU full folding), and MySQL itself fails evaluations that exceed
@@ -408,8 +443,17 @@ every 1024 steps/members elsewhere), and cache eviction
 - Hot-path cost: unchanged fast paths for binary and `_bin` domains; ASCII
   general_ci fold is `bytes.ToUpper`; the weighted matcher runs only for the
   unicode_ci family; the fold rewrite runs once per compiled pattern inside
-  the existing cache, bounded by the budgets above. No new allocation on
-  constant-pattern rows beyond the prepared form.
+  the existing cache, bounded by the budgets above. Cached constant-pattern
+  preparation is the only per-pattern cost; per-row subject processing keeps
+  its subject-length-dependent storage: the unicode_ci LIKE matcher weighs
+  each subject into per-character weight slices per match
+  (`prepareLikeSubjectChars`), the general_ci fold produces one folded subject
+  buffer per comparison, and REGEXP folds each subject once per row — all
+  O(subject length) per row, released with the batch, and unchanged from the
+  r1-era implementation this design reviews. (Erratum directed by the
+  independent r4 design review's P3 finding: the r4 text's "no new
+  allocation on constant-pattern rows beyond the prepared form" conflated
+  cached pattern preparation with per-row subject allocation.)
 - Observability: budget and admission failures surface as bounded SQL
   errors (the fold/LIKE resource-limit error included); no new metric or
   log schema, and user patterns/subjects are not logged.
@@ -426,9 +470,9 @@ resolutions add in the post-approval implementation turn):
 | Collation-routed LIKE/REGEXP/FIND_IN_SET (1, 2) | `pkg/sql/plan/function` fold-mode and routing UTs; BVT `issue_31175_pattern_collation.sql` (410 statements, MySQL-oracle values) covering literals, columns, both operand orders, prepared parameters, user variables |
 | Binary-mix rules (3) | `collation_binary_tie_test.go`, admission-matrix UTs, BVT `_binary`/HEX/BIT/CAST rows incl. error 3995 both orders |
 | Per-character LIKE weights (4) | `pkg/common/collation/wildcard_test.go` (weights, malformed bytes, supplementary identity, sigma/dotless-i), `wildcard_segments_test.go` anchor fallback |
-| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned boundary tests on both engines: redundant-literal-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, the 328-byte four-alternative shape folding fully after dedup so forty `ß` match eighty `s` under `i`), dedup-eligibility counterexamples (capture-bearing duplicates retained — `^((ss)|(ss))\3$` keeps group 3 valid and matches `ssss` through the second branch with group-3 participation; `REGEXP_REPLACE` `$3` replacement identity preserved; backreference-bearing and unscoped-`(?i)`-bearing duplicates retained; intervening-option duplicates retained on both engine routes — `^(?:ss|(?i)a|ss)$` under an ambient case-sensitive mode keeps both `ss` branches, so `SS` and `ß` still match through the second `ss` on the RE2 route and on the lookahead-prefixed regexp2 route, while the same shape with a scoped `(?i:...)` setter between the occurrences still dedups; capture-free duplicates at equal option state still deduped), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
-| Bounded work (7) | cancellation and bounded-work UTs in both packages; planned tests: the fragmented-pattern counterexample (`%` + 15,000 `a_` pairs + a 92-distinct-weight alphabet interleaved with `_` + `%` against 60,000 `a` characters) terminating at the total-work bound with the resource-limit error and an instrumented comparison count at or under the bound, cancellation observed after subject preparation within the shared-step gap, and deterministic work-bound checks straddling the 256 KiB mask-budget transition |
-| Resource-boundary SQL proof (5, 7) | planned BVT (public-path proof per the testing contract, since both boundaries are new SQL-visible errors): update `issue_31175_pattern_collation.sql`'s round-14/15 sections — the 999-nested-capture `'i'` statements currently pinned `1`/`1`/`0` with "never an error" comments become the bounded resource-limit error, the 997-nest accept side and the `'c'` control stay unchanged, and the four-alternative section gains a forty-`ß` subject now returning `1` after dedup plus a public intervening-option proof — `REGEXP_LIKE(subject, '^(?:ss|(?i)a|ss)$', 'c')` returns `1` for `SS` and for `ß` because the second `ss` branch is retained (the deduplicated form would reject both); add `issue_31175_pattern_resource_limits.sql` covering regexp2 translated-size exhaustion, RE2 height-bound exhaustion, LIKE total-work-bound exhaustion, below-bound controls just under each bound returning normal folded results, and malformed-source patterns keeping their own error verdicts. The error is pinned by its stable class and message prefix (`internal error: regexp case-fold resource limit exceeded: <bound>` / `internal error: LIKE pattern resource limit exceeded: <bound>`) using `@regex` on the prefix per BVT quality rules; expected results are hand-written from this contract and independently reviewed before normal comparison execution (generated results are a draft, never accepted merely because generated) |
+| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned boundary tests on both engines: redundant-literal-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, split by engine route after the r5 measurement: on the RE2 route the 328-byte-class four-identical-80-`s`-alternative shape deduplicates to one branch, folds fully, and forty `ß` match eighty `s` under `i`; on the regexp2 route the comment-bearing four-alternative shape deduplicates to two distinct branches — the trailing `(?#x)` joins the last — whose 80-rune fold runs still exceed the engine's 4,096-track compiled backtracking-state bound, so it raises the bounded resource-limit error under `i` and the route's fold-fully equivalence proof relocates below the bound with four identical 12-`s` alternatives plus the comment, six `ß` matching twelve `s`), dedup-eligibility counterexamples (capture-bearing duplicates retained — `^((ss)|(ss))\3$` keeps group 3 valid and matches `ssss` through the second branch with group-3 participation; `REGEXP_REPLACE` `$3` replacement identity preserved; backreference-bearing and unscoped-`(?i)`-bearing duplicates retained; intervening-option duplicates retained on both engine routes — `^(?:ss|(?i)a|ss)$` under an ambient case-sensitive mode keeps both `ss` branches, so `SS` and `ß` still match through the second `ss` on the RE2 route and on the lookahead-prefixed regexp2 route, while the same shape with a scoped `(?i:...)` setter between the occurrences still dedups; capture-free duplicates at equal option state still deduped), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
+| Bounded work (7) | cancellation and bounded-work UTs in both packages; planned tests: the fragmented-pattern counterexample (`%` + 15,000 `a_` pairs + a 92-distinct-weight alphabet interleaved with `_` + `%` against 60,000 `a` characters) terminating at the total-work bound with the resource-limit error and an instrumented comparison count at or under the bound, cancellation observed after subject preparation within the shared-step gap, and deterministic work-bound checks straddling the 256 KiB mask-budget transition; plus representative per-row allocation measurements (the independent r4 review's P3 action): an allocations-per-run UT recording the unicode_ci LIKE matcher's subject-weight slices and the general_ci folded-subject buffer on constant patterns, reported in the implementation report as evidence for the storage cost described under hot-path cost — informational, proportional to subject length, with no fixed byte bound |
+| Resource-boundary SQL proof (5, 7) | planned BVT (public-path proof per the testing contract, since both boundaries are new SQL-visible errors): update `issue_31175_pattern_collation.sql`'s round-14/15 sections — the 999-nested-capture `'i'` statements currently pinned `1`/`1`/`0` with "never an error" comments become the bounded resource-limit error, the 997-nest accept side and the `'c'` control stay unchanged, and the four-alternative comment-bearing section's `'i'` statements become the bounded resource-limit error (the deduplicated two-branch form still exceeds the regexp2 compiled backtracking-state bound) while its `'c'` control stays unchanged, with fold-fully BVT proof relocated to the same four-alternative shape without the comment on the RE2 route (forty `ß` returning `1`) and to a below-bound comment-bearing shape (six `ß` against four identical 12-`s` alternatives returning `1`), plus a public intervening-option proof — `REGEXP_LIKE(subject, '^(?:ss|(?i)a|ss)$', 'c')` returns `1` for `SS` and for `ß` because the second `ss` branch is retained (the deduplicated form would reject both); add `issue_31175_pattern_resource_limits.sql` covering regexp2-route expansion exhaustion at the fold per-pattern emission budget (the engine translated-size backstop sits at the same 1 MiB magnitude), RE2 height-bound exhaustion, LIKE total-work-bound exhaustion, below-bound controls just under each bound returning normal folded results, and malformed-source patterns keeping their own error verdicts. The error is pinned by its stable class and message prefix (`internal error: regexp case-fold resource limit exceeded: <bound>` / `internal error: LIKE pattern resource limit exceeded: <bound>`) using `@regex` on the prefix per BVT quality rules; expected results are hand-written from this contract and independently reviewed before normal comparison execution (generated results are a draft, never accepted merely because generated) |
 | Plan/execution agreement (8) | `TestLikePrefixCaseInsensitiveKeepsFoldedPredicate` (pkg/tests/sqlintegration) proving scan, forced-index, and computed-subject paths return the folded rows; prefix fixtures pinned to `utf8mb4_bin` |
 | Domain/coercibility preservation (9) | `pkg/sql/plan` and `rule` UTs for folded `CAST(x AS BINARY)`/`BINARY 'x'`/`binary()` stamping, negative-width casts, folded-domain preservation; `operator/mysql_compat_string_binary_comparison` BVT unchanged |
 | Cache contract (10) | existing cache/eviction tests plus admission-error tests proving install only after success |
@@ -521,8 +565,61 @@ Revision history:
   preserved implementation head `b554558f9d3c191244f01b0e162a83d6af88ba8d`
   predates the r2-r4 resolutions; their production deltas and the planned
   UT/BVT proof land in the post-approval implementation turn.
-- Design revision under review: r4, 2026-11-08 (this document).
-- Implementation review remains blocked until the review of this revision
-  records a PASS or REQUEST_CHANGES decision bound to this document's SHA256;
-  material implementation deviations require updating this document and
-  re-reviewing the affected decisions.
+- r4 review outcome, 2026-11-08: the independent design-only review of r4
+  (SHA256 `c31aef6c201f712c72aca88c59149d6805f1b99fddad9d2a0cde724021edc098`,
+  docs commit `b48766d8dae4056ba097e8524d3e91b5e2b2520f`) recorded a
+  design-only PASS with one non-blocking P3: the hot-path-cost bullet
+  conflated cached constant-pattern preparation with per-row subject
+  allocation. This document carries the review-directed erratum in place
+  (the hot-path-cost bullet now distinguishes cached pattern preparation
+  from subject-length-dependent per-row storage, and the bounded-work
+  validation row names representative allocation measurements). No
+  invariant, ownership decision, budget, error contract, or validation
+  semantic changed, so the erratum does not alter the approved r4 design
+  content; the r4 hash above remains the approval's reference.
+- r5, 2026-11-08 (this document): corrects r4's validation-map fold-fully
+  expectation with engine bounds measured during the post-approval
+  implementation turn. r4 planned that the 328-byte four-alternative
+  comment-bearing shape would fold fully after deduplication so forty `ß`
+  match eighty `s` under `i`. Measurement on the implementation proved the
+  expectation physically unachievable on the regexp2 route: exact fold
+  emission grows quadratically with run length, and the route's binding
+  engine bound is the compiled backtracking-state limit (4,096 tracks) — a
+  single 80-rune `s` fold run expands to about 68,956 bytes and compiles
+  past the bound (a 40-rune run compiles at 1,439 tracks and is admitted),
+  so even the two distinct branches left after deduplication exceed it, and
+  the shape raises the bounded resource-limit error under `i` (the `'c'`
+  control is unaffected: the rewrite never applies). The translated-size
+  bound (1 MiB) is not the binding constraint for this shape — the
+  deduplicated expansion is 137,917 bytes — and for many-branch shapes the
+  rewrite's own per-pattern emission budget (also 1 MiB) fires first
+  (twenty distinct 80-`s` branches emit about 1.38 MiB); exact per-part
+  enforcement in the regexp2 translation stage keeps the documented
+  translated-size bound exact as the engine-side backstop, so the error
+  names the bound that actually rejects the expansion.
+  The RE2 route has no compiled-state bound: the same four-alternative
+  shape without the comment deduplicates to one branch and folds fully
+  (44,502-byte expansion admitted), so the forty-`ß` oracle outcome is
+  proved there, while the regexp2 route proves fold-fully equivalence below
+  its bound (four identical 12-`s` alternatives plus the comment; six `ß`
+  match twelve `s`). Resolutions: the validation-map invariant-5 row splits
+  the equivalence proof by engine route; the resource-boundary BVT row
+  updates round-14 (the comment-bearing `'i'` statements become the bounded
+  resource-limit error, the `'c'` control unchanged, fold-fully BVT proofs
+  on the RE2 route at the original scale and on below-bound regexp2
+  shapes); invariant 7 and the compatibility bullet name the
+  backtracking-state bound with the measured values. No invariant,
+  ownership decision, budget value, error family, or approved r4 semantic
+  changes: the correction relocates only which shapes deliver fold-fully
+  outcomes versus the resource-limit error, inside the error contract r4
+  already approved. Alternatives considered and rejected: raising the
+  4,096-track bound (weakens an existing resource guard owned by the ICU
+  design), post-expansion branch deduplication (a single 80-rune branch
+  alone exceeds the bound), and subject-side folding (breaks the position
+  mapping `REGEXP_INSTR`/`REPLACE`/`SUBSTR` rely on).
+- Design revision: r5, submitted for independent design review of the
+  correction above; r4's approval (hash and commit recorded there) remains
+  the base, and the review-directed P3 erratum is carried in place.
+- Implementation proceeds against this document; material implementation
+  deviations require updating this document and re-reviewing the affected
+  decisions.
