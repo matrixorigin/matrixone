@@ -2,16 +2,17 @@
 
 Status: design review pending
 
-- Design revision: r2, 2026-11-08. Supersedes r1 (2026-11-08, SHA256
-  `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`), which
-  received a design-only REQUEST_CHANGES for two resource-contract findings;
-  the record section at the end carries the decision and the resolutions.
-  r2 changes only design contracts: the preserved implementation head
-  `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates the two resolutions,
-  whose production deltas (fold-rewrite deduplication plus the resource-limit
-  error, and the LIKE search work bound with shared cancellation accounting)
-  are planned for the post-approval implementation turn together with their
-  tests.
+- Design revision: r3, 2026-11-08. Supersedes r2 (2026-11-08, SHA256
+  `c309345e456cf92c06446cd6bb12a0fb94b7c49637214e743ee71a4f47a95e9a`) and r1
+  (SHA256 `215a86b250e88a8a6f3f1bfc1ccc6024d09c5c501a745a9ce609e4d6504ce574`),
+  each of which received a design-only REQUEST_CHANGES; the record section at
+  the end carries the decisions and the resolutions. r3 changes only design
+  contracts: the preserved implementation head
+  `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates the resolutions, whose
+  production deltas (eligibility-checked fold-rewrite deduplication plus the
+  resource-limit error, and the LIKE search work bound with shared
+  cancellation accounting) are planned for the post-approval implementation
+  turn together with their UT and BVT proof.
 - Owner: gouhongshen (implementation agent), issue group owner per the tracker.
 - Owning issue: [#31175](https://github.com/matrixorigin/matrixone/issues/31175)
   (consolidates [#31179](https://github.com/matrixorigin/matrixone/issues/31179)).
@@ -132,11 +133,13 @@ Secondary defects of the same boundary, found while tracing the owner paths:
    Quantified atoms keep their per-character orbit; character classes keep
    their syntax and members and, on the case-insensitive regexp2 route, gain
    the fold-orbit members the engine's simple-fold class closure misses. The
-   match set is never silently narrowed: identical sibling alternatives are
-   deduplicated before and during expansion (alternation is idempotent on
-   both engines), and when the faithful full-fold form still exceeds a budget
-   the operator raises a bounded resource-limit error instead of falling back
-   to per-character matching (invariant 7).
+   match set is never silently narrowed: dedup-eligible sibling alternatives
+   (byte-identical, free of captures, backreferences and unscoped option
+   setters; first occurrence kept) are deduplicated before expansion, and
+   identical rewrite-generated fold-image alternatives during emission, and
+   when the faithful full-fold form still exceeds a budget the operator
+   raises a bounded resource-limit error instead of falling back to
+   per-character matching (invariant 7).
 6. **Admission verdicts stay with the source pattern.** The case-fold
    expansion is an optimization of expression, never a reason to declare a
    pattern valid or invalid: both engines take malformed-pattern verdicts
@@ -163,9 +166,10 @@ Secondary defects of the same boundary, found while tracing the owner paths:
    cancellation every 1024 members. The fold rewrite is bounded per run (64
    enumerated alternatives, 128 KiB emission), per pattern (1 MiB emission
    enforced during emission), and per rewrite work (16 MiB including
-   discarded attempts); identical-alternative deduplication runs before and
-   during expansion, and exhaustion of any fold budget for fold-relevant
-   content raises the same bounded resource-limit error. Verbatim emission
+   discarded attempts); eligibility-checked identical-alternative
+   deduplication (invariant 5) runs before and during expansion, and
+   exhaustion of any fold budget for fold-relevant content raises the same
+   bounded resource-limit error. Verbatim emission
    survives only where no full-fold promise exists (fold-irrelevant runs
    and non-UTF-8 patterns). The error mirrors MySQL's own regexp resource
    limits (`regexp_stack_limit`, `regexp_time_limit`): at a resource
@@ -268,16 +272,27 @@ Alternatives considered:
    subtraction), literal-run segmentation into single-rune blocks and
    fold-image alternations with case-sensitive source alternatives, class
    fold-orbit augmentation, literal-carrying escape decoding, named-reference
-   preservation, alternative deduplication, and the emission/work budgets.
-   Deduplication drops byte-identical sibling alternatives within one
-   alternation before expansion and identical expanded alternatives during
-   emission (bounded by the existing alternative and work budgets); it
-   preserves the match set because alternation is idempotent on both
-   engines, and it keeps equivalent patterns with redundant alternatives
-   inside the budgets. Exhaustion of any fold budget for fold-relevant
-   content raises the bounded resource-limit error; verbatim emission
-   remains only for fold-irrelevant runs and non-UTF-8 patterns, where no
-   full-fold promise exists.
+   preservation, eligibility-checked alternative deduplication, and the
+   emission/work budgets. Deduplication is conservative: a sibling
+   alternative is dedup-eligible only when it is byte-identical to an
+   earlier sibling in the same alternation and contains no capturing group
+   (numbered or named), no backreference or named/relative reference, and
+   no unscoped inline-option setter; the first occurrence is kept so branch
+   order and positional inline-option state are preserved. Source capture
+   numbering, names, and participation are user-observable (regexp2
+   backreferences such as `\3`, `REGEXP_REPLACE` replacement references,
+   and the `regexp2CaptureMapping` contract of the ICU design's
+   capture-identity invariant), so capture-bearing, reference-bearing, or
+   option-setting branches are always retained; alternation idempotence
+   alone never justifies deleting them. During emission, dedup applies to
+   identical fold-image alternatives, which the rewrite itself generates as
+   non-capturing forms, so eligibility holds by construction. Ineligible
+   redundant branches stay in the pattern; when the faithful expansion
+   still exceeds a budget the resource-limit error contract applies.
+   Exhaustion of any fold budget for fold-relevant content raises the
+   bounded resource-limit error; verbatim emission remains only for
+   fold-irrelevant runs and non-UTF-8 patterns, where no full-fold promise
+   exists.
 4. `regexp_icu.go` and the RE2 cache path in `func_builtin_regexp.go` own
    engine admission: each compiles the expanded form first; when the
    expanded form exceeds an admission bound, the source pattern's own
@@ -308,7 +323,7 @@ bind: aggregate operands -> resolve collation (tie restoration if needed)
 evaluate: binary domain? -> byte path (3995 for text mix on regexp)
   -> match_type resolution (explicit c/i beats collation default)
   -> engine admission on the source pattern (RE2 scanner / regexp2 scanner)
-  -> case-fold expansion when ci applies (deduplicate identical
+  -> case-fold expansion when ci applies (deduplicate eligible identical
      alternatives, then expand; fold-irrelevant content stays verbatim)
   -> on fold-budget exhaustion for fold-relevant content: bounded
      resource-limit error
@@ -362,6 +377,18 @@ every 1024 steps/members elsewhere), and cache eviction
   so the error is the compatibility-preserving boundary. The r1-era
   silent-fallback test pins are replaced by the boundary tests in the
   validation map.
+- Error contract: the resource-limit error uses the same internal-error
+  family as the existing regexp2 budget errors
+  (`moerr.NewInternalErrorNoCtxf`), with stable message prefixes
+  `regexp case-fold resource limit exceeded: <bound>` and
+  `LIKE pattern resource limit exceeded: <bound>` naming the exceeded
+  bound; pattern-validity verdicts keep the invalid-input family
+  (`moerr.NewInvalidInputNoCtxf`) and always come from the source pattern.
+  Being a new SQL-visible error, it carries public-path BVT proof (the
+  validation map's resource-boundary row): the round-15 BVT statements
+  whose `1`/`1`/`0` pins and "never an error" comments this contract
+  flips are updated, below-bound controls keep their folded results, and
+  expected results are independently reviewed before comparison execution.
 - Hot-path cost: unchanged fast paths for binary and `_bin` domains; ASCII
   general_ci fold is `bytes.ToUpper`; the weighted matcher runs only for the
   unicode_ci family; the fold rewrite runs once per compiled pattern inside
@@ -375,7 +402,7 @@ every 1024 steps/members elsewhere), and cache eviction
 
 Acceptance mapping (the r1-era tests exist on the implementation head and
 pass in CI on Ubuntu/x86 UT, coverage, and BVT compose/proxy jobs at head
-`b554558f`; rows marked planned-r2 are the boundary tests the two review
+`b554558f`; rows marked planned are the boundary tests the review
 resolutions add in the post-approval implementation turn):
 
 | Invariant | Cheapest deterministic evidence |
@@ -383,8 +410,9 @@ resolutions add in the post-approval implementation turn):
 | Collation-routed LIKE/REGEXP/FIND_IN_SET (1, 2) | `pkg/sql/plan/function` fold-mode and routing UTs; BVT `issue_31175_pattern_collation.sql` (410 statements, MySQL-oracle values) covering literals, columns, both operand orders, prepared parameters, user variables |
 | Binary-mix rules (3) | `collation_binary_tie_test.go`, admission-matrix UTs, BVT `_binary`/HEX/BIT/CAST rows incl. error 3995 both orders |
 | Per-character LIKE weights (4) | `pkg/common/collation/wildcard_test.go` (weights, malformed bytes, supplementary identity, sigma/dotless-i), `wildcard_segments_test.go` anchor fallback |
-| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned-r2 boundary tests on both engines: redundant-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, the 328-byte four-alternative shape folding fully after dedup so forty `ß` match eighty `s` under `i`), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
-| Bounded work (7) | cancellation and bounded-work UTs in both packages; planned-r2 tests: the fragmented-pattern counterexample (`%` + 15,000 `a_` pairs + a 92-distinct-weight alphabet interleaved with `_` + `%` against 60,000 `a` characters) terminating at the total-work bound with the resource-limit error and an instrumented comparison count at or under the bound, cancellation observed after subject preparation within the shared-step gap, and deterministic work-bound checks straddling the 256 KiB mask-budget transition |
+| Full-fold REGEXP (5, 6) | `regexp_casefold_internal_test.go`, `regexp_casefold_test.go` (tables, orbits, budgets, source-verdict preservation), `func_builtin_regexp_test.go` error-shape tests; planned boundary tests on both engines: redundant-literal-alternative equivalence (`A|A|A|A` ≡ `A` over the ß/ss/STRASSE subject matrix, the 328-byte four-alternative shape folding fully after dedup so forty `ß` match eighty `s` under `i`), dedup-eligibility counterexamples (capture-bearing duplicates retained — `^((ss)|(ss))\3$` keeps group 3 valid and matches `ssss` through the second branch with group-3 participation; `REGEXP_REPLACE` `$3` replacement identity preserved; backreference-bearing and unscoped-`(?i)`-bearing duplicates retained; capture-free duplicates still deduped), and post-dedup budget exhaustion raising the resource-limit error (replacing the silent-false pins in the r1 admission-fallback tests) |
+| Bounded work (7) | cancellation and bounded-work UTs in both packages; planned tests: the fragmented-pattern counterexample (`%` + 15,000 `a_` pairs + a 92-distinct-weight alphabet interleaved with `_` + `%` against 60,000 `a` characters) terminating at the total-work bound with the resource-limit error and an instrumented comparison count at or under the bound, cancellation observed after subject preparation within the shared-step gap, and deterministic work-bound checks straddling the 256 KiB mask-budget transition |
+| Resource-boundary SQL proof (5, 7) | planned BVT (public-path proof per the testing contract, since both boundaries are new SQL-visible errors): update `issue_31175_pattern_collation.sql`'s round-14/15 sections — the 999-nested-capture `'i'` statements currently pinned `1`/`1`/`0` with "never an error" comments become the bounded resource-limit error, the 997-nest accept side and the `'c'` control stay unchanged, and the four-alternative section gains a forty-`ß` subject now returning `1` after dedup; add `issue_31175_pattern_resource_limits.sql` covering regexp2 translated-size exhaustion, RE2 height-bound exhaustion, LIKE total-work-bound exhaustion, below-bound controls just under each bound returning normal folded results, and malformed-source patterns keeping their own error verdicts. The error is pinned by its stable class and message prefix (`internal error: regexp case-fold resource limit exceeded: <bound>` / `internal error: LIKE pattern resource limit exceeded: <bound>`) using `@regex` on the prefix per BVT quality rules; expected results are hand-written from this contract and independently reviewed before normal comparison execution (generated results are a draft, never accepted merely because generated) |
 | Plan/execution agreement (8) | `TestLikePrefixCaseInsensitiveKeepsFoldedPredicate` (pkg/tests/sqlintegration) proving scan, forced-index, and computed-subject paths return the folded rows; prefix fixtures pinned to `utf8mb4_bin` |
 | Domain/coercibility preservation (9) | `pkg/sql/plan` and `rule` UTs for folded `CAST(x AS BINARY)`/`BINARY 'x'`/`binary()` stamping, negative-width casts, folded-domain preservation; `operator/mysql_compat_string_binary_comparison` BVT unchanged |
 | Cache contract (10) | existing cache/eviction tests plus admission-error tests proving install only after success |
@@ -427,18 +455,40 @@ Revision history:
   verification-work bound, and its cancellation accounting skipped `_`
   positions and one-character literals (a fragmented counterexample needs
   hundreds of millions of comparisons with millions between checks).
-- r2, 2026-11-08 (this document): resolves (1) with match-set-preserving
-  alternative deduplication plus a bounded resource-limit error for any
-  residual over-budget faithful expansion (invariants 5-7, ownership items
-  3-4, per-call flow, unhappy paths, compatibility note); resolves (2) with
-  one shared per-call search budget (every comparison charged, cancellation
-  every 1024 shared steps) and a deterministic total-work bound of
-  `max(1<<20, 4 × words × subject_chars)` for the anchor fallback
-  (invariant 7, ownership item 1). The preserved implementation head
-  `b554558f9d3c191244f01b0e162a83d6af88ba8d` predates both resolutions;
-  their production deltas and the planned-r2 boundary tests named in the
-  validation map land in the post-approval implementation turn.
-- Design revision under review: r2, 2026-11-08 (this document).
+- r2, 2026-11-08, SHA256
+  `c309345e456cf92c06446cd6bb12a0fb94b7c49637214e743ee71a4f47a95e9a`:
+  resolved r1's findings with alternative deduplication plus the
+  resource-limit error and the LIKE shared budget with a total-work bound.
+  The independent design-only review returned REQUEST_CHANGES with two P2
+  findings: (1) restrict alternative deduplication to semantically
+  equivalent branches — byte-identical reasoning excluded capture side
+  effects (`^((ss)|(ss))\3$` loses group 3 if either identical branch is
+  deleted; source capture identity is user-observable through
+  backreferences and `REGEXP_REPLACE` replacements, and unscoped inline
+  options make branch position significant); (2) plan public SQL proof for
+  the new resource-limit outcomes — the planned validation was UT-only
+  while the errors are SQL-visible, the existing BVT pins `1`/`1`/`0` with
+  "never an error" comments for shapes the r2 contract turns into errors,
+  and no stable error class/diagnostic was defined.
+- r3, 2026-11-08 (this document): resolves (1) with the conservative
+  dedup-eligibility rule (byte-identical siblings only, no captures, no
+  backreferences, no unscoped option setters, first occurrence kept;
+  emission-level dedup safe by construction; ineligible branches retained
+  with the resource-limit contract as the fallback) plus planned
+  capture/backreference/replacement/inline-option counterexample tests
+  (invariant 5, ownership item 3, validation map); resolves (2) with the
+  error contract (internal-error family, stable bound-naming message
+  prefixes, invalid-input family reserved for source-pattern verdicts) and
+  a planned resource-boundary BVT: the flipped round-14/15 statements in
+  `issue_31175_pattern_collation.sql` are updated, a new
+  `issue_31175_pattern_resource_limits.sql` covers both engines' exhaustion
+  errors, LIKE work-bound exhaustion, below-bound controls and
+  source-pattern errors, with expected results independently reviewed
+  before comparison execution (validation map, compatibility section). The
+  preserved implementation head `b554558f9d3c191244f01b0e162a83d6af88ba8d`
+  predates the r2/r3 resolutions; their production deltas and the planned
+  UT/BVT proof land in the post-approval implementation turn.
+- Design revision under review: r3, 2026-11-08 (this document).
 - Implementation review remains blocked until the review of this revision
   records a PASS or REQUEST_CHANGES decision bound to this document's SHA256;
   material implementation deviations require updating this document and
