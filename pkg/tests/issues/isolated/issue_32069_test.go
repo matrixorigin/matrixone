@@ -137,7 +137,21 @@ func TestIssue32069SetMembershipOwners(t *testing.T) {
 					query := "select k,count(*) from (" + set + ") s group by k"
 					groupedPlan, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 					require.NoError(t, err)
-					require.Positive(t, strings.Count(strings.ToLower(groupedPlan.Text), operatorName), groupedPlan.Text)
+					groupedOwners := strings.Count(strings.ToLower(groupedPlan.Text), operatorName)
+					require.Positive(t, groupedOwners, groupedPlan.Text)
+					t.Run("parallel plan witness", func(t *testing.T) {
+						if cnCount == 1 {
+							if groupedOwners < 8 {
+								t.Skipf("eight owners were not admitted (got %d)", groupedOwners)
+							}
+							require.Equal(t, 8, groupedOwners, groupedPlan.Text)
+							return
+						}
+						if groupedOwners < 2 {
+							t.Skipf("parallel owners were not admitted (got %d)", groupedOwners)
+						}
+						require.Contains(t, groupedPlan.Text, "addr:"+peerAddr, "a remote scan must participate")
+					})
 					rows, err := db.QueryContext(ctx, query)
 					require.NoError(t, err)
 					defer rows.Close()
