@@ -1,0 +1,152 @@
+DROP DATABASE IF EXISTS union_bit_width_regression;
+CREATE DATABASE union_bit_width_regression;
+USE union_bit_width_regression;
+CREATE TABLE bit8_t (id INT, b BIT(8));
+INSERT INTO bit8_t VALUES (1, b'0'), (2, b'11111111'), (3, NULL), (4, b'11111111');
+CREATE TABLE bit16_t (id INT, b BIT(16));
+INSERT INTO bit16_t VALUES (1, b'1'), (2, b'11111111'), (3, NULL);
+CREATE TABLE bit9_t (id INT, b BIT(9));
+INSERT INTO bit9_t VALUES (2, b'100000010'), (3, NULL);
+CREATE TABLE bit1_t (id INT, b BIT(1));
+INSERT INTO bit1_t VALUES (1, b'0'), (2, b'1');
+CREATE TABLE bit64_t (id INT, b BIT(64));
+INSERT INTO bit64_t VALUES (1, b'1111111111111111111111111111111111111111111111111111111111111111'), (2, b'11111111'), (3, NULL);
+CREATE TABLE bit64_empty (id INT, b BIT(64));
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit16_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    2
+1    2
+255    2
+255    2
+255    2
+SELECT COUNT(*) AS null_rows FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit16_t) AS u WHERE d IS NULL;
+null_rows
+2
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit16_t UNION ALL SELECT b FROM bit8_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    2
+1    2
+255    2
+255    2
+255    2
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit8_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    1
+0    1
+255    1
+255    1
+255    1
+255    1
+SELECT COUNT(*) AS null_rows FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit8_t) AS u WHERE d IS NULL;
+null_rows
+2
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION SELECT b FROM bit16_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    2
+1    2
+255    2
+SELECT COUNT(*) AS null_rows FROM (SELECT b AS d FROM bit8_t UNION SELECT b FROM bit16_t) AS u WHERE d IS NULL;
+null_rows
+1
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION SELECT b FROM bit8_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    1
+255    1
+SELECT COUNT(*) AS null_rows FROM (SELECT b AS d FROM bit8_t UNION SELECT b FROM bit8_t) AS u WHERE d IS NULL;
+null_rows
+1
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit1_t UNION ALL SELECT b FROM bit9_t UNION ALL SELECT b FROM bit16_t UNION ALL SELECT b FROM bit64_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    8
+1    8
+1    8
+255    8
+255    8
+258    8
+18446744073709551615    8
+SELECT COUNT(*) AS null_rows FROM (SELECT b AS d FROM bit1_t UNION ALL SELECT b FROM bit9_t UNION ALL SELECT b FROM bit16_t UNION ALL SELECT b FROM bit64_t) AS u WHERE d IS NULL;
+null_rows
+3
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit64_empty UNION ALL SELECT b FROM bit16_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    8
+1    8
+255    8
+255    8
+255    8
+SELECT COUNT(*) AS null_rows FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit64_empty UNION ALL SELECT b FROM bit16_t) AS u WHERE d IS NULL;
+null_rows
+2
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT NULL AS d UNION ALL SELECT b FROM bit8_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    1
+255    1
+255    1
+SELECT COUNT(*) AS null_rows FROM (SELECT NULL AS d UNION ALL SELECT b FROM bit8_t) AS u WHERE d IS NULL;
+null_rows
+2
+SELECT COUNT(*) AS rows_out FROM (SELECT NULL AS d UNION ALL SELECT NULL AS d) AS u;
+rows_out
+2
+SELECT COUNT(d) AS d_count FROM (SELECT NULL AS d UNION ALL SELECT NULL AS d) AS u;
+d_count
+0
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT CAST(258 AS UNSIGNED) AS d) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    1
+255    3
+255    3
+258    3
+SELECT CAST(COALESCE(b, 255) AS UNSIGNED) AS num FROM bit8_t ORDER BY num;
+num
+0
+255
+255
+255
+SELECT COUNT(*) AS wide_rows FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit16_t) AS u WHERE LENGTH(d) = 2;
+wide_rows
+5
+CREATE VIEW union_bit_view AS SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit16_t;
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM union_bit_view WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    2
+1    2
+255    2
+255    2
+255    2
+SELECT COUNT(*) AS null_rows FROM union_bit_view WHERE d IS NULL;
+null_rows
+2
+SELECT column_name, data_type, column_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'union_bit_view' AND column_name = 'd' ORDER BY ordinal_position;
+column_name    data_type    column_type
+d    bit    bit(16)
+CREATE TABLE union_bit_saved AS SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit16_t;
+SELECT COUNT(*) AS rows_saved FROM union_bit_saved;
+rows_saved
+7
+SELECT column_name, data_type, column_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'union_bit_saved' AND column_name = 'd' ORDER BY ordinal_position;
+column_name    data_type    column_type
+d    bit    bit(16)
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM union_bit_saved WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    2
+1    2
+255    2
+255    2
+255    2
+INSERT INTO bit8_t VALUES (9, 256);
+invalid input: data too long, type width = 8, val = 100000000
+SELECT 1;
+1
+1
+SELECT COUNT(*) AS rows_after_reject FROM bit8_t;
+rows_after_reject
+4
+SELECT CAST(d AS UNSIGNED) AS num, LENGTH(d) AS width FROM (SELECT b AS d FROM bit8_t UNION ALL SELECT b FROM bit16_t) AS u WHERE d IS NOT NULL ORDER BY num, width;
+num    width
+0    2
+1    2
+255    2
+255    2
+255    2
+DROP DATABASE union_bit_width_regression;
