@@ -156,6 +156,32 @@ func TestSerializedLiteralRedactionAppliesAcrossExpressionLayouts(t *testing.T) 
 	}
 }
 
+func TestCompositeKeyInExplainShowsRedaction(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendBytes(vec, []byte{0, 1, 2}, false, mp))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	registered, err := function.GetFunctionByName(context.Background(), "in",
+		[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()})
+	require.NoError(t, err)
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "in"},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: catalog.CPrimaryKeyColName}}},
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Data: data, Len: 1, IsSerialized: true}}},
+		},
+	}}}
+	var text bytes.Buffer
+	require.NoError(t, describeExpr(context.Background(), expr, NewExplainDefaultOptions(), &text))
+	require.Equal(t, catalog.CPrimaryKeyColName+" in (<opaque>)", text.String())
+	var jsonText bytes.Buffer
+	require.NoError(t, describeExpr(context.Background(), expr, &ExplainOptions{CompleteLiteralVectors: true}, &jsonText))
+	require.Contains(t, jsonText.String(), "serialized_vec(")
+	require.Contains(t, jsonText.String(), "0x000102")
+}
+
 func TestBinaryLiteralExplainUsesHex(t *testing.T) {
 	got := describeComparisonForLiteralTest(t, "payload", "=", "AB", types.T_varchar, true, false)
 	if want := "(payload = 0x4142)"; got != want {

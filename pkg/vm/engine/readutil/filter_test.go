@@ -2789,6 +2789,69 @@ func TestMergeFiltersRejectsNaNOperands(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestMergeFiltersPrefersExactPointsToPrefix(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	points := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"a1", "a2"} {
+		require.NoError(t, vector.AppendBytes(points, []byte(value), false, mp))
+	}
+	points.SetSorted(true)
+	defer func() {
+		points.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	prefix := BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}
+	exact := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: points}
+	for _, reverse := range []bool{false, true} {
+		left, right := prefix, exact
+		if reverse {
+			left, right = right, left
+		}
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, function.IN, merged.Op)
+		require.Same(t, points, merged.Vec)
+
+		block, err := ConstructBlockPKFilter(false, merged, nil)
+		require.NoError(t, err)
+		func() {
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(mp)
+			for _, value := range []string{"a1", "a2", "b1"} {
+				require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+			}
+			require.Equal(t, []int64{0, 1}, block.DecideSearchFunc(true)(containers.Vectors{*input}))
+		}()
+	}
+	// If the set extends beyond the prefix, its selectivity is unknown. Keep
+	// the existing fallback rather than always preferring either operand.
+	outside := vector.NewVec(types.T_varchar.ToType())
+	defer outside.Free(mp)
+	for _, value := range []string{"a1", "b1"} {
+		require.NoError(t, vector.AppendBytes(outside, []byte(value), false, mp))
+	}
+	outside.SetSorted(true)
+	partial := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: outside}
+	for _, reverse := range []bool{false, true} {
+		left, right := prefix, partial
+		if reverse {
+			left, right = right, left
+		}
+		merged, err := mergeFilters(&left, &right, function.AND, mp)
+		require.NoError(t, err)
+		require.True(t, merged.Valid)
+		require.Equal(t, left.Op, merged.Op)
+	}
+	bad := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bad, int64(1), false, mp))
+	defer bad.Free(mp)
+	invalid := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: bad}
+	merged, err := mergeFilters(&prefix, &invalid, function.AND, mp)
+	require.NoError(t, err)
+	require.False(t, merged.Valid, "invalid point vectors must fail open")
+}
+
 func TestCombineOffsetFuncsDeduplicatesAndRejectsInvalidOffsets(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	vec := vector.NewVec(types.T_int64.ToType())
@@ -4014,6 +4077,63 @@ func TestMergedInFilterCleanupHandoff(t *testing.T) {
 	// multiple reset/error paths.
 	filter.Cleanup()
 	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestMergedInFilterSelectedOverPrefixRetainsCachedSearch(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	left := vector.NewVec(types.T_varchar.ToType())
+	right := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer func() {
+		left.Free(mp)
+		right.Free(mp)
+		input.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	for _, tc := range []struct {
+		vec    *vector.Vector
+		values []string
+	}{{left, []string{"a1", "a2", "a3"}}, {right, []string{"a2", "a3", "a4"}}, {input, []string{"a1", "a2", "a3", "b1"}}} {
+		for _, value := range tc.values {
+			require.NoError(t, vector.AppendBytes(tc.vec, []byte(value), false, mp))
+		}
+		tc.vec.SetSorted(true)
+	}
+	payload, err := input.MarshalBinary()
+	require.NoError(t, err)
+	data := append([]byte(nil), objectio.EncodeIOEntryHeader(&objectio.IOEntryHeader{Type: objectio.IOET_ColData, Version: objectio.IOET_ColumnData_V2})...)
+	data = append(data, payload...)
+	cached := fileservice.NewBytes(data)
+	defer cached.Release()
+	baseline := mp.CurrNB()
+	for _, reverse := range []bool{false, true} {
+		intersection, err := mergeBaseFilterInKind(
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: left},
+			BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: right}, false, mp)
+		require.NoError(t, err)
+		prefix := BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}
+		first, second := &prefix, &intersection
+		if reverse {
+			first, second = second, first
+		}
+		selected, err := mergeFilters(first, second, function.AND, mp)
+		require.NoError(t, err)
+		require.Same(t, intersection.Vec, selected.Vec)
+		filter, err := ConstructBlockPKFilter(false, selected, nil)
+		require.NoError(t, err)
+		require.NotNil(t, filter.CachedSearch)
+		hits, err := objectio.SearchCachedVector(fileservice.IOEntry{CachedData: cached}, filter.CachedSearch, true)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, hits)
+		require.NotNil(t, filter.Cleanup)
+		filter.Cleanup()
+		filter.Cleanup()
+		require.Equal(t, baseline, mp.CurrNB())
+		// The cached descriptor owns its search keys after the merge is freed.
+		hits, err = objectio.SearchCachedVector(fileservice.IOEntry{CachedData: cached}, filter.CachedSearch, true)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, hits)
+	}
 }
 
 func TestConstructBasePKFilterOrFallbackRetainsMergedDisjunct(t *testing.T) {

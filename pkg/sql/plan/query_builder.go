@@ -4434,6 +4434,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizerHints.pushDownLimitToScan = 1
 		builder.optimizerHints.pushDownTopThroughLeftJoin = 1
 	}
+	pointBudget := uint64(maxCompositePointBytes)
 	for i, rootID := range builder.qry.Steps {
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
@@ -4443,7 +4444,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID, err = builder.optimizeFilters(rootID)
+		var points compositePointCapture
+		rootID, points, err = builder.optimizeFilters(rootID, &pointBudget)
 		if err != nil {
 			return nil, err
 		}
@@ -4564,8 +4566,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true, nil)
 		if needsLate {
+			points.revalidate(builder)
 			builder.mergeFiltersOnCompositeKey(rootID, false)
 			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 		}
@@ -4576,6 +4579,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			sortFilterListByStats(builder.GetContext(), rootID, builder)
 			clear(colRefCnt)
 			builder.countColRefs(rootID, colRefCnt)
+			points.snapshot()
 		}
 
 		builder.generateRuntimeFilters(rootID)
@@ -4591,6 +4595,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
+		points.publish(builder, rootID)
 
 		rootNode := builder.qry.Nodes[rootID]
 

@@ -678,11 +678,11 @@ type compositePartBlockFilter struct {
 	copy     *plan.Expr
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool) (map[int32][]compositePartBlockFilter, bool) {
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool, points *compositePointCapture) (map[int32][]compositePartBlockFilter, bool) {
 	var ret map[int32][]compositePartBlockFilter
 	needsLate := false
 	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
-	if blockDisabled && !deferredOnly {
+	if blockDisabled && !deferredOnly && points == nil {
 		return nil, false
 	}
 	visited := make(map[int32]struct{})
@@ -698,6 +698,9 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, defe
 				visit(childID)
 			}
 			return
+		}
+		if points != nil {
+			points.collect(builder, id, node)
 		}
 
 		if deferredOnly {
