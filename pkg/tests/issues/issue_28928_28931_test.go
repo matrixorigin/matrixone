@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	issue289CreateIndexPlanCompiled = "create-index-plan-compiled"
+	issue289IndexDDLPlanCompiled = "index-ddl-plan-compiled"
 )
 
 func TestIssue28928ConcurrentCreateIndexNameIsUnique(t *testing.T) {
@@ -71,7 +71,7 @@ func TestIssue28928ConcurrentCreateIndexNameIsUnique(t *testing.T) {
 				execSQLRequire(t, ctx, db0, "insert into "+table+" values (1, 10, 100), (2, 20, 200)")
 				issue289WaitForTable(t, ctx, db1, table, 2)
 
-				waitForPlans, release := issue289InstallPlanBarrier(t, ctx, issue289CreateIndexPlanCompiled, 2)
+				waitForPlans, release := issue289InstallPlanBarrier(t, ctx, issue289IndexDDLPlanCompiled, 2)
 				conn0, err := db0.Conn(ctx)
 				require.NoError(t, err)
 				defer conn0.Close()
@@ -164,6 +164,126 @@ func TestIssue28928ConcurrentCreateIndexNameIsUnique(t *testing.T) {
 				execSQLRequire(t, ctx, observer, "drop index ix_race on "+table)
 			})
 		}
+	})
+}
+
+func TestIssue32346AlterIndexIncludesCommittedWrites(t *testing.T) {
+	withIssue289Faults(t)
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		writer, ddl := issue289OpenCNs(t, cluster)
+		defer writer.Close()
+		defer ddl.Close()
+
+		database := testutils.GetDatabaseName(t)
+		execSQLRequire(t, ctx, writer, "create database `"+database+"`")
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			execSQLMaybe(t, cleanup, writer, "drop database if exists `"+database+"`")
+		}()
+
+		for _, tc := range []struct {
+			name, alter, update string
+			unique              bool
+		}{
+			{"regular", "add index ix_a (a)", "set a=3 where id=1", false},
+			{"unique", "add unique index ix_a (a)", "set a=1 where id=2", true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				table := "`" + database + "`.`" + tc.name + "`"
+				execSQLRequire(t, ctx, writer, "create table "+table+" (id int primary key, a int not null)")
+				execSQLRequire(t, ctx, writer, "insert into "+table+" values (1,1),(2,2)")
+				issue289WaitForTable(t, ctx, ddl, table, 2)
+
+				// Freeze ALTER after its snapshot and plan are established, then
+				// commit a writer before ALTER acquires its definition locks.
+				waitForPlan, finishDDL := issue289StartPlanBlockedDDL(t, ctx, ddl, "alter table "+table+" "+tc.alter)
+				waitForPlan()
+				execSQLRequire(t, ctx, writer, "update "+table+" "+tc.update)
+				syncAuthenticatedClusterCommit(t, ctx, cluster)
+				err := finishDDL()
+				if tc.unique {
+					issue289RequireMySQLError(t, err, 1062)
+					var published int
+					require.NoError(t, ddl.QueryRowContext(ctx,
+						"select count(*) from information_schema.statistics where table_schema=? and table_name=? and index_name='ix_a'",
+						database, tc.name).Scan(&published))
+					require.Zero(t, published)
+					return
+				}
+				require.NoError(t, err)
+				syncAuthenticatedClusterCommit(t, ctx, cluster)
+				issue289AssertPhysicalIndex(t, ctx, ddl, database, tc.name, "ix_a", "a", false,
+					[]issue289IndexRow{{1, "3"}, {2, "2"}})
+			})
+		}
+
+		t.Run("workspace writes around index build", func(t *testing.T) {
+			const tableName = "workspace_writes"
+			table := "`" + database + "`.`" + tableName + "`"
+			execSQLRequire(t, ctx, writer, "create table "+table+" (id int primary key, a int not null)")
+			execSQLRequire(t, ctx, writer, "insert into "+table+" values (1,1),(2,2)")
+			issue289WaitForTable(t, ctx, ddl, table, 2)
+			conn, err := writer.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			defer func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+				defer stop()
+				_, _ = conn.ExecContext(cleanup, "rollback")
+			}()
+			for _, stmt := range []string{
+				"begin",
+				"update " + table + " set a=3 where id=1",
+				"alter table " + table + " add index ix_a (a)",
+				"update " + table + " set a=4 where id=2",
+				"commit",
+			} {
+				_, err = conn.ExecContext(ctx, stmt)
+				require.NoError(t, err, stmt)
+			}
+			syncAuthenticatedClusterCommit(t, ctx, cluster)
+			issue289AssertPhysicalIndex(t, ctx, ddl, database, tableName, "ix_a", "a", false,
+				[]issue289IndexRow{{1, "3"}, {2, "4"}})
+		})
+
+		t.Run("failed unique build preserves prior transaction work", func(t *testing.T) {
+			const tableName = "failed_build"
+			table := "`" + database + "`.`" + tableName + "`"
+			execSQLRequire(t, ctx, writer, "create table "+table+" (id int primary key, a int not null)")
+			execSQLRequire(t, ctx, writer, "insert into "+table+" values (1,1),(2,2),(3,2)")
+			issue289WaitForTable(t, ctx, ddl, table, 3)
+			conn, err := writer.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			defer func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+				defer stop()
+				_, _ = conn.ExecContext(cleanup, "rollback")
+			}()
+			_, err = conn.ExecContext(ctx, "begin")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "update "+table+" set a=3 where id=1")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "alter table "+table+" add unique index ix_a (a)")
+			issue289RequireMySQLError(t, err, 1062)
+			_, err = conn.ExecContext(ctx, "commit")
+			require.NoError(t, err)
+			syncAuthenticatedClusterCommit(t, ctx, cluster)
+			var value, published, hidden int
+			require.NoError(t, ddl.QueryRowContext(ctx, "select a from "+table+" where id=1").Scan(&value))
+			require.Equal(t, 3, value)
+			require.NoError(t, ddl.QueryRowContext(ctx,
+				"select count(*) from information_schema.statistics where table_schema=? and table_name=? and index_name='ix_a'",
+				database, tableName).Scan(&published))
+			require.Zero(t, published)
+			require.NoError(t, ddl.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname like '__mo_index_unique%'",
+				strings.ToLower(database)).Scan(&hidden))
+			require.Zero(t, hidden)
+		})
 	})
 }
 
@@ -481,7 +601,7 @@ func issue289RunStaleWriter(t *testing.T, ctx context.Context, cluster embed.Clu
 // reaching the normal handoff. KILL QUERY cancels the server-side statement.
 func issue289StartPlanBlockedDDL(t *testing.T, ctx context.Context, db *sql.DB, statement string) (func(), func() error) {
 	t.Helper()
-	wait, release := issue289InstallPlanBarrier(t, ctx, issue289CreateIndexPlanCompiled, 1)
+	wait, release := issue289InstallPlanBarrier(t, ctx, issue289IndexDDLPlanCompiled, 1)
 	conn, err := db.Conn(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })

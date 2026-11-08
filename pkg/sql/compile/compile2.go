@@ -165,7 +165,7 @@ func (c *Compile) Compile(
 	return c.proc.GetQueryContextError()
 }
 
-const createIndexPlanCompiledFault = "create-index-plan-compiled"
+const indexDDLPlanCompiledFault = "index-ddl-plan-compiled"
 
 // triggerStatementPlanCompiledFault exposes a deterministic boundary between
 // planning and pre-pipeline locking for cross-CN schema-change tests. Fault
@@ -176,7 +176,14 @@ func triggerStatementPlanCompiledFault(ctx context.Context, queryPlan *plan.Plan
 		return
 	}
 	if queryPlan.GetDdl().GetCreateIndex() != nil {
-		fault.TriggerFaultWithContext(ctx, createIndexPlanCompiledFault)
+		fault.TriggerFaultWithContext(ctx, indexDDLPlanCompiledFault)
+		return
+	}
+	for _, action := range queryPlan.GetDdl().GetAlterTable().GetActions() {
+		if action.GetAddIndex() != nil {
+			fault.TriggerFaultWithContext(ctx, indexDDLPlanCompiledFault)
+			return
+		}
 	}
 }
 

@@ -773,7 +773,7 @@ func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
 	proc.Base.TxnClient = txnClient
 	proc.Base.TxnOperator = txnOp
 
-	require.NoError(t, (&Compile{proc: proc}).advanceCreateIndexSnapshot())
+	require.NoError(t, (&Compile{proc: proc}).advanceIndexDDLSnapshot())
 }
 
 func TestAdvanceCreateIndexSnapshotNeedsOnlyOneLegacyLogtailUpdate(t *testing.T) {
@@ -814,7 +814,7 @@ func TestAdvanceCreateIndexSnapshotNeedsOnlyOneLegacyLogtailUpdate(t *testing.T)
 	proc.Ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	require.NoError(t, (&Compile{proc: proc}).advanceCreateIndexSnapshot(),
+	require.NoError(t, (&Compile{proc: proc}).advanceIndexDDLSnapshot(),
 		"an already applied frontier must not require another logtail notification")
 }
 
@@ -846,7 +846,7 @@ func TestCreateIndexLegacyFrontierFailsClosed(t *testing.T) {
 					Return(tc.applied, tc.waitErr)
 				proc.Base.TxnClient = txnClient
 			}
-			_, err := (&Compile{proc: proc}).createIndexLegacyLogtailFrontier()
+			_, err := (&Compile{proc: proc}).indexDDLLegacyLogtailFrontier()
 			require.ErrorContains(t, err, tc.wantError)
 		})
 	}
@@ -896,18 +896,18 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 
 	t.Run("missing ordered barrier capability", func(t *testing.T) {
 		c, _ := newCompile(t, newStubEngine())
-		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "barrier is unavailable")
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "barrier is unavailable")
 	})
 
 	t.Run("ordered barrier failure", func(t *testing.T) {
 		c, _ := newCompile(t, newBarrier(wantErr))
-		require.ErrorIs(t, c.advanceCreateIndexSnapshot(), wantErr)
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
 	})
 
 	t.Run("missing workspace", func(t *testing.T) {
 		c, txnOp := newCompile(t, newBarrier(nil))
 		txnOp.EXPECT().GetWorkspace().Return(nil)
-		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "missing workspace")
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "missing workspace")
 	})
 
 	t.Run("workspace advance failure", func(t *testing.T) {
@@ -915,7 +915,7 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 		workspace := mock_frontend.NewMockWorkspace(gomock.NewController(t))
 		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(wantErr)
 		txnOp.EXPECT().GetWorkspace().Return(workspace)
-		require.ErrorIs(t, c.advanceCreateIndexSnapshot(), wantErr)
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
 	})
 
 	t.Run("workspace remains at the frontier", func(t *testing.T) {
@@ -924,7 +924,7 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
 		txnOp.EXPECT().GetWorkspace().Return(workspace)
 		txnOp.EXPECT().SnapshotTS().Return(frontier)
-		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "did not advance past")
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "did not advance past")
 	})
 }
 

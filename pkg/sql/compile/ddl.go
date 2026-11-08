@@ -730,6 +730,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
+	// ADD INDEX reads the base relation just like CREATE INDEX. Once the
+	// existing ALTER locks are held, advance an RC snapshot before any index
+	// backfill so it includes writers that committed after planning.
+	if !isTemp {
+		for _, action := range qry.Actions {
+			if action.GetAddIndex() != nil {
+				if err = c.advanceIndexDDLSnapshot(); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+
 	var hasUpdateConstraints bool
 	var hasDefReplace bool
 
@@ -2589,14 +2603,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 	// CREATE INDEX reads the complete base relation and then publishes a new
-	// write target. The table lock closes both sides of that handoff: a prior
-	// DML commit advances this build to a fresh snapshot, while later DML plans
-	// observe the definition-change fence and rebuild with the new index target.
+	// write target. For pessimistic RC transactions that participate in these
+	// locks, the barrier includes prior commits and the definition-change fence
+	// makes later stale DML plans rebuild with the new index target.
 	if err = lockTable(c.proc.Ctx, c.e, c.proc, r, dbName, true); err != nil {
 		return err
 	}
 	if !qry.GetTableDef().GetIsTemporary() {
-		if err = c.advanceCreateIndexSnapshot(); err != nil {
+		if err = c.advanceIndexDDLSnapshot(); err != nil {
 			return err
 		}
 	}
@@ -2636,11 +2650,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	return nil
 }
 
-// advanceCreateIndexSnapshot closes the gap between CREATE INDEX planning and
-// its base-table scan. The caller holds both the catalog-owner lock and the
-// base-table definition lock, so the barrier includes every DML commit that
-// preceded those locks while later DML must rebuild against the new index.
-func (c *Compile) advanceCreateIndexSnapshot() error {
+// advanceIndexDDLSnapshot closes the gap between index DDL planning and its
+// base-table scan for pessimistic RC transactions. The caller holds the
+// catalog-owner and base-table definition locks before advancing the snapshot.
+func (c *Compile) advanceIndexDDLSnapshot() error {
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
 		return nil
@@ -2654,11 +2667,11 @@ func (c *Compile) advanceCreateIndexSnapshot() error {
 		barrier, ok := getLogtailReadBarrier(c.e)
 		if !ok {
 			return moerr.NewInternalError(c.proc.Ctx,
-				"CREATE INDEX logtail read barrier is unavailable")
+				"index DDL logtail read barrier is unavailable")
 		}
 		frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
 	} else {
-		frontier, err = c.createIndexLegacyLogtailFrontier()
+		frontier, err = c.indexDDLLegacyLogtailFrontier()
 	}
 	if err != nil {
 		return err
@@ -2667,40 +2680,40 @@ func (c *Compile) advanceCreateIndexSnapshot() error {
 	workspace := txnOp.GetWorkspace()
 	if workspace == nil {
 		return moerr.NewInternalError(c.proc.Ctx,
-			"missing workspace for CREATE INDEX snapshot refresh")
+			"missing workspace for index DDL snapshot refresh")
 	}
 	if err = workspace.AdvanceSnapshot(c.proc.Ctx, frontier); err != nil {
 		return err
 	}
 	if !txnOp.SnapshotTS().Greater(frontier) {
 		return moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX transaction snapshot did not advance past the logtail frontier")
+			"index DDL transaction snapshot did not advance past the logtail frontier")
 	}
 	return nil
 }
 
-// createIndexLegacyLogtailFrontier is the rolling-upgrade fallback for TNs
+// indexDDLLegacyLogtailFrontier is the rolling-upgrade fallback for TNs
 // that predate the ordered logtail read barrier. Waiting beyond the local HLC
 // uncertainty bound makes every earlier remote commit visible on this CN.
-func (c *Compile) createIndexLegacyLogtailFrontier() (timestamp.Timestamp, error) {
+func (c *Compile) indexDDLLegacyLogtailFrontier() (timestamp.Timestamp, error) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	if rt == nil || rt.Clock() == nil {
 		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction clock for CREATE INDEX snapshot refresh")
+			"missing transaction clock for index DDL snapshot refresh")
 	}
 	if rt.Clock().MaxOffset() < 0 {
 		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"negative transaction clock offset for CREATE INDEX snapshot refresh")
+			"negative transaction clock offset for index DDL snapshot refresh")
 	}
 	_, upperBound := rt.Clock().Now()
 	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
 		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX snapshot refresh timestamp overflow")
+			"index DDL snapshot refresh timestamp overflow")
 	}
 	minimum := timestamp.Timestamp{PhysicalTime: upperBound.PhysicalTime + 1}
 	if c.proc.Base.TxnClient == nil {
 		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction client for CREATE INDEX snapshot refresh")
+			"missing transaction client for index DDL snapshot refresh")
 	}
 	applied, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, minimum)
 	if err != nil {
@@ -2708,7 +2721,7 @@ func (c *Compile) createIndexLegacyLogtailFrontier() (timestamp.Timestamp, error
 	}
 	if applied.Less(minimum) {
 		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"CREATE INDEX snapshot refresh did not reach the required timestamp")
+			"index DDL snapshot refresh did not reach the required timestamp")
 	}
 	// The waiter returns the next snapshot timestamp, not the applied logtail
 	// timestamp. Passing it back to AdvanceSnapshot would wait for another
