@@ -373,3 +373,27 @@ func TestDictionaryEnsureFlatFailureIsTransactional(t *testing.T) {
 	require.NoError(t, dict.EnsureWritable(mp))
 	require.Equal(t, []int64{22, 11}, MustFixedColNoTypeCheck[int64](dict))
 }
+
+func TestDictionaryPinRefusalMaterializesOnlySelectedRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(t, 32, 32)
+	t.Cleanup(func() {
+		finalizeTestVectorAllocationAccount(t, state)
+		require.Zero(t, mp.CurrNB())
+	})
+	lease, err := NewRefCountedBufferLease(types.EncodeSlice([]int64{11, 22, 33, 44}), 256, nil)
+	require.NoError(t, err)
+	source, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, lease.Bytes(), lease)
+	lease.Release()
+	require.NoError(t, err)
+	t.Cleanup(func() { source.Free(mp) })
+	rows, err := NewRowSelection([]int64{3}, 4, mp, state.selection)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	result, err := source.SelectDictionary(rows, mp, state.selection)
+	require.NoError(t, err, "a pin/full-copy refusal must not reject a fitting selected materialization")
+	t.Cleanup(func() { result.Free(mp) })
+	require.False(t, result.IsDictionary())
+	require.Equal(t, []int64{44}, MustFixedColNoTypeCheck[int64](result))
+	require.LessOrEqual(t, state.account.Snapshot().Used, uint64(32))
+}

@@ -65,7 +65,7 @@ func NewRowSelection(rows []int64, domain int, mp *mpool.MPool, account *Allocat
 	return &RowSelection{lease: lease, storage: storage, domain: domain, monotonic: monotonic}, nil
 }
 
-func (s *RowSelection) Retain() bool { return s != nil && s.lease.Retain() }
+func (s *RowSelection) Retain() bool { return s != nil && s.lease != nil && s.lease.Retain() }
 
 func (s *RowSelection) Release() { s.lease.Release() }
 
@@ -89,7 +89,7 @@ type dictionaryPayloadLease struct {
 	account *mpool.AllocationAccount
 }
 
-func (b *DictionaryBase) Retain() bool { return b != nil && b.lease.Retain() }
+func (b *DictionaryBase) Retain() bool { return b != nil && b.lease != nil && b.lease.Retain() }
 
 func (b *DictionaryBase) Release() { b.lease.Release() }
 
@@ -129,7 +129,11 @@ func FreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 		if err != nil {
 			return nil, err
 		}
-		upper := pinned + uint64(source.nsp.BorrowedAccountedBytes())
+		validityBytes := source.nsp.BorrowedAccountedBytes()
+		if validityBytes < 0 {
+			return nil, moerr.NewInvalidInputNoCtx("invalid dictionary validity pin size")
+		}
+		upper := pinned + uint64(validityBytes)
 		if upper < pinned {
 			return nil, moerr.NewInvalidInputNoCtx("dictionary pin size overflows")
 		}

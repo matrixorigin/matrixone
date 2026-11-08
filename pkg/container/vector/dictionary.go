@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"errors"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -128,6 +129,13 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 			}
 		}
 	}
+	payload := len(logical) * metadata.typ.TypeSize()
+	if area > math.MaxInt-payload || result.Allocated() > math.MaxInt-payload-area {
+		mapping.Release()
+		base.Release()
+		result.Free(mp)
+		return nil, moerr.NewInvalidInputNoCtx("dictionary logical size overflows")
+	}
 	result.class = DIST
 	result.dictionary = &dictionaryVector{base: base, rows: mapping, logicalArea: area}
 	result.sorted = base.vec.sorted && mapping.monotonic
@@ -145,17 +153,33 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 	if !v.CoversLogicalRows(0, rows.domain) {
 		return nil, moerr.NewInvalidInputNoCtx("dictionary composition has an incompatible row domain")
 	}
-	if !dictionaryAccountsMatch(v.allocationAccount, account) ||
-		(rows.Length() > 0 && !dictionaryAccountsMatch(rows.storage.allocationAccount, account)) {
+	if rows.Length() > 0 && !dictionaryAccountsMatch(rows.storage.allocationAccount, account) {
 		return nil, mpool.ErrAllocationAccountMismatch
 	}
 	if !v.IsDictionary() {
 		base, err := FreezeVector(v, mp, account)
+		if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			// A complete backing/base copy may exceed the budget even when
+			// materializing this small logical selection still fits.
+			flat, allocErr := NewOffHeapVecWithTypeAndAllocation(v.typ, account)
+			if allocErr != nil {
+				return nil, allocErr
+			}
+			if allocErr := flat.Union(v, rows.storageFixed(), mp); allocErr != nil {
+				flat.Free(mp)
+				return nil, allocErr
+			}
+			v.CopyExpressionMetadataTo(flat)
+			return flat, nil
+		}
 		if err != nil {
 			return nil, err
 		}
 		defer base.Release()
 		return NewDictionaryVector(base, rows, mp, account)
+	}
+	if !dictionaryAccountsMatch(v.allocationAccount, account) {
+		return nil, mpool.ErrAllocationAccountMismatch
 	}
 	logical := rows.storageFixed()
 	if len(logical) == 0 {
