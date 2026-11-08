@@ -832,9 +832,15 @@ func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, s
 	if err != nil {
 		return nil, err
 	}
+	return HandleSqlForRecordFragments(fragments), nil
+}
+
+// HandleSqlForRecordFragments sanitizes previously parsed statement fragments
+// in order, including empty and comment-only fragments.
+func HandleSqlForRecordFragments(fragments []string) []string {
 	records := make([]string, len(fragments))
 	for i, fragment := range fragments {
 		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
 	}
-	return records, nil
+	return records
 }

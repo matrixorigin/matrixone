@@ -241,7 +241,7 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 	}
 	if req.HasMembershipFilter {
 		if s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
-			proc.GetService(), "ivfpq", spec.SourceTableDef, req.MembershipFilter); err != nil {
+			proc.Ctx, proc.GetService(), "ivfpq", spec.SourceTableDef, req.MembershipFilter); err != nil {
 			return nil, err
 		}
 	}

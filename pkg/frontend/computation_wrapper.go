@@ -314,31 +314,8 @@ func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Conte
 
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
-	switch cwft.GetAst().(type) {
-	case *tree.ShowColumns:
-		if len(cols) == 7 {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
-			}
-		} else {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Collation"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Privileges"},
-				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
-			}
-		}
+	if _, ok := cwft.GetAst().(*tree.ShowColumns); ok {
+		return showColumnsWireMetadata(ctx, len(cols))
 	}
 	return columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 }
@@ -549,6 +526,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true
+
+		// Explicit-account CLONE has a source-only prepared carrier. The
+		// frontend owner resolves and plans the destination in its real account.
+		if clone, ok := cwft.stmt.(*tree.CloneTable); ok && clone.ToAccountOpt != nil && !clone.IsRestore {
+			return nil, nil
+		}
 
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
@@ -990,7 +973,7 @@ func initExecuteStmtParamInSession(
 		cwft,
 		execPlan,
 		stmtName,
-		executionSes.GetTxnCompileCtx().Resolve,
+		executionSes.GetTxnCompileCtx().resolveForCatalogValidation,
 		executionSes.GetTxnCompileCtx(),
 	)
 }
@@ -1565,7 +1548,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		newColDefData, err := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
@@ -1625,7 +1608,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
 			}
-			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+			newColDefData, metadataErr := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 			if metadataErr != nil {
 				return nil, nil, nil, "", false, metadataErr
 			}
@@ -1955,7 +1938,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		colDefData, metadataErr := makeStatementColumnDefData(reqCtx, resper.MysqlRrWr(), prepareStmt.PrepareStmt, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if metadataErr != nil {
 			return nil, nil, nil, originSQL, false, metadataErr
 		}
@@ -2236,10 +2219,13 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 	if expected.GetPubInfo() == nil {
 		return true, nil
 	}
+	// The alias belongs to captured data T. The resolver independently checks
+	// that alias's publication at current authorization A; a current same-named
+	// alias may refer to an unrelated (and denied) publication.
 	currentRef, currentDef, err := resolve(
 		expected.GetSubscriptionName(),
 		expected.GetObjName(),
-		nil,
+		expected.GetSnapshot(),
 	)
 	if err != nil {
 		return false, err
@@ -2248,23 +2234,6 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 		return true, nil
 	}
 	expectedTenant := expected.GetPubInfo().GetTenantId()
-	if plan2.IsSnapshotValid(expected.GetSnapshot()) {
-		if currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
-			currentRef.GetPubInfo().GetTenantId() != expectedTenant {
-			return true, nil
-		}
-		currentRef, currentDef, err = resolve(
-			expected.GetSubscriptionName(),
-			expected.GetObjName(),
-			expected.GetSnapshot(),
-		)
-		if err != nil {
-			return false, err
-		}
-		if currentRef == nil || currentDef == nil || currentRef.GetPubInfo() == nil {
-			return true, nil
-		}
-	}
 	return currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
 		currentRef.GetPubInfo().GetTenantId() != expectedTenant ||
 		currentRef.GetSchemaName() != expected.GetSchemaName() ||
@@ -2865,7 +2834,10 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 		return schemaChanged
 	}
 	if ddl := p.GetDdl(); ddl != nil {
-		if create := ddl.GetCreateTable(); create != nil && create.DatabaseDefaults != nil {
+		if create := ddl.GetCreateTable(); create != nil && (create.DatabaseDefaults != nil || create.GetTemporary()) {
+			return true
+		}
+		if alter := ddl.GetAlterTable(); alter != nil && alter.GetTableDef().GetIsTemporary() {
 			return true
 		}
 		if ddl.GetAlterDatabase() != nil || ddl.GetCreateDatabase().GetDefaults() != nil {
@@ -3074,7 +3046,11 @@ func buildPlanForCompileRetry(
 			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 				CatalogDependencies: preparedRetry.fieldSchemas,
 			}}}
-			changed, err := checkModify(dependencies, compilerContext.Resolve)
+			resolve := compilerContext.Resolve
+			if tcc, ok := compilerContext.(*TxnCompilerContext); ok {
+				resolve = tcc.resolveForCatalogValidation
+			}
+			changed, err := checkModify(dependencies, resolve)
 			if err != nil {
 				return nil, err
 			}

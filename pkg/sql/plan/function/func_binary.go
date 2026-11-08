@@ -1319,6 +1319,34 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, coalesceValueArgument, coalesceCheckTypes)
+}
+
+func coalesceValueArgument(_, _ int) bool {
+	return true
+}
+
+func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, func(int) bool { return true }); ok {
+		return castFromWidened(coalesceCheck(overloads, widened), widened)
+	}
+	if target, ok := sameLowPrecisionFloatType(inputs); ok {
+		for i, over := range overloads {
+			if over.args[0] != target.Oid {
+				continue
+			}
+			castTypes := make([]types.Type, len(inputs))
+			aligned := true
+			for j, input := range inputs {
+				castTypes[j] = target
+				aligned = aligned && input.Oid == target.Oid
+			}
+			if aligned {
+				return newCheckResultWithSuccess(i)
+			}
+			return newCheckResultWithCast(i, castTypes)
+		}
+	}
 	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -7135,6 +7163,9 @@ func formatNumericValueAt(v *vector.Vector, row uint64) (value string, exact, is
 		return strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, idx), 10), true, false, nil
 	case types.T_float32:
 		return strconv.FormatFloat(float64(vector.GetFixedAtNoTypeCheck[float32](v, idx)), 'g', -1, 64), false, false, nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		f, _ := vector.GetLowPrecisionFloatAt(v, idx)
+		return strconv.FormatFloat(float64(f), 'g', -1, 64), false, false, nil
 	case types.T_float64:
 		return strconv.FormatFloat(vector.GetFixedAtNoTypeCheck[float64](v, idx), 'g', -1, 64), false, false, nil
 	case types.T_decimal64:
@@ -7839,7 +7870,7 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
-func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
@@ -7852,6 +7883,12 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		shaType, isnull2 := shaTypes.GetValue(i)
 
 		if isnull1 || isnull2 {
@@ -7882,7 +7919,7 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 // as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
 // string wrapper preserves binary bytes and avoids the lossy implicit cast to
 // VARCHAR that would otherwise happen before execution.
-func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaLengths := vector.GenerateFunctionStrParameter(args[1])
@@ -7905,6 +7942,12 @@ func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		var isnull2 bool
 		var shaType int64
 		if lengthIsConst {

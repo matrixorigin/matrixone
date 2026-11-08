@@ -184,6 +184,12 @@ func (c *Compile) Compile(
 	if err = validateIncompleteTemporalStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
+	if c.indexMaintenanceSpec != nil {
+		c.indexMaintenanceNodeID, err = selectIndexMaintenanceNode(queryPlan.GetQuery(), c.indexMaintenanceSpec, c.indexMaintenanceLiterals)
+		if err != nil {
+			return err
+		}
+	}
 
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
@@ -774,19 +780,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// duplicated.
 		if retryState := c.proc.GetSequenceRetryState(); retryState != nil {
 			if pendings := retryState.ConsumePendings(); len(pendings) > 0 {
-				admitted, cancelErr := c.arbitrateSequenceRetryAdmission(retryState, pendings, err)
+				admitted, verdictErr := c.arbitrateSequenceRetryAdmission(retryState, pendings, err)
 				if !admitted {
 					resourceRecorder.finishAttempt(
 						uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 						attemptScopes, attemptAnal, c.addr, false,
 					)
 					attemptOpen = false
-					// The caller's own cancellation (F2, v21 precedence)
-					// surfaces unchanged; otherwise a declined verdict
-					// surfaces the named terminal of the FIRST-recorded
-					// pending entry exactly once (B3) — never a stale
-					// pending error in place of a live cancellation.
-					cause := cancelErr
+					// Prefer cancellation or the expiry decision's named
+					// terminal; ordinary declines retain the first pending.
+					cause := verdictErr
 					if cause == nil {
 						cause = pendings[0].Pending.Original
 					}
@@ -1068,6 +1071,8 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	// statement's bounded retry window.
 	seqRetryState := c.proc.GetSequenceRetryState()
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.indexMaintenanceSpec = c.indexMaintenanceSpec.Clone()
+	runC.indexMaintenanceLiterals = append([]string(nil), c.indexMaintenanceLiterals...)
 	if seqRetryState != nil {
 		c.proc.ReplaceSequenceRetryState(seqRetryState)
 	}

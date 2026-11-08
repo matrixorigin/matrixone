@@ -492,7 +492,7 @@ create table f1 (fa int primary key);
 CREATE TABLE c1 (ca INT, cb INT);
 ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
 desc c1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 ca  ¦  int  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 cb  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table if exists c1;

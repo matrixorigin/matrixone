@@ -142,6 +142,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		if tableScan.ReadPolicy != 0 {
 			newCtx = fileservice.WithFileServicePolicy(newCtx, fileservice.GetFileServicePolicy(newCtx)|tableScan.ReadPolicy)
+			newCtx = fileservice.WithPreloadGroup(newCtx, tableScan.TableID)
 		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {

@@ -199,16 +199,20 @@ func unmarshalSpillGroupByRows(
 }
 
 type ResHashRelated struct {
-	mp         *mpool.MPool
-	Hash       hashmap.HashMap
-	TxnItr     hashmap.TransactionalIterator
-	insertPlan hashmap.InsertPlan
+	mp              *mpool.MPool
+	Hash            hashmap.HashMap
+	TxnItr          hashmap.TransactionalIterator
+	insertPlan      hashmap.InsertPlan
+	compact         *compactGroupLookup
+	compactRows     int
+	compactDisabled bool
 }
 
 type groupInsertPreview struct {
-	values    []uint64
-	inserted  []uint8
-	newGroups int
+	values       []uint64
+	inserted     []uint8
+	newGroups    int
+	existingOnly bool
 }
 
 type groupKeySourcePublication struct {
@@ -248,6 +252,9 @@ func (ctr *container) commitGroupByChunk(
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	if preview.existingOnly {
+		return preview.values, 0, nil
+	}
 	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
 	if !hasStringSourceMetadata {
 		for _, vec := range vectors {
@@ -502,6 +509,7 @@ func (hr *ResHashRelated) BuildHashTable(
 		return moerr.NewInternalError(ctx, "hr.map mpool reset to different mpool")
 	}
 	if rebuild {
+		hr.freeCompactGroups()
 		if hr.Hash != nil {
 			hr.Hash.Free()
 			hr.Hash = nil
@@ -571,6 +579,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	return nil
 }
 func (hr *ResHashRelated) Free0() {
+	hr.freeCompactGroups()
 	if hr.Hash != nil {
 		hr.Hash.Free()
 		hr.Hash = nil
@@ -1999,7 +2008,7 @@ func hllVectorStateSupported(
 	}
 	switch types.T(args[0].Typ.Id) {
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16:
+		types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false

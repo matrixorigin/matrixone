@@ -160,11 +160,9 @@ type store struct {
 		sync.Mutex
 		metadata metadata.LogStore
 		// skippedZombies is the set of (shardID, replicaID) pairs that
-		// startReplicas decided not to start because the cluster membership
-		// no longer listed them. Persisted here so later bootstrap paths
-		// (BootstrapHAKeeper in particular) can honor the same decision
-		// and do not re-start a replica we have already classified as
-		// removed.
+		// startReplicas decided not to start because cluster membership no
+		// longer listed them or a newer local HAKeeper ID superseded them.
+		// BootstrapHAKeeper must honor the same decision.
 		skippedZombies map[zombieKey]struct{}
 	}
 	shardSnapshotInfo shardSnapshotInfo
@@ -468,10 +466,9 @@ func (l *store) zombieCheckAddresses() []string {
 	return addresses
 }
 
-// isSkippedZombie reports whether startReplicas's membership self-check
-// already classified (shardID, replicaID) as a zombie and chose not to
-// start it. Used by bootstrap paths to honor the same decision rather
-// than re-starting a replica we have deemed removed.
+// isSkippedZombie reports whether startReplicas skipped a removed replica or
+// an older HAKeeper ID superseded by a newer local record. Bootstrap paths
+// must not start either one again.
 func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -505,9 +502,58 @@ func (l *store) startReplicas(ctx context.Context) error {
 			}
 		}
 	}
+	if !l.catalogExecutor.enabled {
+		if replicaID, bootstrapping := l.cfg.Bootstrapping(); bootstrapping {
+			found := false
+			for _, shard := range checkShards {
+				if shard.ShardID == hakeeper.DefaultHAKeeperShardID && shard.ReplicaID == replicaID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				// The initial ID may remain in bootstrap config after L/Kill has
+				// removed it from local metadata. Check it before bootstrap can
+				// replay its old Dragonboat files; do not persist this candidate.
+				candidate := metadata.LogShard{
+					LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID},
+					ReplicaID:      replicaID,
+				}
+				// Give the bootstrap decision the first share of the bounded
+				// startup check, ahead of unrelated data-shard replicas.
+				checkShards = append([]metadata.LogShard{candidate}, checkShards...)
+			}
+		}
+	}
 	zombies := l.checkZombieReplicas(ctx, checkShards)
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	superseded := make(map[zombieKey]struct{})
+	if !l.catalogExecutor.enabled {
+		// Local metadata records every successful start. When old HAKeeper
+		// replicas survive an unclean removal, a cold cluster cannot answer
+		// the membership probe. Replica IDs are allocated monotonically by
+		// HAKeeper, so resume the newest locally persisted candidate and
+		// suppress older ones, including the initial bootstrap ID.
+		var newest uint64
+		for _, rec := range shards {
+			if rec.ShardID != hakeeper.DefaultHAKeeperShardID {
+				continue
+			}
+			if _, zombie := zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}]; !zombie && rec.ReplicaID > newest {
+				newest = rec.ReplicaID
+			}
+		}
+		if newest != 0 {
+			for _, rec := range shards {
+				if rec.ShardID == hakeeper.DefaultHAKeeperShardID && rec.ReplicaID != newest {
+					key := zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}
+					zombies[key] = struct{}{}
+					superseded[key] = struct{}{}
+				}
+			}
+		}
 	}
 	l.mu.Lock()
 	l.mu.skippedZombies = zombies
@@ -515,6 +561,12 @@ func (l *store) startReplicas(ctx context.Context) error {
 
 	for _, rec := range shards {
 		if _, isZombie := zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}]; isZombie {
+			if _, isSuperseded := superseded[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}]; isSuperseded {
+				l.runtime.Logger().Warn("skip superseded HAKeeper replica during restart",
+					zap.Uint64("shardID", rec.ShardID),
+					zap.Uint64("replicaID", rec.ReplicaID))
+				continue
+			}
 			l.runtime.Logger().Warn(
 				"skip starting zombie replica, waiting for HAKeeper to re-add",
 				zap.Uint64("shardID", rec.ShardID),
@@ -536,6 +588,9 @@ func (l *store) startReplicas(ctx context.Context) error {
 				}
 			}
 		} else {
+			if err := l.snapshotMgr.ReconcileInterruptedExport(rec.ShardID, rec.ReplicaID); err != nil {
+				return err
+			}
 			if !rec.NonVoting {
 				if err := l.startReplica(rec.ShardID, rec.ReplicaID, nil, false); err != nil {
 					return err
@@ -892,7 +947,7 @@ func (l *store) truncateLog(ctx context.Context,
 		return err
 	}
 	if result.Value > 0 {
-		l.runtime.Logger().Error(fmt.Sprintf("shardID %d already truncated to index %d", shardID, result.Value))
+		l.runtime.Logger().Error(fmt.Sprintf("shardID %d rejected truncate index %d at boundary %d", shardID, index, result.Value))
 		return moerr.NewInvalidTruncateLsn(ctx, shardID, result.Value)
 	}
 	return nil

@@ -112,6 +112,10 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
+
+	// downloadDeclined is set by the disk cache when some of the entries are in an object
+	// being downloaded, but a range read gets them sooner.
+	downloadDeclined bool
 }
 
 type IOEntry struct {

@@ -172,6 +172,98 @@ func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
 }
 
+// TestUniqueConstraintSymbolPreservesIdentifierCase pins the mixed-case
+// residual of issue #31659: an explicit "CONSTRAINT `Uq_MiXeD` UNIQUE"
+// symbol keeps its declared spelling through the real parser, byte-equal
+// to the equivalent "UNIQUE KEY `Uq_MiXeD`(k)" name, including quoted
+// Unicode and embedded-backtick spellings, for CREATE and ALTER ADD.
+// Primary-key, foreign-key and check symbols intentionally keep their
+// legacy case-normalized form; their name lookup and duplicate rejection
+// consumers are unchanged by this fix and the pins below guard that scope.
+func TestUniqueConstraintSymbolPreservesIdentifierCase(t *testing.T) {
+	symbolIndex := func(sql string) *tree.UniqueIndex {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		// Root finding: the AST nodes belong to the owning test's lifetime.
+		// A helper-local defer Free scrubbed the pooled nodes before the
+		// caller's assertions; returning them unleased would leak pool
+		// objects. Free exactly when the owning test finishes.
+		t.Cleanup(stmt.Free)
+		var found *tree.UniqueIndex
+		for _, def := range stmt.(*tree.CreateTable).Defs {
+			if u, ok := def.(*tree.UniqueIndex); ok {
+				found = u
+			}
+		}
+		require.NotNil(t, found)
+		return found
+	}
+
+	symbol := symbolIndex(
+		"create table symbol_case (id int primary key, k int, constraint `Uq_MiXeD` unique(k))")
+	require.Equal(t, "Uq_MiXeD", symbol.GetIndexName())
+
+	explicit := symbolIndex(
+		"create table explicit_case (id int primary key, k int, unique key `Uq_MiXeD`(k))")
+	require.Equal(t, explicit.GetIndexName(), symbol.GetIndexName())
+
+	unicodeSymbol := symbolIndex(
+		"create table unicode_case (id int primary key, k int, constraint `MiXeD_πανα` unique(k))")
+	unicodeControl := symbolIndex(
+		"create table unicode_control (id int primary key, k int, unique key `MiXeD_πανα`(k))")
+	require.Equal(t, unicodeControl.GetIndexName(), unicodeSymbol.GetIndexName())
+
+	embedded := symbolIndex(
+		"create table embedded_case (id int primary key, k int, constraint `a``b` unique(k))")
+	embeddedControl := symbolIndex(
+		"create table embedded_control (id int primary key, k int, unique key `a``b`(k))")
+	require.Equal(t, embeddedControl.GetIndexName(), embedded.GetIndexName())
+
+	// ALTER ADD CONSTRAINT goes through the same constraint_keyword owner.
+	alter, err := ParseOne(context.Background(),
+		"alter table t add constraint `AlTeR_MiXeD` unique(k)", 1)
+	require.NoError(t, err)
+	defer alter.Free()
+	var added *tree.UniqueIndex
+	for _, opt := range alter.(*tree.AlterTable).Options {
+		switch o := opt.(type) {
+		case *tree.AlterOptionAdd:
+			if u, ok := o.Def.(*tree.UniqueIndex); ok {
+				added = u
+			}
+		}
+	}
+	require.NotNil(t, added)
+	require.Equal(t, "AlTeR_MiXeD", added.GetIndexName())
+
+	// Scope guard: PK/FK/CHECK symbols keep their legacy case-normalized
+	// form, so their name lookup, duplicate rejection and drop behavior
+	// are untouched by the UNIQUE-symbol fix above.
+	stmt, err := ParseOne(context.Background(),
+		"create table pins (id int, k int, "+
+			"constraint `Pk_MiXeD` primary key (id), "+
+			"constraint `Fk_MiXeD` foreign key (k) references p(k), "+
+			"constraint `Ck_MiXeD` check (k > 0))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	primaryKey := ""
+	foreignKey := ""
+	checkKey := ""
+	for _, def := range stmt.(*tree.CreateTable).Defs {
+		switch v := def.(type) {
+		case *tree.PrimaryKeyIndex:
+			primaryKey = v.ConstraintSymbol
+		case *tree.ForeignKey:
+			foreignKey = v.ConstraintSymbol
+		case *tree.CheckIndex:
+			checkKey = v.ConstraintSymbol
+		}
+	}
+	require.Equal(t, "pk_mixed", primaryKey)
+	require.Equal(t, "fk_mixed", foreignKey)
+	require.Equal(t, "ck_mixed", checkKey)
+}
+
 func TestConfigIsNonReservedIdentifier(t *testing.T) {
 	_, err := ParseOne(context.Background(), "CREATE TABLE config ("+
 		"`key` VARCHAR(255) PRIMARY KEY,"+
@@ -1161,6 +1253,71 @@ func TestNumericExponentStatementBoundaries(t *testing.T) {
 	value, exact := expr.Expr.(*tree.NumVal).Float64()
 	require.True(t, exact)
 	require.Equal(t, float64(15), value)
+}
+
+func TestParseWithSQLModeAndFragments(t *testing.T) {
+	ctx := context.Background()
+	parser := &MySQLParser{}
+	for _, tc := range []struct {
+		name, sql, mode string
+	}{
+		{"empty", "", ""},
+		{"blank fragments", "; /* comment */; select 1;; select 2", ""},
+		{"compound", "begin select 1; select 2; end; select 3", ""},
+		{"executable comment", "/*! select 1; /* save_result */ select 2 */; select 3", ""},
+		{"quoted semicolon", `select 'a;b'; select 2`, ""},
+		{"ansi quotes", `select ";"; select 2`, "ANSI_QUOTES"},
+		{"no backslash escapes", `select 'a\'; select 2`, "NO_BACKSLASH_ESCAPES"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantFragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, tc.sql, 1, tc.mode)
+			require.NoError(t, err)
+			wantStmts, err := parser.ParseWithSQLMode(ctx, tc.sql, 1, tc.mode)
+			require.NoError(t, err)
+			want := make([]string, len(wantStmts))
+			for i, stmt := range wantStmts {
+				want[i] = tree.String(stmt, dialect.MYSQL)
+				stmt.Free()
+			}
+
+			stmts, fragments, err := parser.ParseWithSQLModeAndFragments(ctx, tc.sql, 1, tc.mode)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.Len(t, stmts, len(want))
+			for i, stmt := range stmts {
+				require.Equal(t, want[i], tree.String(stmt, dialect.MYSQL))
+			}
+			require.Equal(t, wantFragments, fragments)
+			for _, fragment := range fragments {
+				require.True(t, fragment.MatchesSource(tc.sql))
+			}
+
+			// A later parse must not change returned fragments or borrowed ASTs.
+			other, err := parser.ParseWithSQLMode(ctx, "select 99; select 100", 1, "")
+			require.NoError(t, err)
+			for _, stmt := range other {
+				stmt.Free()
+			}
+			require.Equal(t, wantFragments, fragments)
+			for i, stmt := range stmts {
+				require.Equal(t, want[i], tree.String(stmt, dialect.MYSQL))
+			}
+		})
+	}
+
+	stmts, fragments, err := parser.ParseWithSQLModeAndFragments(ctx, "select 1; select 1.5Efoo", 1, "")
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	require.Empty(t, fragments)
+	stmts, fragments, err = parser.ParseWithSQLModeAndFragments(ctx, "select 7", 1, "")
+	require.NoError(t, err)
+	defer stmts[0].Free()
+	require.Len(t, fragments, 1)
+	require.Equal(t, "select 7", fragments[0].SQL)
 }
 
 func TestParseFirstWithSQLMode(t *testing.T) {
@@ -5502,12 +5659,31 @@ var (
 			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
 		},
 		{
+			// #20567: scalar low-precision float types (no length option).
+			input:  "create table t1(a bf16, b float16, c float8, d float4)",
+			output: "create table t1 (a bf16, b float16, c float8, d float4)",
+		},
+		{
 			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
 			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
 		},
 		{
 			input:  "create table t1(a vecuint8(3))",
 			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			// #20567: block-scaled vecf8 (MXFP8) / vecf4 (NVFP4).
+			input:  "create table t1(a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+			output: "create table t1 (a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf8(3)), cast(v as vecf4(3)) from t1",
+			output: "select cast([1,2,3] as vecf8(3)), cast(v as vecf4(3)) from t1",
+		},
+		{
+			// vecf8/vecf4 are non-reserved keywords.
+			input:  "create table vecf8 (vecf4 int)",
+			output: "create table vecf8 (vecf4 int)",
 		},
 		{
 			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",

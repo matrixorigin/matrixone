@@ -1306,6 +1306,10 @@ func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols [
 					return false
 				}
 			}
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			if _, err := strconv.ParseFloat(field.Val, 32); err != nil {
+				return false
+			}
 		case types.T_float64:
 			// origin float64 data type
 			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
@@ -1330,6 +1334,11 @@ func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols [
 		case types.T_array_float64:
 			_, err := types.StringToArrayToBytesWithContext[float64](ctx, field.Val)
 			if err != nil {
+				return false
+			}
+		case types.T_array_float8, types.T_array_float4:
+			f, _ := id.BlockScaledFormat()
+			if _, err := types.StringToBlockScaled(f, field.Val); err != nil {
 				return false
 			}
 		case types.T_array_bf16:
@@ -1668,6 +1677,7 @@ func isLoadNumericZeroFillType(id types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
@@ -1680,6 +1690,7 @@ func isLoadNumericAdjustedValueType(id types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
@@ -1763,6 +1774,8 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 		return vector.AppendFixed(vec, uint64(0), false, mp)
 	case types.T_float32:
 		return vector.AppendFixed(vec, float32(0), false, mp)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		return appendLowPrecFloatFromFloat32(vec, 0, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), false, mp)
 	case types.T_decimal64:
@@ -1774,6 +1787,22 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
 	}
+}
+
+// appendLowPrecFloatFromFloat32 rounds v to the low-precision float type of vec
+// (bf16/float16/float8/float4) and appends it. Used by the CSV/LOAD field parser.
+func appendLowPrecFloatFromFloat32(vec *vector.Vector, v float32, mp *mpool.MPool) error {
+	switch vec.GetType().Oid {
+	case types.T_bf16:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.BF16FromFloat32(v)), false, mp)
+	case types.T_float16:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float16FromFloat32(v)), false, mp)
+	case types.T_float8:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float8FromFloat32(v)), false, mp)
+	case types.T_float4:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float4FromFloat32(v)), false, mp)
+	}
+	return moerr.NewInternalErrorNoCtxf("not a low-precision float: %v", vec.GetType().Oid)
 }
 
 // resolveExternalErrorMode decides, once per scan, whether the error-mode
@@ -2028,8 +2057,10 @@ func loadAttributedDecimalTextInput(param *ExternalParam, typ *plan.Type) bool {
 	return isAttributedDecimalStagingTarget(typ)
 }
 
-// parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
-// unquoted external CSV decimal text uses exact assignment rounding.
+// parseCSVInt preserves the integer fast path and LOAD conversion policy.
+// Exact assignment rounding applies only where getColData classified the input
+// as unquoted external CSV or JSONLINE file text (external SELECT or directly
+// decoded LOAD); quoted text keeps the original conversion policy.
 // An initial integer overflow can precede an exponent that scales into range;
 // validate the complete decimal value before enforcing the destination width.
 func parseCSVInt(field csvparser.Field, bits int, round bool) (int64, error) {
@@ -2157,7 +2188,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return nil
 	}
 
-	roundExternalInteger := param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) && param.Extern.Format == tree.CSV
+	// roundTextInteger classifies when integer assignment may use the exact
+	// decimal half-away rounding helper: unquoted external CSV text, and
+	// JSONLINE file records — external SELECT and directly decoded LOAD alike —
+	// whose scalar text never carries CSV quotes. Parallel staged LOAD keeps
+	// its varchar staging and cast projection, CSV LOAD keeps the truncation
+	// policy, and Kafka carries its own extern type so it stays excluded.
+	roundTextInteger := (param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) && param.Extern.Format == tree.CSV) ||
+		(param.Extern.Format == tree.JSONLINE && (param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) ||
+			param.Extern.ExternType == int32(plan.ExternType_LOAD)))
 	switch id {
 	case types.T_bool:
 		b, err := types.ParseBool(field.Val)
@@ -2185,14 +2224,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_int8:
-		d, err := parseCSVInt(field, 8, roundExternalInteger)
+		d, err := parseCSVInt(field, 8, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int8(d), false, mp); err != nil {
 				return err
 			}
 		} else {
 			// if field.HasStringQuote is true, like load "1.9" into int type, return error, if load 1.9, can load successful
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int8 type for column %d", field.Val, colIdx)
 			}
@@ -2206,13 +2245,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_int16:
-		d, err := parseCSVInt(field, 16, roundExternalInteger)
+		d, err := parseCSVInt(field, 16, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int16(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int16 type for column %d", field.Val, colIdx)
 			}
@@ -2234,13 +2273,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			min, max = -(1 << 23), (1<<23)-1
 			valueType = "mediumint"
 		}
-		d, err := parseCSVInt(field, bits, roundExternalInteger)
+		d, err := parseCSVInt(field, bits, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, int32(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
@@ -2254,13 +2293,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_int64:
-		d, err := parseCSVInt(field, 64, roundExternalInteger)
+		d, err := parseCSVInt(field, 64, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 				return err
 			}
 		} else {
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not int64 type for column %d", field.Val, colIdx)
 			}
@@ -2274,13 +2313,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint8:
-		d, err := parseCSVUint(field, 8, roundExternalInteger)
+		d, err := parseCSVUint(field, 8, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint8(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint8 type for column %d", field.Val, colIdx)
 			}
@@ -2294,13 +2333,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_uint16:
-		d, err := parseCSVUint(field, 16, roundExternalInteger)
+		d, err := parseCSVUint(field, 16, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint16(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
 			}
@@ -2322,13 +2361,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			max = (1 << 24) - 1
 			valueType = "mediumint unsigned"
 		}
-		d, err := parseCSVUint(field, bits, roundExternalInteger)
+		d, err := parseCSVUint(field, bits, roundTextInteger)
 		if err == nil {
 			if err := vector.AppendFixed(vec, uint32(d), false, mp); err != nil {
 				return err
 			}
 		} else {
-			if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+			if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, valueType, colIdx)
 			}
@@ -2353,13 +2392,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 				return err
 			}
 		} else {
-			d, err := parseCSVUint(field, 64, roundExternalInteger)
+			d, err := parseCSVUint(field, 64, roundTextInteger)
 			if err == nil {
 				if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 					return err
 				}
 			} else {
-				if roundExternalInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
+				if roundTextInteger || errors.Is(err, strconv.ErrRange) || field.HasStringQuote {
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 					return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not uint64 type for column %d", field.Val, colIdx)
 				}
@@ -2393,6 +2432,21 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			if err := vector.AppendFixed(vec, float32(types.Decimal128ToFloat64(d, vec.GetType().Scale)), false, mp); err != nil {
 				return err
 			}
+		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// Low-precision floats: parse as float32 then round to the target format.
+		// Reject NaN/Inf and out-of-range values (strict, like the narrow-vector
+		// element parser) instead of silently saturating.
+		d, d64, err := types.Float32RoundToOddString(field.Val)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, vec.GetType().Oid, colIdx)
+		}
+		if err := types.RejectNarrowFloatInput(d, vec.GetType().Oid, d64, field.Val); err != nil {
+			return err
+		}
+		if err := appendLowPrecFloatFromFloat32(vec, d, mp); err != nil {
+			return err
 		}
 	case types.T_float64:
 		// origin float64 data type
@@ -2440,6 +2494,19 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
 		}
 		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_float8, types.T_array_float4:
+		// "[...]" is quantized; the exact form (a JSON object) is the cell as written
+		f, _ := vec.GetType().Oid.BlockScaledFormat()
+		cell, err := types.StringToBlockScaled(f, field.Val)
+		if err != nil {
+			return err
+		}
+		if dim := types.BlockScaledDim(cell); int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != dim {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), dim)
+		}
+		if err = vector.AppendBytes(vec, cell, false, mp); err != nil {
 			return err
 		}
 	case types.T_array_bf16:

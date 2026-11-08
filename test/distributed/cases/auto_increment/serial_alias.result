@@ -1,0 +1,75 @@
+drop database if exists serial_alias_bvt;
+create database serial_alias_bvt;
+use serial_alias_bvt;
+create table t_alias (id serial, v int);
+create table t_canon (id bigint unsigned not null auto_increment unique, v int);
+show create table t_alias;
+➤ Table[12,7,0]  ¦  Create Table[12,123,0]  𝄀
+t_alias  ¦  CREATE TABLE `t_alias` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  UNIQUE KEY `id` (`id`)
+)
+show create table t_canon;
+➤ Table[12,7,0]  ¦  Create Table[12,123,0]  𝄀
+t_canon  ¦  CREATE TABLE `t_canon` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `v` int DEFAULT NULL,
+  UNIQUE KEY `id` (`id`)
+)
+insert into t_alias (v) values (10), (NULL);
+insert into t_alias (id, v) values (NULL, 20), (NULL, 30);
+insert into t_canon (v) values (10), (NULL);
+insert into t_canon (id, v) values (NULL, 20), (NULL, 30);
+select id, v from t_alias order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  null  𝄀
+3  ¦  20  𝄀
+4  ¦  30
+select id, v from t_canon order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  null  𝄀
+3  ¦  20  𝄀
+4  ¦  30
+insert into t_alias (id, v) values (1, 1);
+Duplicate entry '1' for key 'id'
+insert into t_alias (v) values (40);
+select id, v from t_alias order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  null  𝄀
+3  ¦  20  𝄀
+4  ¦  30  𝄀
+5  ¦  40
+select count(*) from t_alias;
+➤ count(*)[-5,64,0]  𝄀
+5
+select count(*) from t_canon;
+➤ count(*)[-5,64,0]  𝄀
+4
+insert into t_alias (id, v) values (-1, -1);
+Data truncation: data out of range: data type uint64, value '-1'
+select max(id) from t_alias;
+➤ max(id)[-5,64,0]  𝄀
+5
+insert into t_alias (v) values (50);
+select max(id) from t_alias;
+➤ max(id)[-5,64,0]  𝄀
+6
+create table t_alt (v int);
+alter table t_alt add column id serial;
+show create table t_alt;
+➤ Table[12,5,0]  ¦  Create Table[12,121,0]  𝄀
+t_alt  ¦  CREATE TABLE `t_alt` (
+  `v` int DEFAULT NULL,
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  UNIQUE KEY `id` (`id`)
+)
+insert into t_alt (v) values (1), (2);
+select id, v from t_alt order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+drop database serial_alias_bvt;
