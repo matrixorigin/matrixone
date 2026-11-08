@@ -25,6 +25,9 @@ import (
 
 // MarshalBinaryWithBufferV1 in version 1, vector.nulls.bitmap is v1
 func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
+	if v.IsDictionary() {
+		return moerr.NewInvalidStateNoCtx("dictionary vectors must be materialized before legacy serialization")
+	}
 
 	// write class
 	buf.WriteByte(uint8(v.class))
@@ -73,6 +76,9 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
+	if v.IsDictionary() || (len(data) > 0 && data[0] > CONSTANT) {
+		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
+	}
 	// Keep the legacy decoder contract for unrelated types. JSON needs complete
 	// admission before any decoded descriptor can become visible.
 	if len(data) >= 1+types.TSize {
