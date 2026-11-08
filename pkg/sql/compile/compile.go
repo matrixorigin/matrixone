@@ -81,6 +81,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
@@ -2205,7 +2206,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		ss, err = c.tryCompileOwnedSetMembership(curNodeIdx, node, left, right)
+		if err != nil {
+			return nil, err
+		}
+		if ss == nil {
+			ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
@@ -6409,9 +6416,6 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	if keys, dop := c.parallelSetMembership(node, left, right); dop > 1 {
-		return c.compileParallelSetMembership(node, left, right, keys, dop)
-	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
@@ -7752,6 +7756,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		if topN, ok := c.preparedPaginationTop(node); ok {
 			return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 		}
+		var scanBound uint64
 		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
@@ -7778,8 +7783,18 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 				// external Order for large prefixes, even with a tiny final LIMIT.
 				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
+			if !overflow && limit != 0 {
+				scanBound = topN
+			}
+		} else if bound, ok := c.preparedPaginationScanBound(node); ok {
+			scanBound = bound
 		}
-		return c.compileLimit(node, c.compileOffset(node, c.compileOrder(node, ss)))
+		var scan *plan.Node
+		var tag int32
+		if scanBound > mergeTopResidentPlanThreshold {
+			scan, tag = c.paginationCutoffScan(node)
+		}
+		return c.compileLimit(node, c.compileOffset(node, c.compileOrderWithCutoff(node, ss, scan, scanBound, tag)))
 
 	case node.Limit == nil && node.Offset != nil && len(node.OrderBy) > 0: // order and offset
 		return c.compileOffset(node, c.compileOrder(node, ss))
@@ -7995,9 +8010,20 @@ func hasMaterializedTopOrderColumns(orderBy []*plan.OrderBySpec) bool {
 }
 
 func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
+	return c.compileOrderWithCutoff(node, ss, nil, 0, 0)
+}
+
+func (c *Compile) compileOrderWithCutoff(node *plan.Node, ss []*Scope, scan *plan.Node, bound uint64, tag int32) []*Scope {
+	newOrder := func(scope *Scope) *order.Order {
+		op := constructOrder(node)
+		if scan != nil && tag > 0 && bound > 0 && scanCutoffScopeMatches(scope, scan) {
+			op.ScanCutoffLimit, op.ScanCutoffTag = bound, tag
+		}
+		return op
+	}
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
-		order := constructOrder(node)
+		order := newOrder(ss[0])
 		order.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(order)
 		c.anal.isFirst = false
@@ -8013,7 +8039,7 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
-		order := constructOrder(node)
+		order := newOrder(ss[i])
 		order.SetIdx(c.anal.curNodeIdx)
 		order.SetIsFirst(currentFirstFlag)
 		ss[i].setRootOperator(order)

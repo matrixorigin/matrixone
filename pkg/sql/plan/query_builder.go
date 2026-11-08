@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -783,6 +784,36 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A set-operation column that combines DATE and TIME inputs must keep both
+// domains: MySQL types it as DATETIME so the time-of-day survives, while
+// coalesce-style scoring prefers DATE and silently discards it. Null-only
+// branches are already filtered out of source. Any non-temporal input keeps
+// the existing resolution, and a DATETIME or TIMESTAMP input contributes
+// only its fractional-second precision. The result carries the widest
+// fractional-second precision of the temporal inputs.
+func setOperationDateTimeCommonType(source []types.Type) (types.Type, bool) {
+	hasDate, hasTime := false, false
+	var scale int32
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_date:
+			hasDate = true
+		case types.T_time:
+			hasTime = true
+		case types.T_datetime, types.T_timestamp:
+		default:
+			return types.Type{}, false
+		}
+		if typ.Scale > scale {
+			scale = typ.Scale
+		}
+	}
+	if !hasDate || !hasTime {
+		return types.Type{}, false
+	}
+	return types.New(types.T_datetime, scale, scale), true
+}
+
 // Fixed-width binary branches must share one padded representation before a
 // set operation compares or materializes their rows. A nonpositive width
 // denotes an unspecified bound, so it must remain unbounded rather than
@@ -805,6 +836,36 @@ func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 			result.Width = typ.Width
 		}
 	}
+	return result, true
+}
+
+// A set operation whose value-bearing branches are all legal BIT columns keeps
+// the BIT domain. The coalesce resolver falls back to the integer domain and
+// silently drops the declared bit width, which changes LENGTH bytes and the
+// outer predicates of the materialized column. The common type keeps the
+// widest declared width: narrower branches align through the supported
+// bit->bit widening cast, and an empty typed branch still contributes its
+// static width. A width outside 1..MaxBitLen is not a declared bound this rule
+// understands, so such an input keeps the historical coalesce resolution
+// instead of being silently capped.
+func setOperationPureBitCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	var maxWidth int32
+	for _, typ := range source {
+		if typ.Oid != types.T_bit {
+			return types.Type{}, false
+		}
+		if typ.Width < 1 || typ.Width > types.MaxBitLen {
+			return types.Type{}, false
+		}
+		if typ.Width > maxWidth {
+			maxWidth = typ.Width
+		}
+	}
+	result := types.T_bit.ToType()
+	result.Width = maxWidth
 	return result, true
 }
 
@@ -4900,12 +4961,16 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			var targetArgType types.Type
 			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
-			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+			if temporalType, ok := setOperationDateTimeCommonType(tmpArgsType); ok {
+				targetArgType = temporalType
+			} else if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
 			} else if pureFixedBinary {
 				targetArgType = pureBinaryType
 			} else if mixedTextBinary {
 				targetArgType = mixedTextBinaryType
+			} else if pureBitType, ok := setOperationPureBitCommonType(tmpArgsType); ok {
+				targetArgType = pureBitType
 			} else {
 				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
@@ -8578,10 +8643,15 @@ func rollupWindowOutputAliasWithProvenance(selectExpr tree.SelectExpr) (*tree.CS
 		expr = parenExpr.Expr
 	}
 	if heading, ok := tree.NameConstHeading(expr); ok {
-		return tree.NewCStr(heading, 1), headingProvenance{}
+		return tree.NewCStr(legalUTF8GeneratedHeading(heading), 1), headingProvenance{}
 	}
 	heading, provenance := formatSelectExpressionHeading(expr)
-	return tree.NewCStr(heading, 1), provenance
+	// This alias is the rewrite-GENERATED output heading: the rewritten outer
+	// SELECT consumes it through the genuine-alias branch, which copies
+	// As.Origin verbatim and bypasses the general generated-heading sanitizer.
+	// Enforce the wire contract here, at the real producer of the generated
+	// name; explicit user aliases and catalog column names above stay intact.
+	return tree.NewCStr(legalUTF8GeneratedHeading(heading), 1), provenance
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
@@ -12584,7 +12654,7 @@ func appendSelectListWithGroupingOrder(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.appendHeading(tree.String(expr, dialect.MYSQL), headingProvenance{})
+				ctx.appendHeading(legalUTF8GeneratedHeading(tree.String(expr, dialect.MYSQL)), headingProvenance{})
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -12604,10 +12674,10 @@ func appendSelectListWithGroupingOrder(
 					}
 				}
 				if heading, ok := tree.NameConstHeading(expr); ok {
-					ctx.appendHeading(heading, headingProvenance{})
+					ctx.appendHeading(legalUTF8GeneratedHeading(heading), headingProvenance{})
 				} else {
 					heading, provenance := formatSelectExpressionHeading(expr)
-					ctx.appendHeading(heading, provenance)
+					ctx.appendHeading(legalUTF8GeneratedHeading(heading), provenance)
 				}
 			}
 
@@ -12729,6 +12799,18 @@ func qualifyGroupingSetHiddenOrderExpr(
 	orderCtx := *ctx
 	orderCtx.aliasMap = aliasMap
 	return orderCtx.qualifyColumnNames(qualified, AliasAfterColumn)
+}
+
+// legalUTF8GeneratedHeading enforces the wire contract for GENERATED select
+// headings only: a driver-facing column name must be legal UTF-8. The source
+// text of an unaliased expression can carry raw literal bytes (e.g. a _binary
+// literal), so the derived name gets invalid sequences replaced. Aliases and
+// catalog names are appended by other sites and are intentionally untouched.
+func legalUTF8GeneratedHeading(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "�")
 }
 
 // DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string literals.
@@ -13858,10 +13940,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
-		// Published View SQL keeps its creation namespace. Only its implicit
-		// source lookup uses the subscriber name for catalog routing.
+		// Published View SQL keeps its creation namespace. Both qualified and
+		// implicit references to that source use the subscriber alias for the
+		// database probe; resolving a publisher spelling in the subscriber's
+		// catalog would incorrectly require a same-named local database.
 		catalogDatabase := schema
-		if tbl.SchemaName == "" && len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
+		if len(ctx.viewPath) > 0 && builder.GetContext().Value(viewSchemaContextKey{}) == nil {
 			view := ctx.viewPath[len(ctx.viewPath)-1]
 			if view.SubscriptionName != "" {
 				if sub := builder.compCtx.GetQueryingSubscription(); sub != nil &&

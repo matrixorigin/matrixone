@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -971,6 +972,15 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 			(types.T(args[0].Typ.Id) == types.T_date || types.T(args[0].Typ.Id) == types.T_datetime) {
 			return false
 		}
+		// Explicit binary->text casts (overload 1, castModeExplicit) synthesize
+		// NULL with Warning 1300 when the source bytes are not valid UTF-8
+		// (func_cast.go binarySourceToText guard). A NOT NULL binary-domain
+		// source can therefore still produce NULL. Implicit, assignment,
+		// comparison and set-operation casts, binary-charset text targets and
+		// non-text targets keep their existing inference.
+		if oid == 1 && len(args) == 2 && !LegacyExplicitCastNullability(ctx) && explicitBinaryToTextCastMaySynthesizeNull(args) {
+			return false
+		}
 	case OCT:
 		// New string executors produce NULL for empty non-NULL input.
 		// Preserve the persisted legacy and numeric overload contracts.
@@ -1118,6 +1128,46 @@ func isTemporalPromotion(arg *plan.Expr) bool {
 	source := types.T(fn.Args[0].Typ.Id)
 	target := types.T(arg.Typ.Id)
 	return source.IsDateRelate() && target.IsDateRelate() && source != target
+}
+
+// explicitBinaryToTextCastMaySynthesizeNull mirrors the executor's
+// binarySourceToText guard (func_cast.go, castModeExplicit) at the inference
+// level: an explicit CAST into a non-binary-charset char/varchar/text target
+// synthesizes NULL with Warning 1300 on invalid UTF-8 whenever the source
+// carries binary domain evidence. That evidence is NOT only static:
+// stringDomainMode/binaryStringAt read legitimate runtime binary state
+// (types.StringSemanticState) that producers can set on text-shaped results
+// (binary_string_semantics.go setContributingStringResultDomain), and the
+// planner has no authoritative provenance to exclude it. Any MySQL string
+// source is therefore treated conservatively; non-string sources cannot
+// carry string domain state and keep their existing inference.
+func explicitBinaryToTextCastMaySynthesizeNull(args []*plan.Expr) bool {
+	dst := types.T(args[1].Typ.Id)
+	if dst != types.T_char && dst != types.T_varchar && dst != types.T_text {
+		return false
+	}
+	if args[1].Typ.Charset == uint32(types.CharsetBinary) {
+		return false
+	}
+	if !types.T(args[0].Typ.Id).IsMySQLString() {
+		return false
+	}
+	// A non-NULL literal with exactly known, valid UTF-8 bytes can never reach
+	// the executor's NULL synthesis: the func_cast.go binarySourceToText guard
+	// converts a row to NULL only when that row's bytes carry binary-domain
+	// evidence AND fail utf8.Valid. Immutable literal bytes are known at plan
+	// time, so utf8.Valid decides deterministically; a binary-domain marker on
+	// the literal (binary literal, folded hex/bit bytes kept raw under an
+	// explicit text cast) does not change that. Bound literals and
+	// constant-folded values share the same exact bytes, so both are covered.
+	// NULL literals, invalid-UTF8 literals, arbitrary text columns and any
+	// runtime string semantic state source remain conservative.
+	if lit := args[0].GetLit(); lit != nil && !lit.Isnull {
+		if sval, ok := lit.Value.(*plan.Literal_Sval); ok && utf8.ValidString(sval.Sval) {
+			return false
+		}
+	}
+	return true
 }
 
 // ProducesNoNull reports whether a function's contract guarantees a non-NULL
