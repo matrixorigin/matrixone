@@ -21,7 +21,7 @@ hive_err1  ¦  CREATE EXTERNAL TABLE `hive_err1` (
   `year` int DEFAULT NULL
 ) INFILE{'FILEPATH'='/Users/linjunhong/workspace/matrixone/test/distributed/resources/hive_partition/single_level/','FORMAT'='parquet','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='year'}
 desc hive_err1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 year  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table if exists hive_err2;
