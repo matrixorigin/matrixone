@@ -118,11 +118,19 @@ optional index observation can decline on a failed try, while mandatory view
 metadata retains its own errors. The stamp detects changes; it is not a lock,
 permission, resource owner or substitute for the final pair check.
 
-The root builder claims its planning input once, associates it with a scan and
-bounded record set, and clears borrowed references and input on success, error,
-cancellation and panic through the same lexical owner. Nested statements,
-prepared binding and retries cannot claim an earlier root's state. No plan
-stores a native relation, transaction operator, callback or statement owner.
+The root builder claims its planning input once and retains it only when the
+process and the original compiler identity both pass admission. A rejected
+initial claim cannot become eligible after resolver reentry. The retained input
+is itself the admission fact; each borrow rechecks compiler identity without a
+second admission flag. A later mismatched lookup may decline without preventing
+another matching lookup. Cache-lifetime analysis remains independent of whether
+an input was retained.
+
+The builder associates the admitted input with a scan and bounded record set,
+and clears borrowed references and input on success, error, cancellation and
+panic through the same lexical owner. Nested statements, prepared binding and
+retries cannot claim an earlier root's state. No plan stores a native relation,
+transaction operator, callback or statement owner.
 
 ## Selection, observation and publication
 
