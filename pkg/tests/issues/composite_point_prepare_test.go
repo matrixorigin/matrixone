@@ -58,6 +58,8 @@ func TestCompositePointBinaryPrepareReuse(t *testing.T) {
 			"use `" + name + "`",
 			"create table t(tenant varchar(16) not null, session_id varchar(16) not null, request_id varchar(16) not null, payload int, primary key(tenant, session_id, request_id))",
 			"insert into t values ('u','s','r1',1),('u','s','r2',2),('u','other','r1',3),('v','s','r1',4),('u',x'6e007a','nul',5)",
+			"create table idx_t(tenant varchar(16) not null, session_id varchar(16) not null, request_id varchar(16) not null, payload int, primary key(tenant, session_id, request_id), key idx_payload(payload))",
+			"insert into idx_t values ('u','s','r1',1),('u','s','r2',2),('u','other','r1',3)",
 		} {
 			_, err = conn.ExecContext(ctx, statement)
 			require.NoError(t, err, statement)
@@ -170,6 +172,26 @@ func TestCompositePointBinaryPrepareReuse(t *testing.T) {
 				require.Equal(t, tc.want, readRows(t, query, tc.args...))
 			})
 		}
+		t.Run("secondary index prepared reuse", func(t *testing.T) {
+			plan, err := testutils.QueryTextResult(ctx, conn, "explain select session_id,request_id from idx_t force index(idx_payload) where payload=2 and tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'))")
+			require.NoError(t, err)
+			require.Contains(t, plan.Text, "idx_payload")
+			indexed, err := conn.PrepareContext(ctx, "select session_id,request_id from idx_t force index(idx_payload) where payload=? and "+where+" order by session_id,request_id")
+			require.NoError(t, err)
+			defer indexed.Close()
+			for _, tc := range []struct {
+				args []any
+				want []string
+			}{
+				{[]any{2, "u", "s", "r2", "other", "r1"}, []string{"s/r2"}},
+				{[]any{3, "u", "s", "r2", "other", "r1"}, []string{"other/r1"}},
+				{[]any{3, "u", nil, "r2", "other", "r1"}, []string{"other/r1"}},
+				{[]any{3, "u", strings.Repeat("x", 1<<16), "r2", "other", "r1"}, []string{"other/r1"}},
+				{[]any{2, "u", "s", "r2", "other", "r1"}, []string{"s/r2"}},
+			} {
+				require.Equal(t, tc.want, readRows(t, indexed, tc.args...))
+			}
+		})
 		rows, err := query.QueryContext(ctx, "u", "s", "r1", "other")
 		if rows != nil {
 			defer rows.Close()
@@ -182,12 +204,17 @@ func TestCompositePointBinaryPrepareReuse(t *testing.T) {
 			error    uint16
 			warnings int
 		}
-		outcome := func(tenant, residual string, value any) statementOutcome {
+		outcome := func(tenant, residual string, tenantValue any, values ...any) statementOutcome {
 			t.Helper()
-			statement, err := conn.PrepareContext(ctx, "select request_id from t where "+tenant+"=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) and "+residual+" order by request_id")
+			query := "select request_id from t where " + tenant + "=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?))"
+			if residual != "" {
+				query += " and " + residual
+			}
+			statement, err := conn.PrepareContext(ctx, query+" order by request_id")
 			require.NoError(t, err)
 			defer statement.Close()
-			rows, err := statement.QueryContext(ctx, "u", "s", "r1", "other", "r1", value)
+			args := append([]any{tenantValue, "s", "r1", "other", "r1"}, values...)
+			rows, err := statement.QueryContext(ctx, args...)
 			var got statementOutcome
 			if rows != nil {
 				defer rows.Close()
@@ -217,10 +244,14 @@ func TestCompositePointBinaryPrepareReuse(t *testing.T) {
 			{"invalid binary to text cast", "cast(? as char) is not null", []byte{0xff}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				require.Equal(t, outcome("concat(tenant,'')", tc.residual, tc.value), outcome("tenant", tc.residual, tc.value),
+				require.Equal(t, outcome("concat(tenant,'')", tc.residual, "u", tc.value), outcome("tenant", tc.residual, "u", tc.value),
 					"a fallible residual must retain its rows, error and warnings")
 			})
 		}
+		t.Run("invalid binary key bytes", func(t *testing.T) {
+			require.Equal(t, outcome("concat(tenant,'')", "", []byte{0xff}), outcome("tenant", "", []byte{0xff}),
+				"a candidate must preserve the fallback's rows, error and warnings")
+		})
 
 		update, err := conn.PrepareContext(ctx, "update t set payload=case when session_id=? and request_id=? then 11 when session_id=? and request_id=? then 22 else payload end where "+where)
 		require.NoError(t, err)

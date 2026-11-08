@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"errors"
 	"unicode/utf8"
 
 	"github.com/gogo/protobuf/proto"
@@ -51,14 +52,15 @@ type compositePointAnalysis struct {
 }
 
 type compositePointSet struct {
-	values [][]*plan.Expr
-	bytes  uint64
+	values     [][]*plan.Expr
+	checked    []*plan.Expr
+	shapeBytes uint64
 }
 
-// compositePointCandidate returns references to the original values, one
-// tuple per correlated OR arm. It never mutates the original predicates. A nil
-// result means that ordinary composite-key lowering must be used instead.
-func compositePointCandidate(ctx context.Context, proc *process.Process, node *plan.Node, remaining uint64) *compositePointSet {
+// compositePointCandidate identifies a value-independent shape. Its references
+// must be frozen before ordinary lowering can mutate the original predicates.
+// A nil result keeps the existing access path.
+func compositePointCandidate(ctx context.Context, node *plan.Node, remaining uint64) *compositePointSet {
 	if node == nil || node.TableDef == nil || node.TableDef.Pkey == nil ||
 		len(node.BindingTags) == 0 || node.TableDef.ClusterBy != nil ||
 		remaining < 2*compositePointCopies*types.DefaultPackerCapacity() {
@@ -92,7 +94,6 @@ func compositePointCandidate(ctx context.Context, proc *process.Process, node *p
 	}
 	a := compositePointAnalysis{
 		ctx:   ctx,
-		proc:  proc,
 		tag:   node.BindingTags[0],
 		parts: make(map[int32]int, len(key.Names)),
 		types: make([]plan.Type, len(key.Names)),
@@ -116,42 +117,73 @@ func compositePointCandidate(ctx context.Context, proc *process.Process, node *p
 	if uint64(len(points)) > remaining/(compositePointCopies*types.DefaultPackerCapacity()) {
 		return nil
 	}
-	// A point candidate can suppress evaluation on rows it prunes. First prove
-	// every predicate's shape is safe, then inspect execution-bound values. An
-	// ineligible shape must not unnecessarily disable prepared-plan caching.
+	// A point candidate can suppress evaluation on rows it prunes. Prove every
+	// predicate's shape is safe before any execution-bound value is inspected.
 	for _, filter := range node.FilterList {
 		if !a.safePredicate(filter, 0) {
 			return nil
 		}
 	}
+	// Charge independently owned value expressions and tuple references before
+	// copying them. Values used only by an unselected equality are needed too:
+	// early pruning must not suppress a fallible evaluation of that equality.
+	var bytes uint64
+	checked := make([]*plan.Expr, 0, len(a.values))
+	seen := make(map[*plan.Expr]struct{}, len(a.values))
+	for _, value := range a.values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		cost := uint64(value.ProtoSize()) + 1024
+		if cost < 1024 || cost > remaining-bytes {
+			return nil
+		}
+		bytes += cost
+		checked = append(checked, value)
+	}
+	for _, point := range points {
+		cost := uint64(len(point))*8 + 24
+		if cost > remaining-bytes {
+			return nil
+		}
+		bytes += cost
+	}
+	return &compositePointSet{values: points, checked: checked, shapeBytes: bytes}
+}
+
+// candidateBytes validates the current execution's values only after the scan
+// and its witnesses survive access selection. The returned charge is separate
+// from the already reserved frozen shape and witness memory.
+func (p *compositePointSet) candidateBytes(ctx context.Context, proc *process.Process, remaining uint64) (uint64, bool) {
+	a := compositePointAnalysis{ctx: ctx, proc: proc, values: p.checked}
 	valueSizes, ok := a.safeValueSizes()
 	if !ok {
-		return nil
+		return 0, false
 	}
 	var bytes uint64
-	for _, point := range points {
+	for _, point := range p.values {
 		var tupleBytes, largestPart uint64
 		for _, value := range point {
 			bound, supported := valueSizes[value]
 			// Account for expression and encoded data copies in the row filter,
 			// block filter, and compilation. The allowance also bounds list nodes.
 			unit := bound + uint64(value.ProtoSize()) + 128
-			if !supported || unit < bound || unit > (maxCompositePointBytes-bytes)/compositePointCopies || bound > maxCompositePointBytes-tupleBytes {
-				return nil
+			if !supported || unit < bound || unit > (remaining-bytes)/compositePointCopies || bound > maxCompositePointBytes-tupleBytes {
+				return 0, false
 			}
 			bytes += compositePointCopies * unit
 			tupleBytes += bound
 			largestPart = max(largestPart, bound)
 		}
 		// Each SERIAL executor owns a packer, even for tiny or NULL values.
-		// Account for its size class and the same potential expression copies.
 		packerBytes, ok := types.PackerCapacityUpperBound(tupleBytes, largestPart)
-		if !ok || packerBytes > (maxCompositePointBytes-bytes)/compositePointCopies {
-			return nil
+		if !ok || packerBytes > (remaining-bytes)/compositePointCopies {
+			return 0, false
 		}
 		bytes += compositePointCopies * packerBytes
 	}
-	return &compositePointSet{values: points, bytes: bytes}
+	return bytes, true
 }
 
 func compositePointValueSize(ctx context.Context, proc *process.Process, expr *plan.Expr) (uint64, bool) {
@@ -501,8 +533,11 @@ type compositePointProposal struct {
 	key       *plan.PrimaryKeyDef
 	columns   []compositePointColumn
 	tag       int32
-	candidate *plan.Expr
+	shape     *compositePointSet
 	witnesses [][]byte
+	// Revalidation uses temporary wire buffers. Reserve their high-water mark
+	// once per proposal, even when the same proposal is checked again.
+	comparisonBytes uint64
 }
 
 type compositePointColumn struct {
@@ -524,8 +559,8 @@ func (c *compositePointCapture) collect(builder *QueryBuilder, id int32, node *p
 	if c == nil || c.remaining == nil || len(node.BindingTags) != 1 {
 		return
 	}
-	points := compositePointCandidate(builder.GetContext(), builder.compCtx.GetProcess(), node, *c.remaining)
-	if points == nil || points.bytes > *c.remaining {
+	points := compositePointCandidate(builder.GetContext(), node, *c.remaining)
+	if points == nil || points.shapeBytes > *c.remaining {
 		return
 	}
 	table := node.TableDef
@@ -540,15 +575,28 @@ func (c *compositePointCapture) collect(builder *QueryBuilder, id int32, node *p
 		pos := table.Name2ColIndex[name]
 		metadataBytes += uint64(table.Cols[pos].Typ.ProtoSize()) + uint64(len(name)) + 64
 	}
-	if metadataBytes > *c.remaining-points.bytes {
+	if metadataBytes > *c.remaining-points.shapeBytes {
 		return
 	}
-	candidate := builder.bindCompositePointCandidate(node, points.values)
-	if candidate == nil {
-		return
+	// Freeze each distinct source once. Tuple references share only this owned
+	// copy; binding will take an independent copy for each tuple.
+	frozen := make(map[*plan.Expr]*plan.Expr, len(points.checked))
+	for i, value := range points.checked {
+		copy := DeepCopyExpr(value)
+		frozen[value] = copy
+		points.checked[i] = copy
+	}
+	for _, point := range points.values {
+		for i, value := range point {
+			copy, ok := frozen[value]
+			if !ok {
+				return
+			}
+			point[i] = copy
+		}
 	}
 	proposal := &compositePointProposal{
-		node: node, tableID: table.TblId, tag: node.BindingTags[0], candidate: candidate,
+		node: node, tableID: table.TblId, tag: node.BindingTags[0], shape: points,
 		key: proto.Clone(table.Pkey).(*plan.PrimaryKeyDef),
 	}
 	if node.ObjRef != nil {
@@ -565,7 +613,7 @@ func (c *compositePointCapture) collect(builder *QueryBuilder, id int32, node *p
 			typ: proto.Clone(&col.Typ).(*plan.Type),
 		})
 	}
-	*c.remaining -= points.bytes + metadataBytes
+	*c.remaining -= points.shapeBytes + metadataBytes
 	if c.proposals == nil {
 		c.proposals = make(map[int32]*compositePointProposal)
 	}
@@ -573,23 +621,24 @@ func (c *compositePointCapture) collect(builder *QueryBuilder, id int32, node *p
 	c.order = append(c.order, id)
 }
 
-func (builder *QueryBuilder) bindCompositePointCandidate(node *plan.Node, points [][]*plan.Expr) *plan.Expr {
+func (builder *QueryBuilder) bindCompositePointCandidate(node *plan.Node, points [][]*plan.Expr) (*plan.Expr, error) {
 	pos := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	key := &plan.Expr{Typ: node.TableDef.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 		RelPos: node.BindingTags[0], ColPos: pos, Name: node.TableDef.Pkey.PkeyColName,
 	}}}
 	values := make([]*plan.Expr, len(points))
+	ctx := builder.GetContext()
 	for i, point := range points {
-		value, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", DeepCopyExprList(point))
+		value, err := BindFuncExprImplByPlanExpr(ctx, "serial", DeepCopyExprList(point))
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		values[i] = value
 	}
 	keyType := makeTypeByPlan2Expr(key)
-	overload, err := function.GetFunctionByName(builder.GetContext(), "in", []types.Type{keyType, keyType})
+	overload, err := function.GetFunctionByName(ctx, "in", []types.Type{keyType, keyType})
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	overloadID := overload.GetEncodedOverloadID()
 	resultType := overload.GetReturnType()
@@ -598,7 +647,7 @@ func (builder *QueryBuilder) bindCompositePointCandidate(node *plan.Node, points
 	typ.NotNullable = function.DeduceNotNullable(overloadID, args)
 	return &plan.Expr{Typ: typ, Selectivity: 1, Expr: &plan.Expr_F{F: &plan.Function{
 		Func: getFunctionObjRef(overloadID, "in"), Args: args,
-	}}}
+	}}}, nil
 }
 
 // snapshot records exactly the filters produced by the existing early pass.
@@ -650,14 +699,14 @@ func (c *compositePointCapture) snapshot() {
 // Only those proven scans may take a new witness after that owned rewrite.
 func (c *compositePointCapture) revalidate(builder *QueryBuilder) {
 	for _, id := range c.order {
-		if p := c.proposals[id]; p != nil && !p.valid(builder.qry.Nodes[id]) {
+		if p := c.proposals[id]; p != nil && !p.valid(builder.qry.Nodes[id], c.remaining) {
 			delete(c.proposals, id)
 		}
 	}
 }
 
-func (p *compositePointProposal) valid(node *plan.Node) bool {
-	if node != p.node || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil ||
+func (p *compositePointProposal) valid(node *plan.Node, remaining *uint64) bool {
+	if remaining == nil || node != p.node || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil ||
 		node.TableDef.TblId != p.tableID || len(node.BindingTags) != 1 || node.BindingTags[0] != p.tag ||
 		!proto.Equal(p.object, node.ObjRef) || !proto.Equal(p.snapshot, node.ScanSnapshot) ||
 		!proto.Equal(p.key, node.TableDef.Pkey) || len(node.FilterList) > maxCompositePointNodes {
@@ -676,9 +725,8 @@ func (p *compositePointProposal) valid(node *plan.Node) bool {
 	// Full wire identity includes parameter ordinals and Literal.Src, and is
 	// deliberately stricter than structural expression equality. A changed
 	// statistic or other metadata merely keeps the baseline access path.
-	current := make([][]byte, len(node.FilterList))
 	var currentBytes uint64
-	for i, filter := range node.FilterList {
+	for _, filter := range node.FilterList {
 		if filter == nil {
 			return false
 		}
@@ -687,6 +735,20 @@ func (p *compositePointProposal) valid(node *plan.Node) bool {
 			return false
 		}
 		currentBytes += size
+	}
+	// Marshal the current filters only after reserving their temporary buffers
+	// and matching bookkeeping. Repeated checks use the same reservation.
+	comparisonBytes := currentBytes + uint64(len(node.FilterList))*32 + 128
+	if comparisonBytes > p.comparisonBytes {
+		extra := comparisonBytes - p.comparisonBytes
+		if extra > *remaining {
+			return false
+		}
+		*remaining -= extra
+		p.comparisonBytes = comparisonBytes
+	}
+	current := make([][]byte, len(node.FilterList))
+	for i, filter := range node.FilterList {
 		var err error
 		current[i], err = filter.Marshal()
 		if err != nil {
@@ -718,13 +780,23 @@ func (p *compositePointProposal) valid(node *plan.Node) bool {
 
 // publish visits only the surviving plan. Scan copies are deliberately not
 // inferred from table identity; a copy without its own proof keeps baseline.
-func (c *compositePointCapture) publish(builder *QueryBuilder, rootID int32) {
+func (c *compositePointCapture) publish(builder *QueryBuilder, rootID int32) error {
+	if len(c.order) == 0 && len(c.proposals) == 0 {
+		return nil
+	}
+	if err := builder.checkPlanningCanceled(); err != nil {
+		return err
+	}
 	if len(c.proposals) == 0 {
-		return
+		return nil
 	}
 	visited := make(map[int32]struct{})
+	var publishErr error
 	var visit func(int32)
 	visit = func(id int32) {
+		if publishErr != nil {
+			return
+		}
 		if _, ok := visited[id]; ok {
 			return
 		}
@@ -733,8 +805,11 @@ func (c *compositePointCapture) publish(builder *QueryBuilder, rootID int32) {
 		for _, child := range node.Children {
 			visit(child)
 		}
+		if publishErr != nil {
+			return
+		}
 		p := c.proposals[id]
-		if p == nil || !p.valid(node) {
+		if p == nil || !p.valid(node, c.remaining) {
 			return
 		}
 		// Do not duplicate an existing complete-key IN filter.
@@ -747,11 +822,41 @@ func (c *compositePointCapture) publish(builder *QueryBuilder, rootID int32) {
 				}
 			}
 		}
-		node.FilterList = append(node.FilterList, p.candidate)
+		// A known minimum that cannot fit must not inspect parameters or make
+		// an otherwise reusable prepared fallback value-dependent.
+		if uint64(len(p.shape.values)) > *c.remaining/(compositePointCopies*types.DefaultPackerCapacity()) {
+			return
+		}
+		if publishErr = builder.checkPlanningCanceled(); publishErr != nil {
+			return
+		}
+		charge, ok := p.shape.candidateBytes(builder.GetContext(), builder.compCtx.GetProcess(), *c.remaining)
+		if !ok {
+			return
+		}
+		candidate, err := builder.bindCompositePointCandidate(node, p.shape.values)
+		if err != nil {
+			// Binding an optional candidate may fail normally. Cancellation is
+			// owned by the planner and must not be converted into fallback.
+			publishErr = builder.checkPlanningCanceled()
+			if publishErr == nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				publishErr = err
+			}
+			return
+		}
+		if publishErr = builder.checkPlanningCanceled(); publishErr != nil {
+			return
+		}
+		*c.remaining -= charge
+		node.FilterList = append(node.FilterList, candidate)
 		if (builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2) &&
-			ExprIsZonemappable(builder.GetContext(), p.candidate) {
-			appendUniqueBlockFilter(node, p.candidate, true)
+			ExprIsZonemappable(builder.GetContext(), candidate) {
+			appendUniqueBlockFilter(node, candidate, true)
 		}
 	}
 	visit(rootID)
+	if publishErr != nil {
+		return publishErr
+	}
+	return builder.checkPlanningCanceled()
 }

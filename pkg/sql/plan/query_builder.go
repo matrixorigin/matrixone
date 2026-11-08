@@ -4595,7 +4595,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
-		points.publish(builder, rootID)
+		if err = points.publish(builder, rootID); err != nil {
+			return nil, err
+		}
 
 		rootNode := builder.qry.Nodes[rootID]
 

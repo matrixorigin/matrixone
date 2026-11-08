@@ -55,12 +55,22 @@ where payload=2 and tenant='u' and ((session_id='s' and request_id='r2') or (ses
 explain select session_id from t ignore index(idx_payload)
 where payload=2 and tenant='u' and ((session_id='s' and request_id='r2') or (session_id='other' and request_id='r1'));
 
+-- Rebinding a prepared query that chooses the secondary index keeps results.
+prepare indexed_points from 'select session_id,request_id from t force index(idx_payload) where payload=? and tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) order by session_id,request_id';
+set @payload=2, @tenant='u', @s1='s', @r1='r2', @s2='other', @r2='r1';
+execute indexed_points using @payload,@tenant,@s1,@r1,@s2,@r2;
+set @payload=3;
+execute indexed_points using @payload,@tenant,@s1,@r1,@s2,@r2;
+deallocate prepare indexed_points;
+
 prepare points from 'select session_id, request_id from t where tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) order by session_id, request_id';
 set @tenant='u', @s1='s', @r1='r1', @s2='other', @r2='r1';
 execute points using @tenant,@s1,@r1,@s2,@r2;
 set @s1=null, @s2='s', @r2='r2';
 execute points using @tenant,@s1,@r1,@s2,@r2;
 set @r2=null;
+execute points using @tenant,@s1,@r1,@s2,@r2;
+set @s1='s', @s2='other', @r2='r1';
 execute points using @tenant,@s1,@r1,@s2,@r2;
 deallocate prepare points;
 

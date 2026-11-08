@@ -91,6 +91,16 @@ Project  𝄀
   ->  Table Scan on composite_key_points.t  𝄀
         Filter Cond: prefix_eq(t.__mo_cpkey_col), (t.payload = 2), (((t.session_id = 's') and (t.request_id = 'r2')) or ((t.session_id = 'other') and (t.request_id = 'r1'))), (t.tenant = 'u'), t.__mo_cpkey_col in (<opaque>)  𝄀
         Block Filter Cond: (t.payload = 2), (t.tenant = 'u'), prefix_eq(t.__mo_cpkey_col), t.__mo_cpkey_col in (<opaque>)
+prepare indexed_points from 'select session_id,request_id from t force index(idx_payload) where payload=? and tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) order by session_id,request_id';
+set @payload=2, @tenant='u', @s1='s', @r1='r2', @s2='other', @r2='r1';
+execute indexed_points using @payload,@tenant,@s1,@r1,@s2,@r2;
+➤ session_id[12,16,0]  ¦  request_id[12,16,0]  𝄀
+s  ¦  r2
+set @payload=3;
+execute indexed_points using @payload,@tenant,@s1,@r1,@s2,@r2;
+➤ session_id[12,16,0]  ¦  request_id[12,16,0]  𝄀
+other  ¦  r1
+deallocate prepare indexed_points;
 prepare points from 'select session_id, request_id from t where tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?)) order by session_id, request_id';
 set @tenant='u', @s1='s', @r1='r1', @s2='other', @r2='r1';
 execute points using @tenant,@s1,@r1,@s2,@r2;
@@ -104,6 +114,11 @@ s  ¦  r2
 set @r2=null;
 execute points using @tenant,@s1,@r1,@s2,@r2;
 ➤ session_id[12,16,0]  ¦  request_id[12,16,0]
+set @s1='s', @s2='other', @r2='r1';
+execute points using @tenant,@s1,@r1,@s2,@r2;
+➤ session_id[12,16,0]  ¦  request_id[12,16,0]  𝄀
+other  ¦  r1  𝄀
+s  ¦  r1
 deallocate prepare points;
 prepare update_points from 'update t set payload=case when session_id=? and request_id=? then 11 when session_id=? and request_id=? then 22 else payload end where tenant=? and ((session_id=? and request_id=?) or (session_id=? and request_id=?))';
 set @s1='s', @r1='r1', @s2='other', @r2='r1';
