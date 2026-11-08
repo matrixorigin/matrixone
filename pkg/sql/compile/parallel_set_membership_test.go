@@ -401,7 +401,6 @@ func TestOwnedSetMembershipAdmission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newDistinctSetTestCompile(t)
 			c.isPrepare, c.addr, c.ncpu = false, "127.0.0.1:18000", 4
-			c.proc.Base.Lim.Size = tc.limit
 			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
 			if tc.shrink {
 				budget := process.MustNewExecutionResourceBudget(1<<30, 1<<30)
@@ -414,6 +413,8 @@ func TestOwnedSetMembershipAdmission(t *testing.T) {
 				require.NoError(t, budget.UpdateAggregateCap(64<<20))
 				require.NoError(t, c.proc.SetExecutionResourceBudgetForTesting(generation))
 				t.Cleanup(func() { lease.Release(); other.Close(); budget.Close() })
+			} else {
+				setOwnedSetMembershipTestBudget(t, c, uint64(tc.limit))
 			}
 			typ := types.T_int64.ToType().PlanType()
 			scan := func() *plan.Node {
