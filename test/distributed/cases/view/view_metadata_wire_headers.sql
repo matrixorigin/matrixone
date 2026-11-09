@@ -15,6 +15,23 @@ show full columns from view_metadata_wire.v where Field = 'absent';
 prepare view_metadata_wire_stmt from 'show full columns from view_metadata_wire.v';
 execute view_metadata_wire_stmt;
 deallocate prepare view_metadata_wire_stmt;
+-- Table-description aliases preserve metadata in both PREPARE grammar forms.
+describe view_metadata_wire.src;
+describe view_metadata_wire.v;
+prepare view_metadata_wire_stmt from desc view_metadata_wire.src;
+execute view_metadata_wire_stmt;
+execute view_metadata_wire_stmt;
+deallocate prepare view_metadata_wire_stmt;
+prepare view_metadata_wire_stmt from describe view_metadata_wire.v;
+execute view_metadata_wire_stmt;
+deallocate prepare view_metadata_wire_stmt;
+prepare view_metadata_wire_stmt from 'describe view_metadata_wire.src';
+execute view_metadata_wire_stmt;
+deallocate prepare view_metadata_wire_stmt;
+prepare view_metadata_wire_stmt from 'desc view_metadata_wire.v';
+execute view_metadata_wire_stmt;
+deallocate prepare view_metadata_wire_stmt;
+
 -- WHERE markers retain prepare context, parameter order, and empty-result metadata.
 prepare show_where from 'show columns from view_metadata_wire.src where Field=?';
 set @show_field='x';

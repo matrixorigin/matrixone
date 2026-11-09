@@ -38,6 +38,46 @@ execute view_metadata_wire_stmt;
 x  ¦  varchar(8)  ¦  utf8mb4_general_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 tick`column  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 deallocate prepare view_metadata_wire_stmt;
+describe view_metadata_wire.src;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+odd column  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+describe view_metadata_wire.v;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+prepare view_metadata_wire_stmt from desc view_metadata_wire.src;
+execute view_metadata_wire_stmt;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+odd column  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+execute view_metadata_wire_stmt;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+odd column  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+deallocate prepare view_metadata_wire_stmt;
+prepare view_metadata_wire_stmt from describe view_metadata_wire.v;
+execute view_metadata_wire_stmt;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+deallocate prepare view_metadata_wire_stmt;
+prepare view_metadata_wire_stmt from 'describe view_metadata_wire.src';
+execute view_metadata_wire_stmt;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+odd column  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+deallocate prepare view_metadata_wire_stmt;
+prepare view_metadata_wire_stmt from 'desc view_metadata_wire.v';
+execute view_metadata_wire_stmt;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+x  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tick`column  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+deallocate prepare view_metadata_wire_stmt;
 prepare show_where from 'show columns from view_metadata_wire.src where Field=?';
 set @show_field='x';
 execute show_where using @show_field;
