@@ -197,8 +197,16 @@ byte-limited partial block ends its object, keeping every non-final object block
 at BlockMaxRows. The same boundary terminates an ordinary pipeline submission.
 An individually oversized row remains an exception. Admitted writers keep their
 complete materialized-run W reservation and full-block output. The fixed-name
-publication rewrite explicitly retains its single-object merge policy; it cannot
-rotate object names. No storage format or new tuning parameter is introduced.
+publication rewrite reserves a job slot from the same CN memory owner before
+fetching its source. It charges decoded vectors and expanded constant/alias
+payloads before materialization, globally sorts remapped RowIDs, and commits one
+object with full intermediate blocks in a single Sync. An 8192-row block with
+wide keys may exceed the ordinary byte target only under that reservation. This
+is bounded per-object materialization: an object that cannot fit fails admission
+before the larger allocation; it is not an external streaming sort. Growth while
+holding inputs is nonblocking, and every exit destroys vectors and the file
+sinker before releasing its slot. No storage format or new tuning parameter is
+introduced.
 
 ## Build, spill and ordinary execution
 

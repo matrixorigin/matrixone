@@ -16,12 +16,12 @@ package publication
 
 import (
 	"context"
-	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
@@ -39,6 +40,33 @@ import (
 
 // ErrSyncProtectionTTLExpired is returned when sync protection TTL has expired
 var ErrSyncProtectionTTLExpired = moerr.NewInternalErrorNoCtx("sync protection TTL expired")
+
+type publicationMemoryKey struct{}
+
+// One job slot owns fetch/decode, retained source vectors and final encoding.
+// Reserve before fetching; subsequent growth cannot wait on retained input.
+func reserveTombstoneRewrite(ctx context.Context, stats *objectio.ObjectStats) (*rscthrottler.InputLease, func(), error) {
+	owner, ok := ctx.Value(publicationMemoryKey{}).(rscthrottler.WorkingSetThrottler)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("publication rewrite requires CN memory admission")
+	}
+	peak, err := ioutil.IOEnvelope(nil, 1, max(int64(stats.Size()), int64(stats.OriginSize()), int64(stats.Extent().OriginSize())))
+	if err != nil {
+		return nil, nil, err
+	}
+	ticket, err := owner.ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{
+		UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Name: "publication-rewrite", Count: 1, Bytes: peak}},
+	}})
+	if err != nil {
+		return nil, nil, err
+	}
+	lease, err := ticket.AcquireInput(ctx, 0)
+	if err != nil {
+		ticket.Close()
+		return nil, nil, err
+	}
+	return lease, func() { lease.Release(); ticket.Close() }, nil
+}
 
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
 // This interface is implemented by disttae.CCPRTxnCache
@@ -364,6 +392,16 @@ func filterNonAppendableObject(
 	if ttlChecker != nil && !ttlChecker() {
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
+	var memory *rscthrottler.InputLease
+	if isTombstone && aobjectMap != nil {
+		var release func()
+		var err error
+		memory, release, err = reserveTombstoneRewrite(ctx, stats)
+		if err != nil {
+			return objectio.ObjectStats{}, err
+		}
+		defer release()
+	}
 
 	// Get upstream object name from stats
 	upstreamObjectName := stats.ObjectName().String()
@@ -379,10 +417,10 @@ func filterNonAppendableObject(
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
-	// For tombstone objects, read blocks one by one and rewrite rowids using aobjectMap
+	// Tombstone RowIDs may change order across source blocks after remapping.
 	if isTombstone && aobjectMap != nil {
 		objStats, err := rewriteNonAppendableTombstoneWithSinker(
-			ctx, objectContent, stats, localFS, mp, aobjectMap,
+			ctx, objectContent, stats, localFS, mp, aobjectMap, memory,
 		)
 		if err != nil {
 			return objectio.ObjectStats{}, err
@@ -597,9 +635,8 @@ func extractSortKeyFromObject(
 	return sortKeySeqnum, nil
 }
 
-// rewriteNonAppendableTombstoneWithSinker reads tombstone blocks one by one,
-// rewrites rowids using aobjectMap, and writes to a sorted sinker with the original object name.
-// This avoids loading the entire object into memory at once.
+// Rewrite and globally sort under one admitted job slot. A single file sinker
+// owns the fixed-name object through the final Sync; source blocks never Sync it.
 func rewriteNonAppendableTombstoneWithSinker(
 	ctx context.Context,
 	objectContent []byte,
@@ -607,11 +644,18 @@ func rewriteNonAppendableTombstoneWithSinker(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	aobjectMap *AObjectMap,
+	memory *rscthrottler.InputLease,
 ) (objectio.ObjectStats, error) {
+	if err := context.Cause(ctx); err != nil {
+		return objectio.ObjectStats{}, err
+	}
 	// Step 1: Parse object metadata
 	metaExtent := stats.Extent()
 	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+	}
+	if memory == nil {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorNoCtx("publication rewrite requires a memory slot")
 	}
 	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
 
@@ -644,86 +688,101 @@ func rewriteNonAppendableTombstoneWithSinker(
 		return objectio.ObjectStats{}, nil
 	}
 
-	// Step 2: Get column information from first block meta
+	// CN-created tombstones retain RowID and PK; commit timestamps are not
+	// needed after the upstream non-appendable object is visible in the snapshot.
 	firstBlkMeta := dataMeta.GetBlockMeta(0)
 	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
-
-	// Prepare columns and types (excluding commit TS for non-appendable)
-	cols := make([]uint16, 0, maxSeqnum+1)
-	typs := make([]types.Type, 0, maxSeqnum+1)
-	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := firstBlkMeta.ColumnMeta(seqnum)
-		if colMeta.DataType() == 0 {
-			continue
+	cols := []uint16{objectio.TombstoneAttr_Rowid_SeqNum, objectio.TombstoneAttr_PK_SeqNum}
+	typs := []types.Type{types.T_Rowid.ToType(), types.T(firstBlkMeta.ColumnMeta(objectio.TombstoneAttr_PK_SeqNum).DataType()).ToType()}
+	// Serialized constants can be tiny while their flat vectors still need
+	// rows*TypeSize backing. Admit both before decoding any source vectors.
+	payload := int64(len(objectContent)) + int64(metaExtent.OriginSize())
+	for block := uint32(0); block < blkCnt; block++ {
+		meta := dataMeta.GetBlockMeta(block)
+		if meta.GetRows() > objectio.BlockMaxRows {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorNoCtx("publication source block exceeds row limit")
 		}
-		cols = append(cols, seqnum)
-		typ := types.T(colMeta.DataType()).ToType()
-		typs = append(typs, typ)
+		for i, col := range cols {
+			payload += int64(meta.ColumnMeta(col).Location().OriginSize()) + int64(meta.GetRows())*int64(typs[i].TypeSize())
+		}
 	}
-
-	// Step 3: Create sinker factory with specified object name
-	// Use the original object name (segmentID + num)
-	segid := stats.ObjectName().SegmentId()
-	num := stats.ObjectName().Num()
-	objectName := objectio.BuildObjectName(&segid, num)
-
-	// Get PK type from second column (TombstoneAttr_PK_Idx = 1)
-	pkType := typs[objectio.TombstoneAttr_PK_Idx]
-
-	// Create tombstone sinker with the specified object name
-	sinkerFactory := newTombstoneFSinkerFactoryWithName(objectName, objectio.HiddenColumnSelection_None)
-	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
-
-	sinker := ioutil.NewSinker(
-		objectio.TombstonePrimaryKeyIdx,
-		attrs,
-		attrTypes,
-		sinkerFactory,
-		mp,
-		localFS,
-		ioutil.WithTailSizeCap(0), // Force all data to be written to object
-		// This fixed-name owner returns one object and cannot rotate by bytes.
-		ioutil.WithBufferBytes(math.MaxInt64),
-	)
-	defer sinker.Close()
-
-	// Step 4: Read blocks one by one and write to sinker
+	peak, err := ioutil.IOEnvelope([][]types.Type{typs}, 1, payload)
+	if err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	if err := memory.TryGrow(ctx, peak); err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	var inputs []*batch.Batch
+	defer func() {
+		for _, input := range inputs {
+			if input != nil {
+				input.Clean(mp)
+			}
+		}
+	}()
 	allocator := fileservice.DefaultCacheDataAllocator()
-
 	for blkIdx := uint32(0); blkIdx < blkCnt; blkIdx++ {
-		// Read single block
+		if err := context.Cause(ctx); err != nil {
+			return objectio.ObjectStats{}, err
+		}
 		blkBat, err := readSingleBlockToBatch(ctx, objectContent, dataMeta, blkIdx, cols, typs, maxSeqnum, allocator, mp)
 		if err != nil {
 			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to read block %d: %v", blkIdx, err)
 		}
 
-		// Rewrite tombstone rowids using aobjectMap
+		inputs = append(inputs, blkBat)
 		if err := rewriteTombstoneRowidsBatch(ctx, blkBat, aobjectMap, mp); err != nil {
-			blkBat.Clean(mp)
 			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids for block %d: %v", blkIdx, err)
 		}
-
-		// Write to sinker
-		if err := sinker.Write(ctx, blkBat); err != nil {
-			blkBat.Clean(mp)
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write block %d to sinker: %v", blkIdx, err)
+		if err := mergeutil.SortColumnsByIndex(blkBat.Vecs, objectio.TombstonePrimaryKeyIdx, mp); err != nil {
+			return objectio.ObjectStats{}, err
 		}
-
-		blkBat.Clean(mp)
 	}
-
-	// Step 5: Sync sinker and get result
-	if err := sinker.Sync(ctx); err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to sync sinker: %v", err)
+	// Before merge/encoding, charge expanded constant and alias payloads, not
+	// just the serialized source size. Growth never waits behind these inputs.
+	payload = int64(len(objectContent)) + int64(metaExtent.OriginSize())
+	for _, input := range inputs {
+		for _, vec := range input.Vecs {
+			payload += vec.WindowSize(0, input.RowCount())
+		}
 	}
-
-	persisted, _ := sinker.GetResult()
-	if len(persisted) == 0 {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "no object was created by sinker")
+	peak, err = ioutil.IOEnvelope([][]types.Type{typs}, 1, payload)
+	if err != nil {
+		return objectio.ObjectStats{}, err
 	}
-
-	// Return the first (and only) object stats
-	return persisted[0], nil
+	if err := memory.TryGrow(ctx, peak); err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	file := newTombstoneFSinkerFactoryWithName(stats.ObjectName(), objectio.HiddenColumnSelection_None)(mp, localFS)
+	defer file.Close()
+	attrs, _ := objectio.GetTombstoneSchema(typs[1], objectio.HiddenColumnSelection_None)
+	buffer := batch.NewWithSchema(false, attrs, typs)
+	defer buffer.Clean(mp)
+	// The admitted complete-job peak covers each full output block. The
+	// ordinary byte target would create invalid partial intermediate blocks.
+	_, err = mergeutil.MergeSortBatches(inputs, objectio.TombstonePrimaryKeyIdx, buffer,
+		func(data *batch.Batch) (*batch.Batch, error) {
+			if err := context.Cause(ctx); err != nil {
+				return data, err
+			}
+			if err := file.Sink(ctx, data); err != nil {
+				return data, err
+			}
+			data.CleanOnlyData()
+			return data, nil
+		}, mp, func(i int) { inputs[i].Clean(mp); inputs[i] = nil }, peak)
+	if err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	result, err := file.Sync(ctx)
+	if err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	if result == nil {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorNoCtx("empty publication tombstone object")
+	}
+	return *result, nil
 }
 
 // newTombstoneFSinkerFactoryWithName creates a FileSinkerFactory for tombstone

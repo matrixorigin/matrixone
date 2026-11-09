@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1129,6 +1130,11 @@ func ExecuteIteration(
 	syncProtectionRetryOpt *SyncProtectionRetryOption,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
+	if rt := runtime.ServiceRuntime(cnUUID); rt != nil {
+		if memory, ok := rt.GetGlobalVariables(runtime.CNMemoryThrottler); ok {
+			ctx = context.WithValue(ctx, publicationMemoryKey{}, memory)
+		}
+	}
 	startTime := time.Now()
 	v2.CCPRIterationStartedCounter.Inc()
 	v2.CCPRRunningIterationsGauge.Inc()
