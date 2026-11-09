@@ -302,6 +302,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*order.Order)
 		op := order.NewArgument()
 		op.OrderBySpec = t.OrderBySpec
+		op.ScanCutoffLimit = t.ScanCutoffLimit
+		op.ScanCutoffTag = t.ScanCutoffTag
+		op.ScanCutoff = t.ScanCutoff
 		op.SetInfo(&info)
 		return op
 	case vm.Product:
@@ -498,7 +501,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		sourceArg := sourceOp.(*shuffle.Shuffle)
 		pool := dupCtx.shufflePools[sourceArg]
 		if pool == nil {
-			pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			if sourceArg.OwnedOutput {
+				pool = shuffle.NewOwnedShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.OwnedColumnCount)
+			} else {
+				pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			}
 			dupCtx.shufflePools[sourceArg] = pool
 		}
 		op := shuffle.NewArgument()
@@ -514,6 +521,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.OwnedOutput = sourceArg.OwnedOutput
+		op.OwnedColumnCount = sourceArg.OwnedColumnCount
 		op.StringHashKey = sourceArg.StringHashKey
 		op.ShuffleKeyColumns = append([]int32(nil), sourceArg.ShuffleKeyColumns...)
 		op.SetInfo(&info)

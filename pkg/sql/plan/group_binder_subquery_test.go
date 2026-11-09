@@ -68,7 +68,7 @@ func TestBuildPreparedPlanFlattensUncorrelatedScalarGroupKey(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	assertScalarGroupKeysFlattened(t, logicPlan.GetQuery(), true)
 }

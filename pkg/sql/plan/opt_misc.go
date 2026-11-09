@@ -2409,7 +2409,7 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		node.Stats.ForceOneCN = force
+		node.Stats.ForceOneCN = force || CapturedExecutionIndexScan(node)
 	} else if node.NodeType == plan.Node_JOIN {
 		if node.JoinType == plan.Node_DEDUP && !node.Stats.HashmapStats.Shuffle {
 			force = true
@@ -2563,16 +2563,17 @@ func (builder *QueryBuilder) sortRollupMode() int {
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
+func (builder *QueryBuilder) optimizeFilters(rootID int32, pointBudget *uint64) (int32, compositePointCapture, error) {
+	points := compositePointCapture{remaining: pointBudget}
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
-		return rootID, err
+		return rootID, points, err
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false, &points)
 	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
@@ -2582,7 +2583,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID, nil
+	points.snapshot()
+	return rootID, points, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring
@@ -2617,7 +2619,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
+			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil, nil)
 			if e != nil {
 				err = e
 				return

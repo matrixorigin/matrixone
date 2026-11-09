@@ -79,11 +79,12 @@ select id, state from renamed where match(body) against('alpha') order by id;
 alter table renamed drop column prio;
 show create table renamed;
 
--- Regression: renaming a NON-include, non-key column leaves the index intact.
+-- Regression: renaming the primary key leaves the unrelated fulltext2 index intact.
 drop table if exists plain;
 create table plain (id bigint primary key, body text, note int);
-create fulltext2 index ft_plain on plain (body) include (note);
 insert into plain values (1, 'gamma text', 7);
+-- Build synchronously from the existing row before testing the rename.
+create fulltext2 index ft_plain on plain (body) include (note);
 alter table plain rename column id to pk;
 show create table plain;
 

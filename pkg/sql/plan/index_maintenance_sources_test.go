@@ -35,10 +35,12 @@ type maintenanceSourceTestContext struct {
 }
 
 func (c *maintenanceSourceTestContext) GetContext() context.Context { return c.ctx }
-func (c *maintenanceSourceTestContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *maintenanceSourceTestContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, errors.New("ordinary resolution denied")
 }
-func (c *maintenanceSourceTestContext) ResolveIndexTableByRef(_ *ObjectRef, name string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *maintenanceSourceTestContext) ResolveIndexTableByRef(_ *ObjectRef, name string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return &ObjectRef{Obj: int64(c.id), ObjName: name}, &TableDef{TblId: c.id, Name: name}, nil
 }
 
@@ -83,7 +85,7 @@ func TestIndexMaintenanceSourceIdentityAndReplacement(t *testing.T) {
 	}
 	require.NotNil(t, generated)
 	compiler := &maintenanceSourceTestContext{ctx: marked, id: 3}
-	_, _, err = resolveIndexMaintenanceSource(compiler, generated, "db", "hidden", nil)
+	_, _, err = resolveIndexMaintenanceSource(compiler, generated, "db", "hidden", nil, nil)
 	require.NoError(t, err)
 	other, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from db.hidden", 1)
 	require.NoError(t, err)
@@ -93,10 +95,10 @@ func TestIndexMaintenanceSourceIdentityAndReplacement(t *testing.T) {
 	var userNode *tree.TableName
 	for userNode = range otherMarked.Value(indexMaintenanceSourcesKey{}).(map[*tree.TableName]indexMaintenanceSource) {
 	}
-	_, _, err = resolveIndexMaintenanceSource(compiler, userNode, "db", "hidden", nil)
+	_, _, err = resolveIndexMaintenanceSource(compiler, userNode, "db", "hidden", nil, nil)
 	require.ErrorContains(t, err, "ordinary resolution denied")
 	compiler.id = 4
-	_, _, err = resolveIndexMaintenanceSource(compiler, generated, "db", "hidden", nil)
+	_, _, err = resolveIndexMaintenanceSource(compiler, generated, "db", "hidden", nil, nil)
 	require.ErrorContains(t, err, "identity changed")
 }
 
@@ -107,11 +109,13 @@ type maintenanceDeleteTestContext struct {
 	indexGets int
 }
 
-func (c *maintenanceDeleteTestContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *maintenanceDeleteTestContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, errors.New("ordinary resolution denied")
 }
 
-func (c *maintenanceDeleteTestContext) ResolveIndexTableByRef(_ *ObjectRef, name string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *maintenanceDeleteTestContext) ResolveIndexTableByRef(_ *ObjectRef, name string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	c.indexGets++
 	def := DeepCopyTableDef(c.table, true)
 	def.Name, def.DbName, def.TblId = name, "db", c.id
@@ -125,7 +129,7 @@ func TestIndexMaintenanceModernDeleteSource(t *testing.T) {
 	defer proc.Free()
 	mock := NewMockCompilerContext(true, proc)
 	mock.dbs["db"] = true
-	_, table, err := mock.Resolve("tpch", "nation", nil)
+	_, table, err := mock.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, table)
 	compiler := &maintenanceDeleteTestContext{MockCompilerContext: mock, table: table, id: 3}
@@ -161,7 +165,7 @@ func TestIndexMaintenanceModernReplaceSource(t *testing.T) {
 	defer proc.Free()
 	mock := NewMockCompilerContext(true, proc)
 	mock.dbs["db"] = true
-	_, table, err := mock.Resolve("tpch", "nation", nil)
+	_, table, err := mock.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, table)
 	compiler := &maintenanceDeleteTestContext{MockCompilerContext: mock, table: table, id: 3}

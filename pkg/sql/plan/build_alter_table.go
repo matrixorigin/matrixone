@@ -251,7 +251,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	var snapshot *Snapshot
-	_, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot)
+	_, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -813,7 +813,7 @@ func addAlterCopyForeignKeys(
 		}
 
 		_, parentTableDef, err := cctx.Resolve(
-			fkData.ParentDbName, fkData.ParentTableName, nil,
+			fkData.ParentDbName, fkData.ParentTableName, nil, nil,
 		)
 		if err != nil {
 			return err
@@ -1428,7 +1428,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
