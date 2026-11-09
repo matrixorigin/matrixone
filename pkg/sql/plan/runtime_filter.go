@@ -704,7 +704,14 @@ func (builder *QueryBuilder) generateNodeRuntimeFilterInTree(nodeID int32, keyBo
 			if keyBound > 0 {
 				buildSize = keyBound
 			}
-			if buildSize/probeNdv >= 0.1 {
+			// DEDUP probes complete stored keys, including REPLACE's serialized
+			// composite PK. Stale small-table NDV must not turn a bounded key
+			// lookup into a full scan as flushed objects accumulate. Keep the
+			// exact-IN budget; underestimated builds still publish PASS at runtime.
+			boundedDedupPK := node.JoinType == plan.Node_DEDUP && sortOrder == 0 &&
+				probeCol.Name == tableDef.Pkey.PkeyColName &&
+				buildSize <= float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt))
+			if buildSize/probeNdv >= 0.1 && !boundedDedupPK {
 				if keyBound != 0 || sortOrder != 0 || 1/probeNdv >= 0.1 ||
 					!builder.pointRuntimeFilterCandidate(point, nodeID, node, leftChild, probeExprs[0]) {
 					if keyBound == 0 {
