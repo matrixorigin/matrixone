@@ -69,6 +69,9 @@ func TestLocalRuntimeFilterDomainCompositeLineage(t *testing.T) {
 		{name: "source wait", change: func(q *planpb.Query) {
 			q.Nodes[1].RuntimeFilterProbeList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
 		}},
+		{name: "already filtered target keeps its reader path", targets: []int32{0}, change: func(q *planpb.Query) {
+			q.Nodes[3].FilterList = []*planpb.Expr{makePlan2BoolConstExprWithType(true)}
+		}},
 		{name: "source unselective", change: func(q *planpb.Query) { q.Nodes[1].Stats.Outcnt = 1000 }},
 		{name: "computed scan projection cannot be skipped", change: func(q *planpb.Query) {
 			q.Nodes[3].ProjectList = append(q.Nodes[3].ProjectList, DeepCopyExpr(fallible))

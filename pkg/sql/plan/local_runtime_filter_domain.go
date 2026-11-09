@@ -255,8 +255,11 @@ func LocalRuntimeFilterDomains(q *planpb.Query, ndv func(*planpb.Node, string) f
 		for _, col := range columns {
 			n := q.Nodes[col.scan]
 			if col.scan == source.scan || n.Stats == nil || n.Stats.Outcnt <= 0 ||
-				sourceNode.Stats.Outcnt > n.Stats.Outcnt*.3 || !areTruncationSafePredicates(n.FilterList) ||
-				!areTruncationSafePredicates(n.BlockFilterList) {
+				sourceNode.Stats.Outcnt > n.Stats.Outcnt*.3 || len(n.FilterList) != 0 ||
+				len(n.BlockFilterList) != 0 || len(n.RuntimeFilterProbeList) != 0 {
+				// This eager-scan stage cannot avoid an existing reader/static
+				// predicate's work. Preserve that path and its overlap; combine
+				// membership earlier only in the separate reader integration.
 				continue
 			}
 			name := n.TableDef.Cols[col.col].Name

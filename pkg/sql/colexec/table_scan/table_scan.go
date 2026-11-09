@@ -121,11 +121,13 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-	if err := tableScan.waitLocalDomains(proc); err != nil {
-		return vm.CancelResult, err
-	}
-	if tableScan.ctr.domainEmpty {
-		return vm.CancelResult, nil
+	if len(tableScan.ctr.domainProbes) > 0 {
+		if err := tableScan.waitLocalDomains(proc); err != nil {
+			return vm.CancelResult, err
+		}
+		if tableScan.ctr.domainEmpty {
+			return vm.CancelResult, nil
+		}
 	}
 
 	for {
@@ -212,11 +214,13 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
-		if err = tableScan.applyLocalDomains(proc); err != nil {
-			return vm.CancelResult, err
-		}
-		if tableScan.ctr.buf.IsEmpty() {
-			continue
+		if len(tableScan.ctr.domainSources) > 0 || len(tableScan.ctr.domainProbes) > 0 {
+			if err = tableScan.applyLocalDomains(proc); err != nil {
+				return vm.CancelResult, err
+			}
+			if tableScan.ctr.buf.IsEmpty() {
+				continue
+			}
 		}
 		break
 	}
