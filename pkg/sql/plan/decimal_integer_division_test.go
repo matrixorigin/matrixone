@@ -78,7 +78,7 @@ func TestDecimalIntegerDivViewConsumers(t *testing.T) {
 						stmts, err := mysql.Parse(t.Context(), "create "+kind+" div_consumer as select q from "+source, 1)
 						require.NoError(t, err)
 						defer stmts[0].Free()
-						p, err := BuildPlan(f.compiler, stmts[0], false)
+						p, err := BuildPlan(f.compiler, stmts[0], false, nil)
 						require.NoError(t, err)
 						var cols []*ColDef
 						if kind == "table" {
@@ -113,7 +113,7 @@ func TestDecimalIntegerDivViewBoundaryPlan(t *testing.T) {
 				require.NoError(t, err)
 				func() {
 					defer stmts[0].Free()
-					p, err := BuildPlan(f.compiler, stmts[0], false)
+					p, err := BuildPlan(f.compiler, stmts[0], false, nil)
 					require.NoError(t, err)
 					div := findPlanFunctionExpr(p, "div")
 					require.NotNil(t, div)

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -56,6 +57,30 @@ type container struct {
 	// extCols are the ColDefs aligned with InsertCtx.Attrs, for the external
 	// path's NOT NULL check.
 	extCols []*plan.ColDef
+	// extFillOwned holds the operator-owned vectors the external IGNORE fill
+	// booked for the child's batch during the current insert_external Call,
+	// each paired with the child-owned vector it displaced: the fresh
+	// constant a constant NULL broadcast was replaced with, and the detached
+	// copy an aliased flat fill destination got before its in-place fill.
+	// The external path writes the child's batch in place, but the child - a
+	// projection in the minimal external plan - reuses its batch and
+	// overwrites every slot on its next Call, freeing only its own vectors,
+	// so a replacement nobody owns would stay recorded in the mpool's pointer
+	// registry forever. The operator is that cleanup owner: insert_external
+	// drains the list on every path out of the Call (fill rejection, write
+	// failure, success and a panicking unwind alike), so no entry survives
+	// its batch and Reset/Free never carry one.
+	extFillOwned []extFillReplacement
+}
+
+// extFillReplacement pairs one operator-owned IGNORE-fill vector this
+// operator installs into the child's borrowed batch with the child-owned
+// vector that occupied the slot, so the slot can be returned and the
+// replacement's storage released once the batch was consumed.
+type extFillReplacement struct {
+	slot int
+	orig *vector.Vector
+	fill *vector.Vector
 }
 
 type Insert struct {

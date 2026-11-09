@@ -59,7 +59,6 @@ type MockCompilerContext struct {
 	DatabaseExistsFunc                    func(string, *Snapshot) bool
 	GetDatabaseIdFunc                     func(string, *Snapshot) (uint64, error)
 	ResolveAccountIdsFunc                 func([]string) ([]uint32, error)
-	ResolveFunc                           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
 	ResolveVariableFunc                   func(string, bool, bool) (interface{}, error)
 	ResolveVariableTypeFunc               func(string, bool, bool) (Type, error)
 	ResolveVariableRegexpStringResultFunc func(string) (bool, error)
@@ -95,8 +94,9 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 	panic("implement me")
 }
 
-func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
-	objRef, tableDef, err := m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
+	objRef, tableDef, err := m.Resolve(DbNameOfObjRef(ref), tblName, snapshot, nil)
 	if objRef != nil && ref != nil {
 		objRef.SchemaName = ref.SchemaName
 		objRef.SubscriptionName = ref.SubscriptionName
@@ -2094,11 +2094,13 @@ func (m *MockCompilerContext) GetUserName() string {
 }
 
 // This fixture stores catalog objects without a session alias layer.
-func (m *MockCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (m *MockCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return m.resolve(dbName, tableName, snapshot)
 }
 
-func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return m.resolve(dbName, tableName, snapshot)
 }
 
@@ -2260,7 +2262,7 @@ func NewMockOptimizer(_ bool, proc *process.Process) *MockOptimizer {
 
 func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
-	query, err := BuildPlan(ctx, stmt, false)
+	query, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		// logutil.Infof("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err
@@ -2276,4 +2278,9 @@ func (moc *MockOptimizer) CurrentContext() CompilerContext {
 // letting tests exercise sql_mode-dependent build paths.
 func (m *MockCompilerContext) SetSqlModeOverride(mode string) {
 	m.sqlModeOverride = &mode
+}
+
+// BorrowedTableStillCurrent declines native borrowing in the catalog-only fixture.
+func (*MockCompilerContext) BorrowedTableStillCurrent(*process.Process, *BorrowedTable) bool {
+	return false
 }

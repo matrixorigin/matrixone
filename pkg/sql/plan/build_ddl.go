@@ -281,14 +281,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName))
+			objectkey.Encode(viewDatabase, viewName), nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName))
+			objectkey.Encode(viewDatabase, viewName), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2420,7 +2420,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	var typ plan.Type
 	var err error
 	if stmt.Type == nil {
-		_, tableDef, err := ctx.Resolve(as.GetDatabase(), as.TableDef.Name, nil)
+		_, tableDef, err := ctx.Resolve(as.GetDatabase(), as.TableDef.Name, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -2526,7 +2526,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	}
 	dropSequence.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropSequence.Database, dropSequence.Table, nil)
+	obj, tableDef, err := ctx.Resolve(dropSequence.Database, dropSequence.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2890,6 +2890,46 @@ func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
 	return string(payload), nil
 }
 
+// prepareCreateLikeSource validates and owns source metadata before any
+// destination planning. Prepared cross-account clones use the same source
+// checks without probing destination metadata in the caller's account.
+func prepareCreateLikeSource(
+	ctx CompilerContext, tableDef *TableDef, snapshot *Snapshot, sub *SubscriptionMeta, dbName, tblName string,
+) (*TableDef, bool, error) {
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, false, err
+	}
+	tableDef = DeepCopyTableDef(tableDef, true)
+	if sub == nil {
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, false, err
+		}
+	}
+	hadStructuredChecks := len(tableDef.Checks) > 0
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, false, err
+	}
+	recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+	if len(tableDef.Checks) > 0 {
+		if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+			return nil, false, err
+		}
+	}
+	if tableDef.TableType == catalog.SystemViewRel ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		tableDef.TableType == catalog.SystemSequenceRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return nil, false, err
+		}
+		if isIceberg {
+			return nil, false, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
+		}
+		return nil, false, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+	}
+	return tableDef, recoveredLegacyChecks, nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -2930,51 +2970,21 @@ func buildCreateTable(
 			}()
 		}
 
-		_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+		_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 		if err != nil {
 			return nil, err
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if err := validateTableIndexDefinitions(tableDef); err != nil {
-			return nil, err
-		}
-		// Resolve and rewrite a private source definition. Resolve can return a
-		// cached TableDef, and the reconstruction below changes its table name.
-		tableDef = DeepCopyTableDef(tableDef, true)
 		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
 		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
 		// a local source definition and asks the normal CREATE planner to rebuild
 		// it. A subscription definition belongs to the publisher, whose catalog
 		// is not available through this compiler context.
-		if sub == nil {
-			if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
-				return nil, err
-			}
-		}
-		hadStructuredChecks := len(tableDef.Checks) > 0
-		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		tableDef, recoveredLegacyChecks, err := prepareCreateLikeSource(ctx, tableDef, snapshot, sub, dbName, tblName)
+		if err != nil {
 			return nil, err
-		}
-		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
-		if len(tableDef.Checks) > 0 {
-			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
-				return nil, err
-			}
-		}
-		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel ||
-			tableDef.TableType == catalog.SystemExternalRel ||
-			tableDef.TableType == catalog.SystemSequenceRel {
-			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
-			if err != nil {
-				return nil, err
-			}
-			if isIceberg {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
-			}
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
 		tableDef.Name = string(newTable.ObjectName)
@@ -4722,13 +4732,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	skip := IsFkBannedDatabase(createTable.Database)
+	// Temporary destinations live in the session namespace and cannot own or
+	// receive foreign keys. Persistent same-name tables and forward references
+	// must not be resolved while constructing a temporary table.
+	skip := createTable.Temporary || IsFkBannedDatabase(createTable.Database)
 	if !skip {
 		// Existing relations are handled by the execution-time RelationExists
 		// check. Their reverse foreign keys belong to the existing definition and
 		// must never be validated against the ignored replacement definition.
 		_, existingTableDef, err := ctx.Resolve(
-			createTable.Database, createTable.TableDef.Name, nil,
+			createTable.Database, createTable.TableDef.Name, nil, nil,
 		)
 		if err != nil {
 			return err
@@ -6156,7 +6169,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	obj, tableDef, err := ctx.Resolve(truncateTable.Database, truncateTable.Table, nil)
+	obj, tableDef, err := ctx.Resolve(truncateTable.Database, truncateTable.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6341,7 +6354,7 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	}); ok {
 		obj, tableDef, err = resolver.ResolveForDrop(dropTable.Database, dropTable.Table)
 	} else {
-		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -6479,7 +6492,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6635,7 +6648,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check table
 	tableName := string(stmt.Table.ObjectName)
-	obj, tableDef, err := ctx.Resolve(createIndex.Database, tableName, nil)
+	obj, tableDef, err := ctx.Resolve(createIndex.Database, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7049,7 +7062,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 	// check table
 	dropIndex.Table = string(stmt.TableName.ObjectName)
-	obj, tableDef, err := ctx.Resolve(dropIndex.Database, dropIndex.Table, nil)
+	obj, tableDef, err := ctx.Resolve(dropIndex.Database, dropIndex.Table, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7151,7 +7164,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// step 1: check the view exists or not
-	obj, oldViewDef, err := ctx.Resolve(alterView.Database, viewName, nil)
+	obj, oldViewDef, err := ctx.Resolve(alterView.Database, viewName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7246,7 +7259,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		} else if removed[srcKey] {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 		} else {
-			objRef, tableDef, err = ctx.ResolveWithoutTemporaryAlias(schemaName, tableName, nil)
+			objRef, tableDef, err = ctx.ResolveWithoutTemporaryAlias(schemaName, tableName, nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -7307,7 +7320,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 					}
 					if !removed[dstKey] {
-						_, existDef, err := ctx.ResolveWithoutTemporaryAlias(schemaName, newName, nil)
+						_, existDef, err := ctx.ResolveWithoutTemporaryAlias(schemaName, newName, nil, nil)
 						if err != nil {
 							return nil, err
 						}
@@ -7366,7 +7379,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+	_, tableDef, err := ctx.Resolve(databaseName, tableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7637,6 +7650,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					_, parentTableDef, err := ctx.Resolve(
 						fkData.ParentDbName,
 						fkData.ParentTableName,
+						nil,
 						nil,
 					)
 					if err != nil {
@@ -7940,8 +7954,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				continue
 			}
 
-			// TODO ONLY Check
-			_, destination, err := ctx.Resolve(databaseName, newName, nil)
+			var destination *plan.TableDef
+			var err error
+			if tableDef.IsTemporary {
+				_, destination, err = resolveTemporaryTable(ctx, databaseName, newName, nil)
+			} else {
+				_, destination, err = ctx.Resolve(databaseName, newName, nil, nil)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -8246,7 +8265,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		}
 
 		// check table whether exist
-		obj, tableDef, err := ctx.Resolve(schemaName, tblName, nil)
+		obj, tableDef, err := ctx.Resolve(schemaName, tblName, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -8433,7 +8452,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	fkData.ParentDbName = parentDbName
 	fkData.ParentTableName = parentTableName
 
-	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
+	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -8789,7 +8808,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 	if len(fkDefs) == 0 {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "empty forward foreign key declaration")
 	}
-	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil)
+	_, childTableDef, err := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -8956,7 +8975,8 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		// PITR's frontend owner reads persistent mo_tables, not session aliases.
+		objRef, tableDef, err := ctx.ResolveWithoutTemporaryAlias(string(stmt.DatabaseName), string(stmt.TableName), nil, nil)
 		if err != nil {
 			return nil, err
 		}

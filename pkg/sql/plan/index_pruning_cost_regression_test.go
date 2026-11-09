@@ -220,13 +220,13 @@ func TestRegularIndexBackfillReaderEstimate(t *testing.T) {
 	node := builder.qry.Nodes[scanID]
 	filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
 	builder.qry.MaxDop = 1
-	require.Equal(t, 1.0, builder.newEncodedRegularIndexCostContext(node, refs).backfillReaders())
+	require.Equal(t, 1.0, builder.newEncodedRegularIndexCostContext(node, refs).localScanReaders())
 	builder.qry.MaxDop = 2
-	readers := builder.newEncodedRegularIndexCostContext(node, refs).backfillReaders()
+	readers := builder.newEncodedRegularIndexCostContext(node, refs).localScanReaders()
 	require.GreaterOrEqual(t, readers, 1.0)
 	require.LessOrEqual(t, readers, 2.0)
 	node.Stats.BlockNum = 0
-	require.Equal(t, 1.0, builder.newEncodedRegularIndexCostContext(node, refs).backfillReaders())
+	require.Equal(t, 1.0, builder.newEncodedRegularIndexCostContext(node, refs).localScanReaders())
 }
 
 func TestRegularIndexBackfillEmptyKeys(t *testing.T) {
@@ -317,7 +317,7 @@ func TestRegularIndexBackfillInt32SingleReader(t *testing.T) {
 	node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "tenant_id", Names: []string{"tenant_id"}}
 	filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
 	ctx := builder.newEncodedRegularIndexCostContext(node, refs)
-	require.Equal(t, 1.0, ctx.backfillReaders())
+	require.Equal(t, 1.0, ctx.localScanReaders())
 	_, skip, valid := ctx.score(index, []int32{0}, nil, encodedRegularIndexCostBackfill)
 	require.True(t, valid)
 	require.True(t, skip, "broad int32 keys must include single-reader preparation CPU")

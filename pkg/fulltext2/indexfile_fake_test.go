@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
@@ -59,10 +60,13 @@ type fakeOpenFile struct {
 func (f *fakeOpenFile) File() *os.File { return f.f }
 func (f *fakeOpenFile) Size() int64    { return f.size }
 
-func (f *fakeOpenFile) Keep() func() {
+func (f *fakeOpenFile) Keep() *fileservice.IndexFileHold {
 	release := f.release
 	f.release = nil
-	return release
+	if release == nil {
+		return nil
+	}
+	return fileservice.NewIndexFileHold(func(bool) { release() })
 }
 
 func (f *fakeOpenFile) Close() error {
