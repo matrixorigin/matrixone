@@ -804,18 +804,8 @@ func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, erro
 		return nil, err
 	}
 
-	// The spill directory is process-independent, idempotent initialization.
-	// proc.Ctx is pipeline-scoped and may already be canceled (or be nil in a
-	// lightweight Process) before a frontend spool asks for the service. The
-	// actual spill I/O still receives and observes its caller-owned context.
-	if err := local.EnsureDir(context.Background(), defines.SpillFileServiceName); err != nil {
-		return nil, err
-	}
-
-	subPathFS := fileservice.SubPath(local, defines.SpillFileServiceName)
-	mutablefs, ok := subPathFS.(fileservice.MutableFileService)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("subPathFS is not a MutableFileService")
-	}
-	return mutablefs, nil
+	// Service ownership is CN-scoped, not pipeline-scoped. A canceled Process
+	// can still acquire its existing view for terminal cleanup; actual I/O
+	// observes the context supplied to that operation.
+	return fileservice.GetSpillFileService(context.Background(), local, defines.SpillFileServiceName)
 }

@@ -16,6 +16,7 @@ package rightdedupjoin
 
 import (
 	"bytes"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -121,7 +122,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
-					ctr.spillEngine.FinishBucket()
+					if err := ctr.spillEngine.FinishBucket(); err != nil {
+						return result, err
+					}
 					ctr.state = Finalize
 					continue
 				}
@@ -225,10 +228,10 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				return takeErr
 			}
 			if rightDedupJoin.allocationAccount == nil {
-				_ = payload.Close()
+				cleanupErr := payload.Close()
 				ctr.mp.Free()
 				ctr.mp = nil
-				return mpool.ErrAllocationAccountInvalid
+				return errors.Join(mpool.ErrAllocationAccountInvalid, cleanupErr)
 			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
@@ -240,7 +243,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				Budget:                  budget,
 			}, rightDedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
-				_ = payload.Close()
+				engineErr = errors.Join(engineErr, payload.Close())
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEvalVectors()
@@ -263,7 +266,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				err = errors.Join(err, engine.Cleanup(proc))
 				ctr.spillEngine = nil
 				return err
 			}

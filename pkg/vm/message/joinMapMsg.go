@@ -253,18 +253,16 @@ func (p *SpillBuildPayload) Close() error {
 	if p == nil {
 		return nil
 	}
-	var firstErr error
+	var closeErr error
 	for i, file := range p.Files {
 		if file != nil {
-			if err := file.Close(); err != nil && firstErr == nil {
-				firstErr = err
-			}
+			closeErr = errors.Join(closeErr, file.Close())
 			p.Files[i] = nil
 		}
 	}
 	p.Files = nil
 	p.BudgetRef = nil
-	return firstErr
+	return closeErr
 }
 
 // SpillFile binds one spill payload to the accounting ownership that made the
@@ -277,30 +275,31 @@ func (p *SpillBuildPayload) Close() error {
 // message -> process import cycle while still keeping physical cleanup with the
 // move-only payload.
 type SpillFile struct {
-	mu          sync.Mutex
-	fd          *os.File
-	open        func(context.Context) (*os.File, error)
-	remove      func() error
-	rows        int64
-	bytes       uint64
-	release     func()
-	removeOnce  sync.Once
-	removeErr   error
-	releaseOnce sync.Once
+	mu        sync.Mutex
+	fd        *os.File
+	open      func(context.Context) (*os.File, error)
+	remove    func() error
+	rows      int64
+	bytes     uint64
+	finish    func(removed bool)
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewReopenableSpillFile creates a dormant spill payload. open must return the
 // complete file from offset zero. remove owns the stable name and must be safe
-// to invoke after a failed open or an already-removed path.
+// to invoke after a failed open or an already-removed path. finish runs once
+// after terminal close/removal: true confirms deletion; false must preserve
+// disk charges without retaining the query. Close does not retry failed unlink.
 func NewReopenableSpillFile(
 	open func(context.Context) (*os.File, error),
 	remove func() error,
 	rows int64,
 	bytes uint64,
-	release func(),
+	finish func(removed bool),
 ) *SpillFile {
 	return &SpillFile{
-		open: open, remove: remove, rows: rows, bytes: bytes, release: release,
+		open: open, remove: remove, rows: rows, bytes: bytes, finish: finish,
 	}
 }
 
@@ -409,28 +408,27 @@ func (f *SpillFile) Close() error {
 	if f == nil {
 		return nil
 	}
-	f.mu.Lock()
-	fd := f.fd
-	f.fd = nil
-	f.open = nil
-	f.mu.Unlock()
-	var err error
-	if fd != nil {
-		err = fd.Close()
-	}
-	f.removeOnce.Do(func() {
-		if f.remove != nil {
-			f.removeErr = f.remove()
-			f.remove = nil
+	f.closeOnce.Do(func() {
+		f.mu.Lock()
+		fd, remove, finish := f.fd, f.remove, f.finish
+		f.fd, f.open, f.remove, f.finish = nil, nil, nil, nil
+		f.mu.Unlock()
+		var closeErr, removeErr error
+		if fd != nil {
+			closeErr = fd.Close()
+		}
+		if remove != nil {
+			removeErr = remove()
+		}
+		if errors.Is(removeErr, os.ErrNotExist) || moerr.IsMoErrCode(removeErr, moerr.ErrFileNotFound) {
+			removeErr = nil
+		}
+		f.closeErr = errors.Join(closeErr, removeErr)
+		if finish != nil {
+			finish(removeErr == nil)
 		}
 	})
-	f.releaseOnce.Do(func() {
-		if f.release != nil {
-			f.release()
-			f.release = nil
-		}
-	})
-	return errors.Join(err, f.removeErr)
+	return f.closeErr
 }
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
