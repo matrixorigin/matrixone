@@ -103,3 +103,49 @@ func TestExplainQuotedWildcardControls(t *testing.T) {
 	require.NotNil(t, sc.Like)
 	show.Free()
 }
+
+// Prepared parity: parsing the same quoted forms through the prepareable_stmt
+// boundary (the native COM_STMT_PREPARE grammar admission, which shares
+// describe_table_stmt) must yield the identical ShowColumns AST as the direct
+// parse, and trailing tokens around the quoted pattern stay syntax errors.
+func TestExplainQuotedWildcardPreparedParity(t *testing.T) {
+	forms := []string{
+		"DESC t 'v%'",
+		"DESCRIBE t 'v%'",
+		"EXPLAIN t 'v%'",
+		"DESC db.t 'v%'",
+		"DESCRIBE db.t 'v%'",
+		"EXPLAIN db.t 'v%'",
+		"DESC t 'v_1'",
+		"DESC t 'va\\%lue'",
+		"DESC t 'it''s'",
+		"DESC t 'nomatch%'",
+		"DESC t ''",
+	}
+	for _, sql := range forms {
+		t.Run(sql, func(t *testing.T) {
+			direct, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err, sql)
+			defer direct.Free()
+
+			stmt, err := ParseOne(context.Background(), "prepare description_stmt from "+sql, 1)
+			require.NoError(t, err, sql)
+			defer stmt.Free()
+			prepared, ok := stmt.(*tree.PrepareStmt)
+			require.True(t, ok, sql)
+			require.IsType(t, &tree.ShowColumns{}, prepared.Stmt, sql)
+			defer prepared.Stmt.Free()
+			require.Equal(t, direct, prepared.Stmt.(*tree.ShowColumns),
+				"native PREPARE must preserve the direct quoted AST, got %s", sql)
+		})
+	}
+	for _, sql := range []string{
+		"prepare description_stmt from desc t 'v%' y",
+		"prepare description_stmt from desc t x 'v%'",
+	} {
+		t.Run("reject/"+sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
