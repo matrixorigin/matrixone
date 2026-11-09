@@ -30,7 +30,7 @@ import (
 )
 
 func TestShowColumnsPreparedWhere(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		cn, err := c.GetCNService(0)
