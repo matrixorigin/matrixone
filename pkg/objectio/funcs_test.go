@@ -73,6 +73,7 @@ func (d *validatedVectorBytesProbe) Bytes() []byte {
 }
 
 func (d *validatedVectorBytesProbe) Size() int64            { return int64(len(d.backing)) }
+func (d *validatedVectorBytesProbe) BackingSize() int64     { return int64(cap(d.backing)) }
 func (d *validatedVectorBytesProbe) Slice(int) fscache.Data { return d }
 func (d *validatedVectorBytesProbe) Retain()                {}
 func (d *validatedVectorBytesProbe) Release()               {}
@@ -81,6 +82,15 @@ func (d *validatedVectorBytesProbe) validatedVectorSnapshot() []byte {
 }
 func (d *validatedVectorBytesProbe) validatedVectorBackingForScope() []byte {
 	return d.backing
+}
+
+func TestValidatedVectorCacheDataSizesDoNotSnapshot(t *testing.T) {
+	probe := &validatedVectorBytesProbe{backing: make([]byte, 9, 16)}
+	data := &validatedVectorCacheData{data: probe}
+	require.True(t, isValidatedVectorCacheData(data))
+	require.Equal(t, int64(9), data.Size())
+	require.Equal(t, int64(16), data.BackingSize())
+	require.Zero(t, probe.bytesCalls.Load())
 }
 
 type partialReadErrorFS struct {

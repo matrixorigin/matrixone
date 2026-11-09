@@ -47,6 +47,19 @@ func (b *Bytes) Size() int64 {
 	return int64(len(b.bytes))
 }
 
+// BackingSize is the addressable capacity of an allocator-owned buffer. Slice
+// keeps that capacity. Data supplied to NewBytes may be an arbitrary subview,
+// so its retained backing cannot be determined and is reported as unknown.
+func (b *Bytes) BackingSize() int64 {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.BackingSize: use after free")
+	}
+	if b.deallocator == nil {
+		return -1
+	}
+	return int64(cap(b.bytes))
+}
+
 func (b *Bytes) Bytes() []byte {
 	if b.refs.Load() <= 0 {
 		panic("Bytes.Bytes: use after free")
