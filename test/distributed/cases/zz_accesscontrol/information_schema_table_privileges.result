@@ -19,12 +19,12 @@ and lower(column_name) in ('grantee', 'table_catalog', 'table_schema', 'table_na
 'privilege_type', 'is_grantable')
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  is_nullable[12,3,0]  𝄀
-GRANTEE  ¦  NO  𝄀
+GRANTEE  ¦  YES  𝄀
 TABLE_CATALOG  ¦  NO  𝄀
-TABLE_SCHEMA  ¦  NO  𝄀
-TABLE_NAME  ¦  NO  𝄀
-PRIVILEGE_TYPE  ¦  NO  𝄀
-IS_GRANTABLE  ¦  NO
+TABLE_SCHEMA  ¦  YES  𝄀
+TABLE_NAME  ¦  YES  𝄀
+PRIVILEGE_TYPE  ¦  YES  𝄀
+IS_GRANTABLE  ¦  YES
 create database table_privileges_db;
 create table table_privileges_db.t(id int);
 create table table_privileges_db.hidden_t(id int);

@@ -18,17 +18,39 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 func (builder *QueryBuilder) metadataViewColumnsSQL(schema, table, definition string, snapshot *Snapshot) (string, error) {
 	definition, err := builder.historicalViewColumnsSQL(schema, table, definition, snapshot)
-	if err != nil || !HasViewMetadataRequest(builder.GetContext()) ||
-		!strings.EqualFold(schema, "information_schema") || !strings.EqualFold(table, "columns") {
+	if err != nil || !strings.EqualFold(schema, "information_schema") || !strings.EqualFold(table, "columns") {
 		return definition, err
+	}
+	derived := HasViewMetadataRequest(builder.GetContext())
+	if IsSnapshotValid(snapshot) && snapshot.Tenant != nil && snapshot.ExtraInfo != nil &&
+		snapshot.ExtraInfo.Level == tree.SNAPSHOTLEVELACCOUNT.String() {
+		caller, err := builder.compCtx.GetAccountId()
+		if err != nil {
+			return "", err
+		}
+		if snapshot.Tenant.TenantID != caller {
+			if caller != catalog.System_Account || snapshot.ExtraInfo.ObjId != uint64(snapshot.Tenant.TenantID) {
+				return "", moerr.NewInvalidInput(builder.GetContext(), "cross-account snapshot metadata requires the system account and matching snapshot scope")
+			}
+			adapted, ok := sysview.SnapshotColumnsDDL(definition, snapshot.Tenant.TenantID, derived)
+			if !ok {
+				return "", moerr.NewNotSupported(builder.GetContext(), "unsupported cross-account information_schema.COLUMNS definition")
+			}
+			return adapted, nil
+		}
+	}
+	if !derived {
+		return definition, nil
 	}
 	adapted, ok := sysview.ViewMetadataColumnsDDL(definition)
 	if !ok {
@@ -62,7 +84,7 @@ func (builder *QueryBuilder) historicalViewColumnsSQL(
 	}
 	// Only the implementation/migration gate is current. All relations in the
 	// adapted SQL will still be bound through the caller's historical snapshot.
-	currentRef, currentDef, err := ctx.Resolve("information_schema", "columns", nil)
+	currentRef, currentDef, err := ctx.Resolve("information_schema", "columns", nil, nil)
 	if err != nil {
 		return "", err
 	}

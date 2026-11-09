@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -245,7 +246,7 @@ func TestCoverage_buildShowCreatePublications(t *testing.T) {
 		return
 	}
 	for _, stmt := range stmts {
-		_, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		_, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		if err != nil {
 			// May fail due to mock limitations but should not panic
 			t.Logf("BuildPlan for show create publication: %v", err)
@@ -262,7 +263,7 @@ func TestCoverage_buildShowPublicationCoverage(t *testing.T) {
 		return
 	}
 	for _, stmt := range stmts {
-		_, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		_, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		if err != nil {
 			t.Logf("BuildPlan for show publication coverage: %v", err)
 		}
@@ -317,12 +318,13 @@ type showTablesBootstrapContext struct {
 	privilegeLookups int
 }
 
-func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
 		c.privilegeLookups++
 		return nil, nil, nil
 	}
-	return c.CompilerContext.Resolve(database, table, snapshot)
+	return c.CompilerContext.Resolve(database, table, snapshot, nil)
 }
 
 func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
@@ -343,7 +345,7 @@ func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
 				stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				built, err := BuildPlan(ctx, stmt, false)
+				built, err := BuildPlan(ctx, stmt, false, nil)
 				if mode == "internal" {
 					require.NoError(t, err)
 					require.NotNil(t, built.GetQuery())
@@ -367,7 +369,7 @@ func TestShowTablesUserVisibilityPlan(t *testing.T) {
 			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			filtered := false
 			for _, node := range built.GetQuery().GetNodes() {
@@ -602,7 +604,7 @@ func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
 			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			require.True(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_"))
 			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
@@ -622,7 +624,7 @@ func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
 		stmt := stmts[0]
 		sc, ok := stmt.(*tree.ShowColumns)
 		require.True(t, ok, sql)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err, sql)
 		return sc, func() { stmt.Free() }
 	}
@@ -634,7 +636,7 @@ func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
 	// statement (#32197 review).
 	sc, free := build("desc nation n_name")
 	require.Nil(t, sc.Like, "saved prepared AST must stay pristine: the derived LIKE must not persist past the first build")
-	replan, err := BuildPlan(ctx, sc, false)
+	replan, err := BuildPlan(ctx, sc, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, replan)
 	require.Nil(t, sc.Like, "a replan of the saved AST must regenerate the derived predicate, not retain it")
@@ -649,4 +651,70 @@ func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
 	missSC, freeMiss := build("desc nation nosuch")
 	require.Nil(t, missSC.Like, "the unknown-name shortcut derives per plan and stays pristine")
 	freeMiss()
+}
+
+// The status projection invokes a privileged relation helper. Its input must
+// first pass the physical-index filter, including after planner rewrites.
+func TestShowMetadataFiltersPhysicalIndexesBeforeProjection(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+		"show table status from tpch like 'n%'",
+		"show table status from tpch where Name = 'nation'",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+			require.NoError(t, err)
+			query := built.GetQuery()
+			require.NotNil(t, query)
+
+			// The optimizer can leave dead nodes in Query.Nodes. The filter
+			// must be in the projection's reachable input subtree.
+			var subtreeContainsFilter func(int32) bool
+			subtreeContainsFilter = func(id int32) bool {
+				node := query.Nodes[id]
+				for _, expr := range node.FilterList {
+					if exprContainsFuncName(expr, "mo_is_physical_index") {
+						return true
+					}
+				}
+				for _, child := range node.Children {
+					if subtreeContainsFilter(child) {
+						return true
+					}
+				}
+				return false
+			}
+			foundFilter, foundProjection := false, false
+			var inspect func(int32)
+			inspect = func(id int32) {
+				node := query.Nodes[id]
+				for _, expr := range node.FilterList {
+					foundFilter = foundFilter || exprContainsFuncName(expr, "mo_is_physical_index")
+				}
+				for _, expr := range node.ProjectList {
+					if exprContainsFuncName(expr, "internal_auto_increment") {
+						foundProjection = true
+						require.True(t, subtreeContainsFilter(id), "the classifier must run before the auto-increment projection")
+					}
+				}
+				for _, child := range node.Children {
+					inspect(child)
+				}
+			}
+			for _, root := range query.Steps {
+				inspect(root)
+			}
+			require.True(t, foundFilter)
+			if strings.HasPrefix(statement, "show table status") {
+				require.True(t, foundProjection)
+			}
+		})
+	}
 }

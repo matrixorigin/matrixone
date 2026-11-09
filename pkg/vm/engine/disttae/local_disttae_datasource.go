@@ -186,6 +186,7 @@ func (ls *LocalDisttaeDataSource) String() string {
 
 func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.OrderBy = orderby
+	ls.desc = len(orderby) > 0 && orderby[0] != nil && orderby[0].Flag&plan.OrderBySpec_DESC != 0
 	// Ordered scans prune blocks after reading their zone maps. Prefetching the
 	// original block order can read whole objects that the scan will skip.
 	ls.rc.prefetchDisabled = ls.rangeSlice.Len() < 4 || (len(orderby) > 0 && ls.Limit == 0)
@@ -196,6 +197,10 @@ func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (ls *LocalDisttaeDataSource) SetFilterZM(zm objectio.ZoneMap) {
+	if len(ls.OrderBy) == 0 || ls.OrderBy[0] == nil || ls.OrderBy[0].Expr == nil ||
+		!readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
+		return
+	}
 	if !ls.filterZM.IsInited() {
 		ls.filterZM = zm.Clone()
 		return
@@ -340,7 +345,11 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		location = ls.rangeSlice.Get(i).MetaLocation()
+		block := ls.rangeSlice.Get(i)
+		if block.IsAppendable() {
+			continue
+		}
+		location = block.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
 			objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, ls.fs)
 			if err != nil {
@@ -349,7 +358,12 @@ func (ls *LocalDisttaeDataSource) getBlockZMs(ctx context.Context) ([]index.ZM, 
 			objDataMeta = objMeta.MustDataMeta()
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-		blockZMS[i] = blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+		if orderByColIDX <= int(blkMeta.GetMaxSeqnum()) {
+			zm := blkMeta.ColumnMeta(uint16(orderByColIDX)).ZoneMap()
+			if readutil.UsableOrderZoneMap(zm, ls.OrderBy[0].Expr.Typ, ls.desc) {
+				blockZMS[i] = zm
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -543,11 +557,11 @@ func (ls *LocalDisttaeDataSource) handleOrderBy(ctx context.Context) error {
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
 	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
+			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			blockZMS, err := ls.getBlockZMs(ctx)
 			if err != nil {
 				return err
 			}
-			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			ls.blockZMS = blockZMS
 			ls.sortBlockList()
 			ls.sorted = true

@@ -195,6 +195,7 @@ func ExecuteIterationWithRuntime(
 							preLSN[0],
 						)
 					},
+					iterCtx.tableID,
 				)
 			},
 		)
@@ -1256,6 +1257,7 @@ func processInitSQL(
 	tableName string,
 	indexName string,
 	complete initSQLStep,
+	expectedSourceID ...uint64,
 ) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
@@ -1282,6 +1284,11 @@ func processInitSQL(
 			}
 			if err := cnEngine.New(runCtx, txn); err != nil {
 				return err
+			}
+			if len(expectedSourceID) > 0 {
+				if err := checkInitSQLSourceID(runCtx, cnEngine, txn, dbName, tableName, expectedSourceID[0]); err != nil {
+					return err
+				}
 			}
 
 			// Fetch the target index's captured build-time session vars from
@@ -1313,12 +1320,22 @@ func processInitSQL(
 			}
 			sqlctx := sqlexec.NewSqlContext(runCtx, cnUUID, txn, accountId, resolver)
 			sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+			stmts := splitInitSQL(sql)
+			maintenance, err := resolveInitSQLMaintenance(runCtx, cnEngine, txn, dbName, tableName, indexName, expectedSourceID, stmts)
+			if err != nil {
+				return err
+			}
 			// InitSQL is a JSON array of statements (the multi-statement form), or a JSON
 			// string / raw single statement (backward-compat). ISCP has no multi-statement
 			// executor, so run each in sequence within this txn.
-			for _, stmt := range splitInitSQL(sql) {
+			for i, stmt := range stmts {
 				if stmt == "" {
 					continue
+				}
+				if maintenance != nil && maintenance.statement == i {
+					sqlproc.IndexMaintenanceSpec, sqlproc.IndexMaintenanceValidator = maintenance.spec, maintenance.validator
+				} else {
+					sqlproc.IndexMaintenanceSpec, sqlproc.IndexMaintenanceValidator = nil, nil
 				}
 				res, err := sqlexec.RunSql(sqlproc, stmt)
 				if err != nil {

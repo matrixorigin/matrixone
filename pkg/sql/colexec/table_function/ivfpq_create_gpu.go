@@ -85,12 +85,14 @@ type ivfpqBuilder interface {
 }
 
 type ivfpqCreateState struct {
-	inited  bool
-	builder ivfpqBuilder
-	param   vectorindex.IvfpqParam
-	tblcfg  vectorindex.IndexTableConfig
-	idxcfg  vectorindex.IndexConfig
-	offset  int
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	inited         bool
+	builder        ivfpqBuilder
+	param          vectorindex.IvfpqParam
+	tblcfg         vectorindex.IndexTableConfig
+	idxcfg         vectorindex.IndexConfig
+	offset         int
 
 	// devices resolved at build setup; kept so end() can admit the finished
 	// aggregate against the same device set the search will use.
@@ -130,6 +132,9 @@ type ivfpqCreateState struct {
 }
 
 func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
+	if u.policy == nil {
+		return nil
+	}
 	// A parallel instance that received no rows never created a builder.
 	if u.srcEmpty || u.builder == nil {
 		return nil
@@ -148,7 +153,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	ts := time.Now().UnixMicro()
 	sqls, err = u.builder.PreparePersistence(ts, buildSnapshotTS(proc),
-		metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
+		metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable, u.policy))
 	if err != nil {
 		return err
 	}
@@ -216,6 +221,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	logutil.Infof("IVFPQ create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
 		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
 	storageProc := sqlexec.NewSqlProcess(proc)
+	storageProc.IndexRelationPolicy = u.policy
 	return sqlexec.RunTxn(storageProc, func(exec executor.TxnExecutor) error {
 		stmt := storageProc.StatementOption()
 		run := func(sql string) error {
@@ -241,6 +247,7 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 }
 
 func (u *ivfpqCreateState) reset(tf *TableFunction, proc *process.Process) {
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -276,6 +283,29 @@ func ivfpqCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 
 // start is called once per input row.
 func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+	defer func() {
+		if err != nil {
+			u.policy = nil
+		}
+	}()
+	admit := func() error {
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar || !cfgVec.IsConst() {
+			return moerr.NewInvalidInput(proc.Ctx, "IndexTableConfig must be a string constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "ivfpq_create", cfgstr, u.admittedConfig, u.inited, ivfpqrt.MaintenanceOperands)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+		return nil
+	}
+	if u.inited && u.policy == nil {
+		if err = admit(); err != nil {
+			return err
+		}
+	}
 	if !u.inited {
 		// ---- parse Params ----
 		if len(tf.Params) > 0 {
@@ -343,19 +373,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 		u.idxcfg.CuvsIvfpq.Quantization = uint16(qt)
 
-		// ---- IndexTableConfig ----
-		cfgVec := tf.ctr.argVecs[0]
-		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "first argument (IndexTableConfig) must be a string")
-		}
-		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a string constant")
-		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
-		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
-		}
-		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+		if err = admit(); err != nil {
 			return err
 		}
 
@@ -381,7 +399,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// NULL) rows, matching the build cursor (which advances only on non-NULL
 		// rows), so srcRowCount equals the indexable rows actually streamed — the
 		// `rowsSeen >= cdcCutoff` split cannot drift even under concurrent writes.
-		srcRowCount, err := fetchSrcTableRowCount(proc, ivfpq_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
+		srcRowCount, err := fetchSrcTableRowCount(proc, ivfpq_runSql, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart, u.policy)
 		if err != nil {
 			return err
 		}

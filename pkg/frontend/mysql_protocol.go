@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -886,6 +887,12 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
 	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
+	if _, showColumns := stmt.PrepareStmt.(*tree.ShowColumns); showColumns {
+		stmt.ColDefData, err = makeStatementColumnDefData(ctx, mp, stmt.PrepareStmt, columns)
+		if err != nil {
+			return err
+		}
+	}
 
 	var data []byte
 	// status ok

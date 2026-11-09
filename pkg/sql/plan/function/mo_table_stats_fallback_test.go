@@ -90,10 +90,13 @@ func TestMoTableStatsFallbackResolvesMetadataOnce(t *testing.T) {
 						rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(10)).AnyTimes()
 						rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).AnyTimes()
 					}
+					rel.EXPECT().GetTableName().Return("table").Times(1)
 					if size {
 						rel.EXPECT().Size(gomock.Any(), AllColumns).Return(uint64(37), nil).Times(1)
-						rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).Times(1)
+						// One lookup checks the target kind, the other collects index sizes.
+						rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).Times(2)
 					} else {
+						rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).Times(1)
 						rel.EXPECT().Rows(gomock.Any()).Return(uint64(37), nil).Times(1)
 					}
 					callback := GetMoTableSizeRowsFuncType(func(context.Context, engine.Engine, MoTableStatsResolver, bool, bool) ([]uint64, error, bool) {

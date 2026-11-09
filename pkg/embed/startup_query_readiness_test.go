@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func TestStartupQueryReadiness(t *testing.T) {
 	var one int
 	require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
 	require.Equal(t, 1, one)
-	for _, stmt := range []string{"create database startup_query_readiness", "use startup_query_readiness", "create table t(id int primary key, v vecf32(3))", "insert into t values (1,'[1,1,1]'),(2,'[2,2,2]'),(3,'[9,9,9]'),(4,'[10,10,10]')", "create index idx using ivfflat on t(v) lists=1 op_type 'vector_l2_ops'"} {
+	for _, stmt := range []string{"create database startup_query_readiness", "use startup_query_readiness", "create table t(id int primary key, v vecf32(3))", "insert into t values (1,'[1,1,1]'),(2,'[2,2,2]'),(3,'[9,9,9]'),(4,'[10,10,10]')", "create view startup_view as select id from t", "create index idx using ivfflat on t(v) lists=1 op_type 'vector_l2_ops'"} {
 		_, err = conn.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
 	}
@@ -97,4 +98,23 @@ func TestStartupQueryReadiness(t *testing.T) {
 	require.NoError(t, rows.Close())
 	require.Equal(t, []int{1, 2}, ids)
 	require.Contains(t, admitted, cfg.UUID)
+	// Both initial CNs and the joining CN must expose the current system views
+	// as soon as their SQL ingress is ready.
+	for i := 0; i < 3; i++ {
+		func() {
+			service, err := c.GetCNService(i)
+			require.NoError(t, err)
+			port := service.GetServiceConfig().CN.Frontend.Port
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+			require.NoError(t, err)
+			defer db.Close()
+			var viewDefinition string
+			require.NoError(t, db.QueryRowContext(ctx, "select view_definition from information_schema.views where table_schema='startup_query_readiness' and table_name='startup_view'").Scan(&viewDefinition))
+			require.Contains(t, viewDefinition, "`t`.`id`")
+			require.NotContains(t, strings.ToLower(viewDefinition), "create view")
+			var tables int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema='startup_query_readiness' and table_name='t'").Scan(&tables))
+			require.Equal(t, 1, tables)
+		}()
+	}
 }

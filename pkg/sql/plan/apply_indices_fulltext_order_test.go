@@ -207,7 +207,7 @@ func TestFullTextImplicitOrderSQLReachability(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, stmts, 1)
 				defer stmts[0].Free()
-				p, err := BuildPlan(&fullTextOrderPythonUdfContext{ctx}, stmts[0], false)
+				p, err := BuildPlan(&fullTextOrderPythonUdfContext{ctx}, stmts[0], false, nil)
 				require.NoError(t, err)
 				query := p.GetQuery()
 				require.NotNil(t, query)

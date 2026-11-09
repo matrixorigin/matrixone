@@ -709,12 +709,11 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 				if !zm.IsInited() {
 					continue
 				}
-				index.UpdateZM(zms[idx], zm.GetMaxBuf())
-				index.UpdateZM(zms[idx], zm.GetMinBuf())
+				index.MergeZM(zms[idx], zm)
 			}
 		} else {
 			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap().Clone()
 				tableTypes[idx] = uint8(cols[idx].Typ.Id)
 			}
 			inited = true
@@ -3649,6 +3648,16 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	checkTombstone bool,
 	requireSubscribed bool,
 ) (bool, error) {
+	return tbl.primaryKeysMayBeChangedWithHistory(ctx, from, to, keysVector, checkTombstone, requireSubscribed, false)
+}
+
+// requireHistory protects optimistic writes whose older dependency snapshot can
+// outlive the operator's advanced RC read snapshot. A truncated interval is
+// unknown, never evidence that those writes had no competitors.
+func (tbl *txnTable) primaryKeysMayBeChangedWithHistory(
+	ctx context.Context, from, to types.TS, keysVector *vector.Vector,
+	checkTombstone, requireSubscribed, requireHistory bool,
+) (bool, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnPKMayBeChangedDurationHistogram.Observe(time.Since(start).Seconds())
@@ -3711,6 +3720,10 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if requireHistory && !snap.CanServe(from) {
+		return true, nil
+	}
+
 	historyStart, _ := snap.GetDuration()
 	// Only generated-ID probes recover their allocation window. Ordinary
 	// modification probes retain their existing row/object checks. An empty

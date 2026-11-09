@@ -200,10 +200,10 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			exec("create view owned as select id, label from source", executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive())
 			exec("create view rollback_only as select id from source", executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive())
-			_, uncommitted, err := compiler.Resolve(database, "rollback_only", nil)
+			_, uncommitted, err := compiler.Resolve(database, "rollback_only", nil, nil)
 			require.NoError(t, err)
 			require.NotNil(t, uncommitted)
-			_, oracle, err := compiler.Resolve(database, "oracle", nil)
+			_, oracle, err := compiler.Resolve(database, "oracle", nil, nil)
 			require.NoError(t, err)
 			require.NotNil(t, oracle)
 			generation, err := proc.GetExecutionResourceBudget()

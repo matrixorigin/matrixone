@@ -57,6 +57,30 @@ func newTestGlobalStats(
 	return owner
 }
 
+func TestPatchStatsOwnsShuffleResult(t *testing.T) {
+	gs := &GlobalStats{}
+	key := statsinfo.StatsInfoKey{AccId: 1, DatabaseID: 2, TableID: 3}
+	gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+	gs.mu.cond = sync.NewCond(&gs.mu.Mutex)
+
+	values := []float64{7, 8}
+	patch := &PatchArgs{ShuffleRangeMap: map[string]*ShuffleRangePartialUpdate{
+		"d": {Result: values},
+	}}
+	require.NoError(t, gs.PatchStats(key, patch))
+	values[0] = 999
+	require.Equal(t, []float64{7, 8}, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+
+	patch.ShuffleRangeMap["d"].Result = nil
+	require.NoError(t, gs.PatchStats(key, patch))
+	require.Equal(t, []float64{7, 8}, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+
+	patch.ShuffleRangeMap["d"].Result = []float64{}
+	require.NoError(t, gs.PatchStats(key, patch))
+	require.NotNil(t, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+	require.Empty(t, gs.mu.statsInfoMap[key].ShuffleRangeMap["d"].Result)
+}
+
 func TestGlobalStatsCloseJoinsOwnedRoots(t *testing.T) {
 	gs := newTestGlobalStats(context.Background(), nil, nil)
 	ex := gs.concurrentExecutor.(*concurrentExecutor)
@@ -2841,4 +2865,106 @@ func TestGlobalStatsGetReleasesRemoteResponseWithoutStatsPayload(t *testing.T) {
 		require.Equal(t, key, *qc.request.GetStatsInfoRequest.StatsInfoKey)
 		require.Equal(t, int32(1), qc.releases.Load())
 	})
+}
+
+func TestGlobalStatsCloseDuringSynchronousPublicationDoesNotStartRoots(t *testing.T) {
+	gs := NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) {
+		value.Close()
+	})
+	require.True(t, gs.startSealed)
+	require.Nil(t, gs.concurrentExecutor)
+	select {
+	case <-gs.lifecycleDone():
+	default:
+		t.Fatal("published owner is not closed")
+	}
+	gs.Close()
+}
+
+func TestGlobalStatsCloseBeforePublicationReturnsDoesNotStartRoots(t *testing.T) {
+	published := make(chan *GlobalStats, 1)
+	resume := make(chan struct{})
+	done := make(chan *GlobalStats, 1)
+	go func() {
+		done <- NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) {
+			published <- value
+			<-resume
+		})
+	}()
+	gs := <-published
+	gs.Close()
+	close(resume)
+	require.Same(t, gs, <-done)
+	require.True(t, gs.startSealed)
+	require.Nil(t, gs.concurrentExecutor)
+}
+
+func TestGlobalStatsCloseFromOptionBeforePanic(t *testing.T) {
+	var owner *GlobalStats
+	require.PanicsWithValue(t, "option after close", func() {
+		NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) { owner = value }, func(value *GlobalStats) {
+			value.Close()
+			panic("option after close")
+		})
+	})
+	require.NotNil(t, owner)
+	require.True(t, owner.startSealed)
+	require.Nil(t, owner.concurrentExecutor)
+	owner.Close()
+}
+
+func TestGlobalStatsCloseAfterRootStartup(t *testing.T) {
+	published := make(chan *GlobalStats, 1)
+	started, release := make(chan struct{}), make(chan struct{})
+	constructed := make(chan *GlobalStats, 1)
+	go func() {
+		constructed <- NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) { published <- value }, func(value *GlobalStats) {
+			value.afterRootsStarted = func() { close(started); <-release }
+		})
+	}()
+	gs := <-published
+	<-started
+	locked := gs.startMu.TryLock()
+	if locked {
+		gs.startMu.Unlock()
+	}
+	closed := make(chan struct{})
+	closeStarted := make(chan struct{})
+	go func() { close(closeStarted); gs.Close(); close(closed) }()
+	<-closeStarted
+	close(release)
+	actual := <-constructed
+	<-closed
+	require.Same(t, gs, actual)
+	require.False(t, locked, "startup must retain its lifecycle fence")
+	ex, ok := gs.concurrentExecutor.(*concurrentExecutor)
+	require.True(t, ok)
+	select {
+	case <-ex.done:
+	default:
+		t.Fatal("Close did not join the executor")
+	}
+	select {
+	case <-gs.lifecycleDone():
+	default:
+		t.Fatal("owner context was not canceled")
+	}
+}
+
+func TestGlobalStatsStartupPanicReleasesFenceAndJoins(t *testing.T) {
+	var owner *GlobalStats
+	require.PanicsWithValue(t, "startup failed", func() {
+		NewGlobalStats(context.Background(), nil, nil, func(value *GlobalStats) { owner = value }, func(value *GlobalStats) {
+			value.afterRootsStarted = func() { panic("startup failed") }
+		})
+	})
+	require.NotNil(t, owner)
+	ex, ok := owner.concurrentExecutor.(*concurrentExecutor)
+	require.True(t, ok)
+	select {
+	case <-ex.done:
+	default:
+		t.Fatal("startup panic did not join executor")
+	}
+	owner.Close()
 }
