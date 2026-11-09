@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -68,11 +69,60 @@ func TestLocalDomainCompleteAndIndependentFanout(t *testing.T) {
 	mask := make([]uint8, 2)
 	require.True(t, bloom.TestFixedVectorInto(keys, mask))
 	require.Equal(t, []uint8{1, 1}, mask)
+	require.Equal(t, int64(1), d.Snapshot().NativeCalls, "small source batches share one final native insertion")
 	require.Equal(t, peak, g.Snapshot().Used)
 	first.Complete(true)
 	d.Close()
 	d.Close()
 	require.Zero(t, g.Snapshot().Used)
+}
+
+func TestLocalDomainCoalescingFlushBoundary(t *testing.T) {
+	proc, g := localDomainTestProcess(t, 16<<20)
+	d, _ := NewLocalDomain(types.T_uint32, 10000, 1, 1, 1000000)
+	t.Cleanup(d.Close)
+	first, err := vector.NewConstFixed(types.T_uint32.ToType(), uint32(11), LocalDomainBatchRows-1, proc.Mp())
+	require.NoError(t, err)
+	t.Cleanup(func() { first.Free(proc.Mp()) })
+	last, err := vector.NewConstFixed(types.T_uint32.ToType(), uint32(22), 2, proc.Mp())
+	require.NoError(t, err)
+	t.Cleanup(func() { last.Free(proc.Mp()) })
+	source, err := d.Begin(proc, 0, 1)
+	require.NoError(t, err)
+	require.NoError(t, source.AddVector(proc.Ctx, first, LocalDomainBatchRows-1))
+	require.Zero(t, d.Snapshot().NativeCalls)
+	require.NoError(t, source.AddVector(proc.Ctx, last, 2))
+	require.Equal(t, int64(1), d.Snapshot().NativeCalls)
+	require.False(t, d.ProbeEligible(1000000), "a full insertion is still not a complete domain")
+	source.Complete(false)
+	bloom, empty, err := d.Wait(proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.Equal(t, int64(2), d.Snapshot().NativeCalls, "final remainder must flush before publication")
+	for _, key := range []*vector.Vector{first, last} {
+		mask := make([]uint8, key.Length())
+		require.True(t, bloom.TestFixedVectorInto(key, mask))
+		require.Equal(t, uint8(1), mask[0])
+	}
+	d.Close()
+	require.Zero(t, g.Snapshot().Used)
+}
+
+func TestLocalDomainPendingKeysNeverProveAbsenceOnAbort(t *testing.T) {
+	proc, _ := localDomainTestProcess(t, 16<<20)
+	d, _ := NewLocalDomain(types.T_int64, 1000, 2, 1, 1000000)
+	t.Cleanup(d.Close)
+	keys := testutil.MakeInt64Vector([]int64{11, 22}, []uint64{1}, proc.Mp())
+	t.Cleanup(func() { keys.Free(proc.Mp()) })
+	source, err := d.Begin(proc, 0, 2)
+	require.NoError(t, err)
+	require.NoError(t, source.AddVector(proc.Ctx, keys, 2))
+	require.Zero(t, d.Snapshot().NativeCalls)
+	source.Complete(true)
+	bloom, empty, err := d.Wait(proc.Ctx)
+	require.NoError(t, err)
+	require.Nil(t, bloom)
+	require.False(t, empty)
 }
 
 func TestLocalDomainFallbackAndCancellation(t *testing.T) {

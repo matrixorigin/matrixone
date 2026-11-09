@@ -195,3 +195,26 @@ Design review: PASS before implementation of the amendment. The source remains
 independent, partial membership remains invisible, memory geometry is unchanged,
 and final gain/regression evidence is still required. Capture estimate/observed
 rows, filter bytes, completion and per-target PASS reasons in physical stats.
+
+## Bounded construction coalescing
+
+Warm Q10 profiles identify serialized small source submissions as a measured
+cost: AddVector owns 57% of differential mutex delay while overall query CPU
+stays nearly unchanged. Coalesce accepted fixed-width keys into one query-owned
+buffer of at most 8192 keys before native insertion. All copying and native
+writes keep the existing coordinator mutex; there are no concurrent C writes,
+per-producer replicas, new goroutines or probe buffers. Include the buffer's
+full typed capacity and header bound in the existing 64 MiB peak admission.
+
+Flush a full buffer immediately. Successful final producer completion flushes
+any remainder before sealing immutable membership. PASS/cancel/partial failure
+never publishes its pending keys as complete; terminal Compile cleanup frees
+buffer/native storage and reservation once after scopes stop. Allocation failure
+at this exact optional scratch boundary uses the existing fatal-first runtime
+filter error classification. Source vectors are copied synchronously, never
+retained. Probes still use only fully completed membership.
+
+Implementation-refinement review: PASS before code. This implements the already
+approved bounded-vector-chunk construction contract without changing logical
+eligibility, probability/geometry, source/probe scheduling, cap or acceptance.
+Re-run the failed all22 campaign on the changed head; preserve its failed run.

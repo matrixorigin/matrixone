@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -52,6 +53,8 @@ type LocalDomainSnapshot struct {
 	Expected      int
 	Finished      int
 	PassReason    LocalDomainPassReason
+	NativeCalls   int64
+	NativeElapsed time.Duration
 }
 
 // LocalDomain owns one complete integer domain for one execution generation.
@@ -74,6 +77,10 @@ type LocalDomain struct {
 	board         *message.MessageBoard
 	reservation   *process.ExecutionTransientMemoryReservation
 	bloom         *bloomfilter.CBloomFilter
+	input         *vector.Vector
+	inputMP       *mpool.MPool
+	pending       int
+	nativeCalls   int64
 	pass          bool
 	passReason    LocalDomainPassReason
 	sealed        bool
@@ -112,7 +119,8 @@ func NewLocalDomain(typ types.T, rows int64, sources, probes int, maxProbeNDV fl
 	if !ok || bytes < 0 {
 		return nil, 0
 	}
-	peak := uint64(bytes) + uint64(probes)*(LocalDomainBatchRows*9+256) + uint64(sources)*128
+	peak := uint64(bytes) + uint64(probes)*(LocalDomainBatchRows*9+256) + uint64(sources)*128 +
+		uint64(LocalDomainBatchRows*typ.ToType().TypeSize()+1024)
 	if peak > LocalDomainQueryCap {
 		return nil, 0
 	}
@@ -151,6 +159,19 @@ func (d *LocalDomain) prepare(proc *process.Process) error {
 		}
 		d.disableLocked(LocalDomainBudgetRefused)
 		return nil
+	}
+	d.input, d.inputMP = vector.NewOffHeapVecWithType(d.typ.ToType()), proc.Mp()
+	if err = d.input.PreExtend(LocalDomainBatchRows, d.inputMP); err != nil {
+		d.input.Free(d.inputMP)
+		d.input = nil
+		err = MarkOptionalAllocationError(err)
+		if ClassifyOptionalFallback(err) == OptionalFallbackAllocation {
+			d.disableLocked(LocalDomainAllocationRefused)
+			return nil
+		}
+		d.err = err
+		d.disableLocked(LocalDomainPartial)
+		return err
 	}
 	var ok bool
 	d.bloom, ok = bloomfilter.TryNewCBloomFilterWithSeed(d.bits, d.hashes, d.seed)
@@ -242,13 +263,58 @@ func (p *LocalDomainSource) AddVector(ctx context.Context, vec *vector.Vector, r
 		d.disableLocked(LocalDomainUnprofitable)
 		return nil
 	}
-	start := time.Now()
-	d.bloom.AddVector(vec)
-	d.buildTime += time.Since(start)
+	width := d.typ.ToType().TypeSize()
+	raw, target := vec.GetData(), d.input.GetData()
+	physicalRows := rows
+	if vec.IsConst() {
+		physicalRows = 1
+	}
+	if len(raw) < physicalRows*width {
+		d.disableLocked(LocalDomainUnsupported)
+		return nil
+	}
+	if !vec.IsConst() && !vec.HasNull() {
+		for offset := 0; offset < rows; {
+			count := min(rows-offset, LocalDomainBatchRows-d.pending)
+			copy(target[d.pending*width:(d.pending+count)*width], raw[offset*width:(offset+count)*width])
+			d.pending += count
+			offset += count
+			if d.pending == LocalDomainBatchRows {
+				d.flushInputLocked()
+			}
+		}
+	} else {
+		for row := range rows {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			index := row
+			if vec.IsConst() {
+				index = 0
+			}
+			copy(target[d.pending*width:(d.pending+1)*width], raw[index*width:(index+1)*width])
+			d.pending++
+			if d.pending == LocalDomainBatchRows {
+				d.flushInputLocked()
+			}
+		}
+	}
 	if keys > 0 {
 		d.nonempty = true
 	}
 	return nil
+}
+
+func (d *LocalDomain) flushInputLocked() {
+	if d.pending == 0 {
+		return
+	}
+	d.input.SetLength(d.pending)
+	start := time.Now()
+	d.bloom.AddVector(d.input)
+	d.buildTime += time.Since(start)
+	d.nativeCalls++
+	d.pending = 0
 }
 
 func (p *LocalDomainSource) Complete(pass bool) {
@@ -267,6 +333,7 @@ func (p *LocalDomainSource) Complete(pass bool) {
 		d.disableLocked(LocalDomainPartial)
 	}
 	if d.finished == d.expected && !d.sealed {
+		d.flushInputLocked()
 		d.sealed = true
 		close(d.done)
 	}
@@ -312,7 +379,8 @@ func (d *LocalDomain) Snapshot() LocalDomainSnapshot {
 		bytes = d.filterBytes
 	}
 	return LocalDomainSnapshot{EstimatedRows: d.estimatedRows, ObservedRows: d.buildRows,
-		FilterBytes: bytes, PeakBytes: d.peak, Expected: d.expected, Finished: d.finished, PassReason: d.passReason}
+		FilterBytes: bytes, PeakBytes: d.peak, Expected: d.expected, Finished: d.finished, PassReason: d.passReason,
+		NativeCalls: d.nativeCalls, NativeElapsed: d.buildTime}
 }
 
 func (d *LocalDomain) Close() {
@@ -327,6 +395,11 @@ func (d *LocalDomain) Close() {
 		d.bloom.Free()
 		d.bloom = nil
 	}
+	if d.input != nil {
+		d.input.Free(d.inputMP)
+		d.input = nil
+	}
+	d.pending = 0
 	if d.reservation != nil {
 		d.reservation.Release()
 		d.reservation = nil
