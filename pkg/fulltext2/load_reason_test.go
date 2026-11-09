@@ -117,3 +117,71 @@ func TestLoadReasonRegistryDoesNotConsumeNewerInvalidationAfterReasonReplacement
 	require.Equal(t, LoadMissRebuild, secondReason)
 	consumeLoadReason(key, secondGeneration)
 }
+
+func TestRecoverCacheInvalidationFencesOnlyItsGeneration(t *testing.T) {
+	restore := setLoadObserver(func(LoadEvent) {})
+	defer restore()
+	cfg := TableConfig{DbName: "recovery-test", IndexTable: "first"}
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	other := loadReasonKey(cfg.DbName, "other")
+	t.Cleanup(func() { clearLoadGeneration(index); clearLoadGeneration(other) })
+	rememberLoadReason(index, LoadMissCDCFlush)
+	first := beginLoadGeneration(index)
+	second := beginLoadGeneration(other)
+	defer endLoadGeneration(first)
+	defer endLoadGeneration(second)
+	reason, generation := peekLoadReason(index)
+
+	s := NewFulltext2Search(cfg)
+	require.NoError(t, s.RecoverCacheInvalidation(string(LoadMissTTLExpired)))
+	require.False(t, loadGenerationCurrent(first))
+	require.True(t, loadGenerationCurrent(second))
+	gotReason, gotGeneration := peekLoadReason(index)
+	require.Equal(t, reason, gotReason)
+	require.Equal(t, generation, gotGeneration)
+	require.Error(t, s.RecoverCacheInvalidation(string(LoadMissRebuild)))
+}
+
+func TestRecoverCacheInvalidationRejectsBrokenRegistry(t *testing.T) {
+	pendingLoadReasons.Lock()
+	old := pendingLoadReasons.m
+	pendingLoadReasons.m = nil
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = old
+		pendingLoadReasons.Unlock()
+	})
+	s := NewFulltext2Search(TableConfig{DbName: "recovery-test", IndexTable: "first"})
+	require.Error(t, s.RecoverCacheInvalidation(string(LoadMissGenerationChange)))
+}
+
+func TestTTLInvalidationDoesNotSweepOtherIndexPools(t *testing.T) {
+	index := loadReasonKey("recovery-test", "other")
+	key := baseKey{index: index, id: "base", filesize: 1}
+	old := time.Now().Add(-2 * basePoolIdleTTL)
+	base := &baseEntry{lease: newSegmentLease(NewSegment("base", 0)), lastUsed: old}
+	loadedBasePool.mu.Lock()
+	loadedBasePool.entries[key] = base
+	loadedBasePool.totalBytes++
+	loadedBasePool.mu.Unlock()
+	tail := &tailState{lastUsed: old}
+	loadedTailPool.mu.Lock()
+	loadedTailPool.states[index] = tail
+	loadedTailPool.mu.Unlock()
+	t.Cleanup(func() {
+		loadedBasePool.clearIndex(index)
+		loadedTailPool.clear(index)
+		clearLoadGeneration(loadReasonKey("recovery-test", "first"))
+	})
+
+	NewFulltext2Search(TableConfig{DbName: "recovery-test", IndexTable: "first"}).OnCacheInvalidated(string(LoadMissTTLExpired))
+	loadedBasePool.mu.Lock()
+	gotBase := loadedBasePool.entries[key]
+	loadedBasePool.mu.Unlock()
+	loadedTailPool.mu.Lock()
+	gotTail := loadedTailPool.states[index]
+	loadedTailPool.mu.Unlock()
+	require.Same(t, base, gotBase)
+	require.Same(t, tail, gotTail)
+}

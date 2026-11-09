@@ -103,8 +103,8 @@ func loadHnswGeneration(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTab
 	if err != nil {
 		return 0, 0, err
 	}
+	defer res.Close()
 	fp, count = genChecksums(res)
-	res.Close()
 	return fp, count, nil
 }
 
@@ -121,7 +121,7 @@ func queryHnswGeneration(ctx context.Context, cnUUID string, accountID uint32, t
 	if err != nil {
 		return 0, 0, err
 	}
+	defer res.Close()
 	fp, count = genChecksums(res)
-	res.Close()
 	return fp, count, nil
 }

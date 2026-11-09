@@ -15,7 +15,6 @@
 package cache
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,8 +61,7 @@ func (m *observerMock) Destroy() {
 
 func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	mock := &observerMock{}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	s.loadWaiters.Store(5)
 	require.NoError(t, s.Load(nil))
 	require.Equal(t, int64(5), mock.waiters)
@@ -73,8 +71,7 @@ func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 
 func TestVectorIndexSearchDoesNotNotifyEmptyInvalidationReason(t *testing.T) {
 	mock := &invalidationMock{}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	s.Destroy()
 	require.Empty(t, mock.reasons)
 }
@@ -132,8 +129,7 @@ func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
 	c := NewVectorIndexCache()
 	c.IndexMap.Store("key", s)
@@ -145,8 +141,7 @@ func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
 	}()
 
 	<-mock.started
-	replacement := &VectorIndexSearch{Algo: &MockSearch{}}
-	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	replacement := newVectorIndexSearch(&MockSearch{})
 	value, loaded := c.IndexMap.LoadOrStore("key", replacement)
 	require.True(t, loaded)
 	require.Same(t, s, value)
@@ -160,22 +155,19 @@ func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
 
 func TestVectorIndexSearchDestroyWithReasonNotifiesOptionalHook(t *testing.T) {
 	mock := &observerMock{}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	s.DestroyWithReason("cdc_flush")
 	require.Equal(t, "cdc_flush", mock.invalidated)
 
 	mock = &observerMock{}
-	s = &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s = newVectorIndexSearch(mock)
 	s.Destroy()
 	require.Empty(t, mock.invalidated)
 }
 
 func TestVectorIndexCacheRemoveDoesNotNotifyOptionalHook(t *testing.T) {
 	mock := &observerMock{}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	c := NewVectorIndexCache()
 	c.IndexMap.Store("key", s)
 
@@ -185,8 +177,7 @@ func TestVectorIndexCacheRemoveDoesNotNotifyOptionalHook(t *testing.T) {
 
 func TestVectorIndexCacheExplicitInvalidationThenRemoveNotifiesOnce(t *testing.T) {
 	mock := &observerMock{}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	c := NewVectorIndexCache()
 	c.IndexMap.Store("key", s)
 
@@ -203,8 +194,7 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 		allowInvalidation: make(chan struct{}),
 		destroyStarted:    make(chan struct{}),
 	}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := newVectorIndexSearch(mock)
 	s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
 	c := NewVectorIndexCache()
 	c.IndexMap.Store("key", s)
@@ -238,8 +228,7 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 	value, loaded := c.IndexMap.Load("key")
 	require.True(t, loaded, "the old entry must still occupy the key while its reason is published")
 	require.Same(t, s, value)
-	replacement := &VectorIndexSearch{Algo: &observerMock{}}
-	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	replacement := newVectorIndexSearch(&observerMock{})
 	actual, loaded := c.IndexMap.LoadOrStore("key", replacement)
 	require.True(t, loaded, "a replacement must not start before the old entry is removed")
 	require.Same(t, s, actual)
@@ -269,8 +258,7 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 
 func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 	makeExpired := func(mock *observerMock) *VectorIndexSearch {
-		s := &VectorIndexSearch{Algo: mock}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s := newVectorIndexSearch(mock)
 		s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
 		return s
 	}
@@ -309,8 +297,7 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 	if capturedKey == "a" {
 		replacementKey = "b"
 	}
-	replacement := &VectorIndexSearch{Algo: &observerMock{}}
-	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	replacement := newVectorIndexSearch(&observerMock{})
 	replacement.ExpireAt.Store(time.Now().Add(time.Hour).UnixMicro())
 	c.IndexMap.Store(replacementKey, replacement)
 
@@ -330,9 +317,9 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 
 func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *testing.T) {
 	makeExpiredLoaded := func(mock *observerMock) *VectorIndexSearch {
-		s := &VectorIndexSearch{Algo: mock}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s := newVectorIndexSearch(mock)
 		s.Status.Store(STATUS_LOADED)
+		s.markReady()
 		s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
 		return s
 	}
@@ -390,9 +377,9 @@ func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *te
 
 func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *testing.T) {
 	c := NewVectorIndexCache()
-	entry := &VectorIndexSearch{Algo: &MockSearch{}}
-	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	entry := newVectorIndexSearch(&MockSearch{})
 	entry.Status.Store(STATUS_LOADED)
+	entry.markReady()
 	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
 	c.IndexMap.Store("renewed", entry)
 
@@ -407,9 +394,9 @@ func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *test
 	require.True(t, loaded)
 	require.Same(t, entry, value)
 
-	stale := &VectorIndexSearch{Algo: &MockSearch{}}
-	stale.Cond = sync.NewCond(stale.Mutex.RLocker())
+	stale := newVectorIndexSearch(&MockSearch{})
 	stale.Status.Store(STATUS_LOADED)
+	stale.markReady()
 	stale.ExpireAt.Store(time.Now().Add(time.Minute).UnixMicro())
 	stale.markStale()
 	c.IndexMap.Store("stale", stale)

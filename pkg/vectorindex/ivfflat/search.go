@@ -76,7 +76,13 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	ThreadsSearch int64
 }
 
+type centroidIndexFactory[T types.RealNumbers] func([][]T, uint, metric.MetricType, uint, uint, bool) (cache.VectorIndexSearchIf, error)
+
 func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+	return idx.loadCentroids(proc, idxcfg, tblcfg, nthread, brute_force.NewBruteForceIndex[T])
+}
+
+func (idx *IvfflatSearchIndex[T]) loadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, newIndex centroidIndexFactory[T]) error {
 
 	logutil.Infof("IVFFLAT START: Load Centroids")
 	defer logutil.Infof("IVFFLAT END: Load Centroids")
@@ -129,27 +135,38 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 	}
 
 	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
-	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
+	bfidx, err := newIndex(centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz), uint(nthread), gpuMode)
 	if err != nil {
 		return err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			vectorindex.CleanupFailedLoad("IVF centroid", bfidx.Destroy)
+		}
+	}()
 	err = bfidx.Load(proc)
 	if err != nil {
 		return err
 	}
 
 	idx.Centroids = bfidx
+	owned = false
 
 	return nil
 }
 
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) (err error) {
+	return idx.loadIndex(proc, idxcfg, tblcfg, nthread, brute_force.NewBruteForceIndex[T])
+}
+
+func (idx *IvfflatSearchIndex[T]) loadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, newIndex centroidIndexFactory[T]) (err error) {
 
 	idx.Version = idxcfg.Ivfflat.Version
 	idx.QuantMul = 1.0
 	idx.QuantAdd = 0.0
 
-	err = idx.LoadCentroids(proc, idxcfg, tblcfg, nthread)
+	err = idx.loadCentroids(proc, idxcfg, tblcfg, nthread, newIndex)
 	if err != nil {
 		return err
 	}
@@ -1007,14 +1024,25 @@ func (s *IvfflatSearch[T]) Destroy() {
 
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
 func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+	return s.load(sqlproc, brute_force.NewBruteForceIndex[T])
+}
+
+func (s *IvfflatSearch[T]) load(sqlproc *sqlexec.SqlProcess, newIndex centroidIndexFactory[T]) error {
 
 	idx := &IvfflatSearchIndex[T]{}
+	owned := true
+	defer func() {
+		if owned {
+			vectorindex.CleanupFailedLoad("IVF index", idx.Destroy)
+		}
+	}()
 	// load index model
-	err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
+	err := idx.loadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, newIndex)
 	if err != nil {
 		return err
 	}
 	s.Index = idx
+	owned = false
 	return nil
 }
 

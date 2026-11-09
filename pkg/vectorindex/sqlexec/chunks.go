@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -139,4 +140,89 @@ func (w *ChunkInserter) fail(err error) error {
 	w.err = err
 	w.clear()
 	return err
+}
+
+// StreamChunksToFile owns the SQL producer until every delivered result is
+// closed. Callers retain ownership of the file and choose the chunk query.
+func StreamChunksToFile(sqlproc *SqlProcess, sql string, dst io.WriteSeeker,
+	run func(context.Context, *SqlProcess, string, chan executor.Result, chan error) (executor.Result, error)) error {
+	stream := make(chan executor.Result, 2)
+	errors := make(chan error, 2)
+	producerDone := make(chan error, 1)
+	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
+	defer cancel(nil)
+
+	go func() {
+		var producerErr error
+		defer func() {
+			if p := recover(); p != nil {
+				producerErr = moerr.ConvertPanicError(ctx, p)
+			}
+			close(stream)
+			producerDone <- producerErr
+		}()
+		_, producerErr = run(ctx, sqlproc, sql, stream, errors)
+	}()
+
+	joined := false
+	defer func() {
+		if !joined {
+			cancel(nil)
+			for res := range stream {
+				res.Close()
+			}
+			<-producerDone
+		}
+	}()
+
+	var loopErr error
+	closed := false
+	for !closed && loopErr == nil {
+		select {
+		case res, ok := <-stream:
+			if !ok {
+				closed = true
+				break
+			}
+			loopErr = writeChunkResult(dst, res)
+		case loopErr = <-errors:
+		case <-sqlproc.GetContext().Done():
+			loopErr = moerr.NewInternalError(sqlproc.GetContext(), "context cancelled")
+		case <-ctx.Done():
+			loopErr = moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
+		}
+	}
+	if loopErr != nil {
+		cancel(loopErr)
+	}
+	for res := range stream {
+		res.Close()
+	}
+	producerErr := <-producerDone
+	joined = true
+	if loopErr != nil {
+		return loopErr
+	}
+	select {
+	case err := <-errors:
+		return err
+	default:
+		return producerErr
+	}
+}
+
+func writeChunkResult(dst io.WriteSeeker, res executor.Result) error {
+	defer res.Close()
+	bat := res.Batches[0]
+	ids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+	for i, id := range ids {
+		data := bat.Vecs[1].GetRawBytesAt(i)
+		if _, err := dst.Seek(id*vectorindex.MaxChunkSize, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := dst.Write(data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
