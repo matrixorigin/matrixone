@@ -564,3 +564,110 @@ func TestScalarTimeShortStringComparisonKeepsStringSemantics(t *testing.T) {
 	require.NoError(t, err)
 	requireTemporalCompareArgTypes(t, expr, types.T_varchar, 0)
 }
+
+// bindVolatileDateExpr binds a DATE-typed expression whose evaluation is
+// volatile: CAST(DATE_ADD(DATE '2026-01-01', INTERVAL nextval(...) DAY) AS
+// DATE). It carries no evaluation memo because the SELECT projection does
+// not duplicate it.
+func bindVolatileDateExpr(t *testing.T) *planpb.Expr {
+	t.Helper()
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"select cast(date_add(date '2026-01-01', interval nextval('date_string_between_seq') day) as date)")
+	require.NoError(t, err)
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if expr.Typ.Id == int32(types.T_date) && containsVolatileFunction(expr) {
+				require.Zero(t, expr.AuxId)
+				return expr
+			}
+		}
+	}
+	require.FailNow(t, "no volatile DATE projection")
+	return nil
+}
+
+// requireSingleNegativeAuxID returns the one evaluation memo (negative
+// AuxId) carried anywhere inside expr.
+func requireSingleNegativeAuxID(t *testing.T, expr *planpb.Expr) int32 {
+	t.Helper()
+	ids := map[int32]struct{}{}
+	collectNegativeAuxIDs(expr, ids)
+	require.Len(t, ids, 1)
+	for id := range ids {
+		return id
+	}
+	return 0
+}
+
+// The range expansion rebinds its left operand in each comparison, so a
+// volatile left operand such as a sequence must not evaluate twice. The
+// query binder assigns one evaluation memo (negative AuxId) before the
+// expansion runs, and both independent comparisons consume the same
+// memoized value (issue #31539 review).
+func TestDateStringVolatileBetweenExpandsWithSharedEvaluationMemo(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"select cast(date_add(date '2026-01-01', interval nextval('date_string_between_seq') day) as date) "+
+			"between '2026-01-01 12:00:00' and date '2026-01-02'")
+	require.NoError(t, err)
+
+	var rangeExpr *planpb.Expr
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.GetObjName() == "and" && rangeExpr == nil {
+				rangeExpr = expr
+			}
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, projection := range node.ProjectList {
+			visit(projection)
+		}
+	}
+	require.NotNil(t, rangeExpr, "the DATE/string range must expand to independent comparisons")
+	lowerCmp, upperCmp := requireBetweenExpansion(t, rangeExpr)
+	lowerMemo := requireSingleNegativeAuxID(t, lowerCmp.GetF().Args[0])
+	upperMemo := requireSingleNegativeAuxID(t, upperCmp.GetF().Args[0])
+	require.Equal(t, lowerMemo, upperMemo,
+		"both comparisons must consume one memoized evaluation of the volatile operand")
+}
+
+// A volatile left operand without a binder-issued evaluation memo keeps the
+// fused range: the builder-less binder cannot memoize, and expanding would
+// evaluate the operand once per comparison.
+func TestDateStringVolatileBetweenKeepsFusedRangeWithoutEvaluationMemo(t *testing.T) {
+	ctx := context.Background()
+	left := bindVolatileDateExpr(t)
+	lower := makePlan2StringConstExprWithType("2026-01-01 12:00:00")
+	upper := makePlan2DateConstExprWithType(0)
+
+	expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{left, lower, upper})
+	require.NoError(t, err)
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "between", fn.Func.GetObjName(),
+		"an unmemoized volatile operand keeps the fused single-evaluation range")
+}
+
+// With a binder-issued memo the range still expands, and the deep-copied
+// operand in each comparison carries the same memo key, so the executor
+// evaluates the volatile source once.
+func TestDateStringVolatileBetweenExpansionSharesMemoizedEvaluation(t *testing.T) {
+	ctx := context.Background()
+	left := bindVolatileDateExpr(t)
+	left.AuxId = -7 // binder-issued evaluation memo
+	lower := makePlan2StringConstExprWithType("2026-01-01 12:00:00")
+	upper := makePlan2DateConstExprWithType(0)
+
+	expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*planpb.Expr{left, lower, upper})
+	require.NoError(t, err)
+	lowerCmp, upperCmp := requireBetweenExpansion(t, expr)
+	require.Equal(t, int32(-7), requireSingleNegativeAuxID(t, lowerCmp.GetF().Args[0]))
+	require.Equal(t, int32(-7), requireSingleNegativeAuxID(t, upperCmp.GetF().Args[0]))
+}

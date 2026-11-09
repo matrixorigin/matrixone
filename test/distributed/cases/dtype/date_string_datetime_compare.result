@@ -160,3 +160,24 @@ select d not between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as col
 1  𝄀
 0
 drop table date_string_datetime_compare;
+drop sequence if exists date_str_dt_cmp_seq;
+create sequence date_str_dt_cmp_seq as int start with 1;
+select cast(date_add(date '2026-01-01', interval nextval('date_str_dt_cmp_seq') day) as date) between '2026-01-01 12:00:00' and date '2026-01-02' as volatile_between_typed_peer;
+➤ volatile_between_typed_peer[-6,8,0]  𝄀
+1
+select currval('date_str_dt_cmp_seq') as seq_after_typed_peer;
+➤ seq_after_typed_peer[12,65535,0]  𝄀
+1
+select cast(date_add(date '2026-01-01', interval nextval('date_str_dt_cmp_seq') day) as date) between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as volatile_between_slash_clock;
+➤ volatile_between_slash_clock[-6,8,0]  𝄀
+1
+select currval('date_str_dt_cmp_seq') as seq_after_slash_clock;
+➤ seq_after_slash_clock[12,65535,0]  𝄀
+2
+select cast(date_add(date '2026-01-01', interval nextval('date_str_dt_cmp_seq') day) as date) between '2026-01-01 12:00:00' and '2026-01-04 00:00:00' as volatile_between_uniform_domain;
+➤ volatile_between_uniform_domain[-6,8,0]  𝄀
+1
+select currval('date_str_dt_cmp_seq') as seq_after_uniform_domain;
+➤ seq_after_uniform_domain[12,65535,0]  𝄀
+3
+drop sequence date_str_dt_cmp_seq;

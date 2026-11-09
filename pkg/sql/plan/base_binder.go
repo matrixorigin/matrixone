@@ -4922,6 +4922,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "between" && len(args) == 3 && b.builder != nil &&
+		containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+		if _, expandRange := dateStringBetweenNormalization(args); expandRange {
+			// The DATE/string range expansion (normalizeDateStringComparisonArgs)
+			// rebinds its left operand in each of the two comparisons. Memoize it
+			// so a volatile source such as nextval still runs once, the same
+			// contract the IN expansion above uses.
+			if err := b.markVolatileInLeft(args[0]); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if state := preparedBindingState(b.GetContext()); state != nil &&
 		len(args) == 2 && isPreparedNumericComparisonContext(name) {
 		for i, source := range args {
@@ -11783,7 +11795,11 @@ func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr)
 // preserve it, so a row could satisfy both expr BETWEEN a AND b and expr
 // NOT BETWEEN a AND b. The positive range therefore expands to the same
 // independent comparisons NOT BETWEEN uses, and each bound converts exactly
-// as it would in a standalone comparison. The returned expression replaces
+// as it would in a standalone comparison. That expansion rebinds the left
+// operand in each comparison, so a volatile left operand (for example
+// nextval) must carry a binder-issued evaluation memo (markVolatileInLeft)
+// that shares one evaluation between both copies; without a memo the range
+// keeps its fused single-evaluation form. The returned expression replaces
 // the fused range; it is nil when the range keeps its original form.
 func normalizeDateStringComparisonArgs(ctx context.Context, name string, args []*Expr) (*Expr, error) {
 	switch name {
@@ -11807,15 +11823,8 @@ func normalizeDateStringComparisonArgs(ctx context.Context, name string, args []
 			return nil, nil
 		}
 	case "between":
-		if len(args) != 3 || args[0].Typ.Id != int32(types.T_date) {
-			return nil, nil
-		}
-		promote1, parseable1 := dateStringLiteralPromotion(args[1])
-		promote2, parseable2 := dateStringLiteralPromotion(args[2])
-		if !promote1 && !promote2 {
-			return nil, nil
-		}
-		if parseable1 && parseable2 {
+		castBothBounds, expandRange := dateStringBetweenNormalization(args)
+		if castBothBounds {
 			for _, pos := range []int{1, 2} {
 				castExpr, err := appendCastBeforeExpr(ctx, args[pos], makePlan2Type(datetimeMaxScaleType()))
 				if err != nil {
@@ -11825,9 +11834,43 @@ func normalizeDateStringComparisonArgs(ctx context.Context, name string, args []
 			}
 			return nil, nil
 		}
+		if !expandRange {
+			return nil, nil
+		}
+		// The expanded range rebinds its left operand once per comparison. A
+		// volatile left operand must arrive with an evaluation memo assigned by
+		// the binder (markVolatileInLeft); without one the expansion would
+		// evaluate it twice, so the range keeps its fused single-evaluation
+		// form instead.
+		if containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+			return nil, nil
+		}
 		return bindBetweenAsComparisons(ctx, args)
 	}
 	return nil, nil
+}
+
+// dateStringBetweenNormalization decides how a BETWEEN range with a
+// DATE-typed left operand and string-literal bounds normalizes (see
+// normalizeDateStringComparisonArgs). castBothBounds keeps the fused range
+// and casts both bounds to DATETIME(6), which is possible only when both
+// bounds are datetime parseable. expandRange rewrites the range to the same
+// independent comparisons NOT BETWEEN uses. The binder consults the same
+// decision so a volatile left operand receives an evaluation memo exactly
+// when the range will expand.
+func dateStringBetweenNormalization(args []*Expr) (castBothBounds bool, expandRange bool) {
+	if len(args) != 3 || args[0].Typ.Id != int32(types.T_date) {
+		return false, false
+	}
+	promote1, parseable1 := dateStringLiteralPromotion(args[1])
+	promote2, parseable2 := dateStringLiteralPromotion(args[2])
+	if !promote1 && !promote2 {
+		return false, false
+	}
+	if parseable1 && parseable2 {
+		return true, false
+	}
+	return false, true
 }
 
 // dateStringLiteralPromotion inspects an eligible string literal compared
