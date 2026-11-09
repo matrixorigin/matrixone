@@ -128,8 +128,8 @@ func (Hooks) BuildSecondaryIndexDefs(
 		return nil, nil, err
 	}
 
-	indexDefs := make([]*plan.IndexDef, 3)
-	tableDefs := make([]*plan.TableDef, 3)
+	indexDefs := make([]*plan.IndexDef, 3, 4)
+	tableDefs := make([]*plan.TableDef, 3, 4)
 
 	// 1. metadata table: ( key VARCHAR PRIMARY KEY, val VARCHAR )
 	{
@@ -369,6 +369,16 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Properties: &plan.PropertiesDef{Properties: properties},
 			},
 		})
+	}
+
+	// 4. ignored table: the rows whose vector the index cannot store
+	{
+		indexDef, tableDef, err := planplugin.BuildIgnoredTableDefs(ctx, indexInfo, indexParts, colMap[pkeyName])
+		if err != nil {
+			return nil, nil, err
+		}
+		indexDefs = append(indexDefs, indexDef)
+		tableDefs = append(tableDefs, tableDef)
 	}
 
 	return indexDefs, tableDefs, nil
