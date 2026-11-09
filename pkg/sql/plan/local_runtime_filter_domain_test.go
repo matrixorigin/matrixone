@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -47,6 +48,10 @@ func localDomainTestQuery() *planpb.Query {
 }
 
 func TestLocalRuntimeFilterDomainCompositeLineage(t *testing.T) {
+	narrow := types.New(types.T_decimal64, 1, 0)
+	fallible, err := makePlan2CastExpr(context.Background(),
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 0, 1), makePlan2Type(&narrow))
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name    string
 		change  func(*planpb.Query)
@@ -65,6 +70,12 @@ func TestLocalRuntimeFilterDomainCompositeLineage(t *testing.T) {
 			q.Nodes[1].RuntimeFilterProbeList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
 		}},
 		{name: "source unselective", change: func(q *planpb.Query) { q.Nodes[1].Stats.Outcnt = 1000 }},
+		{name: "computed scan projection cannot be skipped", change: func(q *planpb.Query) {
+			q.Nodes[3].ProjectList = append(q.Nodes[3].ProjectList, DeepCopyExpr(fallible))
+		}},
+		{name: "computed join projection cannot be skipped", change: func(q *planpb.Query) {
+			q.Nodes[2].ProjectList = append(q.Nodes[2].ProjectList, DeepCopyExpr(fallible))
+		}},
 		{name: "estimate above ten percent waits for actual cardinality", targets: []int32{0, 3}, change: func(q *planpb.Query) { q.Nodes[1].Stats.Outcnt = 200 }},
 		{name: "source not single primary key", change: func(q *planpb.Query) {
 			q.Nodes[1].TableDef.Pkey.Names = []string{"key", "other"}

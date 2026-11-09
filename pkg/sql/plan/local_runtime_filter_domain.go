@@ -117,6 +117,16 @@ func newLocalDomainProof(q *planpb.Query) *localDomainProof {
 	p := &localDomainProof{query: q, tree: tree, parents: make(map[localDomainColumn]localDomainColumn), builds: make(map[localDomainColumn]bool)}
 	for _, id := range tree.order {
 		n := q.Nodes[id]
+		// A domain can remove rows before these physical projections run.
+		// Keep fallible/volatile computed projections on ordinary execution;
+		// key lineage alone cannot prove their evaluation may be skipped.
+		if n.NodeType == planpb.Node_TABLE_SCAN || n.NodeType == planpb.Node_JOIN || n.NodeType == planpb.Node_PROJECT {
+			for _, projected := range n.ProjectList {
+				if projected == nil || projected.GetCol() == nil {
+					return nil
+				}
+			}
+		}
 		if n.NodeType != planpb.Node_JOIN {
 			continue
 		}
