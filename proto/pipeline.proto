@@ -409,6 +409,7 @@ message ProductL2 {
   plan.Expr expr = 3;
   int32 join_map_tag = 4;
   string vector_op_type = 5;
+  string ignored = 6;
 }
 
 message IndexJoin {

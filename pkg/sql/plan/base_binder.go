@@ -4939,6 +4939,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "between" && len(args) == 3 && b.builder != nil &&
+		containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+		if _, expandRange := dateStringBetweenNormalization(args); expandRange {
+			// The DATE/string range expansion (normalizeDateStringComparisonArgs)
+			// rebinds its left operand in each of the two comparisons. Memoize it
+			// so a volatile source such as nextval still runs once, the same
+			// contract the IN expansion above uses.
+			if err := b.markVolatileInLeft(args[0]); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if state := preparedBindingState(b.GetContext()); state != nil &&
 		len(args) == 2 && isPreparedNumericComparisonContext(name) {
 		for i, source := range args {
@@ -7919,6 +7931,13 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
+	}
+	dateRangeExpr, err := normalizeDateStringComparisonArgs(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
+	if dateRangeExpr != nil {
+		return dateRangeExpr, nil
 	}
 	if strings.EqualFold(name, "inet_ntoa") {
 		normalizeInetNtoaBinaryPlanLiteral(args)
@@ -11769,6 +11788,151 @@ func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr)
 	return nil
 }
 
+// MySQL compares DATE values with strings in the DATETIME domain, so the
+// string keeps any time-of-day it carries instead of being truncated to a
+// pure date. Binary comparisons and BETWEEN share one literal-eligibility
+// rule (isDateComparisonStringLiteral): character string literals and
+// binary-introducer (_binary'...') literals qualify, because MySQL coerces
+// both to DATETIME in temporal comparisons. A string keeps the DATE domain
+// (and its column/index fast path) only when both domains are proven
+// equivalent for it: the canonical
+// datetime parser accepts it with a zero time-of-day AND the DATE cast
+// parser accepts it with the same calendar date, because the DATE domain
+// then only drops that zero time portion and DATE promotes to midnight. Any
+// other datetime-parseable string literal promotes the comparison to
+// DATETIME(6); strings the datetime parser rejects keep the existing
+// DATE-domain behavior, including its error reporting.
+//
+// BETWEEN applies the same per-bound rule. When both bounds are datetime
+// parseable string literals and at least one promotes, both bounds cast to
+// DATETIME(6) and the fused range evaluates in one uniform domain. A fused
+// range cannot honor a promoting bound otherwise: its shared cast domain
+// would truncate that bound's time portion, while NOT BETWEEN — which
+// rewrites to two independent comparisons before function binding — would
+// preserve it, so a row could satisfy both expr BETWEEN a AND b and expr
+// NOT BETWEEN a AND b. The positive range therefore expands to the same
+// independent comparisons NOT BETWEEN uses, and each bound converts exactly
+// as it would in a standalone comparison. That expansion rebinds the left
+// operand in each comparison, so a volatile left operand (for example
+// nextval) must carry a binder-issued evaluation memo (markVolatileInLeft)
+// that shares one evaluation between both copies; without a memo the range
+// keeps its fused single-evaluation form. The returned expression replaces
+// the fused range; it is nil when the range keeps its original form.
+func normalizeDateStringComparisonArgs(ctx context.Context, name string, args []*Expr) (*Expr, error) {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil, nil
+		}
+		for _, pos := range []int{0, 1} {
+			if args[pos].Typ.Id != int32(types.T_date) || !isDateComparisonStringLiteral(args[1-pos]) {
+				continue
+			}
+			promote, _ := dateStringLiteralPromotion(args[1-pos])
+			if !promote {
+				return nil, nil
+			}
+			castExpr, err := appendCastBeforeExpr(ctx, args[1-pos], makePlan2Type(datetimeMaxScaleType()))
+			if err != nil {
+				return nil, err
+			}
+			args[1-pos] = castExpr
+			return nil, nil
+		}
+	case "between":
+		castBothBounds, expandRange := dateStringBetweenNormalization(args)
+		if castBothBounds {
+			for _, pos := range []int{1, 2} {
+				castExpr, err := appendCastBeforeExpr(ctx, args[pos], makePlan2Type(datetimeMaxScaleType()))
+				if err != nil {
+					return nil, err
+				}
+				args[pos] = castExpr
+			}
+			return nil, nil
+		}
+		if !expandRange {
+			return nil, nil
+		}
+		// The expanded range rebinds its left operand once per comparison. A
+		// volatile left operand must arrive with an evaluation memo assigned by
+		// the binder (markVolatileInLeft); without one the expansion would
+		// evaluate it twice, so the range keeps its fused single-evaluation
+		// form instead.
+		if containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+			return nil, nil
+		}
+		return bindBetweenAsComparisons(ctx, args)
+	}
+	return nil, nil
+}
+
+// dateStringBetweenNormalization decides how a BETWEEN range with a
+// DATE-typed left operand and string-literal bounds normalizes (see
+// normalizeDateStringComparisonArgs). castBothBounds keeps the fused range
+// and casts both bounds to DATETIME(6), which is possible only when both
+// bounds are datetime parseable. expandRange rewrites the range to the same
+// independent comparisons NOT BETWEEN uses. The binder consults the same
+// decision so a volatile left operand receives an evaluation memo exactly
+// when the range will expand.
+func dateStringBetweenNormalization(args []*Expr) (castBothBounds bool, expandRange bool) {
+	if len(args) != 3 || args[0].Typ.Id != int32(types.T_date) {
+		return false, false
+	}
+	promote1, parseable1 := dateStringLiteralPromotion(args[1])
+	promote2, parseable2 := dateStringLiteralPromotion(args[2])
+	if !promote1 && !promote2 {
+		return false, false
+	}
+	if parseable1 && parseable2 {
+		return true, false
+	}
+	return false, true
+}
+
+// dateStringLiteralPromotion inspects an eligible string literal compared
+// with a DATE operand (character string or binary-introducer literal; see
+// isDateComparisonStringLiteral). promote is true when the string parses as a datetime
+// and the DATE domain would change the outcome: either the string carries a
+// non-zero time-of-day (which the DATE cast silently drops), or the DATE
+// cast parser rejects the string or parses it to a different calendar day
+// (for example the compact 'YYYYMMDDHHMMSS' form, which ParseDateCast
+// refuses). datetimeParseable reports whether the canonical datetime parser
+// accepts the string at all; BETWEEN consults it to decide whether both
+// bounds can share one DATETIME domain or the range must expand to
+// independent comparisons. Strings that fail the datetime parse keep the
+// existing DATE-domain behavior, including its error reporting.
+func dateStringLiteralPromotion(expr *Expr) (promote bool, datetimeParseable bool) {
+	if !isDateComparisonStringLiteral(expr) {
+		return false, false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return false, false
+	}
+	text, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false, false
+	}
+	dt, err := types.ParseDatetime(text.Sval, 6)
+	if err != nil {
+		return false, false
+	}
+	if dt.Hour() != 0 || dt.Minute() != 0 || dt.Sec() != 0 || dt.MicroSec() != 0 {
+		return true, true
+	}
+	date, err := types.ParseDateCast(text.Sval)
+	if err != nil || date != dt.ToDate() {
+		return true, true
+	}
+	return false, true
+}
+
+func datetimeMaxScaleType() *types.Type {
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	return &datetimeType
+}
+
 // MySQL compares scalar TIME expressions to strings as text, but converts a
 // constant string or direct prepared parameter to TIME(scale) when the TIME
 // side is a column.
@@ -11837,6 +12001,31 @@ func allTimeOrCharacterString(args []*Expr) bool {
 
 func isCharacterStringLiteral(expr *Expr) bool {
 	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
+}
+
+// isDateComparisonStringLiteral reports whether expr is a string literal
+// eligible for DATE comparison normalization. Character string literals
+// qualify; so do binary-introducer (_binary'...') literals, because MySQL
+// coerces their string content to DATETIME in temporal comparisons exactly
+// like character strings. Binary comparisons and BETWEEN share this one
+// rule so NOT BETWEEN stays the exact negation of BETWEEN.
+func isDateComparisonStringLiteral(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) || isBinaryIntroducerStringLiteral(expr)
+}
+
+// isBinaryIntroducerStringLiteral reports whether expr is a _binary'...'
+// literal: a VARBINARY constant carrying string content. Hex and bit
+// literals (IsBin) are excluded.
+func isBinaryIntroducerStringLiteral(expr *Expr) bool {
+	if expr.Typ.Id != int32(types.T_varbinary) {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return false
+	}
+	_, ok := lit.Value.(*plan.Literal_Sval)
+	return ok
 }
 
 func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {

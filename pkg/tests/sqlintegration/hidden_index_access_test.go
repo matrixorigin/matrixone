@@ -628,8 +628,8 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 					}
 				}
 				require.NoError(t, rows.Err())
-				require.Len(t, groups["σ"], 3)
-				require.Len(t, groups["ς"], 3)
+				require.Len(t, groups["σ"], 4)
+				require.Len(t, groups["ς"], 4)
 				firstIDs := make(map[uint64]bool, len(groups["σ"]))
 				for _, id := range groups["σ"] {
 					require.NotZero(t, id)
