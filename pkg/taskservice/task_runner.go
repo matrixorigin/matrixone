@@ -602,11 +602,15 @@ func (r *taskRunner) run(rt runningTask) {
 			if rt.task.Metadata.Executor == task.TaskCode_SQLTask && !disposition.handled {
 				// A wrapper may reject a firing before calling the SQL executor.
 				// Never use generic completion: another invocation may have claimed it.
-				sqlTaskExecutorEarly.Warn(zap.Uint64("task-id", rt.task.ID), zap.Error(err))
-				owner := sqlTaskServiceOwner(r.service)
-				claim := SQLTaskClaim{ID: rt.task.ID, Runner: rt.task.TaskRunner, Epoch: rt.task.Epoch}
-				if owner == nil || !owner.finishUnclaimedSQLTask(execCtx, claim, err, 0) {
+				if sqlTaskRunnerStopOnly(err, execCtx.Err()) {
 					disposition.deferred = true
+				} else {
+					sqlTaskExecutorEarly.Warn(zap.Uint64("task-id", rt.task.ID), zap.Error(err))
+					owner := sqlTaskServiceOwner(r.service)
+					claim := SQLTaskClaim{ID: rt.task.ID, Runner: rt.task.TaskRunner, Epoch: rt.task.Epoch}
+					if owner == nil || !owner.finishUnclaimedSQLTask(execCtx, claim, err, 0) {
+						disposition.deferred = true
+					}
 				}
 				disposition.handled = true
 			}
@@ -628,6 +632,61 @@ func (r *taskRunner) run(rt runningTask) {
 	if err != nil {
 		r.logger.Error("run task failed", zap.Error(err))
 	}
+}
+
+// sqlTaskRunnerStopOnly recognizes only the runner's stop, not a precheck
+// failure joined with it. Unknown identity hooks and error trees that cannot
+// be fully inspected within the fixed budget remain selected results.
+func sqlTaskRunnerStopOnly(err, stop error) bool {
+	if err == nil || stop == nil {
+		return false
+	}
+	const limit = 64
+	var pending [limit]error
+	pending[0] = err
+	size := 1
+	for visited := 0; size > 0; visited++ {
+		if visited == limit {
+			return false
+		}
+		size--
+		current := pending[size]
+		pending[size] = nil
+		if current == nil {
+			return false
+		}
+		if converted, ok := current.(*moerr.Error); ok {
+			if converted == nil || !converted.Is(stop) {
+				return false
+			}
+			continue
+		}
+		if _, ok := current.(interface{ Is(error) bool }); ok {
+			return false
+		}
+		if _, ok := current.(interface{ As(any) bool }); ok {
+			return false
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			children := wrapped.Unwrap()
+			if len(children) == 0 || len(children) > limit-size {
+				return false
+			}
+			for _, child := range children {
+				pending[size] = child
+				size++
+			}
+		case interface{ Unwrap() error }:
+			pending[size] = wrapped.Unwrap()
+			size++
+		default:
+			if current != stop { //nolint:errorlint // only the actual stop sentinel proves cancellation
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (r *taskRunner) taskExecResult(rt runningTask, err error, mayRetry bool) {

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -430,6 +431,99 @@ func TestExternalSQLExecutorEarlyReturnDoesNotCompleteClaimedFiring(t *testing.T
 				require.Equal(t, task.ResultCode_Failed, firings[0].ExecuteResult.Code)
 				require.Contains(t, firings[0].ExecuteResult.Error, "precheck failed")
 			}
+		})
+	}
+}
+
+func TestExternalSQLExecutorWrapperStopAndSelectedResult(t *testing.T) {
+	precheck := errors.New("precheck failed")
+	cases := []struct {
+		name       string
+		result     func(context.Context) error
+		stopFirst  bool
+		deferred   bool
+		resultCode task.ResultCode
+		errorText  string
+	}{
+		{"stop", func(ctx context.Context) error { return ctx.Err() }, true, true, 0, ""},
+		{"wrapped_stop", func(ctx context.Context) error { return fmt.Errorf("wrapper stopped: %w", ctx.Err()) }, true, true, 0, ""},
+		{"joined_stops", func(ctx context.Context) error { return errors.Join(ctx.Err(), fmt.Errorf("wrapper: %w", ctx.Err())) }, true, true, 0, ""},
+		{"converted_stop", func(ctx context.Context) error { return moerr.ConvertGoError(context.Background(), ctx.Err()) }, true, true, 0, ""},
+		{"selected_failure", func(context.Context) error { return precheck }, true, false, task.ResultCode_Failed, "precheck failed"},
+		{"failure_joined_with_stop", func(ctx context.Context) error { return errors.Join(precheck, ctx.Err()) }, true, false, task.ResultCode_Failed, "precheck failed"},
+		{"different_stop", func(context.Context) error { return context.DeadlineExceeded }, true, false, task.ResultCode_Failed, "deadline exceeded"},
+		{"selected_success", func(context.Context) error { return nil }, true, false, task.ResultCode_Success, ""},
+		{"live_context", func(context.Context) error { return context.Canceled }, false, false, task.ResultCode_Failed, "context canceled"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := &observingUnclaimedStore{TaskStorage: taskservice.NewMemTaskStorage(), finished: make(chan error, 1)}
+			service := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
+			runner := taskservice.NewTaskRunner("cn1", service, nil, taskservice.WithRunnerParallelism(1), taskservice.WithRunnerFetchInterval(5*time.Millisecond))
+			t.Cleanup(func() {
+				require.NoError(t, runner.Stop())
+				require.NoError(t, service.Close())
+			})
+			_, err := store.AddSQLTask(ctx, taskservice.SQLTask{TaskName: "early", AccountID: 1, Enabled: true, TriggerCount: 1})
+			require.NoError(t, err)
+			definitions, err := store.QuerySQLTask(ctx)
+			require.NoError(t, err)
+			require.Len(t, definitions, 1)
+			definition := definitions[0]
+			spec := &task.SQLTaskContext{TaskId: definition.TaskID, TaskName: definition.TaskName, AccountId: definition.AccountID,
+				TriggerType: taskservice.SQLTaskTriggerScheduled, TriggerCount: 1}
+			firing := task.AsyncTask{Metadata: taskservice.BuildSQLTaskMetadata(spec), ParentTaskID: fmt.Sprintf("sql-task:%d", definition.TaskID),
+				Status: task.TaskStatus_Running, TaskRunner: "cn1", Epoch: 1}
+			_, err = store.AddAsyncTask(ctx, firing)
+			require.NoError(t, err)
+			started := make(chan struct{})
+			runner.RegisterExecutor(task.TaskCode_SQLTask, func(ctx context.Context, _ task.Task) error {
+				close(started)
+				if tc.stopFirst {
+					<-ctx.Done()
+				}
+				return tc.result(ctx)
+			})
+			require.NoError(t, runner.Start())
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("SQL wrapper did not start")
+			}
+			if !tc.stopFirst {
+				select {
+				case err := <-store.finished:
+					require.NoError(t, err)
+				case <-time.After(5 * time.Second):
+					t.Fatal("selected wrapper result was not completed")
+				}
+			}
+			require.NoError(t, runner.Stop())
+			if tc.stopFirst {
+				select {
+				case err := <-store.finished:
+					require.False(t, tc.deferred, "stop-only result must not issue a completion CAS")
+					require.NoError(t, err)
+				default:
+					require.True(t, tc.deferred, "selected result must issue a completion CAS")
+				}
+			}
+			firings, err := store.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, firing.Metadata.ID))
+			require.NoError(t, err)
+			require.Len(t, firings, 1)
+			if tc.deferred {
+				require.Equal(t, task.TaskStatus_Running, firings[0].Status)
+				require.Nil(t, firings[0].ExecuteResult)
+			} else {
+				require.Equal(t, task.TaskStatus_Completed, firings[0].Status)
+				require.NotNil(t, firings[0].ExecuteResult)
+				require.Equal(t, tc.resultCode, firings[0].ExecuteResult.Code)
+				require.Contains(t, firings[0].ExecuteResult.Error, tc.errorText)
+			}
+			runs, err := store.QuerySQLTaskRun(ctx)
+			require.NoError(t, err)
+			require.Empty(t, runs, "the wrapper did not admit or execute SQL")
 		})
 	}
 }

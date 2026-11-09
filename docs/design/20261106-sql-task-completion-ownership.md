@@ -107,10 +107,11 @@ exactly-once business effects. Manual EXECUTE TASK retains the existing
 client-disconnect behavior; scheduled tasks retain their runner cancellation.
 
 Manual EXECUTE remains synchronous on the frontend request stack. The original
-request context controls lookup and the provisional guard; after lookup, the
-existing frontend detaches its cancellation and deadline before durable run
-admission. Consequently the request's default 24-hour session deadline does
-not bound the remaining wait, and a disconnect or KILL after detachment does
+request context is passed to lookup; a nonblocking provisional guard is acquired
+first. After lookup, the existing frontend detaches its cancellation and
+deadline before durable run admission. Consequently the request's default
+24-hour session deadline does not bound the remaining wait, and a disconnect
+or KILL after detachment does
 not stop the task. TaskService shutdown requests execution cancellation. A
 positive task timeout bounds the body of each attempt; a zero task timeout
 does not impose a whole-task limit. Each internal statement still uses its own
@@ -174,8 +175,10 @@ cancellation; an early nil is a selected success. A wrapper must return its
 context's stop identity when that stop is its only outcome, and meaningful
 precheck failures must have an independent error identity. The existing
 `func(context.Context, task.Task) error` contract cannot distinguish a bare
-independent `context.Canceled` from the same runner stop if both race. Once
-the completion CAS has been issued, a canceled caller or lost acknowledgement
+independent `context.Canceled` from the same runner stop if both race. Error
+conversion can flatten a joined failure into a cancellation-only type; wrappers
+must preserve the precheck identity before that conversion. Once the completion
+CAS has been issued, a canceled caller or lost acknowledgement
 does not prove that the CAS rolled back. Non-SQL tasks retain their existing
 lifecycle. Scheduler
 expiry may complete or garbage-collect the async row; it is not proof that the
