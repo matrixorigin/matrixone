@@ -177,7 +177,7 @@ func TestCacheConcurrentAndRepeatedDestroy(t *testing.T) {
 func TestCacheCancelWhileLoadPublishes(t *testing.T) {
 	for _, into := range []bool{false, true} {
 		t.Run(map[bool]string{false: "Search", true: "SearchInto"}[into], func(t *testing.T) {
-			entry := NewVectorIndexSearch(&recoveryAlgo{})
+			entry := newVectorIndexSearch(&recoveryAlgo{})
 			entry.ttlMu.Lock()
 			var once sync.Once
 			release := func() { once.Do(entry.ttlMu.Unlock) }
@@ -215,7 +215,7 @@ func TestFollowerRetryBudgetDoesNotWaitForFinalTeardown(t *testing.T) {
 	for _, into := range []bool{false, true} {
 		t.Run(map[bool]string{false: "Search", true: "SearchInto"}[into], func(t *testing.T) {
 			c := NewVectorIndexCache()
-			old := NewVectorIndexSearch(&MockSearch{})
+			old := newVectorIndexSearch(&MockSearch{})
 			c.IndexMap.Store("key", old)
 			a := &teardownRetryAlgo{loadStarted: make(chan struct{}), releaseLoad: make(chan struct{}), destroyStarted: make(chan struct{}), releaseDestroy: make(chan struct{})}
 			var loadOnce, destroyOnce sync.Once

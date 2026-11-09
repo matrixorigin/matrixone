@@ -33,7 +33,7 @@ func (*searchIntoError) SearchInto(*sqlexec.SqlProcess, any, vectorindex.Runtime
 
 func TestVectorIndexSearchIntoStatusAndDelegation(t *testing.T) {
 	mock := &MockSearch{}
-	s := NewVectorIndexSearch(mock)
+	s := newVectorIndexSearch(mock)
 	require.NoError(t, s.Load(nil))
 	require.NoError(t, s.SearchInto(nil, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{}))
 

@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -483,48 +484,115 @@ func TestCompactSegmentsNoDelta(t *testing.T) {
 }
 
 func TestLoadAllBasesReleasesPartialViewsOnPanic(t *testing.T) {
-	sp, mp := mockSqlProc(t)
-	cfg := testStorageCfg()
-	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
-	loadedBasePool.clearIndex(index)
-	t.Cleanup(func() { loadedBasePool.clearIndex(index) })
-	generation := beginLoadGeneration(index)
-	defer endLoadGeneration(generation)
-	b := NewBuilder("s0", int32(types.T_int64))
-	feed(t, b, int64(1), "hello")
-	seg, err := b.Finish()
-	require.NoError(t, err)
-	buf, err := seg.Serialize()
-	require.NoError(t, err)
-	var lease *segmentLease
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "'s1'"):
-			loadedBasePool.mu.Lock()
-			for key, entry := range loadedBasePool.entries {
-				if key.index == index && key.id == "s0" {
-					lease = entry.lease
+	for _, pooled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "uncached", true: "pooled"}[pooled], func(t *testing.T) {
+			sp, mp := mockSqlProc(t)
+			cfg := testStorageCfg()
+			index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+			loadedBasePool.clearIndex(index)
+			t.Cleanup(func() { loadedBasePool.clearIndex(index) })
+			generation := beginLoadGeneration(index)
+			defer endLoadGeneration(generation)
+			dir := t.TempDir()
+			t.Setenv("TMPDIR", dir)
+			b := NewBuilder("s0", int32(types.T_int64))
+			feed(t, b, int64(1), "hello")
+			seg, err := b.Finish()
+			require.NoError(t, err)
+			buf, err := seg.Serialize()
+			require.NoError(t, err)
+			before := mp.CurrNB()
+			var lease *segmentLease
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "'s1'"):
+					loadedBasePool.mu.Lock()
+					for key, entry := range loadedBasePool.entries {
+						if key.index == index && key.id == "s0" {
+							lease = entry.lease
+						}
+					}
+					loadedBasePool.mu.Unlock()
+					panic("metadata failure")
+				case strings.Contains(sql, "checksum"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), 0)}}, nil
+				default:
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{twoIdBatch(mp, "s0", "s1")}}, nil
 				}
+			})
+			swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
+				sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
+				return executor.Result{}, nil
+			})
+			require.Panics(t, func() {
+				if pooled {
+					_, _ = loadAllBases(sp, cfg, nil, generation)
+				} else {
+					_, _ = loadAllBasesUncached(sp, cfg, nil)
+				}
+			})
+			if pooled {
+				require.NotNil(t, lease)
+				lease.mu.Lock()
+				refs, template := lease.refs, lease.template
+				lease.mu.Unlock()
+				require.Zero(t, refs)
+				require.Nil(t, template)
 			}
-			loadedBasePool.mu.Unlock()
-			panic("metadata failure")
-		case strings.Contains(sql, "checksum"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), 0)}}, nil
-		default:
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{twoIdBatch(mp, "s0", "s1")}}, nil
-		}
+			require.Equal(t, before, mp.CurrNB())
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Empty(t, entries)
+		})
+	}
+}
+
+func malformedScalarResult(mp *mpool.MPool) executor.Result {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	_ = vector.AppendFixed[int64](bat.Vecs[1], 1, false, mp)
+	bat.SetRowCount(1)
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
+func TestLoadReadersReleaseMalformedResults(t *testing.T) {
+	t.Run("metadata", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		before := mp.CurrNB()
+		swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
+			return malformedScalarResult(mp), nil
+		})
+		require.Panics(t, func() { _, _, _, _, _ = readMetadata(sp, testStorageCfg(), "base") })
+		require.Equal(t, before, mp.CurrNB())
 	})
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
-		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
-		return executor.Result{}, nil
+	t.Run("tail", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		before := mp.CurrNB()
+		swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
+			// The budget query expects one column; the tail query expects two.
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		})
+		require.Panics(t, func() { _, _, _, _ = loadTailSegmentsAfter(sp, testStorageCfg(), -1, nil) })
+		require.Equal(t, before, mp.CurrNB())
 	})
-	require.Panics(t, func() { _, _ = loadAllBases(sp, cfg, nil, generation) })
-	require.NotNil(t, lease)
-	lease.mu.Lock()
-	refs, template := lease.refs, lease.template
-	lease.mu.Unlock()
-	require.Zero(t, refs)
-	require.Nil(t, template)
+	for _, failingCall := range []int{1, 2} {
+		t.Run(fmt.Sprintf("generation-%d", failingCall), func(t *testing.T) {
+			sp, mp := mockSqlProc(t)
+			before := mp.CurrNB()
+			calls := 0
+			swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
+				calls++
+				if calls == failingCall {
+					return malformedScalarResult(mp), nil
+				}
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 1)}}, nil
+			})
+			_, _, err := LoadGeneration(sp, testStorageCfg())
+			require.ErrorContains(t, err, "LoadGeneration recovered")
+			require.Equal(t, failingCall, calls)
+			require.Equal(t, before, mp.CurrNB())
+		})
+	}
 }
 
 func TestLoadFromStorageCleansTempFileAfterStreamPanic(t *testing.T) {

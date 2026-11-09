@@ -193,6 +193,7 @@ func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (chec
 	if err != nil {
 		return "", 0, 0, false, err
 	}
+	defer res.Close()
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 {
 			continue
@@ -203,7 +204,6 @@ func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (chec
 		found = true
 		break
 	}
-	res.Close()
 	return checksum, filesize, recency, found, nil
 }
 
@@ -281,24 +281,32 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 		return nil, err
 	}
 	var ids []string
-	for _, bat := range res.Batches {
-		if bat == nil {
-			continue
+	func() {
+		defer res.Close()
+		for _, bat := range res.Batches {
+			if bat == nil {
+				continue
+			}
+			for i := 0; i < bat.RowCount(); i++ {
+				ids = append(ids, bat.Vecs[0].GetStringAt(i))
+			}
 		}
-		for i := 0; i < bat.RowCount(); i++ {
-			ids = append(ids, bat.Vecs[0].GetStringAt(i))
-		}
-	}
-	res.Close()
+	}()
 	bases := make([]*Segment, 0, len(ids))
+	transferred := false
+	defer func() {
+		if !transferred {
+			freeSegs(bases)
+		}
+	}()
 	for _, id := range ids {
 		m, lerr := loadFromStorage(sqlproc, cfg, id, trace)
 		if lerr != nil {
-			freeSegs(bases)
 			return nil, lerr
 		}
 		bases = append(bases, m)
 	}
+	transferred = true
 	return bases, nil
 }
 
@@ -667,23 +675,25 @@ func loadTailSegmentsAfter(sqlproc *sqlexec.SqlProcess, cfg TableConfig, after i
 	}
 	var chunks []TailChunk
 	maxChunk := after
-	for _, bat := range res.Batches {
-		if bat == nil {
-			continue
-		}
-		cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-		for i := 0; i < bat.RowCount(); i++ {
-			data := bat.Vecs[1].GetRawBytesAt(i)
-			if trace != nil {
-				trace.addTailBytes(int64(len(data)))
+	func() {
+		defer res.Close()
+		for _, bat := range res.Batches {
+			if bat == nil {
+				continue
 			}
-			if cids[i] > maxChunk {
-				maxChunk = cids[i]
+			cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+			for i := 0; i < bat.RowCount(); i++ {
+				data := bat.Vecs[1].GetRawBytesAt(i)
+				if trace != nil {
+					trace.addTailBytes(int64(len(data)))
+				}
+				if cids[i] > maxChunk {
+					maxChunk = cids[i]
+				}
+				chunks = append(chunks, TailChunk{ChunkId: cids[i], Data: append([]byte(nil), data...)})
 			}
-			chunks = append(chunks, TailChunk{ChunkId: cids[i], Data: append([]byte(nil), data...)})
 		}
-	}
-	res.Close()
+	}()
 	if len(chunks) == 0 {
 		return nil, nil, maxChunk, nil
 	}
@@ -933,6 +943,11 @@ func resultScalarInt64(res executor.Result) int64 {
 	return 0
 }
 
+func consumeScalarInt64(res executor.Result) int64 {
+	defer res.Close()
+	return resultScalarInt64(res)
+}
+
 // LoadGeneration reads the current (timestamp, tailChunk) generation using the caller's
 // LIVE sqlproc/txn — called at load time so the captured generation reflects exactly the
 // txn snapshot the cached index was built from.
@@ -947,14 +962,12 @@ func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tai
 	if err != nil {
 		return 0, 0, err
 	}
-	ts = resultScalarInt64(res)
-	res.Close()
+	ts = consumeScalarInt64(res)
 	res, err = runSql(sqlproc, tailSQL)
 	if err != nil {
 		return 0, 0, err
 	}
-	tail = resultScalarInt64(res)
-	res.Close()
+	tail = consumeScalarInt64(res)
 	return ts, tail, nil
 }
 
@@ -972,14 +985,12 @@ func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg T
 	if err != nil {
 		return 0, 0, err
 	}
-	ts = resultScalarInt64(res)
-	res.Close()
+	ts = consumeScalarInt64(res)
 	res, err = sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tailSQL)
 	if err != nil {
 		return 0, 0, err
 	}
-	tail = resultScalarInt64(res)
-	res.Close()
+	tail = consumeScalarInt64(res)
 	return ts, tail, nil
 }
 

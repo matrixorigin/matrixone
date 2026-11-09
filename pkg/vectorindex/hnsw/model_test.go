@@ -731,6 +731,7 @@ func TestCorruptedIndexFile(t *testing.T) {
 	err := idx0.LoadIndexFromBuffer(sqlproc, idxcfg, tblcfg, 0, true)
 	require.Error(t, err, "View() should fail on empty file")
 	require.Nil(t, idx0.Index)
+	require.FileExists(t, p0)
 
 	// LoadIndex (view=true): Load() fails → usearchidx cleanup.
 	p1, cs1 := makeEmptyFile(t)
@@ -738,6 +739,7 @@ func TestCorruptedIndexFile(t *testing.T) {
 	err = idx1.LoadIndex(sqlproc, idxcfg, tblcfg, 0, true)
 	require.Error(t, err, "Load() should fail on empty file (view=true)")
 	require.Nil(t, idx1.Index)
+	require.FileExists(t, p1)
 
 	// LoadIndex (view=false): Load() fails → usearchidx cleanup.
 	p2, cs2 := makeEmptyFile(t)
@@ -745,4 +747,5 @@ func TestCorruptedIndexFile(t *testing.T) {
 	err = idx2.LoadIndex(sqlproc, idxcfg, tblcfg, 0, false)
 	require.Error(t, err, "Load() should fail on empty file (view=false)")
 	require.Nil(t, idx2.Index)
+	require.FileExists(t, p2)
 }

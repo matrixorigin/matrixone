@@ -129,12 +129,8 @@ func (idx *HnswModel[T]) Destroy() error {
 	}
 
 	if len(idx.Path) > 0 {
-		// remove the file
-		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
-			err := os.Remove(idx.Path)
-			if err != nil {
-				return err
-			}
+		if err := os.Remove(idx.Path); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
 
@@ -143,6 +139,18 @@ func (idx *HnswModel[T]) Destroy() error {
 	}
 
 	return nil
+}
+
+// removeTempFile retains the path if removal fails so its owner can retry cleanup.
+func (idx *HnswModel[T]) removeTempFile() {
+	if idx.Path == "" {
+		return
+	}
+	if err := os.Remove(idx.Path); err != nil && !os.IsNotExist(err) {
+		logutil.Errorf("HNSW temp file cleanup failed for %s: %v", idx.Path, err)
+		return
+	}
+	idx.Path = ""
 }
 
 // Save the index to file
@@ -395,12 +403,8 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	nthread int64,
 	view bool) (err error) {
 
-	var (
-		fp          *os.File
-		stream_chan = make(chan executor.Result, 2)
-		error_chan  = make(chan error, 2)
-		wg          sync.WaitGroup
-	)
+	var fp *os.File
+	loaded := false
 
 	if idx.Index != nil {
 		// index already loaded. ignore
@@ -429,9 +433,8 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 			if fp != nil {
 				fp.Close()
 			}
-			if err != nil {
-				// clean up on error
-				idx.Destroy()
+			if !loaded {
+				idx.removeTempFile()
 			}
 		}()
 
@@ -440,56 +443,8 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 			return err
 		}
 
-		// run streaming sql
-		sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
-
-		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-		defer cancel(nil)
-
-		wg.Add(1)
-		go func() {
-			defer func() {
-				close(stream_chan)
-				wg.Done()
-			}()
-			_, err2 := runSql_streaming(ctx, sqlproc, sql, stream_chan, error_chan)
-			if err2 != nil {
-				error_chan <- err2
-				return
-			}
-		}()
-
-		// incremental load from database
-		sql_closed := false
-		for !sql_closed {
-			sql_closed, err = idx.loadChunk(ctx, sqlproc, stream_chan, error_chan, fp)
-			if err != nil {
-				// notify the producer to stop the sql streaming
-				cancel(err)
-				break
-			}
-		}
-
-		// wait for the sql streaming to be closed. make sure all the remaining
-		// results in stream_chan are closed.
-		if !sql_closed {
-			for res := range stream_chan {
-				res.Close()
-			}
-		}
-
-		wg.Wait()
-
-		if err == nil {
-			// fetch potential remaining errors from error_chan
-			select {
-			case err = <-error_chan:
-			default:
-			}
-		}
-
-		if err != nil {
-			return
+		if err = idx.streamIndexToFile(sqlproc, tblcfg, fp); err != nil {
+			return err
 		}
 
 		fp.Close()
@@ -510,10 +465,12 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		return err
 	}
 	defer func() {
-		if err != nil {
-			usearchidx.Destroy()
+		if !loaded {
 			if idx.Index == usearchidx {
 				idx.Index = nil
+			}
+			if err := usearchidx.Destroy(); err != nil {
+				logutil.Errorf("HNSW index cleanup failed: %v", err)
 			}
 		}
 	}()
@@ -550,7 +507,65 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		return err
 	}
 
+	loaded = true
 	return nil
+}
+
+// streamIndexToFile owns the producer until all delivered results are closed.
+// A consumer panic still cancels and joins the producer before unwinding.
+func (idx *HnswModel[T]) streamIndexToFile(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig, fp *os.File) error {
+	sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
+	stream := make(chan executor.Result, 2)
+	errors := make(chan error, 2)
+	producerDone := make(chan error, 1)
+	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
+	defer cancel(nil)
+
+	go func() {
+		var producerErr error
+		defer func() {
+			if p := recover(); p != nil {
+				producerErr = moerr.ConvertPanicError(ctx, p)
+			}
+			close(stream)
+			producerDone <- producerErr
+		}()
+		_, producerErr = runSql_streaming(ctx, sqlproc, sql, stream, errors)
+	}()
+
+	joined := false
+	defer func() {
+		if !joined {
+			cancel(nil)
+			for res := range stream {
+				res.Close()
+			}
+			<-producerDone
+		}
+	}()
+
+	var loopErr error
+	closed := false
+	for !closed && loopErr == nil {
+		closed, loopErr = idx.loadChunk(ctx, sqlproc, stream, errors, fp)
+	}
+	if loopErr != nil {
+		cancel(loopErr)
+	}
+	for res := range stream {
+		res.Close()
+	}
+	producerErr := <-producerDone
+	joined = true
+	if loopErr != nil {
+		return loopErr
+	}
+	select {
+	case err := <-errors:
+		return err
+	default:
+		return producerErr
+	}
 }
 
 // load chunk from database
@@ -577,8 +592,8 @@ func (idx *HnswModel[T]) loadChunk(ctx context.Context,
 		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
 	}
 
-	bat := res.Batches[0]
 	defer res.Close()
+	bat := res.Batches[0]
 
 	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
 	for i, chunkId := range chunkIds {
@@ -612,12 +627,8 @@ func (idx *HnswModel[T]) LoadIndex(
 	nthread int64,
 	view bool) (err error) {
 
-	var (
-		fp          *os.File
-		stream_chan = make(chan executor.Result, 2)
-		error_chan  = make(chan error, 2)
-		wg          sync.WaitGroup
-	)
+	var fp *os.File
+	loaded := false
 
 	if idx.Index != nil {
 		// index already loaded. ignore
@@ -651,14 +662,11 @@ func (idx *HnswModel[T]) LoadIndex(
 				fp = nil
 			}
 
-			if err != nil || view {
+			if !loaded || view {
 				// On error: always remove the temp file.
 				// On success with view: Load() copies data to C heap,
 				// file is no longer needed.
-				if len(idx.Path) > 0 {
-					os.Remove(idx.Path)
-					idx.Path = ""
-				}
+				idx.removeTempFile()
 			}
 		}()
 
@@ -667,57 +675,8 @@ func (idx *HnswModel[T]) LoadIndex(
 			return err
 		}
 
-		// run streaming sql
-		sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
-
-		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-		defer cancel(nil)
-
-		wg.Add(1)
-		go func() {
-
-			defer func() {
-				close(stream_chan)
-				wg.Done()
-			}()
-			_, err2 := runSql_streaming(ctx, sqlproc, sql, stream_chan, error_chan)
-			if err2 != nil {
-				error_chan <- err2
-				return
-			}
-		}()
-
-		// incremental load from database
-		sql_closed := false
-		for !sql_closed {
-			sql_closed, err = idx.loadChunk(ctx, sqlproc, stream_chan, error_chan, fp)
-			if err != nil {
-				// notify the producer to stop the sql streaming
-				cancel(err)
-				break
-			}
-		}
-
-		// wait for the sql streaming to be closed. make sure all the remaining
-		// results in stream_chan are closed.
-		if !sql_closed {
-			for res := range stream_chan {
-				res.Close()
-			}
-		}
-
-		wg.Wait()
-
-		if err == nil {
-			// fetch potential remaining errors from error_chan
-			select {
-			case err = <-error_chan:
-			default:
-			}
-		}
-
-		if err != nil {
-			return
+		if err = idx.streamIndexToFile(sqlproc, tblcfg, fp); err != nil {
+			return err
 		}
 
 		fp.Close()
@@ -739,10 +698,12 @@ func (idx *HnswModel[T]) LoadIndex(
 		return err
 	}
 	defer func() {
-		if err != nil {
-			usearchidx.Destroy()
+		if !loaded {
 			if idx.Index == usearchidx {
 				idx.Index = nil
+			}
+			if err := usearchidx.Destroy(); err != nil {
+				logutil.Errorf("HNSW index cleanup failed: %v", err)
 			}
 		}
 	}()
@@ -796,6 +757,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		}
 	}
 
+	loaded = true
 	return nil
 }
 

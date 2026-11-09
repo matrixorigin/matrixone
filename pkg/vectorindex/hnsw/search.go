@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -221,11 +222,31 @@ func (s *HnswSearch[T]) Contains(key int64) (bool, error) {
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (s *HnswSearch[T]) Destroy() {
-	// destroy index
-	for _, idx := range s.Indexes {
-		idx.Index.Destroy()
-	}
+	indexes := s.Indexes
 	s.Indexes = nil
+	if p := destroyModels(indexes); p != nil {
+		panic(p)
+	}
+}
+
+// destroyModels attempts every model even if an earlier cleanup fails.
+func destroyModels[T types.RealNumbers](indexes []*HnswModel[T]) (firstPanic any) {
+	for _, idx := range indexes {
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					logutil.Errorf("HNSW model cleanup panic: %v", p)
+					if firstPanic == nil {
+						firstPanic = p
+					}
+				}
+			}()
+			if err := idx.Destroy(); err != nil {
+				logutil.Errorf("HNSW model cleanup failed: %v", err)
+			}
+		}()
+	}
+	return firstPanic
 }
 
 // load metadata from database
@@ -265,22 +286,18 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 
 // load index from database
 func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswModel[T]) ([]*HnswModel[T], error) {
-	var err error
-
+	loaded := false
+	defer func() {
+		if !loaded {
+			destroyModels(indexes)
+		}
+	}()
 	for _, idx := range indexes {
-		err = idx.LoadIndexFromBuffer(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
-		if err != nil {
-			break
+		if err := idx.LoadIndexFromBuffer(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
+			return nil, err
 		}
 	}
-
-	if err != nil {
-		for _, idx := range indexes {
-			idx.Destroy()
-		}
-		return nil, err
-	}
-
+	loaded = true
 	return indexes, nil
 }
 

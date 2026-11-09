@@ -184,10 +184,8 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		}
 	}
 	s.Indexes = indexes
-	// From here the GPU sub-indexes are owned by s. If a later step fails, the
-	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
-	// and there is no finalizer, so release them here to avoid orphaning GPU
-	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	// From here s owns the GPU sub-indexes. Clean them up on failure for
+	// direct callers too; Destroy is idempotent if the cache also calls it.
 	defer func() {
 		if err != nil {
 			s.Destroy()

@@ -53,7 +53,7 @@ func startCacheSearch(c *VectorIndexCache, proc *sqlexec.SqlProcess, algo Vector
 }
 
 func TestAwaitDestroyedHonorsCanceledContext(t *testing.T) {
-	s := NewVectorIndexSearch(&MockSearch{})
+	s := newVectorIndexSearch(&MockSearch{})
 	s.markDestroyed()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -262,7 +262,7 @@ func TestFollowerRetriesWithoutWaitingForForeignTeardown(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			c := NewVectorIndexCache()
-			old := NewVectorIndexSearch(&MockSearch{})
+			old := newVectorIndexSearch(&MockSearch{})
 			c.IndexMap.Store("key", old)
 			t.Cleanup(func() {
 				old.Destroy()

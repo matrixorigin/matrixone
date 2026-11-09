@@ -450,10 +450,13 @@ func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error { return nil }
 func (f *fakeCachedIndex) Destroy()                         { f.destroyed.Store(true) }
 
 // seedCache parks a fake index under the given cache key and returns it.
-func seedCache(key string) *fakeCachedIndex {
+func seedCache(t *testing.T, key string) *fakeCachedIndex {
+	t.Helper()
 	algo := &fakeCachedIndex{}
-	s := cache.NewVectorIndexSearch(algo)
-	cache.Cache.IndexMap.Store(key, s)
+	c := cache.Cache
+	_, _, err := c.Search(nil, key, algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Remove(key) })
 	return algo
 }
 
@@ -464,11 +467,10 @@ func seedCache(key string) *fakeCachedIndex {
 // generation of THIS index must go, and no other index's entries may be touched.
 func TestRunCreateOrReindex_EvictsEveryCachedGeneration(t *testing.T) {
 	const centroids = "__mo_index_centroids_evict"
-	gen0 := seedCache(centroids + ":0")
-	gen7 := seedCache(centroids + ":7")
-	split := seedCache(centroids + ":7/1/4")
-	other := seedCache("__mo_other_centroids:0")
-	defer cache.Cache.Remove("__mo_other_centroids:0")
+	gen0 := seedCache(t, centroids+":0")
+	gen7 := seedCache(t, centroids+":7")
+	split := seedCache(t, centroids+":7/1/4")
+	other := seedCache(t, "__mo_other_centroids:0")
 
 	defs := ivfIndexDefs(params(
 		catalog.IndexAlgoParamLists, "1",

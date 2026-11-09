@@ -49,9 +49,10 @@ func (s *stubIndexSearch) Destroy()                       { s.destroyed = true }
 func seedCachedIndex(t *testing.T, key string) *stubIndexSearch {
 	t.Helper()
 	algo := &stubIndexSearch{}
-	entry := veccache.NewVectorIndexSearch(algo)
-	veccache.Cache.IndexMap.Store(key, entry)
-	t.Cleanup(func() { veccache.Cache.IndexMap.Delete(key) })
+	c := veccache.Cache
+	_, _, err := c.Search(nil, key, algo, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Remove(key) })
 	return algo
 }
 
