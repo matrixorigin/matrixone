@@ -339,6 +339,9 @@ func (zm ZM) ContainsKey(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if zm.IsString() {
 		return zm.containsString(k)
 	}
@@ -351,6 +354,9 @@ func (zm ZM) ContainsKey(k []byte) bool {
 func (zm ZM) AnyLTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
+	}
+	if zm.hasNaNBound() {
+		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) < 0
@@ -365,6 +371,9 @@ func (zm ZM) AnyGTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) > 0
 	}
@@ -375,6 +384,24 @@ func (zm ZM) AnyGTByValue(k []byte) bool {
 
 func (zm ZM) IsInited() bool {
 	return len(zm) == ZMSize && zm[62]&0x80 != 0
+}
+
+// 旧 writer 可为包含普通值的浮点块生成 NaN 边界；已初始化不代表
+// 摘要可用于证明不匹配。标量裁剪必须保守保留，由行过滤决定结果。
+func (zm ZM) hasNaNBound() bool {
+	if !zm.IsInited() {
+		return false
+	}
+	switch zm.GetType() {
+	case types.T_float32:
+		return math.IsNaN(float64(types.DecodeFloat32(zm.GetMinBuf()))) ||
+			math.IsNaN(float64(types.DecodeFloat32(zm.GetMaxBuf())))
+	case types.T_float64:
+		return math.IsNaN(types.DecodeFloat64(zm.GetMinBuf())) ||
+			math.IsNaN(types.DecodeFloat64(zm.GetMaxBuf()))
+	default:
+		return false
+	}
 }
 
 func (zm ZM) Reset() {
@@ -533,6 +560,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) >= 0
 	}
@@ -545,6 +575,9 @@ func (zm ZM) AnyGEByValue(k []byte) bool {
 func (zm ZM) AnyLEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
+	}
+	if zm.hasNaNBound() {
+		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) <= 0
@@ -707,6 +740,9 @@ func (zm ZM) PrefixInRange(lb, ub []byte, hint uint8) bool {
 }
 
 func (zm ZM) Between(lb, ub []byte) bool {
+	if zm.hasNaNBound() {
+		return true
+	}
 	oth := BuildZM(zm.GetType(), lb)
 	oth.SetScale(zm.GetScale())
 	if zm.IsString() {
