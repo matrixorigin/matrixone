@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // This decorator narrows broad queries but honors an exact identity query. A
@@ -540,14 +540,17 @@ func TestSQLTaskGroupedUntrustedPageArmsOneWave(t *testing.T) {
 func TestSQLTaskTrustedFetchExpiryRevisitsUnqueuedCandidate(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := NewMemTaskStorage()
-		mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: "wanted", Executor: task.TaskCode_TestOnly}})
+		for i := range 33 {
+			mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: fmt.Sprintf("wanted-%d", i), Executor: task.TaskCode_TestOnly}})
+		}
 		owner := NewTaskService(runtime.DefaultRuntime(), store)
-		runner := NewTaskRunner("cn1", owner, nil, WithRunnerParallelism(1), WithRunnerFetchLimit(1), WithRunnerFetchInterval(100*time.Millisecond), WithRunnerFetchTimeout(10*time.Millisecond)).(*taskRunner)
+		runner := NewTaskRunner("cn1", owner, nil, WithRunnerParallelism(33), WithRunnerFetchLimit(33), WithRunnerFetchInterval(100*time.Millisecond), WithRunnerFetchTimeout(10*time.Millisecond)).(*taskRunner)
 		entered, release := make(chan struct{}), make(chan struct{})
+		var logged atomic.Int32
 		var enteredOnce, releaseOnce sync.Once
-		core := zapcore.NewCore(zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(io.Discard), zapcore.DebugLevel)
+		core, logs := observer.New(zapcore.DebugLevel)
 		runner.logger = zap.New(core, zap.Hooks(func(entry zapcore.Entry) error {
-			if entry.Message == "new task fetched" {
+			if entry.Message == "new task fetched" && logged.Add(1) == 33 {
 				enteredOnce.Do(func() { close(entered); <-release })
 			}
 			return nil
@@ -557,8 +560,8 @@ func TestSQLTaskTrustedFetchExpiryRevisitsUnqueuedCandidate(t *testing.T) {
 			require.NoError(t, runner.Stop())
 			require.NoError(t, owner.Close())
 		})
-		executed := make(chan struct{}, 1)
-		runner.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { executed <- struct{}{}; return nil })
+		executed := make(chan uint64, 64)
+		runner.RegisterExecutor(task.TaskCode_TestOnly, func(_ context.Context, value task.Task) error { executed <- value.GetID(); return nil })
 		require.NoError(t, runner.Start())
 		<-entered // the trusted query has returned, before its candidate is queued
 		time.Sleep(20 * time.Millisecond)
@@ -566,5 +569,29 @@ func TestSQLTaskTrustedFetchExpiryRevisitsUnqueuedCandidate(t *testing.T) {
 		synctest.Wait()
 		require.Empty(t, executed)
 		require.EqualValues(t, 1, runner.sqlDeferred.Load(), "the live runner must revisit the interrupted candidate")
+		entries := logs.FilterMessage("fetch task failed").All()
+		require.Len(t, entries, 1)
+		var fetchErr error
+		for _, field := range entries[0].Context {
+			if field.Key == "error" {
+				fetchErr, _ = field.Interface.(error)
+			}
+		}
+		require.ErrorIs(t, fetchErr, context.DeadlineExceeded)
+		require.ErrorIs(t, fetchErr, moerr.CauseDoFetch)
+		seen := make(map[uint64]bool)
+		for range 20 {
+			time.Sleep(100 * time.Millisecond)
+			synctest.Wait()
+			for len(executed) != 0 {
+				id := <-executed
+				require.False(t, seen[id], "a revisited task must run once")
+				seen[id] = true
+			}
+			if len(seen) == 33 {
+				return
+			}
+		}
+		t.Fatalf("fair recovery did not execute the full page: %d/33", len(seen))
 	})
 }

@@ -414,13 +414,7 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	defer cancel()
 	tasks, err := r.doFetch(fetchCtx, ctx)
 	if err != nil {
-		if ctx.Err() == nil {
-			if r.sqlFetch.active {
-				sqlTaskFetchFailed.Warn(zap.Error(err))
-			} else {
-				r.logger.Error("fetch task failed", zap.Error(err))
-			}
-		}
+		r.reportFetchError(ctx, err)
 		return false
 	}
 	var firstID uint64
@@ -430,6 +424,7 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	tasks, held, err := groupSQLTaskBatch(fetchCtx, tasks)
 	if err != nil {
 		r.revisitUnqueued(ctx, firstID)
+		r.reportFetchError(ctx, moerr.AttachCause(fetchCtx, err))
 		return false
 	}
 	if len(held) != 0 {
@@ -442,8 +437,9 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	}
 	continueBurst := true
 	for _, t := range tasks {
-		if fetchCtx.Err() != nil {
+		if err := fetchCtx.Err(); err != nil {
 			r.revisitUnqueued(ctx, t.ID)
+			r.reportFetchError(ctx, moerr.AttachCause(fetchCtx, err))
 			return false
 		}
 		if !r.addToWait(ctx, t, held[t.ID]) {
@@ -457,6 +453,17 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 		}
 	}
 	return continueBurst
+}
+
+func (r *taskRunner) reportFetchError(runnerCtx context.Context, err error) {
+	if runnerCtx.Err() != nil {
+		return
+	}
+	if r.sqlFetch.active {
+		sqlTaskFetchFailed.Warn(zap.Error(err))
+	} else {
+		r.logger.Error("fetch task failed", zap.Error(err))
+	}
 }
 
 // A fair cursor can rewind directly. A normal fetch has no cursor, so keep
