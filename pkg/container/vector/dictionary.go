@@ -17,6 +17,7 @@ package vector
 import (
 	"errors"
 	"math"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,10 +25,61 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// dictionaryVector is the immutable composite backing stored in dataLease for
+// DIST only. The ordinary Vector header keeps its original physical layout.
 type dictionaryVector struct {
+	refs        atomic.Int64
 	base        *DictionaryBase
 	rows        *RowSelection
 	logicalArea int
+}
+
+var _ BufferLease = (*dictionaryVector)(nil)
+
+func (d *dictionaryVector) Retain() bool {
+	if d == nil {
+		return false
+	}
+	for {
+		refs := d.refs.Load()
+		if refs <= 0 || refs == math.MaxInt64 {
+			return false
+		}
+		if d.refs.CompareAndSwap(refs, refs+1) {
+			return true
+		}
+	}
+}
+
+func (d *dictionaryVector) Release() {
+	if d == nil {
+		panic(moerr.NewInvalidStateNoCtx("release nil dictionary backing"))
+	}
+	refs := d.refs.Add(-1)
+	if refs < 0 {
+		panic(moerr.NewInvalidStateNoCtx("dictionary backing release underflow"))
+	}
+	if refs == 0 {
+		d.rows.Release()
+		d.base.Release()
+	}
+}
+
+// A dictionary has no contiguous byte payload. Physical callers must flatten
+// explicitly; logical callers resolve the base and immutable mapping instead.
+func (*dictionaryVector) Bytes() []byte { return nil }
+
+func (d *dictionaryVector) AccountedBytes() int64 {
+	if d == nil {
+		return 0
+	}
+	return d.base.RetainedBytes() + d.rows.RetainedBytes()
+}
+
+// dictionaryState is used only after the DIST class has established the
+// representation invariant. No descriptor lookup is added to flat row loops.
+func (v *Vector) dictionaryState() *dictionaryVector {
+	return v.dataLease.(*dictionaryVector)
 }
 
 // Must-style physical accessors use one immutable error value so their cold
@@ -43,7 +95,7 @@ func (v *Vector) DictionaryRetainedBytes() int64 {
 	if !v.IsDictionary() {
 		return 0
 	}
-	return v.dictionary.base.RetainedBytes() + v.dictionary.rows.RetainedBytes()
+	return v.dictionaryState().AccountedBytes()
 }
 
 func (v *Vector) requirePhysical() {
@@ -136,8 +188,10 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 		result.Free(mp)
 		return nil, moerr.NewInvalidInputNoCtx("dictionary logical size overflows")
 	}
+	backing := &dictionaryVector{base: base, rows: mapping, logicalArea: area}
+	backing.refs.Store(1)
+	result.dataLease = backing
 	result.class = DIST
-	result.dictionary = &dictionaryVector{base: base, rows: mapping, logicalArea: area}
 	result.sorted = base.vec.sorted && mapping.monotonic
 	return result, nil
 }
@@ -183,7 +237,7 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 	}
 	logical := rows.storageFixed()
 	if len(logical) == 0 {
-		return newDictionaryHeader(v.dictionary.base, rows, v, nil, mp, account)
+		return newDictionaryHeader(v.dictionaryState().base, rows, v, nil, mp, account)
 	}
 	// The intermediate mapping is an accounted vector, never an unbounded
 	// Go-heap copy. Transfer its immutable storage into a selection lease.
@@ -197,7 +251,7 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 	}
 	composed.length = len(logical)
 	indices := MustFixedColNoTypeCheck[int64](composed)
-	old := v.dictionary.rows.storageFixed()
+	old := v.dictionaryState().rows.storageFixed()
 	monotonic := true
 	for i, row := range logical {
 		indices[i] = old[row]
@@ -210,9 +264,9 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 		composed.Free(mp)
 		return nil, err
 	}
-	mapping := &RowSelection{lease: lease, storage: composed, domain: v.dictionary.rows.domain, monotonic: monotonic}
+	mapping := &RowSelection{lease: lease, storage: composed, domain: v.dictionaryState().rows.domain, monotonic: monotonic}
 	defer mapping.Release()
-	return newDictionaryHeader(v.dictionary.base, mapping, v, logical, mp, account)
+	return newDictionaryHeader(v.dictionaryState().base, mapping, v, logical, mp, account)
 }
 
 func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) error {
@@ -258,11 +312,12 @@ func (v *Vector) dictionaryPhysicalRow(row int) (*Vector, int) {
 	if row < 0 || row >= v.length {
 		panic(moerr.NewInvalidInputNoCtx("dictionary logical row out of bounds"))
 	}
-	base := v.dictionary.base.vec
+	backing := v.dictionaryState()
+	base := backing.base.vec
 	if base.IsConst() {
 		return base, 0
 	}
-	return base, int(v.dictionary.rows.storageFixed()[row])
+	return base, int(backing.rows.storageFixed()[row])
 }
 
 func getDictionaryFixedAt[T any](v *Vector, row int) T {
@@ -292,14 +347,15 @@ func getDictionaryBytesAt(v *Vector, row int) []byte {
 }
 
 func (v *Vector) releaseDictionary() {
-	if v.dictionary == nil {
+	if !v.IsDictionary() {
 		return
 	}
-	d := v.dictionary
-	v.dictionary = nil
+	backing := v.dictionaryState()
+	// Retire the header first: ordinary backing cleanup must not release this
+	// composite owner again, including after a reset or successful COW swap.
+	v.dataLease = nil
 	v.class = FLAT
-	d.rows.Release()
-	d.base.Release()
+	backing.Release()
 }
 
 // FixedReadView resolves representation once. Values and Selection are
@@ -320,8 +376,9 @@ func ResolveFixedReadView[T any](v *Vector) FixedReadView[T] {
 	base := v
 	var selected []int64
 	if v.IsDictionary() {
-		base = v.dictionary.base.vec
-		selected = v.dictionary.rows.storageFixed()[:v.length]
+		backing := v.dictionaryState()
+		base = backing.base.vec
+		selected = backing.rows.storageFixed()[:v.length]
 	}
 	length := base.length
 	if base.IsConst() {
@@ -342,7 +399,7 @@ type VarlenaReadView struct {
 func ResolveVarlenaReadView(v *Vector) VarlenaReadView {
 	base := v
 	if v.IsDictionary() {
-		base = v.dictionary.base.vec
+		base = v.dictionaryState().base.vec
 	}
 	return VarlenaReadView{FixedReadView: ResolveFixedReadView[types.Varlena](v), Area: base.area}
 }
@@ -389,14 +446,15 @@ func (v *Vector) materializeDictionary(mp *mpool.MPool, account *AllocationAccou
 		return nil, err
 	}
 	v.CopyExpressionMetadataTo(flat)
-	base, mapping := v.dictionary.base.vec, v.dictionary.rows.storageFixed()
+	backing := v.dictionaryState()
+	base, mapping := backing.base.vec, backing.rows.storageFixed()
 	flat.data, err = flat.allocData(mp, v.length*v.typ.TypeSize())
 	if err != nil {
 		flat.Free(mp)
 		return nil, err
 	}
-	if v.dictionary.logicalArea > 0 {
-		flat.area, err = flat.allocArea(mp, v.dictionary.logicalArea)
+	if backing.logicalArea > 0 {
+		flat.area, err = flat.allocArea(mp, backing.logicalArea)
 		if err != nil {
 			flat.Free(mp)
 			return nil, err

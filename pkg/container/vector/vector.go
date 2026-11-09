@@ -102,8 +102,7 @@ func MergePrepareParamKinds(left, right PrepareParamKind) PrepareParamKind {
 // Vector represent a column
 type Vector struct {
 	// vector's class
-	class      int
-	dictionary *dictionaryVector
+	class int
 	// type represent the type of column
 	typ types.Type
 
@@ -583,7 +582,7 @@ func (v *Vector) Size() int {
 	}
 	area := len(v.area)
 	if v.IsDictionary() {
-		area = v.dictionary.logicalArea
+		area = v.dictionaryState().logicalArea
 	}
 	return v.length*v.typ.TypeSize() + area + binaryStringBytes +
 		len(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +

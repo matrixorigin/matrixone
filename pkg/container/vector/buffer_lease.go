@@ -64,9 +64,6 @@ func (v *Vector) DataBackingKind() BackingKind {
 	if v == nil {
 		return OwnedMPoolUnique
 	}
-	if v.IsDictionary() {
-		return BorrowedLease
-	}
 	if v.dataLease != nil {
 		return BorrowedLease
 	}
@@ -93,14 +90,14 @@ func (v *Vector) AreaBackingKind() BackingKind {
 }
 
 func (v *Vector) HasBorrowedBacking() bool {
-	return v != nil && (v.IsDictionary() || v.dataLease != nil || v.areaLease != nil || v.nsp.HasBorrowedValidity())
+	return v != nil && (v.dataLease != nil || v.areaLease != nil || v.nsp.HasBorrowedValidity())
 }
 
 func (v *Vector) BorrowedAccountedBytes() int64 {
 	if v == nil {
 		return 0
 	}
-	bytes := v.DictionaryRetainedBytes()
+	bytes := int64(0)
 	if v.dataLease != nil {
 		bytes += v.dataLease.AccountedBytes()
 	}

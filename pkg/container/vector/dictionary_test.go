@@ -90,8 +90,8 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	second, err := dict.SelectDictionary(secondRows, mp, state.selection)
 	require.NoError(t, err)
 	t.Cleanup(func() { second.Free(mp) })
-	require.Same(t, base, second.dictionary.base)
-	require.Equal(t, []int64{3, 0, 1, 3}, second.dictionary.rows.storageFixed())
+	require.Same(t, base, second.dictionaryState().base)
+	require.Equal(t, []int64{3, 0, 1, 3}, second.dictionaryState().rows.storageFixed())
 	dict.Free(mp)
 	source.ResetWithSameType()
 	require.Equal(t, int64(40), GetFixedAtNoTypeCheck[int64](second, 3))
@@ -364,14 +364,17 @@ func TestDictionaryEnsureFlatFailureIsTransactional(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { dict.Free(mp) })
 	before := account.Snapshot().Used
+	backing := dict.dataLease
 	controller.failAt = controller.calls + 1
 	require.ErrorIs(t, dict.EnsureFlat(mp), mpool.ErrAllocationAccountCapacity)
 	require.True(t, controller.rejected)
 	require.Equal(t, before, account.Snapshot().Used)
 	require.True(t, dict.IsDictionary())
+	require.Same(t, backing, dict.dataLease, "failed COW preserves its owner")
 	require.Equal(t, int64(22), GetFixedAtNoTypeCheck[int64](dict, 0))
 	controller.failAt = 0
 	require.NoError(t, dict.EnsureWritable(mp))
+	require.False(t, backing.Retain(), "successful COW retires the descriptor")
 	require.Equal(t, []int64{22, 11}, MustFixedColNoTypeCheck[int64](dict))
 }
 
