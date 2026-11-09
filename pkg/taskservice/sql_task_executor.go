@@ -305,7 +305,7 @@ func (e *SQLTaskExecutor) executeContext(ctx context.Context, spec *task.SQLTask
 				service.rt.Logger().WarnEvent(sqlTaskRetryIncomplete, zap.Uint64("run-id", run.RunID), zap.Error(reason))
 				return errors.Join(err, reason)
 			}
-			transitionErr = fmt.Errorf("SQL task retry was not executed: %w", transitionErr)
+			transitionErr = errors.Join(moerr.NewInternalErrorNoCtx("SQL task retry was not executed"), transitionErr)
 			service.rt.Logger().WarnEvent(sqlTaskRetryIncomplete, zap.Uint64("run-id", run.RunID),
 				zap.String("error", util.Abbreviate(transitionErr.Error(), 997)))
 			cause := errors.Join(err, transitionErr)
