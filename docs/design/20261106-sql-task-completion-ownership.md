@@ -197,16 +197,30 @@ Normal runner fetching keeps its existing service query. An unclaimed SQL
 defer (including a busy guard, exhausted credit, unavailable store, or failed
 CAS) or a nonempty receipt worker enables exceptional fetching. A full normal
 page with locally running or recently completed entries removed after LIMIT
-also arms a fair wave when queue capacity remains. A short or empty normal
-page from an untrusted service or storage decorator likewise arms a wave:
-the decorator may have filtered rows after LIMIT. Reuse the existing query and
+also arms a fair wave when queue capacity remains. Every successful normal
+page from an untrusted service or storage decorator likewise arms a wave,
+whether short or full: the decorator may omit an earlier row while still
+returning a full page. Reuse the existing query and
 holder path; do not issue a separate trust probe. A monotonic failure
 generation prevents a concurrent defer from being lost while a scan finishes.
 A complete scan with no withheld siblings, no newer defer and an idle receipt
 worker exits this mode.
 If the obstruction remains, a later normal poll can arm another bounded wave;
-an untrusted decorator that repeatedly returns short pages can therefore cause
+an untrusted decorator can therefore cause
 continuing periodic scans, whose cost must be measured.
+
+Before dispatch, validate every normal result as RUNNING on this runner; SQL
+firings also require an available SQL-task owner. A decorator can replace
+query conditions, so the result itself is not proof of those properties. The
+existing running-task owner deduplicates under its lock when enqueueing: an
+already queued, running, or recently completed ID is a no-op, not a full
+queue. This also covers completion racing with a duplicate in the same page.
+An untrusted normal result can contain more rows than requested. Inspect and
+group at most 32 of them per poll (and no more than the configured limit); the
+armed fair wave revisits other persisted IDs using decorated exact-ID queries.
+The memory already returned by a decorator cannot be bounded by the runner.
+When no SQL-task owner exists, progress for unrelated tasks still requires a
+decorator to preserve the non-SQL restriction before applying LIMIT.
 
 The runner groups a fetched batch by canonical SQL parent and submits at most
 one firing per parent, choosing the smallest task ID as a stable order. It
@@ -248,19 +262,31 @@ water; it must not advance past candidates not yet inspected or a candidate
 rejected by a full runner queue. Late allocations/commits are revisited on a
 later pass. Rotate lanes by
 attempt even for a fetch limit of one, empty results or errors. If a selective
-fast query times out, fall back to a bounded primary-key page that advances.
-Each fetch derives its deadline from the runner context and the configured
-fetch timeout, so stopping the runner cancels in-flight queries. Cancellation
+fast query times out, or its source is untrusted even when it returns a full
+page, fall back to a bounded primary-key page that advances.
+Each fetch, including result validation and grouping, shares the deadline
+derived from the runner context and configured fetch timeout. Stopping the
+runner cancels in-flight queries and cooperative result inspection. Cancellation
 does not turn into a storage failure or move a cursor past an uninspected or
-unqueued candidate. Service and storage decorators preserve that context.
-Since a decorator can filter after LIMIT, a short decorated page is not proof of exhaustion; use
-the raw-page fallback unless the queried store is known to apply LIMIT last.
+unqueued candidate. During multi-row point-result inspection, leave the cursor
+before the uninspected ID and return already selected partial results through
+the existing queue-rewind path. Context checks do not bound a decorator that
+ignores cancellation or the memory it already returned. Service and storage
+decorators preserve that context. A decorated page is not proof that every
+earlier ID was inspected, even if the page is full; use the raw-page fallback
+unless the queried store is known to apply its conditions and LIMIT directly.
+The fetch loop may place an outer deadline around the existing query helper and
+batch grouping; any inner query deadline must be no later than that deadline.
+Enqueued task contexts remain children of the runner, not the short fetch
+deadline. If inspection or grouping stops before enqueueing, rewind the first
+unqueued fair candidate; a normal untrusted page has already armed a new wave.
 The fallback reads an unfiltered ordered window of at most 32 lightweight rows:
 ID, status, runner, executor, parent and claim pointer. It never decodes task
 options or retains SQL bodies. Skip a row without a point lookup only when all
 needed snapshot fields are known and prove it cannot match this lane; query
-every possible match by exact ID through the decorated service and recheck its
-identity and eligibility. Unknown or nullable fields are not proof. The
+every possible match by exact ID through the decorated service and inspect its
+returned rows for the exact identity and eligibility, ignoring other IDs and
+dispatching at most one match. Unknown or nullable fields are not proof. The
 high-water query remains global and unfiltered. A row that becomes eligible
 after its snapshot can be revisited by a later wave or normal poll; queue-full
 rewind and cancellation must not skip an unqueued candidate. Decorators may
