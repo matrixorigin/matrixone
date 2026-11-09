@@ -214,8 +214,116 @@ func TestRequiredLsn(t *testing.T) {
 		lsn, err = lc.getRequiredLsn(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(100), lsn)
+
+		require.NoError(t, lc.resetRequiredLsn(ctx))
+		lsn, err = lc.getRequiredLsn(ctx)
+		require.NoError(t, err)
+		require.Zero(t, lsn)
 	}
 	logservice.RunClientTest(t, false, nil, fn)
+}
+
+// requiredStateClient models the replicated ownership state while allowing a
+// committed proposal's response to be lost before DataSync sees it.
+type requiredStateClient struct {
+	logservice.StandbyClient
+	lsn, revision, owner uint64
+	leaderID, term       uint64
+	loseClaimResponse    bool
+	loseSetResponse      bool
+	takeoverAfterSet     bool
+	changeResetReadback  bool
+	stateReads           int
+}
+
+func (c *requiredStateClient) GetLeaderState(context.Context) (uint64, uint64, error) {
+	return c.leaderID, c.term, nil
+}
+
+func (c *requiredStateClient) GetRequiredLsnState(context.Context) (logservice.Lsn, uint64, uint64, error) {
+	c.stateReads++
+	if c.changeResetReadback && c.lsn == 0 && c.stateReads > 1 {
+		// Another owner claimed the shard between the reset and its readback.
+		c.owner++
+		c.revision++
+	}
+	return c.lsn, c.revision, c.owner, nil
+}
+
+func (c *requiredStateClient) ClaimRequiredLsn(
+	_ context.Context, expected logservice.Lsn, revision, owner, term, leaderID uint64,
+) error {
+	if c.lsn != expected || c.revision != revision ||
+		c.term != term || c.leaderID != leaderID {
+		return errRequiredLsnConflict
+	}
+	c.owner = owner
+	c.revision++
+	if c.loseClaimResponse {
+		return fakeError
+	}
+	return nil
+}
+
+func (c *requiredStateClient) SetRequiredLsnIfCurrent(
+	_ context.Context, lsn, expected logservice.Lsn, revision, owner uint64,
+) error {
+	if c.lsn != expected || c.revision != revision || c.owner != owner {
+		return errRequiredLsnConflict
+	}
+	c.lsn = lsn
+	c.revision++
+	if c.takeoverAfterSet {
+		c.owner++
+		c.revision++
+		return fakeError
+	}
+	if c.loseSetResponse {
+		return fakeError
+	}
+	return nil
+}
+
+func TestRequiredLsnOwnershipAfterLostResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		loseClaimResponse   bool
+		loseSetResponse     bool
+		takeoverAfterSet    bool
+		changeResetReadback bool
+	}{
+		{name: "claim response lost", loseClaimResponse: true},
+		{name: "set response lost", loseSetResponse: true},
+		{name: "new owner after set", takeoverAfterSet: true},
+		{name: "new owner before reset readback", changeResetReadback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &requiredStateClient{
+				leaderID: 2, term: 1,
+				loseClaimResponse:   tc.loseClaimResponse,
+				loseSetResponse:     tc.loseSetResponse,
+				takeoverAfterSet:    tc.takeoverAfterSet,
+				changeResetReadback: tc.changeResetReadback,
+			}
+			lc := &logClient{client: server}
+			ctx := context.Background()
+			require.NoError(t, lc.claimRequiredLsn(ctx))
+			require.NotZero(t, lc.requiredOwner)
+			if tc.takeoverAfterSet {
+				require.ErrorIs(t, lc.setRequiredLsn(ctx, 100), errRequiredLsnConflict)
+				require.NotEqual(t, lc.requiredRevision, server.revision)
+				return
+			}
+			require.NoError(t, lc.setRequiredLsn(ctx, 100))
+			if tc.changeResetReadback {
+				require.ErrorIs(t, lc.resetRequiredLsn(ctx), errRequiredLsnConflict)
+				require.NotEqual(t, lc.requiredOwner, server.owner)
+				return
+			}
+			require.NoError(t, lc.resetRequiredLsn(ctx))
+			require.Zero(t, server.lsn)
+		})
+	}
 }
 
 type serverValue struct {
