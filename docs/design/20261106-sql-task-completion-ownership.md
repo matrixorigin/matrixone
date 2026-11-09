@@ -215,12 +215,16 @@ query conditions, so the result itself is not proof of those properties. The
 existing running-task owner deduplicates under its lock when enqueueing: an
 already queued, running, or recently completed ID is a no-op, not a full
 queue. This also covers completion racing with a duplicate in the same page.
-An untrusted normal result can contain more rows than requested. Inspect and
-group at most 32 of them per poll (and no more than the configured limit); the
-armed fair wave revisits other persisted IDs using decorated exact-ID queries.
-The memory already returned by a decorator cannot be bounded by the runner.
-When no SQL-task owner exists, progress for unrelated tasks still requires a
-decorator to preserve the non-SQL restriction before applying LIMIT.
+An untrusted normal result can contain more rows than requested. When an owner
+can arm a fair wave, inspect at most 32 rows per poll and no more than the
+configured limit; that wave revisits other persisted IDs using decorated
+exact-ID queries. Without an owner, inspect a compliant response up to the
+configured limit because there is no fair wave to revisit a truncated prefix.
+In either case retain at most the available queue capacity for grouping and
+dispatch. The memory already returned by a decorator cannot be bounded by the
+runner. Without an owner, progress for unrelated tasks still requires a
+decorator to preserve the non-SQL restriction before applying LIMIT; a running
+prefix that itself fills that limit can still delay later work.
 
 The runner groups a fetched batch by canonical SQL parent and submits at most
 one firing per parent, choosing the smallest task ID as a stable order. It
@@ -277,6 +281,9 @@ earlier ID was inspected, even if the page is full; use the raw-page fallback
 unless the queried store is known to apply its conditions and LIMIT directly.
 The fetch loop may place an outer deadline around the existing query helper and
 batch grouping; any inner query deadline must be no later than that deadline.
+If it does, retain the separate runner context for lifecycle classification:
+a fetch deadline while the runner is live still arms recovery and retains the
+fetch-timeout cause, whereas runner shutdown must not create a failure marker.
 Enqueued task contexts remain children of the runner, not the short fetch
 deadline. If inspection or grouping stops before enqueueing, rewind the first
 unqueued fair candidate; a normal untrusted page has already armed a new wave.
