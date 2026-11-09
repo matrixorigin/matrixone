@@ -41,7 +41,7 @@ func assertCdcNegativeZeroInHnsw[T types.ArrayElement](t *testing.T, values []T,
 	require.NoError(t, err)
 	var decoded vectorindex.VectorIndexCdc[T]
 	require.NoError(t, decoded.UnmarshalJSON([]byte(encoded)))
-	sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", mockMoIndexes(), typ, 3, "")
+	sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", mockMoIndexes(), typ, 3, "", nil)
 	require.NoError(t, err)
 	require.NoError(t, sync.Update(sqlproc, &decoded))
 	require.NotEmpty(t, sync.indexes)
