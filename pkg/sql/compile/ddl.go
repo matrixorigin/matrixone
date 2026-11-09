@@ -2669,7 +2669,16 @@ func (c *Compile) advanceIndexDDLSnapshot() error {
 			return moerr.NewInternalError(c.proc.Ctx,
 				"index DDL logtail read barrier is unavailable")
 		}
-		frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
+		peerBarrier, ok := barrier.(engine.PeerLogtailReadBarrier)
+		if !ok {
+			return moerr.NewInternalError(c.proc.Ctx,
+				"index DDL peer logtail read barrier is unavailable")
+		}
+		var supported bool
+		frontier, supported, err = peerBarrier.AcquirePeerLogtailReadBarrier(c.proc.Ctx)
+		if err == nil && !supported {
+			frontier, err = c.indexDDLLegacyLogtailFrontier()
+		}
 	} else {
 		frontier, err = c.indexDDLLegacyLogtailFrontier()
 	}

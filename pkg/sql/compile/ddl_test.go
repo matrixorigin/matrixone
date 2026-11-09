@@ -738,42 +738,57 @@ func TestCreateIndexLockProtocol(t *testing.T) {
 }
 
 func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
-	const service = "create-index-legacy-logtail-fence"
-	frontier := timestamp.Timestamp{PhysicalTime: 125, LogicalTime: 3}
+	for _, tc := range []struct {
+		name        string
+		version     int64
+		unsupported bool
+	}{
+		{name: "old cluster version", version: defines.MORPCVersion10},
+		{name: "old TN on new cluster", version: defines.MORPCVersion11, unsupported: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := t.Name()
+			frontier := timestamp.Timestamp{PhysicalTime: 125, LogicalTime: 3}
 
-	rt := moruntime.NewRuntime(
-		metadata.ServiceType_CN,
-		service,
-		nil,
-		moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)),
-	)
-	moruntime.SetupServiceBasedRuntime(service, rt)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
+			rt := moruntime.NewRuntime(
+				metadata.ServiceType_CN,
+				service,
+				nil,
+				moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)),
+			)
+			moruntime.SetupServiceBasedRuntime(service, rt)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
 
-	ctrl := gomock.NewController(t)
-	lockService := mock_lock.NewMockLockService(ctrl)
-	lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	txnClient.EXPECT().WaitLogTailAppliedAt(
-		gomock.Any(),
-		timestamp.Timestamp{PhysicalTime: 121},
-	).Return(frontier, nil)
-	workspace := mock_frontend.NewMockWorkspace(ctrl)
-	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), timestamp.Timestamp{PhysicalTime: 121}).Return(nil)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
-		Mode:      txn.TxnMode_Pessimistic,
-		Isolation: txn.TxnIsolation_RC,
-	}).AnyTimes()
-	txnOp.EXPECT().GetWorkspace().Return(workspace)
-	txnOp.EXPECT().SnapshotTS().Return(frontier.Next())
+			ctrl := gomock.NewController(t)
+			lockService := mock_lock.NewMockLockService(ctrl)
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+			txnClient := mock_frontend.NewMockTxnClient(ctrl)
+			txnClient.EXPECT().WaitLogTailAppliedAt(
+				gomock.Any(),
+				timestamp.Timestamp{PhysicalTime: 121},
+			).Return(frontier, nil)
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			workspace.EXPECT().AdvanceSnapshot(gomock.Any(), timestamp.Timestamp{PhysicalTime: 121}).Return(nil)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode:      txn.TxnMode_Pessimistic,
+				Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			txnOp.EXPECT().GetWorkspace().Return(workspace)
+			txnOp.EXPECT().SnapshotTS().Return(frontier.Next())
 
-	proc := testutil.NewProcess(t)
-	proc.Base.LockService = lockService
-	proc.Base.TxnClient = txnClient
-	proc.Base.TxnOperator = txnOp
+			proc := testutil.NewProcess(t)
+			proc.Base.LockService = lockService
+			proc.Base.TxnClient = txnClient
+			proc.Base.TxnOperator = txnOp
 
-	require.NoError(t, (&Compile{proc: proc}).advanceIndexDDLSnapshot())
+			var eng engine.Engine
+			if tc.unsupported {
+				eng = &testCreateIndexLogtailBarrier{unsupported: true}
+			}
+			require.NoError(t, (&Compile{proc: proc, e: eng}).advanceIndexDDLSnapshot())
+		})
+	}
 }
 
 func TestAdvanceCreateIndexSnapshotNeedsOnlyOneLegacyLogtailUpdate(t *testing.T) {
@@ -854,13 +869,36 @@ func TestCreateIndexLegacyFrontierFailsClosed(t *testing.T) {
 
 type testCreateIndexLogtailBarrier struct {
 	engine.Engine
-	acquire func(context.Context) (timestamp.Timestamp, error)
+	acquire     func(context.Context) (timestamp.Timestamp, error)
+	unsupported bool
+	peerErr     error
 }
 
 func (e *testCreateIndexLogtailBarrier) AcquireLogtailReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, error) {
 	return e.acquire(ctx)
+}
+
+func (e *testCreateIndexLogtailBarrier) AcquirePeerLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, bool, error) {
+	if e.peerErr != nil {
+		return timestamp.Timestamp{}, false, e.peerErr
+	}
+	if e.unsupported {
+		return timestamp.Timestamp{}, false, nil
+	}
+	frontier, err := e.acquire(ctx)
+	return frontier, true, err
+}
+
+type testGenericIndexBarrier struct {
+	engine.Engine
+}
+
+func (*testGenericIndexBarrier) AcquireLogtailReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
 }
 
 func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
@@ -897,6 +935,16 @@ func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
 	t.Run("missing ordered barrier capability", func(t *testing.T) {
 		c, _ := newCompile(t, newStubEngine())
 		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "barrier is unavailable")
+	})
+
+	t.Run("generic barrier without peer capability", func(t *testing.T) {
+		c, _ := newCompile(t, &testGenericIndexBarrier{})
+		require.ErrorContains(t, c.advanceIndexDDLSnapshot(), "peer logtail read barrier is unavailable")
+	})
+
+	t.Run("no advertisement with negotiation error", func(t *testing.T) {
+		c, _ := newCompile(t, &testCreateIndexLogtailBarrier{peerErr: wantErr})
+		require.ErrorIs(t, c.advanceIndexDDLSnapshot(), wantErr)
 	})
 
 	t.Run("ordered barrier failure", func(t *testing.T) {

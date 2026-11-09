@@ -25,12 +25,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -50,6 +53,160 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
+
+func TestCheckPeerReadBarrierReady(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	stream.EXPECT().Receive().Return(make(chan morpc.Message), nil)
+	stream.EXPECT().Close(true).AnyTimes().Return(nil)
+	peer, err := service.NewLogtailClient(t.Context(), stream)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	c := &PushClient{subscriber: newLogTailSubscriber()}
+	c.subscriber.swapClient(peer)
+	c.subscriber.setReady()
+	c.receivedLogTailTime.ready.Store(true)
+	require.NoError(t, c.checkPeerReadBarrierReady(t.Context(), peer))
+	c.mu.paused = true
+	require.Error(t, c.checkPeerReadBarrierReady(t.Context(), peer))
+	c.mu.paused = false
+	c.receivedLogTailTime.ready.Store(false)
+	require.Error(t, c.checkPeerReadBarrierReady(t.Context(), peer))
+	c.receivedLogTailTime.ready.Store(true)
+	c.subscriber.setNotReady()
+	require.Error(t, c.checkPeerReadBarrierReady(t.Context(), peer))
+	c.subscriber.setReady()
+	c.subscriber.swapClient(nil)
+	require.Error(t, c.checkPeerReadBarrierReady(t.Context(), peer))
+	c.subscriber.swapClient(peer)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, c.checkPeerReadBarrierReady(canceled, peer), context.Canceled)
+	require.NoError(t, peer.Close())
+	require.Error(t, c.checkPeerReadBarrierReady(t.Context(), peer))
+}
+
+func TestAcquirePeerLogtailReadBarrierUsesCapturedPeer(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	recvC := make(chan morpc.Message, 4)
+	stream.EXPECT().Receive().Return(recvC, nil)
+	stream.EXPECT().ID().AnyTimes().Return(uint64(1))
+	stream.EXPECT().Close(true).AnyTimes().Return(nil)
+	frontier := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	var failSend atomic.Bool
+	encode := func(response *service.LogtailResponse) (*service.LogtailResponseSegment, error) {
+		payload, err := response.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		return &service.LogtailResponseSegment{MessageSegment: logtail.MessageSegment{MessageSize: int32(len(payload)), Sequence: 1, MaxSequence: 1, Payload: payload}}, nil
+	}
+	stream.EXPECT().Send(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(func(_ context.Context, message morpc.Message) error {
+		if failSend.Load() {
+			return moerr.NewInternalErrorNoCtx("injected barrier send failure")
+		}
+		id := message.(*service.LogtailRequest).GetReadBarrier().BarrierId
+		segment, err := encode(&service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{Response: &logtail.LogtailResponse_ReadBarrierResponse{ReadBarrierResponse: &logtail.ReadBarrierResponse{BarrierId: id, Timestamp: &frontier}}}})
+		if err == nil {
+			recvC <- segment
+		}
+		return err
+	})
+	peer, err := service.NewLogtailClient(t.Context(), stream)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	sub, err := encode(&service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: &logtail.SubscribeResponse{SupportsReadBarrier: true}}}})
+	require.NoError(t, err)
+	recvC <- sub
+	_, err = peer.Receive(t.Context())
+	require.NoError(t, err)
+	recvCtx, stopRecv := context.WithCancel(t.Context())
+	recvDone := make(chan error, 1)
+	go func() { _, e := peer.Receive(recvCtx); recvDone <- e }()
+	defer func() { stopRecv(); <-recvDone }()
+	c := &PushClient{subscriber: newLogTailSubscriber()}
+	c.subscriber.swapClient(peer)
+	c.subscriber.setReady()
+	c.receivedLogTailTime.ready.Store(true)
+	c.timestampWaiter = &barrierTimestampWaiter{get: func(_ context.Context, target timestamp.Timestamp) (timestamp.Timestamp, error) {
+		assert.Equal(t, frontier, target)
+		return target.Next(), nil
+	}}
+	got, supported, err := c.AcquirePeerLogtailReadBarrier(t.Context())
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, frontier, got)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	c.timestampWaiter = &barrierTimestampWaiter{get: func(ctx context.Context, target timestamp.Timestamp) (timestamp.Timestamp, error) {
+		close(entered)
+		select {
+		case <-release:
+			return target.Next(), nil
+		case <-ctx.Done():
+			return timestamp.Timestamp{}, ctx.Err()
+		}
+	}}
+	type result struct {
+		supported bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() { _, supported, e := c.AcquirePeerLogtailReadBarrier(t.Context()); done <- result{supported, e} }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("barrier did not reach the waiter")
+	}
+	c.subscriber.swapClient(nil)
+	close(release)
+	select {
+	case got := <-done:
+		require.True(t, got.supported)
+		require.Error(t, got.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("barrier did not observe peer replacement")
+	}
+
+	c.subscriber.swapClient(peer)
+	failSend.Store(true)
+	_, supported, err = c.AcquirePeerLogtailReadBarrier(t.Context())
+	require.True(t, supported, "a failed supported barrier must not select the legacy fallback")
+	require.Error(t, err)
+}
+
+func TestAcquirePeerLogtailReadBarrierDoesNotSendToOldTN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	recvC := make(chan morpc.Message, 1)
+	stream.EXPECT().Receive().Return(recvC, nil)
+	stream.EXPECT().Close(true).AnyTimes().Return(nil)
+	peer, err := service.NewLogtailClient(t.Context(), stream)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, peer.Close()) })
+	response := &service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+		Response: &logtail.LogtailResponse_SubscribeResponse{
+			SubscribeResponse: &logtail.SubscribeResponse{},
+		},
+	}}
+	payload, err := response.Marshal()
+	require.NoError(t, err)
+	recvC <- &service.LogtailResponseSegment{MessageSegment: logtail.MessageSegment{
+		MessageSize: int32(len(payload)), Sequence: 1, MaxSequence: 1, Payload: payload,
+	}}
+	_, err = peer.Receive(t.Context())
+	require.NoError(t, err)
+
+	c := &PushClient{subscriber: newLogTailSubscriber()}
+	c.subscriber.swapClient(peer)
+	c.subscriber.setReady()
+	c.receivedLogTailTime.ready.Store(true)
+	_, supported, err := c.AcquirePeerLogtailReadBarrier(t.Context())
+	require.NoError(t, err)
+	require.False(t, supported)
+	// The mock has no Send expectation: any barrier sent to the old peer fails the test.
+}
 
 /*
 func mockLogtail(table api.TableID, ts timestamp.Timestamp) logtail.TableLogtail {
