@@ -2315,6 +2315,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
 			continue
 		}
+		// A case-insensitive collation makes LIKE fold case, while the
+		// byte-ordered =/prefix_eq rewrite cannot. Keep the folding LIKE
+		// predicate so index and scan paths agree (issue #31175).
+		if types.IsCaseInsensitiveCollation(uint8(fn.Args[0].Typ.Charset)) {
+			continue
+		}
 		if _, usable := prefixStringDomain(fn.Args[0].Typ); !usable {
 			continue
 		}
