@@ -61,7 +61,7 @@ func TestRetiredNativeCollationKeyRejectsBeforeFolding(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "internal_collation_key")
 		})
@@ -81,7 +81,7 @@ func TestNativeCollationMetadataRejectsFoldedProjection(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.ErrorContains(t, err, "disabled")
 		})
 	}
@@ -117,7 +117,7 @@ func TestCollationCatalogAdmissionPreservesAllowedDomainsAndReuse(t *testing.T) 
 				table.KeyFormat = contract.keyFormat
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				stmt.Free()
 				if contract.allowed {
 					require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestCollationCatalogAdmissionPreservesAllowedDomainsAndReuse(t *testing.T) 
 				stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1 from nation", 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err)
 			})
 		}
@@ -171,7 +171,7 @@ func TestCollationCatalogAdmissionPreservesSnapshotScopeErrors(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select 1 from nation {snapshot = 'snapshot'}", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if contract.errorText == "" {
 				require.NoError(t, err)
 			} else {

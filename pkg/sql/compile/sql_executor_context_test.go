@@ -200,14 +200,16 @@ func TestCompilerContextUnsupportedOperations(t *testing.T) {
 
 type recordingSessionCompilerContext struct {
 	*plan.MockCompilerContext
-	snapshot             *plan.Snapshot
-	subscription         *plan.SubscriptionMeta
-	queryingSubscription *plan.SubscriptionMeta
-	checkedSubscription  []string
-	resolvedDatabase     string
-	resolvedTable        string
-	resolvedTableDef     *plan.TableDef
-	proc                 *process.Process
+	snapshot              *plan.Snapshot
+	subscription          *plan.SubscriptionMeta
+	queryingSubscription  *plan.SubscriptionMeta
+	checkedSubscription   []string
+	resolvedDatabase      string
+	resolvedTable         string
+	resolvedTableDef      *plan.TableDef
+	resolvedIndexRef      *plan.ObjectRef
+	resolvedIndexSnapshot *plan.Snapshot
+	proc                  *process.Process
 }
 
 func (c *recordingSessionCompilerContext) GetProcess() *process.Process { return c.proc }
@@ -245,11 +247,19 @@ func (c *recordingSessionCompilerContext) GetQueryingSubscription() *plan.Subscr
 func (c *recordingSessionCompilerContext) Resolve(
 	databaseName string,
 	tableName string,
-	_ *plan.Snapshot,
+	_ *plan.Snapshot, borrowOutput *plan.TableResolution,
 ) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	c.resolvedDatabase = databaseName
 	c.resolvedTable = tableName
 	return &plan.ObjectRef{}, c.resolvedTableDef, nil
+}
+
+func (c *recordingSessionCompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tableName string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	c.resolvedIndexRef, c.resolvedIndexSnapshot = ref, snapshot
+	c.resolvedTable = tableName
+	return &plan.ObjectRef{NotLockMeta: ref.NotLockMeta}, c.resolvedTableDef, nil
 }
 
 func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
@@ -276,16 +286,19 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	require.Equal(t, []string{"sub", "publisher", "pub"}, delegate.checkedSubscription)
 	c.SetQueryingSubscription(subscription)
 	require.Same(t, subscription, c.GetQueryingSubscription())
-	_, resolved, err := c.Resolve("subscription_db", "source", snapshot)
+	_, resolved, err := c.Resolve("subscription_db", "source", snapshot, nil)
 	require.NoError(t, err)
 	require.Same(t, delegate.resolvedTableDef, resolved)
 	require.Equal(t, "subscription_db", delegate.resolvedDatabase)
 	require.Equal(t, "source", delegate.resolvedTable)
 	for _, skipMeta := range []bool{false, true} {
-		indexRef, _, err := c.ResolveIndexTableByRef(&plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}, "hidden_index", nil)
+		baseRef := &plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}
+		indexRef, _, err := c.ResolveIndexTableByRef(baseRef, "hidden_index", snapshot, nil)
 		require.NoError(t, err)
 		require.Equal(t, skipMeta, indexRef.NotLockMeta)
 		require.Equal(t, "hidden_index", delegate.resolvedTable)
+		require.Same(t, baseRef, delegate.resolvedIndexRef)
+		require.Same(t, snapshot, delegate.resolvedIndexSnapshot)
 	}
 }
 
@@ -503,7 +516,7 @@ func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).Times(2)
 	c := &compilerContext{ctx: requestCtx, defaultDB: "db", engine: eng, proc: proc}
 	for range 2 {
-		_, resolved, err := c.Resolve("db", "legacy_cmp", nil)
+		_, resolved, err := c.Resolve("db", "legacy_cmp", nil, nil)
 		require.NoError(t, err)
 		require.NotSame(t, catalogDef.Checks[0], resolved.Checks[0])
 		for _, arg := range resolved.Checks[0].Check.GetF().Args {
@@ -583,7 +596,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 				engine:    eng,
 				proc:      proc,
 			}
-			obj, tableDef, err := c.Resolve("db", "missing", nil)
+			obj, tableDef, err := c.Resolve("db", "missing", nil, nil)
 			if tc.wantMissing {
 				require.NoError(t, err)
 				require.Nil(t, obj)
@@ -610,7 +623,7 @@ func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := plan.BuildPlan(c, stmt, false)
+	p, err := plan.BuildPlan(c, stmt, false, nil)
 	require.NoError(t, err)
 	drop := p.GetDdl().GetDropTable()
 	require.Equal(t, "gone", drop.GetDatabase())
@@ -747,7 +760,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		result, err := plan.BuildPlan(c, stmt, false)
+		result, err := plan.BuildPlan(c, stmt, false, nil)
 		require.NoError(t, err)
 		return result
 	}
@@ -1005,11 +1018,13 @@ type namespaceDelegate struct {
 	snapshot *plan.Snapshot
 }
 
-func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	return &plan.ObjectRef{Obj: 99}, &plan.TableDef{TblId: 99, IsTemporary: true}, nil
 }
 
-func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot, borrowOutput *plan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	require.Equal(d.t, "subscription_db", db)
 	require.Equal(d.t, "source", table)
 	require.Same(d.t, d.snapshot, snapshot)
@@ -1018,21 +1033,32 @@ func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snaps
 	return &plan.ObjectRef{Obj: 11, PubInfo: &pbplan.PubInfo{TenantId: int32(id)}}, &plan.TableDef{TblId: 11}, nil
 }
 
+func (d *namespaceDelegate) ResolveTemporaryTable(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	require.Equal(d.t, "subscription_db", db)
+	require.Equal(d.t, "source", table)
+	require.Same(d.t, d.snapshot, snapshot)
+	return &plan.ObjectRef{Obj: 22}, &plan.TableDef{TblId: 22, IsTemporary: true}, nil
+}
+
 func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	snapshot := &plan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 23}}
 	delegate := &namespaceDelegate{MockCompilerContext: plan.NewMockCompilerContext(false, proc), t: t, snapshot: snapshot}
 	for _, viewChild := range []bool{false, true} {
 		c := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(proc.Ctx, delegate), viewChild: viewChild, viewDelegate: delegate}
-		obj, def, err := c.ResolveWithoutTemporaryAlias("subscription_db", "source", snapshot)
+		obj, def, err := c.ResolveWithoutTemporaryAlias("subscription_db", "source", snapshot, nil)
 		require.NoError(t, err)
 		require.Equal(t, uint64(11), def.TblId)
 		id, err := delegate.GetAccountId()
 		require.NoError(t, err)
 		require.Equal(t, int32(id), obj.PubInfo.TenantId)
-		_, def, err = c.Resolve("subscription_db", "source", snapshot)
+		_, def, err = c.Resolve("subscription_db", "source", snapshot, nil)
 		require.NoError(t, err)
 		require.Equal(t, uint64(99), def.TblId)
+		obj, def, err = c.ResolveTemporaryTable("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, int64(22), obj.Obj)
+		require.Equal(t, uint64(22), def.TblId)
 	}
 }
 
@@ -1061,7 +1087,7 @@ func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
 		if skipAlias {
 			resolve = c.ResolveWithoutTemporaryAlias
 		}
-		obj, def, err := resolve("db", "t", nil)
+		obj, def, err := resolve("db", "t", nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, !skipAlias, def.IsTemporary)
 		require.Equal(t, !skipAlias, obj.NotLockMeta)
@@ -1071,10 +1097,10 @@ func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
 			require.Equal(t, uint64(12), def.TblId)
 		}
 	}
-	obj, def, err := c.ResolveWithoutTemporaryAlias("db", "physical", nil)
+	obj, def, err := c.ResolveWithoutTemporaryAlias("db", "physical", nil, nil)
 	require.NoError(t, err)
 	require.True(t, def.IsTemporary)
 	require.True(t, obj.NotLockMeta)
-	_, _, err = (&recoveryCompilerContext{compilerContext: c}).ResolveWithoutTemporaryAlias("db", "t", nil)
+	_, _, err = (&recoveryCompilerContext{compilerContext: c}).ResolveWithoutTemporaryAlias("db", "t", nil, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }

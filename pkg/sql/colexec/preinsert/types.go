@@ -28,8 +28,18 @@ var _ vm.Operator = new(PreInsert)
 type proc = process.Process
 
 type container struct {
-	buf               *batch.Batch
-	canFreeVecIdx     map[int]bool //auto incr & expand constant vecotr.need free
+	buf           *batch.Batch
+	canFreeVecIdx map[int]bool //auto incr & expand constant vecotr.need free
+	// ownedVecSlots records which buf slots currently hold storage this
+	// operator allocated; Free releases exactly the recorded slots and
+	// detaches every other entry as a child-owned borrow. canFreeVecIdx
+	// carries a slot's ownership intent one step early: constructColBuf
+	// marks aliased slots before converting them, so a marked slot whose
+	// conversion never ran (an earlier marked slot's UnionBatch failed)
+	// still references the child's vector - such an entry must be replaced
+	// with independent storage when its conversion runs, and it must never
+	// be cleaned or freed in place, on either the fill or the teardown path.
+	ownedVecSlots     map[int]bool
 	clusterByExecutor colexec.ExpressionExecutor
 	compPkExecutor    colexec.ExpressionExecutor
 	// autoIncrementGenerated is statement-row provenance captured before the
@@ -131,8 +141,18 @@ func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err
 		preInsert.ctr.clusterByExecutor = nil
 	}
 	if preInsert.ctr.buf != nil {
+		// Teardown must agree with conversion on actual ownership. Key the
+		// detach on ownedVecSlots, not on the canFreeVecIdx intent: a marked
+		// slot whose conversion was interrupted (the failing UnionBatch of an
+		// earlier marked slot returned the error first) still holds the
+		// child vector an earlier batch borrowed, and freeing that entry
+		// would release child-owned storage and zero the child vector's
+		// length. Genuinely owned entries - converted/expanded columns and
+		// the hidden composite-key, cluster-by, rowid and provenance
+		// vectors this operator installed - are recorded in ownedVecSlots at
+		// their install sites and are left for buf.Clean to release.
 		for idx := range preInsert.ctr.buf.Vecs {
-			if !preInsert.ctr.canFreeVecIdx[idx] {
+			if !preInsert.ctr.ownedVecSlots[idx] {
 				preInsert.ctr.buf.SetVector(int32(idx), nil)
 			}
 		}

@@ -1668,7 +1668,7 @@ func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		called++
 		return nil, wantErr
@@ -1736,7 +1736,7 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k"), nil
 	}
@@ -1813,7 +1813,7 @@ func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("order_id"), nil
 	}
@@ -1878,7 +1878,7 @@ func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k1", "k2"), nil
 	}
@@ -1943,7 +1943,7 @@ func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement,
+		stmt tree.Statement, _ *plan2.PlanningInput,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k"), nil
 	}

@@ -232,12 +232,14 @@ type CompilerContext interface {
 	// check if database exist
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
-	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	Resolve(schemaName string, tableName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
 	// ResolveWithoutTemporaryAlias skips session aliases for standalone RENAME TABLE.
 	// It retains catalog visibility, temporary ownership and access checks.
-	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
-	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot, resolution *TableResolution) (*ObjectRef, *TableDef, error)
+	// Revalidate borrowed ordinary results after synchronous planning/reentry.
+	BorrowedTableStillCurrent(*process.Process, *BorrowedTable) bool
 	// get table definition by table id
 	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get the value of variable
@@ -396,17 +398,27 @@ type QueryBuilder struct {
 
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
-	deleteIndexScanTables map[int32]deleteIndexScan
-	integerPrecision      *integerPrecisionBuilder
-	correlationRouteNodes map[int32]bool
-	dependentRelations    map[int32]bool
-	preparedBindingProof  *bool
+	deleteIndexScanTables    map[int32]deleteIndexScan
+	planningInput            *PlanningInput
+	scanBorrows              []scanBorrow
+	borrowResolutionDisabled bool
+	originalIndexScan        originalIndexScan
+	integerPrecision         *integerPrecisionBuilder
+	correlationRouteNodes    map[int32]bool
+	dependentRelations       map[int32]bool
+	preparedBindingProof     *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
 	pendingExistentials     map[uint64]*pendingExistential
 	hadPendingExistentials  bool
 	existentialGateProjects map[int32]struct{}
+	// Lock-key materializations built for the pass-through CHECK/FK barrier
+	// FILTER keep their PROJECT physical: the barrier FILTER hands computed
+	// unique lock-key vectors through positionally, and the restored row
+	// image must export those vectors as columns instead of re-evaluating
+	// the key expression in every downstream consumer.
+	materializedLockKeyProjects map[int32]struct{}
 
 	qry     *plan.Query
 	compCtx CompilerContext
@@ -1247,6 +1259,13 @@ type baseBinder struct {
 	// resolves that literal.  Some functions, such as INET_NTOA, have a
 	// string-valued result but still preserve native numeric input overloads.
 	suppressDefaultValueBindType bool
+	// binaryLiteralUnderExplicitTextCast marks the source subtree of the
+	// innermost user-written explicit CAST when that cast targets
+	// non-binary-charset char/varchar/text. In that scope only hex/bit
+	// literals skip the destination-column pre-coercion so the explicit
+	// cast's own binary-to-text contract (invalid UTF-8 -> NULL + Warning
+	// 1300) can apply. See numValDefaultBindType.
+	binaryLiteralUnderExplicitTextCast bool
 	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
 	// INET_NTOA can select its numeric overload.  Those literals are otherwise
 	// materialized as binary strings by the generic literal binder.

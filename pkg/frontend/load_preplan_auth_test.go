@@ -200,9 +200,7 @@ func TestAuthenticateLoadBeforePlanPropagatesPrivilegeErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			withLoadPrivilegeFixture(t, stmt, dbName, tableName, false,
 				func(ses *Session, _ *backgroundExecTest) {
-					_, err := buildPlanWithPrepareMode(
-						defines.AttachAccountId(context.Background(), ses.GetTenantInfo().GetTenantID()),
-						ses, plan2.NewEmptyCompilerContext(nil), tc.stmt, tc.forcePrepare)
+					_, err := buildPlanWithPrepareMode(defines.AttachAccountId(context.Background(), ses.GetTenantInfo().GetTenantID()), ses, plan2.NewEmptyCompilerContext(nil), tc.stmt, tc.forcePrepare, nil)
 					require.ErrorContains(t, err, "do not have privilege")
 				})
 		})

@@ -22,6 +22,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +30,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
@@ -61,18 +63,26 @@ var (
 )
 
 type ivfCreateState struct {
-	inited       bool
-	param        vectorindex.IvfParam
-	tblcfg       vectorindex.IndexTableConfig
-	idxcfg       vectorindex.IndexConfig
-	data32       [][]float32
-	data64       [][]float64
-	nsample      uint
-	sample_ratio float64
-	offset       int
+	inited         bool
+	policy         *executor.IndexRelationPolicy
+	admittedConfig string
+	param          vectorindex.IvfParam
+	tblcfg         vectorindex.IndexTableConfig
+	idxcfg         vectorindex.IndexConfig
+	data32         [][]float32
+	data64         [][]float64
+	nsample        uint
+	sample_ratio   float64
+	offset         int
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
+}
+
+func ivfSampleSQL(cfg vectorindex.IndexTableConfig, ratio float64, limit uint) string {
+	return fmt.Sprintf("SELECT SAMPLE(%s, %f PERCENT) FROM %s WHERE %s IS NOT NULL LIMIT %d",
+		sqlquote.Ident(cfg.KeyPart), ratio*100, sqlquote.QualifiedIdent(cfg.DbName, cfg.SrcTable),
+		sqlquote.Ident(cfg.KeyPart), limit)
 }
 
 func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc *process.Process, data [][]T) error {
@@ -81,7 +91,9 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	var err error
 	var ok bool
 
-	version, err := ivfflat.GetVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexRelationPolicy = u.policy
+	version, err := ivfflat.GetVersion(sqlproc, u.tblcfg)
 	if err != nil {
 		return err
 	}
@@ -136,7 +148,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	}
 
 	logutil.Infof("IVFFLAT START: After Kmeans clustering, insert centroids to table")
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
+	sql := fmt.Sprintf("INSERT INTO %s (`%s`, `%s`, `%s`) VALUES %s", sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.IndexTable),
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
@@ -146,7 +158,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	sqls := []string{sql}
 	for _, s := range sqls {
-		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), s)
+		res, err := ivf_runSql(sqlproc, s)
 		if err != nil {
 			return err
 		}
@@ -165,14 +177,14 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
 		qmin, qmax := quantizer.TrainInt8(data)
 		insSQL := fmt.Sprintf(
-			"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
+			"INSERT INTO %s (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
 				"ON DUPLICATE KEY UPDATE `%s` = VALUES(`%s`)",
-			u.tblcfg.DbName, u.tblcfg.MetadataTable,
+			sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.MetadataTable),
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, qmin,
 			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax, qmax,
 			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val)
-		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), insSQL)
+		res, err := ivf_runSql(sqlproc, insSQL)
 		if err != nil {
 			return err
 		}
@@ -185,7 +197,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 
-	if !u.inited || (len(u.data32) == 0 && len(u.data64) == 0) {
+	if !u.inited || u.policy == nil || (len(u.data32) == 0 && len(u.data64) == 0) {
 		return nil
 	}
 
@@ -197,6 +209,7 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 }
 
 func (u *ivfCreateState) reset(tf *TableFunction, proc *process.Process) {
+	u.policy = nil
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
@@ -238,7 +251,32 @@ func ivfCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
 func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
-
+	defer func() {
+		if err != nil {
+			u.policy = nil
+		}
+	}()
+	admit := func() error {
+		cfgVec := tf.ctr.argVecs[0]
+		if cfgVec.GetType().Oid != types.T_varchar {
+			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+		}
+		if !cfgVec.IsConst() {
+			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+		}
+		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfg, policy, err := admitVectorIndexMaintenance(proc, tf, "ivf_create", cfgstr, u.admittedConfig, u.inited, ivfflatrt.MaintenanceOperands)
+		if err != nil {
+			return err
+		}
+		u.tblcfg, u.policy, u.admittedConfig = cfg, policy, string([]byte(cfgstr))
+		return nil
+	}
+	if u.inited && u.policy == nil {
+		if err = admit(); err != nil {
+			return err
+		}
+	}
 	if !u.inited {
 		if len(tf.Params) > 0 {
 			// Wrap the JSON decode error in a stable message: sonic's error text is
@@ -271,20 +309,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
-		// IndexTableConfig
-		cfgVec := tf.ctr.argVecs[0]
-		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
-		}
-		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
-		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
-		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
-		}
-		err := sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
+		if err = admit(); err != nil {
 			return err
 		}
 
@@ -331,17 +356,13 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		}
 
 		// run SQL
-		sql := fmt.Sprintf("SELECT SAMPLE(`%s`, %f PERCENT) FROM `%s`.`%s` WHERE `%s` IS NOT NULL LIMIT %d",
-			u.tblcfg.KeyPart,
-			u.sample_ratio*100,
-			u.tblcfg.DbName,
-			u.tblcfg.SrcTable,
-			u.tblcfg.KeyPart,
-			u.nsample)
+		sql := ivfSampleSQL(u.tblcfg, u.sample_ratio, u.nsample)
 
 		logutil.Infof("IVFFLAT START: pick sample. %s", sql)
 
-		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), sql)
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		res, err := ivf_runSql(sqlproc, sql)
 		if err != nil {
 			return err
 		}

@@ -167,7 +167,7 @@ func bindAnalyzeTables(
 		if dbName == "" {
 			return nil, moerr.NewNoDB(execCtx.reqCtx)
 		}
-		obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil)
+		obj, tableDef, err := tcc.Resolve(dbName, string(entry.Table.Name()), nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +186,7 @@ func bindAnalyzeTables(
 			return nil, moerr.NewNotSupported(execCtx.reqCtx,
 				"ANALYZE TABLE cannot publish statistics for an account-filtered table")
 		}
-		physicalCtx, relation, err := tcc.getRelation(dbName, string(entry.Table.Name()), nil, nil)
+		physicalCtx, relation, err := tcc.getRelation(dbName, string(entry.Table.Name()), nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}

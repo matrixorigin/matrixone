@@ -176,7 +176,7 @@ func TestPublicationViewBindingMarkerStopsAtMetadataBoundary(t *testing.T) {
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -298,7 +298,7 @@ func TestPublicationViewBindingMarkerSkipsComparisonFolds(t *testing.T) {
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -412,7 +412,7 @@ func TestPublicationViewBindingMarkerSkipsStringLengthInference(t *testing.T) {
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -514,7 +514,7 @@ func TestPublicationViewBindingMarkerRefusesCorrelatedAggregateSpineProof(t *tes
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		return bound
 	}
@@ -687,7 +687,7 @@ func TestPublicationViewBindingMarkerPreservesConstantExpressionSRIDs(t *testing
 		t.Cleanup(stmt.Free)
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1071,7 +1071,7 @@ func TestPublicationViewBindingMarkerKeepsProbeLiteralStatements(t *testing.T) {
 	} {
 		compiler := NewMockCompilerContext(true, proc)
 		compiler.SetContext(ctx)
-		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false)
+		bound, err := BuildPlan(compiler, stmt.(*tree.Select), false, nil)
 		require.NoError(t, err)
 		limitSeen := false
 		for _, node := range bound.GetQuery().Nodes {

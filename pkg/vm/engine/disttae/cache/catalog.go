@@ -648,6 +648,8 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -851,6 +853,8 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)

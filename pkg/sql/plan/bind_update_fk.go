@@ -202,6 +202,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				return oldColName2Idx[qualifiedName]
 			},
 			true,
+			false,
 		)
 		if err != nil {
 			return 0, 0, nil, err
@@ -342,6 +343,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetChildForeignKeyChecks(
 			return oldColName2Idx[qualifiedName]
 		},
 		true,
+		false,
 	)
 	if err != nil {
 		return 0, 0, nil, err
@@ -1348,7 +1350,7 @@ func (builder *QueryBuilder) appendUpdateParentKeyLocks(
 				lockTable = true
 			} else {
 				lockObjRef, lockTableDef, buildErr = builder.compCtx.ResolveIndexTableByRef(
-					parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+					parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot, nil)
 				if buildErr != nil {
 					return 0, 0, buildErr
 				}
@@ -2202,6 +2204,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			affectedFK.childObjRef,
 			idxDef.IndexTableName,
 			bindCtx.snapshot,
+			nil,
 		)
 		if resolveErr != nil {
 			return resolveErr

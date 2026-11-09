@@ -1861,8 +1861,7 @@ func TestSQLPreparedBooleanDirectResultIsIndependentOfNumericSibling(t *testing.
 					controlStmt, parseErr := mysql.ParseOne(execCtx.reqCtx, "select ?", 1)
 					require.NoError(t, parseErr)
 					defer controlStmt.Free()
-					control, bindErr := buildPreparedBoundQuery(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), controlStmt,
-						[]plan2.PreparedSourceBinding{cw.paramBindings[test.directIndex]}, cw.paramVals)
+					control, bindErr := buildPreparedBoundQuery(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), controlStmt, []plan2.PreparedSourceBinding{cw.paramBindings[test.directIndex]}, cw.paramVals)
 					require.NoError(t, bindErr)
 					controlQuery := control.Plan.GetQuery()
 					controlExpr := controlQuery.Nodes[controlQuery.Steps[0]].ProjectList[0]
@@ -3771,8 +3770,7 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 				t.Helper()
 				// Match the real Compile entry when reusing this test wrapper.
 				cw.discardRuntimeCacheCandidate()
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
-					execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -3931,7 +3929,7 @@ func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
 	} {
 		t.Run(predicate, func(t *testing.T) {
 			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			for _, col := range table.Cols {
 				if col.Name == "n_nationkey" {
@@ -3963,8 +3961,7 @@ func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
 			execute := func() (*compile.Compile, *plan.Plan) {
 				t.Helper()
 				cw.discardRuntimeCacheCandidate()
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
-					execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, ctx.Resolve, ctx)
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -4107,8 +4104,7 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 			}
 			compiler := &preparedTestCompiler{CompilerContext: optimizer.CurrentContext(), proc: cw.proc}
 			execute := func() (*compile.Compile, *plan.Plan) {
-				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(
-					execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
+				comp, p, stmt, _, owned, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepared.Name, compiler.Resolve, compiler)
 				if owned && stmt != nil {
 					stmt.Free()
 				}
@@ -5178,13 +5174,13 @@ func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.
 	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
 		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}}}}
-	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
+	rebuildEveryExecute := !planReuse(false, metadataPlan, preparedLogicalPlan).reusable
 	require.True(t, rebuildEveryExecute)
 
 	resolveCalls := 0
 	resolve := func(
 		_, _ string,
-		_ *plan.Snapshot,
+		_ *plan.Snapshot, borrowOutput *plan2.TableResolution,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		resolveCalls++
 		return nil, nil, assert.AnError
@@ -5215,7 +5211,7 @@ func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
 		def *plan.TableDef,
 		err error,
 	) preparedSchemaResolver {
-		return func(databaseName, tableName string, _ *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		return func(databaseName, tableName string, _ *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 			require.Equal(t, "sub", databaseName)
 			require.Equal(t, "src", tableName)
 			return ref, def, err
@@ -5277,7 +5273,7 @@ func TestPreparedSubscriptionSchemaChangedUsesLogicalName(t *testing.T) {
 		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
 	}
 	changed, err := preparedSubscriptionSchemaChanged(func(
-		databaseName, tableName string, _ *plan.Snapshot,
+		databaseName, tableName string, _ *plan.Snapshot, borrowOutput *plan2.TableResolution,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		require.Equal(t, "sub", databaseName)
 		require.Equal(t, "src", tableName)
@@ -5302,14 +5298,10 @@ func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
 	}
 	calls := 0
 	changed, err := preparedSubscriptionSchemaChanged(func(
-		databaseName, tableName string, gotSnapshot *plan.Snapshot,
+		databaseName, tableName string, gotSnapshot *plan.Snapshot, borrowOutput *plan2.TableResolution,
 	) (*plan.ObjectRef, *plan.TableDef, error) {
 		calls++
-		if calls == 1 {
-			require.Nil(t, gotSnapshot)
-		} else {
-			require.Equal(t, snapshot, gotSnapshot)
-		}
+		require.Same(t, snapshot, gotSnapshot)
 		return &plan.ObjectRef{
 				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
 				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
@@ -5318,7 +5310,56 @@ func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
 	}, expected)
 	require.NoError(t, err)
 	require.False(t, changed)
-	require.Equal(t, 2, calls)
+	require.Equal(t, 1, calls)
+}
+
+func TestValidateHistoricalSubscriptionUsesCapturedAlias(t *testing.T) {
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11}, Snapshot: snapshot,
+	}
+	stableRef := &plan.ObjectRef{
+		Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	for _, tc := range []struct {
+		name    string
+		ref     *plan.ObjectRef
+		def     *plan.TableDef
+		err     error
+		changed bool
+	}{
+		{"current alias is unrelated and denied", stableRef, &plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil, false},
+		{"historical publication is withdrawn", nil, nil, assert.AnError, false},
+		{"historical relation is missing", nil, nil, nil, true},
+		{"admitted historical source changed", stableRef, &plan.TableDef{DbId: 2, TblId: 5, Version: 4}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			changed, validated, err := validateCapturedPrepareSchemas(7, []*plan.ObjectRef{expected},
+				func(database, table string, got *plan.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+					calls++
+					require.Equal(t, "sub", database)
+					require.Equal(t, "src", table)
+					require.Nil(t, borrowOutput)
+					if got == nil {
+						return nil, nil, moerr.NewInternalError(t.Context(), "unrelated current publication is denied")
+					}
+					require.Same(t, snapshot, got)
+					return tc.ref, tc.def, tc.err
+				}, nil, timestamp.Timestamp{}, true, false)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err, "captured T must not bypass the corresponding publication's current authorization")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.changed, changed)
+			require.True(t, validated)
+			require.Equal(t, 1, calls)
+			require.Equal(t, int64(42), snapshot.TS.PhysicalTime, "borrowed snapshot must remain unchanged")
+		})
+	}
 }
 
 func TestPreparedSubscriptionsNeedValidation(t *testing.T) {
@@ -5563,15 +5604,13 @@ func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(
-		execCtx, ses, ses, cw, nil, prepareStmt.Name,
-		func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-			return &plan.ObjectRef{
-					Obj: 3, SchemaName: "publisher_db", ObjName: "src",
-					SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
-				},
-				&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
-		}, ses.GetTxnCompileCtx())
+	retComp, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, func(string, string, *plan.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}, ses.GetTxnCompileCtx())
 	require.NoError(t, err)
 	require.Same(t, sentinel, retComp)
 	require.Same(t, sentinel, prepareStmt.compile)
@@ -5586,7 +5625,7 @@ func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
 	}
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{expected}
-	resolve := func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	resolve := func(string, string, *plan.Snapshot, *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 		return &plan.ObjectRef{
 				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
 				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
@@ -5596,8 +5635,7 @@ func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(
-			execCtx, ses, ses, cw, nil, prepareStmt.Name, resolve, ses.GetTxnCompileCtx())
+		_, _, _, _, _, err := initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cw, nil, prepareStmt.Name, resolve, ses.GetTxnCompileCtx())
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -5976,14 +6014,9 @@ func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
 	prepareStmt.Name = "prepared_view"
 	ses.SetSql(executeSQL)
 
-	rebuilt, err := rebuildPreparePlan(
-		execCtx,
-		ses,
-		prepareStmt,
-		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
-			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
-		},
-	)
+	rebuilt, err := rebuildPreparePlan(execCtx, ses, prepareStmt, func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+		return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
+	})
 	require.NoError(t, err)
 	prepareStmt.PreparePlan = rebuilt
 	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
@@ -6040,14 +6073,9 @@ func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	require.True(t, preparePlanNeedsRebuild(false, modeMismatch, false))
 	require.True(t, preparePlanNeedsRebuild(false, false, true))
 
-	rebuilt, err := rebuildPreparePlan(
-		execCtx,
-		ses,
-		prepareStmt,
-		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
-			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
-		},
-	)
+	rebuilt, err := rebuildPreparePlan(execCtx, ses, prepareStmt, func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+		return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
+	})
 	require.NoError(t, err)
 	prepareStmt.PreparePlan = rebuilt
 	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
@@ -6621,9 +6649,22 @@ func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 
 func TestPreparedViewMetadataUdfRebuildsEveryExecute(t *testing.T) {
 	udfPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
-	require.True(t, shouldRebuildPreparePlan(false, udfPlan))
+	require.True(t, !planReuse(false, udfPlan, preparedLogicalPlan).reusable)
 	ordinaryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
-	require.False(t, shouldRebuildPreparePlan(false, ordinaryPlan))
+	require.False(t, !planReuse(false, ordinaryPlan, preparedLogicalPlan).reusable)
+}
+
+func TestPreparedTemporaryDDLRebuildsEveryExecute(t *testing.T) {
+	for _, temporary := range []bool{false, true} {
+		create := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{Temporary: temporary}},
+		}}}
+		alter := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+			Definition: &plan.DataDefinition_AlterTable{AlterTable: &plan.AlterTable{TableDef: &plan.TableDef{IsTemporary: temporary}}},
+		}}}
+		require.Equal(t, temporary, !planReuse(false, create, preparedLogicalPlan).reusable)
+		require.Equal(t, temporary, !planReuse(false, alter, preparedLogicalPlan).reusable)
+	}
 }
 
 func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
@@ -7146,8 +7187,9 @@ func (c *preparedStatsTestCompiler) StatsWithTableDef(_ *plan.ObjectRef, _ *plan
 	return c.stats, c.err
 }
 
-func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	obj, table, err := c.CompilerContext.Resolve(dbName, tableName, snapshot)
+func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
+	obj, table, err := c.CompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	if err == nil && c.table != nil && tableName == c.table.Name {
 		table = plan2.DeepCopyTableDef(c.table, true)
 	}
@@ -7213,7 +7255,7 @@ func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
 	prepared.compile = sentinel
 	// Keep the real session compiler/rebuild owner, replacing only storage
 	// observations so the distribution threshold needs no large physical data.
-	_, table, err := base.Resolve("tpch", "nation", nil)
+	_, table, err := base.Resolve("tpch", "nation", nil, nil)
 	require.NoError(t, err)
 	installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 	defer ses.GetTxnCompileCtx().Close()
@@ -7275,7 +7317,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 			base := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			if tc.params == 2 {
-				_, table, err := base.Resolve("tpch", "partsupp", nil)
+				_, table, err := base.Resolve("tpch", "partsupp", nil, nil)
 				require.NoError(t, err)
 				hidden := plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 				table.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"ps_partkey", "ps_suppkey"}, CompPkeyCol: hidden}
@@ -7298,7 +7340,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 			if tc.params == 2 {
 				tableName = "partsupp"
 			}
-			_, table, err := ctx.Resolve("tpch", tableName, nil)
+			_, table, err := ctx.Resolve("tpch", tableName, nil, nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 			for _, node := range prepared.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery().Nodes {
@@ -7379,7 +7421,7 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 			defer ses.GetTxnCompileCtx().Close()
 			ctx.proc = cw.proc
 			prepared.defaultDatabase = "tpch"
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(b, err)
 			installStatsAdmissionStorage(b, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
 			prepared.params = vector.NewVec(types.T_text.ToType())
