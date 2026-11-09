@@ -247,20 +247,32 @@ func (s *refreshableTaskStorage) QueryAsyncTask(ctx context.Context, conditions 
 	if ctx.Value(sqlTaskFairFetchContextKey{}) == true {
 		return querySQLTaskAsync(ctx, s, conditions...)
 	}
+	v, err, _ := s.queryAsyncTaskPage(ctx, conditions...)
+	return v, err
+}
+
+// Classify the same store that serves the normal query; it may be replaced
+// on refresh. Keep the holder's normal ping and refresh behavior unchanged.
+func (s *refreshableTaskStorage) queryAsyncTaskPage(ctx context.Context, conditions ...Condition) ([]task.AsyncTask, error, bool) {
 	var v []task.AsyncTask
 	var err error
+	var trustShortPage bool
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
 		err = ErrNotReady
 	} else if err = s.mu.store.PingContext(ctx); err == nil {
 		v, err = s.mu.store.QueryAsyncTask(ctx, conditions...)
+		switch s.mu.store.(type) {
+		case *mysqlTaskStorage, *memTaskStorage:
+			trustShortPage = true
+		}
 	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return v, err
+	return v, err, trustShortPage
 }
 
 func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask) (int, error) {

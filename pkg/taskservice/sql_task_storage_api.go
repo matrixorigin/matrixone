@@ -160,12 +160,12 @@ func (s *refreshableTaskStorage) DeleteStaleSQLTaskBatch(ctx context.Context, ta
 	return deleted, err
 }
 
-func (s *refreshableTaskStorage) ScanAsyncTaskIDs(ctx context.Context, after, high uint64, descending bool, limit int) ([]uint64, error) {
-	var ids []uint64
+func (s *refreshableTaskStorage) ScanAsyncTaskPage(ctx context.Context, after, high uint64, descending bool, limit int) ([]AsyncTaskScanRow, error) {
+	var page []AsyncTaskScanRow
 	err := s.withSQLTaskFetchStore(ctx, func(store TaskStorage) error {
 		var err error
-		ids, err = store.ScanAsyncTaskIDs(ctx, after, high, descending, limit)
+		page, err = store.ScanAsyncTaskPage(ctx, after, high, descending, limit)
 		return err
 	})
-	return ids, err
+	return page, err
 }

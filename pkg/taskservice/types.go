@@ -975,12 +975,26 @@ type TaskStorage interface {
 	// DeleteStaleSQLTaskBatch removes at most 128 unclaimed old-generation SQL
 	// firings for one task, serialized with admission and schedule changes.
 	DeleteStaleSQLTaskBatch(context.Context, uint64) (int, error)
-	// ScanAsyncTaskIDs reads an ordered primary-key page without decoding task
-	// metadata, with a maximum page size of 32 and IDs in (after, high].
-	ScanAsyncTaskIDs(context.Context, uint64, uint64, bool, int) ([]uint64, error)
+	// ScanAsyncTaskPage reads an unfiltered, ordered primary-key page in
+	// (after, high], without decoding task metadata. The page is limited to 32.
+	// Known headers must reflect the persisted row, even through decorators.
+	ScanAsyncTaskPage(context.Context, uint64, uint64, bool, int) ([]AsyncTaskScanRow, error)
 
 	// TriggerSQLTask updates persisted trigger state and inserts an async task in one transaction.
 	TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error)
+}
+
+// AsyncTaskScanRow is a lightweight snapshot used to avoid decoding rows that
+// cannot match a fetch lane. Unknown headers must be checked through the
+// regular task query; a known header is never an execution claim.
+type AsyncTaskScanRow struct {
+	ID           uint64
+	Status       task.TaskStatus
+	Runner       string
+	Executor     task.TaskCode
+	Parent       string
+	SQLTaskRunID uint64
+	Known        bool
 }
 
 // TaskServiceHolder create and hold the task service in the cn, tn and log node. Create

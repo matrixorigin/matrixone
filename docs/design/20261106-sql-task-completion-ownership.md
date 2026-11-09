@@ -218,7 +218,9 @@ single withheld-work flag and continues the cursor past the inspected page;
 when the wave finishes, that flag starts a new wave to revisit the withheld
 siblings. Immediately rewinding every grouped sibling could reduce a 32-row
 page to one task per turn and delay unrelated parents behind a blocked one.
-An entry rejected because the runner queue is full still rewinds immediately.
+An entry rejected because the runner queue is full still rewinds immediately
+and sets the same pending-work flag, including for new arrivals. This keeps
+the candidate eligible when the current wave rolls over.
 The selected runner entry records whether siblings were withheld. After that
 executor returns a selected, non-deferred outcome,
 the runner removes it, releases its slot and offers a nonblocking wakeup to
@@ -227,7 +229,10 @@ not wake immediately. The hint checks runner lifecycle, not the removed entry's
 context, which removal cancels. A wakeup is a scheduling hint, not evidence of claim,
 completion or rollback. It causes at most four fetch attempts, and the runner
 allows at most 32 additional attempts per configured fetch interval. A full
-queue, cancellation or storage error stops the burst; the normal timer
+queue, cancellation, storage error, or submission of a SQL firing stops the
+burst. Stopping after submission limits competition between pages while the
+selected firing reaches admission; another hint can still race, so the
+existing parent guard remains authoritative. The normal timer
 reconsiders work when hints are coalesced, exhausted or lost. This adds no
 worker or persistent per-parent registry. A long-running selected executor
 does not wake siblings until it returns, but periodic fetching can still

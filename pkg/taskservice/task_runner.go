@@ -157,6 +157,7 @@ type taskRunner struct {
 	waitTasksC   chan runningTask
 	parallelismC chan struct{}
 	doneC        chan runningTask
+	sqlFetchWake chan struct{}
 
 	started     atomic.Bool
 	sqlDeferred atomic.Uint64
@@ -238,6 +239,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 	r.parallelismC = make(chan struct{}, r.options.parallelism)
 	r.waitTasksC = make(chan runningTask, r.options.maxWaitTasks)
 	r.doneC = make(chan runningTask, r.options.maxWaitTasks)
+	r.sqlFetchWake = make(chan struct{}, 1)
 	r.runningTasks.m = make(map[uint64]runningTask)
 	r.runningTasks.completedTasks = make(map[uint64]struct{})
 	r.pendingTaskHandle = make(chan TaskHandler, 20)
@@ -371,35 +373,122 @@ func (r *taskRunner) fetch(ctx context.Context) {
 	ticker := time.NewTicker(r.options.fetchInterval)
 	defer ticker.Stop()
 
+	extra := 32
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Debug("fetch task stopped")
 			return
 		case <-ticker.C:
-			if taskFrameworkDisabled() {
-				continue
-			}
-			tasks, err := r.doFetch(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
+			extra = 32
+			r.fetchTasks(ctx)
+		case <-r.sqlFetchWake:
+			for i := 0; i < 4 && extra > 0; i++ {
+				// A ready periodic poll takes precedence over another hint.
+				select {
+				case <-ctx.Done():
 					return
+				case <-ticker.C:
+					extra = 32
+					r.fetchTasks(ctx)
+					i = 4
+					continue
+				default:
 				}
-				if r.sqlFetch.active {
-					sqlTaskFetchFailed.Warn(zap.Error(err))
-				} else {
-					r.logger.Error("fetch task failed", zap.Error(err))
-				}
-				break
-			}
-			for _, t := range tasks {
-				if !r.addToWait(ctx, t) {
-					r.sqlFetch.rewind(t.ID)
+				extra--
+				if !r.fetchTasks(ctx) {
 					break
 				}
 			}
 		}
 	}
+}
+
+// fetchTasks returns false when a wake burst should stop; the periodic timer
+// will retry after capacity, cancellation, or a storage failure.
+func (r *taskRunner) fetchTasks(ctx context.Context) bool {
+	if taskFrameworkDisabled() || ctx.Err() != nil || len(r.waitTasksC) == cap(r.waitTasksC) {
+		return false
+	}
+	tasks, err := r.doFetch(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			if r.sqlFetch.active {
+				sqlTaskFetchFailed.Warn(zap.Error(err))
+			} else {
+				r.logger.Error("fetch task failed", zap.Error(err))
+			}
+		}
+		return false
+	}
+	tasks, held := groupSQLTaskBatch(tasks)
+	if len(held) != 0 {
+		if r.sqlFetch.active {
+			r.sqlFetch.pendingWork = true
+		} else {
+			r.sqlDeferred.Add(1)
+		}
+	}
+	continueBurst := true
+	for _, t := range tasks {
+		if !r.addToWait(ctx, t, held[t.ID]) {
+			r.sqlFetch.rewind(t.ID)
+			return false
+		}
+		if t.Metadata.Executor == task.TaskCode_SQLTask {
+			// Let this batch reach admission before another hint fetch can
+			// select a sibling from a different page of the same parent.
+			continueBurst = false
+		}
+	}
+	return continueBurst
+}
+
+// Leave same-parent firings in storage until one selected firing has had an
+// opportunity to acquire the parent guard. Other parents remain eligible.
+func groupSQLTaskBatch(tasks []task.AsyncTask) ([]task.AsyncTask, map[uint64]bool) {
+	type group struct {
+		id      uint64
+		count   int
+		emitted bool
+	}
+	var groups map[string]group
+	for _, value := range tasks {
+		if value.Metadata.Executor != task.TaskCode_SQLTask {
+			continue
+		}
+		if _, ok := sqlTaskParentID(value.ParentTaskID); !ok {
+			continue
+		}
+		if groups == nil {
+			groups = make(map[string]group)
+		}
+		g := groups[value.ParentTaskID]
+		if g.count == 0 || value.ID < g.id {
+			g.id = value.ID
+		}
+		g.count++
+		groups[value.ParentTaskID] = g
+	}
+	var held map[uint64]bool
+	selected := tasks[:0]
+	for _, value := range tasks {
+		if g, ok := groups[value.ParentTaskID]; ok && value.Metadata.Executor == task.TaskCode_SQLTask {
+			if value.ID != g.id || g.emitted {
+				continue
+			}
+			g.emitted = true
+			groups[value.ParentTaskID] = g
+			if g.count > 1 {
+				if held == nil {
+					held = make(map[uint64]bool)
+				}
+				held[value.ID] = true
+			}
+		}
+		selected = append(selected, value)
+	}
+	return selected, held
 }
 
 func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
@@ -409,8 +498,10 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 	ctx, cancel := context.WithTimeoutCause(parent, r.options.fetchTimeout, moerr.CauseDoFetch)
 	var tasks []task.AsyncTask
 	var err error
+	var trustShortPage bool
 	service := sqlTaskServiceOwner(r.service)
-	if service != nil && r.useSQLTaskFairFetch(service) {
+	fair := service != nil && r.useSQLTaskFairFetch(service)
+	if fair {
 		tasks, err = r.doSQLTaskFairFetch(ctx, service)
 	} else {
 		conditions := []Condition{
@@ -422,7 +513,11 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 		if service == nil {
 			conditions = append(conditions, withSQLTaskLane(false))
 		}
-		tasks, err = r.service.QueryAsyncTask(ctx, conditions...)
+		if service == nil {
+			tasks, err = r.service.QueryAsyncTask(ctx, conditions...)
+		} else {
+			tasks, err, trustShortPage = r.queryNormalTaskPage(ctx, service, conditions...)
+		}
 	}
 	cancel()
 	if err != nil {
@@ -449,6 +544,10 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 		delete(r.runningTasks.completedTasks, k)
 	}
 	r.runningTasks.Unlock()
+	if service != nil && !fair && (len(tasks) >= r.options.queryLimit && len(newTasks) < len(tasks) && len(r.waitTasksC) < cap(r.waitTasksC) ||
+		!trustShortPage && len(tasks) < r.options.queryLimit) {
+		r.sqlDeferred.Add(1)
+	}
 
 	if len(newTasks) == 0 {
 		return nil, nil
@@ -457,7 +556,7 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 	return newTasks, nil
 }
 
-func (r *taskRunner) addToWait(ctx context.Context, value task.AsyncTask) bool {
+func (r *taskRunner) addToWait(ctx context.Context, value task.AsyncTask, hasWithheldSiblings bool) bool {
 	ctx2, cancel := context.WithCancelCause(ctx)
 	enqueued := false
 	defer func() {
@@ -466,9 +565,10 @@ func (r *taskRunner) addToWait(ctx context.Context, value task.AsyncTask) bool {
 		}
 	}()
 	rt := runningTask{
-		task:   value,
-		ctx:    ctx2,
-		cancel: cancel,
+		task:                value,
+		ctx:                 ctx2,
+		cancel:              cancel,
+		hasWithheldSiblings: hasWithheldSiblings,
 	}
 
 	select {
@@ -624,6 +724,12 @@ func (r *taskRunner) run(rt runningTask) {
 				}
 				r.removeRunningTask(rt, nil)
 				r.releaseParallel()
+				if rt.hasWithheldSiblings && !disposition.deferred && ctx.Err() == nil && r.started.Load() {
+					select {
+					case r.sqlFetchWake <- struct{}{}:
+					default:
+					}
+				}
 				return
 			}
 			r.taskExecResult(rt, err, err != nil)
@@ -864,11 +970,12 @@ func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
 }
 
 type runningTask struct {
-	task       task.AsyncTask
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	retryTimes uint32
-	retryAt    time.Time
+	task                task.AsyncTask
+	ctx                 context.Context
+	cancel              context.CancelCauseFunc
+	retryTimes          uint32
+	retryAt             time.Time
+	hasWithheldSiblings bool
 }
 
 func (rt runningTask) canRetry() bool {

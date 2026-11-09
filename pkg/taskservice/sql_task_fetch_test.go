@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -220,7 +221,7 @@ func TestSQLTaskFairFetchHonorsRestrictedWrapperIDs(t *testing.T) {
 	require.Empty(t, values)
 	done := make(chan struct{}, 1)
 	runner.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { done <- struct{}{}; return nil })
-	require.True(t, runner.addToWait(ctx, allowed))
+	require.True(t, runner.addToWait(ctx, allowed, false))
 	require.NoError(t, runner.Start())
 	select {
 	case <-done:
@@ -316,10 +317,10 @@ func TestSQLTaskDeferredParentDoesNotBlockQueuedTasks(t *testing.T) {
 	})
 	runner.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { close(other); return nil })
 	for id := uint64(1); id <= 128; id++ {
-		require.True(t, runner.addToWait(ctx, task.AsyncTask{ID: id, ParentTaskID: "sql-task:1", Metadata: task.TaskMetadata{Executor: task.TaskCode_SQLTask}}))
+		require.True(t, runner.addToWait(ctx, task.AsyncTask{ID: id, ParentTaskID: "sql-task:1", Metadata: task.TaskMetadata{Executor: task.TaskCode_SQLTask}}, false))
 	}
-	require.True(t, runner.addToWait(ctx, task.AsyncTask{ID: 129, ParentTaskID: "sql-task:2", Metadata: task.TaskMetadata{Executor: task.TaskCode_SQLTask}}))
-	require.True(t, runner.addToWait(ctx, task.AsyncTask{ID: 130, Metadata: task.TaskMetadata{Executor: task.TaskCode_TestOnly}}))
+	require.True(t, runner.addToWait(ctx, task.AsyncTask{ID: 129, ParentTaskID: "sql-task:2", Metadata: task.TaskMetadata{Executor: task.TaskCode_SQLTask}}, false))
+	require.True(t, runner.addToWait(ctx, task.AsyncTask{ID: 130, Metadata: task.TaskMetadata{Executor: task.TaskCode_TestOnly}}, false))
 	require.NoError(t, runner.Start())
 	select {
 	case <-firstStarted:
@@ -476,8 +477,8 @@ func TestSQLTaskFairFetchRevisitsRejectedTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	blocker := task.AsyncTask{ID: 999}
-	require.True(t, runner.addToWait(ctx, blocker))
-	require.False(t, runner.addToWait(ctx, values[0]))
+	require.True(t, runner.addToWait(ctx, blocker, false))
+	require.False(t, runner.addToWait(ctx, values[0], false))
 	runner.sqlFetch.rewind(values[0].ID)
 	rt := <-runner.waitTasksC
 	runner.removeRunningTask(rt, nil)
@@ -563,6 +564,11 @@ func (s *interruptedSQLTaskFetchStore) QueryAsyncTask(ctx context.Context, conds
 			s.cancel()
 			return nil, ctx.Err()
 		}
+		values, err := s.memTaskStorage.QueryAsyncTask(ctx, conds...)
+		if err == nil && len(values) == 1 && strings.HasPrefix(values[0].Metadata.ID, "filtered-") {
+			return nil, nil // a decorator filters a row after its point lookup
+		}
+		return values, err
 	}
 	return s.memTaskStorage.QueryAsyncTask(ctx, conds...)
 }
@@ -574,7 +580,7 @@ func TestSQLTaskRawFetchMakesProgressAcrossDeadlines(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
 	runner := NewTaskRunner("cn1", service, nil, WithRunnerFetchLimit(2)).(*taskRunner)
 	for i := 0; i < 18; i++ {
-		mustAddTestAsyncTask(t, base, 1, task.AsyncTask{Status: task.TaskStatus_Completed, Metadata: task.TaskMetadata{ID: fmt.Sprintf("done-%d", i)}})
+		mustAddTestAsyncTask(t, base, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: fmt.Sprintf("filtered-%d", i), Executor: task.TaskCode_SQLTask}})
 	}
 	wanted := task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: "wanted", Executor: task.TaskCode_SQLTask}}
 	mustAddTestAsyncTask(t, base, 1, wanted)
@@ -583,6 +589,7 @@ func TestSQLTaskRawFetchMakesProgressAcrossDeadlines(t *testing.T) {
 	}
 	cursor := sqlTaskFetchCursor{high: 22, ready: true}
 	found := false
+	interruptions := 0
 	for i := 0; i < 15 && !found; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		store.reads, store.cancel = 0, cancel
@@ -591,6 +598,7 @@ func TestSQLTaskRawFetchMakesProgressAcrossDeadlines(t *testing.T) {
 		cancel()
 		if err != nil {
 			require.ErrorIs(t, err, context.Canceled)
+			interruptions++
 		}
 		require.Greater(t, cursor.after, before, "completed checks must survive a later timeout")
 		for _, value := range values {
@@ -598,4 +606,5 @@ func TestSQLTaskRawFetchMakesProgressAcrossDeadlines(t *testing.T) {
 		}
 	}
 	require.True(t, found, "repeated deadlines must not keep the cursor on the first page")
+	require.Positive(t, interruptions, "the point-query cancellation path must actually execute")
 }

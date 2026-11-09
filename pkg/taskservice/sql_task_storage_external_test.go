@@ -197,9 +197,10 @@ func TestExternalTaskWrappersRecoverWithoutReplayingSQL(t *testing.T) {
 	require.NoError(t, executor.ExecuteContext(ctx, &manual, true))
 	require.Equal(t, int32(2), fake.calls.Load(), "the same wrapped service must also complete a healthy execution")
 	require.False(t, fake.background.Load(), "manual SQL retains ordinary statement logging")
-	ids, err := store.ScanAsyncTaskIDs(ctx, 0, ^uint64(0), false, 32)
+	page, err := store.ScanAsyncTaskPage(ctx, 0, ^uint64(0), false, 32)
 	require.NoError(t, err)
-	require.Contains(t, ids, firings[0].ID)
+	require.Len(t, page, 1)
+	require.Equal(t, firings[0].ID, page[0].ID)
 }
 
 func TestExternalTaskServiceRejectsMissingOrMismatchedOwnerBeforeSQL(t *testing.T) {

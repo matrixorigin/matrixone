@@ -370,7 +370,7 @@ func TestRemoveRunningTask(t *testing.T) {
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 
 		task := mustGetTestAsyncTask(t, store, 1)[0]
-		require.True(t, r.addToWait(context.Background(), task))
+		require.True(t, r.addToWait(context.Background(), task, false))
 		select {
 		case <-executorStarted:
 		case <-time.After(10 * time.Second):
