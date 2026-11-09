@@ -1,7 +1,8 @@
 # Early runtime-filter domains
 
 Owner: #30844; implementation: replacement of #32098; series: #32379 / #30838.
-Status: implementation plan and scope approved by the requester on 2026-11-09.
+Status: implementation scope and completed-cardinality admission amendment approved
+by the requester on 2026-11-09 ("approve. go on").
 Risk: R3, planner/compiler/reader ownership, synchronization and hot-path work.
 This design is independent of dictionary vectors and cache PR #32093.
 
@@ -51,7 +52,8 @@ positives, not false negatives. No SQL-specific names or values enter the rule.
 Store candidate domains in a new optional Query annotation, separate from
 RuntimeFilterProbeList/BuildList readiness messages. Each descriptor identifies
 the originating join, source scan and source column, immutable integer key type,
-and target scan/column pairs. Column identities use the finalized scan schema,
+and target scan/column pairs and known probe NDV cost hints. NDV affects profitability,
+never the equality proof. Column identities use the finalized scan schema,
 not a pre-remap expression slot. Include descriptors in deep-copy contracts.
 Recompute/revalidate endpoints before physical binding; missing or changed nodes
 disable a candidate before physical execution.
@@ -97,8 +99,14 @@ integration uses ReaderFilterRequest/ReadWithFilter; it is a separate enabling P
 The current private-replica geometry multiplies a globally sized filter by the
 number of producers. Replace it with one query-generation-owned CBloomFilter per
 domain, sized using the admitted global build estimate and the existing 1%
-target. Keep the existing NDV/selectivity admission and disable controls; unknown
-or unprofitable estimates fall back rather than receiving a larger budget.
+target. Keep the existing 10% source-cardinality / probe-NDV admission threshold and
+disable controls. A bounded filtered source may be considered even when its
+estimated ratio exceeds 10%: the completed source's actual PK row count makes
+the final profitability decision for each target. Unknown or invalid NDV uses
+PASS. The estimate still sizes the one filter; its budget is never enlarged.
+If the observed source count already fails every target's ratio, stop optional
+construction and publish PASS early, restoring ordinary scan overlap. Partial
+counts never authorize membership rejection or an empty-domain result.
 
 Reserve the sum of all admitted filters, coordinator state and actual bounded
 probe scratch before native allocation, within the execution-resource budget and
@@ -170,3 +178,20 @@ Accepted boundaries: single-CN binding first; same-type integer necessary domain
 one shared filter with bounded serialized construction; ordinary fallback; no
 logical join rewrite or new cache policy. A material deviation requires review of
 the affected design before implementation/delivery.
+
+## Admission amendment review
+
+The live SF10 Q9 plan estimates filtered PART at 400,000 / 2,000,000 rows
+(20%), so the former estimate-only 10% gate prevented activation. The requester
+approved using completed source cardinality while retaining the 10% NDV ratio,
+64 MiB query cap, unchanged estimates/placement and the full Q9/all22 acceptance
+protocol. Single-column PK source rows conservatively bound distinct build keys.
+Each probe checks actual completed rows against its own known finite NDV; an
+unprofitable or invalid target uses PASS. Early PASS is allowed when every
+target is already unprofitable; it never establishes absence. Source workers
+still execute ordinary query work and propagate their errors.
+
+Design review: PASS before implementation of the amendment. The source remains
+independent, partial membership remains invisible, memory geometry is unchanged,
+and final gain/regression evidence is still required. Capture estimate/observed
+rows, filter bytes, completion and per-target PASS reasons in physical stats.
