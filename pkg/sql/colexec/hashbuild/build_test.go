@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -786,7 +787,7 @@ func TestHashBuildRuntimeFilterFallbackStatsTriggerDiagnostics(t *testing.T) {
 	require.False(t, hasHashBuildDiagnosticStats(nil))
 }
 
-func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
+func TestHashmapBuilderNextUniqueChunkFailureAbandonsOptionalKeysInPlace(
 	t *testing.T,
 ) {
 	typ := types.T_int32.ToType()
@@ -803,7 +804,7 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 	installTestHashBuildBudget(t, tc.arg, generation)
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	const uniqueGrowthRows = hashmap.UnitLimit * 2
+	const uniqueGrowthRows = keycodec.KeyChunkRows + 1
 	input := newBatch(
 		[]types.Type{typ}, tc.proc, uniqueGrowthRows)
 	require.NoError(t,
@@ -811,33 +812,20 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = uniqueGrowthRows
 	input.Clean(tc.proc.Mp())
 
-	providerCalls := 0
-	rejectCall := 0
-	forcedUniqueGrowthReject := false
+	forcedNextChunkReject := false
 	aggregate.SetAggregateCapProvider(func() (uint64, error) {
-		providerCalls++
-		if rejectCall > 0 && providerCalls == rejectCall {
-			forcedUniqueGrowthReject = true
+		// The first chunk is already complete. Reject its successor rather
+		// than the initial chunk's metadata or vector reservation.
+		if !forcedNextChunkReject && tc.arg.ctr.hashmapBuilder.uniqueKeys.first.length() == keycodec.KeyChunkRows {
+			forcedNextChunkReject = true
 			return generation.Used(), nil
 		}
 		return capBytes, nil
 	})
 
-	// HashOnPK preallocates the complete mandatory map before row insertion.
-	// Calibrate those deterministic admissions without optional keys, then
-	// reject the next admission in the equivalent build: growth overlap for
-	// the second UnitLimit-sized UniqueJoinKeys append.
-	require.NoError(t, tc.arg.ctr.hashmapBuilder.BuildHashmap(
-		true, false, false, tc.proc))
-	mandatoryCalls := providerCalls
-	require.Greater(t, mandatoryCalls, 0)
-	tc.arg.ctr.hashmapBuilder.FreeHashMapOnly(tc.proc)
-	providerCalls = 0
-	rejectCall = mandatoryCalls + 1
-
 	require.NoError(t, tc.arg.ctr.hashmapBuilder.BuildHashmap(
 		true, false, true, tc.proc))
-	require.True(t, forcedUniqueGrowthReject)
+	require.True(t, forcedNextChunkReject)
 	fallback, rebuildSafe :=
 		tc.arg.ctr.hashmapBuilder.runtimeFilterFallbackState()
 	require.True(t, fallback)
@@ -1937,6 +1925,9 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 		name       string
 		wide       []int64
 		direct     []int32
+		nulls      []uint64
+		split      int
+		unsigned   bool
 		expectedRF int32
 	}{
 		{
@@ -1951,27 +1942,77 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 			direct:     []int32{11},
 			expectedRF: message.RuntimeFilter_PASS,
 		},
+		{
+			name:       "multiple chunks preserve tuple order and signed boundaries",
+			wide:       []int64{math.MinInt32, math.MaxInt32, 0},
+			direct:     []int32{11, 12, 13},
+			split:      1,
+			expectedRF: message.RuntimeFilter_IN,
+		},
+		{
+			name:       "later chunk overflow fails the complete filter open",
+			wide:       []int64{1, math.MaxInt32 + 1},
+			direct:     []int32{11, 12},
+			split:      1,
+			expectedRF: message.RuntimeFilter_PASS,
+		},
+		{
+			name:       "later chunk underflow fails the complete filter open",
+			wide:       []int64{1, math.MinInt32 - 1},
+			direct:     []int32{11, 12},
+			split:      1,
+			expectedRF: message.RuntimeFilter_PASS,
+		},
+		{
+			name:       "later chunk null is omitted from serial",
+			wide:       []int64{1, 2, 3},
+			direct:     []int32{11, 12, 13},
+			nulls:      []uint64{1},
+			split:      1,
+			expectedRF: message.RuntimeFilter_IN,
+		},
+		{
+			name:       "multiple chunks preserve unsigned boundary",
+			wide:       []int64{0, math.MaxUint32},
+			direct:     []int32{11, 12},
+			split:      1,
+			unsigned:   true,
+			expectedRF: message.RuntimeFilter_IN,
+		},
+		{
+			name:       "later chunk unsigned overflow fails open",
+			wide:       []int64{1, math.MaxUint32 + 1},
+			direct:     []int32{11, 12},
+			split:      1,
+			unsigned:   true,
+			expectedRF: message.RuntimeFilter_PASS,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wideType := types.T_int64.ToType()
 			narrowType := types.T_int32.ToType()
+			if test.unsigned {
+				wideType = types.T_uint64.ToType()
+				narrowType = types.T_uint32.ToType()
+			}
+			directType := types.T_int32.ToType()
 			conditions := []*plan.Expr{
 				newExpr(0, wideType),
-				newExpr(1, narrowType),
+				newExpr(1, directType),
 			}
 			tc := newTestCase(
 				t,
 				[]bool{false, false},
-				[]types.Type{wideType, narrowType},
+				[]types.Type{wideType, directType},
 				conditions,
 			)
 			spec := makeSerializedRuntimeFilterSpec(
 				t, tc.proc, 206, 100,
-				[]types.Type{narrowType, narrowType}, false)
+				[]types.Type{directType, narrowType}, false)
 			// The tuple contract follows probe/primary-key order: direct slot 1
 			// first, then narrowed slot 0. This is intentionally different from
 			// the physical HashBuild condition order.
-			spec.BuildExpr.GetF().Args[0] = newExpr(1, narrowType)
+			spec.BuildExpr.GetF().Args[0] = newExpr(1, directType)
 			spec.BuildExpr.GetF().Args[1] = makeSerializedRuntimeFilterCastExpr(
 				t, tc.proc, 0, wideType, narrowType)
 			tc.arg.RuntimeFilterSpec = spec
@@ -1980,9 +2021,37 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			installTestHashBuildBudget(t, tc.arg, generation)
-			tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
-				testutil.MakeInt64Vector(test.wide, nil, tc.proc.Mp()),
-				testutil.MakeInt32Vector(test.direct, nil, tc.proc.Mp()),
+			makeChunk := func(start, end int) uniqueKeyBatch {
+				var nulls []uint64
+				for _, row := range test.nulls {
+					if row >= uint64(start) && row < uint64(end) {
+						nulls = append(nulls, row-uint64(start))
+					}
+				}
+				var wide *vector.Vector
+				if test.unsigned {
+					values := make([]uint64, end-start)
+					for i := range values {
+						values[i] = uint64(test.wide[start+i])
+					}
+					wide = testutil.MakeUint64Vector(values, nulls, tc.proc.Mp())
+				} else {
+					wide = testutil.MakeInt64Vector(test.wide[start:end], nulls, tc.proc.Mp())
+				}
+				return uniqueKeyBatch{vecs: []*vector.Vector{
+					wide,
+					testutil.MakeInt32Vector(test.direct[start:end], nil, tc.proc.Mp()),
+				}}
+			}
+			split := test.split
+			if split == 0 {
+				split = len(test.wide)
+			}
+			keys := &tc.arg.ctr.hashmapBuilder.uniqueKeys
+			keys.first = makeChunk(0, split)
+			if split < len(test.wide) {
+				keys.rest = []uniqueKeyBatch{makeChunk(split, len(test.wide))}
+				keys.rows = len(test.wide)
 			}
 
 			service := tc.proc.GetService()
@@ -2014,16 +2083,24 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 			require.Equal(t, test.expectedRF, runtimeFilter.Typ)
 
 			if test.expectedRF == message.RuntimeFilter_IN {
-				require.Equal(t, int32(len(test.wide)), runtimeFilter.Card)
+				rows := len(test.wide) - len(test.nulls)
+				require.Equal(t, int32(rows), runtimeFilter.Card)
 				payload := vector.NewVec(types.T_any.ToType())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
-				require.Equal(t, len(test.wide), payload.Length())
-				expected := make(map[string]struct{}, len(test.wide))
+				require.Equal(t, rows, payload.Length())
+				expected := make(map[string]struct{}, rows)
 				packer := types.NewPacker()
 				for i := range test.wide {
+					if slices.Contains(test.nulls, uint64(i)) {
+						continue
+					}
 					packer.Reset()
 					packer.EncodeInt32(test.direct[i])
-					packer.EncodeInt32(int32(test.wide[i]))
+					if test.unsigned {
+						packer.EncodeUint32(uint32(test.wide[i]))
+					} else {
+						packer.EncodeInt32(int32(test.wide[i]))
+					}
 					expected[string(packer.GetBuf())] = struct{}{}
 				}
 				packer.Close()
