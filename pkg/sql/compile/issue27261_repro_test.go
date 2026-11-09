@@ -25,6 +25,7 @@ import (
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -107,16 +108,12 @@ func (op *issue27261BlockingScan) Call(proc *process.Process) (vm.CallResult, er
 // still in flight. It must stop that pipeline tree without canceling the query
 // or leaking context.Canceled through Scope.Run.
 func TestIssue27261StopSendingCancelsOnlyRemotePipeline(t *testing.T) {
-	oldRuntime := runtime.ServiceRuntime("")
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
-
+	rootProc := newIssue27261Process(t)
 	server := colexec.NewServer("")
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
 
-	rootProc := testutil.NewProcess(t)
 	remoteCtx := context.WithValue(rootProc.GetTopContext(), defines.RemoteRunContext{}, true)
 	queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(remoteCtx)
 	rootProc.BuildPipelineContext(queryCtx)
@@ -132,8 +129,7 @@ func TestIssue27261StopSendingCancelsOnlyRemotePipeline(t *testing.T) {
 		started:      make(chan struct{}),
 	}
 	scope := &Scope{Proc: readerProc, RootOp: op}
-	result := make(chan error, 1)
-	go func() { result <- scope.Run(&Compile{proc: rootProc}) }()
+	result := runIssue27261Scope(t, rootProc, func() error { return scope.Run(&Compile{proc: rootProc}) })
 
 	select {
 	case <-op.started:
@@ -172,16 +168,12 @@ func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.
 	)
 	cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
 
-	oldRuntime := runtime.ServiceRuntime("")
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
-
+	rootProc := newIssue27261Process(t)
 	server := colexec.NewServer("")
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
 
-	rootProc := testutil.NewProcess(t)
 	remoteCtx := context.WithValue(rootProc.GetTopContext(), defines.RemoteRunContext{}, true)
 	queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(remoteCtx)
 	rootProc.BuildPipelineContext(queryCtx)
@@ -215,8 +207,7 @@ func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.
 		},
 	}
 
-	result := make(chan error, 1)
-	go func() { result <- blockedScope.ParallelRun(compile) }()
+	result := runIssue27261Scope(t, rootProc, func() error { return blockedScope.ParallelRun(compile) })
 
 	select {
 	case <-relation.started:
@@ -274,8 +265,7 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 		},
 	}
 
-	result := make(chan error, 1)
-	go func() { result <- scope.ParallelRun(&Compile{proc: rootProc}) }()
+	result := runIssue27261Scope(t, rootProc, func() error { return scope.ParallelRun(&Compile{proc: rootProc}) })
 
 	select {
 	case <-relation.started:
@@ -419,4 +409,82 @@ func TestParallelReaderBuildPreservesQueryDeadline(t *testing.T) {
 	err := scope.ParallelRun(&Compile{proc: root})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorIs(t, reg.Err(), context.DeadlineExceeded)
+}
+
+// The private runtime owns its increment service. Never close the service on
+// the runtime that was installed by another test.
+func newIssue27261Process(t *testing.T) *process.Process {
+	t.Helper()
+	oldRuntime := runtime.ServiceRuntime("")
+	rt := runtime.DefaultRuntime()
+	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
+	runtime.SetupServiceBasedRuntime("", rt)
+	testutil.SetupAutoIncrService("")
+	service := incrservice.GetAutoIncrementService("")
+	t.Cleanup(func() {
+		service.Close()
+		rt.CompareAndDeleteGlobalVariables(runtime.AutoIncrementService, service)
+	})
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	proc.BuildPipelineContext(proc.GetTopContext())
+	t.Cleanup(func() { proc.Cancel(nil) })
+	return proc
+}
+
+// Cleanup must join the worker even when an assertion returns before the test
+// consumes its result. The separate done channel is not consumed by assertions.
+func runIssue27261Scope(t *testing.T, proc *process.Process, run func() error) <-chan error {
+	t.Helper()
+	result := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		proc.Cancel(nil)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("scope worker did not exit during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		result <- run()
+	}()
+	return result
+}
+
+func TestIssue27261FixtureClosesOwnedServiceAndWorker(t *testing.T) {
+	oldRuntime := runtime.ServiceRuntime("")
+	var ownedRuntime runtime.Runtime
+	var ownedService incrservice.AutoIncrementService
+	exited := make(chan struct{})
+	if !t.Run("return before consuming worker result", func(t *testing.T) {
+		proc := newIssue27261Process(t)
+		ownedRuntime = runtime.ServiceRuntime("")
+		ownedService = incrservice.GetAutoIncrementService("")
+		require.NoError(t, ownedService.Reload(context.Background(), 1))
+		started := make(chan struct{})
+		runIssue27261Scope(t, proc, func() error {
+			defer close(exited)
+			close(started)
+			<-proc.Ctx.Done()
+			return proc.Ctx.Err()
+		})
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("scope worker did not start")
+		}
+	}) {
+		return
+	}
+	require.Same(t, oldRuntime, runtime.ServiceRuntime(""))
+	select {
+	case <-exited:
+	default:
+		t.Fatal("fixture returned before worker exited")
+	}
+	require.Error(t, ownedService.Reload(context.Background(), 1), "owned service must be closed")
+	_, installed := ownedRuntime.GetGlobalVariables(runtime.AutoIncrementService)
+	require.False(t, installed, "private runtime must release its service")
 }
