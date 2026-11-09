@@ -231,6 +231,8 @@ type requiredStateClient struct {
 	leaderID, term       uint64
 	loseClaimResponse    bool
 	loseSetResponse      bool
+	rejectClaim          bool
+	failReadback         bool
 	takeoverAfterSet     bool
 	changeResetReadback  bool
 	stateReads           int
@@ -242,6 +244,9 @@ func (c *requiredStateClient) GetLeaderState(context.Context) (uint64, uint64, e
 
 func (c *requiredStateClient) GetRequiredLsnState(context.Context) (logservice.Lsn, uint64, uint64, error) {
 	c.stateReads++
+	if c.failReadback && c.stateReads > 1 {
+		return 0, 0, 0, fakeError
+	}
 	if c.changeResetReadback && c.lsn == 0 && c.stateReads > 1 {
 		// Another owner claimed the shard between the reset and its readback.
 		c.owner++
@@ -253,6 +258,9 @@ func (c *requiredStateClient) GetRequiredLsnState(context.Context) (logservice.L
 func (c *requiredStateClient) ClaimRequiredLsn(
 	_ context.Context, expected logservice.Lsn, revision, owner, term, leaderID uint64,
 ) error {
+	if c.rejectClaim {
+		return fakeError
+	}
 	if c.lsn != expected || c.revision != revision ||
 		c.term != term || c.leaderID != leaderID {
 		return errRequiredLsnConflict
@@ -324,6 +332,42 @@ func TestRequiredLsnOwnershipAfterLostResponses(t *testing.T) {
 			require.Zero(t, server.lsn)
 		})
 	}
+}
+
+func TestRequiredLsnClaimRejectsStaleLeadership(t *testing.T) {
+	ctx := context.Background()
+	t.Run("no leader", func(t *testing.T) {
+		server := &requiredStateClient{term: 1}
+		lc := &logClient{client: server}
+		require.ErrorIs(t, lc.claimRequiredLsn(ctx), errRequiredLsnConflict)
+		require.Zero(t, server.revision)
+	})
+	t.Run("local replica is no longer leader", func(t *testing.T) {
+		server := &requiredStateClient{leaderID: 2, term: 1}
+		localReplicas := &sync.Map{}
+		localReplicas.Store(uint64(3), uint64(1))
+		lc := &logClient{common: common{shardReplicaID: localReplicas}, client: server, shardID: 3}
+		require.ErrorIs(t, lc.claimRequiredLsn(ctx), errRequiredLsnConflict)
+		require.Zero(t, server.revision)
+	})
+	t.Run("failed proposal did not commit", func(t *testing.T) {
+		server := &requiredStateClient{leaderID: 2, term: 1, rejectClaim: true}
+		lc := &logClient{client: server}
+		require.ErrorIs(t, lc.claimRequiredLsn(ctx), errRequiredLsnConflict)
+		require.Zero(t, lc.requiredOwner)
+		require.Zero(t, server.revision)
+	})
+}
+
+func TestRequiredLsnSetNeedsVerifiableCommit(t *testing.T) {
+	server := &requiredStateClient{leaderID: 2, term: 1, loseSetResponse: true}
+	lc := &logClient{client: server}
+	ctx := context.Background()
+	require.NoError(t, lc.claimRequiredLsn(ctx))
+	server.failReadback = true
+	require.ErrorIs(t, lc.setRequiredLsn(ctx, 100), fakeError)
+	require.Zero(t, lc.requiredLsn)
+	require.Equal(t, uint64(100), server.lsn)
 }
 
 type serverValue struct {
