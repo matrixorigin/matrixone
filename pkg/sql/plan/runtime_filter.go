@@ -508,6 +508,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	if !policy.eligible || !builder.canSatisfyRuntimeFilterDelivery(node, policy) {
 		return
 	}
+	if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && !mustRuntimeFilter(node) {
+		return
+	}
 	if node.JoinType == plan.Node_SINGLE && builder.optimizerHints != nil && builder.optimizerHints.disableRightSingleRF != 0 {
 		return
 	}
@@ -713,10 +716,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			//if probeCol.Name != tableDef.Pkey.PkeyColName && builder.getColOverlap(probeCol) > overlapThreshold {
 			//	return
 			//}
-		}
-
-		if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && !mustRuntimeFilter(node) {
-			return
 		}
 
 		notOnPk := probeCol.Name != tableDef.Pkey.PkeyColName

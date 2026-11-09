@@ -136,6 +136,43 @@ func configureRuntimeFilterCompositePK(builder *QueryBuilder) (*planpb.Node, *pl
 	return probe, build
 }
 
+func TestRuntimeFilterDisableHintRespectsKeyShapeAndMandatoryJoins(t *testing.T) {
+	for _, composite := range []bool{false, true} {
+		keyShape := "single"
+		if composite {
+			keyShape = "composite"
+		}
+		for _, joinType := range []planpb.Node_JoinType{planpb.Node_INNER, planpb.Node_INDEX, planpb.Node_DEDUP} {
+			for _, hint := range []string{"default", "enabled", "disabled"} {
+				t.Run(keyShape+"/"+joinType.String()+"/"+hint, func(t *testing.T) {
+					builder := newRuntimeFilterSingleTestBuilder(false)
+					if composite {
+						configureRuntimeFilterCompositePK(builder)
+					}
+					join := builder.qry.Nodes[2]
+					join.JoinType = joinType
+					if hint != "default" {
+						builder.optimizerHints = &OptimizerHints{}
+						if hint == "disabled" {
+							builder.optimizerHints.runtimeFilter = 1
+						}
+					}
+					builder.generateRuntimeFilters(2)
+					probe := builder.qry.Nodes[0]
+					if hint == "disabled" && joinType == planpb.Node_INNER {
+						require.Empty(t, join.RuntimeFilterBuildList)
+						require.Empty(t, probe.RuntimeFilterProbeList)
+						return
+					}
+					require.Len(t, join.RuntimeFilterBuildList, 1)
+					require.Len(t, probe.RuntimeFilterProbeList, 1)
+					require.Equal(t, join.RuntimeFilterBuildList[0].Tag, probe.RuntimeFilterProbeList[0].Tag)
+				})
+			}
+		}
+	}
+}
+
 func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	t.Run("right single filters only the discardable probe and is colocated", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
