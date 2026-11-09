@@ -767,7 +767,7 @@ func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
 	const uniqueIndexName = catalog.UniqueIndexTableNamePrefix + "docs-ft-dual-payload"
 	found := false
 	foundLock := false
-	_, indexTable, resolveErr := mock.ctxt.ResolveIndexTableByRef(&planpb.ObjectRef{SchemaName: "constraint_test", ObjName: base.Name}, uniqueIndexName, nil)
+	_, indexTable, resolveErr := mock.ctxt.ResolveIndexTableByRef(&planpb.ObjectRef{SchemaName: "constraint_test", ObjName: base.Name}, uniqueIndexName, nil, nil)
 	require.NoError(t, resolveErr)
 	require.NotNil(t, indexTable)
 	for _, node := range logicPlan.GetQuery().Nodes {
