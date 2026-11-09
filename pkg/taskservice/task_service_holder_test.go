@@ -1580,7 +1580,7 @@ func TestSQLTaskFetchRecoversAfterInitialStorageOutage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
 	runner := NewTaskRunner("cn1", service, nil, WithRunnerFetchLimit(1), WithRunnerFetchTimeout(time.Second)).(*taskRunner)
 	require.Eventually(t, func() bool {
-		values, err := runner.doFetch(context.Background())
+		values, err := runner.doFetch(context.Background(), context.Background())
 		return err == nil && len(values) == 1 && values[0].Metadata.ID == "ready"
 	}, 3*time.Second, 5*time.Millisecond, "periodic fetch must reconnect without another task-store operation")
 	require.GreaterOrEqual(t, calls.Load(), int32(3))

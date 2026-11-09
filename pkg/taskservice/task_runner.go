@@ -410,7 +410,9 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	if taskFrameworkDisabled() || ctx.Err() != nil || len(r.waitTasksC) == cap(r.waitTasksC) {
 		return false
 	}
-	tasks, err := r.doFetch(ctx)
+	fetchCtx, cancel := context.WithTimeoutCause(ctx, r.options.fetchTimeout, moerr.CauseDoFetch)
+	defer cancel()
+	tasks, err := r.doFetch(fetchCtx, ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			if r.sqlFetch.active {
@@ -421,7 +423,15 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 		}
 		return false
 	}
-	tasks, held := groupSQLTaskBatch(tasks)
+	var firstID uint64
+	if len(tasks) != 0 {
+		firstID = tasks[0].ID
+	}
+	tasks, held, err := groupSQLTaskBatch(fetchCtx, tasks)
+	if err != nil {
+		r.sqlFetch.rewind(firstID)
+		return false
+	}
 	if len(held) != 0 {
 		if r.sqlFetch.active {
 			r.sqlFetch.pendingWork = true
@@ -431,6 +441,10 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	}
 	continueBurst := true
 	for _, t := range tasks {
+		if fetchCtx.Err() != nil {
+			r.sqlFetch.rewind(t.ID)
+			return false
+		}
 		if !r.addToWait(ctx, t, held[t.ID]) {
 			r.sqlFetch.rewind(t.ID)
 			return false
@@ -446,7 +460,10 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 
 // Leave same-parent firings in storage until one selected firing has had an
 // opportunity to acquire the parent guard. Other parents remain eligible.
-func groupSQLTaskBatch(tasks []task.AsyncTask) ([]task.AsyncTask, map[uint64]bool) {
+func groupSQLTaskBatch(ctx context.Context, tasks []task.AsyncTask) ([]task.AsyncTask, map[uint64]bool, error) {
+	if len(tasks) < 2 {
+		return tasks, nil, ctx.Err()
+	}
 	type group struct {
 		id      uint64
 		count   int
@@ -454,6 +471,9 @@ func groupSQLTaskBatch(tasks []task.AsyncTask) ([]task.AsyncTask, map[uint64]boo
 	}
 	var groups map[string]group
 	for _, value := range tasks {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if value.Metadata.Executor != task.TaskCode_SQLTask {
 			continue
 		}
@@ -473,6 +493,9 @@ func groupSQLTaskBatch(tasks []task.AsyncTask) ([]task.AsyncTask, map[uint64]boo
 	var held map[uint64]bool
 	selected := tasks[:0]
 	for _, value := range tasks {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if g, ok := groups[value.ParentTaskID]; ok && value.Metadata.Executor == task.TaskCode_SQLTask {
 			if value.ID != g.id || g.emitted {
 				continue
@@ -488,17 +511,21 @@ func groupSQLTaskBatch(tasks []task.AsyncTask) ([]task.AsyncTask, map[uint64]boo
 		}
 		selected = append(selected, value)
 	}
-	return selected, held
+	return selected, held, nil
 }
 
-func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
+func (r *taskRunner) doFetch(parent, runnerCtx context.Context) ([]task.AsyncTask, error) {
 	if err := parent.Err(); err != nil {
-		return nil, err
+		if runnerCtx.Err() == nil && sqlTaskServiceOwner(r.service) != nil && !r.sqlFetch.active {
+			r.sqlDeferred.Add(1)
+		}
+		return nil, moerr.AttachCause(parent, err)
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, r.options.fetchTimeout, moerr.CauseDoFetch)
+	defer cancel()
 	var tasks []task.AsyncTask
 	var err error
-	var trustShortPage bool
+	var trustedSource bool
 	service := sqlTaskServiceOwner(r.service)
 	fair := service != nil && r.useSQLTaskFairFetch(service)
 	if fair {
@@ -516,21 +543,62 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 		if service == nil {
 			tasks, err = r.service.QueryAsyncTask(ctx, conditions...)
 		} else {
-			tasks, err, trustShortPage = r.queryNormalTaskPage(ctx, service, conditions...)
+			tasks, err, trustedSource = r.queryNormalTaskPage(ctx, service, conditions...)
 		}
 	}
-	cancel()
 	if err != nil {
-		if parent.Err() == nil && service != nil && !r.sqlFetch.active {
+		if runnerCtx.Err() == nil && service != nil && !r.sqlFetch.active {
 			r.sqlDeferred.Add(1)
 		}
 		return nil, moerr.AttachCause(ctx, err)
 	}
+	armed := service != nil && !fair && !trustedSource && runnerCtx.Err() == nil
+	if armed {
+		r.sqlDeferred.Add(1)
+	}
+	if !fair && !trustedSource {
+		limit := max(r.options.queryLimit, 1)
+		if service != nil {
+			limit = min(limit, 32)
+		}
+		if len(tasks) > limit {
+			tasks = tasks[:limit]
+		}
+	}
+	var firstID uint64
+	if len(tasks) != 0 {
+		firstID = tasks[0].ID
+	}
+	if err := ctx.Err(); err != nil {
+		r.sqlFetch.rewind(firstID)
+		if service != nil && !fair && !armed && runnerCtx.Err() == nil {
+			r.sqlDeferred.Add(1)
+		}
+		return nil, moerr.AttachCause(ctx, err)
+	}
+	available := cap(r.waitTasksC) - len(r.waitTasksC)
 	newTasks := tasks[:0]
+	truncated := false
 	r.runningTasks.Lock()
 	for _, t := range tasks {
+		if err := ctx.Err(); err != nil {
+			r.runningTasks.Unlock()
+			r.sqlFetch.rewind(firstID)
+			if service != nil && !fair && !armed && runnerCtx.Err() == nil {
+				r.sqlDeferred.Add(1)
+			}
+			return nil, moerr.AttachCause(ctx, err)
+		}
+		if t.ID == 0 || t.Status != task.TaskStatus_Running || t.TaskRunner != r.runnerID ||
+			service == nil && t.Metadata.Executor == task.TaskCode_SQLTask {
+			continue
+		}
 		if _, ok := r.runningTasks.m[t.ID]; !ok {
 			if _, ok := r.runningTasks.completedTasks[t.ID]; !ok {
+				if len(newTasks) >= available {
+					truncated = true
+					continue
+				}
 				if t.Metadata.Executor == task.TaskCode_SQLTask {
 					r.logger.Debug("new SQL task fetched", zap.Uint64("task-id", t.ID))
 				} else {
@@ -544,8 +612,8 @@ func (r *taskRunner) doFetch(parent context.Context) ([]task.AsyncTask, error) {
 		delete(r.runningTasks.completedTasks, k)
 	}
 	r.runningTasks.Unlock()
-	if service != nil && !fair && (len(tasks) >= r.options.queryLimit && len(newTasks) < len(tasks) && len(r.waitTasksC) < cap(r.waitTasksC) ||
-		!trustShortPage && len(tasks) < r.options.queryLimit) {
+	if service != nil && !fair && !armed && runnerCtx.Err() == nil && (truncated ||
+		len(tasks) >= r.options.queryLimit && len(newTasks) < len(tasks) && available > 0) {
 		r.sqlDeferred.Add(1)
 	}
 
@@ -579,6 +647,12 @@ func (r *taskRunner) addToWait(ctx context.Context, value task.AsyncTask, hasWit
 
 	r.runningTasks.Lock()
 	defer r.runningTasks.Unlock()
+	if _, ok := r.runningTasks.m[value.ID]; ok {
+		return true
+	}
+	if _, ok := r.runningTasks.completedTasks[value.ID]; ok {
+		return true
+	}
 	select {
 	case r.waitTasksC <- rt:
 		r.runningTasks.m[value.ID] = rt

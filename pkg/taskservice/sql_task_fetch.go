@@ -36,18 +36,18 @@ func querySQLTaskAsync(ctx context.Context, store TaskStorage, conditions ...Con
 	return tasks, err
 }
 
-// A short page proves exhaustion only for built-in stores: a decorator can
-// filter rows after the underlying query has applied LIMIT.
+// Only built-in stores prove that a page inspected all earlier matching IDs;
+// a decorator can refine predicates or filter after LIMIT.
 func querySQLTaskPage(ctx context.Context, store TaskStorage, conditions ...Condition) ([]task.AsyncTask, error, bool) {
 	if holder, ok := store.(*refreshableTaskStorage); ok {
 		var tasks []task.AsyncTask
-		var trustShortPage bool
+		var trustedSource bool
 		err := holder.withSQLTaskFetchStore(ctx, func(inner TaskStorage) error {
 			var err error
-			tasks, err, trustShortPage = querySQLTaskPage(ctx, inner, conditions...)
+			tasks, err, trustedSource = querySQLTaskPage(ctx, inner, conditions...)
 			return err
 		})
-		return tasks, err, trustShortPage
+		return tasks, err, trustedSource
 	}
 	tasks, err := store.QueryAsyncTask(ctx, conditions...)
 	switch store.(type) {
@@ -331,11 +331,11 @@ func (r *taskRunner) doSQLTaskFairFetch(ctx context.Context, service *taskServic
 			conditions = append(conditions, withSQLTaskParentExcluded(excluded.id))
 		}
 	}
-	tasks, err, trustShortPage := r.querySQLTaskAsync(fastCtx, service, conditions...)
+	tasks, err, trusted := r.querySQLTaskAsync(fastCtx, service, conditions...)
 	cancel()
 	// A service decorator can refine query conditions. Check the returned
 	// identity and order before moving the cursor or dispatching any row.
-	fallback := err != nil || len(tasks) > limit || !trustShortPage && len(tasks) < limit
+	fallback := err != nil || len(tasks) > limit || !trusted
 	if !fallback {
 		lastID := cursor.after
 		for _, value := range tasks {
@@ -426,18 +426,28 @@ func (r *taskRunner) fetchSQLTaskRawPage(ctx context.Context, service *taskServi
 			}
 			return nil, ctx.Err()
 		}
-		cursor.after = id
 		if queryErr != nil {
+			cursor.after = id
 			r.sqlDeferred.Add(1)
 			sqlTaskFetchFailed.Warn(zap.Uint64("task-id", id), zap.Error(queryErr))
 			continue
 		}
-		if len(tasks) == 1 && tasks[0].ID == id && taskMatchesFetchLane(tasks[0], r.runnerID, sqlLane) &&
-			(excluded == nil || tasks[0].ParentTaskID != excluded.parent) {
-			values = append(values, tasks[0])
-			if len(values) == limit {
+		for _, value := range tasks {
+			if err := ctx.Err(); err != nil {
+				if len(values) != 0 {
+					return values, nil
+				}
+				return nil, err
+			}
+			if value.ID == id && taskMatchesFetchLane(value, r.runnerID, sqlLane) &&
+				(excluded == nil || value.ParentTaskID != excluded.parent) {
+				values = append(values, value)
 				break
 			}
+		}
+		cursor.after = id
+		if len(values) == limit {
+			break
 		}
 	}
 	if cursor.after >= cursor.high || len(page) < 32 && cursor.after == page[len(page)-1].ID {

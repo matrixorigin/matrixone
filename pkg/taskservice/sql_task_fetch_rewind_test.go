@@ -45,7 +45,7 @@ func TestSQLTaskRejectedNewLaneSurvivesWaveRollover(t *testing.T) {
 	runner.sqlFetch.rewind(all[1].ID) // the selected new-lane task did not fit in the wait queue
 	require.True(t, runner.useSQLTaskFairFetch(service.(*taskService)), "a rejected new-lane candidate must keep fair recovery active across rollover")
 	for i := 0; i < 12; i++ {
-		values, err := runner.doFetch(ctx)
+		values, err := runner.doFetch(ctx, ctx)
 		require.NoError(t, err)
 		for _, value := range values {
 			if value.Metadata.ID == "new-candidate" {

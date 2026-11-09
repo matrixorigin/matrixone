@@ -256,7 +256,7 @@ func (s *refreshableTaskStorage) QueryAsyncTask(ctx context.Context, conditions 
 func (s *refreshableTaskStorage) queryAsyncTaskPage(ctx context.Context, conditions ...Condition) ([]task.AsyncTask, error, bool) {
 	var v []task.AsyncTask
 	var err error
-	var trustShortPage bool
+	var trustedSource bool
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
@@ -265,14 +265,14 @@ func (s *refreshableTaskStorage) queryAsyncTaskPage(ctx context.Context, conditi
 		v, err = s.mu.store.QueryAsyncTask(ctx, conditions...)
 		switch s.mu.store.(type) {
 		case *mysqlTaskStorage, *memTaskStorage:
-			trustShortPage = true
+			trustedSource = true
 		}
 	}
 	s.mu.RUnlock()
 	if err != nil {
 		s.maybeRefresh(lastAddress)
 	}
-	return v, err, trustShortPage
+	return v, err, trustedSource
 }
 
 func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask) (int, error) {

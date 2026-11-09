@@ -387,7 +387,7 @@ func TestRemoveRunningTask(t *testing.T) {
 		require.False(t, exists, "removed task should not be in runningTasks")
 		require.True(t, completed, "removed task should be in completedTasks")
 
-		tasks, err := r.doFetch(context.Background())
+		tasks, err := r.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		require.Empty(t, tasks, "fetch should not return the task marked completed")
 		r.runningTasks.RLock()

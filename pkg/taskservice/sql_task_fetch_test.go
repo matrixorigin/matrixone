@@ -63,12 +63,12 @@ func TestUnsupportedSQLTaskOwnerDoesNotStarveOtherTasks(t *testing.T) {
 	mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1",
 		Metadata: task.TaskMetadata{ID: "other", Executor: task.TaskCode_TestOnly}})
 
-	values, err := runner.doFetch(context.Background())
+	values, err := runner.doFetch(context.Background(), context.Background())
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	require.Equal(t, "other", values[0].Metadata.ID)
 	service.enabled.Store(true)
-	values, err = runner.doFetch(context.Background())
+	values, err = runner.doFetch(context.Background(), context.Background())
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	require.Equal(t, "sql", values[0].Metadata.ID, "a restored owner can fetch SQL work")
@@ -131,6 +131,7 @@ func TestTaskRunnerStopCancelsFetch(t *testing.T) {
 			if exceptional {
 				runner.sqlDeferred.Add(1)
 			}
+			initialDeferred := runner.sqlDeferred.Load()
 			require.NoError(t, runner.Start())
 			var queryCtx context.Context
 			select {
@@ -153,6 +154,7 @@ func TestTaskRunnerStopCancelsFetch(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("runner did not stop after canceling its query")
 			}
+			require.Equal(t, initialDeferred, runner.sqlDeferred.Load(), "runner shutdown must not be recorded as a fetch failure")
 		})
 	}
 }
@@ -165,12 +167,12 @@ func TestTaskRunnerFetchContextAndTimeout(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := runner.doFetch(ctx)
+	_, err := runner.doFetch(ctx, ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, wrapped.entered, "an already stopped runner must not query storage")
 	require.Zero(t, runner.sqlDeferred.Load())
 
-	_, err = runner.doFetch(context.Background())
+	_, err = runner.doFetch(context.Background(), context.Background())
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorIs(t, err, moerr.CauseDoFetch)
 	require.EqualValues(t, 1, runner.sqlDeferred.Load(), "a storage timeout still triggers recovery")
@@ -350,7 +352,7 @@ func TestSQLTaskDeferredParentDoesNotHideHealthyOldTask(t *testing.T) {
 	runner.recordDeferredSQLTaskParent("sql-task:1")
 	found := false
 	for i := 0; i < 6 && !found; i++ {
-		values, err := runner.doFetch(context.Background())
+		values, err := runner.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		for _, value := range values {
 			found = found || value.Metadata.ID == "healthy"
@@ -370,7 +372,7 @@ func TestSQLTaskDeferredParentDoesNotHideHealthyOldTask(t *testing.T) {
 	runner.sqlBackoff.Store(expired)
 	found = false
 	for i := 0; i < 8 && !found; i++ {
-		values, err := runner.doFetch(context.Background())
+		values, err := runner.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		for _, value := range values {
 			found = found || value.ParentTaskID == "sql-task:1"
@@ -397,7 +399,7 @@ func TestSQLTaskDeferredParentWaitsForActualOldLane(t *testing.T) {
 	require.Same(t, marker, runner.deferredSQLTaskParent())
 	found := false
 	for i := 0; i < 6 && !found; i++ {
-		values, err := runner.doFetch(context.Background())
+		values, err := runner.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		for _, value := range values {
 			found = found || value.Metadata.ID == "healthy"
@@ -441,15 +443,15 @@ func TestSQLTaskFairFetchKeepsOldNewAndOtherTasksMoving(t *testing.T) {
 	mustAddTestAsyncTask(t, base, 3, old, other, poison)
 	all := mustGetTestAsyncTask(t, base, 38)
 	store.poison = all[len(all)-1].ID
-	_, err := runner.doFetch(context.Background())
+	_, err := runner.doFetch(context.Background(), context.Background())
 	require.Error(t, err, "a malformed head row must activate exceptional fetching")
-	_, err = runner.doFetch(context.Background()) // establishes the old high water
+	_, err = runner.doFetch(context.Background(), context.Background()) // establishes the old high water
 	require.NoError(t, err)
 	fresh := task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: "new-sql", Executor: task.TaskCode_SQLTask}}
 	mustAddTestAsyncTask(t, base, 1, fresh)
 	seen := map[string]bool{}
 	for i := 0; i < 20 && len(seen) < 3; i++ {
-		values, err := runner.doFetch(context.Background())
+		values, err := runner.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		for _, value := range values {
 			seen[value.Metadata.ID] = true
@@ -473,7 +475,7 @@ func TestSQLTaskFairFetchRevisitsRejectedTask(t *testing.T) {
 	value := task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: "other", Executor: task.TaskCode_TestOnly}}
 	mustAddTestAsyncTask(t, store, 1, value)
 	runner.sqlDeferred.Add(1)
-	values, err := runner.doFetch(context.Background())
+	values, err := runner.doFetch(context.Background(), context.Background())
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	blocker := task.AsyncTask{ID: 999}
@@ -484,7 +486,7 @@ func TestSQLTaskFairFetchRevisitsRejectedTask(t *testing.T) {
 	runner.removeRunningTask(rt, nil)
 	var found bool
 	for i := 0; i < 4; i++ {
-		values, err = runner.doFetch(context.Background())
+		values, err = runner.doFetch(context.Background(), context.Background())
 		require.NoError(t, err)
 		if len(values) != 0 && values[0].Metadata.ID == "other" {
 			found = true
@@ -548,7 +550,7 @@ func TestSQLTaskFetchCancellationRevisitsPartialResults(t *testing.T) {
 
 	store.cancel = nil
 	runner.sqlFetch.nextSQL = false
-	values, err := runner.doFetch(context.Background())
+	values, err := runner.doFetch(context.Background(), context.Background())
 	require.NoError(t, err)
 	require.Len(t, values, 3)
 	for i := range all {
