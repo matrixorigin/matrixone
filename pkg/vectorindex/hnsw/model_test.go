@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -25,20 +26,22 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 
@@ -487,7 +490,11 @@ func TestModel(t *testing.T) {
 
 }
 
-func TestModelPersistenceValuesRemainData(t *testing.T) {
+// A model file is written through the index-file layer under the model id, with the MD5 its
+// metadata row records, byte for byte.
+func TestModelWriteIndexFile(t *testing.T) {
+	old := writeIndexFile
+	t.Cleanup(func() { writeIndexFile = old })
 	for _, tc := range []struct{ name, id, file string }{
 		{"plain", "model-id", "model.bin"},
 		{"quoted ID", "model'\\id", "model.bin"},
@@ -499,26 +506,227 @@ func TestModelPersistenceValuesRemainData(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, data, 0600))
 			model := HnswModel[float32]{Id: tc.id, Path: path}
 			require.NoError(t, model.PreparePersistence())
-			txn := executortest.NewMockTxnExecutor(gomock.NewController(t))
-			txn.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opts executor.StatementOption) (executor.Result, error) {
-				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			tblcfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store"}
+			ran := 0
+			writeIndexFile = func(_ *sqlexec.SqlProcess, _ *indexfile.Files, _ client.TxnOperator, ref indexfile.Ref,
+				src io.Reader, _ string, run func(sql string) error) (int64, error) {
+				require.Equal(t, indexfile.Ref{DB: "db", Table: "store", IndexID: tc.id, Tag: int64(vectorindex.Tag_ModelChunk),
+					Size: int64(len(data)), Checksum: vectorindex.CheckSumFromBuffer(data)}, ref)
+				got, err := io.ReadAll(src)
 				require.NoError(t, err)
-				insert := stmt.(*tree.Insert)
-				require.Len(t, insert.Rows.Select.(*tree.ValuesClause).Rows, 1)
-				require.NotContains(t, sql, path)
-				mp := mpool.MustNewZero()
-				vec, err := opts.Params(mp)
-				require.NoError(t, err)
-				defer vec.Free(mp)
-				require.Equal(t, tc.id, string(vec.GetRawBytesAt(0)))
-				require.Equal(t, data, vec.GetRawBytesAt(1))
-				return executor.Result{}, nil
-			})
-			w, err := sqlexec.NewChunkInserter(t.Context(), txn, executor.StatementOption{}, "db", "store", 2000)
-			require.NoError(t, err)
-			require.NoError(t, model.PersistChunks(w))
+				require.Equal(t, data, got)
+				require.NoError(t, run("x"))
+				return int64(len(got)), nil
+			}
+			run := func(string) error { ran++; return nil }
+			require.NoError(t, model.WriteIndexFile(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(t.Context(), "", nil, 0, nil)), nil, tblcfg, nil, run))
+			require.Equal(t, 1, ran)
+
+			writeIndexFile = func(*sqlexec.SqlProcess, *indexfile.Files, client.TxnOperator, indexfile.Ref, io.Reader, string, func(string) error) (int64, error) {
+				return 1, nil
+			}
+			require.ErrorContains(t, model.WriteIndexFile(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(t.Context(), "", nil, 0, nil)), nil, tblcfg, nil, run), "wrote 1 bytes")
 		})
 	}
+
+	empty := HnswModel[float32]{Id: "empty"}
+	require.NoError(t, empty.WriteIndexFile(nil, nil, vectorindex.IndexTableConfig{}, nil, nil), "a model with no file writes nothing")
+
+	// The layer inserts the chunk rows from the file in the caller's transaction.
+	writeIndexFile = old
+	path := filepath.Join(t.TempDir(), "model.bin")
+	require.NoError(t, os.WriteFile(path, []byte("model bytes"), 0600))
+	model := HnswModel[float32]{Id: "m", Path: path, TmpDir: t.TempDir()}
+	require.NoError(t, model.PreparePersistence())
+	var sqls []string
+	sqlproc := sqlexec.NewSqlProcess(testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()))
+	require.NoError(t, model.WriteIndexFile(sqlproc, nil, vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store"}, mockTxnOperator{},
+		func(sql string) error { sqls = append(sqls, sql); return nil }))
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "INSERT INTO `db`.`store`")
+	require.Contains(t, sqls[0], indexfile.FuncName+"(")
+}
+
+// Without a storage engine, or without a cache when one is required, a model is not read
+// through the layer.
+func TestOpenIndexFileWithoutEngine(t *testing.T) {
+	bg := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(t.Context(), "", nil, 0, nil))
+	proc := sqlexec.NewSqlProcess(testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()))
+	eng := mock_frontend.NewMockEngine(gomock.NewController(t))
+	for _, tc := range []struct {
+		sqlproc *sqlexec.SqlProcess
+		files   *indexfile.Files
+		cached  bool
+	}{
+		{bg, nil, false},
+		{proc, nil, false},
+		{bg, &indexfile.Files{Engine: eng}, true},
+	} {
+		f, err := openIndexFile(tc.sqlproc, tc.files, indexfile.Ref{}, "", tc.cached)
+		require.NoError(t, err)
+		require.Nil(t, f)
+	}
+}
+
+type fakeIndexFile struct {
+	f                           *os.File
+	keeps, releases, superseded int
+	closed                      bool
+}
+
+func (f *fakeIndexFile) FDPath() string { return fmt.Sprintf("/dev/fd/%d", f.f.Fd()) }
+func (f *fakeIndexFile) Keep() *fileservice.IndexFileHold {
+	f.keeps++
+	return fileservice.NewIndexFileHold(func(used bool) {
+		if used {
+			f.releases++
+		} else {
+			f.superseded++
+		}
+	})
+}
+func (f *fakeIndexFile) Close() error {
+	f.closed = true
+	return f.f.Close()
+}
+
+// A model read through the index-file layer is loaded from the open file with the layer's
+// verification only. A mapped model keeps the hold on the cache entry until Destroy.
+func TestModelLoadThroughIndexFile(t *testing.T) {
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	cfg.Usearch.Metric = usearch.L2sq
+	built, err := NewHnswModelForBuild[float32]("model", cfg, 1, 16, 0, t.TempDir())
+	require.NoError(t, err)
+	defer built.Destroy()
+	require.NoError(t, built.Add(7, []float32{1, 2, 3}))
+	require.NoError(t, built.PreparePersistence())
+	require.NotZero(t, built.FileSize)
+
+	sqlproc := sqlexec.NewSqlProcess(testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()))
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store"}
+	old := openIndexFile
+	t.Cleanup(func() { openIndexFile = old })
+	var fake *fakeIndexFile
+	var opened indexfile.Ref
+	var openedFiles *indexfile.Files
+	var cachedOnly bool
+	openIndexFile = func(_ *sqlexec.SqlProcess, files *indexfile.Files, ref indexfile.Ref, _ string, cached bool) (indexFile, error) {
+		f, err := os.Open(built.Path)
+		require.NoError(t, err)
+		opened, openedFiles, cachedOnly, fake = ref, files, cached, &fakeIndexFile{f: f}
+		return fake, nil
+	}
+
+	idx := &HnswModel[float32]{Id: "model", FileSize: built.FileSize, Checksum: "not the md5"}
+	require.NoError(t, idx.LoadIndexFromBuffer(sqlproc, cfg, tblcfg, 1, true))
+	require.Equal(t, idx.indexFileRef(tblcfg), opened)
+	require.True(t, fake.closed)
+	require.Empty(t, idx.Path)
+	keys, _, err := idx.Search([]float32{1, 2, 3}, 1)
+	require.NoError(t, err)
+	require.Equal(t, []usearch.Key{7}, keys)
+	require.Equal(t, 1, fake.keeps)
+	require.Zero(t, fake.releases, "the mapped model holds its file")
+	require.NoError(t, idx.Destroy())
+	require.Equal(t, 1, fake.releases)
+	require.False(t, cachedOnly, "a search reads without a cache too")
+
+	// A model loaded to be updated, as a sync loads it, reads through the files it was given,
+	// only with a cache, copies the file and holds nothing.
+	files := &indexfile.Files{}
+	idx = &HnswModel[float32]{Id: "model", FileSize: built.FileSize, Checksum: "not the md5", files: files}
+	require.NoError(t, idx.LoadIndex(sqlproc, cfg, tblcfg, 1, false))
+	require.Same(t, files, openedFiles)
+	require.True(t, cachedOnly)
+	require.True(t, fake.closed)
+	require.Zero(t, fake.keeps)
+	require.Empty(t, idx.Path)
+	keys, _, err = idx.Search([]float32{1, 2, 3}, 1)
+	require.NoError(t, err)
+	require.Equal(t, []usearch.Key{7}, keys)
+	require.NoError(t, idx.Destroy())
+
+	// A load that fails after the file opened keeps no hold, so a retry does not leak one.
+	junk := filepath.Join(t.TempDir(), "junk")
+	require.NoError(t, os.WriteFile(junk, []byte("not a model"), 0600))
+	openIndexFile = func(*sqlexec.SqlProcess, *indexfile.Files, indexfile.Ref, string, bool) (indexFile, error) {
+		f, err := os.Open(junk)
+		require.NoError(t, err)
+		fake = &fakeIndexFile{f: f}
+		return fake, nil
+	}
+	bad := &HnswModel[float32]{Id: "model", FileSize: 11}
+	require.Error(t, bad.LoadIndexFromBuffer(sqlproc, cfg, tblcfg, 1, true))
+	require.Zero(t, fake.keeps)
+	require.True(t, fake.closed)
+	require.NoError(t, bad.Destroy())
+
+	fail := errors.New("open failed")
+	openIndexFile = func(*sqlexec.SqlProcess, *indexfile.Files, indexfile.Ref, string, bool) (indexFile, error) {
+		return nil, fail
+	}
+	idx = &HnswModel[float32]{Id: "model", FileSize: built.FileSize, Checksum: built.Checksum}
+	require.ErrorIs(t, idx.LoadIndexFromBuffer(sqlproc, cfg, tblcfg, 1, true), fail)
+	require.ErrorIs(t, idx.LoadIndex(sqlproc, cfg, tblcfg, 1, false), fail)
+	require.Nil(t, idx.Index)
+}
+
+// A search the cache evicts because a newer generation replaced it releases its models' holds
+// as superseded; any other eviction releases them as a use.
+func TestSearchReleasesSupersededModels(t *testing.T) {
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	cfg.Usearch.Metric = usearch.L2sq
+	built, err := NewHnswModelForBuild[float32]("model", cfg, 1, 16, 0, t.TempDir())
+	require.NoError(t, err)
+	defer built.Destroy()
+	require.NoError(t, built.Add(7, []float32{1, 2, 3}))
+	require.NoError(t, built.PreparePersistence())
+
+	sqlproc := sqlexec.NewSqlProcess(testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()))
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", IndexTable: "store"}
+	old := openIndexFile
+	t.Cleanup(func() { openIndexFile = old })
+	var fake *fakeIndexFile
+	openIndexFile = func(*sqlexec.SqlProcess, *indexfile.Files, indexfile.Ref, string, bool) (indexFile, error) {
+		f, err := os.Open(built.Path)
+		require.NoError(t, err)
+		fake = &fakeIndexFile{f: f}
+		return fake, nil
+	}
+	for _, reason := range []string{veccache.ReasonGenerationChanged, "ttl_expired", ""} {
+		s := NewHnswSearch[float32](cfg, tblcfg)
+		s.Indexes = []*HnswModel[float32]{{Id: "model", FileSize: built.FileSize, Checksum: built.Checksum}}
+		_, err := s.LoadIndex(sqlproc, s.Indexes)
+		require.NoError(t, err)
+		if reason != "" {
+			s.OnCacheInvalidated(reason)
+		}
+		s.Destroy()
+		if reason == veccache.ReasonGenerationChanged {
+			require.Equal(t, 1, fake.superseded, reason)
+			require.Zero(t, fake.releases, reason)
+		} else {
+			require.Equal(t, 1, fake.releases, reason)
+			require.Zero(t, fake.superseded, reason)
+		}
+	}
+
+	// A cache retry reuses the search for the next generation: once that generation is
+	// destroyed for another reason, its holds are released as a use.
+	s := NewHnswSearch[float32](cfg, tblcfg)
+	s.Indexes = []*HnswModel[float32]{{Id: "model", FileSize: built.FileSize, Checksum: built.Checksum}}
+	_, err = s.LoadIndex(sqlproc, s.Indexes)
+	require.NoError(t, err)
+	s.OnCacheInvalidated(veccache.ReasonGenerationChanged)
+	s.Destroy()
+	require.Equal(t, 1, fake.superseded)
+	s.Indexes = []*HnswModel[float32]{{Id: "model", FileSize: built.FileSize, Checksum: built.Checksum}}
+	_, err = s.LoadIndex(sqlproc, s.Indexes)
+	require.NoError(t, err)
+	s.OnCacheInvalidated("ttl_expired")
+	s.Destroy()
+	require.Equal(t, 1, fake.releases)
+	require.Zero(t, fake.superseded)
 }
 
 func TestModelNil(t *testing.T) {

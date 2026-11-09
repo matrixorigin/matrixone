@@ -38,7 +38,7 @@ type indexFile interface {
 // tests replace them.
 var (
 	openIndexFile = func(sqlproc *sqlexec.SqlProcess, ref indexfile.Ref, tempDir string) (indexFile, error) {
-		return indexfile.OpenWithProcess(sqlproc, ref, tempDir)
+		return indexfile.OpenWithProcess(sqlproc, nil, ref, tempDir)
 	}
 	writeIndexFile = func(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, ref indexfile.Ref,
 		src io.Reader, tempDir string, runSQL func(sql string) error) (int64, error) {
