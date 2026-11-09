@@ -29,11 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeIndexSelection bool) {
+func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeIndexSelection bool, deferredPoints map[int32]struct{}) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_TABLE_SCAN {
 		for _, childID := range node.Children {
-			builder.mergeFiltersOnCompositeKey(childID, beforeIndexSelection)
+			builder.mergeFiltersOnCompositeKey(childID, beforeIndexSelection, deferredPoints)
 		}
 
 		return
@@ -42,17 +42,23 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeInde
 	if node.TableDef.Pkey == nil {
 		return
 	}
+	// A complete disjunction can use a correlated set of primary-key points.
+	// Keep its component predicates visible for index selection; the candidate
+	// is added after join costing while the SQL predicates remain authoritative.
+	if hasCompositePointFilter(node) {
+		return
+	}
+	if beforeIndexSelection {
+		if _, deferred := deferredPoints[nodeID]; deferred {
+			return
+		}
+	}
 
 	deferred := compositeKeyFiltersNeedIndexSelection(node.TableDef)
 	if beforeIndexSelection && deferred {
 		// Keep logical normalization before matching, but never hide a key
 		// component behind physical compound-key encoding at this phase.
-		for _, filter := range node.FilterList {
-			if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "or" {
-				node.FilterList = builder.doMergeFiltersOnCompositeKey(false, node.TableDef, node.BindingTags[0], node.FilterList...)
-				break
-			}
-		}
+		builder.normalizeCompositeKeyFiltersForIndex(node)
 		// optimizeFilters owns the following fold/statistics refresh.
 		return
 	}
@@ -70,6 +76,18 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeInde
 		// Preserve distribution decisions; the following stats pass does too.
 		foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, nodeID, true)
 	}
+}
+
+// normalizeCompositeKeyFiltersForIndex leaves the key components visible to
+// secondary-index matching; physical compound-key lowering happens later.
+func (builder *QueryBuilder) normalizeCompositeKeyFiltersForIndex(node *plan.Node) bool {
+	for _, filter := range node.FilterList {
+		if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "or" {
+			node.FilterList = builder.doMergeFiltersOnCompositeKey(false, node.TableDef, node.BindingTags[0], node.FilterList...)
+			return true
+		}
+	}
+	return false
 }
 
 // collectCompositePartBlockFilters preserves zonemappable predicates on the
@@ -97,11 +115,14 @@ func compositeKeyFiltersNeedIndexSelection(table *plan.TableDef) bool {
 	return false
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool) (map[int32][]compositePartBlockFilter, bool) {
+// When deferredPoints is provided, resolve early point deferrals before taking
+// snapshots. A scan whose compound rewrite is deferred does not consume its
+// component filters in this phase.
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool, deferredPoints map[int32]struct{}) (map[int32][]compositePartBlockFilter, bool) {
 	var ret map[int32][]compositePartBlockFilter
 	needsLate := false
 	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
-	if blockDisabled && !deferredOnly {
+	if blockDisabled && !deferredOnly && deferredPoints == nil {
 		return nil, false
 	}
 	visited := make(map[int32]struct{})
@@ -117,6 +138,18 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, defe
 				visit(childID)
 			}
 			return
+		}
+
+		if !deferredOnly && deferredPoints != nil && node.TableDef != nil && node.TableDef.Pkey != nil &&
+			len(node.TableDef.Pkey.Names) > 1 && !hasCompositePointFilter(node) {
+			if compositePointCandidate(node) != nil {
+				deferredPoints[id] = struct{}{}
+				if !hasCompoundKeyFilter(node.FilterList, node) {
+					// No compound rewrite runs for this scan in the early phase, so
+					// retainConsumedCompositePartBlockFilters would discard these copies.
+					return
+				}
+			}
 		}
 
 		if deferredOnly {
@@ -2415,6 +2448,12 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		if _, ok := sortKeyPartCols[col.ColPos]; !ok {
 			continue
 		}
+		if col.ColPos < 0 || int(col.ColPos) >= len(tableDef.Cols) || tableDef.Cols[col.ColPos] == nil {
+			continue
+		}
+		if types.T(tableDef.Cols[col.ColPos].Typ.Id).IsFloat() {
+			continue
+		}
 		// Keep first-component SQL bounds intact. Their optional compound-key
 		// object filter is added separately without casting or consuming them.
 		if col.ColPos == tableDef.Name2ColIndex[Parts[0]] {
@@ -2496,7 +2535,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 
 	filterIdx := make([]int, 0, numParts)
 	for _, part := range Parts {
-		colIdx := tableDef.Name2ColIndex[part]
+		colIdx, found := tableDef.Name2ColIndex[part]
+		if !found || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
+			break
+		}
+		if types.T(tableDef.Cols[colIdx].Typ.Id).IsFloat() {
+			// SQL equates signed zeroes while the tuple encoder preserves their
+			// different bits. Keep this and later parts as SQL predicates.
+			break
+		}
 		idx, ok := col2filter[colIdx]
 		if !ok {
 			break
