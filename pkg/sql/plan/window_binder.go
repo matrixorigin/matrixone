@@ -867,7 +867,7 @@ func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder)
 	dependencies = appendPrepareSchemas(dependencies, dependencyRule.schemas...)
 	for _, dependency := range dependencyRule.indexDependencies {
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			dependency.baseRef, dependency.tableName, dependency.snapshot)
+			dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 		if err != nil {
 			return err
 		}
@@ -1295,6 +1295,9 @@ func validateIndicatorWindowSpec(
 	if len(fn.Args) != 2 {
 		return moerr.NewInvalidInputf(ctx, "%s takes exactly two arguments (x, n)", funcName)
 	}
+	if defines.IsNoEvaluationViewBinding(ctx) {
+		return nil
+	}
 	period, ok := constantFoldedPeriod(fn.Args[1], proc)
 	if !ok || period < 1 || period > 1024 {
 		return moerr.NewInvalidInputf(ctx,
@@ -1640,7 +1643,7 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
-	if defines.IsPublicationViewBinding(bindCtx) {
+	if defines.IsNoEvaluationViewBinding(bindCtx) {
 		// Publication scope validation (#27767) binds a stored definition's
 		// window frame bound without evaluating it: the eager executor here
 		// executes every function of the bound expression at bind time. The
@@ -1789,7 +1792,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		return nil, err
 	}
 
-	if defines.IsPublicationViewBinding(bindCtx) {
+	if defines.IsNoEvaluationViewBinding(bindCtx) {
 		// Validation binds a stored definition's interval frame bound without
 		// evaluating it (#27767): this executor executes every function of
 		// the bound value at bind time, while the probe needs only the fact

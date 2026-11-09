@@ -292,7 +292,7 @@ invalid input: STARTVALUE (-1000) for sequence must between MINVALUE (1) and MAX
 create sequence if not exists seq_an_01 as bigint increment by 10000 minvalue 500  start with 100;
 invalid input: STARTVALUE (100) for sequence must between MINVALUE (500) and MAXVALUE (9223372036854775807)
 create sequence seq_an_01 as smallint maxvalue 9999999 start with -10;
-invalid input: MAXVALUE (-27009) of sequence must be bigger than MINVALUE (1) of it
+invalid input: MAXVALUE (9999999) is out of range for sequence data type SMALLINT
 create sequence seq_an_01 start with 0;
 invalid input: STARTVALUE (0) for sequence must between MINVALUE (1) and MAXVALUE (9223372036854775807)
 create sequence seq_an_02 as tinyint unsigned;

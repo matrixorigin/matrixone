@@ -245,9 +245,10 @@ func TestLikePrefixIndex(t *testing.T) {
 					}
 					for _, hint := range []string{"", " force index(ix)", " ignore index(ix)"} {
 						check("select payload from candidate_errors"+hint+" where name like 'abc%' and name in (regexp_replace('x','[','y'),'abc1')", !strings.Contains(hint, "ignore"))
-						// Preserve the baseline error domain for each hint: an ordinary
-						// IN lookup can avoid a throwing residual on excluded rows.
-						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload=regexp_replace('x','[','y')", strings.Contains(hint, "ignore"))
+						// A matching row must evaluate the throwing residual for every
+						// access path, including when the table has persisted blocks.
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('abc9','xy') and payload=regexp_replace('x','[','y')", true)
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload='p'", false)
 					}
 					for _, scoped := range []struct{ hint, suffix string }{
 						{" force index for order by(ix)", " order by name"},

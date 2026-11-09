@@ -49,7 +49,7 @@ type issue29907Optimizer struct {
 func (o *issue29907Optimizer) CurrentContext() CompilerContext { return o.ctx }
 
 func (o *issue29907Optimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	return NewBaseOptimizer(o.ctx).Optimize(stmt, false)
+	return NewBaseOptimizer(o.ctx).Optimize(stmt, false, nil)
 }
 
 func addIssueTable(ctx *MockCompilerContext, name string, cols []struct {

@@ -218,6 +218,7 @@ func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
 			}}}
 			localTop := top.NewArgument().WithLimit(limitExpr).WithFs(orderBy)
 			localTop.OrderedOutput = ordered
+			localTop.TopValueTag = 42
 			localTop.AppendChild(table_scan.NewArgument())
 			source := &Scope{
 				Magic: Remote, NodeInfo: engine.Node{Mcpu: 4},
@@ -236,6 +237,12 @@ func TestRemoteOrderedTopWriteBackPreservesDOPBoundary(t *testing.T) {
 			require.Equal(t, ordered, reg.OrderedStream)
 			gather, workers := newParallelScope(decoded)
 			require.Len(t, workers, 4)
+			for i, worker := range workers {
+				workerTop, ok := worker.RootOp.GetOperatorBase().GetChildren(0).(*top.Top)
+				require.True(t, ok)
+				require.Equal(t, int32(42)+(int32(i)<<16), workerTop.TopValueTag)
+				require.Equal(t, ordered, workerTop.OrderedOutput)
+			}
 			if ordered {
 				require.Equal(t, 1, reg.NilBatchCnt)
 				require.Equal(t, Merge, gather.Magic)
@@ -596,6 +603,28 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
+	t.Run("OrderScanCutoffHint", func(t *testing.T) {
+		original := order.NewArgument()
+		defer original.Release()
+		original.ScanCutoffLimit = 500005
+		original.ScanCutoffTag = 42
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredOrder := restored.(*order.Order)
+		require.Equal(t, original.ScanCutoffLimit, restoredOrder.ScanCutoffLimit)
+		require.Equal(t, original.ScanCutoffTag, restoredOrder.ScanCutoffTag)
+		require.Nil(t, restoredOrder.ScanCutoff, "execution state is not serialized")
+	})
+
+	t.Run("TopValueTag", func(t *testing.T) {
+		original := top.NewArgument().WithLimit(plan.MakePlan2Int64ConstExprWithType(3))
+		defer original.Release()
+		original.TopValueTag = 42
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.TopValueTag, restored.(*top.Top).TopValueTag)
+	})
+
 	t.Run("TopOrderedOutput", func(t *testing.T) {
 		original := top.NewArgument().
 			WithLimit(plan.MakePlan2Uint64ConstExprWithType(17)).
@@ -606,11 +635,13 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 				},
 			}}).
 			WithOrderedOutput()
+		original.TopValueTag = 42
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		restoredTop, ok := restored.(*top.Top)
 		require.True(t, ok)
 		require.True(t, restoredTop.OrderedOutput)
+		require.Equal(t, original.TopValueTag, restoredTop.TopValueTag)
 		require.Equal(t, original.Limit, restoredTop.Limit)
 		require.Equal(t, original.Fs, restoredTop.Fs)
 	})

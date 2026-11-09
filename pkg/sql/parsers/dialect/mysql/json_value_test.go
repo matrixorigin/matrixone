@@ -172,3 +172,49 @@ func TestJSONValueKeywordsPreserveExistingEmptyCalls(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONValueWithConstraintNamesAndStatementFragments(t *testing.T) {
+	const sql = "create table t (doc json, k int, " +
+		"constraint ChK_Mixed check (json_value(doc, '$.x' returning signed default 1 on empty error on error) >= 0), " +
+		"constraint UnQ_Mixed unique (k)); " +
+		"select json_value(doc, '$.a;b' returning char null on empty) from t"
+	for _, tc := range []struct {
+		name      string
+		lower     int64
+		checkName string
+	}{
+		{"case sensitive", 0, "chk_mixed"},
+		{"case insensitive", 1, "chk_mixed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parser := &MySQLParser{}
+			stmts, fragments, err := parser.ParseWithSQLModeAndFragments(context.Background(), sql, tc.lower, "")
+			require.NoError(t, err)
+			for _, stmt := range stmts {
+				defer stmt.Free()
+			}
+			require.Len(t, stmts, 2)
+			require.Len(t, fragments, 2)
+			require.True(t, fragments[0].MatchesSource(sql))
+			require.True(t, fragments[1].MatchesSource(sql))
+			require.Contains(t, fragments[1].SQL, "'$.a;b'")
+
+			create, ok := stmts[0].(*tree.CreateTable)
+			require.True(t, ok)
+			require.Len(t, create.Defs, 4)
+			check, ok := create.Defs[2].(*tree.CheckIndex)
+			require.True(t, ok)
+			require.Equal(t, tc.checkName, check.ConstraintSymbol)
+			comparison, ok := check.Expr.(*tree.ComparisonExpr)
+			require.True(t, ok)
+			value, ok := comparison.Left.(*tree.FuncExpr)
+			require.True(t, ok)
+			require.NotNil(t, value.JsonValue)
+			require.Equal(t, tree.JsonValueDefaultResponse, value.JsonValue.OnEmpty.Mode)
+			require.Equal(t, tree.JsonValueErrorResponse, value.JsonValue.OnError.Mode)
+			unique, ok := create.Defs[3].(*tree.UniqueIndex)
+			require.True(t, ok)
+			require.Equal(t, "UnQ_Mixed", unique.ConstraintSymbol)
+		})
+	}
+}

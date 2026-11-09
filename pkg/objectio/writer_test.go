@@ -501,6 +501,13 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, limit, arenaCompressBufSize(limit))
 		// An illegal request must still reach Alloc's existing failure path.
 		require.Greater(t, arenaCompressBufSize(limit+1), limit)
+		require.Equal(t, math.MaxInt, arenaCompressBufSize(math.MaxInt))
+
+		a := NewArena(64)
+		defer a.FreeBuffers()
+		_, err := a.compressBufChecked(limit + 1)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.Panics(t, func() { a.CompressBuf(limit + 1) })
 	})
 
 	t.Run("zero-size arena falls back to exact make", func(t *testing.T) {

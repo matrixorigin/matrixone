@@ -266,3 +266,7 @@ func TestGenBuildSQL(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func (r *recordingCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
+	return r.RunSql(sql)
+}

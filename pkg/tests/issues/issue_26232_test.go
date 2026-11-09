@@ -204,7 +204,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "blob_col", wantInfo: sql.NullString{String: "('blob-seed')", Valid: true}, wantDesc: sql.NullString{String: "('blob-seed')", Valid: true}},
 			{column: "float_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
 			{column: "double_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
-			{column: "bit_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
+			{column: "bit_col", wantInfo: sql.NullString{String: "b'0'", Valid: true}, wantDesc: sql.NullString{String: "b'0'", Valid: true}},
 			{column: "year_col", wantInfo: sql.NullString{String: "0000", Valid: true}, wantDesc: sql.NullString{String: "0000", Valid: true}},
 			{column: "text_col", wantInfo: sql.NullString{String: "('text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('text-seed')", Valid: true}},
 			{column: "nullable_text", wantInfo: sql.NullString{String: "('nullable-text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('nullable-text-seed')", Valid: true}},

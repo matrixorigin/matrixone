@@ -32,7 +32,7 @@ func TestBuildViewColumnsRejectsDirectUse(t *testing.T) {
 		"select * from nation cross apply mo_view_columns(n_nationkey) mc", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.ErrorContains(t, err, "private to information_schema metadata views")
 }
 

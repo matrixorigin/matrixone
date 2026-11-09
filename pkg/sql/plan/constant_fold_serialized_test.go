@@ -301,7 +301,7 @@ func TestOptimizerConstantFoldsNegativeSecToTime(t *testing.T) {
 	stmt, err := mysql.ParseOne(t.Context(), "select sec_to_time(-2378)", 1)
 	require.NoError(t, err)
 
-	query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, query.Steps)
 	root := query.Nodes[query.Steps[len(query.Steps)-1]]
@@ -458,7 +458,7 @@ func TestOptimizerPreservesByteIdenticalSerializedProvenance(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
 
-			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 			require.NoError(t, err)
 			require.NotEmpty(t, query.Steps)
 			root := query.Nodes[query.Steps[len(query.Steps)-1]]
@@ -494,7 +494,7 @@ func TestOptimizerPreservesSerializedListProvenance(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
-			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 			require.NoError(t, err)
 
 			literalVecExpr := findFirstLiteralVecExpr(query)
@@ -530,7 +530,7 @@ func TestOptimizerDoesNotTreatSerializedProvenanceAsFilterValue(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 			require.NoError(t, err)
 
 			seenScan := false
@@ -679,7 +679,7 @@ func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), "select cast('x' as char)", 1)
 	require.NoError(t, err)
-	pl, err := BuildPlan(ctx, stmt, false)
+	pl, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	query := pl.GetQuery()
 	root := query.Nodes[query.Steps[len(query.Steps)-1]]
@@ -768,7 +768,7 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
-			pl, err := BuildPlan(ctx, stmt, false)
+			pl, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			require.NotEmpty(t, query.Steps)

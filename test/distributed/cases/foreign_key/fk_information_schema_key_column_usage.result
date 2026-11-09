@@ -47,14 +47,14 @@ alter_child  ¦  NO ACTION  ¦  NO ACTION  𝄀
 restrict_alter_child  ¦  RESTRICT  ¦  RESTRICT  𝄀
 unnamed_child  ¦  NO ACTION  ¦  NO ACTION
 desc information_schema.KEY_COLUMN_USAGE;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 constraint_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-constraint_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+constraint_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+constraint_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_catalog  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_schema  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-column_name  ¦  varchar(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  int unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 position_in_unique_constraint  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 referenced_table_schema  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

@@ -15,8 +15,11 @@
 package plan
 
 import (
+	"context"
+	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/go-cmp/cmp"
@@ -252,6 +255,83 @@ func TestRegularIndexMergeBranchBudget(t *testing.T) {
 	require.Len(t, arms, 1, "AND 不能展开为笛卡尔积")
 }
 
+func TestRegularIndexOnlyAliasedSinglePartMapping(t *testing.T) {
+	ctx := newIndexMergePlanContext(t)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+	table := ctx.tables["index_hint_t"]
+	tag := builder.genNewBindTag()
+	typ := table.Cols[2].Typ
+	bound := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 10}}}}
+	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{GetColExpr(typ, tag, 2), bound})
+	require.NoError(t, err)
+	index := &planpb.IndexDef{IndexName: "idx_b", IndexTableName: "idx_hint_b", Unique: true, Parts: []string{catalog.CreateAlias("b")}}
+	ctx.tables[index.IndexTableName].Cols[0].Typ = typ
+	node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, TableDef: table, ObjRef: ctx.objects[table.Name],
+		BindingTags: []int32{tag}, FilterList: []*planpb.Expr{filter}, Limit: MakePlan2Uint64ConstExprWithType(5)}
+	build := func(index *planpb.IndexDef, mapping map[[2]int32]*planpb.Expr) *planpb.Node {
+		scan, err := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+			filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
+		})
+		require.NoError(t, err)
+		return scan
+	}
+	mapping := make(map[[2]int32]*planpb.Expr)
+	scan := build(index, mapping)
+	require.NotNil(t, scan)
+	require.NotNil(t, mapping[[2]int32{tag, 2}], "the alias resolves to b rather than the primary key")
+	require.NotContains(t, mapping, [2]int32{tag, 0})
+	require.Same(t, node.Limit, scan.Limit)
+	require.Equal(t, int32(0), scan.FilterList[0].GetF().Args[0].GetCol().ColPos)
+
+	t.Run("nil base context", func(t *testing.T) {
+		ctx.SetContext(nil)
+		mapping := make(map[[2]int32]*planpb.Expr)
+		scan := build(index, mapping)
+		require.NotNil(t, scan)
+		require.NotNil(t, mapping[[2]int32{tag, 2}])
+	})
+
+	t.Run("cancellation cause", func(t *testing.T) {
+		cancelled, cancel := context.WithCancelCause(context.Background())
+		cause := errors.New("cancel regular index mapping")
+		cancel(cause)
+		ctx.SetContext(cancelled)
+		original := GetColExpr(typ, tag, 2)
+		mapping := map[[2]int32]*planpb.Expr{{tag, 2}: original}
+		scan, err := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+			filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
+		})
+		require.Nil(t, scan)
+		require.ErrorIs(t, err, cause)
+		require.Same(t, original, mapping[[2]int32{tag, 2}])
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		ctx.SetContext(expired)
+		mapping := make(map[[2]int32]*planpb.Expr)
+		scan, err := builder.buildRegularIndexOnlyScan(index, node, mapping, &Snapshot{}, &regularIndexOnlyMatch{
+			filterIdx: []int32{0}, filterType: EqualIndexCondition, leadingEqual: true,
+		})
+		require.Nil(t, scan)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Empty(t, mapping)
+	})
+
+	t.Run("missing index column", func(t *testing.T) {
+		ctx.SetContext(context.Background())
+		invalid := *index
+		invalid.Parts = []string{"missing"}
+		original := GetColExpr(typ, tag, 2)
+		mapping := map[[2]int32]*planpb.Expr{{tag, 2}: original}
+		scan := build(&invalid, mapping)
+		require.Nil(t, scan)
+		require.Len(t, mapping, 1)
+		require.Same(t, original, mapping[[2]int32{tag, 2}])
+	})
+}
+
 func TestRegularIndexMergeConstructionFailure(t *testing.T) {
 	ctx := newIndexMergePlanContext(t)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
@@ -275,12 +355,39 @@ func TestRegularIndexMergeConstructionFailure(t *testing.T) {
 		require.NotNil(t, branch)
 		candidate.branches = append(candidate.branches, branch)
 	}
+	for _, branch := range candidate.branches {
+		cancelCtx, cancel := context.WithCancelCause(context.Background())
+		ctx.SetContext(cancelCtx)
+		stop := errors.New("index merge stopped after resolution")
+		compiler := &controlledIndexResolver{
+			CompilerContext: ctx,
+			target:          branch.index.IndexTableName,
+			after:           func() { cancel(stop) },
+		}
+		builder.compCtx = compiler
+		original := proto.Clone(node)
+		nameCount := len(builder.nameByColRef)
+		mapping := map[[2]int32]*planpb.Expr{}
+		got, err := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+		require.Equal(t, id, got)
+		require.ErrorIs(t, err, stop)
+		require.Equal(t, 1, compiler.resolved)
+		require.Len(t, builder.qry.Nodes, 1, "no branch may be published on cancellation")
+		require.Len(t, builder.ctxByNode, 1)
+		require.Len(t, builder.nameByColRef, nameCount)
+		require.Empty(t, mapping)
+		require.Empty(t, cmp.Diff(original, node))
+		cancel(nil)
+		ctx.SetContext(context.Background())
+		builder.compCtx = ctx
+	}
 	indexType := ctx.tables["idx_hint_b"].Cols[0].Typ
 	ctx.tables["idx_hint_b"].Cols[0].Typ = planpb.Type{Id: int32(types.T_json)}
 	before := proto.Clone(node)
 	nameCount := len(builder.nameByColRef)
 	mapping := map[[2]int32]*planpb.Expr{}
-	got := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	got, err := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	require.NoError(t, err)
 	require.Equal(t, id, got)
 	require.Len(t, builder.qry.Nodes, 1, "第一分支不能提前发布")
 	require.Len(t, builder.ctxByNode, 1)
@@ -294,7 +401,8 @@ func TestRegularIndexMergeConstructionFailure(t *testing.T) {
 	for _, branch := range candidate.branches {
 		branch.scan.ScanSnapshot = node.ScanSnapshot
 	}
-	root := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	root, err := builder.buildRegularIndexMerge(node, 0, candidate, mapping)
+	require.NoError(t, err)
 	require.NotEqual(t, id, root)
 	require.Same(t, node.Limit, builder.qry.Nodes[root].Limit)
 	published := 0
@@ -331,7 +439,8 @@ func TestRegularIndexMergeInvalidCost(t *testing.T) {
 		node.Stats = &planpb.Stats{TableCnt: 200000, Cost: cost, Outcnt: 401, Selectivity: 0.002005}
 		original := proto.Clone(node)
 		mapping := map[[2]int32]*planpb.Expr{}
-		got := builder.applyRegularIndexMerge(node, table.Indexes, refs, mapping, builder.newEncodedRegularIndexCostContext(node, refs))
+		got, err := builder.applyRegularIndexMerge(node, table.Indexes, refs, mapping, builder.newEncodedRegularIndexCostContext(node, refs))
+		require.NoError(t, err)
 		require.Equal(t, id, got)
 		require.Empty(t, cmp.Diff(original, node, cmpopts.EquateNaNs()))
 		require.Empty(t, mapping)

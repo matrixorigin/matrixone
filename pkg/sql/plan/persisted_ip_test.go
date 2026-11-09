@@ -172,7 +172,7 @@ func TestPersistedDecimalDivisionViewAdmissionBeforeFold(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 	_, err := build(defines.MORPCVersion96)
 	require.ErrorContains(t, err, "protocol version 97")
@@ -449,7 +449,7 @@ func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				if version < defines.MORPCVersion72 {
 					require.ErrorContains(t, err, "protocol version 72")
 				} else {
@@ -763,7 +763,7 @@ func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion85)
@@ -806,7 +806,7 @@ func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T)
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 	}
 
 	_, err := build(defines.MORPCVersion85)
@@ -858,7 +858,7 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 					return nil, err
 				}
 				defer stmt.Free()
-				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 			}
 
 			_, err := build(0)

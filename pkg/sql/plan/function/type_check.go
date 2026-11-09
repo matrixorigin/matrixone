@@ -29,10 +29,12 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	// MySQL evaluates ENUM by its 1-based index in numeric contexts.  Treat it
 	// as uint16 while selecting binary arithmetic and numeric comparison rules;
 	// the later cast still starts from T_enum and preserves NULL handling.
-	if s1.Oid == types.T_enum {
+	enumLeft := s1.Oid == types.T_enum
+	enumRight := s2.Oid == types.T_enum
+	if enumLeft {
 		s1 = types.T_uint16.ToType()
 	}
-	if s2.Oid == types.T_enum {
+	if enumRight {
 		s2 = types.T_uint16.ToType()
 	}
 	// The scalar low-precision float types (bf16/float16/float8/float4) all fit
@@ -52,6 +54,20 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	// so a low-precision pair that both normalized to float32 must still be cast from
 	// its low-precision type. Force that cast to float32 here.
 	if lowPrec && s1.Oid == types.T_float32 && s2.Oid == types.T_float32 {
+		return true, s1, s2
+	}
+	// An ENUM normalized to uint16 and paired with a SMALLINT UNSIGNED operand
+	// lands on the same uint16/uint16 diagonal, which carries no cast rule
+	// either, so the pair was reported as "no cast needed" even though the
+	// ENUM operand still must be cast from its original T_enum type to
+	// execute: = and <=> then bound the mismatched physical vectors and
+	// panicked in the comparison kernel, while < <= > >= and + - * %
+	// rejected the pair at bind time. Mirror the float32 diagonal: force the
+	// uint16 targets only when exactly one operand was originally ENUM. An
+	// ENUM/ENUM pair keeps its direct same-identity comparison and a plain
+	// uint16 pair stays cast-free; every other mix keeps the Table-registered
+	// routes below (uint8, uint32, signed integers, floats and T_any).
+	if enumLeft != enumRight && s1.Oid == types.T_uint16 && s2.Oid == types.T_uint16 {
 		return true, s1, s2
 	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]

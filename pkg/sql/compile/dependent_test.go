@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -293,7 +294,7 @@ func TestDependentNativeStages(t *testing.T) {
 			stmts, err := mysql.Parse(proc.Ctx, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, query.Correlation)
 			budget, err := proc.GetExecutionResourceBudget()
@@ -435,7 +436,7 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 	stmts, err := mysql.Parse(proc.Ctx, `SELECT (SELECT (SELECT MAX(n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY<=n1.N_NATIONKEY)) FROM NATION n1`, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+	q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, q.Correlation)
 	scans := 0
@@ -448,6 +449,22 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 		n.ExternScan = &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB), LoadType: tree.INLINE,
 			Data: "1\n2\n3\n", Format: tree.CSV, Terminated: ",", EnclosedBy: []byte{'"'}, EscapedBy: []byte{'\\'},
 			TbColToDataCol: map[string]int32{n.TableDef.Cols[0].Name: 0}}
+		// An inline external scan reconstructs its reader options from the
+		// serialized source param in TableDef.Createsql; the inline payload
+		// and the flat escape byte travel in ExternScan like the LOAD planners
+		// encode them.
+		src := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INLINE,
+				Format:   tree.CSV,
+				Tail: &tree.TailParameter{
+					Fields: &tree.Fields{Terminated: &tree.Terminated{Value: ","}},
+				},
+			},
+		}
+		payload, err := json.Marshal(src)
+		require.NoError(t, err)
+		n.TableDef.Createsql = string(payload)
 		scans++
 	}
 	require.Equal(t, 2, scans)
@@ -506,7 +523,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 				stmts, err := mysql.Parse(proc.Ctx, `SELECT (SELECT (SELECT n.N_NATIONKEY)) FROM NATION n`, 1)
 				require.NoError(t, err)
 				defer stmts[0].Free()
-				q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+				q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 				require.NoError(t, err)
 				require.NotNil(t, q.Correlation)
 				var scan *plan.Node
