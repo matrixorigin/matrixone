@@ -1175,8 +1175,11 @@ func decimalStateMinus[S sumAvgDecimalState](value S) S {
 
 type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 	aggExec
-	isSum              bool
-	localAddSafe       bool // true when state type is wider than arg type (overflow impossible in local buffer)
+	isSum        bool
+	localAddSafe bool // true when state type is wider than arg type (overflow impossible in local buffer)
+	// Physical Go carriers are distinct from declared SQL result types.
+	bulkInput          types.T
+	bulkState          types.T
 	windowNonNullCount int64
 }
 
@@ -1277,6 +1280,14 @@ func (exec *sumAvgDecExec[A, S]) removeWindowRow(row int, vectors []*vector.Vect
 func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
+	}
+	v := vectors[0]
+	// A single row needs neither batch-local accumulation nor SIMD dispatch.
+	if v.Length() == 1 && groupIndex >= 0 {
+		return exec.Fill(groupIndex, 0, vectors)
+	}
+	if v.Length() >= 256 && decimalReductionAvailable() && !v.HasNull() && !v.IsConst() && !v.HasGrouping() && exec.bulkInput != 0 && v.GetType().Oid == exec.bulkInput && exec.bulkState != 0 && exec.aggInfo.stateTypes[0].Oid == exec.bulkState {
+		return decimalBulkReduce(&exec.aggExec, exec.isSum, groupIndex, v, 0, v.Length())
 	}
 	if exec.isSum {
 		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
@@ -1410,6 +1421,18 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgRange(groupIndex, offset, n int, vec
 func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	if exec.bulkInput != 0 && len(groups) == 1 {
+		return exec.Fill(int(groups[0])-1, offset, vectors)
+	}
+	// Non-decimal instantiations keep the existing scalar dispatch.
+	if exec.bulkInput != 0 && exec.bulkState != 0 && len(groups) >= 256 && groups[0] != GroupNotMatched && groups[0] == groups[len(groups)-1] && decimalReductionAvailable() {
+		v := vectors[0]
+		if v.GetType().Oid == exec.bulkInput && exec.aggInfo.stateTypes[0].Oid == exec.bulkState && !v.HasNull() && !v.IsConst() && !v.HasGrouping() {
+			if group, ok := decimalReductionGroup(groups); ok {
+				return decimalBulkReduce(&exec.aggExec, exec.isSum, int(group-1), v, offset, len(groups))
+			}
+		}
 	}
 	// The legacy combiner buffers only 255 groups and updates later groups
 	// directly. A checked large call must keep that order: a local subtotal
@@ -2179,6 +2202,21 @@ func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool,
 		exec.aggInfo.stateTypes = []types.Type{
 			sumAvgDecimalStateType[S](sumAvgDecimalArgScale(param)),
 			types.T_int64.ToType(),
+		}
+	}
+
+	switch any(a).(type) {
+	case types.Decimal64:
+		exec.bulkInput = types.T_decimal64
+	case types.Decimal128:
+		exec.bulkInput = types.T_decimal128
+	case types.Decimal256:
+		exec.bulkInput = types.T_decimal256
+	}
+	if decimalReductionAvailable() && exec.bulkInput != 0 {
+		exec.bulkState = sumAvgDecimalStateType[S](sumAvgDecimalArgScale(param)).Oid
+		if exec.bulkInput.TypeLen() > exec.bulkState.TypeLen() {
+			exec.bulkState = 0
 		}
 	}
 

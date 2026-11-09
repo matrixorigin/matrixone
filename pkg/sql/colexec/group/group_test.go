@@ -5974,3 +5974,48 @@ func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
 	require.Equal(t, "600.35", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0].Vecs[3], 0).Format(2))
 	require.Equal(t, "599.65", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0].Vecs[4], 0).Format(2))
 }
+
+// A real no-GROUP-BY consumer sends a full UnitLimit span and a scalar tail
+// through BatchFill. The input owner and output metadata remain unchanged.
+func TestGroupDecimalUniformBatchReduction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	typ := types.New(types.T_decimal128, 38, 2)
+	aggs := make([]aggexec.AggFuncExecExpression, 0, 2)
+	for _, name := range []string{"sum", "avg"} {
+		f, err := function.GetFunctionByName(proc.Ctx, name, []types.Type{typ})
+		require.NoError(t, err)
+		aggs = append(aggs, aggexec.MakeAggFunctionExpression(f.GetEncodedOverloadID(), false, []*plan.Expr{colExprWithType(0, typ)}, nil))
+	}
+	child := colexec.NewMockOperator()
+	t.Cleanup(func() { child.Free(proc, false, nil) })
+	g := newGroupOp(proc, nil, aggs)
+	g.AppendChild(child)
+	t.Cleanup(func() { g.Free(proc, false, nil) })
+	input := batch.NewWithSize(1)
+	child.WithBatchs([]*batch.Batch{input})
+	input.Vecs[0] = vector.NewVec(typ)
+	for i := 0; i < 263; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal128FromInt64(3), false, proc.Mp()))
+	}
+	input.SetRowCount(263)
+	require.NoError(t, g.Prepare(proc))
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, 1, results[0].RowCount())
+	require.Len(t, results[0].Vecs, 2)
+	for i, want := range []string{"7.89", "0.03"} {
+		v := results[0].Vecs[i]
+		require.False(t, v.IsNull(0))
+		var got string
+		switch v.GetType().Oid {
+		case types.T_decimal128:
+			got = vector.GetFixedAtNoTypeCheck[types.Decimal128](v, 0).Format(v.GetType().Scale)
+		case types.T_decimal256:
+			got = vector.GetFixedAtNoTypeCheck[types.Decimal256](v, 0).Format(v.GetType().Scale)
+		default:
+			t.Fatalf("unexpected aggregate carrier %s", v.GetType().Oid)
+		}
+		require.Equal(t, want, strings.TrimRight(strings.TrimRight(got, "0"), "."))
+	}
+}
