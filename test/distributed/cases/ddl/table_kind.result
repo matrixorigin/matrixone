@@ -72,12 +72,14 @@ select name, type, column_name from mo_catalog.mo_indexes where name = 'idx9' an
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
 idx9  ¦  MULTIPLE  ¦  b  𝄀
 idx9  ¦  MULTIPLE  ¦  b  𝄀
+idx9  ¦  MULTIPLE  ¦  b  𝄀
 idx9  ¦  MULTIPLE  ¦  b
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx9' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't2'));
 ➤ relkind[12,-1,0]  𝄀
 metadata  𝄀
 centroids  𝄀
-entries
+entries  𝄀
+ignored
 drop table if exists t3;
 create table t3(a int primary key, b vecf32(3), index idx10 using ivfflat (b));
 insert into t3 values(1, "[1,2,3]");
@@ -98,12 +100,14 @@ select name, type, column_name from mo_catalog.mo_indexes where name = 'idx10' a
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
 idx10  ¦  MULTIPLE  ¦  b  𝄀
 idx10  ¦  MULTIPLE  ¦  b  𝄀
+idx10  ¦  MULTIPLE  ¦  b  𝄀
 idx10  ¦  MULTIPLE  ¦  b
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx10' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't3'));
 ➤ relkind[12,-1,0]  𝄀
 metadata  𝄀
 centroids  𝄀
-entries
+entries  𝄀
+ignored
 alter table t3 drop column b;
 show index from t3;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
@@ -145,12 +149,14 @@ select name, type, column_name, algo, algo_table_type,algo_params from mo_catalo
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
 idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  metadata  ¦  {"lists":"2","op_type":"vector_l2_ops"}  𝄀
 idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  centroids  ¦  {"lists":"2","op_type":"vector_l2_ops"}  𝄀
-idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  entries  ¦  {"lists":"2","op_type":"vector_l2_ops"}
+idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  entries  ¦  {"lists":"2","op_type":"vector_l2_ops"}  𝄀
+idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  ignored  ¦  {"lists":"2","op_type":"vector_l2_ops"}
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx1' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'tbl'));
 ➤ relkind[12,-1,0]  𝄀
 metadata  𝄀
 centroids  𝄀
-entries
+entries  𝄀
+ignored
 alter table tbl alter reindex idx1 ivfflat lists=3;
 show index from tbl;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
@@ -168,12 +174,14 @@ select name, type, column_name, algo, algo_table_type,algo_params from mo_catalo
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
 idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  metadata  ¦  {"lists":"3","op_type":"vector_l2_ops"}  𝄀
 idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  centroids  ¦  {"lists":"3","op_type":"vector_l2_ops"}  𝄀
-idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  entries  ¦  {"lists":"3","op_type":"vector_l2_ops"}
+idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  entries  ¦  {"lists":"3","op_type":"vector_l2_ops"}  𝄀
+idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  ignored  ¦  {"lists":"3","op_type":"vector_l2_ops"}
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx1' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'tbl'));
 ➤ relkind[12,-1,0]  𝄀
 metadata  𝄀
 centroids  𝄀
-entries
+entries  𝄀
+ignored
 alter table tbl add c vecf32(3);
 show index from tbl;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
@@ -192,12 +200,14 @@ select name, type, column_name, algo, algo_table_type,algo_params from mo_catalo
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
 idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  metadata  ¦  {"lists":"3","op_type":"vector_l2_ops"}  𝄀
 idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  centroids  ¦  {"lists":"3","op_type":"vector_l2_ops"}  𝄀
-idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  entries  ¦  {"lists":"3","op_type":"vector_l2_ops"}
+idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  entries  ¦  {"lists":"3","op_type":"vector_l2_ops"}  𝄀
+idx1  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  ignored  ¦  {"lists":"3","op_type":"vector_l2_ops"}
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx1' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'tbl'));
 ➤ relkind[12,-1,0]  𝄀
 metadata  𝄀
 centroids  𝄀
-entries
+entries  𝄀
+ignored
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
@@ -218,12 +228,14 @@ select name, type, column_name, algo, algo_table_type,algo_params from mo_catalo
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  ¦  algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
 idx2  ¦  MULTIPLE  ¦  b  ¦  ivfflat  ¦  metadata  ¦  {"lists":"2","op_type":"vector_l2_ops"}  𝄀
 idx2  ¦  MULTIPLE  ¦  b  ¦  ivfflat  ¦  centroids  ¦  {"lists":"2","op_type":"vector_l2_ops"}  𝄀
-idx2  ¦  MULTIPLE  ¦  b  ¦  ivfflat  ¦  entries  ¦  {"lists":"2","op_type":"vector_l2_ops"}
+idx2  ¦  MULTIPLE  ¦  b  ¦  ivfflat  ¦  entries  ¦  {"lists":"2","op_type":"vector_l2_ops"}  𝄀
+idx2  ¦  MULTIPLE  ¦  b  ¦  ivfflat  ¦  ignored  ¦  {"lists":"2","op_type":"vector_l2_ops"}
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'tbl'));
 ➤ relkind[12,-1,0]  𝄀
 metadata  𝄀
 centroids  𝄀
-entries
+entries  𝄀
+ignored
 set ft_relevancy_algorithm="TF-IDF";
 create table src1 (id bigint primary key, body varchar, title text);
 insert into src1 values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),

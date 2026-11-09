@@ -166,42 +166,44 @@ func TestDescColNameReplanRefiltersAfterStoredSpellingChange(t *testing.T) {
 	first, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"N_Name"},
-		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_NAME"}),
+		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_PAME"}),
 		"the first build filters the then-current stored spelling")
 	require.True(t, queryContainsStringLiteral(first.GetQuery(), "N_Name"))
 
-	nationCol.OriginName = "n_NAME"
+	nationCol.OriginName = "n_PAME"
 	reused, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{"n_NAME"},
-		descKeptByFilterPattern(t, proc, reused, "n_NAME", []string{"N_Name", "n_NAME"}),
+	require.Equal(t, []string{"n_PAME"},
+		descKeptByFilterPattern(t, proc, reused, "n_PAME", []string{"N_Name", "n_PAME"}),
 		"a reused prepared DESC must filter by the current stored spelling")
 
 	fresh, err := runOneStmt(mock, t, "desc nation n_name")
 	require.NoError(t, err)
-	require.Equal(t, []string{"n_NAME"},
-		descKeptByFilterPattern(t, proc, fresh, "n_NAME", []string{"N_Name", "n_NAME"}),
+	require.Equal(t, []string{"n_PAME"},
+		descKeptByFilterPattern(t, proc, fresh, "n_PAME", []string{"N_Name", "n_PAME"}),
 		"a fresh DESC filters by the current stored spelling")
-	require.True(t, queryContainsStringLiteral(reused.GetQuery(), "n_NAME"))
+	require.True(t, queryContainsStringLiteral(reused.GetQuery(), "n_PAME"))
 	require.False(t, queryContainsStringLiteral(reused.GetQuery(), "N_Name"))
 
 	// Authored LIKE and the wildcard/unknown shortcuts execute their real
 	// predicate over the current stored fields.
 	likeStmt, err := runOneStmt(mock, t, "show columns from nation like 'n_na%'")
 	require.NoError(t, err)
-	// The repository LIKE is case-sensitive: the flipped-store spelling n_NAME
-	// matches an exact-name filter, not the authored lowercase prefix.
+	// The repository LIKE honors the effective (case-insensitive) collation
+	// (#31175), so the flipped-store spelling differs beyond letter case:
+	// n_PAME matches an exact-name filter, not the authored lowercase prefix.
 	require.Equal(t, []string{"n_nationkey"},
-		descKeptByFilterPattern(t, proc, likeStmt, "n_na%", []string{"n_nationkey", "n_NAME", "n_regionkey", "n_comment"}))
+		descKeptByFilterPattern(t, proc, likeStmt, "n_na%", []string{"n_nationkey", "n_PAME", "n_regionkey", "n_comment"}))
 	wild, err := runOneStmt(mock, t, "desc nation `n_na%`")
 	require.NoError(t, err)
-	// The repository LIKE is case-sensitive: the flipped-store spelling n_NAME
-	// matches an exact-name filter, not the authored lowercase prefix.
+	// The repository LIKE honors the effective (case-insensitive) collation
+	// (#31175), so the flipped-store spelling differs beyond letter case:
+	// n_PAME matches an exact-name filter, not the authored lowercase prefix.
 	require.Equal(t, []string{"n_nationkey"},
-		descKeptByFilterPattern(t, proc, wild, "n_na%", []string{"n_nationkey", "n_NAME", "n_regionkey", "n_comment"}))
+		descKeptByFilterPattern(t, proc, wild, "n_na%", []string{"n_nationkey", "n_PAME", "n_regionkey", "n_comment"}))
 	miss, err := runOneStmt(mock, t, "desc nation nosuch")
 	require.NoError(t, err)
-	require.Empty(t, descKeptByFilterPattern(t, proc, miss, "nosuch", []string{"n_NAME", "n_regionkey"}))
+	require.Empty(t, descKeptByFilterPattern(t, proc, miss, "nosuch", []string{"n_PAME", "n_regionkey"}))
 
 	// Pristine saved AST AFTER the evaluated witnesses.
 	require.Nil(t, sc.Like, "the derived predicate must not persist into the saved AST")

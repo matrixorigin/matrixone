@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -543,6 +544,7 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	c.productL2IgnoredOf = nil
 	// Materialized sources own allocation-account-backed retained and decoded
 	// batches but are not VM operators. Close their compile-owned safety nets
 	// before sealing the execution account, especially on partial-run failures
@@ -2218,6 +2220,18 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		right = c.ensureCoordinatorOnlyFunctions(node, right)
+		if node.JoinType == plan.Node_L2 {
+			ig, err := c.productL2Ignored(node)
+			if err != nil {
+				return nil, err
+			}
+			if ig != nil {
+				if c.productL2IgnoredOf == nil {
+					c.productL2IgnoredOf = make(map[*plan.Node]*productl2.Ignored)
+				}
+				c.productL2IgnoredOf[node] = ig
+			}
+		}
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -5723,21 +5737,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if err != nil {
 		return nil, nil, err
 	}
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx = scanSnapshotTxn(ctx, txnOp, node.ScanSnapshot)
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -7328,6 +7328,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
+			op.Ignored = c.productL2IgnoredOf[node]
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			if rs[i].NodeInfo.Mcpu != 1 {
@@ -10992,21 +10993,7 @@ func collectTombstones(
 	var tombstone engine.Tombstoner
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
-		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
-		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
-			if c.proc.GetCloneTxnOperator() == nil {
-				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	ctx, _ := scanSnapshotContext(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
 	//-----------------------------------------------------------------------------------------------------
 
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
@@ -11018,7 +11005,8 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
+	// 读取事务由 rel 持有，不能把其他扫描的 clone 当作本次读取点记录。
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, nil)
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
@@ -11124,24 +11112,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
 	//-------------------------------------------------------------------------------------------------------------
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
