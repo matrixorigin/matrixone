@@ -15,12 +15,13 @@
 package plan
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestAsyncDatalinkUpdateFinalAssignments(t *testing.T) {
@@ -54,7 +55,7 @@ func TestAsyncDatalinkUpdateFinalAssignments(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), "update constraint_test.t_on_update_gen set "+tc.assignment, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(ctx, stmts[0], false)
+			p, err := BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			checks := 0
 			for _, node := range p.GetQuery().Nodes {

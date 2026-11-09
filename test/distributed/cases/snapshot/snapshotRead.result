@@ -1211,7 +1211,7 @@ use test07;
 drop table if exists t1;
 create table t1(a int, b char(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 b  ¦  char(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

@@ -181,7 +181,7 @@ func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select g17 from legacydag where g17 > 0", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	pl, err := BuildPlan(compiler, stmt, false)
+	pl, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	projectCount := 0
 	exprNodes := 0
@@ -249,7 +249,7 @@ func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			update, err := BuildPlan(compiler, stmt, false)
+			update, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			stages := 0
 			for _, node := range update.GetQuery().Nodes {

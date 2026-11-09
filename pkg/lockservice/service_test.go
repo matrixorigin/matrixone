@@ -2931,6 +2931,41 @@ func TestLockResultWithConflictAndTxnCommitted(t *testing.T) {
 	)
 }
 
+// runRollingRestartTests retains the allocator grace period while shortening
+// heartbeat-driven state transitions in the short CI suite.
+func runRollingRestartTests(
+	t *testing.T,
+	serviceIDs []string,
+	fn func(*lockTableAllocator, []*service),
+) {
+	runLockServiceTestsWithAdjustConfig(t, serviceIDs, 10*time.Second, fn,
+		accelerateLockKeeperForShortTest)
+}
+
+func requireRollingRestartCondition(
+	t *testing.T,
+	ctx context.Context,
+	description string,
+	condition func() bool,
+) {
+	t.Helper()
+	if condition() {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v", description, ctx.Err())
+		case <-ticker.C:
+			if condition() {
+				return
+			}
+		}
+	}
+}
+
 func TestRestartInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -2944,7 +2979,7 @@ func TestRestartInRollingRestartCN(t *testing.T) {
 }
 
 func TestUnlockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -2977,23 +3012,15 @@ func TestUnlockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.Equal(t, false, true)
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceCanRestart)", func() bool {
+				return l.isStatus(pb.Status_ServiceCanRestart)
+			})
 		},
 	)
 }
 
 func TestReLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3067,7 +3094,7 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 }
 
 func TestOldTxnLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3165,7 +3192,7 @@ func TestIssue4017(t *testing.T) {
 }
 
 func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3217,16 +3244,9 @@ func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if l.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceCanRestart)", func() bool {
+				return l.isStatus(pb.Status_ServiceCanRestart)
+			})
 			// get bind
 			_, _, err = getLockTableBindWithContext(
 				ctx,
@@ -3243,7 +3263,7 @@ func TestLeaveGetBindInRollingRestartCN(t *testing.T) {
 }
 
 func TestNewTxnLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3270,16 +3290,9 @@ func TestNewTxnLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l.isStatus(pb.Status_ServiceLockWaiting)
+			})
 
 			// new txn
 			t2, _ := l.clock.Now()
@@ -3296,7 +3309,7 @@ func TestNewTxnLockInRollingRestartCN(t *testing.T) {
 }
 
 func TestStatusInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3323,16 +3336,9 @@ func TestStatusInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l.Unlock(
@@ -3341,16 +3347,9 @@ func TestStatusInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if l.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l.isStatus(pb.Status_ServiceCanRestart)", func() bool {
+				return l.isStatus(pb.Status_ServiceCanRestart)
+			})
 			require.Equal(t, true, l.isStatus(pb.Status_ServiceCanRestart))
 			require.Equal(t, true, alloc.canRestartService("s1"))
 		},
@@ -3358,7 +3357,7 @@ func TestStatusInRollingRestartCN(t *testing.T) {
 }
 
 func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3386,16 +3385,9 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			// remote lock should be failed,
@@ -3413,7 +3405,7 @@ func TestRemoteLockFailedInRollingRestartCN(t *testing.T) {
 }
 
 func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -3451,16 +3443,9 @@ func TestRemoteLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			// remote lock should be succ
@@ -4439,7 +4424,7 @@ func TestRequireRollingRestartLockEventuallySucceedsRetriesTransientRPCErrors(t 
 }
 
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4524,7 +4509,7 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 }
 
 func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4551,16 +4536,9 @@ func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l1.Unlock(
@@ -4569,23 +4547,16 @@ func TestMoveTableSuccInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if !alloc.validLockTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "!alloc.validLockTable(0, 0)", func() bool {
+				return !alloc.validLockTable(0, 0)
+			})
 			require.False(t, alloc.validLockTable(0, 0))
 		},
 	)
 }
 
 func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4613,16 +4584,9 @@ func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "l1.isStatus(pb.Status_ServiceLockWaiting)", func() bool {
+				return l1.isStatus(pb.Status_ServiceLockWaiting)
+			})
 			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
 
 			err = l1.Unlock(
@@ -4631,16 +4595,9 @@ func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if !alloc.validLockTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireRollingRestartCondition(t, ctx, "!alloc.validLockTable(0, 0)", func() bool {
+				return !alloc.validLockTable(0, 0)
+			})
 			require.False(t, alloc.validLockTable(0, 0))
 
 			// new txn should be got right lock table
@@ -4658,7 +4615,7 @@ func TestMoveTableLockSuccInRollingRestartCN(t *testing.T) {
 }
 
 func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {
@@ -4733,7 +4690,7 @@ func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
 }
 
 func TestPreTxnLockInRollingRestartCN(t *testing.T) {
-	runLockServiceTests(
+	runRollingRestartTests(
 		t,
 		[]string{"s1", "s2"},
 		func(alloc *lockTableAllocator, s []*service) {

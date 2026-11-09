@@ -5,7 +5,7 @@ create table src (a int, b varchar(8));
 insert into src values (1, 'x');
 create table dst_empty as select * from src limit 0;
 desc dst_empty;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from dst_empty;
@@ -18,12 +18,12 @@ create table src_key (id int primary key, v varchar(8), unique key(v));
 insert into src_key values (1, 'k');
 create table dst_key_empty as select * from src_key limit 0;
 desc dst_key_empty;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 v  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table dst_explicit as select a, b from src limit 0;
 desc dst_explicit;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  varchar(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table dst_missing as select * from missing_src limit 0;

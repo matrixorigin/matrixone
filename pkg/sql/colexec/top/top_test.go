@@ -33,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -201,6 +202,96 @@ func TestTop(t *testing.T) {
 					require.Equal(t, expectedSecond, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
 				}
 			}()
+		}
+	}
+}
+
+func TestTopMultiKeyThresholdAndReset(t *testing.T) {
+	for _, mode := range []string{"fixed", "resident", "spill", "migrate"} {
+		for _, ordered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/ordered=%t", mode, ordered), func(t *testing.T) {
+				first, second := newExpression(0), newExpression(1)
+				first.Typ = plan.Type{Id: int32(types.T_int64), NotNullable: true}
+				second.Typ = first.Typ
+				typs := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+				if mode != "fixed" {
+					typs = append(typs, types.T_varchar.ToType())
+				}
+				tc := newTestCase(t, mpool.MustNewZero(), typs, 2,
+					[]*plan.OrderBySpec{{Expr: first, Flag: plan.OrderBySpec_DESC}, {Expr: second, Flag: plan.OrderBySpec_DESC}})
+				tc.arg.TopValueTag = 42
+				tc.arg.OrderedOutput = ordered
+				tc.proc.SetMessageBoard(message.NewMessageBoard())
+				t.Cleanup(func() {
+					tc.arg.Free(tc.proc, false, nil)
+					tc.proc.Free()
+					require.Zero(t, tc.proc.Mp().CurrNB())
+				})
+				receiver := message.NewMessageReceiver([]int32{42}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+				for generation := range 2 {
+					func() {
+						require.NoError(t, tc.arg.Prepare(tc.proc))
+						if mode == "spill" {
+							tc.arg.ctr.spilling = true
+						}
+						if mode == "migrate" {
+							tc.arg.ctr.residentByteLimit = 512
+						}
+						child := colexec.NewMockOperator()
+						defer child.Free(tc.proc, false, nil)
+						tc.arg.Children = nil
+						tc.arg.AppendChild(child)
+						base := int64(5 - generation*4)
+						for i, row := range [][2]int64{{base, 1}, {base, 2}, {base, 9}, {base + 1, 1}} {
+							bat := batch.NewWithSize(len(typs))
+							child.WithBatchs([]*batch.Batch{bat})
+							for col, value := range row {
+								bat.Vecs[col] = vector.NewVec(typs[col])
+								require.NoError(t, vector.AppendFixed(bat.Vecs[col], value, false, tc.proc.Mp()))
+							}
+							if mode != "fixed" {
+								width := 32
+								if mode == "migrate" && i == 2 {
+									width = 2048
+								}
+								bat.Vecs[2] = vector.NewVec(typs[2])
+								require.NoError(t, vector.AppendBytes(bat.Vecs[2], bytes.Repeat([]byte("x"), width), false, tc.proc.Mp()))
+							}
+							bat.SetRowCount(1)
+						}
+						child.WithBatchCallback(func(i int) {
+							msgs, _, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+							require.NoError(t, err)
+							if i == 2 {
+								require.Len(t, msgs, 1, "满 K 后才可发布阈值")
+								zm := msgs[0].(message.TopValueMessage).TopValueZM
+								require.Equal(t, base, types.DecodeInt64(zm.GetMaxBuf()))
+							} else {
+								require.Empty(t, msgs, "K 未满或首键阈值未变时不能发布新阈值")
+							}
+							if mode == "migrate" && i == 2 {
+								require.True(t, tc.arg.ctr.boundedResident)
+								require.False(t, tc.arg.ctr.spilling)
+							}
+						})
+						var keys, secondary []int64
+						for {
+							result, err := vm.Exec(tc.arg, tc.proc)
+							require.NoError(t, err)
+							if result.Batch == nil {
+								break
+							}
+							keys = append(keys, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])...)
+							secondary = append(secondary, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])...)
+						}
+						require.Equal(t, []int64{base + 1, base}, keys)
+						require.Equal(t, []int64{1, 9}, secondary)
+						require.Equal(t, mode == "spill" || mode == "migrate", tc.arg.ctr.spilling)
+						tc.arg.Reset(tc.proc, false, nil)
+						require.Nil(t, tc.arg.ctr.topValueZM)
+					}()
+				}
+			})
 		}
 	}
 }

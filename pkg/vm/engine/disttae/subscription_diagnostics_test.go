@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
@@ -35,8 +36,9 @@ const diagnosticDB, diagnosticCold, diagnosticWarm = uint64(1000), uint64(100), 
 
 func subscriptionDiagnosticsFixture(t *testing.T) *PushClient {
 	t.Helper()
-	e := &Engine{service: "subscription-diagnostics", partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{}}
-	c := &PushClient{eng: e, subscriber: newLogTailSubscriber()}
+	e := &Engine{service: "subscription-diagnostics", partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 1)}}
+	c := &e.pClient
+	c.eng, c.subscriber = e, newLogTailSubscriber()
 	c.subscriber.setReady()
 	c.receivedLogTailTime.ready.Store(true)
 	c.subscribed.eng = e
@@ -169,7 +171,7 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 	logutil.SetupMOLogger(&cfg)
 	t.Cleanup(func() { cfg := logutil.GetDefaultConfig(); logutil.SetupMOLogger(&cfg) })
 	require.True(t, logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel))
-	for _, scenario := range []string{"not found", "subscribed", "response received", "unsubscribe cleanup", "unsubscribe absent", "unsubscribe sent", "unsubscribe failed", "GC rollback", "subscribe completed"} {
+	for _, scenario := range []string{"not found", "subscribed", "response received", "subscribe action", "unsubscribe cleanup", "unsubscribe action", "unsubscribe absent", "unsubscribe sent", "unsubscribe failed", "GC rollback", "subscribe completed"} {
 		t.Run(scenario, func(t *testing.T) {
 			c := subscriptionDiagnosticsFixture(t)
 			transportErr := errors.New("subscription transport failed")
@@ -194,12 +196,24 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 					c.subscribed.setTableSubRspReceived(diagnosticDB, diagnosticCold)
 					return nil
 				}
-			case "unsubscribe cleanup":
+			case "subscribe action":
+				message = "logtail.consumer.set.table.sub.rsp.received"
+				action = func(ctx context.Context) error {
+					cmd := &cmdToConsumeSub{log: &logtail.SubscribeResponse{Logtail: logtail.TableLogtail{
+						Table: &api.TableID{DbId: diagnosticDB, TbId: diagnosticCold, DbName: "diagnostics"},
+					}}, receiveAt: time.Now()}
+					return cmd.action(ctx, c.eng, nil)
+				}
+			case "unsubscribe cleanup", "unsubscribe action":
 				message = "logtail.consumer.set.table.unsubscribe"
 				c.subscribed.m[diagnosticCold] = &subEntry{dbID: diagnosticDB, state: Subscribed}
 				c.eng.GetOrCreateLatestPart(t.Context(), 0, diagnosticDB, diagnosticCold)
 				c.eng.globalStats.mu.statsInfoMap = map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo{{DatabaseID: diagnosticDB, TableID: diagnosticCold}: nil, {DatabaseID: diagnosticDB, TableID: diagnosticWarm}: nil}
-				action = func(context.Context) error {
+				action = func(ctx context.Context) error {
+					if scenario == "unsubscribe action" {
+						cmd := &cmdToConsumeUnSub{log: &logtail.UnSubscribeResponse{Table: &api.TableID{DbId: diagnosticDB, TbId: diagnosticCold}}}
+						return cmd.action(ctx, c.eng, nil)
+					}
 					c.subscribed.setTableUnsubscribe(diagnosticDB, diagnosticCold)
 					return nil
 				}
@@ -252,9 +266,11 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 					return c.TryToSubscribeTable(ctx, 0, diagnosticDB, diagnosticCold, "db", "cold")
 				}
 			}
+			responseReceived := scenario == "response received" || scenario == "subscribe action"
+			unsubscribeCleanup := scenario == "unsubscribe cleanup" || scenario == "unsubscribe action"
 			matches := func(event subscriptionDiagnosticEvent) bool {
 				msg := event.entry.Message
-				if !(strings.Contains(msg, message) || scenario == "subscribe completed" && strings.Contains(msg, "send-subscribe-ok") || scenario == "unsubscribe cleanup" && strings.HasPrefix(msg, "clean memory table of tbl")) {
+				if !(strings.Contains(msg, message) || scenario == "subscribe completed" && strings.Contains(msg, "send-subscribe-ok") || unsubscribeCleanup && strings.HasPrefix(msg, "clean memory table of tbl")) {
 					return false
 				}
 				dbID := diagnosticDB
@@ -277,7 +293,7 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 					level = zapcore.ErrorLevel
 				}
 				require.Equal(t, level, event.entry.Level)
-				if scenario == "not found" || scenario == "subscribed" || scenario == "response received" || scenario == "unsubscribe cleanup" || scenario == "subscribe completed" {
+				if scenario == "not found" || scenario == "subscribed" || responseReceived || unsubscribeCleanup || scenario == "subscribe completed" {
 					tableKey := "tbl-id"
 					if scenario == "subscribe completed" {
 						tableKey = "table-id"
@@ -292,7 +308,7 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 					}
 					require.Empty(t, want, "retained diagnostics must preserve table identity")
 				}
-				if scenario == "response received" {
+				if responseReceived {
 					var service *zapcore.Field
 					for i := range event.fields {
 						if event.fields[i].Key == "service" {
@@ -302,7 +318,7 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 					require.NotNil(t, service)
 					require.Equal(t, c.eng.service, service.String)
 				}
-				if scenario == "unsubscribe cleanup" {
+				if unsubscribeCleanup {
 					require.NotContains(t, c.subscribed.m, diagnosticCold)
 					require.NotContains(t, c.eng.partitions, [2]uint64{diagnosticDB, diagnosticCold})
 					require.NotContains(t, c.eng.globalStats.mu.statsInfoMap, statsinfo.StatsInfoKey{DatabaseID: diagnosticDB, TableID: diagnosticCold})
@@ -316,7 +332,7 @@ func TestSubscriptionDiagnosticsReleaseStateLock(t *testing.T) {
 				require.Equal(t, SubRspTableNotExist, c.subscribed.m[diagnosticCold].state)
 			case "subscribed", "subscribe completed":
 				require.Equal(t, Subscribed, c.subscribed.m[diagnosticCold].state)
-			case "response received":
+			case "response received", "subscribe action":
 				require.Equal(t, SubRspReceived, c.subscribed.m[diagnosticCold].state)
 			case "unsubscribe absent":
 				require.Zero(t, sends.Load())

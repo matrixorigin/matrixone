@@ -474,7 +474,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			(funcName == "count" || funcName == "sum" || funcName == "avg") &&
 				len(expr.GetF().Args) == 1 &&
 				expr.GetF().Args[0].Typ.Id != int32(types.T_tuple)
-		if !canRewriteDistinctArgument {
+		if uint64(f.Func.Obj)&function.Distinct != 0 && !canRewriteDistinctArgument {
 			for i := range expr.GetF().Args {
 				expr.GetF().Args[i], err = appendPadSpaceComparisonCastIfNeeded(
 					b.GetContext(), expr.GetF().Args[i])

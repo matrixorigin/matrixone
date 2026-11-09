@@ -524,6 +524,9 @@ type Transaction struct {
 
 	// writes cache stores any writes done by txn
 	writes []Entry
+	// optimisticWriteSnapshot is the last snapshot through which existing
+	// writes were validated. It must not follow an unvalidated RC read advance.
+	optimisticWriteSnapshot timestamp.Timestamp
 	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
 	// the approximation of total size for insert entries
@@ -1879,11 +1882,14 @@ func (txn *Transaction) advanceSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) error {
 
+	if txn.optimisticWriteSnapshot.IsEmpty() {
+		txn.optimisticWriteSnapshot = txn.op.SnapshotTS()
+	}
 	if err := txn.op.UpdateSnapshot(ctx, minTS); err != nil {
 		return err
 	}
 
-	return nil
+	return txn.validateOptimisticWritesLocked(ctx)
 }
 
 // For RC isolation, update the snapshot TS for every statement execution.

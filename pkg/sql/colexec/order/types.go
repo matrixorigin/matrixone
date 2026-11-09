@@ -49,6 +49,12 @@ type Order struct {
 
 	OrderBySpec []*plan.OrderBySpec
 
+	// ScanCutoffLimit and ScanCutoffTag are optional execution hints. The
+	// summary is constructed per scan-scope execution, after reader pairing.
+	ScanCutoffLimit uint64
+	ScanCutoffTag   int32
+	ScanCutoff      *ScanCutoff
+
 	vm.OperatorBase
 }
 
@@ -119,6 +125,8 @@ type container struct {
 }
 
 func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	// Drop only this worker's reference; siblings may still use the summary.
+	order.ScanCutoff = nil
 	ctr := &order.ctr
 	if ctr.batWaitForSort != nil {
 		if ctr.batWaitForSort.HasAllocationAccount() ||
@@ -155,6 +163,7 @@ func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (order *Order) Free(proc *process.Process, _ bool, err error) {
+	order.ScanCutoff = nil
 	order.cleanBatch(proc)
 	order.ctr.releaseAttempt()
 	order.ctr.desc = nil

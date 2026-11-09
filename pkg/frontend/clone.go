@@ -952,6 +952,11 @@ func handleCloneTable(
 			return
 		}
 	}
+	if resolvedAccounts == nil && stmt.ToAccountOpt != nil {
+		if err = checkCloneDestinationAtAccount(execCtx, ses, &stmt.CreateTable.Table, opAccountId, toAccountId); err != nil {
+			return
+		}
+	}
 	if admission != nil {
 		var dag databranchutils.BranchReclaimDag
 		dag, err = admission.admitBranchCloneRC(reqCtx, ses, bh,
@@ -1660,9 +1665,9 @@ func rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName string, lowerCaseTa
 		var localDDL string
 		switch {
 		case strings.EqualFold(string(createView.Name.ObjectName), "TABLES"):
-			localDDL = sysview.InformationSchemaTablesV41DDL
+			localDDL = sysview.InformationSchemaTablesLocalCurrentDDL
 		case strings.EqualFold(string(createView.Name.ObjectName), "COLUMNS"):
-			localDDL = sysview.InformationSchemaColumnsV41DDL
+			localDDL = sysview.InformationSchemaColumnsLocalCurrentDDL
 		}
 		if localDDL != "" {
 			localStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, localDDL, lowerCaseTableNames)

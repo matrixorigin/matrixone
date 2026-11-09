@@ -2127,7 +2127,7 @@ func (result *aggregateSpineEmptyResult) nullEquivalent(count int) bool {
 // empty. Unknown deterministic filters may retain or remove a singleton;
 // upper aggregates must make those possibilities converge before admission.
 func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindContext) *aggregateSpineEmptyResult {
-	if builder.compCtx != nil && defines.IsPublicationViewBinding(builder.GetContext()) {
+	if builder.compCtx != nil && defines.IsNoEvaluationViewBinding(builder.GetContext()) {
 		// The empty-input proof evaluates substituted constant expressions of
 		// the stored definition through ConstantFold (foldAggregateSpineLiteral
 		// and substituteAggregateSpineEmptyExpr are this file's only fold

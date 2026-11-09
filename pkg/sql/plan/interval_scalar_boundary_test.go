@@ -144,7 +144,7 @@ func TestBuildPlanRejectsStandaloneIntervalAtScalarBoundaries(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 			require.ErrorContains(t, err, "standalone INTERVAL expression in "+test.clause)
@@ -173,7 +173,7 @@ func TestBuildPlanAllowsConsumedIntervalExpressions(t *testing.T) {
 			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -228,7 +228,7 @@ func TestBuildPlanPreservesInvalidIntervalFunctionDiagnostics(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
 			require.ErrorContains(t, err, test.want)

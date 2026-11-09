@@ -49,7 +49,7 @@ type issue25590WorkspaceStub struct {
 }
 
 func (s *issue25590WorkspaceStub) SinkerCapacityOption() ioutil.SinkerOption {
-	return ioutil.WithUncommittedCapacityHook(
+	hook := ioutil.WithUncommittedCapacityHook(
 		ioutil.UncommittedCapacityHook(func(name string) error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -59,6 +59,10 @@ func (s *issue25590WorkspaceStub) SinkerCapacityOption() ioutil.SinkerOption {
 			}
 			return nil
 		}))
+	return func(sinker *ioutil.Sinker) {
+		hook(sinker)
+		ioutil.WithWorkspaceOwnedCleanup()(sinker)
+	}
 }
 
 func (s *issue25590WorkspaceStub) RetainUnrecordedS3Objects(
