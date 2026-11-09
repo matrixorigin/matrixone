@@ -23,13 +23,13 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -89,10 +89,7 @@ func mock_runSql_streaming_error(
 	ch chan executor.Result,
 	err_chan chan error,
 ) (executor.Result, error) {
-	defer func() {
-		err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-		time.Sleep(10 * time.Millisecond)
-	}()
+	err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
 }
 
@@ -168,6 +165,8 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, f
 // ---- Tests ----
 
 func TestModelStreamError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -176,8 +175,7 @@ func TestModelStreamError(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming_error
 	defer func() { runSql_streaming = orig }()
 
-	// LoadIndex now fires tag=1 / tag=2 goroutines via runSql; mock those
-	// to return empty so they don't hit the production executor.
+	// The CDC query precedes the streamed model load.
 	origRunSql := runSql
 	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: proc.Mp()}, nil
@@ -192,9 +190,32 @@ func TestModelStreamError(t *testing.T) {
 		Idxcfg:   testIdxcfg(),
 	}
 
-	err := idx.LoadIndex(sqlproc, testIdxcfg(), testTblcfg(), 1, true)
-	require.NotNil(t, err)
-	fmt.Printf("stream error (expected): %v\n", err)
+	for _, view := range []bool{false, true} {
+		err := idx.LoadIndex(sqlproc, testIdxcfg(), testTblcfg(), 1, view)
+		require.ErrorContains(t, err, "mock_runSql_streaming_error")
+		require.Empty(t, idx.Path)
+		files, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		require.Empty(t, files)
+	}
+}
+
+func TestLoadIndexesCleansEarlierModelOnPanic(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "loaded-model")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	first := &IvfpqModel[float32, float32]{Index: &cuvs.GpuIvfPq[float32, float32]{}, Path: f.Name()}
+	second := &IvfpqModel[float32, float32]{Id: "second", FileSize: 1, Checksum: "checksum"}
+	oldRunSQL := runSql
+	runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) { panic("second load") }
+	t.Cleanup(func() { runSql = oldRunSQL; _ = first.Destroy() })
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), nil)
+	require.PanicsWithValue(t, "second load", func() {
+		_, _ = s.loadIndexes(nil, []*IvfpqModel[float32, float32]{first, second})
+	})
+	require.Nil(t, first.Index)
+	_, err = os.Stat(f.Name())
+	require.True(t, os.IsNotExist(err))
 }
 
 func TestModelBuildAndLoad(t *testing.T) {

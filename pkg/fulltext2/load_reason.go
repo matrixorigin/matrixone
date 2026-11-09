@@ -287,6 +287,33 @@ func clearLoadGeneration(index string) {
 	loadGenerations.m[index] = state
 }
 
+// fenceLoadGeneration repairs a failed local invalidation without changing
+// pending diagnostics or reusable pools. Active loaders see a newer epoch.
+func fenceLoadGeneration(index string) bool {
+	if index == "" {
+		return false
+	}
+	pendingLoadReasons.Lock()
+	defer pendingLoadReasons.Unlock()
+	loadGenerations.Lock()
+	defer loadGenerations.Unlock()
+	if pendingLoadReasons.m == nil || loadGenerations.m == nil {
+		return false
+	}
+	state, ok := loadGenerations.m[index]
+	if !ok {
+		return true
+	}
+	if state.active == 0 {
+		delete(loadGenerations.m, index)
+	} else {
+		state.invalidation++
+		state.lastUsed = time.Now()
+		loadGenerations.m[index] = state
+	}
+	return true
+}
+
 func clearLoadGenerationRegistry() {
 	pendingLoadReasons.Lock()
 	loadGenerations.Lock()
@@ -323,13 +350,5 @@ func invalidateLoadGeneration(cfg TableConfig, reason LoadMissReason) {
 		} else {
 			clearReusableLoadPools(cfg)
 		}
-	case LoadMissTTLExpired, LoadMissGenerationChange:
-		// Keep the current index's immutable base/tail reusable across CDC and
-		// TTL refreshes, but sweep stale entries belonging to indexes that have
-		// not been queried recently. This gives the process-global pools a
-		// bounded idle lifetime without making every CDC refresh cold-load its
-		// own base.
-		loadedBasePool.evict(time.Now())
-		loadedTailPool.evict(time.Now())
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -320,13 +321,23 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	if err != nil {
 		return nil, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			vectorindex.DestroyIndexResources("GPU brute force", []*cuvs.GpuBruteForce[T, T]{km})
+		}
+	}()
 
-	km.Start()
-	return &GpuBruteForceIndex[T]{
+	if err := km.Start(); err != nil {
+		return nil, err
+	}
+	idx := &GpuBruteForceIndex[T]{
 		index:     km,
 		dimension: dimension,
 		count:     uint(len(dataset)),
-	}, nil
+	}
+	owned = false
+	return idx, nil
 }
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
@@ -422,7 +433,11 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 
 func (idx *GpuBruteForceIndex[T]) Destroy() {
 	if idx.index != nil {
-		idx.index.Destroy()
+		index := idx.index
+		idx.index = nil
+		if err := index.Destroy(); err != nil {
+			logutil.Errorf("GPU brute force cleanup failed: %v", err)
+		}
 	}
 }
 

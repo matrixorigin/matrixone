@@ -133,7 +133,9 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 
 }
 
-func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyzer process.Analyzer, centers [][]T, nullvec []T) (cache.VectorIndexSearchIf, error) {
+type bruteForceIndexFactory[T types.RealNumbers] func([][]T, uint, metric.MetricType, uint, uint, bool) (cache.VectorIndexSearchIf, error)
+
+func getIndex[T types.RealNumbers](ap *Productl2, centers [][]T, nullvec []T, newIndex bruteForceIndexFactory[T]) (cache.VectorIndexSearchIf, error) {
 	ctr := &ap.ctr
 	buildCount := ctr.bat.RowCount()
 	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
@@ -161,16 +163,23 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 	}
 
 	gpuMode := gpumode.EffectiveGpuMode(ctr.sqlproc.GetResolveVariableFunc())
-	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1, gpuMode)
+	algo, err := newIndex(centers, uint(dim), ctr.metrictype, elemSize, 1, gpuMode)
 	if err != nil {
 		return nil, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			vectorindex.CleanupFailedLoad("ProductL2 brute force", algo.Destroy)
+		}
+	}()
 
 	err = algo.Load(ctr.sqlproc)
 	if err != nil {
 		return nil, err
 	}
 
+	owned = false
 	return algo, nil
 }
 
@@ -210,14 +219,14 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 	case types.T_array_float32:
 		ctr.centersF32 = get1D[[]float32](&pool2DF32, ctr.bat.RowCount())
 		ctr.nullvecF32 = get1D[float32](&pool1DF32, int(centroidVec.GetType().Width))
-		ctr.brute_force, err = getIndex[float32](productl2, proc, analyzer, *ctr.centersF32, *ctr.nullvecF32)
+		ctr.brute_force, err = getIndex[float32](productl2, *ctr.centersF32, *ctr.nullvecF32, brute_force.NewBruteForceIndex[float32])
 		if err != nil {
 			return err
 		}
 	case types.T_array_float64:
 		ctr.centersF64 = get1D[[]float64](&pool2DF64, ctr.bat.RowCount())
 		ctr.nullvecF64 = get1D[float64](&pool1DF64, int(centroidVec.GetType().Width))
-		ctr.brute_force, err = getIndex[float64](productl2, proc, analyzer, *ctr.centersF64, *ctr.nullvecF64)
+		ctr.brute_force, err = getIndex[float64](productl2, *ctr.centersF64, *ctr.nullvecF64, brute_force.NewBruteForceIndex[float64])
 		if err != nil {
 			return err
 		}

@@ -226,6 +226,137 @@ func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) 
 	}
 }
 
+// cachedFulltextFixture starts with an already assembled index while using the
+// cache's normal admission and publication path.
+type cachedFulltextFixture struct{ *Fulltext2Search }
+
+func (*cachedFulltextFixture) Load(*sqlexec.SqlProcess) error { return nil }
+
+func (*cachedFulltextFixture) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return nil, nil, nil
+}
+
+type panickingFulltextInvalidation struct {
+	*cachedFulltextFixture
+	loadStarted, releaseLoad, notified chan struct{}
+	panicBeforeHook                    bool
+}
+
+func (s *panickingFulltextInvalidation) Load(*sqlexec.SqlProcess) error {
+	close(s.loadStarted)
+	<-s.releaseLoad
+	return nil
+}
+
+func (s *panickingFulltextInvalidation) OnCacheInvalidated(reason string) {
+	if !s.panicBeforeHook || reason != string(LoadMissGenerationChange) {
+		s.Fulltext2Search.OnCacheInvalidated(reason)
+	}
+	if reason == string(LoadMissGenerationChange) {
+		close(s.notified)
+		panic(moerr.NewInvalidStateNoCtx("injected fulltext invalidation failure"))
+	}
+}
+
+func TestFulltextInvalidationFailureIsIsolatedByCache(t *testing.T) {
+	for _, panicBeforeHook := range []bool{true, false} {
+		t.Run(map[bool]string{true: "before-hook", false: "after-hook"}[panicBeforeHook], func(t *testing.T) {
+			badCfg := TableConfig{DbName: "recovery-cache-test", IndexTable: "bad"}
+			otherCfg := TableConfig{DbName: "recovery-cache-test", IndexTable: "other"}
+			badKey := loadReasonKey(badCfg.DbName, badCfg.IndexTable)
+			otherKey := loadReasonKey(otherCfg.DbName, otherCfg.IndexTable)
+			badGeneration := beginLoadGeneration(badKey)
+			otherGeneration := beginLoadGeneration(otherKey)
+			t.Cleanup(func() {
+				endLoadGeneration(badGeneration)
+				endLoadGeneration(otherGeneration)
+				clearLoadGeneration(badKey)
+				clearLoadGeneration(otherKey)
+			})
+			c := veccache.NewVectorIndexCache()
+			bad := &panickingFulltextInvalidation{
+				cachedFulltextFixture: &cachedFulltextFixture{NewFulltext2Search(badCfg)},
+				loadStarted:           make(chan struct{}), releaseLoad: make(chan struct{}), notified: make(chan struct{}),
+				panicBeforeHook: panicBeforeHook,
+			}
+			var once sync.Once
+			release := func() { once.Do(func() { close(bad.releaseLoad) }) }
+			t.Cleanup(func() {
+				release()
+				done := make(chan struct{})
+				go func() { c.Destroy(); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("cache shutdown did not finish")
+				}
+			})
+			other := &cachedFulltextFixture{NewFulltext2Search(otherCfg)}
+			_, _, err := c.Search(nil, "other", other, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+			owner := make(chan error, 1)
+			go func() { _, _, e := c.Search(nil, "bad", bad, nil, vectorindex.RuntimeConfig{}); owner <- e }()
+			select {
+			case <-bad.loadStarted:
+			case <-time.After(time.Second):
+				t.Fatal("fulltext load did not start")
+			}
+			removed := make(chan struct{})
+			go func() { c.RemoveWithReason("bad", string(LoadMissGenerationChange)); close(removed) }()
+			select {
+			case <-bad.notified:
+			case <-time.After(time.Second):
+				t.Fatal("fulltext invalidation did not run")
+			}
+			follower := make(chan error, 1)
+			go func() {
+				_, _, e := c.Search(nil, "bad", &cachedFulltextFixture{NewFulltext2Search(badCfg)}, nil, vectorindex.RuntimeConfig{})
+				follower <- e
+			}()
+			select {
+			case e := <-follower:
+				require.ErrorContains(t, e, "injected fulltext invalidation failure")
+			case <-time.After(time.Second):
+				t.Fatal("fulltext follower waited for the blocked load")
+			}
+			_, _, err = c.Search(nil, "other", other, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+			require.True(t, loadGenerationCurrent(otherGeneration))
+			if panicBeforeHook {
+				require.True(t, loadGenerationCurrent(badGeneration), "repair must wait for the old load")
+			}
+			release()
+			select {
+			case e := <-owner:
+				require.ErrorContains(t, e, "injected fulltext invalidation failure")
+			case <-time.After(time.Second):
+				t.Fatal("fulltext load owner did not return")
+			}
+			select {
+			case <-removed:
+			case <-time.After(time.Second):
+				t.Fatal("fulltext invalidation did not return")
+			}
+			require.Eventually(t, func() bool { _, found := c.IndexMap.Load("bad"); return !found }, time.Second, time.Millisecond)
+			require.False(t, loadGenerationCurrent(badGeneration))
+			require.True(t, loadGenerationCurrent(otherGeneration))
+			_, _, err = c.Search(nil, "bad", &cachedFulltextFixture{NewFulltext2Search(badCfg)}, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func seedFulltextCache(t *testing.T, s *Fulltext2Search) *veccache.VectorIndexSearch {
+	t.Helper()
+	c := veccache.Cache
+	_, _, err := c.Search(nil, s.cfg.IndexTable, &cachedFulltextFixture{s}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Remove(s.cfg.IndexTable) })
+	entry, ok := c.IndexMap.Load(s.cfg.IndexTable)
+	require.True(t, ok)
+	return entry.(*veccache.VectorIndexSearch)
+}
+
 func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	cleanupObserver := setLoadObserver(func(LoadEvent) {})
 	defer cleanupObserver()
@@ -248,21 +379,30 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	old := NewFulltext2Search(cfg)
 	old.idx = NewIndex(nil, nil)
 	old.loaded = true
-	oldEntry := &veccache.VectorIndexSearch{Algo: old}
-	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
-	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+	oldEntry := seedFulltextCache(t, old)
 
 	// Production mutation order: record the reason before evicting the local
 	// entry. Hold the old entry lock so Remove has deleted the old map entry but
 	// is blocked before destruction; a replacement can therefore start while
 	// the old eviction is still in flight.
 	oldEntry.Mutex.Lock()
+	var unlock sync.Once
+	unlockOld := func() { unlock.Do(oldEntry.Mutex.Unlock) }
+	defer unlockOld()
 	old.OnCacheInvalidated(string(LoadMissCDCFlush))
 	removed := make(chan struct{})
 	go func() {
 		veccache.Cache.Remove(cfg.IndexTable)
 		close(removed)
 	}()
+	t.Cleanup(func() {
+		unlockOld()
+		select {
+		case <-removed:
+		case <-time.After(time.Second):
+			t.Error("old cache eviction did not finish during cleanup")
+		}
+	})
 	require.Eventually(t, func() bool {
 		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
 		return !loaded
@@ -270,15 +410,13 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
 	replacement.loaded = true
-	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
-	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
-	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+	seedFulltextCache(t, replacement)
 
 	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
 	require.Equal(t, LoadMissCDCFlush, reason)
 	require.NotZero(t, generation)
 	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), generation)
-	oldEntry.Mutex.Unlock()
+	unlockOld()
 	select {
 	case <-removed:
 	case <-time.After(time.Second):
@@ -296,33 +434,42 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 
 	previousCache := veccache.Cache
 	veccache.Cache = veccache.NewVectorIndexCache()
-	defer func() { veccache.Cache = previousCache }()
+	t.Cleanup(func() { veccache.Cache = previousCache })
 
 	loadGenerations.Lock()
 	previousGenerations := loadGenerations.m
 	loadGenerations.m = make(map[string]loadGenerationState)
 	loadGenerations.Unlock()
-	defer func() {
+	t.Cleanup(func() {
 		loadGenerations.Lock()
 		loadGenerations.m = previousGenerations
 		loadGenerations.Unlock()
-	}()
+	})
 
 	cfg := testStorageCfg()
 	old := NewFulltext2Search(cfg)
 	old.idx = NewIndex(nil, nil)
 	old.loaded = true
-	oldEntry := &veccache.VectorIndexSearch{Algo: old}
-	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	oldEntry := seedFulltextCache(t, old)
 	oldEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
-	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
 
 	oldEntry.Mutex.Lock()
+	var unlock sync.Once
+	unlockOld := func() { unlock.Do(oldEntry.Mutex.Unlock) }
+	defer unlockOld()
 	done := make(chan struct{})
 	go func() {
 		veccache.Cache.HouseKeeping()
 		close(done)
 	}()
+	t.Cleanup(func() {
+		unlockOld()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("housekeeping did not finish during cleanup")
+		}
+	})
 	require.Eventually(t, func() bool {
 		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
 		return !loaded
@@ -335,15 +482,13 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
 	replacement.loaded = true
-	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
-	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
-	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+	seedFulltextCache(t, replacement)
 
 	loadGen := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))
 	require.True(t, loadGenerationCurrent(loadGen))
 	endLoadGeneration(loadGen)
 
-	oldEntry.Mutex.Unlock()
+	unlockOld()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

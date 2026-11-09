@@ -221,11 +221,11 @@ func (s *HnswSearch[T]) Contains(key int64) (bool, error) {
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (s *HnswSearch[T]) Destroy() {
-	// destroy index
-	for _, idx := range s.Indexes {
-		idx.Index.Destroy()
-	}
+	indexes := s.Indexes
 	s.Indexes = nil
+	if p := vectorindex.DestroyIndexResources("HNSW model", indexes); p != nil {
+		panic(p)
+	}
 }
 
 // load metadata from database
@@ -265,22 +265,18 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 
 // load index from database
 func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswModel[T]) ([]*HnswModel[T], error) {
-	var err error
-
+	loaded := false
+	defer func() {
+		if !loaded {
+			vectorindex.DestroyIndexResources("HNSW model", indexes)
+		}
+	}()
 	for _, idx := range indexes {
-		err = idx.LoadIndexFromBuffer(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
-		if err != nil {
-			break
+		if err := idx.LoadIndexFromBuffer(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
+			return nil, err
 		}
 	}
-
-	if err != nil {
-		for _, idx := range indexes {
-			idx.Destroy()
-		}
-		return nil, err
-	}
-
+	loaded = true
 	return indexes, nil
 }
 
