@@ -815,17 +815,21 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	memUsed := ctr.memUsed()
 	opAnalyzer.SetMemUsed(memUsed)
 
+	// Generic group spill partitions groups using the grouping hash table. H0
+	// has exactly one aggregate group and no grouping hash table. Aggregates
+	// that support H0 spilling (for example ordered GROUP_CONCAT) manage it in
+	// their own executors.
+	if ctr.mtyp == H0 {
+		return false
+	}
+
 	// spill less than 10K, used only for debug.
 	// in this case, we spill when there are more than
 	// this many groups
-	var needSpill bool
 	if ctr.spillMem < 10000 {
-		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
-	} else {
-		needSpill = memUsed > ctr.spillMem
+		return ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
 	}
-
-	return needSpill
+	return memUsed > ctr.spillMem
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {
