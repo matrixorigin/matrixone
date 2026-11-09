@@ -17,6 +17,7 @@ package runtimefilter
 import (
 	"context"
 	"math"
+	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -165,4 +166,103 @@ func TestMarshalExactFilterRunsSharedArea(t *testing.T) {
 		require.Equal(t, runs[row/3].GetRawBytesAt(0), actual.GetRawBytesAt(row))
 	}
 	require.True(t, actual.GetSorted())
+}
+
+type cancelOnOutputAdmission struct {
+	cancel   context.CancelFunc
+	acquired bool
+	used     uint64
+}
+
+func (c *cancelOnOutputAdmission) AcquireAllocationCapacity(n uint64) error {
+	c.acquired = true
+	c.used += n
+	c.cancel()
+	return nil
+}
+
+func (c *cancelOnOutputAdmission) ReleaseAllocationCapacity(n uint64) { c.used -= n }
+
+func TestMarshalExactFilterRunsInlineOrdering(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		values            [][]string
+		canceled          bool
+		cancelOnAdmission bool
+	}{
+		{name: "ordered with empty run and equal boundaries", values: [][]string{{"", "a"}, {}, {"a", "b"}, {"z"}}},
+		{name: "empty previous key", values: [][]string{{""}, {}, {"", "a"}}},
+		{name: "overlapping ranges", values: [][]string{{"a", "c"}, {"b", "d"}}},
+		{name: "reversed ranges", values: [][]string{{"b"}, {"a"}}},
+		{name: "canceled", values: [][]string{{"a"}, {"b"}}, canceled: true},
+		{name: "canceled after output admission", values: [][]string{{"a"}, {"b"}}, cancelOnAdmission: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 4096)
+			require.NoError(t, err)
+			ctx := context.Background()
+			var controller *cancelOnOutputAdmission
+			if test.cancelOnAdmission {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				controller = &cancelOnOutputAdmission{cancel: cancel}
+			}
+			var account *mpool.AllocationAccount
+			if controller != nil {
+				account, err = registry.OpenWithController(1<<20, controller)
+			} else {
+				account, err = registry.Open(1 << 20)
+			}
+			require.NoError(t, err)
+			runs := make([]*vector.Vector, len(test.values))
+			t.Cleanup(func() {
+				for _, run := range runs {
+					if run != nil {
+						run.Free(mp)
+					}
+				}
+				require.Zero(t, mp.CurrNB())
+				require.Zero(t, account.Snapshot().Used)
+				if controller != nil {
+					require.Zero(t, controller.used)
+				}
+			})
+			var expected []string
+			for i, values := range test.values {
+				runs[i] = vector.NewVec(types.T_varchar.ToType())
+				for _, value := range values {
+					require.NoError(t, vector.AppendBytes(runs[i], []byte(value), false, mp))
+					expected = append(expected, value)
+				}
+				runs[i].InplaceSort()
+			}
+			if test.canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			data, release, err := MarshalExactFilterRuns(ctx, runs, mp, account, mpool.AllocationOwnerMin, mpool.AllocationSiteMin)
+			if test.canceled || test.cancelOnAdmission {
+				if controller != nil {
+					require.True(t, controller.acquired)
+				}
+				require.ErrorIs(t, err, context.Canceled)
+				require.Nil(t, data)
+				require.Nil(t, release)
+				return
+			}
+			require.NoError(t, err)
+			defer release()
+			var actual vector.Vector
+			require.NoError(t, actual.UnmarshalBinary(data))
+			defer actual.Free(nil)
+			sort.Strings(expected)
+			require.Equal(t, len(expected), actual.Length())
+			for i, value := range expected {
+				require.Equal(t, value, string(actual.GetRawBytesAt(i)))
+			}
+			require.True(t, actual.GetSorted())
+		})
+	}
 }

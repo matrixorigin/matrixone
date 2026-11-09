@@ -125,7 +125,31 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 	if rows > uint64(^uint32(0)>>1) || total > uint64(mpool.MaxAllocationSize()) {
 		return nil, nil, ErrOptionalKeySize
 	}
-	if sorter := ExactFilterDataSorter(typ); sorter != nil {
+	sorter := ExactFilterDataSorter(typ)
+	copyRuns := sorter != nil
+	// Inline values have no area offsets to rebase. If the already-sorted
+	// runs occupy consecutive key ranges, their descriptors can be copied
+	// directly in run order without a per-row heap merge.
+	if !copyRuns && typ.IsVarlen() && areaBytes == 0 {
+		copyRuns = true
+		var previous []byte
+		hasPrevious := false
+		for _, v := range runs {
+			if err = ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			if v.Length() == 0 {
+				continue
+			}
+			if hasPrevious && bytes.Compare(previous, v.GetRawBytesAt(0)) > 0 {
+				copyRuns = false
+				break
+			}
+			previous = v.GetRawBytesAt(v.Length() - 1)
+			hasPrevious = true
+		}
+	}
+	if copyRuns {
 		buf, out, err := newExactRunBuffer(typ, rows, 0, mp, account, owner, site)
 		if err != nil {
 			return nil, nil, err
@@ -140,7 +164,9 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 			copy(out[pos:pos+n], v.GetData()[:n])
 			pos += n
 		}
-		sorter(out[header : header+int(dataBytes)])
+		if sorter != nil {
+			sorter(out[header : header+int(dataBytes)])
+		}
 		if err := ctx.Err(); err != nil {
 			buf.Free()
 			return nil, nil, err
