@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -44,7 +45,9 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
 		checkType[T](v)
-		*ret = toSliceOfLengthNoTypeCheck[T](v, v.length)
+		// Preserve a backed empty physical view. The logical unchecked
+		// helper intentionally returns nil for every zero-row vector.
+		*ret = util.UnsafeSliceCastToLength[T](v.data, v.length)
 	}
 }
 
