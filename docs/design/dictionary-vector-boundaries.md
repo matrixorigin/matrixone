@@ -1,0 +1,90 @@
+# Dictionary compatibility boundaries
+
+Owner: #32384; series: #32379. This stage builds on #32394 and the approved
+engine-wide design at adebe845cb4a77d97cf7dd0ae4b2efaf87dc224a. It enables no
+production dictionary producers and makes no speedup claim.
+
+## Contract and implementation decisions
+
+A consumer without a declared input capability receives flat/constant vectors.
+An optional producer contract declares dictionary output after its projection and
+supplies the immutable allocation selection for its normalization destination.
+An optional consumer contract admits dictionaries per child edge. Unknown input
+and external root destinations default to flat. During runtime preparation, after
+operator decoding/duplication, configure a boundary only for a declared producer
+whose destination does not admit dictionaries. No adapter node or transport
+opcode is introduced, so operator identity, terminal-sender and leaf-reader
+checks retain their current meaning. All-flat trees allocate no boundary.
+
+The producing OperatorBase owns at most one normalization buffer. Exec retires
+its prior borrowed output before the next Call, then explicitly copies dictionary
+output after projection and before publication. Flat batches pass through without
+column copying. The copy owns private vector headers and storage, copies logical
+rows once, preserves constants and all vector metadata, and preserves batch
+attributes, row count, recursive/shuffle markers and ExtraBuf. The source batch
+and its expression-owned vectors are borrowed and never cleaned or mutated.
+The boundary uses the current process pool and its declared destination account;
+allocation failure publishes nothing and releases partial copies.
+
+Normal cleanup delegates through vm.Reset/vm.Free: Reset retires the boundary
+after the operator stops, and Free retires it before the operator can retire its
+allocation account. Pipeline sender/receiver/loop cleanup, prepared generations,
+compiler disposal and dependent native kernels use the same helpers. Repeated
+cleanup is harmless. Preparation discards any previous execution buffer and
+reconfigures capabilities; Exec cancellation/error/EOF and partial preparation
+are covered by the same owning cleanup. No goroutine, wait, registry or cache is
+added. The live bound is one logical batch per active incompatible producer edge,
+plus the source backing until normal upstream release. Ordinary allocation
+admission applies to the full copy peak.
+
+## Consumer matrix and compatibility
+
+| Destination | Current contract | Boundary |
+| --- | --- | --- |
+| expressions, filters, key/hash/aggregate/copy kernels | unknown/flat | producer edge before Call; migration is #32385 |
+| order, windows, remaining joins, DML, external/native operators | unknown/flat | producer edge before Call |
+| spill writers inside an unconverted operator | flat operator input | same edge; raw codecs continue rejecting dictionaries |
+| frontend/output callbacks | unknown/flat | same edge before Output.Call |
+| connector/dispatch and local/remote spool | unknown/flat | same edge before sending or serialization |
+| decoded remote pipelines | same runtime capability setup | normal preparation after decode; no encoded adapter |
+| direct vector/batch serializer APIs | physical flat only | caller uses explicit FlatCopy; raw rejection remains |
+| pipeline root without an external capability | flat | root output boundary |
+| converted operator accepting a specific child | declared dictionary | no normalization on that edge |
+
+This is a closed default policy, not a claim that every physical accessor has
+already been migrated. Native/function boundaries inside converted operators
+must be handled in #32385 before those operators may declare support. Consumers
+must not infer write permission from read capability. All future producers must
+use canonical runtime preparation (including dependent native setup).
+
+Wire/spill/protobuf remain unchanged flat formats; malformed DIST input remains
+invalid. No SQL/catalog/storage migration is introduced. Disabling producers
+restores ordinary execution. FlatCopy is explicit and transactional, never hidden
+inside physical accessors or serializers.
+
+An operator wrapper was rejected: executable OpType/type assertions, compiler
+duplication and special cleanup rely on operator identity. In-place flattening
+was rejected because batches and expression result headers are borrowed. Eager
+normalization of every edge was rejected because it taxes all-flat pipelines.
+The optional capability plus OperatorBase-owned output preserves these contracts
+with one predictable Exec branch and prepare-time work only on declared edges.
+
+## Delivery and validation
+
+Draft development may stack on prerequisite branches before merge. Draft PRs
+identify their parent and incremental diff. Production readiness, producer
+activation and performance qualification remain isolated against actual main
+after prerequisites merge; percentages are never added across PRs. This refines
+the earlier merge-first development schedule without relaxing acceptance.
+
+Small deterministic UTs cover repeated/reordered/NULL/string/constant logical
+rows, mixed batches, borrowed-input preservation, wire round trips and unchanged
+raw rejection, explicit accounts and failure cleanup. Runtime tests cover unknown
+versus capable consumers, root normalization, flat pass-through, projection,
+next-call retirement, reset/free/cancel/error and repeated prepare. Existing
+pipeline cleanup and a real Output consumer close lifecycle/interface behavior.
+No production SQL route can produce a dictionary at this stage, so dictionary
+SQL BVT belongs to producer enablement; existing owning package tests cover the
+unchanged flat route. Shared immutable core race evidence is reusable; boundary
+state is one execution lane, with existing asynchronous-owner cleanup tests.
+The neutral SF10/SF100 all-query gate remains required before leaving draft.
