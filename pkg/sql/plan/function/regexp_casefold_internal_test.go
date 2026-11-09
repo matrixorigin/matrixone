@@ -740,13 +740,94 @@ func TestDedupRegexpIdenticalAlternatives(t *testing.T) {
 		{"unbalanced closer bails", `a|a)`, `a|a)`},
 		{"unterminated class bails", `[a|[a|`, `[a|[a|`},
 		{"free-spacing header before group", `(?x)(?:a|a)`, `(?x)(?:a)`},
+		// Flags of constructs nested inside groups fold into the enclosing
+		// branch when the group closes, so a duplicate outer branch whose
+		// text contains a nested capture, reference, or unscoped setter is
+		// retained exactly as if the construct sat at the outer level.
+		{"nested capture retained", `b(?:x(c)y)|b(?:x(c)y)`, `b(?:x(c)y)|b(?:x(c)y)`},
+		{"nested reference retained", `^(a)(?:q(?:\1)|q(?:\1))$`, `^(a)(?:q(?:\1)|q(?:\1))$`},
+		{"nested unscoped setter retained", `q(?:x(?i)y)|q(?:x(?i)y)`, `q(?:x(?i)y)|q(?:x(?i)y)`},
+		{"nested scoped setter exempt", `q(?:x(?i:i)y)|q(?:x(?i:i)y)`, `q(?:x(?i:i)y)`},
+		// An unscoped setter one level down blocks siblings of its own
+		// alternation but does not mark the enclosing branch's level.
+		{"nested setter blocks own level", `(?:(?i)|a|a)`, `(?:(?i)|a)`},
+		{"nested duplicate collapse", `(?:(?:a|a))`, `(?:(?:a))`},
+		{"duplicate enclosing group", `(?:a|a)b|(?:a|a)b`, `(?:a)b`},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			require.Equal(t, row.want,
-				dedupRegexpIdenticalAlternatives(row.pat, requiresRegexp2Pattern(row.pat)))
+				dedupRegexpIdenticalAlternatives(row.pat, requiresRegexp2Pattern(row.pat),
+					regexpCaseFoldMaxDedupWorkBytes))
 		})
 	}
+}
+
+// TestDedupRegexpIdenticalAlternativesWorkBound pins the linear charged-work
+// model and the abandonment contract of the deduplication prepass (issue
+// #31175, implementation review on the r5 head): the prepass runs before the
+// rewrite budgets are initialized, so it carries its own bound. The scan
+// charges the pattern length once, each alternation closure charges the
+// branch-text bytes it hashes, and the close-time flag folding charges one
+// unit per branch; exhausting the budget abandons the prepass and returns
+// the source pattern byte for byte, discarding any recorded deletions.
+// Before the bound, 65,536 identical siblings forced (N-1)(N-2)/2 setter
+// rescans and 32,768 nested captures forced a full ancestor walk per group.
+func TestDedupRegexpIdenticalAlternativesWorkBound(t *testing.T) {
+	dedup := func(pat string, budget int) string {
+		return dedupRegexpIdenticalAlternatives(pat, requiresRegexp2Pattern(pat), budget)
+	}
+	// Exact charged totals: "a|a" charges 3 (scan) + 1 + 1 (hashed branch
+	// bytes) = 5; "(?:a|a)" charges 7 (scan) + 1 + 1 (hashes) + 2 (folded
+	// branches) = 11. One unit below the total abandons the prepass.
+	for _, row := range []struct {
+		name   string
+		pat    string
+		budget int
+		want   string
+	}{
+		{"top-level exact budget", `a|a`, 5, `a`},
+		{"top-level one below budget", `a|a`, 4, `a|a`},
+		{"top-level zero budget", `a|a`, 0, `a|a`},
+		{"group exact budget", `(?:a|a)`, 11, `(?:a)`},
+		{"group one below budget", `(?:a|a)`, 10, `(?:a|a)`},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			require.Equal(t, row.want, dedup(row.pat, row.budget))
+		})
+	}
+
+	// The review's probe shapes complete far below the production budget:
+	// 65,536 identical siblings charge 196,607 (scan) + 131,072 (hashes) =
+	// 327,679 and collapse to one branch; 32,768 nested captures around one
+	// duplicate pair charge 65,539 (scan) + 2 (hashes) + 32,769 (folded
+	// branches) = 98,310 and still deduplicate.
+	const alts = 65536
+	flat := strings.Repeat("ss|", alts-1) + "ss"
+	require.Equal(t, "ss", dedup(flat, regexpCaseFoldMaxDedupWorkBytes))
+	const depth = 32768
+	nested := strings.Repeat("(", depth) + "a|a" + strings.Repeat(")", depth)
+	require.Equal(t, strings.Repeat("(", depth)+"a"+strings.Repeat(")", depth),
+		dedup(nested, regexpCaseFoldMaxDedupWorkBytes))
+
+	// Deeply nested alternations re-hash the enclosing branch text at every
+	// level, so charged work grows with depth x pattern length; the budget
+	// abandons the prepass and returns the source byte for byte (partial
+	// deletions discarded) where a shallow control of the same shape still
+	// deduplicates its core pair. The depth-2000 shape would charge about
+	// 410 MB of branch hashing without the bound.
+	nest := func(depth, pad int) string {
+		pat := "(?:a|a)"
+		for i := 0; i < depth; i++ {
+			pat = "(?:" + strings.Repeat("x", pad) + "|" + strings.Repeat("y", pad) + pat + ")"
+		}
+		return pat
+	}
+	deep := nest(2000, 100)
+	require.Equal(t, deep, dedup(deep, regexpCaseFoldMaxDedupWorkBytes))
+	shallow := nest(50, 100)
+	wantShallow := strings.Replace(shallow, "(?:a|a)", "(?:a)", 1)
+	require.Equal(t, wantShallow, dedup(shallow, regexpCaseFoldMaxDedupWorkBytes))
 }
 
 // TestRegexpCaseFoldDedupEligibility pins the invariant-5 eligibility

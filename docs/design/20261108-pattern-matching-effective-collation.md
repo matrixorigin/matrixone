@@ -1,17 +1,15 @@
 # Pattern matching honors the effective collation (LIKE, ILIKE, REGEXP, FIND_IN_SET)
 
-Status: design r5 submitted for independent design review (2026-11-08).
+Status: design r6 submitted for independent design review (2026-11-09).
 Supersedes approved r4 (SHA256
-`c31aef6c201f712c72aca88c59149d6805f1b99fddad9d2a0cde724021edc098`) with one
-validation-contract correction measured during the post-approval
-implementation: the binding engine bound for long fold runs on the regexp2
-route is the engine's compiled backtracking-state limit (4,096 tracks), so
-the round-14 four-alternative comment-bearing shape raises the bounded
-resource-limit error under `i` even after deduplication; fold-fully proofs
-relocate to below-bound regexp2 shapes and to the RE2 route at the original
-scale. Implementation in progress on PR #32357 against this revision.
+`c31aef6c201f712c72aca88c59149d6805f1b99fddad9d2a0cde724021edc098`), the r5
+validation-contract correction, and one implementation-review resolution:
+the alternative-deduplication prepass is linear and carries its own charged
+work bound (4 MiB), so many identical siblings and deeply nested groups
+cannot perform quadratic work before the rewrite budgets are initialized.
+Implementation in progress on PR #32357 against this revision.
 
-- Design revision: r5, 2026-11-08. Supersedes r4 (2026-11-08, SHA256
+- Design revision: r6, 2026-11-09. Supersedes r5 (2026-11-08), r4 (2026-11-08, SHA256
   `c31aef6c201f712c72aca88c59149d6805f1b99fddad9d2a0cde724021edc098`,
   design-only PASS with one non-blocking P3), r3 (2026-11-08, SHA256
   `590a0eabdfeab02f21b7b8d708d27ced42652747e76997a10135e72ced11a4f6`), r2
@@ -188,7 +186,18 @@ Secondary defects of the same boundary, found while tracing the owner paths:
    discarded attempts); eligibility-checked identical-alternative
    deduplication (invariant 5) runs before and during expansion, and
    exhaustion of any fold budget for fold-relevant content raises the same
-   bounded resource-limit error. Engine-side admission bounds then apply to
+   bounded resource-limit error. The deduplication prepass itself is linear
+   and bounded (4 MiB of charged work: the pattern length once for the
+   scan, one unit per branch for the close-time flag folding, and the
+   branch-text bytes each alternation closure hashes): a closing group
+   folds its constructs' flags into the enclosing branch in one pass and
+   each closure tracks its most recent unscoped-setter branch
+   incrementally, so deeply nested constructs and many identical siblings
+   cost O(1) each instead of an ancestor walk or an intervening-branch
+   rescan; exhausting the prepass bound abandons deduplication and returns
+   the source pattern unchanged — never an error, since the expansion
+   budgets above still guard the rewrite. Engine-side admission bounds
+   then apply to
    the expanded form through the ICU design's regexp2 layer, unchanged by
    this design: the translated-size bound (1 MiB) and the compiled
    backtracking-state bound (4,096 tracks). Exact fold emission grows
@@ -308,7 +317,8 @@ Alternatives considered:
    subtraction), literal-run segmentation into single-rune blocks and
    fold-image alternations with case-sensitive source alternatives, class
    fold-orbit augmentation, literal-carrying escape decoding, named-reference
-   preservation, eligibility-checked alternative deduplication, and the
+   preservation, eligibility-checked alternative deduplication, the
+   deduplication prepass work bound, and the
    emission/work budgets. Deduplication is conservative: a sibling
    alternative is dedup-eligible only when it is byte-identical to an
    earlier sibling in the same alternation, contains no capturing group
@@ -620,6 +630,38 @@ Revision history:
 - Design revision: r5, submitted for independent design review of the
   correction above; r4's approval (hash and commit recorded there) remains
   the base, and the review-directed P3 erratum is carried in place.
+- r6, 2026-11-09 (this document): resolves the mo-bot implementation
+  review's P1 on the r5 head (`bd80b57137855d7e4535198c1cb086c94c6f3fde`):
+  the alternative-deduplication prepass performed quadratic work before the
+  rewrite budgets were initialized — each duplicate sibling rescanned the
+  intervening branches for unscoped setters ((N-1)(N-2)/2 checks for N
+  identical siblings: an exact-source probe of 65,536 alternatives took
+  2.19 s locally) and every capture, reference, and option-setter construct
+  walked the full ancestor frame stack (32,768 nested captures took 0.94 s).
+  The resolution makes the prepass linear and bounds it: construct marks
+  land on the innermost branch in O(1) and a closing group folds its
+  branches' flags into the enclosing branch in one pass (preserving the
+  capture/reference/option eligibility verdicts exactly — the flags of a
+  construct reach exactly the branches whose text contains it), each
+  alternation closure tracks its most recent unscoped-setter branch
+  incrementally instead of rescanning, and a charged work bound of 4 MiB
+  (pattern length once for the scan, one unit per branch for the close-time
+  folding, branch-text bytes hashed per closure) abandons the prepass and
+  returns the source pattern unchanged on exhaustion. The same probes now
+  take 4.8 ms and 4.7 ms (linear), matching the engines' own parse cost;
+  the deep-nested-alternation shape whose branch hashing still grows with
+  depth × length (about 410 MB at depth 2,000) is capped by the bound.
+  Abandonment adds no SQL-visible outcome: deduplication only shrinks the
+  later emission, so skipping it defers to the approved expansion budgets
+  and their resource-limit error, and malformed-source verdicts are
+  untouched. No invariant, ownership decision, rewrite budget value, error
+  family, or approved r4/r5 semantic changes: the prepass bound is a new
+  internal resource guard inside invariant 7's bounded-work contract,
+  directed by the implementation review itself. Regression coverage:
+  exact-budget straddle pins of the charged-work model, both probe shapes
+  completing below the production bound, the depth-scaling shape abandoning
+  byte-identically, and nested flag-propagation eligibility rows
+  (`regexp_casefold_internal_test.go`).
 - Implementation proceeds against this document; material implementation
   deviations require updating this document and re-reviewing the affected
   decisions.

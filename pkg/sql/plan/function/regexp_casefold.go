@@ -110,6 +110,17 @@ const (
 	// returning, round-14 pre-PR review). On exhaustion the rewrite fails
 	// with the bounded resource-limit error.
 	regexpCaseFoldMaxWorkBytes = 16 << 20
+	// regexpCaseFoldMaxDedupWorkBytes bounds the alternative-deduplication
+	// prepass that runs before the budgets above are initialized. The
+	// prepass charges the pattern length once for the scan, one unit per
+	// branch for the close-time flag folding, and the branch-text bytes
+	// each alternation closure hashes, so many identical siblings cannot
+	// multiply the pattern length by the sibling count and deeply nested
+	// alternations cannot multiply it by the nesting depth. On exhaustion
+	// the prepass abandons and returns the source pattern unchanged:
+	// deduplication is an emission-size optimization, the engines keep
+	// their own verdicts, and the budgets above still guard the rewrite.
+	regexpCaseFoldMaxDedupWorkBytes = 4 << 20
 )
 
 // regexpCaseFoldResourceLimitf builds the bounded resource-limit error a
@@ -191,7 +202,7 @@ func expandRegexpCaseFoldRuns(pat string, ambientCI bool) (string, error) {
 		return pat, nil
 	}
 	regexp2 := requiresRegexp2Pattern(pat)
-	pat = dedupRegexpIdenticalAlternatives(pat, regexp2)
+	pat = dedupRegexpIdenticalAlternatives(pat, regexp2, regexpCaseFoldMaxDedupWorkBytes)
 	exp := &regexpCaseFoldExpander{ci: ambientCI, regexp2: regexp2, remain: regexpCaseFoldMaxExpandedBytes, workRemain: regexpCaseFoldMaxWorkBytes}
 	out := exp.expand(pat)
 	if exp.failed {
@@ -230,7 +241,24 @@ func expandRegexpCaseFoldRuns(pat string, ambientCI bool) (string, error) {
 // an unterminated class, comment, group header or trailing escape, or a
 // group construct outside the recognized set — is returned unchanged, so
 // the engines keep their own verdicts byte for byte.
-func dedupRegexpIdenticalAlternatives(pat string, regexp2 bool) string {
+//
+// The prepass is linear in the pattern length and bounded by workBudget
+// (regexpCaseFoldMaxDedupWorkBytes in production): the scan examines every
+// byte once, each construct marks only its innermost branch in O(1) — a
+// closing group folds the flags of its branches into the enclosing branch
+// in one pass, so deeply nested captures, references and option setters
+// cost O(1) per construct instead of an ancestor walk per construct — and
+// each alternation closure makes a single pass over its branches with an
+// incremental most-recent-setter index, so many identical siblings cost
+// O(1) per sibling instead of a rescan of the intervening branches. The
+// scan charges the pattern length once, the close-time folding charges one
+// unit per branch, and the closures charge the branch-text bytes they
+// hash; exhausting workBudget abandons the prepass and returns the source
+// pattern unchanged, discarding any recorded deletions. Abandonment is
+// always safe: deduplication only shrinks the later emission, the engines
+// keep their own verdicts, and the emission/work budgets of the rewrite
+// still guard the result.
+func dedupRegexpIdenticalAlternatives(pat string, regexp2 bool, workBudget int) string {
 	type branch struct {
 		sep   int // offset of the '|' that opened the branch (-1 for the first)
 		start int // offset of the branch text
@@ -247,56 +275,72 @@ func dedupRegexpIdenticalAlternatives(pat string, regexp2 bool) string {
 		x        bool // free-spacing state in effect inside this frame
 	}
 
+	// The scan charges the pattern length once up front; the close-time
+	// flag folding and the alternation closures charge as they run.
+	workRemain := workBudget - len(pat)
+	if workRemain < 0 {
+		return pat
+	}
+	abandoned := false
+	charge := func(n int) bool {
+		workRemain -= n
+		if workRemain < 0 {
+			abandoned = true
+		}
+		return !abandoned
+	}
+
 	frames := make([]frame, 1, 8)
 	frames[0].cur.sep, frames[0].cur.start = -1, 0
 	var deletions [][2]int
 
+	// Construct marks land on the innermost frame's current branch only;
+	// closing a group folds the flags of everything it contains into the
+	// enclosing branch (see the ')' case), which is exactly the set of
+	// branches whose text contains the construct. Deeply nested constructs
+	// therefore cost O(1) each instead of an ancestor walk per construct.
 	markCapture := func() {
-		for i := range frames {
-			frames[i].cur.capture = true
-		}
+		frames[len(frames)-1].cur.capture = true
 	}
 	markReference := func() {
-		for i := range frames {
-			frames[i].cur.reference = true
-		}
+		frames[len(frames)-1].cur.reference = true
 	}
 	markSetter := func() {
-		for i := range frames {
-			frames[i].cur.setterAny = true
-		}
-		frames[len(frames)-1].cur.setterTop = true
+		top := &frames[len(frames)-1].cur
+		top.setterAny = true
+		top.setterTop = true
 	}
 	// closeAlternation analyzes one completed frame and records the
-	// deletions of its eligible duplicate branches.
+	// deletions of its eligible duplicate branches in a single pass: kept
+	// maps each branch text to its first occurrence, and lastSetter tracks
+	// the most recent branch carrying an unscoped setter at this level, so
+	// the intervening-setter check costs O(1) per duplicate instead of a
+	// rescan of the branches between the kept occurrence and the
+	// duplicate. Each branch's text bytes are charged once for the hash.
 	closeAlternation := func(f *frame) {
 		all := f.branches
 		if len(all) < 2 {
 			return
 		}
 		kept := make(map[string]int, len(all))
+		lastSetter := -1
 		for j := 0; j < len(all); j++ {
+			if !charge(all[j].end - all[j].start) {
+				return
+			}
 			text := pat[all[j].start:all[j].end]
 			i, seen := kept[text]
-			if !seen {
-				kept[text] = j
-				continue
-			}
-			b := all[j]
-			if b.capture || b.reference || b.setterAny {
-				continue
-			}
-			blocked := false
-			for k := i + 1; k < j; k++ {
-				if all[k].setterTop {
-					blocked = true
-					break
+			if seen {
+				b := all[j]
+				if !b.capture && !b.reference && !b.setterAny && lastSetter <= i {
+					deletions = append(deletions, [2]int{b.sep, b.end})
 				}
+			} else {
+				kept[text] = j
 			}
-			if blocked {
-				continue
+			if all[j].setterTop {
+				lastSetter = j
 			}
-			deletions = append(deletions, [2]int{b.sep, b.end})
 		}
 	}
 
@@ -349,7 +393,29 @@ func dedupRegexpIdenticalAlternatives(pat string, regexp2 bool) string {
 			f.cur.end = i
 			f.branches = append(f.branches, f.cur)
 			closeAlternation(f)
+			// The closed group is one element of the enclosing frame's
+			// current branch: fold the flags of everything it contains
+			// into that branch in one pass. setterTop is level-local — an
+			// unscoped setter applies only to the siblings of its own
+			// alternation — so it does not propagate.
+			var hasCapture, hasReference, hasSetter bool
+			for k := range f.branches {
+				if !charge(1) {
+					break
+				}
+				b := &f.branches[k]
+				hasCapture = hasCapture || b.capture
+				hasReference = hasReference || b.reference
+				hasSetter = hasSetter || b.setterAny
+			}
+			if abandoned {
+				return pat
+			}
 			frames = frames[:len(frames)-1]
+			parent := &frames[len(frames)-1].cur
+			parent.capture = parent.capture || hasCapture
+			parent.reference = parent.reference || hasReference
+			parent.setterAny = parent.setterAny || hasSetter
 			i++
 		case '#':
 			if frames[len(frames)-1].x {
@@ -457,7 +523,7 @@ func dedupRegexpIdenticalAlternatives(pat string, regexp2 bool) string {
 	frames[0].cur.end = len(pat)
 	frames[0].branches = append(frames[0].branches, frames[0].cur)
 	closeAlternation(&frames[0])
-	if len(deletions) == 0 {
+	if abandoned || len(deletions) == 0 {
 		return pat
 	}
 	sort.Slice(deletions, func(a, b int) bool { return deletions[a][0] < deletions[b][0] })
