@@ -5,7 +5,7 @@ stage of the [approved design at adebe845cb4](https://github.com/matrixorigin/ma
 It enables no production dictionary producers. Consumer capability, transport
 normalization, expression migration and producer rollout are later stages.
 
-`DIST` is the existing reserved in-memory class. It now owns an immutable
+`DICTIONARY` uses the existing reserved in-memory class value `2`. It owns an immutable
 `DictionaryBase` and a validated `RowSelection`; both use the existing buffer
 lease implementation. Freeze one base per input vector and share it among
 partitions. Every successful handle `Retain` needs one `Release`; every returned
@@ -66,7 +66,7 @@ a confirmed Q6 speedup is diagnostic rather than an additional adoption rule.
 The rejected field-tail experiment remains separate.
 
 Remove Vector.dictionary and preserve every ordinary Vector field offset.
-For DIST only, the existing dataLease interface owns dictionaryVector, an
+For DICTIONARY only, the existing dataLease interface owns dictionaryVector, an
 immutable descriptor with its own atomic reference count, base, selection and
 logical-area summary. It implements the existing BufferLease interface; Bytes
 returns nil because the dictionary has no contiguous physical payload.
@@ -87,7 +87,7 @@ composite owner, so generic backing cleanup cannot release it again.
 EnsureFlat/EnsureWritable publish their replacement only after selected payload
 and metadata allocations succeed; the old descriptor is then retired. Failure
 preserves the original representation. Physical accessors and old byte-window
-or rebinding APIs continue rejecting DIST. Read views resolve the descriptor once.
+or rebinding APIs continue rejecting DICTIONARY. Read views resolve the descriptor once.
 BorrowedAccountedBytes must not add the dictionary bounds again after the data
 lease already contributes them; Allocated retains its existing full-pin estimate
 plus owned metadata.

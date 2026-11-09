@@ -40,9 +40,9 @@ import (
 )
 
 const (
-	FLAT     = iota // flat vector represent a uncompressed vector
-	CONSTANT        // const vector
-	DIST            // dictionary vector
+	FLAT       = iota // flat vector represent a uncompressed vector
+	CONSTANT          // const vector
+	DICTIONARY        // dictionary vector
 )
 
 // PrepareParamKind is the compatibility name for the conversion domain of a
@@ -4194,9 +4194,9 @@ func (v *Vector) IsGrouping() bool {
 }
 
 func (v *Vector) SetClass(class int) {
-	if v.IsDictionary() || class == DIST {
+	if v.IsDictionary() || class == DICTIONARY {
 		v.requirePhysical()
-		if class == DIST {
+		if class == DICTIONARY {
 			panic(moerr.NewInvalidStateNoCtx("dictionary construction requires an immutable base and selection"))
 		}
 	}

@@ -110,7 +110,7 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	t.Cleanup(func() { decoded.Free(mp) })
 	require.NoError(t, decoded.UnmarshalBinary(wire))
 	require.Equal(t, int64(123), GetFixedAtNoTypeCheck[int64](decoded, 0))
-	wire[0] = DIST
+	wire[0] = DICTIONARY
 	require.Error(t, decoded.UnmarshalBinary(wire), "wire input cannot carry a dictionary class")
 }
 

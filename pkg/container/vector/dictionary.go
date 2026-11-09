@@ -26,7 +26,7 @@ import (
 )
 
 // dictionaryVector is the immutable composite backing stored in dataLease for
-// DIST only. The ordinary Vector header keeps its original physical layout.
+// DICTIONARY only. The ordinary Vector header keeps its original physical layout.
 type dictionaryVector struct {
 	refs        atomic.Int64
 	base        *DictionaryBase
@@ -76,7 +76,7 @@ func (d *dictionaryVector) AccountedBytes() int64 {
 	return d.base.RetainedBytes() + d.rows.RetainedBytes()
 }
 
-// dictionaryState is used only after the DIST class has established the
+// dictionaryState is used only after the DICTIONARY class has established the
 // representation invariant. No descriptor lookup is added to flat row loops.
 func (v *Vector) dictionaryState() *dictionaryVector {
 	return v.dataLease.(*dictionaryVector)
@@ -86,7 +86,7 @@ func (v *Vector) dictionaryState() *dictionaryVector {
 // rejection branch does not prevent the ordinary slice access from inlining.
 var errDictionaryPhysicalAccess = moerr.NewInvalidStateNoCtx("dictionary vector requires a read view or explicit materialization")
 
-func (v *Vector) IsDictionary() bool { return v != nil && v.class == DIST }
+func (v *Vector) IsDictionary() bool { return v != nil && v.class == DICTIONARY }
 
 // DictionaryRetainedBytes is a conservative physical pin bound, not logical
 // row size and not a second allocation charge. Several dictionaries can refer
@@ -99,7 +99,7 @@ func (v *Vector) DictionaryRetainedBytes() int64 {
 }
 
 func (v *Vector) requirePhysical() {
-	if v.class == DIST {
+	if v.class == DICTIONARY {
 		panic(errDictionaryPhysicalAccess)
 	}
 }
@@ -191,7 +191,7 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 	backing := &dictionaryVector{base: base, rows: mapping, logicalArea: area}
 	backing.refs.Store(1)
 	result.dataLease = backing
-	result.class = DIST
+	result.class = DICTIONARY
 	result.sorted = base.vec.sorted && mapping.monotonic
 	return result, nil
 }
