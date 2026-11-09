@@ -521,12 +521,13 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.setFile(
+	if err := s.diskCache.setFileSized(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
 		s.asyncUpdate,
+		s.statObject(s.pathToKey(filePath)),
 	); err != nil {
 		return err
 	}
@@ -539,12 +540,16 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	}
 
 	key := s.pathToKey(filePath)
-	r, err := s.storage.Read(ctx, key, ptrTo[int64](0), (*int64)(nil))
-	if err != nil {
-		return nil, err
-	}
+	return &lazyObjectReader{ctx: ctx, read: func(ctx context.Context, min, max *int64) (io.ReadCloser, error) {
+		return s.storage.Read(ctx, key, min, max)
+	}}, nil
+}
 
-	return r, nil
+// statObject returns the size of the object at key.
+func (s *S3FS) statObject(key string) func(context.Context) (int64, error) {
+	return func(ctx context.Context) (int64, error) {
+		return s.storage.Stat(ctx, key)
+	}
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
@@ -1544,7 +1549,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	started := make(chan *objectDownload, 1)
 	setDone := make(chan error, 1)
 	go func() {
-		setDone <- s.diskCache.setFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		setDone <- s.diskCache.setFileSized(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
 			download := s.diskCache.download(diskPath)
@@ -1554,8 +1559,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 				}
 			}
 			started <- download
-			return getReader(fillCtx, ptrTo[int64](0), nil)
-		}, s.asyncUpdate)
+			return &lazyObjectReader{ctx: fillCtx, read: getReader}, nil
+		}, s.asyncUpdate, s.statObject(s.pathToKey(file)))
 	}()
 	var setErr error
 	setFinished := false
@@ -1673,7 +1678,7 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 		if c.size >= 0 {
 			end = c.offset + c.size
 		}
-		written, ok := download.waitFor(ctx, end, maxIOWaitDuration)
+		written, ok := download.waitFor(ctx, c.offset, end, maxIOWaitDuration)
 		if ok || download.isComplete() {
 			want := written - c.offset
 			if c.size >= 0 {

@@ -146,7 +146,7 @@ func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
 		download := cache.download(cache.pathForFile("obj"))
 		_, err := pw.Write([]byte("hello"))
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { written, _ := download.estimate(5); return written == 5 },
+		require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
 			diskCacheLifecycleTestTimeout, time.Millisecond)
 		f, ok := download.acquire()
 		require.True(t, ok)
@@ -175,7 +175,7 @@ func TestDiskCacheReadDeclinesDownloadFarBehind(t *testing.T) {
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
 	download := cache.download(cache.pathForFile("obj"))
-	require.Eventually(t, func() bool { written, _ := download.estimate(5); return written == 5 },
+	require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
 	vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 1, Size: 3}, {Offset: 100 << 20, Size: 3}}}
@@ -215,7 +215,7 @@ func TestDiskCacheReadWaitsWhenItWouldDuplicateTheDownload(t *testing.T) {
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
 	download := cache.download(cache.pathForFile("obj"))
-	require.Eventually(t, func() bool { written, _ := download.estimate(5); return written == 5 },
+	require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
 	pending := readRange(context.Background(), cache, 5, 20)

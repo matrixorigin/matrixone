@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -32,9 +33,9 @@ type objectDownload struct {
 	measured bool // the download's rate counts toward downloadRates
 
 	mu       sync.Mutex
-	written  int64
-	ended    bool // no more bytes will be written
-	complete bool // every byte of the object was written
+	parts    []downloadPart // the ranges of the object written at once, in order
+	ended    bool           // no more bytes will be written
+	complete bool           // every byte of the object was written
 	changed  chan struct{}
 	file     *os.File // closed once the download is retired and no reader holds it
 	readers  int
@@ -42,6 +43,14 @@ type objectDownload struct {
 	served   int64         // bytes readers took from the download before credited
 	credited bool          // the cached file counts the bytes readers take
 	credit   func(n int64) // counts n bytes read toward the published file
+}
+
+// downloadPart is a range of the object a download writes from its start.
+type downloadPart struct {
+	start, end int64 // end is -1 for the end of the object
+	written    int64
+	began      time.Time // when the read of the part began, zero before
+	first      time.Time // when its first byte was written, zero before
 }
 
 // serve records n bytes a reader took from the download, which count toward the cached
@@ -70,8 +79,21 @@ func (o *objectDownload) takeServed() int64 {
 	return n
 }
 
-func newObjectDownload(tempPath string, measured bool) *objectDownload {
-	o := &objectDownload{started: time.Now(), measured: measured, changed: make(chan struct{})}
+// newObjectDownload returns a download that writes the ranges between bounds at once, or
+// the object as one range when bounds is nil.
+func newObjectDownload(tempPath string, measured bool, bounds []int64) *objectDownload {
+	o := &objectDownload{
+		started:  time.Now(),
+		measured: measured,
+		parts:    []downloadPart{{end: -1}},
+		changed:  make(chan struct{}),
+	}
+	if bounds != nil {
+		o.parts = o.parts[:0]
+		for i := 0; i+1 < len(bounds); i++ {
+			o.parts = append(o.parts, downloadPart{start: bounds[i], end: bounds[i+1]})
+		}
+	}
 	if f, err := os.Open(tempPath); err == nil {
 		o.file = f
 	}
@@ -123,11 +145,75 @@ func (o *objectDownload) notifyLocked() {
 	o.changed = make(chan struct{})
 }
 
-func (o *objectDownload) advance(n int64) {
+// begin records that the read of the part began.
+func (o *objectDownload) begin(part int) {
 	o.mu.Lock()
-	o.written += n
+	defer o.mu.Unlock()
+	if o.parts[part].began.IsZero() {
+		o.parts[part].began = time.Now()
+	}
+}
+
+// split reports whether the download writes more than one part.
+func (o *objectDownload) split() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.parts) > 1
+}
+
+// bounds returns the bounds of the parts.
+func (o *objectDownload) bounds() []int64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	bounds := make([]int64, 0, len(o.parts)+1)
+	for _, p := range o.parts {
+		bounds = append(bounds, p.start)
+	}
+	return append(bounds, o.parts[len(o.parts)-1].end)
+}
+
+func (o *objectDownload) advance(part int, n int64) {
+	o.mu.Lock()
+	p := &o.parts[part]
+	if p.first.IsZero() {
+		p.first = time.Now()
+	}
+	sample := o.measured && p.written < downloadRateMinBytes && p.written+n >= downloadRateMinBytes
+	p.written += n
+	written, elapsed := p.written, time.Since(p.first)
 	o.notifyLocked()
 	o.mu.Unlock()
+	if sample {
+		downloadRates.observe(written, elapsed)
+	}
+}
+
+// writtenLocked returns the bytes written of all parts.
+func (o *objectDownload) writtenLocked() int64 {
+	var n int64
+	for _, p := range o.parts {
+		n += p.written
+	}
+	return n
+}
+
+// availableLocked returns the end of the written bytes from off, or off when the byte at
+// off is not written.
+func (o *objectDownload) availableLocked(off int64) int64 {
+	pos := off
+	for _, p := range o.parts {
+		if p.end >= 0 && p.end <= pos {
+			continue
+		}
+		if p.start > pos {
+			break
+		}
+		pos = max(pos, p.start+p.written)
+		if p.end < 0 || pos < p.end {
+			break
+		}
+	}
+	return pos
 }
 
 func (o *objectDownload) end(complete bool) {
@@ -135,38 +221,63 @@ func (o *objectDownload) end(complete bool) {
 	if !o.ended {
 		o.ended, o.complete = true, complete
 		o.notifyLocked()
-		if complete && o.measured {
-			downloadRates.observe(o.written, time.Since(o.started))
+		if complete && o.measured && !o.parts[0].first.IsZero() {
+			downloadRates.observe(o.writtenLocked()/int64(len(o.parts)), time.Since(o.parts[0].first))
 		}
 	}
 	o.mu.Unlock()
 }
 
-// estimate returns the bytes written and the time the download needs to write the bytes
-// before end, at its rate so far, or at the recent downloads' rate before it wrote enough
-// to measure its own.
-func (o *objectDownload) estimate(end int64) (int64, time.Duration) {
+// estimate returns the bytes a part of the download still writes before the bytes in
+// [off, end) are written, the most of the parts holding them, and the time until they
+// are: the time to the first byte of a part not yet writing, plus its bytes left at its
+// rate so far, or at the recent downloads' rate before it wrote enough to measure its own.
+func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
+	now := time.Now()
+	latency := rangeReadCosts.firstByte()
+	recent := downloadRates.rate()
 	o.mu.Lock()
-	written := o.written
-	o.mu.Unlock()
-	if written >= end {
-		return written, 0
+	defer o.mu.Unlock()
+	var behind int64
+	var wait time.Duration
+	for _, p := range o.parts {
+		if p.end >= 0 && p.end <= off || p.start >= end {
+			continue
+		}
+		stop := end
+		if p.end >= 0 {
+			stop = min(stop, p.end)
+		}
+		left := stop - (p.start + p.written)
+		if left <= 0 {
+			continue
+		}
+		behind = max(behind, left)
+		var ttfb time.Duration
+		if p.first.IsZero() {
+			ttfb = latency
+			if !p.began.IsZero() {
+				ttfb = max(latency-now.Sub(p.began), 0)
+			}
+		}
+		rate := recent
+		if elapsed := now.Sub(p.first); !p.first.IsZero() && p.written >= downloadRateMinBytes && elapsed > 0 {
+			rate = float64(p.written) / elapsed.Seconds()
+		}
+		wait = max(wait, ttfb+time.Duration(float64(left)/rate*float64(time.Second)))
 	}
-	rate := downloadRates.rate()
-	if elapsed := time.Since(o.started); written >= downloadRateMinBytes && elapsed > 0 {
-		rate = float64(written) / elapsed.Seconds()
-	}
-	return written, time.Duration(float64(end-written) / rate * float64(time.Second))
+	return behind, wait
 }
 
-// waitFor waits until the bytes before end are written, or until the whole object is when
-// end is negative. It returns the bytes written, and false when they will never cover end.
-func (o *objectDownload) waitFor(ctx context.Context, end int64, timeout time.Duration) (int64, bool) {
+// waitFor waits until the bytes in [off, end) are written, or until the whole object is
+// when end is negative. It returns the end of the written bytes from off, and false when
+// they will never cover end.
+func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout time.Duration) (int64, bool) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		o.mu.Lock()
-		written, ended, complete, changed := o.written, o.ended, o.complete, o.changed
+		written, ended, complete, changed := o.availableLocked(off), o.ended, o.complete, o.changed
 		o.mu.Unlock()
 		if end >= 0 && written >= end || end < 0 && complete {
 			return written, true
@@ -187,14 +298,128 @@ func (o *objectDownload) waitFor(ctx context.Context, end int64, timeout time.Du
 type downloadProgressWriter struct {
 	w        io.Writer
 	download *objectDownload
+	part     int
 }
 
 func (p downloadProgressWriter) Write(b []byte) (int, error) {
 	n, err := p.w.Write(b)
 	if n > 0 {
-		p.download.advance(int64(n))
+		p.download.advance(p.part, int64(n))
 	}
 	return n, err
+}
+
+// objectSplitConfig sets the parts a whole-object download reads at once.
+type objectSplitConfig struct {
+	// parts is how many ranges the download of an object of at least min bytes reads.
+	parts int
+	min   int64
+}
+
+// bounds returns the 64KiB-aligned bounds of the parts the download of an object of size
+// bytes reads at once, or nil to read it as one range.
+func (c objectSplitConfig) bounds(size int64) []int64 {
+	if c.parts <= 1 || size < c.min {
+		return nil
+	}
+	part := (size + int64(c.parts) - 1) / int64(c.parts)
+	part = (part + prefetchBlockMax - 1) / prefetchBlockMax * prefetchBlockMax
+	bounds := []int64{0}
+	for pos := part; pos < size; pos += part {
+		bounds = append(bounds, pos)
+	}
+	return append(bounds, size)
+}
+
+// objectRangeOpener opens a range [start, end) of the object it reads.
+type objectRangeOpener interface {
+	openRange(ctx context.Context, start, end int64) (io.ReadCloser, error)
+}
+
+// lazyObjectReader reads a whole object through read from its first Read on, and opens
+// its ranges.
+type lazyObjectReader struct {
+	ctx  context.Context
+	read func(ctx context.Context, min, max *int64) (io.ReadCloser, error)
+	r    io.ReadCloser
+}
+
+func (l *lazyObjectReader) Read(b []byte) (int, error) {
+	if l.r == nil {
+		r, err := l.read(l.ctx, ptrTo[int64](0), nil)
+		if err != nil {
+			return 0, err
+		}
+		l.r = r
+	}
+	return l.r.Read(b)
+}
+
+func (l *lazyObjectReader) Close() error {
+	if l.r == nil {
+		return nil
+	}
+	return l.r.Close()
+}
+
+func (l *lazyObjectReader) openRange(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+	return l.read(ctx, &start, &end)
+}
+
+// copyParts writes the parts of download into f at once, each read through open, and
+// returns the bytes written. A failed part fails the copy.
+func copyParts(ctx context.Context, f *os.File, download *objectDownload, open objectRangeOpener) (int64, error) {
+	bounds := download.bounds()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make([]error, len(bounds)-1)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if errs[i] = copyPart(ctx, f, download, open, i, bounds[i], bounds[i+1]); errs[i] != nil {
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return 0, err
+		}
+	}
+	for _, err := range errs {
+		if err != nil {
+			return 0, err
+		}
+	}
+	return bounds[len(bounds)-1], nil
+}
+
+func copyPart(ctx context.Context, f *os.File, download *objectDownload, open objectRangeOpener, part int, start, end int64) error {
+	download.begin(part)
+	r, err := open.openRange(ctx, start, end)
+	if err != nil {
+		return &diskCacheSourceError{err: err}
+	}
+	defer r.Close()
+	source := &diskCacheSourceReader{Reader: r}
+	var buf []byte
+	put := ioBufferPool.Get(&buf)
+	defer put.Put()
+	dst := downloadProgressWriter{w: io.NewOffsetWriter(f, start), download: download, part: part}
+	n, err := io.CopyBuffer(dst, source, buf)
+	if err != nil {
+		if source.err != nil {
+			return &diskCacheSourceError{err: source.err}
+		}
+		return err
+	}
+	if n != end-start {
+		return &diskCacheSourceError{err: io.ErrUnexpectedEOF}
+	}
+	return nil
 }
 
 type diskCacheDownloads struct {
@@ -202,8 +427,8 @@ type diskCacheDownloads struct {
 	m  map[string]*objectDownload
 }
 
-func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool) *objectDownload {
-	o := newObjectDownload(tempPath, measured)
+func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool, bounds []int64) *objectDownload {
+	o := newObjectDownload(tempPath, measured, bounds)
 	o.credit = func(n int64) { d.preloads.read(diskPath, n) }
 	d.downloads.mu.Lock()
 	if d.downloads.m == nil {
@@ -224,6 +449,13 @@ func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
 	o.retire()
 }
 
+// downloading returns the number of whole-object downloads in flight.
+func (d *DiskCache) downloading() int {
+	d.downloads.mu.Lock()
+	defer d.downloads.mu.Unlock()
+	return len(d.downloads.m)
+}
+
 func (d *DiskCache) download(diskPath string) *objectDownload {
 	d.downloads.mu.Lock()
 	defer d.downloads.mu.Unlock()
@@ -240,7 +472,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		return false, false, nil
 	}
 	end := entry.Offset + entry.Size
-	written, wait := o.estimate(end)
+	behind, wait := o.estimate(entry.Offset, end)
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
@@ -252,14 +484,14 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		if wait > budget {
 			// A range read fetches these bytes again; it pays only when they are a small
 			// part of what the download still writes before them.
-			if entry.Size*downloadDuplicateRatio <= end-written {
+			if entry.Size*downloadDuplicateRatio <= behind {
 				metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
 				metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
 				return true, false, nil
 			}
 			budget += wait
 		}
-		if _, ok := o.waitFor(ctx, end, budget); !ok {
+		if _, ok := o.waitFor(ctx, entry.Offset, end, budget); !ok {
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
 		}
@@ -283,8 +515,13 @@ const (
 	// downloadDuplicateRatio is how many times its own size a read must be behind a
 	// download before it reads its bytes again rather than wait for them.
 	downloadDuplicateRatio = 8
-	// downloadRateMinBytes is written before a download's own rate is used.
-	downloadRateMinBytes = 1 << 20
+	// downloadRateMinBytes is written by a part before its own rate is used, and each
+	// part's rate at that point is a sample of the recent downloads' rate.
+	downloadRateMinBytes = 256 << 10
+	// objectSplitMaxDownloads is the most whole-object downloads in flight with which
+	// another download is split: beyond them the link is shared and a split adds no
+	// bandwidth.
+	objectSplitMaxDownloads = 4
 	// rangeReadSmall is the largest range read whose time counts as latency.
 	rangeReadSmall = 256 << 10
 	costWeight     = 0.1
@@ -347,6 +584,13 @@ func (m *rangeReadCostModel) observeLatency(d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.latency = (1-costWeight)*m.latency + costWeight*d.Seconds()
+}
+
+// firstByte returns the latency of range reads.
+func (m *rangeReadCostModel) firstByte() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return time.Duration(m.latency * float64(time.Second))
 }
 
 // bandwidthDelay returns the bytes a range read could take in the time of its latency.

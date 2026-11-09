@@ -66,6 +66,7 @@ type DiskCache struct {
 	downloads            diskCacheDownloads
 	downloadMaxExtraWait time.Duration
 	prefetchRange        prefetchRangeConfig
+	objectSplit          objectSplitConfig
 	prefetchFlights      prefetchFlights
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.
@@ -156,6 +157,8 @@ type diskCacheOptions struct {
 	downloadMaxExtraWait time.Duration
 	// prefetchRange sets the prefetch ranges of range reads.
 	prefetchRange prefetchRangeConfig
+	// objectSplit sets the parts a whole-object download reads at once.
+	objectSplit objectSplitConfig
 }
 
 func newDiskCache(
@@ -201,6 +204,7 @@ func newDiskCache(
 		dirEntries:           opts.dirEntries,
 		downloadMaxExtraWait: opts.downloadMaxExtraWait,
 		prefetchRange:        opts.prefetchRange,
+		objectSplit:          opts.objectSplit,
 		preloads:             newPreloadUsage(),
 	}
 
@@ -802,7 +806,7 @@ func (d *DiskCache) writeEntry(
 ) (bool, error) {
 	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, false, claimPublication, notWholeFill)
+	}, false, claimPublication, notWholeFill, nil)
 	if writeErr != nil {
 		return false, d.observeWriteResult(diskPath, writeErr)
 	}
@@ -820,7 +824,7 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
-	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, notWholeFill)
+	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, notWholeFill, nil)
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
@@ -916,6 +920,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	asyncFinalize bool,
 	claimPublication func() bool,
 	fill wholeFill,
+	objectSize func(context.Context) (int64, error),
 ) (written bool, err error) {
 	defer func() {
 		d.evictForDiskFull(ctx, err)
@@ -989,7 +994,13 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var download *objectDownload
 	var dst io.Writer = f
 	if fill != notWholeFill {
-		download = d.startDownload(diskPath, f.Name(), fill == storageFill)
+		var bounds []int64
+		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < objectSplitMaxDownloads {
+			if size, err := objectSize(ctx); err == nil {
+				bounds = d.objectSplit.bounds(size)
+			}
+		}
+		download = d.startDownload(diskPath, f.Name(), fill == storageFill, bounds)
 		dst = downloadProgressWriter{w: f, download: download}
 		endUpdate := doneUpdate
 		doneUpdate = func() error {
@@ -1016,18 +1027,30 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	}
 	d.cache.Evict(ctx, nil, forceEvict)
 
-	var buf []byte
-	put := ioBufferPool.Get(&buf)
-	defer put.Put()
-	n, err := io.CopyBuffer(dst, source, buf)
-	if download != nil {
+	var n int64
+	if parts, ok := from.(objectRangeOpener); ok && download != nil && download.split() {
+		n, err = copyParts(ctx, f, download, parts)
 		download.end(err == nil)
-	}
-	if err != nil {
-		if source.err != nil {
-			return false, &diskCacheSourceError{err: source.err}
+		if err != nil {
+			return false, err
 		}
-		return false, err
+	} else {
+		var buf []byte
+		put := ioBufferPool.Get(&buf)
+		defer put.Put()
+		if download != nil {
+			download.begin(0)
+		}
+		n, err = io.CopyBuffer(dst, source, buf)
+		if download != nil {
+			download.end(err == nil)
+		}
+		if err != nil {
+			if source.err != nil {
+				return false, &diskCacheSourceError{err: source.err}
+			}
+			return false, err
+		}
 	}
 
 	if download != nil {
@@ -1507,7 +1530,20 @@ func (d *DiskCache) setFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 ) error {
-	return d.fillFile(ctx, filePath, openReader, asyncFinalize, storageFill)
+	return d.setFileSized(ctx, filePath, openReader, asyncFinalize, nil)
+}
+
+// setFileSized downloads the whole object of filePath through openReader; objectSize, when
+// set, returns the object's size before the download starts, so a large object downloads
+// as parts.
+func (d *DiskCache) setFileSized(
+	ctx context.Context,
+	filePath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	objectSize func(context.Context) (int64, error),
+) error {
+	return d.fillFileSized(ctx, filePath, openReader, asyncFinalize, storageFill, objectSize)
 }
 
 // setFileContent caches content already in memory as the whole file of filePath.
@@ -1541,13 +1577,24 @@ func (d *DiskCache) fillFile(
 	asyncFinalize bool,
 	fill wholeFill,
 ) error {
+	return d.fillFileSized(ctx, filePath, openReader, asyncFinalize, fill, nil)
+}
+
+func (d *DiskCache) fillFileSized(
+	ctx context.Context,
+	filePath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	fill wholeFill,
+	objectSize func(context.Context) (int64, error),
+) error {
 	path, err := ParsePath(filePath)
 	if err != nil {
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
 	d.wholeFills.Add(1)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, fill)
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize)
 	d.wholeFills.Add(-1)
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)

@@ -58,10 +58,17 @@ type CacheConfig struct {
 	DiskPrefetchRangeAligned *bool `toml:"disk-prefetch-range-aligned"`
 	// DiskPrefetchRangeNarrowOnly limits prefetch ranges to the narrow reads of tables
 	// that read ranges instead of whole objects.
-	DiskPrefetchRangeNarrowOnly bool         `toml:"disk-prefetch-range-narrow-only"`
-	RemoteCacheEnabled          bool         `toml:"remote-cache-enabled"`
-	RPC                         morpc.Config `toml:"rpc"`
-	CheckOverlaps               bool         `toml:"check-overlaps"`
+	DiskPrefetchRangeNarrowOnly bool `toml:"disk-prefetch-range-narrow-only"`
+	// DiskPrefetchObjectSplit is how many ranges, from 1 to 4, the download of a whole
+	// object of at least DiskPrefetchObjectSplitMin bytes reads at once; 1 reads it as
+	// one range. Default DefaultDiskPrefetchObjectSplit.
+	DiskPrefetchObjectSplit *int `toml:"disk-prefetch-object-split"`
+	// DiskPrefetchObjectSplitMin is the size of the smallest object whose download is
+	// split. Default DefaultDiskPrefetchObjectSplitMin.
+	DiskPrefetchObjectSplitMin *toml.ByteSize `toml:"disk-prefetch-object-split-min"`
+	RemoteCacheEnabled         bool           `toml:"remote-cache-enabled"`
+	RPC                        morpc.Config   `toml:"rpc"`
+	CheckOverlaps              bool           `toml:"check-overlaps"`
 
 	// IndexFileDiskCapacity is the capacity of the index-file cache, separate from
 	// DiskCapacity; DisableCacheCapacity or less disables it. Default
@@ -190,6 +197,7 @@ func newFileServiceCaches(
 			diskCacheOptions{
 				downloadMaxExtraWait: config.diskDownloadMaxExtraWait(),
 				prefetchRange:        config.diskPrefetchRange(),
+				objectSplit:          config.diskObjectSplit(),
 			},
 		)
 		if err != nil {
@@ -241,6 +249,26 @@ func (c *CacheConfig) diskPrefetchRange() prefetchRangeConfig {
 		on:         c.DiskPrefetchRangeAligned == nil || *c.DiskPrefetchRangeAligned,
 		narrowOnly: c.DiskPrefetchRangeNarrowOnly,
 	}
+}
+
+const (
+	// DefaultDiskPrefetchObjectSplit is the default DiskPrefetchObjectSplit.
+	DefaultDiskPrefetchObjectSplit = 2
+	// DefaultDiskPrefetchObjectSplitMin is the default DiskPrefetchObjectSplitMin.
+	DefaultDiskPrefetchObjectSplitMin = 16 << 20
+	// diskPrefetchObjectSplitMax is the most ranges a whole-object download reads at once.
+	diskPrefetchObjectSplitMax = 4
+)
+
+func (c *CacheConfig) diskObjectSplit() objectSplitConfig {
+	split := objectSplitConfig{parts: DefaultDiskPrefetchObjectSplit, min: DefaultDiskPrefetchObjectSplitMin}
+	if c.DiskPrefetchObjectSplit != nil {
+		split.parts = min(max(*c.DiskPrefetchObjectSplit, 1), diskPrefetchObjectSplitMax)
+	}
+	if c.DiskPrefetchObjectSplitMin != nil {
+		split.min = int64(*c.DiskPrefetchObjectSplitMin)
+	}
+	return split
 }
 
 // indexFileDiskCapacity returns the capacity of the index-file cache, 0 when the cache is
