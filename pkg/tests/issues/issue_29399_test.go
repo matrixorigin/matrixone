@@ -664,6 +664,8 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		t.Run("recreated creator is not historical owner", func(t *testing.T) {
 			var err error
 			execSQLRequire(t, ctx, admin, "grant create database on account * to reader")
+			// The retained session is on CN1; observe CN0's grant before DDL.
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			_, err = conn.ExecContext(ctx, "create database historical_parent")
 			require.NoError(t, err)
 			execSQLRequire(t, ctx, admin, "create table historical_parent.t(id int)")
@@ -673,6 +675,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			// reject reconstruction of the eligible admin-owned objects.
 			execSQLRequire(t, ctx, admin, "create database external_parent")
 			execSQLRequire(t, ctx, admin, "grant create table on database external_parent to reader")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			csv := filepath.Join(t.TempDir(), "external.csv")
 			require.NoError(t, os.WriteFile(csv, []byte("1\n"), 0600))
 			_, err = conn.ExecContext(ctx, "create external table external_parent.ext(id int) infile{'filepath'='"+csv+"'} fields terminated by ','")
