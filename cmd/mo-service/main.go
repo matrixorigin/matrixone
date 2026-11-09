@@ -81,11 +81,8 @@ func init() {
 }
 
 func main() {
-	if *maxProcessor > 0 {
-		system.SetGoMaxProcs(*maxProcessor)
-	}
-
 	flag.Parse()
+	applyMaxProcessor()
 	maybePrintVersion()
 	if *catalogDecisionsFile != "" {
 		if *configFile == "" || *launchFile != "" {
@@ -176,6 +173,16 @@ func main() {
 		panic(err)
 	}
 	logutil.GetGlobalLogger().Info("Shutdown complete")
+}
+
+// applyMaxProcessor applies -max-processor to the Go runtime and to the
+// worker budget reported by system.GoMaxProcs. It must run after
+// flag.Parse: before parsing, the flag still holds its registered
+// default 0 and an explicit command-line value would be silently ignored.
+func applyMaxProcessor() {
+	if *maxProcessor > 0 {
+		system.SetGoMaxProcs(*maxProcessor)
+	}
 }
 
 func serviceFailureC() <-chan error {

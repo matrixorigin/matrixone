@@ -90,6 +90,7 @@ type s3WriterDelegate struct {
 
 	action             actionType
 	rejectZeroTemporal bool
+	fillInsertOwned    bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -159,6 +160,7 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		rejectZeroTemporal:  update.RejectZeroTemporal,
+		fillInsertOwned:     update.insertNotNullFillOwned(),
 		addAffectedRows:     update.addAffectedRowsFunc,
 		takeAffectedRows:    update.takeS3AffectedRowsFunc,
 		seenTargetRows:      update.ctr.seenTargetRows,
@@ -262,7 +264,14 @@ func retainedS3InputCols(updateCtxs []*MultiUpdateCtx, action actionType) []int 
 // ensureInsertSinkers lazily creates persistent per-table insert sinkers
 // on first call. Requires proc for Mp() and fileservice.
 func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error {
-	if writer.insertSinkers[0] != nil {
+	missing := false
+	for i, updateCtx := range writer.updateCtxs {
+		if len(updateCtx.InsertCols) > 0 && writer.insertSinkers[i] == nil {
+			missing = true
+			break
+		}
+	}
+	if !missing {
 		return nil
 	}
 	fs, err := colexec.GetSharedFSFromProc(proc)
@@ -270,7 +279,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		return err
 	}
 	for i, updateCtx := range writer.updateCtxs {
-		if len(updateCtx.InsertCols) == 0 {
+		if len(updateCtx.InsertCols) == 0 || writer.insertSinkers[i] != nil {
 			continue
 		}
 		opts := []ioutil.SinkerOption{
@@ -377,9 +386,26 @@ func (writer *s3WriterDelegate) append(
 			continue
 		}
 		insertAttrs := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).insertAttrs
-		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		tableType := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).tableType
+
+		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
+		if tableType == UpdateMainTable {
+			// Under statement IGNORE adjust NULL cells of NOT NULL columns
+			// before the shared legs below; the projection taken below and
+			// every filtered or checked copy inherit the adjusted values
+			// through the shared vectors. A constant NULL owns no backing
+			// storage, so the fill replaces it instead of writing it in
+			// place - the fill must therefore run before the projection
+			// snapshots the vector pointers. Rows with a NULL primary key
+			// are dropped here, and the projection re-counts after the
+			// drop.
+			if _, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, contextBatch, false, writer.fillInsertOwned); fillErr != nil {
+				return fillErr
+			}
+		}
+
+		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		mainTablePkProjectIdx := -1
 		mainTableNullPkFilter := false
@@ -391,7 +417,6 @@ func (writer *s3WriterDelegate) append(
 			mainTableNullPkFilter = projBat.Vecs[mainTablePkProjectIdx].HasNull()
 		}
 
-		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
@@ -741,24 +766,13 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		)
 	}
 
-	defer s3Writer.Close()
-	// Collect-then-close (issue #25590 round-20 review, finding 2): the
-	// deferred Close below drops the writer's tracked references to the
-	// files it persisted, and the metadata record runs only in the
-	// CALLER — after this function returned. Keep the persisted names
-	// on the delegate so Reset/Free can hand the unrecorded ones to the
-	// workspace's retainer; a successful record filters every handed
-	// name out in the workspace itself, so this never double-owns a
-	// recorded object. Registered before Close, deferred calls run this
-	// FIRST (LIFO).
-	defer func() {
-		if names := s3Writer.PersistedNames(); len(names) > 0 {
-			writer.unrecordedSinkNames = append(writer.unrecordedSinkNames, names...)
-		}
-	}()
-
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
+	defer func() {
+		// Source metadata is recorded by the caller after this writer closes.
+		writer.unrecordedSinkNames = append(writer.unrecordedSinkNames, s3Writer.AbandonAndRetainableNames()...)
+		err = s3Writer.CloseWithCleanup(writeCtx, err)
+	}()
 
 	for i := range bats {
 		rowCount += bats[i].RowCount()
@@ -985,14 +999,26 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 // nowhere, and the workspace's retainer keeps only the UNRECORDED names
 // (its recorded-name filter owns that), so a successful statement can
 // reuse this same path without re-owning its live objects.
+func (writer *s3WriterDelegate) cancelPending() {
+	if writer == nil {
+		return
+	}
+	for _, s3w := range writer.insertSinkers {
+		s3w.CancelPending()
+	}
+}
+
 func (writer *s3WriterDelegate) retainUnrecordedSinkObjects(proc *process.Process) {
+	// These writers can share the same worker pool, so cancel all before
+	// waiting for any one writer to drain.
+	writer.cancelPending()
 	names := writer.unrecordedSinkNames
 	writer.unrecordedSinkNames = nil
 	for _, s3w := range writer.insertSinkers {
 		if s3w == nil {
 			continue
 		}
-		names = append(names, s3w.PersistedNames()...)
+		names = append(names, s3w.AbandonAndRetainableNames()...)
 	}
 	if len(names) == 0 {
 		return
@@ -1028,9 +1054,20 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	// their buffer pools and arenas on the next append() call.  On the
 	// success path the sinkers were already flushed by
 	// flushTailAndWriteToOutput(), so Reset() is a no-op on the data side.
-	for _, s3w := range writer.insertSinkers {
+	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
-			s3w.Reset()
+			if s3w.WorkspaceOwnsCleanup() && len(s3w.PendingUnpublishedRuns()) != 0 {
+				// Names have been handed off above; retire the aborted generation.
+				_ = s3w.Close()
+				writer.insertSinkers[i] = nil
+			} else if s3w.WorkspaceOwnsCleanup() {
+				s3w.Reset()
+			} else if cleanupErr := s3w.CleanupUnpublished(proc.Ctx); cleanupErr != nil {
+				_ = s3w.Close()
+				writer.insertSinkers[i] = nil
+			} else {
+				s3w.Reset()
+			}
 		}
 	}
 
@@ -1097,7 +1134,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	// Close persistent insert sinkers.
 	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
-			s3w.Close()
+			err = s3w.CloseWithCleanup(proc.Ctx, err)
 			writer.insertSinkers[i] = nil
 		}
 	}

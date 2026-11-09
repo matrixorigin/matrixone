@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -539,4 +541,95 @@ func TestServiceBootstrap(t *testing.T) {
 		}
 		runServiceTest(t, false, false, fn)
 	})
+}
+
+func TestBootstrapChecksInitialReplicaMissingFromMetadata(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	const oldID uint64 = 131072
+	const newID uint64 = 131073
+	files := newFS()
+
+	// Keep Dragonboat's old files but model a completed L/Kill metadata removal.
+	first, err := NewService(cfg, files, nil)
+	require.NoError(t, err)
+	defer func() {
+		if first != nil {
+			require.NoError(t, first.Close())
+		}
+	}()
+	require.NoError(t, first.store.startHAKeeperReplica(oldID,
+		map[uint64]dragonboat.Target{oldID: cfg.UUID}, false))
+	require.NoError(t, first.store.startReplica(1, 2,
+		map[uint64]dragonboat.Target{2: cfg.UUID}, false))
+	require.NoError(t, first.store.stopReplica(hakeeper.DefaultHAKeeperShardID, oldID))
+	require.NoError(t, first.store.stopReplica(1, 2))
+	first.store.removeMetadata(hakeeper.DefaultHAKeeperShardID, oldID)
+	first.store.mu.Lock()
+	initialShards := append([]metadata.LogShard(nil), first.store.mu.metadata.Shards...)
+	first.store.mu.Unlock()
+	require.Len(t, initialShards, 1)
+	require.Equal(t, uint64(1), initialShards[0].ShardID)
+	require.NoError(t, first.Close())
+	first = nil
+
+	cfg.BootstrapConfig.BootstrapCluster = true
+	cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
+	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"10.0.0.1:32001"}
+	original := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = original })
+	var checked []uint64
+	getShardMembershipFn = func(_ context.Context, _, _ string, shardID uint64) (map[uint64]string, bool, error) {
+		checked = append(checked, shardID)
+		if shardID == hakeeper.DefaultHAKeeperShardID {
+			return map[uint64]string{newID: "10.0.0.2:32001"}, true, nil
+		}
+		return map[uint64]string{2: "10.0.0.2:32001"}, true, nil
+	}
+
+	restarted, err := NewService(cfg, files, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, restarted.Close()) }()
+	require.Equal(t, []uint64{hakeeper.DefaultHAKeeperShardID, 1}, checked,
+		"bootstrap membership must be checked before data shards exhaust the startup budget")
+	require.True(t, restarted.store.isSkippedZombie(hakeeper.DefaultHAKeeperShardID, oldID))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, restarted.BootstrapHAKeeper(ctx, cfg))
+	require.Zero(t, atomic.LoadUint64(&restarted.store.haKeeperReplicaID))
+	restarted.store.mu.Lock()
+	restartedShards := append([]metadata.LogShard(nil), restarted.store.mu.metadata.Shards...)
+	restarted.store.mu.Unlock()
+	require.Equal(t, initialShards, restartedShards)
+	// LogInfo includes retained WAL files; ShardInfoList contains only
+	// replicas that Dragonboat is actually running now.
+	info := restarted.store.nh.GetNodeHostInfo(dragonboat.NodeHostInfoOption{SkipLogInfo: true})
+	for _, shard := range info.ShardInfoList {
+		require.NotEqual(t, oldID, shard.ReplicaID)
+	}
+	_, _, running, err := restarted.store.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+	require.False(t, running)
+}
+
+func TestColdBootstrapWithUnknownMembership(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	cfg.BootstrapConfig.BootstrapCluster = true
+	cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
+	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"10.0.0.1:32001"}
+	original := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = original })
+	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, bool, error) {
+		return nil, false, nil
+	}
+	s, err := NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, s.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, s.BootstrapHAKeeper(ctx, cfg))
+	require.Equal(t, uint64(131072), atomic.LoadUint64(&s.store.haKeeperReplicaID))
 }

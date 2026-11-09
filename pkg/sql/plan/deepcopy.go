@@ -446,12 +446,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
 
 	newNode.IndexScanInfo = plan.IndexScanInfo{
-		IsIndexScan:    node.IndexScanInfo.IsIndexScan,
-		IndexName:      node.IndexScanInfo.IndexName,
-		BelongToTable:  node.IndexScanInfo.BelongToTable,
-		Parts:          slices.Clone(node.IndexScanInfo.Parts),
-		IsUnique:       node.IndexScanInfo.IsUnique,
-		IndexTableName: node.IndexScanInfo.IndexTableName,
+		IsIndexScan:               node.IndexScanInfo.IsIndexScan,
+		IndexName:                 node.IndexScanInfo.IndexName,
+		BelongToTable:             node.IndexScanInfo.BelongToTable,
+		Parts:                     slices.Clone(node.IndexScanInfo.Parts),
+		IsUnique:                  node.IndexScanInfo.IsUnique,
+		IndexTableName:            node.IndexScanInfo.IndexTableName,
+		RequiresCapturedExecution: node.IndexScanInfo.RequiresCapturedExecution,
 	}
 
 	if node.WinSpecList != nil {
@@ -888,6 +889,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	}
 	newQry := &plan.Query{
 		IntegerPrecision:         cloneIntegerPrecisionGraph(qry.IntegerPrecision),
+		ExecutionDependentAccess: qry.ExecutionDependentAccess,
 		StmtType:                 qry.StmtType,
 		Steps:                    slices.Clone(qry.Steps),
 		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
@@ -1226,6 +1228,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		Ndv:             expr.Ndv,
 		Selectivity:     expr.Selectivity,
 		PreparedNumeric: copyPreparedNumericMetadata(expr.PreparedNumeric),
+		CandidateFilter: expr.CandidateFilter,
 	}
 	// Positive AuxId values belong to later execution/zonemap numbering and
 	// intentionally remain reset across a semantic deep copy.  Prepared numeric

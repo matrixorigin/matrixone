@@ -63,7 +63,7 @@ func TestOpenHoldsCacheEntry(t *testing.T) {
 	require.Equal(t, 0, cachedEntries(t, cache), "a held entry is deleted at once")
 	require.Equal(t, data, readFile(t, f))
 	require.NoError(t, f.Close())
-	release()
+	release.Release()
 
 	f, err = Open(ctx, env, ref)
 	require.NoError(t, err)
@@ -71,12 +71,12 @@ func TestOpenHoldsCacheEntry(t *testing.T) {
 	kept := f.Keep()
 	require.NoError(t, f.Close())
 	require.Equal(t, 1, cachedEntries(t, cache))
-	kept()
+	kept.Release()
 	require.Equal(t, 1, cachedEntries(t, cache), "releasing the last hold keeps an entry that was not removed")
 
 	env.Cache = nil
 	f, err = Open(ctx, env, ref)
 	require.NoError(t, err)
-	f.Keep()()
+	f.Keep().Release()
 	require.NoError(t, f.Close())
 }

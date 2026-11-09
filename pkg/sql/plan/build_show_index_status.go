@@ -56,7 +56,7 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	tblName := stmt.TableName.GetTableName()
-	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -81,15 +81,7 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	defer newStmt.Free()
-	if stmt.Where != nil {
-		newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = stmt.Where
-	}
-	p, err := getReturnDdlBySelectStmt(ctx, newStmt, plan.DataDefinition_SHOW_INDEX)
-	if err != nil {
-		return nil, err
-	}
-	readOnBehalfOf(p, ignoredTables, objRef)
-	return p, nil
+	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef)
 }
 
 // showIndexStatusSql returns the rows of SHOW INDEX STATUS of the indexes of the tables defs of

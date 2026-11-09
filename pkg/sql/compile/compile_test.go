@@ -308,6 +308,37 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	require.Equal(t, []*plan.Expr{stable}, filters)
 }
 
+func TestAppendTemporalStorageHintsKeepsRowFilterIndependent(t *testing.T) {
+	row := plan2.MakePlan2Int64ConstExprWithType(1)
+	unrelated := plan2.MakePlan2Int64ConstExprWithType(2)
+	helper := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: function.EncodeOverloadID(function.TEMPORAL_DATETIME_BOUND, 0), ObjName: "__mo_temporal_datetime_bound",
+	}, Args: []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false)}}}}
+	helper.CandidateFilter = true
+	unmarked := plan2.DeepCopyExpr(helper)
+	unmarked.CandidateFilter = false
+	storage := make([]*plan.Expr, 1, 2)
+	storage[0] = row
+	result := appendCandidateStorageHints(storage, []*plan.Expr{unrelated, unmarked, helper})
+	require.Equal(t, []*plan.Expr{row, helper}, result)
+	require.Nil(t, storage[:2][1])
+	require.Equal(t, []*plan.Expr{row}, appendCandidateStorageHints(storage, nil))
+	staticHint := plan2.MakePlan2Int64ConstExprWithType(3)
+	staticHint.CandidateFilter = true
+	require.Equal(t, []*plan.Expr{row, staticHint}, appendCandidateStorageHints(storage, []*plan.Expr{staticHint}),
+		"a proved hint does not require a runtime-only function")
+	copy := plan2.DeepCopyExpr(helper)
+	copy.Selectivity = 0.25
+	copy.Ndv = 17
+	copy.GetF().Args[0].Selectivity = 0.7
+	require.Equal(t, []*plan.Expr{row, copy}, appendCandidateStorageHints([]*plan.Expr{row, copy}, []*plan.Expr{helper}),
+		"statistics differences must not forward the same candidate twice")
+	different := plan2.DeepCopyExpr(helper)
+	different.GetF().Args = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+	require.Len(t, appendCandidateStorageHints([]*plan.Expr{row, different}, []*plan.Expr{helper}), 3,
+		"different values must not be deduplicated")
+}
+
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -334,7 +365,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			compilerCtx.SetContext(ctx)
 			stmts, err := mysql.Parse(ctx, "select ?", 1)
 			require.NoError(t, err)
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true, nil)
 			require.NoError(t, err)
 			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 			_, _, err = plan2.ResetPreparePlan(compilerCtx, pn)
@@ -418,7 +449,7 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	const sql = "select 1 union all select 2"
 	stmts, err := mysql.Parse(ctx, sql, 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -528,7 +559,7 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 			const sql = "select 1 union all select 2"
 			stmts, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -981,7 +1012,7 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select 1", 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
@@ -4108,7 +4139,7 @@ func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCach
 func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	base.SetContext(context.Background())
-	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
+	_, tableDef, err := base.Resolve("tpch", "lineitem", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, tableDef)
 
@@ -4143,7 +4174,7 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 			stats.NdvMap["l_orderkey"] = tc.ndv
 			statements, err := mysql.Parse(context.Background(), tc.sql, 1)
 			require.NoError(t, err)
-			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false, nil)
 			require.NoError(t, err)
 			plan2.CalcQueryDOP(&plan.Plan{Plan: &plan.Plan_Query{Query: query}}, 4, 1, plan2.ExecTypeAP_ONECN)
 			for _, parent := range query.Nodes {

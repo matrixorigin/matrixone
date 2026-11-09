@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
+func getPreparePlan(ctx CompilerContext, stmt tree.Statement, planningInput *PlanningInput) (*Plan, *Query, error) {
 	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
 		switch source := stmt.(type) {
 		case *tree.Select, *tree.ParenSelect:
@@ -40,12 +40,12 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			p, err := BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true, nil)
 			return p, nil, err
 		}
 	} else if s, ok := stmt.(*tree.Replace); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			p, err := BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true, nil)
 			return p, nil, err
 		}
 	}
@@ -57,7 +57,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, true)
+		optimized, err := opt.Optimize(stmt, true, planningInput)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -68,6 +68,13 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.CloneTable:
+		if stmt.ToAccountOpt != nil && !stmt.IsRestore {
+			p, err := buildPrepareCloneTableWithAccount(stmt, ctx)
+			return p, nil, err
+		}
+		p, err := BuildPlan(ctx, stmt, true, nil)
+		return p, nil, err
 	case *tree.ShowPublications:
 		if stmt.Like != nil {
 			switch pattern := stmt.Like.Right.(type) {
@@ -97,12 +104,12 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		// compile it.
 		return &Plan{}, nil, nil
 	default:
-		p, err := BuildPlan(ctx, stmt, true)
+		p, err := BuildPlan(ctx, stmt, true, nil)
 		return p, nil, err
 	}
 }
 
-func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
+func buildPrepare(stmt tree.Prepare, ctx CompilerContext, planningInput *PlanningInput) (*Plan, error) {
 	// Views belong to the statement currently being built. Query/DML builders
 	// replace this state, but pure DDL builders do not, so clear the previous
 	// statement's dependencies before planning this PREPARE.
@@ -120,7 +127,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		stmtName = string(pstmt.Name)
 		preparedStmt = pstmt.Stmt
 		sourceParameterCount = tree.ParameterCount(preparedStmt)
-		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt)
+		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt, planningInput)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +166,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		stmtName = string(pstmt.Name)
 		preparedStmt = stmts[0]
 		sourceParameterCount = tree.ParameterCount(preparedStmt)
-		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0])
+		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0], nil)
 		if err != nil {
 			return nil, err
 		}
@@ -325,7 +332,7 @@ func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*
 				return nil, err
 			}
 		}
-		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -365,6 +372,7 @@ func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*
 func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {
 	var tableNames []*tree.TableName
 	var schemas []*plan.ObjectRef
+	temporaryTargets := make(map[*tree.TableName]bool)
 	resolveTable := ctx.Resolve
 
 	addTableNames := func(names tree.TableNames) {
@@ -377,7 +385,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, fk.Refer.TableName)
 		}
 	}
-	addRenameTarget := func(source *tree.TableName, rename *tree.AlterOptionTableName) {
+	addRenameTarget := func(source *tree.TableName, rename *tree.AlterOptionTableName, temporary bool) {
 		if source == nil || rename == nil || rename.Name == nil {
 			return
 		}
@@ -387,6 +395,9 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		// the SQL spells an explicit target database.
 		target.SchemaName = source.SchemaName
 		tableNames = append(tableNames, &target)
+		if temporary {
+			temporaryTargets[&target] = true
+		}
 	}
 	addQuerySchemas := func(selectStmt *tree.Select) error {
 		if selectStmt == nil {
@@ -426,9 +437,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 	switch ddl := stmt.(type) {
 	case *tree.AlterTable:
 		tableNames = append(tableNames, ddl.Table)
+		temporary := preparePlan.GetDdl().GetAlterTable().GetTableDef().GetIsTemporary()
 		for _, option := range ddl.Options {
 			if rename, ok := option.(*tree.AlterOptionTableName); ok {
-				addRenameTarget(ddl.Table, rename)
+				addRenameTarget(ddl.Table, rename, temporary)
 			}
 			if add, ok := option.(*tree.AlterOptionAdd); ok {
 				if fk, ok := add.Def.(*tree.ForeignKey); ok {
@@ -444,7 +456,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, alterTable.Table)
 			for _, option := range alterTable.Options {
 				if rename, ok := option.(*tree.AlterOptionTableName); ok {
-					addRenameTarget(alterTable.Table, rename)
+					addRenameTarget(alterTable.Table, rename, false)
 				}
 			}
 		}
@@ -474,6 +486,9 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		}
 	case *tree.CreateTable:
 		tableNames = append(tableNames, &ddl.Table)
+		if ddl.Temporary {
+			temporaryTargets[&ddl.Table] = true
+		}
 		if ddl.IsAsLike {
 			tableNames = append(tableNames, &ddl.LikeTableName)
 		}
@@ -495,8 +510,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			return nil, err
 		}
 	case *tree.CloneTable:
-		if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
-			return nil, err
+		if ddl.ToAccountOpt == nil || ddl.IsRestore {
+			if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -509,7 +526,14 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			databaseName = ctx.DefaultDatabase()
 		}
 		name := string(tableName.ObjectName)
-		objRef, tableDef, err := resolveTable(databaseName, name, nil)
+		var objRef *plan.ObjectRef
+		var tableDef *plan.TableDef
+		var err error
+		if temporaryTargets[tableName] {
+			objRef, tableDef, err = resolveTemporaryTable(ctx, databaseName, name, nil)
+		} else {
+			objRef, tableDef, err = resolveTable(databaseName, name, nil, nil)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -546,7 +570,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key table is missing its database")
 			}
 			databaseName := createTable.GetFkDbs()[i]
-			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -556,7 +580,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
 		}
 		for _, fk := range createTable.GetFksReferToMe() {
-			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil)
+			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -592,7 +616,7 @@ func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
 		if dependencySnapshot != nil {
 			snapshot = dependencySnapshot
 		}
-		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot, nil)
 		if err != nil {
 			return nil, err
 		}

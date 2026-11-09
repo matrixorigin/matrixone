@@ -38,17 +38,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -318,10 +323,18 @@ type fakeTable struct {
 	rows    func() []chunkRow
 	scans   atomic.Int32
 	filters chan *plan.Expr
+	// service is the CN service ID a background read's process must report.
+	service string
 }
 
 func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *fileservice.IndexFileCache) *Env {
-	proc := testutil.NewProcess(t)
+	return newEnvWithProc(t, ctrl, tbl, cache, testutil.NewProcess(t))
+}
+
+// newEnvWithProc is newEnv for a caller with process proc; nil is a background job, which
+// reads the whole workspace and scans on a process of the read's own. Ranges on a relation
+// opened without a process fails, as the storage engine reads the relation's process there.
+func newEnvWithProc(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *fileservice.IndexFileCache, proc *process.Process) *Env {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -329,12 +342,33 @@ func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *filese
 	ws := mock_frontend.NewMockWorkspace(ctrl)
 
 	eng.EXPECT().Database(gomock.Any(), "db", txn).Return(db, nil).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), "idx", proc).Return(rel, nil).AnyTimes()
+	noProc := mock_frontend.NewMockRelation(ctrl)
+	noProc.EXPECT().GetTableID(gomock.Any()).Return(tbl.tableID).AnyTimes()
+	noProc.EXPECT().GetTableDef(gomock.Any()).Return(storageTableDef()).AnyTimes()
+	noProc.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(context.Context, engine.RangesParam) (engine.RelData, error) {
+			t.Error("Ranges on a relation opened without a process")
+			return nil, moerr.NewInternalErrorNoCtx("relation opened without a process")
+		}).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "idx", gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ string, p any) (engine.Relation, error) {
+			if got, _ := p.(*process.Process); got == nil {
+				return noProc, nil
+			}
+			if proc != nil {
+				require.Same(t, proc, p)
+			}
+			return rel, nil
+		}).AnyTimes()
 	rel.EXPECT().GetTableID(gomock.Any()).Return(tbl.tableID).AnyTimes()
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(storageTableDef()).AnyTimes()
 	txn.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 	txn.EXPECT().Txn().Return(pbtxn.TxnMeta{ID: []byte("txn-1")}).AnyTimes()
-	ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+	if proc != nil {
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+	} else {
+		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+	}
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, p engine.RangesParam) (engine.RelData, error) {
 			tbl.scans.Add(1)
@@ -346,8 +380,17 @@ func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *filese
 			}
 			return nil, nil
 		}).AnyTimes()
-	rel.EXPECT().BuildReaders(gomock.Any(), proc, gomock.Any(), gomock.Any(), 1, 0, false, gomock.Any(), gomock.Any()).
-		DoAndReturn(func(context.Context, any, *plan.Expr, engine.RelData, int, int, bool, engine.TombstoneApplyPolicy, engine.FilterHint) ([]engine.Reader, error) {
+	rel.EXPECT().BuildReaders(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), 1, 0, false, gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, p any, _ *plan.Expr, _ engine.RelData, _ int, _ int, _ bool, _ engine.TombstoneApplyPolicy, _ engine.FilterHint) ([]engine.Reader, error) {
+			got, ok := p.(*process.Process)
+			require.True(t, ok)
+			require.NotNil(t, got.Mp())
+			if proc == nil {
+				require.Equal(t, tbl.service, got.GetService())
+			}
+			if proc != nil {
+				require.Same(t, proc, got)
+			}
 			return []engine.Reader{&fakeReader{rows: tbl.rows(), batch: 3}}, nil
 		}).AnyTimes()
 	return &Env{Engine: eng, Proc: proc, Txn: txn, Cache: cache}
@@ -582,6 +625,49 @@ func TestOpenVerifiesLegacyMD5(t *testing.T) {
 	require.ErrorContains(t, err, "checksum mismatch")
 }
 
+// A background job, a SqlProcess with only a SqlContext, reads through the layer as a query
+// does: rebuilt from the rows once, then served from the cache.
+func TestOpenWithoutProcess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(2*ChunkSize+7, 21)
+	ref := testRef(data)
+	const service = "indexfile-background-cn"
+	registerCNLockService(t, ctrl, service)
+	tbl := &fakeTable{tableID: 21, rows: func() []chunkRow { return fileRows(ref, data, 22) }, service: service}
+	env := newEnvWithProc(t, ctrl, tbl, newCache(t, t.TempDir()), nil)
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(context.Background(), service, env.Txn, 3, nil))
+	files := &Files{Engine: env.Engine, Cache: env.Cache}
+	for i := 0; i < 2; i++ {
+		f, err := OpenWithProcess(sqlproc, files, ref, "")
+		require.NoError(t, err)
+		require.Equal(t, data, readFile(t, f))
+		require.NoError(t, f.Close())
+		require.Equal(t, int32(1), tbl.scans.Load(), "open %d", i)
+	}
+}
+
+// registerCNLockService registers a lock service for CN service in its runtime.
+func registerCNLockService(t *testing.T, ctrl *gomock.Controller, service string) {
+	ls := mock_lock.NewMockLockService(ctrl)
+	ls.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.LockService, ls)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+}
+
+// A background read on a CN with no lock service in its runtime fails before scanning.
+func TestOpenWithoutProcessNeedsCNLockService(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(ChunkSize+7, 23)
+	ref := testRef(data)
+	tbl := &fakeTable{tableID: 23, rows: func() []chunkRow { return fileRows(ref, data, 24) }}
+	env := newEnvWithProc(t, ctrl, tbl, newCache(t, t.TempDir()), nil)
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(context.Background(), "indexfile-unknown-cn", env.Txn, 3, nil))
+	_, err := OpenWithProcess(sqlproc, &Files{Engine: env.Engine, Cache: env.Cache}, ref, "")
+	require.ErrorContains(t, err, `no lock service for CN "indexfile-unknown-cn"`)
+	require.Zero(t, tbl.scans.Load())
+}
+
 func TestOpenWithoutCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	data := randomBytes(ChunkSize+1, 13)
@@ -637,7 +723,7 @@ func TestFDPathSurvivesEviction(t *testing.T) {
 	f, err := Open(context.Background(), env, ref)
 	require.NoError(t, err)
 	defer f.Close()
-	f.Keep()()
+	f.Keep().Release()
 	require.NoError(t, env.Cache.Delete(context.Background(), entryName(18, &ref)))
 	_, err = env.Cache.Open(context.Background(), entryName(18, &ref), dataFile)
 	require.Error(t, err, "the cache entry is gone")
@@ -867,7 +953,7 @@ func TestOpenReplacesInvalidHeldEntry(t *testing.T) {
 	held, err := Open(ctx, env, ref)
 	require.NoError(t, err)
 	release := held.Keep()
-	defer release()
+	defer release.Release()
 	require.NoError(t, held.Close())
 
 	files, err := cache.Open(ctx, entryName(16, &ref), dataFile)

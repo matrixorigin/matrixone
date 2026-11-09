@@ -225,23 +225,33 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 		return
 	}
 	defer client.Putback()
+	budgetCtx, cancel := context.WithTimeoutCause(
+		ctx, d.config.MaxTimeout, moerr.CauseGetLogserviceTruncate)
+	defer cancel()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
-			ctx,
-			d.config.MaxTimeout,
-			moerr.CauseGetLogserviceTruncate,
-		)
-		psn, err = client.wrapped.GetTruncatedLsn(ctx)
-		cancel()
+		if budgetCtx.Err() != nil {
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
+		}
+		psn, err = client.wrapped.GetTruncatedLsn(budgetCtx)
 		if err == nil {
 			break
 		}
 		retryTimes++
-		if time.Since(start) > d.config.MaxTimeout {
-			break
+		if budgetCtx.Err() != nil {
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
 		}
-		time.Sleep(d.config.RetryInterval(retryTimes))
+		timer := time.NewTimer(d.config.RetryInterval(retryTimes))
+		select {
+		case <-timer.C:
+		case <-budgetCtx.Done():
+			timer.Stop()
+			err = moerr.AttachCause(budgetCtx, budgetCtx.Err())
+			return
+		}
+		timer.Stop()
 	}
 	return
 }

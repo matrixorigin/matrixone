@@ -170,7 +170,7 @@ func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) er
 			continue
 		}
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot)
+			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot, nil)
 		if err != nil {
 			return err
 		}
@@ -4430,6 +4430,15 @@ func preparedNumericPrefixArgs(
 	return sources, true, nil
 }
 
+func isPreparedNumericPrefixFunction(name string) bool {
+	switch name {
+	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
+		return true
+	default:
+		return false
+	}
+}
+
 func preparedNumericPrefixContext(
 	name string,
 	args []*plan.Expr,
@@ -4438,9 +4447,7 @@ func preparedNumericPrefixContext(
 	prefixListArgs [][]bool,
 	prefixListKinds [][]types.StringConversionKind,
 ) bool {
-	switch name {
-	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
-	default:
+	if !isPreparedNumericPrefixFunction(name) {
 		return false
 	}
 

@@ -65,7 +65,7 @@ show triggers;
 ➤ Trigger[12,-1,0]  ¦  Event[12,-1,0]  ¦  Table[12,-1,0]  ¦  Statement[12,0,0]  ¦  Timing[12,-1,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,-1,0]  ¦  Definer[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  Database Collation[12,-1,0]
 use mo_catalog;
 show columns from mo_tables;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 rel_id  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  varchar(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  varchar(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -191,7 +191,7 @@ select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordin
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  name[12,-1,0]  ¦  is_visible[-6,8,0]  ¦  hidden[-6,8,0]  ¦  comment[12,-1,0]  ¦  column_name[12,-1,0]  ¦  ordinal_position[4,32,0]  ¦  options[12,0,0]  𝄀
 deptno  ¦  UNIQUE  ¦  deptno  ¦  1  ¦  0  ¦    ¦  deptno  ¦  1  ¦  null
 desc mo_catalog.mo_indexes;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 table_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 database_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -234,7 +234,7 @@ create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  name[12,-1,0]  ¦  is_visible[-6,8,0]  ¦  hidden[-6,8,0]  ¦  comment[12,-1,0]  ¦  column_name[12,-1,0]  ¦  ordinal_position[4,32,0]  ¦  options[12,0,0]
 desc mo_catalog.mo_indexes;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint unsigned  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 table_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 database_id  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -257,7 +257,7 @@ drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
 desc mo_catalog.mo_stages;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 stage_id  ¦  int unsigned  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 stage_name  ¦  varchar(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 url  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

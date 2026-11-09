@@ -425,6 +425,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	vector.resetCacheAdmission()
 	if _, err := parseFilePathAtService(vector.FilePath, l.name); err != nil {
 		return err
 	}
@@ -682,7 +683,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					C: counter,
 				}
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(ctx, cr, nil, l)
+				cacheData, err = entry.ToCacheData(ctx, cr, nil, entry.allocatorForDecode(l))
 				if err != nil {
 					return err
 				}
@@ -836,7 +837,7 @@ func (l *LocalFS) handleReadCloserForRead(
 				defer file.Close()
 				defer fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 				var cacheData fscache.Data
-				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), l)
+				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), entry.allocatorForDecode(l))
 				if err != nil {
 					return err
 				}
