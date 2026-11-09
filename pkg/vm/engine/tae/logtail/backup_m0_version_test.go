@@ -364,6 +364,43 @@ func testBackupRewriteObjectVersion(t *testing.T, sourceVersion uint32) {
 		require.ErrorContains(t, panicErr, "injected panic cleanup failure")
 		require.Len(t, panicCleanupDst.paths, 1)
 		require.ErrorContains(t, panicErr, panicCleanupDst.paths[0])
+
+		// A later panic must also settle the data object written by the
+		// previous iteration, not just the object whose write panicked.
+		for _, cleanupFails := range []bool{false, true} {
+			t.Run(fmt.Sprintf("panic_after_two_writes_cleanup_fails_%t", cleanupFails), func(t *testing.T) {
+				base, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { base.Close(ctx) })
+				dst := &m0BackupOutputFailure{FileService: base, panicAt: 2}
+				if cleanupFails {
+					dst.deleteErr = errors.New("injected multi-object cleanup failure")
+				}
+				var got any
+				func() {
+					defer func() { got = recover() }()
+					_, _, _, _ = ReWriteCheckpointAndBlockFromKey(ctx, "m0-backup", srcFS, dst, location, last, CheckpointCurrentVersion, backupTS)
+				}()
+				require.Len(t, dst.paths, 2)
+				if cleanupFails {
+					panicErr, ok := got.(error)
+					require.True(t, ok, "cleanup failure must retain the panic as an error")
+					require.ErrorContains(t, panicErr, "injected backup write panic")
+					require.ErrorContains(t, panicErr, "injected multi-object cleanup failure")
+					for _, path := range dst.paths {
+						require.ErrorContains(t, panicErr, path)
+						_, err = base.StatFile(ctx, path)
+						require.NoError(t, err, "failed cleanup must retain the object for its next owner")
+					}
+				} else {
+					require.Equal(t, "injected backup write panic", got)
+					for _, path := range dst.paths {
+						_, err = base.StatFile(ctx, path)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "panic cleanup left output %s", path)
+					}
+				}
+			})
+		}
 	}
 	rewritten, _, _, err := ReWriteCheckpointAndBlockFromKey(ctx, "m0-backup", srcFS, dstFS, location, last, CheckpointCurrentVersion, backupTS)
 	require.NoError(t, err)

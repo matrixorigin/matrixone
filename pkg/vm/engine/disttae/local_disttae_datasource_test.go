@@ -1212,6 +1212,23 @@ func TestOrderedScanRetainsBlockWithMissingColumn(t *testing.T) {
 	require.Len(t, present, 2)
 	require.True(t, present[0].IsInited())
 	require.True(t, present[1].IsInited())
+	t.Run("incompatible_column_metadata", func(t *testing.T) {
+		// The current schema and ORDER BY agree, but the old object stores a
+		// different type. Its zone map must not prune either block.
+		def.Cols[0].Typ = plan.Type{Id: int32(types.T_int64)}
+		t.Cleanup(func() { def.Cols[0].Typ = plan.Type{Id: int32(types.T_int32)} })
+		orderBy("present", 0)
+		ls.OrderBy[0].Expr.Typ.Id = int32(types.T_int64)
+		incompatible, err := ls.getBlockZMs(ctx)
+		require.NoError(t, err)
+		require.Len(t, incompatible, 2)
+		ls.blockZMS = incompatible
+		ls.filterZM = present[0]
+		for i := range incompatible {
+			require.False(t, incompatible[i].IsInited())
+			require.True(t, ls.needReadBlkByZM(i), "incompatible statistics must not prune the block")
+		}
+	})
 	for _, tc := range []struct {
 		name string
 		pos  int32

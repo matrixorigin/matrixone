@@ -488,7 +488,8 @@ func TestForceSingleScan_ZmMinMaxEligibility(t *testing.T) {
 		zmAggFuncExpr("min", zmAggColExpr(0), 0),
 		zmAggFuncExpr("count", zmAggLitExpr(1), 0))))
 	// Supported column metadata keeps the fast path and its single scan.
-	require.True(t, forceSingleScan(zmAggNode(i64, zmAggFuncExpr("min", zmAggColExpr(0), 0))))
+	require.Equal(t, !activeM0DisableCountNotNullRewrite,
+		forceSingleScan(zmAggNode(i64, zmAggFuncExpr("min", zmAggColExpr(0), 0))))
 }
 
 // Actual Scope.aggOptimize consumer closure: a whole-node eligibility decline
@@ -595,10 +596,14 @@ func TestScopeAggOptimizeDeclinesWholeNode(t *testing.T) {
 			require.Zero(t, rel.rangesCalls, "no range collection on a declined node")
 			require.Zero(t, rel.buildReadersCalls, "no reader construction on a declined node")
 
-			if tt.wantStarcountAt >= 0 && !activeM0DisableCountNotNullRewrite {
+			if tt.wantStarcountAt >= 0 {
 				fn := tt.aggs[tt.wantStarcountAt].Expr.(*plan.Expr_F).F
-				require.Equal(t, "starcount", fn.Func.ObjName)
-				require.Equal(t, wantCountStarObj, fn.Func.Obj)
+				if activeM0DisableCountNotNullRewrite {
+					require.Equal(t, "count", fn.Func.ObjName)
+				} else {
+					require.Equal(t, "starcount", fn.Func.ObjName)
+					require.Equal(t, wantCountStarObj, fn.Func.Obj)
+				}
 			}
 		})
 	}
