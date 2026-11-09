@@ -312,17 +312,6 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 
 func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace, generation loadGeneration) ([]*Segment, error) {
 	indexKey := cfg.DbName + "." + cfg.IndexTable
-	committed := false
-	var bases []*Segment
-	defer func() {
-		if !committed {
-			freeSegs(bases)
-			// A later base can fail after earlier segments have been acquired.
-			// Roll back only claims held by this load; another generation may have
-			// reused or committed the same immutable base in the meantime.
-			loadedBasePool.rollback(generation.owner)
-		}
-	}()
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	var sqlStart time.Time
@@ -349,7 +338,17 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 		}
 	}()
 
-	bases = make([]*Segment, 0, len(ids))
+	bases := make([]*Segment, 0, len(ids))
+	committed := false
+	defer func() {
+		if !committed {
+			freeSegs(bases)
+			// A later base can fail after earlier segments have been acquired.
+			// Roll back only claims held by this load; another generation may have
+			// reused or committed the same immutable base in the meantime.
+			loadedBasePool.rollback(generation.owner)
+		}
+	}()
 	used := make(map[baseKey]struct{}, len(ids))
 	for _, id := range ids {
 		var metaStart time.Time
