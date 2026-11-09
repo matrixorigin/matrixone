@@ -830,3 +830,97 @@ func TestStoredContainerNumericEncodingEquivalent(t *testing.T) {
 		t.Fatalf("later corruption bypassed: ok=%v visits=%d", ok, visits)
 	}
 }
+
+func TestStoredNumericRunsPreserveBudgetsAndCallbacks(t *testing.T) {
+	// Three numeric entries precede the callback and two follow it. The
+	// complete walk costs 13 work units: one container, six entries and six
+	// non-inline scalars.
+	fixture := testScalarArray(
+		[]byte{typeInt64, typeUint64, typeFloat64, typeString, typeInt64, typeUint64},
+		[][]byte{make([]byte, 8), make([]byte, 8), make([]byte, 8), {1, 'x'}, make([]byte, 8), make([]byte, 8)},
+	)
+	type observation struct {
+		valid, depth bool
+		visits       int
+	}
+	run := func(change string, limit uint64, specialized bool) observation {
+		data := bytes.Clone(fixture)
+		later := headerSize + 4*valEntrySize
+		if change == "repair" {
+			data[later] = 0xfd
+		}
+		visits := 0
+		predicate := func(tp byte, value []byte) bool {
+			if tp == typeString {
+				visits++
+				switch change {
+				case "corrupt":
+					data[later] = 0xfd
+				case "repair":
+					data[later] = typeInt64
+				}
+			}
+			return benchmarkScalar(tp, value)
+		}
+		var valid, depth bool
+		if specialized {
+			valid, depth = StoredContainerWithNumericEncoding(typeArray, data, predicate, limit)
+		} else {
+			valid, depth = StoredContainer(typeArray, data, predicate, limit)
+		}
+		return observation{valid, depth, visits}
+	}
+	for _, change := range []string{"none", "corrupt", "repair"} {
+		for limit := uint64(0); limit <= 14; limit++ {
+			want := run(change, limit, false)
+			got := run(change, limit, true)
+			if got != want {
+				t.Fatalf("change=%s limit=%d got=%+v want=%+v", change, limit, got, want)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		change string
+		limit  uint64
+		want   observation
+	}{
+		{"none", 9, observation{false, false, 0}},
+		{"none", 10, observation{false, false, 0}},
+		{"none", 11, observation{false, false, 1}},
+		{"none", 13, observation{true, false, 1}},
+		{"corrupt", 13, observation{false, false, 1}},
+		{"repair", 13, observation{true, false, 1}},
+	} {
+		if got := run(tc.change, tc.limit, true); got != tc.want {
+			t.Fatalf("change=%s limit=%d got=%+v want=%+v", tc.change, tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestStoredNumericRunsRejectMalformedEntries(t *testing.T) {
+	for _, change := range []string{"valid", "nonfinite", "overlap", "truncated", "unknown"} {
+		t.Run(change, func(t *testing.T) {
+			data := testScalarArray(
+				[]byte{typeInt64, typeUint64, typeFloat64, typeInt64, typeUint64},
+				[][]byte{make([]byte, 8), make([]byte, 8), make([]byte, 8), make([]byte, 8), make([]byte, 8)},
+			)
+			entry := func(i int) []byte { return data[headerSize+i*valEntrySize:] }
+			switch change {
+			case "nonfinite":
+				offset := binary.LittleEndian.Uint32(entry(2)[valTypeSize:])
+				binary.LittleEndian.PutUint64(data[offset:], math.Float64bits(math.Inf(1)))
+			case "overlap":
+				copy(entry(3)[valTypeSize:valEntrySize], entry(2)[valTypeSize:valEntrySize])
+			case "truncated":
+				binary.LittleEndian.PutUint32(entry(4)[valTypeSize:], uint32(len(data)-numberSize+1))
+			case "unknown":
+				entry(3)[0] = 0xfd
+			}
+			want, wantDepth := StoredContainer(typeArray, data, benchmarkScalar, 100)
+			got, gotDepth := StoredContainerWithNumericEncoding(typeArray, data, benchmarkScalar, 100)
+			if want != (change == "valid") || got != want || gotDepth != wantDepth {
+				t.Fatalf("got=%v/%v want=%v/%v", got, gotDepth, want, wantDepth)
+			}
+		})
+	}
+}

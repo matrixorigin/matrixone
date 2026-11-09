@@ -187,6 +187,44 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 		}
 		childOffset := uint64(binary.LittleEndian.Uint32(entry[valTypeSize:]))
 		if childType >= typeInt64 && childType <= typeFloat64 {
+			if storedWork != nil && numericEncoding && entryOffset+valEntrySize < len(valueTable) {
+				nextType := valueTable[entryOffset+valEntrySize]
+				if nextType >= typeInt64 && nextType <= typeFloat64 {
+					// Numeric entries have no scalar callback. Charge a contiguous
+					// run once, before the next callback or recursive descent, but
+					// still examine every descriptor and every float payload.
+					budget := *remaining / numberSize
+					if *storedWork < budget {
+						budget = *storedWork
+					}
+					var visited uint64
+					end := entryOffset
+					for end < len(valueTable) {
+						numericEntry := valueTable[end : end+valEntrySize]
+						tp := numericEntry[0]
+						if tp < typeInt64 || tp > typeFloat64 {
+							break
+						}
+						if visited == budget {
+							return false
+						}
+						offset := uint64(binary.LittleEndian.Uint32(numericEntry[valTypeSize:]))
+						if offset < previousRangeEnd || offset > documentSize-numberSize {
+							return false
+						}
+						if tp == typeFloat64 && binary.LittleEndian.Uint64(data[offset:offset+numberSize])&0x7ff0000000000000 == 0x7ff0000000000000 {
+							return false
+						}
+						previousRangeEnd = offset + numberSize
+						visited++
+						end += valEntrySize
+					}
+					*remaining -= visited * numberSize
+					*storedWork -= visited
+					entryOffset = end - valEntrySize
+					continue
+				}
+			}
 			// Fixed-width scalars need neither a tail view nor container
 			// dispatch. Read each descriptor only after the previous callback;
 			// the exact payload view retains its original borrowed capacity.

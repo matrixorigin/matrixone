@@ -2734,6 +2734,48 @@ func TestJsonValueLegacyUnselectedDescendant(t *testing.T) {
 }
 
 func TestJsonValueLegacyRechecksCurrentVectorBytes(t *testing.T) {
+	for _, change := range []string{"unknown", "overlap", "truncated", "nonfinite"} {
+		t.Run("unselected numeric run "+change, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `{"keep":1,"large":[0,0,0,0,0]}`)}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.keep"}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), JsonValue)
+			t.Cleanup(fc.Free)
+			run := func() error {
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+				return JsonValue(fc.parameters, fc.result, proc, 1, nil)
+			}
+			check := func() {
+				t.Helper()
+				require.NoError(t, run())
+				require.Equal(t, "1", string(fc.result.GetResultVector().GetBytesAt(0)))
+			}
+			check()
+			child := types.DecodeJson(fc.parameters[0].GetBytesAt(0)).GetObjectVal(1)
+			original := bytes.Clone(child.Data)
+			entry := func(i int) []byte { return child.Data[8+i*5:] }
+			for i := 0; i < 5; i++ {
+				require.GreaterOrEqual(t, entry(i)[0], byte(bytejson.TpCodeInt64))
+				require.LessOrEqual(t, entry(i)[0], byte(bytejson.TpCodeFloat64))
+			}
+			switch change {
+			case "unknown":
+				entry(4)[0] = 0xfd
+			case "overlap":
+				copy(entry(4)[1:5], entry(3)[1:5])
+			case "truncated":
+				binary.LittleEndian.PutUint32(entry(4)[1:5], uint32(len(child.Data)-7))
+			case "nonfinite":
+				offset := binary.LittleEndian.Uint32(entry(4)[1:5])
+				entry(4)[0] = bytejson.TpCodeFloat64
+				binary.LittleEndian.PutUint64(child.Data[offset:], 0x7ff0000000000000)
+			}
+			require.True(t, moerr.IsMoErrCode(run(), moerr.ErrInvalidArg))
+			copy(child.Data, original)
+			check()
+		})
+	}
 	for _, corruption := range []string{"key-order", "key-utf8", "value-utf8"} {
 		t.Run("unselected canonical "+corruption, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
