@@ -50,7 +50,7 @@ func buildPlanForEnumNumericQuery(t *testing.T, ctx *MockCompilerContext, sql st
 	stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
 	require.NoError(t, err, "%s", sql)
 	defer stmts[0].Free()
-	p, err := BuildPlan(ctx, stmts[0], false)
+	p, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err, "%s", sql)
 	return p.GetQuery()
 }

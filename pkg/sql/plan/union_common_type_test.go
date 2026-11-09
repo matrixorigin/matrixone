@@ -49,7 +49,7 @@ func TestUnionDistinctChainKeepsFinalDedup(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
-			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, test.prepare)
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, test.prepare, nil)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.Equal(t, test.distinct, countReachableNodeType(query, planpb.Node_UNION))
@@ -189,7 +189,7 @@ func TestUnionSignedUnsignedIntegerColumnCommonType(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotEmpty(t, query.Steps)
@@ -240,7 +240,7 @@ func TestUnionMediumIntColumnMetadata(t *testing.T) {
 					"select "+tc.left+" as x from test.union_medium union all select "+tc.right+" from test.union_medium", 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				built, err := BuildPlan(ctx, stmt, false)
+				built, err := BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err)
 				query := built.GetQuery()
 				root := query.Nodes[query.Steps[len(query.Steps)-1]]
@@ -273,7 +273,7 @@ func TestCTASUnionSignedUnsignedIntegerMetadata(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef
@@ -296,7 +296,7 @@ func TestCTASUnionDecimalLiteralMetadata(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef
@@ -469,7 +469,7 @@ func TestNarrowUnsignedBigintConsumerCommonType(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			logicPlan, err := BuildPlan(ctx, stmt, test.prepare)
+			logicPlan, err := BuildPlan(ctx, stmt, test.prepare, nil)
 			require.NoError(t, err)
 			var typ planpb.Type
 			if query := logicPlan.GetQuery(); query != nil {
@@ -499,7 +499,7 @@ func buildFirstQueryResultType(t *testing.T, sql string) planpb.Type {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotEmpty(t, query.Steps)

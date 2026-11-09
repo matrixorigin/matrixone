@@ -52,7 +52,7 @@ func buildCreateTablePlan(t *testing.T, ctx context.Context, sql string) *plan.T
 
 	cc := NewMockCompilerContext(false, newPlanTestProcess(t))
 	cc.SetContext(ctx)
-	p, err := BuildPlan(cc, stmt, false)
+	p, err := BuildPlan(cc, stmt, false, nil)
 	require.NoError(t, err)
 	return p.GetDdl().GetCreateTable().GetTableDef()
 }

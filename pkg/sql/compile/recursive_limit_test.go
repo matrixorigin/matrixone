@@ -76,7 +76,7 @@ func TestDerivedSortZeroLimitSkipsRecursiveProducers(t *testing.T) {
 			stmts, err := mysql.Parse(c.proc.Ctx, cte+tc.sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			logical, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+			logical, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 			query := logical.GetQuery()
 			require.Greater(t, len(query.Steps), 1, "the public SQL must retain producer steps")

@@ -415,6 +415,44 @@ func IsRuntimeConstant(expr *plan.Expr) bool {
 	return isConstant(expr, true, true, constantForRuntime)
 }
 
+// RequiresRuntimeEvaluation identifies a function-owned evaluation boundary.
+// Neither the call nor its arguments may be folded into a reusable plan.
+// This family property also protects malformed overloads until their normal
+// binding/execution owner can validate them.
+func RequiresRuntimeEvaluation(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	fid, _ := DecodeOverloadID(fn.Func.GetObj())
+	return fid >= 0 && int(fid) < len(allSupportedFunctions) && allSupportedFunctions[fid].runtimeOnly
+}
+
+// ContainsRuntimeBound observes registered execution boundaries in a tree.
+func ContainsRuntimeBound(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		if RequiresRuntimeEvaluation(expr) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if ContainsRuntimeBound(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsRuntimeBound(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type constantPurpose uint8
 
 const (
@@ -449,6 +487,9 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
+		if purpose != constantForRuntime && RequiresRuntimeEvaluation(expr) {
+			return false
+		}
 		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}
@@ -1270,6 +1311,11 @@ type FuncNew struct {
 	// Whether the SQL type default is a valid executable default after CTAS
 	// materializes this function's result as a table column.
 	hasExecutableCTASTypeDefault bool
+
+	// This family and its arguments must remain executable until the current
+	// execution context exists. Stability and prepared-time flags do not grant
+	// permission to fold across this boundary.
+	runtimeOnly bool
 
 	// All execution overloads, including identities retained for old plans.
 	Overloads []overload

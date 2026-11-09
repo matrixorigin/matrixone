@@ -28,7 +28,7 @@ import (
 // Existing SQL entry points do not select this mode automatically.
 func (r *ViewSchemaRequest) BuildPlan(stmt tree.Statement, isPrepare bool) (*Plan, error) {
 	return r.buildPlan(stmt, isPrepare, func(compiler CompilerContext) (*Plan, error) {
-		return BuildPlan(compiler, stmt, isPrepare)
+		return BuildPlan(compiler, stmt, isPrepare, nil)
 	})
 }
 

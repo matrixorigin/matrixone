@@ -956,7 +956,7 @@ func TestBoundBetweenSelectivityClipsToDomain(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, stmts, 1)
 			defer stmts[0].Free()
-			built, err := BuildPlan(compiler, stmts[0], false)
+			built, err := BuildPlan(compiler, stmts[0], false, nil)
 			require.NoError(t, err)
 			var scan *planpb.Node
 			for _, node := range built.GetQuery().Nodes {
@@ -1049,7 +1049,7 @@ func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
-	built, err := BuildPlan(ctx, stmts[0], false)
+	built, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var scan *planpb.Node
@@ -3155,7 +3155,7 @@ func TestCachedLimitZeroFinalPlan(t *testing.T) {
 	statements, err := mysql.Parse(ctx.GetContext(), "select n_nationkey from nation limit 0", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	p, err := BuildPlan(ctx, statements[0], false)
+	p, err := BuildPlan(ctx, statements[0], false, nil)
 	require.NoError(t, err)
 	qry := p.GetQuery()
 	require.NotNil(t, qry)
@@ -3261,7 +3261,7 @@ func TestCachedPlanStatsAdmissionQueryShapes(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(ctx, stmts[0], false)
+			p, err := BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.strict, cachedPlanRequiresExactStats(p.GetQuery()), "%s", p.String())
 			for _, node := range p.GetQuery().Nodes {
@@ -3289,7 +3289,7 @@ func BenchmarkCachedPointPlanAdmission(b *testing.B) {
 	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation where n_nationkey=1", 1)
 	require.NoError(b, err)
 	defer stmts[0].Free()
-	p, err := BuildPlan(ctx, stmts[0], false)
+	p, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(b, err)
 	b.ReportAllocs()
 	b.ResetTimer()

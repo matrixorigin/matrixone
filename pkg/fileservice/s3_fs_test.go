@@ -3307,3 +3307,66 @@ func TestS3FSReadFullObjectToDiskCacheStreamingCancelWhileWaiting(t *testing.T) 
 	require.Error(t, waitResult(t, done))
 	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
 }
+
+// With every background slot taken, a download that fails after the reader captured its
+// bytes does not fail the read.
+func TestS3FSReadFullObjectToDiskCacheStreamingErrorAfterCaptureWhenBackgroundFull(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	for i := 0; i < cap(backgroundFills); i++ {
+		backgroundFills <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < cap(backgroundFills); i++ {
+			<-backgroundFills
+		}
+	})
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello")) }()
+	_, vector, done := streamFill(t, context.Background(), func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+		return pr, nil
+	})
+
+	select {
+	case err := <-done:
+		t.Fatalf("read returned before its download ended: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.NoError(t, pw.CloseWithError(errors.New("source failed")))
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+}
+
+// A download continuing after its reader returned keeps the reader's deadline and ends
+// when the disk cache closes.
+func TestS3FSReadFullObjectToDiskCacheStreamingBackgroundEndsOnClose(t *testing.T) {
+	require.Eventually(t, func() bool { return len(backgroundFills) == 0 },
+		diskCacheLifecycleTestTimeout, time.Millisecond, "fills of earlier tests released their slots")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	pr, pw := io.Pipe()
+	go func() { _, _ = pw.Write([]byte("hello")) }()
+	fillDeadline := make(chan time.Time, 1)
+	fillDone := make(chan struct{})
+	cache, vector, done := streamFill(t, ctx, func(fillCtx context.Context, _ *int64, _ *int64) (io.ReadCloser, error) {
+		d, _ := fillCtx.Deadline()
+		fillDeadline <- d
+		go func() {
+			<-fillCtx.Done()
+			close(fillDone)
+			_ = pw.CloseWithError(fillCtx.Err())
+		}()
+		return pr, nil
+	})
+
+	require.NoError(t, waitResult(t, done))
+	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
+	require.Equal(t, deadline, <-fillDeadline)
+	cache.Close(ctx)
+	select {
+	case <-fillDone:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("the download outlived the disk cache")
+	}
+}

@@ -584,7 +584,7 @@ func TestIndexRelationCatalogAdmissionWithTemporaryShadow(t *testing.T) {
 	require.ErrorContains(t, checkFrontendIndexTargetWithCatalog(execCtx, &tree.DumpTable{Table: target}), "privilege")
 	missing := tree.NewTableName("missing_definition", tree.ObjectNamePrefix{SchemaName: "mo_catalog", ExplicitSchema: true}, nil)
 	require.ErrorContains(t, checkFrontendIndexTargetWithCatalog(execCtx, &tree.TruncateTable{Name: missing}), "table definition is unavailable")
-	_, _, err := tcc.Resolve("mo_catalog", "missing_definition", nil)
+	_, _, err := tcc.Resolve("mo_catalog", "missing_definition", nil, nil)
 	require.ErrorContains(t, err, "table definition is unavailable")
 	_, absent, err := tcc.ResolveTemporaryTable("mo_catalog", "protected", nil)
 	require.NoError(t, err)

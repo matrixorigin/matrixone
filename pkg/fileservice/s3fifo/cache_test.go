@@ -16,6 +16,7 @@ package s3fifo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -86,6 +87,146 @@ func liveBytes(c *Cache[int, *value]) int64 {
 		panic(fmt.Sprintf("index holds %d bytes, queues %d", indexed, queued))
 	}
 	return indexed
+}
+
+func TestTryGet(t *testing.T) {
+	t.Run("lookup and admission", func(t *testing.T) {
+		var misuse atomic.Int32
+		c := newCache(100)
+		v := newValue(1, &misuse)
+		t.Cleanup(func() {
+			c.Delete(1)
+			v.Release()
+			require.Zero(t, misuse.Load())
+		})
+		inserted, _ := c.Set(1, v, 10)
+		require.True(t, inserted)
+		ix := c.indexOf(hashInt(1))
+		entry := ix.index[1]
+		var admitted, released int
+		admit := func(size int64) (func(), error) {
+			admitted++
+			require.EqualValues(t, 10, size)
+			return func() { released++ }, nil
+		}
+
+		got, release, ok, err := c.TryGet(2, admit)
+		require.NoError(t, err)
+		require.False(t, ok)
+		require.Nil(t, got)
+		require.Nil(t, release)
+		func() {
+			ix.mu.Lock()
+			defer ix.mu.Unlock()
+			got, release, ok, err = c.TryGet(1, admit)
+			require.NoError(t, err)
+			require.False(t, ok, "a contended lookup must return while the shard is held")
+			require.Nil(t, got)
+			require.Nil(t, release)
+		}()
+		require.Zero(t, admitted)
+		require.Equal(t, int32(2), v.refs.Load())
+		require.Zero(t, entry.freq.Load())
+
+		got, release, ok, err = c.TryGet(1, admit)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Same(t, v, got)
+		require.Equal(t, int32(3), v.refs.Load())
+		require.Equal(t, int32(1), entry.freq.Load())
+		require.NotNil(t, release)
+		release()
+		got.Release()
+		require.Equal(t, 1, admitted)
+		require.Equal(t, 1, released)
+
+		got, release, ok, err = c.Get(1, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Nil(t, release)
+		got.Release()
+		require.Equal(t, int32(2), entry.freq.Load(), "Get and TryGet update the same frequency")
+		denied := errors.New("admission denied")
+		got, release, ok, err = c.TryGet(1, func(int64) (func(), error) {
+			return func() { released++ }, denied
+		})
+		require.ErrorIs(t, err, denied)
+		require.False(t, ok)
+		require.Nil(t, got)
+		require.Nil(t, release)
+		require.Equal(t, 2, released)
+		require.Equal(t, int32(2), v.refs.Load())
+		require.Equal(t, int32(2), entry.freq.Load(), "failed admission must not update frequency")
+	})
+
+	t.Run("ghost is a miss", func(t *testing.T) {
+		var misuse atomic.Int32
+		c := newCache(100)
+		v := newValue(2, &misuse)
+		t.Cleanup(func() {
+			c.Delete(2)
+			v.Release()
+			require.Zero(t, misuse.Load())
+		})
+		inserted, _ := c.Set(2, v, 10)
+		require.True(t, inserted)
+		require.Zero(t, c.EvictTo(context.Background(), 0))
+		ps := c.policyOf(hashInt(2))
+		ps.mu.Lock()
+		remembered := ps.ghost.contains(hashInt(2))
+		ps.mu.Unlock()
+		require.True(t, remembered)
+		got, release, ok, err := c.TryGet(2, func(int64) (func(), error) {
+			t.Fatal("admission must not run for a ghost")
+			return nil, nil
+		})
+		require.NoError(t, err)
+		require.False(t, ok)
+		require.Nil(t, got)
+		require.Nil(t, release)
+		ps.mu.Lock()
+		remembered = ps.ghost.contains(hashInt(2))
+		ps.mu.Unlock()
+		require.True(t, remembered, "a read miss must not consume the ghost")
+		require.Equal(t, int32(1), v.refs.Load())
+	})
+
+	for _, operation := range []string{"delete", "replace", "evict"} {
+		t.Run("retained after "+operation, func(t *testing.T) {
+			var misuse atomic.Int32
+			c := newCache(100)
+			original, replacement := newValue(1, &misuse), newValue(2, &misuse)
+			t.Cleanup(func() {
+				c.EvictTo(context.Background(), 0)
+				original.Release()
+				replacement.Release()
+				require.Zero(t, misuse.Load())
+			})
+			inserted, _ := c.Set(1, original, 10)
+			require.True(t, inserted)
+			got, release, ok, err := c.TryGet(1, nil)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Nil(t, release)
+			t.Cleanup(got.Release)
+			done := make(chan bool, 1)
+			go func() {
+				switch operation {
+				case "delete":
+					c.Delete(1)
+					done <- true
+				case "replace":
+					done <- c.Replace(1, replacement, 10)
+				case "evict":
+					done <- c.EvictTo(context.Background(), 0) == 0
+				}
+			}()
+			require.True(t, <-done)
+			require.Same(t, original, got)
+			require.False(t, got.freed.Load())
+			require.Equal(t, int32(2), got.refs.Load(), "caller and initial owner still hold the original")
+		})
+	}
 }
 
 // The cache retains each value it caches and releases it once it leaves, whatever the way;

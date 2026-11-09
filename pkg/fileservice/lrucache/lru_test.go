@@ -117,8 +117,9 @@ func TestEvictsLeastRecentlyUsed(t *testing.T) {
 	require.Empty(t, r.take(), "a miss runs no callback")
 
 	c.Set(ctx, "big", 4, 40)
-	require.Empty(t, keys(c), "an item larger than the capacity is evicted with the rest")
-	require.Zero(t, c.Used())
+	require.Equal(t, []string{"d", "a", "c"}, keys(c), "an item larger than the capacity is evicted first")
+	require.Equal(t, []string{"set big=4/40", "prepare big", "evict big=4/40", "finish big"}, r.take())
+	require.Equal(t, int64(30), c.Used())
 }
 
 func TestSetOldestAddsBehindEveryItem(t *testing.T) {
@@ -420,4 +421,183 @@ func TestScanEvictsOldestAfterConcurrentGet(t *testing.T) {
 	armed.Store(true)
 	c.EvictToTargetWithWait(ctx, 3)
 	require.Equal(t, []string{b}, evicted)
+}
+
+// An item is not evicted before postSet of it returns.
+func TestNotEvictedBeforePostSet(t *testing.T) {
+	ctx := context.Background()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var evicted []string
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(10),
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			if key == "a" {
+				close(entered)
+				<-release
+			}
+		},
+		nil,
+		func(string, int, int64, uint64) func() { return func() {} },
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			mu.Lock()
+			evicted = append(evicted, key)
+			mu.Unlock()
+		},
+	)
+	setDone := make(chan struct{})
+	go func() {
+		c.Set(ctx, "a", 0, 10)
+		close(setDone)
+	}()
+	<-entered
+	c.Set(ctx, "b", 1, 10)
+	require.True(t, c.Contains("a"))
+	mu.Lock()
+	require.Empty(t, evicted, "nothing is evicted for a pending item")
+	mu.Unlock()
+	close(release)
+	<-setDone
+	require.Equal(t, int64(10), c.Used())
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"a"}, evicted, "the least recently used, once postSet returned")
+}
+
+// While an item larger than the capacity waits for its postSet, other inserts evict
+// nothing for it; the item is evicted alone once postSet returns.
+func TestPendingOversizedItemEvictsNothingElse(t *testing.T) {
+	ctx := context.Background()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var evicted []string
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(100),
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			if key == "big" {
+				close(entered)
+				<-release
+			}
+		},
+		nil,
+		func(string, int, int64, uint64) func() { return func() {} },
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			mu.Lock()
+			evicted = append(evicted, key)
+			mu.Unlock()
+		},
+	)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	setDone := make(chan struct{})
+	go func() {
+		c.Set(ctx, "big", 2, 150)
+		close(setDone)
+	}()
+	<-entered
+	c.Set(ctx, "c", 3, 10)
+	mu.Lock()
+	require.Empty(t, evicted)
+	mu.Unlock()
+	close(release)
+	<-setDone
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"big"}, evicted)
+	require.Equal(t, int64(90), c.Used())
+}
+
+func TestOversizedItemStaysOldestWhenUsedWhilePending(t *testing.T) {
+	ctx := context.Background()
+	entered, release := make(chan struct{}), make(chan struct{})
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(100),
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			if key == "big" {
+				close(entered)
+				<-release
+			}
+		},
+		nil,
+		func(string, int, int64, uint64) func() { return func() {} },
+		nil,
+	)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	setDone := make(chan struct{})
+	go func() {
+		c.Set(ctx, "big", 2, 150)
+		close(setDone)
+	}()
+	<-entered
+	_, ok := c.Get(ctx, "big")
+	require.True(t, ok)
+	close(release)
+	<-setDone
+	require.True(t, c.Contains("a"))
+	require.True(t, c.Contains("b"))
+	require.False(t, c.Contains("big"))
+	require.Equal(t, int64(80), c.Used())
+}
+
+func TestOversizedItemStaysOldestAfterSetOldest(t *testing.T) {
+	ctx := context.Background()
+	entered, release := make(chan struct{}), make(chan struct{})
+	c := NewWithPrepareEvict(
+		fscache.ConstCapacity(100),
+		func(_ context.Context, key string, _ int, _ int64, _ uint64) {
+			if key == "big" {
+				close(entered)
+				<-release
+			}
+		},
+		nil,
+		func(string, int, int64, uint64) func() { return func() {} },
+		nil,
+	)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	setDone := make(chan struct{})
+	go func() {
+		c.Set(ctx, "big", 2, 150)
+		close(setDone)
+	}()
+	<-entered
+	require.True(t, c.SetOldest(ctx, "c", 3, 10))
+	close(release)
+	<-setDone
+	require.True(t, c.Contains("a"))
+	require.True(t, c.Contains("b"))
+	require.True(t, c.Contains("c"))
+	require.False(t, c.Contains("big"))
+	require.Equal(t, int64(90), c.Used())
+}
+
+func TestEvictionDoesNotCountPendingInsertion(t *testing.T) {
+	ctx := context.Background()
+	c := NewWithPrepareEvict[string, int](fscache.ConstCapacity(100), nil, nil, nil, nil)
+	c.Set(ctx, "a", 0, 40)
+	c.Set(ctx, "b", 1, 40)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.Evict(ctx, nil, 0)
+			}
+		}
+	}()
+	for i := 0; i < 20000 && c.Contains("a") && c.Contains("b"); i++ {
+		c.Set(ctx, "big", 2, 150)
+		c.Delete(ctx, "big")
+	}
+	close(stop)
+	wg.Wait()
+	require.True(t, c.Contains("a"))
+	require.True(t, c.Contains("b"))
 }

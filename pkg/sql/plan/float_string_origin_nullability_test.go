@@ -36,7 +36,7 @@ func TestLegacyFloatOriginRejectsForgedRootNullability(t *testing.T) {
 	stmt, err := mysql.ParseOne(t.Context(), "select coalesce(cast(x'61' as char), 'fallback')", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	q := built.GetQuery()
 	require.NotNil(t, q)

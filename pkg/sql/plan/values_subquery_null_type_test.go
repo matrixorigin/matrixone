@@ -196,7 +196,7 @@ func TestValuesWithSubqueriesTypedArrayF64BranchCarrier(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	ctx := NewMockCompilerContext(true, proc)
 
-	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil)
+	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, baseRef, "docs_vec_raw must resolve with an object reference")
 	require.NotNil(t, baseDef, "docs_vec_raw must resolve in the mock schema")
@@ -228,7 +228,7 @@ func TestValuesWithSubqueriesTypedArrayF64BranchCarrier(t *testing.T) {
 	sql := "insert into " + twinName + " values (1, '[1,2,3]', (select 3)), (2, null, null)"
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	query := p.GetQuery()
 
@@ -343,7 +343,7 @@ func TestValuesWithSubqueriesTypedArrayBitBoundary(t *testing.T) {
 	const twinName = "docs_vec64_bit_local"
 	proc := newPlanTestProcess(t)
 	ctx := NewMockCompilerContext(true, proc)
-	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil)
+	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, baseRef, "docs_vec_raw must resolve with an object reference")
 	require.NotNil(t, baseDef, "docs_vec_raw must resolve in the mock schema")
@@ -378,7 +378,7 @@ func TestValuesWithSubqueriesTypedArrayBitBoundary(t *testing.T) {
 		t.Run(stmt.name, func(t *testing.T) {
 			parsed, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, stmt.sql, 1)
 			require.NoError(t, err, "grammar must accept bit literals")
-			p, err := BuildPlan(ctx, parsed, false)
+			p, err := BuildPlan(ctx, parsed, false, nil)
 			require.NoError(t, err, "the vecf64 bit row must plan like any VALUES row")
 			anchored := false
 			for _, node := range p.GetQuery().GetNodes() {

@@ -28,6 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// ScanStorageFilterEligible is the common admission rule for filters executed
+// by storage readers. Physical costing must not assume that a predicate the
+// compiler removes will prune blocks.
+func ScanStorageFilterEligible(proc *process.Process, expr *plan.Expr, provenFree bool) bool {
+	return !ContainsVolatileFunction(expr) && !ContainsConstantFilterDiagnostic(proc, expr) &&
+		!ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, provenFree)
+}
+
 // ContainsConstantFilterDiagnostic probes a logical constant under a filter
 // with an isolated warning sink. A diagnostic expression must retain one
 // execution owner: copying it into a join or set-operation branch changes the
