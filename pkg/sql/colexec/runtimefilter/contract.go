@@ -227,6 +227,58 @@ func BuildKeyExpr(spec *plan.RuntimeFilterSpec) *plan.Expr {
 	return spec.BuildExpr
 }
 
+// TupleComponentSlot returns the HashBuild condition slot and its source type
+// for a serialized tuple component. A planner-generated narrowing cast is
+// allowed so a wider comparison key can be encoded in the probe column's
+// physical domain; evaluation failures remain an optional-filter PASS.
+func integerWidth(oid types.T) (int, bool, bool) {
+	switch oid {
+	case types.T_int8:
+		return 8, true, true
+	case types.T_int16:
+		return 16, true, true
+	case types.T_int32:
+		return 32, true, true
+	case types.T_int64:
+		return 64, true, true
+	case types.T_uint8:
+		return 8, false, true
+	case types.T_uint16:
+		return 16, false, true
+	case types.T_uint32:
+		return 32, false, true
+	case types.T_uint64:
+		return 64, false, true
+	default:
+		return 0, false, false
+	}
+}
+
+func safeTupleNarrowingCast(source, target types.T) bool {
+	sourceWidth, sourceSigned, sourceOK := integerWidth(source)
+	targetWidth, targetSigned, targetOK := integerWidth(target)
+	return sourceOK && targetOK && sourceSigned == targetSigned && targetWidth <= sourceWidth
+}
+
+func TupleComponentSlot(arg *plan.Expr) (int, types.Type, bool) {
+	if arg == nil {
+		return 0, types.Type{}, false
+	}
+	if col := arg.GetCol(); col != nil && col.ColPos >= 0 {
+		return int(col.ColPos), planType(arg.Typ), true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 || fn.Args[0] == nil {
+		return 0, types.Type{}, false
+	}
+	col := fn.Args[0].GetCol()
+	if col == nil || col.ColPos < 0 ||
+		!safeTupleNarrowingCast(types.T(fn.Args[0].Typ.Id), types.T(arg.Typ.Id)) {
+		return 0, types.Type{}, false
+	}
+	return int(col.ColPos), planType(fn.Args[0].Typ), true
+}
+
 func validateTupleEncodingComponents(
 	spec *plan.RuntimeFilterSpec,
 	componentPayloadTypes []types.Type,
@@ -266,7 +318,7 @@ func validateTupleEncodingComponents(
 	}
 
 	for i, arg := range function.Args {
-		if arg == nil || arg.GetCol() == nil ||
+		if _, _, ok := TupleComponentSlot(arg); !ok ||
 			spec.KeyComponentProbeTypes[i].Id == int32(types.T_any) ||
 			!planfunction.SerialTypeSupported(types.T(arg.Typ.Id)) ||
 			!planfunction.SerialTypeSupported(
