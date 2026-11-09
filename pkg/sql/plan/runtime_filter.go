@@ -694,7 +694,15 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				//maybe not flushed yet, set at least 100 to continue calculation
 				probeNdv = 100
 			}
-			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+			buildSize := node.Stats.HashmapStats.HashmapSize
+			// DEDUP probes complete stored keys, including REPLACE's serialized
+			// composite PK. Stale small-table NDV must not turn a bounded key
+			// lookup into a full scan as flushed objects accumulate. Keep the
+			// exact-IN budget; underestimated builds still publish PASS at runtime.
+			boundedDedupPK := node.JoinType == plan.Node_DEDUP && sortOrder == 0 &&
+				probeCol.Name == tableDef.Pkey.PkeyColName &&
+				buildSize <= float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt))
+			if buildSize/probeNdv >= 0.1 && !boundedDedupPK {
 				if !allowSingleton() {
 					return
 				}
