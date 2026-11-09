@@ -23,6 +23,9 @@ column copying. The copy owns private vector headers and storage, copies logical
 rows once, preserves constants and all vector metadata, and preserves batch
 attributes, row count, recursive/shuffle markers and ExtraBuf. The source batch
 and its expression-owned vectors are borrowed and never cleaned or mutated.
+The protobuf boundary uses one physical value for constants (zero for NULL),
+while retaining their logical length; this prevents slicing a scalar buffer by
+its broadcast row count.
 The boundary uses the current process pool and its declared destination account;
 allocation failure publishes nothing and releases partial copies.
 

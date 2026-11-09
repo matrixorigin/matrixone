@@ -156,8 +156,10 @@ neutral foundations can remain.
 The seven production PRs are early filtering; representation/ownership;
 normalization/compatibility; consumer migration; scan producers; shuffle/join
 producers; reader integration. The first three dictionary stages enable no
-production producers. Each dependent stage builds on main after prerequisites
-merge; one isolated candidate is measured against its actual main baseline.
+production producers. Draft development may stack on prerequisite branches before
+merge, with parent dependencies and incremental diffs identified in each PR.
+Production readiness and qualification still wait for prerequisites to merge;
+one isolated candidate is measured against its actual main baseline.
 
 ## Alternatives and verification
 

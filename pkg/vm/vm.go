@@ -40,8 +40,23 @@ func String(rootOp Operator, buf *bytes.Buffer) {
 
 // do init work for each operator by calling its prepare function
 func Prepare(op Operator, proc *process.Process) error {
+	// Decode and duplication see only real operators. Capabilities are bound
+	// after preparation, when execution-local allocation selections exist.
+	if err := prepare(op, proc); err != nil {
+		return err
+	}
+	ConfigureDictionaryBoundaries(op)
+	return nil
+}
+
+func prepare(op Operator, proc *process.Process) error {
 	if op == nil {
 		return nil
+	}
+
+	if boundary := op.GetOperatorBase().dictionaryOutput; boundary != nil {
+		boundary.clean()
+		op.GetOperatorBase().dictionaryOutput = nil
 	}
 
 	childrenProc := proc
@@ -49,7 +64,7 @@ func Prepare(op Operator, proc *process.Process) error {
 		childrenProc = preparer.PrepareChildrenProcess(proc)
 	}
 	for _, child := range op.GetOperatorBase().Children {
-		if err := Prepare(child, childrenProc); err != nil {
+		if err := prepare(child, childrenProc); err != nil {
 			return err
 		}
 	}

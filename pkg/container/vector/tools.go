@@ -283,6 +283,13 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		return
 	}
 	sz := vec.typ.TypeSize()
+	physicalRows := vec.length
+	if vec.IsConst() {
+		physicalRows = min(physicalRows, 1)
+		if vec.IsConstNull() {
+			physicalRows = 0
+		}
+	}
 	return api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
@@ -291,7 +298,7 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
 		// Data:     vec.data,
-		Data: vec.data[:vec.length*sz],
+		Data: vec.data[:physicalRows*sz],
 	}, nil
 }
 

@@ -278,8 +278,9 @@ type Operator interface {
 
 type OperatorBase struct {
 	OperatorInfo
-	OpAnalyzer process.Analyzer
-	Children   []Operator
+	OpAnalyzer       process.Analyzer
+	Children         []Operator
+	dictionaryOutput *dictionaryBoundary
 }
 
 // ExecProjection returns the input unchanged for operators without projection work.
@@ -412,6 +413,10 @@ func CancelCheck(proc *process.Process) (error, bool) {
 }
 
 func Exec(op Operator, proc *process.Process) (CallResult, error) {
+	boundary := op.GetOperatorBase().dictionaryOutput
+	if boundary != nil {
+		boundary.clean()
+	}
 	if err, isCancel := CancelCheck(proc); isCancel {
 		return CancelResult, err
 	}
@@ -426,6 +431,9 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 		return result, nil
 	}
 	result.Batch, err = op.ExecProjection(proc, result.Batch)
+	if err == nil && boundary != nil {
+		result.Batch, err = boundary.normalize(result.Batch, proc.Mp())
+	}
 	analyzer.Output(result.Batch)
 	return result, err
 }
