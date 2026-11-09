@@ -1,5 +1,10 @@
 # SQL task execution ownership and recovery
 
+Implementation: [PR #32331](https://github.com/matrixorigin/matrixone/pull/32331).
+Issues: [#32279](https://github.com/matrixorigin/matrixone/issues/32279),
+[#32280](https://github.com/matrixorigin/matrixone/issues/32280), and
+[#32281](https://github.com/matrixorigin/matrixone/issues/32281).
+
 ## Problem and scope
 
 A SQL task with no timeout may run indefinitely, including across several
@@ -11,6 +16,19 @@ repair can be committed separately, leaving a permanent RUNNING record.
 
 Fix #32279, #32280 and #32281 together at the task-storage boundary. Ordinary
 SQL statements receive no additional query, RPC or per-statement check.
+
+## Design decision
+
+| Approach | Correctness and recovery | Cost and limitation |
+| --- | --- | --- |
+| Existing age-based reaper and guessed repair | Can admit overlapping SQL and modify the wrong run; split commits can strand RUNNING metadata. | Small, but does not satisfy the ownership contract. |
+| Lease and fence every business effect | A lease cannot itself stop SQL; fencing is safe only where every effect, including external effects, accepts the fence. | Broad execution and integration changes, with a new availability dependency. |
+| Durable replicated result journal | Could recover known results after the executor process is lost. | Adds persistent infrastructure, upgrade, bounded admission and crash-recovery obligations. |
+| Atomic run/async identity and bounded live receipts (selected) | Prevents guessed ownership changes and lets the live service publish a known outcome without rerunning SQL. | A process loss may retain RUNNING and need operator reconciliation; receipts are not durable. |
+
+The selected boundary addresses all three failures without adding a check to
+ordinary SQL. It deliberately does not claim exactly-once business effects or
+automatic recovery when the owner and its in-memory receipts are lost.
 
 ## Ownership and normal execution
 
@@ -88,6 +106,21 @@ successful statements in the task body: this protocol does not promise
 exactly-once business effects. Manual EXECUTE TASK retains the existing
 client-disconnect behavior; scheduled tasks retain their runner cancellation.
 
+Manual EXECUTE remains synchronous on the frontend request stack. The original
+request context controls lookup and the provisional guard; after lookup, the
+existing frontend detaches its cancellation and deadline before durable run
+admission. Consequently the request's default 24-hour session deadline does
+not bound the remaining wait, and a disconnect or KILL after detachment does
+not stop the task. TaskService shutdown requests execution cancellation. A
+positive task timeout bounds the body of each attempt; a zero task timeout
+does not impose a whole-task limit. Each internal statement still uses its own
+session timeout (24 hours by default), so consecutive statements can run for
+more than 24 hours in total. Admission and metadata operations use their own
+bounded budgets. The receipt worker owns only metadata, not the SQL body. In
+particular, this design does not promise that an expired client request returns
+while its admitted body continues; making that promise requires a separately
+bounded execution handoff and shutdown protocol.
+
 Reserve a bounded receipt credit before inserting a run. Manual executions and
 scheduled executions use separate shares of 4096 and
 `min(P + max(P, 8), 16384)` credits, respectively, for runner parallelism P;
@@ -133,7 +166,18 @@ generic Complete. A custom SQL executor wrapper must perform only side-effect-fr
 checks before delegating business execution to the built-in SQL executor with
 the same context. If such a wrapper returns early, the runner uses the same
 unclaimed CAS to record its result; it cannot complete a concurrently claimed
-firing. Non-SQL tasks retain their existing lifecycle. Scheduler
+firing. If the runner stopped and the wrapper returned only that cancellation,
+no precheck result has been selected: defer the unclaimed firing instead of
+recording a failed execution. A real precheck error remains a result even if
+the runner stops concurrently, including when the error is joined with a
+cancellation; an early nil is a selected success. A wrapper must return its
+context's stop identity when that stop is its only outcome, and meaningful
+precheck failures must have an independent error identity. The existing
+`func(context.Context, task.Task) error` contract cannot distinguish a bare
+independent `context.Canceled` from the same runner stop if both race. Once
+the completion CAS has been issued, a canceled caller or lost acknowledgement
+does not prove that the CAS rolled back. Non-SQL tasks retain their existing
+lifecycle. Scheduler
 expiry may complete or garbage-collect the async row; it is not proof that the
 body stopped and must never mark even its exact pointed-to run terminal on the
 basis of lost heartbeat. Generic heartbeat/allocation
@@ -235,6 +279,10 @@ generation and `(account_id,status,task_name)` run index. The v4.0.0 task DDL
 remains fixed at its released definition; the existing v4.0.7 owner applies
 the new entries when upgrading a released catalog. MatrixOne requires a
 shutdown upgrade, with all old services stopped before the new binary starts.
+The released v4.2.8 binary at commit
+`10d204b8763f19b2b37ba2147d1d4c1a7828d6d4` uses catalog 4.0.6; the
+upgrade target here is 4.0.7. A current-engine test that stages the released
+catalog shape verifies upgrade logic but is not an old-binary upgrade test.
 Legacy queued SQL firings are invalidated rather than run with stale ownership.
 Restores must keep task definitions, async rows and runs from one consistent
 snapshot. Downgrade is unsupported.
