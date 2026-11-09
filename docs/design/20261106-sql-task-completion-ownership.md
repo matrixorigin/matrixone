@@ -200,6 +200,25 @@ failure generation prevents a concurrent defer from being lost while a scan
 finishes. A complete scan with no newer defer and an idle receipt worker exits
 this mode.
 
+The runner groups a fetched batch by canonical SQL parent and submits at most
+one firing per parent, choosing the smallest task ID as a stable order. It
+leaves siblings in storage and continues submitting other parents and non-SQL
+tasks. This avoids repeatedly racing the parent admission guard; the guard
+remains necessary so a stalled admission cannot occupy every runner slot.
+Grouping enters exceptional fetching once and rewinds its cursor before the
+earliest withheld sibling. The selected runner entry records whether siblings
+were withheld. After that executor returns a selected, non-deferred outcome,
+the runner removes it, releases its slot and offers a nonblocking wakeup to
+the existing fetch loop. Guard contention or any other deferred outcome does
+not wake immediately. A wakeup is a scheduling hint, not evidence of claim,
+completion or rollback. It causes at most four fetch attempts, and the runner
+allows at most 32 additional attempts per configured fetch interval. A full
+queue, cancellation or storage error stops the burst; the normal timer
+reconsiders work when hints are coalesced, exhausted or lost. This adds no
+worker or persistent per-parent registry. A long-running selected executor
+does not wake siblings until it returns, but periodic fetching can still
+observe its RUNNING barrier and complete an exact overlapping firing.
+
 Only in exceptional mode, isolate non-SQL and SQL fetches so a poisoned SQL
 parent cannot consume all fetch slots. Each lane maintains a bounded cursor
 and an end-of-pass high-water task ID. SQL additionally alternates an old
@@ -216,7 +235,20 @@ fetch timeout, so stopping the runner cancels in-flight queries. Cancellation
 does not turn into a storage failure or move a cursor past an uninspected or
 unqueued candidate. Service and storage decorators preserve that context.
 Since a decorator can filter after LIMIT, a short decorated page is not proof of exhaustion; use
-the raw-ID fallback unless the queried store is known to apply LIMIT last.
+the raw-page fallback unless the queried store is known to apply LIMIT last.
+The fallback reads an unfiltered ordered window of at most 32 lightweight rows:
+ID, status, runner, executor, parent and claim pointer. It never decodes task
+options or retains SQL bodies. Skip a row without a point lookup only when all
+needed snapshot fields are known and prove it cannot match this lane; query
+every possible match by exact ID through the decorated service and recheck its
+identity and eligibility. Unknown or nullable fields are not proof. The
+high-water query remains global and unfiltered. A row that becomes eligible
+after its snapshot can be revisited by a later wave or normal poll; queue-full
+rewind and cancellation must not skip an unqueued candidate. Decorators may
+restrict or post-filter query results, but must not fabricate a task or rewrite
+its persisted identity or eligibility fields. Existing in-repository
+production implementations forward authoritative rows; test decorators narrow
+or inject faults. Custom implementations must preserve this contract.
 Query limits,
 contexts and runner queue limits remain bounded even when the configured fetch
 limit is one. A single recently failing canonical SQL parent is temporarily
@@ -228,9 +260,9 @@ It stays through a successful old-lane query, subject to a finite hard retry
 deadline, then causes a new scan; it never changes a firing's ownership. The
 single marker bounds memory, and does not promise isolation from arbitrary
 numbers of simultaneous failing parents. Neither an individual query plan nor
-its scan cost is bounded by the result limit; if exclusion queries time out,
-the bounded raw fallback may advance slowly. No parent registry, per-run timer
-or new background scanner is introduced.
+its scan cost is bounded by the result limit; the raw page may use a table
+scan and dense pages can still require one decorated lookup per eligible row.
+No parent registry, per-run timer or new background scanner is introduced.
 
 When a stale generation is encountered, reuse that executor and the single
 no-claim slot to remove old unclaimed firings in bounded batches for at most
@@ -295,7 +327,10 @@ snapshot. Downgrade is unsupported.
 Test admission, completion and A-to-B retry, lost/late COMMIT, no-claim CAS
 racing a claim, DROP/recreate, FORCE/RESUME, tenant isolation, shutdown,
 cancellation, timeout, real and unknown SQL errors, and recovery after a long
-metadata outage. Challenge stale batches with concurrent admission, malformed
+metadata outage. Challenge same-parent bursts, long and blocked admissions,
+unrelated work, coalesced wakes, queue-full rewind, wave rollover and shutdown.
+Challenge raw-page snapshots with concurrent allocation, nullable or malformed
+data, decorators and cancellation. Challenge stale batches with concurrent admission, malformed
 IDs, generation bounds, and large backlogs. Validate fresh and upgraded
 catalogs, SQL permission/warning behavior, one- and multi-CN operation,
 non-SQL isolation, fixed logging, queue bounds and no business replay.
