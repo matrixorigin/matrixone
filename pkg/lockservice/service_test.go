@@ -3982,58 +3982,68 @@ func TestGetLatestLockTableBindRejectsSupersededAllocator(t *testing.T) {
 }
 
 func TestAllocatorObserverBoundsSupersededAllocatorIDs(t *testing.T) {
-	runLockServiceTests(
-		t,
-		[]string{"s1"},
-		func(_ *lockTableAllocator, s []*service) {
-			l1 := s[0]
-			table := uint64(21513)
-			currentBind := pb.LockTable{
-				Group:       0,
-				Table:       table,
-				OriginTable: table,
-				ServiceID:   l1.serviceID,
-				Version:     1000,
-				Valid:       true,
-				AllocatorID: "allocator-0",
-			}
-			l1.tableGroups.set(0, table, l1.createLockTableByBind(currentBind))
+	// This observer invariant has no RPC dependency. A live keeper would also
+	// publish real allocator epochs while the test injects its own sequence.
+	logger := getLogger("")
+	svc := &service{serviceID: "s1", logger: logger}
+	svc.tableGroups = &lockTableHolders{
+		service: svc.serviceID,
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	t.Cleanup(func() {
+		svc.tableGroups.removeWithFilter(func(uint64, lockTable) bool { return true }, closeReasonBindChanged)
+	})
+	currentBind := pb.LockTable{
+		Group:       0,
+		Table:       21513,
+		OriginTable: 21513,
+		ServiceID:   "s2",
+		Version:     1000,
+		Valid:       true,
+		AllocatorID: "allocator-0",
+	}
+	svc.tableGroups.set(currentBind.Group, currentBind.Table, newRemoteLockTable(
+		svc.serviceID, time.Second, currentBind, nil, svc.handleBindChanged, logger,
+	))
+	svc.lastAllocatorID = currentBind.AllocatorID
+	svc.lastAllocatorVersion = currentBind.Version
 
-			l1.allocatorVersionMu.Lock()
-			l1.lastAllocatorID = currentBind.AllocatorID
-			l1.lastAllocatorVersion = currentBind.Version
-			l1.allocatorVersionMu.Unlock()
+	var previous allocatorState
+	for i := 1; i <= maxSupersededAllocatorIDs+3; i++ {
+		previous = svc.allocatorStateSnapshot()
+		next := allocatorState{
+			id:      fmt.Sprintf("allocator-%d", i),
+			version: currentBind.Version + uint64(i),
+		}
+		removed, accepted := svc.observeAllocatorStateWithHoldersFromSnapshot(
+			"allocator-restart-sequence-test", next, allocatorState{}, false, svc.tableGroups,
+		)
+		require.True(t, accepted)
+		if i == 1 {
+			require.Equal(t, 1, removed, "the first new epoch must purge the stale real holder entry")
+		} else {
+			require.Zero(t, removed)
+		}
+		require.Nil(t, svc.tableGroups.get(currentBind.Group, currentBind.Table))
+		require.Equal(t, next, svc.allocatorStateSnapshot())
+		wantSize := min(i, maxSupersededAllocatorIDs)
+		require.Len(t, svc.supersededAllocatorIDs, wantSize)
+		require.Len(t, svc.supersededAllocatorIDOrder, wantSize)
+		for offset, id := range svc.supersededAllocatorIDOrder {
+			require.Equal(t, fmt.Sprintf("allocator-%d", i-wantSize+offset), id, "evict oldest IDs first")
+			require.Contains(t, svc.supersededAllocatorIDs, id, "map and FIFO must retain exactly the same IDs")
+		}
+		require.NotContains(t, svc.supersededAllocatorIDs, next.id)
+	}
 
-			var previous allocatorState
-			for i := 1; i <= maxSupersededAllocatorIDs+3; i++ {
-				previous = l1.allocatorStateSnapshot()
-				next := allocatorState{
-					id:      fmt.Sprintf("allocator-%d", i),
-					version: currentBind.Version + uint64(i),
-				}
-				_, accepted := l1.observeAllocatorStateWithHoldersFromSnapshot(
-					"allocator-restart-sequence-test",
-					next,
-					allocatorState{},
-					false,
-					l1.tableGroups)
-				require.True(t, accepted)
-				require.Equal(t, next.id, l1.lastAllocatorID)
-				require.Equal(t, next.version, l1.lastAllocatorVersion)
-				require.LessOrEqual(t, len(l1.supersededAllocatorIDs), maxSupersededAllocatorIDs)
-				require.LessOrEqual(t, len(l1.supersededAllocatorIDOrder), maxSupersededAllocatorIDs)
-			}
-
-			_, accepted := l1.observeAllocatorStateWithHoldersFromSnapshot(
-				"allocator-restart-superseded-test",
-				previous,
-				l1.allocatorStateSnapshot(),
-				true,
-				l1.tableGroups)
-			require.False(t, accepted)
-			require.Equal(t, fmt.Sprintf("allocator-%d", maxSupersededAllocatorIDs+3), l1.lastAllocatorID)
-		},
+	current := svc.allocatorStateSnapshot()
+	removed, accepted := svc.observeAllocatorStateWithHoldersFromSnapshot(
+		"allocator-restart-superseded-test", previous, current, true, svc.tableGroups,
 	)
+	require.False(t, accepted)
+	require.Zero(t, removed)
+	require.Equal(t, current, svc.allocatorStateSnapshot(), "a recent superseded reply cannot replace the current epoch")
 }
 
 func TestAllocatorIDDistinguishesBindIdentity(t *testing.T) {
