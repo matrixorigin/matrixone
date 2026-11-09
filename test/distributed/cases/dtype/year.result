@@ -1,12 +1,12 @@
 drop table if exists t1;
 create table t1 (a year not null, primary key(a));
 desc t1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  year  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 drop table t1;
 create table t1 (a year(4) not null);
 desc t1;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 a  ¦  year  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop table t1;
 drop table if exists t_year;
@@ -591,7 +591,7 @@ drop table if exists t_year_alter;
 create table t_year_alter (id int);
 alter table t_year_alter add column y year;
 desc t_year_alter;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 y  ¦  year  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t_year_alter values (1, 2024);
@@ -600,7 +600,7 @@ select * from t_year_alter;
 1  ¦  2024-01-01
 alter table t_year_alter modify column y year not null default 2000;
 desc t_year_alter;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 y  ¦  year  ¦  NO  ¦    ¦  2000  ¦    ¦  
 drop table t_year_alter;
@@ -610,7 +610,7 @@ insert into t_year_src values (2020), (2021), (2022);
 drop table if exists t_year_copy;
 create table t_year_copy as select * from t_year_src;
 desc t_year_copy;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 y  ¦  year  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t_year_copy order by y;
 ➤ y[91,2147483647,0]  𝄀

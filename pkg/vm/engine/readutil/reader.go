@@ -307,6 +307,14 @@ type mergeReader struct {
 type EmptyReader struct {
 }
 
+// SupportsScanCutoff admits a single ordered reader. A merge reader reports
+// the order of any one child and therefore cannot prove all its children have
+// the ordered-scan contract needed to apply a shared cutoff.
+func SupportsScanCutoff(r engine.Reader) bool {
+	single, ok := r.(*reader)
+	return ok && single != nil && len(single.GetOrderBy()) == 1
+}
+
 func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
 		rds: readers,
@@ -1032,7 +1040,7 @@ func (r *reader) read(
 	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
-		policy |= fileservice.SkipMemoryCacheWrites
+		policy |= fileservice.MemoryCacheNoEvict
 	}
 	r.readBlockCnt++
 

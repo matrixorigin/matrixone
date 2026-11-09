@@ -238,7 +238,7 @@ func checkExplicitIndexTargetCatalog(execCtx *ExecCtx, target explicitIndexTarge
 		return err
 	}
 	resolveTemporary := !target.withoutTemporaryAlias && target.publication == ""
-	obj, def, err := tcc.resolve(db, target.table, snapshot, resolveTemporary)
+	obj, def, err := tcc.resolve(db, target.table, snapshot, resolveTemporary, nil)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoDB) || moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
 			moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {

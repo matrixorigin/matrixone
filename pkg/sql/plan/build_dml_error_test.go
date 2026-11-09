@@ -30,7 +30,8 @@ type dmlResolveErrorCompilerContext struct {
 	err error
 }
 
-func (c *dmlResolveErrorCompilerContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *dmlResolveErrorCompilerContext) Resolve(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, c.err
 }
 
@@ -39,12 +40,13 @@ type dmlUnsupportedOnceCompilerContext struct {
 	modernRejected bool
 }
 
-func (c *dmlUnsupportedOnceCompilerContext) Resolve(schemaName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *dmlUnsupportedOnceCompilerContext) Resolve(schemaName, tableName string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if !c.modernRejected {
 		c.modernRejected = true
 		return nil, nil, moerr.NewUnsupportedDML(c.GetContext(), "force legacy planner")
 	}
-	return c.MockCompilerContext.Resolve(schemaName, tableName, snapshot)
+	return c.MockCompilerContext.Resolve(schemaName, tableName, snapshot, nil)
 }
 
 func TestDMLPlannerPropagatesNonMoResolveErrors(t *testing.T) {
@@ -82,7 +84,7 @@ func TestDMLPlannerPropagatesNonMoResolveErrors(t *testing.T) {
 					var plan *Plan
 					var buildErr error
 					require.NotPanics(t, func() {
-						plan, buildErr = BuildPlan(ctx, stmt, false)
+						plan, buildErr = BuildPlan(ctx, stmt, false, nil)
 					})
 					require.Nil(t, plan)
 					require.ErrorIs(t, buildErr, resolveError.err)
@@ -108,7 +110,7 @@ func TestDMLPlannerRoutesUnsupportedDMLToLegacyPlanner(t *testing.T) {
 			require.NoError(t, err)
 			ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 
-			plan, err := BuildPlan(ctx, stmt, false)
+			plan, err := BuildPlan(ctx, stmt, false, nil)
 
 			require.NoError(t, err)
 			require.NotNil(t, plan)
@@ -122,7 +124,7 @@ func TestUpdatePlannerRejectsUnknownUnsupportedDML(t *testing.T) {
 	require.NoError(t, err)
 	ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 
-	logicPlan, err := BuildPlan(ctx, stmt, false)
+	logicPlan, err := BuildPlan(ctx, stmt, false, nil)
 
 	require.Nil(t, logicPlan)
 	require.ErrorContains(t, err, "unsupported DML: force legacy planner")

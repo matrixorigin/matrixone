@@ -233,7 +233,7 @@ special_single_empty  ¦  CREATE TABLE `special_single_empty` (
   PRIMARY KEY (`id`)
 )
 show columns from special_single_empty;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 e  ¦  enum('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀
 s  ¦  set('')  ¦  YES  ¦    ¦    ¦    ¦    𝄀

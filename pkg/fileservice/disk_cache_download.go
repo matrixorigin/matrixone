@@ -28,7 +28,8 @@ import (
 // object read the bytes already written through the download's own handle on the file,
 // which keeps them readable after the file is published or removed.
 type objectDownload struct {
-	started time.Time
+	started  time.Time
+	measured bool // the download's rate counts toward downloadRates
 
 	mu       sync.Mutex
 	written  int64
@@ -38,10 +39,39 @@ type objectDownload struct {
 	file     *os.File // closed once the download is retired and no reader holds it
 	readers  int
 	retired  bool
+	served   int64         // bytes readers took from the download before credited
+	credited bool          // the cached file counts the bytes readers take
+	credit   func(n int64) // counts n bytes read toward the published file
 }
 
-func newObjectDownload(tempPath string) *objectDownload {
-	o := &objectDownload{started: time.Now(), changed: make(chan struct{})}
+// serve records n bytes a reader took from the download, which count toward the cached
+// file once it is published.
+func (o *objectDownload) serve(n int64) {
+	o.mu.Lock()
+	if !o.credited {
+		o.served += n
+		o.mu.Unlock()
+		return
+	}
+	o.mu.Unlock()
+	if o.credit != nil {
+		o.credit(n)
+	}
+}
+
+// takeServed returns the bytes readers took so far; readers count later bytes
+// themselves.
+func (o *objectDownload) takeServed() int64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.credited = true
+	n := o.served
+	o.served = 0
+	return n
+}
+
+func newObjectDownload(tempPath string, measured bool) *objectDownload {
+	o := &objectDownload{started: time.Now(), measured: measured, changed: make(chan struct{})}
 	if f, err := os.Open(tempPath); err == nil {
 		o.file = f
 	}
@@ -105,7 +135,7 @@ func (o *objectDownload) end(complete bool) {
 	if !o.ended {
 		o.ended, o.complete = true, complete
 		o.notifyLocked()
-		if complete {
+		if complete && o.measured {
 			downloadRates.observe(o.written, time.Since(o.started))
 		}
 	}
@@ -172,8 +202,9 @@ type diskCacheDownloads struct {
 	m  map[string]*objectDownload
 }
 
-func (d *DiskCache) startDownload(diskPath, tempPath string) *objectDownload {
-	o := newObjectDownload(tempPath)
+func (d *DiskCache) startDownload(diskPath, tempPath string, measured bool) *objectDownload {
+	o := newObjectDownload(tempPath, measured)
+	o.credit = func(n int64) { d.preloads.read(diskPath, n) }
 	d.downloads.mu.Lock()
 	if d.downloads.m == nil {
 		d.downloads.m = make(map[string]*objectDownload)
@@ -235,6 +266,9 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		return false, false, nil
 	}
 	defer o.release()
+	// The bytes count before they are read, so a file published and evicted while the
+	// read runs still has them.
+	o.serve(entry.Size)
 	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset, entry.Size), d.cacheDataAllocator); err != nil {
 		return true, false, err
 	}

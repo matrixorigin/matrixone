@@ -105,7 +105,7 @@ func TestFullTextBooleanPublicPlanner(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(cc, stmt, false)
+			p, err := BuildPlan(cc, stmt, false, nil)
 			require.NoError(t, err)
 			require.Zero(t, countReachableFullTextMatches(p.GetQuery()), "public planner must admit preserving composition")
 			left := 0
@@ -325,7 +325,9 @@ func TestFullTextBooleanProtectsEarlyIndexPaths(t *testing.T) {
 	require.True(t, builder.scanHasMatchedFullTextFilter(scan))
 	builder.prepareSpecialIndexGuards(projectID)
 	require.True(t, builder.isScanProtected(scanID))
-	require.Equal(t, scanID, builder.applyIndicesForFilters(scanID, scan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{}),
+	optimized, err := builder.applyIndicesForFilters(scanID, scan, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, scanID, optimized,
 		"a real secondary index must not consume the protected scan")
 	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString()} {
 		require.False(t, builder.vectorIndexSupportsContext(&vectorSortContext{scanNode: scan}, algo), algo)
@@ -666,7 +668,7 @@ func buildBooleanFullTextPublicPlanIn(t *testing.T, cc *fullTextJoinMockCompiler
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(cc, stmt, prepare)
+	p, err := BuildPlan(cc, stmt, prepare, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetQuery())
 	require.Zero(t, countReachableFullTextMatches(p.GetQuery()))

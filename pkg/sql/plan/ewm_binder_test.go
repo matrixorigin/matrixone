@@ -201,7 +201,7 @@ func TestEwmBinderMarkerDecayDefersEventTimeShape(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		defer stmts[0].Free()
-		return BuildPlan(opt.CurrentContext(), stmts[0], true)
+		return BuildPlan(opt.CurrentContext(), stmts[0], true, nil)
 	}
 	for _, sql := range []string{
 		"select ewmmean(n_nationkey, ?) over (order by n_nationkey desc) from nation",
@@ -456,7 +456,7 @@ func TestEwmMarkerDecayBindsDecimal256HalfLife(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		defer stmts[0].Free()
-		return BuildPlan(opt.CurrentContext(), stmts[0], true)
+		return BuildPlan(opt.CurrentContext(), stmts[0], true, nil)
 	}
 	for _, sql := range []string{
 		"select ewmmean(n_nationkey, ?, cast(1 as decimal(65,0))) over (order by n_nationkey) from nation",

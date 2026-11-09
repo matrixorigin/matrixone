@@ -34,12 +34,13 @@ type temporaryDestinationTestContext struct {
 	persistentCalls int
 }
 
-func (c *temporaryDestinationTestContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *temporaryDestinationTestContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if name == "destination" {
 		c.persistentCalls++
 		return nil, nil, c.persistentErr
 	}
-	return c.MockCompilerContext.Resolve(db, name, snapshot)
+	return c.MockCompilerContext.Resolve(db, name, snapshot, nil)
 }
 
 func (c *temporaryDestinationTestContext) ResolveTemporaryTable(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
@@ -82,7 +83,7 @@ func TestTemporaryRenameDestinationUsesSessionNamespace(t *testing.T) {
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "alter table constraint_test.auto_incr_t rename to destination", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			switch {
 			case tc.wantErr != nil:
 				require.ErrorIs(t, err, tc.wantErr)
@@ -104,7 +105,7 @@ func TestTemporaryCreateAndPreparedDestinationDependencies(t *testing.T) {
 	stmt, err := mysql.ParseOne(ctx.GetContext(), "create temporary table constraint_test.destination(id int)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, ctx.persistentCalls)
 	_, err = collectPrepareDdlSchemas(ctx, stmt, p)
@@ -117,7 +118,7 @@ func TestTemporaryCreateAndPreparedDestinationDependencies(t *testing.T) {
 	alter, err := mysql.ParseOne(ctx.GetContext(), "alter table constraint_test.auto_incr_t rename to destination", 1)
 	require.NoError(t, err)
 	defer alter.Free()
-	p, err = BuildPlan(ctx, alter, false)
+	p, err = BuildPlan(ctx, alter, false, nil)
 	require.NoError(t, err)
 	_, err = collectPrepareDdlSchemas(ctx, alter, p)
 	require.NoError(t, err)

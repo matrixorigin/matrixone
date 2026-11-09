@@ -343,8 +343,8 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	}
 	outputTypes = append(outputTypes,
 		planpb.Type{Id: int32(types.T_int64), NotNullable: true})
-	inputRowSize, inputSizeKnown := materializedDeclaredRowSize(inputTypes)
-	outputRowSize, outputSizeKnown := materializedDeclaredRowSize(outputTypes)
+	inputRowSize, inputSizeKnown := MaterializedDeclaredRowSize(inputTypes)
+	outputRowSize, outputSizeKnown := MaterializedDeclaredRowSize(outputTypes)
 	if !inputSizeKnown || !outputSizeKnown {
 		return false
 	}
@@ -1015,11 +1015,11 @@ func (builder *QueryBuilder) subtreeMayExposeGroupingSentinel(nodeID int32, seen
 	return false
 }
 
-// materializedDeclaredRowSize returns a conservative retained-byte estimate for
+// MaterializedDeclaredRowSize returns a conservative retained-byte estimate for
 // a materialized row. Fixed-width values use their vector element width;
 // variable-width values include both the Varlena cell and declared payload
 // capacity. Missing capacities and unsupported/future types fail closed.
-func materializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
+func MaterializedDeclaredRowSize(rowTypes []planpb.Type) (float64, bool) {
 	if len(rowTypes) == 0 {
 		return 0, false
 	}
