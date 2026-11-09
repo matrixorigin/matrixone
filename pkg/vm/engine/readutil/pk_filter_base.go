@@ -186,7 +186,7 @@ func constructBasePKFilter(
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		switch name := exprImpl.F.Func.ObjName; name {
+		switch name := columnFilterOperator(exprImpl.F); name {
 		case "and":
 			var filters []BasePKFilter
 			for idx := range exprImpl.F.Args {
