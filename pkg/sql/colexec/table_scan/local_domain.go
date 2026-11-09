@@ -235,8 +235,6 @@ func (tableScan *TableScan) recordLocalDomainSnapshot(snapshot runtimefilter.Loc
 	stats.AddExtraStat("RuntimeDomainPeakReservedBytes", int64(snapshot.PeakBytes))
 	stats.AddExtraStat("RuntimeDomainExpectedSources", int64(snapshot.Expected))
 	stats.AddExtraStat("RuntimeDomainFinishedSources", int64(snapshot.Finished))
-	stats.AddExtraStat("RuntimeDomainNativeBuildCalls", snapshot.NativeCalls)
-	stats.AddExtraStat("RuntimeDomainNativeBuildElapsedNs", int64(snapshot.NativeElapsed))
 	stats.AddExtraStat("RuntimeDomainPassReason", int64(snapshot.PassReason))
 	if ndv > 0 {
 		value := int64(math.MaxInt64)
