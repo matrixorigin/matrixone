@@ -158,7 +158,7 @@ func resolveCloneTableSource(builder *QueryBuilder, stmt *tree.CloneTable) (*Obj
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	obj, def, err := builder.compCtx.Resolve(string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), snapshot)
+	obj, def, err := builder.compCtx.Resolve(string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), snapshot, nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}

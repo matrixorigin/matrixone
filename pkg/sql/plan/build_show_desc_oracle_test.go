@@ -163,7 +163,7 @@ func TestDescColNameReplanRefiltersAfterStoredSpellingChange(t *testing.T) {
 	require.Equal(t, "n_name", nationCol.Name)
 
 	nationCol.OriginName = "N_Name"
-	first, err := BuildPlan(ctx, stmt, false)
+	first, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"N_Name"},
 		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_NAME"}),
@@ -171,7 +171,7 @@ func TestDescColNameReplanRefiltersAfterStoredSpellingChange(t *testing.T) {
 	require.True(t, queryContainsStringLiteral(first.GetQuery(), "N_Name"))
 
 	nationCol.OriginName = "n_NAME"
-	reused, err := BuildPlan(ctx, stmt, false)
+	reused, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"n_NAME"},
 		descKeptByFilterPattern(t, proc, reused, "n_NAME", []string{"N_Name", "n_NAME"}),
@@ -228,7 +228,7 @@ func TestDescColNameUserViewFiltersByLiveDescriptionSpelling(t *testing.T) {
 			stmt := descParseOne(t, mock.CurrentContext(), "desc v_hit LIVENAME")
 			defer stmt.Free()
 			sc := descShowColumns(t, stmt)
-			got, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			got, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, []string{"livename"},
 				descKeptByFilterPattern(t, proc, got, "livename", []string{"livename", "n_regionkey"}),
@@ -335,12 +335,13 @@ type descPostDescriptionBindFailContext struct {
 }
 
 func (c *descPostDescriptionBindFailContext) Resolve(
-	dbName string, tableName string, snapshot *Snapshot,
+	dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if c.closeCount >= 1 && strings.EqualFold(dbName, MO_CATALOG_DB_NAME) {
 		return nil, nil, errors.New("rewritten sql binding unavailable")
 	}
-	return c.descViewProviderRecorder.Resolve(dbName, tableName, snapshot)
+	return c.descViewProviderRecorder.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func (c *descPostDescriptionBindFailContext) GetAccountId() (uint32, error) {
@@ -370,7 +371,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, rec, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		got, err := BuildPlan(rec, stmt, false)
+		got, err := BuildPlan(rec, stmt, false, nil)
 		require.NoError(t, err)
 		require.Equal(t, []string{"livename"},
 			descKeptByFilterPattern(t, proc, got, "livename", []string{"livename", "n_regionkey"}),
@@ -393,7 +394,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, rec, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		_, err := BuildPlan(rec, stmt, false)
+		_, err := BuildPlan(rec, stmt, false, nil)
 		require.Error(t, err)
 		require.Equal(t, 1, rec.openCount)
 		require.Equal(t, 1, rec.closeCount, "the created child closes exactly once when the description fails")
@@ -412,7 +413,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, failCtx, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		got, err := BuildPlan(failCtx, stmt, false)
+		got, err := BuildPlan(failCtx, stmt, false, nil)
 		require.Error(t, err, "the rewritten sql must fail to bind after the successful child description")
 		require.Nil(t, got)
 		require.Equal(t, 1, rec.openCount)
@@ -432,7 +433,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, rec, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		_, err := BuildPlan(rec, stmt, false)
+		_, err := BuildPlan(rec, stmt, false, nil)
 		require.Error(t, err)
 		require.Equal(t, 1, rec.openCount)
 		require.Equal(t, 0, rec.closeCount, "failed creation must not invoke cleanup")
@@ -453,7 +454,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		}
 		stmt := descParseOne(t, wrapper, "desc v_nop LIVENAME")
 		defer stmt.Free()
-		_, err := BuildPlan(wrapper, stmt, false)
+		_, err := BuildPlan(wrapper, stmt, false, nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "isolated binding context")
 	})

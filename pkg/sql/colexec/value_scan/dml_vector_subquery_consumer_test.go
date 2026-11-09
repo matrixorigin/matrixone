@@ -279,7 +279,7 @@ func buildInsertPlanErr(t *testing.T, ctx *plan2.MockCompilerContext, sql string
 	if err != nil {
 		return nil, err
 	}
-	return plan2.BuildPlan(ctx, stmt, false)
+	return plan2.BuildPlan(ctx, stmt, false, nil)
 }
 
 // evalResult snapshots the evaluated vector before the executor is freed: the
@@ -446,9 +446,9 @@ type bitF64TwinContext struct {
 
 func (c *bitF64TwinContext) resolveTwin(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	if strings.ToLower(tableName) != bitF64TwinTable {
-		return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+		return c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	}
-	baseRef, baseDef, err := c.MockCompilerContext.Resolve("constraint_test", "docs_vec_raw", snapshot)
+	baseRef, baseDef, err := c.MockCompilerContext.Resolve("constraint_test", "docs_vec_raw", snapshot, nil)
 	if err != nil || baseRef == nil || baseDef == nil {
 		return baseRef, baseDef, err
 	}
@@ -465,11 +465,15 @@ func (c *bitF64TwinContext) resolveTwin(dbName, tableName string, snapshot *plan
 	return &twinRef, twin, nil
 }
 
-func (c *bitF64TwinContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+// The twin changes the resolved descriptor, so neither override can return a
+// borrowed relation from the underlying mock.
+func (c *bitF64TwinContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, output *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	output.Reset()
 	return c.resolveTwin(dbName, tableName, snapshot)
 }
 
-func (c *bitF64TwinContext) ResolveWithoutTemporaryAlias(dbName, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (c *bitF64TwinContext) ResolveWithoutTemporaryAlias(dbName, tableName string, snapshot *plan2.Snapshot, output *plan2.TableResolution) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	output.Reset()
 	return c.resolveTwin(dbName, tableName, snapshot)
 }
 
@@ -528,7 +532,7 @@ func checkBitBoundaryCase(t *testing.T, proc *process.Process, build plan2.Compi
 	t.Helper()
 	stmt, err := parsers.ParseOne(mock.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err, "grammar must accept BIT literals")
-	p, err := plan2.BuildPlan(build, stmt, false)
+	p, err := plan2.BuildPlan(build, stmt, false, nil)
 	if err != nil {
 		requireCheckedVectorRejection(t, err, "bind")
 		return
@@ -587,7 +591,7 @@ func checkBitDecoderPanicIsolated(t *testing.T, proc *process.Process, build pla
 	t.Helper()
 	stmt, err := parsers.ParseOne(mock.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err, "grammar must accept BIT literals")
-	p, err := plan2.BuildPlan(build, stmt, false)
+	p, err := plan2.BuildPlan(build, stmt, false, nil)
 	if err != nil {
 		requireCheckedVectorRejection(t, err, "bind")
 		return
@@ -623,7 +627,7 @@ func checkBitReuseNextValid(t *testing.T, proc *process.Process, build plan2.Com
 	stmt, err := parsers.ParseOne(mock.GetContext(), dialect.MYSQL,
 		fmt.Sprintf(`insert into %s values (1, '[1,2,3]', (select 3)), (2, null, null)`, d.table), 1)
 	require.NoError(t, err)
-	p, err := plan2.BuildPlan(build, stmt, false)
+	p, err := plan2.BuildPlan(build, stmt, false, nil)
 	require.NoError(t, err, "the same process and context must keep binding genuine vector literals after the BIT rejections")
 	nodes := p.GetQuery().GetNodes()
 

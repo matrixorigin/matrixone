@@ -48,7 +48,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, err
 	}
 	tblName := stmt.TableName.GetTableName()
-	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef)
 		return nil, nil, err
 	}
 	for _, p := range meta.Partitions {
-		_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil)
+		_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil, nil)
 		if err != nil {
 			return nil, nil, err
 		}

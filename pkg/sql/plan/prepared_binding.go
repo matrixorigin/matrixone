@@ -1226,6 +1226,8 @@ func preparedUnderlyingSelect(stmt tree.Statement) bool {
 
 // BuildPreparedExecutionPlan binds SQL source domains before optimization.
 // The caller installs the current Process parameter vector before invoking it.
+// Prepared templates and bound execution plans keep their reusable-plan owner;
+// they do not receive an optional candidate planning input.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
 	previous := ctx.GetContext()
@@ -1241,7 +1243,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
-	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)
+	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,7 +1254,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		preparedBindingState(planning).fieldTypes = fieldTypes
 		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 		ctx.SetContext(planning)
-		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false)
+		query, err = NewPrepareOptimizer(ctx).Optimize(stmt, false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1263,7 +1265,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, TemporalTypes: state.temporalTypes, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
+	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

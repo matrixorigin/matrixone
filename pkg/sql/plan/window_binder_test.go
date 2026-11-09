@@ -187,7 +187,7 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 	stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL, preparedWindowFrameSQL, 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedRowsFrameParam(t, window.Frame.Start.Val, 1)
@@ -202,7 +202,7 @@ func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
 			sql := "select sum(a) over (order by cast('2024-01-01' as timestamp) range between interval -1 " + unit + " preceding and current row) from select_test.bind_select"
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.ErrorContains(t, err, "frame start or end is negative")
 		})
 	}
@@ -241,7 +241,7 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 				return
@@ -296,7 +296,7 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			if !tc.wantErr {
 				require.NoError(t, err)
 				return
@@ -328,7 +328,7 @@ func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.EqualError(t, err, "Incorrect arguments to "+name)
 				moErr, ok := err.(*moerr.Error)
 				require.True(t, ok)
@@ -342,7 +342,7 @@ func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.NoError(t, err)
 			})
 		}
@@ -359,7 +359,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(ctx, stmt, true)
+	queryPlan, err := BuildPlan(ctx, stmt, true, nil)
 	require.NoError(t, err)
 
 	offset := firstWindowSpec(t, queryPlan).WindowFunc.GetF().Args[1]
@@ -423,7 +423,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
@@ -441,7 +441,7 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
@@ -458,7 +458,7 @@ func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 	require.ErrorContains(t, err, "parameterized RANGE frame requires a numeric ORDER BY expression")
 }
 
@@ -507,7 +507,7 @@ func TestWindowIntervalFrameRequiresTemporalRange(t *testing.T) {
 			stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL,
 				"select sum(n_nationkey) over (order by "+tc.order+" "+tc.frame+" interval "+value+" day preceding) from nation", 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.ErrorContains(t, err, tc.errorText)
 		}
 	}
@@ -525,7 +525,7 @@ func TestPreparedWindowNestedIntervalFrameMarkersAreUnsupported(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true, nil)
 			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
 		})
 	}
@@ -655,7 +655,7 @@ func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	return BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 }
 
 func TestNamedWindowSpecHelpers(t *testing.T) {
@@ -1400,7 +1400,7 @@ func TestBuildPlanWindowDependencyValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(ctx, stmts[0], false)
+			_, err = BuildPlan(ctx, stmts[0], false, nil)
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
@@ -1413,7 +1413,7 @@ func TestBuildPlanWindowDependencyValidation(t *testing.T) {
 	for _, sql := range positiveSQL {
 		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmts[0], false)
+		_, err = BuildPlan(ctx, stmts[0], false, nil)
 		require.NoError(t, err, sql)
 	}
 }
@@ -2037,7 +2037,7 @@ func TestWindowScalarInputsAreLowered(t *testing.T) {
 			opt := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(opt.CurrentContext().GetContext(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			p, err := BuildPlan(opt.CurrentContext(), stmts[0], false)
+			p, err := BuildPlan(opt.CurrentContext(), stmts[0], false, nil)
 			require.NoError(t, err)
 			windows := allWindowSpecs(p)
 			require.NotEmpty(t, windows)
@@ -2071,7 +2071,7 @@ func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmts[0], false)
+		_, err = BuildPlan(ctx, stmts[0], false, nil)
 		require.ErrorContains(t, err, "subquery should return 1 column")
 	}
 	// Multi-column row comparisons and EXISTS do not consume a scalar value.
@@ -2083,7 +2083,7 @@ func TestScalarInputsRejectMultipleColumns(t *testing.T) {
 		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(ctx, stmts[0], false)
+		_, err = BuildPlan(ctx, stmts[0], false, nil)
 		require.NoError(t, err, sql)
 	}
 }

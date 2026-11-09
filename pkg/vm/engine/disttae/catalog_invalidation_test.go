@@ -16,6 +16,11 @@ package disttae
 
 import (
 	"context"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -141,4 +146,38 @@ func TestSessionTemporarySchemaCatalogVisibility(t *testing.T) {
 			require.Equal(t, old, op.SnapshotTS())
 		})
 	}
+}
+
+// The optimizer borrows the ordinary resolver's schema domain. Reconnect or
+// replay advancing the latest catalog must not override an SI relation that
+// remains valid in its transaction; RC has the separate eviction control above.
+func TestTemporalCanonicalRelationKeepsSISchemaAcrossReplay(t *testing.T) {
+	base := newTxnTableForTest()
+	eng := base.eng.(*Engine)
+	client.RunTxnTests(func(cli client.TxnClient, _ rpc.TxnSender) {
+		ctx := defines.AttachAccountId(t.Context(), 7)
+		op, err := cli.New(ctx, timestamp.Timestamp{PhysicalTime: 150}, client.WithTxnIsolation(pbtxn.TxnIsolation_SI))
+		require.NoError(t, err)
+		require.False(t, op.Txn().IsRCIsolation())
+		op.SetSnapshotTS(timestamp.Timestamp{PhysicalTime: 150})
+		workspace := &Transaction{op: op, engine: eng, proc: testutil.NewProc(t), tableCache: new(sync.Map), tableOps: newTableOps(), databaseOps: newDbOps()}
+		op.AddWorkspace(workspace)
+		db := &txnDatabase{op: op, accountId: 7, databaseId: 10, databaseName: "db"}
+		origin := newTxnTableWithItem(db, cache.TableItem{AccountId: 7, DatabaseId: 10, Name: "t", Id: 42, Version: 1}, workspace.proc, eng)
+		canonical := &txnTableDelegate{origin: origin}
+		key := tableKey{accountId: 7, databaseId: 10, dbName: "db", name: "t"}
+		workspace.tableCache.Store(key, canonical)
+		insertCatalogTableAt(t, eng, workspace, 7, 10, 42, 1, "db", "t", types.BuildTS(100, 0))
+		first, err := db.relation(ctx, "t", nil)
+		require.NoError(t, err)
+		require.Same(t, canonical, first)
+		insertCatalogTableAt(t, eng, workspace, 7, 10, 42, 2, "db", "t", types.BuildTS(200, 0))
+		insertCatalogTableAt(t, eng, workspace, 7, 10, 43, 1, "db", "t", types.BuildTS(300, 0))
+		afterReplay, err := db.relation(ctx, "t", nil)
+		require.NoError(t, err)
+		require.Same(t, first, afterReplay)
+		require.Equal(t, uint64(42), canonical.origin.tableId)
+		require.Equal(t, uint32(1), canonical.origin.version)
+		require.Equal(t, timestamp.Timestamp{PhysicalTime: 150}, op.SnapshotTS())
+	})
 }

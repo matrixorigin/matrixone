@@ -709,12 +709,11 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 				if !zm.IsInited() {
 					continue
 				}
-				index.UpdateZM(zms[idx], zm.GetMaxBuf())
-				index.UpdateZM(zms[idx], zm.GetMinBuf())
+				index.MergeZM(zms[idx], zm)
 			}
 		} else {
 			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap().Clone()
 				tableTypes[idx] = uint8(cols[idx].Typ.Id)
 			}
 			inited = true

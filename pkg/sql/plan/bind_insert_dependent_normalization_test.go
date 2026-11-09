@@ -135,7 +135,7 @@ func dependentBuildTable(t *testing.T, ddl string) *planpb.TableDef {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, ddl, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	table := p.GetDdl().GetCreateTable().TableDef
 	require.NotNil(t, table)

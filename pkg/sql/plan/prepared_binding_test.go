@@ -150,9 +150,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 						"select c from decimal_filters where "+tc.predicate, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-						[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}},
-						[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
 					require.NoError(t, err)
 					if tc.binding.IsInteger() && tc.native {
 						require.False(t, bound.ValueDependent, "safe plans reuse the existing per-execution conversion guard")
@@ -647,9 +645,7 @@ func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
 				params.CleanOnlyData()
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 				proc.SetPrepareParams(params)
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
-					[]any{ParamValue{Value: value}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}}, []any{ParamValue{Value: value}})
 				require.NoError(t, err)
 				require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
 				cast := false
@@ -843,9 +839,7 @@ func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				value := ParamValue{Value: tc.value, IsBinaryProtocol: binary}
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}},
-					[]any{value, value})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}}, []any{value, value})
 				require.NoError(t, err)
 				q := bound.Plan.GetQuery()
 				require.NotNil(t, q.Correlation)
@@ -1199,9 +1193,7 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, statement+tc.predicate, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}},
-					[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
 				require.NoError(t, err)
 				found, columnCast := false, false
 				for _, node := range bound.Plan.GetQuery().Nodes {
@@ -1632,8 +1624,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			previous := mock.ctxt.GetContext()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: tc.source, NumericType: tc.numeric, BitCountType: tc.latch}}, []any{value})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source, NumericType: tc.numeric, BitCountType: tc.latch}}, []any{value})
 			require.NoError(t, err)
 			require.Equal(t, previous, mock.ctxt.GetContext())
 			require.Equal(t, tc.dependent, bound.ValueDependent, "%s", bound.Plan.String())
@@ -1667,9 +1658,7 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
-				[]any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: sourceType}}, []any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(bound.Plan, "left")
 			require.NotNil(t, expr)

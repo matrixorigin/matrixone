@@ -41,7 +41,7 @@ func loadDependentDrive(t *testing.T, ddl string, loadSQL string, selfFk bool) (
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(mock.CurrentContext().GetContext(), dialect.MYSQL, ddl, 1)
 	require.NoError(t, err)
-	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	stmt.Free()
 	tableDef := createPlan.GetDdl().GetCreateTable().GetTableDef()
