@@ -14779,6 +14779,12 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		if len(tbl.Option) == 0 {
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "CENTROIDX without optype")
 		}
+		// the index the option names is written by the operator, which only internal SQL may ask
+		if opt, err := tree.ParseCentroidxOption(tbl.Option); err != nil || opt.Config != "" {
+			if !defines.IsInternalExecutor(builder.GetContext()) {
+				return 0, moerr.NewNotSupported(builder.GetContext(), "CENTROIDX with index parameters")
+			}
+		}
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
