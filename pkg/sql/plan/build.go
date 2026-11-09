@@ -876,7 +876,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, pla
 	case *tree.ShowSequences:
 		return buildShowSequences(stmt, ctx)
 	case *tree.ShowColumns:
-		return buildShowColumns(stmt, ctx)
+		return buildShowColumns(stmt, ctx, isPrepareStmt)
 	case *tree.ShowTableStatus:
 		return buildShowTableStatus(stmt, ctx)
 	case *tree.ShowTarget:

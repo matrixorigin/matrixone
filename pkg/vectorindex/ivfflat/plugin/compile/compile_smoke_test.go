@@ -174,7 +174,7 @@ func TestIvfflatEntriesTableQuotesIdentifiers(t *testing.T) {
 		},
 	}
 
-	err := ivfIndexEntriesTable(ctx, indexDef, "db`name", tableDef, "meta`tbl", "centroids`tbl")
+	err := ivfIndexEntriesTable(ctx, indexDef, "db`name", tableDef, "meta`tbl", "centroids`tbl", nil)
 	require.NoError(t, err)
 	require.Len(t, ctx.sqls, 3)
 
