@@ -248,6 +248,7 @@ func TestLikePrefixIndex(t *testing.T) {
 						// A matching row must evaluate the throwing residual for every
 						// access path, including when the table has persisted blocks.
 						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('abc9','xy') and payload=regexp_replace('x','[','y')", true)
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload='p'", false)
 					}
 					for _, scoped := range []struct{ hint, suffix string }{
 						{" force index for order by(ix)", " order by name"},

@@ -106,6 +106,51 @@ func TestVisitExprTreeTraversesEveryNestedVariant(t *testing.T) {
 	require.Equal(t, []int32{4, 3, 5, 6, 7}, positions)
 }
 
+func TestRequiredRemoteExpressionFeaturesNonFunctionParents(t *testing.T) {
+	format := func(missingFirst bool) *Expr {
+		first := &Expr{Typ: Type{Id: 23}}
+		if missingFirst {
+			first = nil
+		}
+		return &Expr{Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(262) << 32},
+			Args: []*Expr{first, {}},
+		}}}
+	}
+	parents := map[string]func(*Expr) *Expr{
+		"literal source": func(child *Expr) *Expr {
+			return &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: child}}}
+		},
+		"function without descriptor": func(child *Expr) *Expr {
+			return &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{child}}}}
+		},
+	}
+	for name, parent := range parents {
+		t.Run(name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(parent(format(false)))
+			require.NoError(t, err)
+			require.True(t, features.FormatNumericArguments)
+
+			_, err = RequiredRemoteExpressionFeatures(parent(format(true)))
+			require.ErrorContains(t, err, "FORMAT is missing its first argument")
+		})
+	}
+
+	owner := &struct{ Expressions []*Expr }{Expressions: []*Expr{
+		{Typ: Type{Id: planJSONTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "1"}}}},
+		{Expr: &Expr_Vec{Vec: &LiteralVec{DecimalLiteralRequiresV82: true}}},
+		{Expr: &Expr_Dependent{Dependent: &DependentExpr{Inputs: []*Expr{
+			{Typ: Type{Id: 31}, Expr: &Expr_P{P: &ParamRef{}}},
+		}}}},
+	}}
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONScalarLiteralContracts)
+	require.True(t, features.DecimalLiteralSemantics)
+	require.True(t, features.DependentPrograms)
+	require.True(t, features.FloatConversionSemantics)
+}
+
 func TestValidateStringLiteralFormsSkipsBytePayloads(t *testing.T) {
 	owner := struct {
 		Payload []byte

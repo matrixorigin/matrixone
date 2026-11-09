@@ -2531,8 +2531,13 @@ type UserInput struct {
 	sameStatementAuthorization bool
 	preparePlan                *plan.Plan // binary protocol execute
 	sqlSourceType              []string
-	isRestore                  bool
-	isBinaryProtExecute        bool
+	// Fragments belong only to this input's successful scheduling parse. They
+	// can be reused by statement recording while the SQL and parser mode match.
+	recordFragments     []mysql.SQLFragment
+	recordSQL           string
+	recordSQLMode       string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
 	// admission; binary execution passes the inner AST rather than tree.Execute.
 	preparedDefaultDatabase string
@@ -2564,6 +2569,21 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) clearRecordFragments() {
+	ui.recordFragments = nil
+	ui.recordSQL = ""
+	ui.recordSQLMode = ""
+}
+
+func (ui *UserInput) setRecordFragments(fragments []mysql.SQLFragment, sqlMode string) {
+	if fragments == nil {
+		return
+	}
+	ui.recordFragments = fragments
+	ui.recordSQL = ui.sql
+	ui.recordSQLMode = sqlMode
 }
 
 func (ui *UserInput) genHash() {

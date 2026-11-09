@@ -739,7 +739,24 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			}
 		}
 	}
-	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions)
+	// Under statement IGNORE the omitted defaults staged here read the fill
+	// adjustment through the same reference coalesce the INSERT pre-insert
+	// projection applies, so buildInsertPlans' later PRE_INSERT fill and the
+	// staged defaults observe one row image. The gate covers exactly the
+	// columns the row can still carry a NULL through: file-supplied columns
+	// and SET assignments (mirroring appendLoadDefaultProjections' own
+	// supplied test).
+	var ignoreSupplied map[string]*Expr
+	if tree.IsIgnoreStatement(stmt) {
+		ignoreSupplied = make(map[string]*Expr, len(colToIndex)+len(setExpressions))
+		for name := range colToIndex {
+			ignoreSupplied[name] = nil
+		}
+		for name := range setExpressions {
+			ignoreSupplied[name] = nil
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex, setExpressions, ignoreSupplied)
 	if err != nil {
 		return nil, err
 	}
@@ -1002,12 +1019,19 @@ func getProjectNode(
 // LOAD builds physical (child-batch) references directly, unlike INSERT's
 // logical binding tags. Normalize file columns first, then reuse the same
 // dependency stages as INSERT and lower their tags to child-batch coordinates.
+// Under statement IGNORE (ignoreSupplied non-nil, carrying the file-supplied
+// and SET-assigned columns) a staged omit-default expression reads its NOT
+// NULL sources through the fill adjustment: coalesceGeneratedColIgnoreFillRefs
+// rebuilds each such reference as coalesce(reference, implicit default), the
+// same rewrite the INSERT pre-insert projection applies, because the staged
+// defaults evaluate before the PRE_INSERT fill adjusts the batch.
 func (builder *QueryBuilder) appendLoadDefaultProjections(
 	bindCtx *BindContext,
 	node *plan.Node,
 	tableDef *TableDef,
 	supplied map[string]int32,
 	setExpressions map[string]*plan.Expr,
+	ignoreSupplied map[string]*plan.Expr,
 ) (int32, error) {
 	needed := false
 	for i, col := range tableDef.Cols {
@@ -1035,6 +1059,13 @@ func (builder *QueryBuilder) appendLoadDefaultProjections(
 		if sourceSupplied || setSupplied {
 			replaceColRefTag(expr, 0, inputTag)
 		} else if exprHasLocalColumnRef(expr) {
+			if ignoreSupplied != nil {
+				wrapped, wrapErr := builder.coalesceGeneratedColIgnoreFillRefs(tableDef, ignoreSupplied, expr)
+				if wrapErr != nil {
+					return 0, wrapErr
+				}
+				expr = wrapped
+			}
 			materialize[pos] = true
 			order = append(order, pos)
 		}

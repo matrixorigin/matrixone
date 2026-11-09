@@ -35,6 +35,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedConsumerKeepsUnaryConversionBeforePrefixAdmission(t *testing.T) {
+	textType := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name      string
+		value     any
+		decimal   bool
+		dependent bool
+	}{
+		{name: "exact", value: "-2.25", decimal: true, dependent: true},
+		{name: "invalid", value: "not-a-number", dependent: true},
+		{name: "null", value: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: textType}},
+				[]any{ParamValue{Value: tc.value, SourceType: textType, HasSourceType: true, EnableNumericPrefix: true}})
+			state := preparedBindingState(ctx)
+			prior := makePlan2Int64ConstExprWithType(42)
+			state.diagnosticCandidates = []*Expr{prior}
+			source := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			original := []*Expr{source}
+			args, err := bindPreparedConsumerArguments(ctx, "ABS", original)
+			require.NoError(t, err)
+			require.Same(t, source, original[0])
+			require.NotSame(t, source, args[0])
+			require.Equal(t, tc.decimal, types.T(args[0].Typ.Id).IsDecimal())
+			if !tc.decimal {
+				require.Equal(t, types.T_float64, types.T(args[0].Typ.Id))
+			}
+			require.Equal(t, tc.dependent, state.valueDependent)
+			require.True(t, state.diagnosticFree)
+			require.Equal(t, []*Expr{prior}, state.diagnosticCandidates)
+			args[0] = prior
+			require.Same(t, source, original[0], "consumer owns its argument slice")
+		})
+	}
+
+	source := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	original := []*Expr{source}
+	args, err := bindPreparedConsumerArguments(context.Background(), "ABS", original)
+	require.NoError(t, err)
+	require.Same(t, source, args[0], "without binding state the existing argument is retained")
+}
+
 func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
 	for _, test := range []struct {
 		name   string

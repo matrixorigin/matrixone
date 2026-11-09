@@ -39,7 +39,7 @@ drop table if exists enum01;
 create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from enum01;
 ➤ col1[12,-1,0]  𝄀
@@ -91,7 +91,7 @@ enum03  ¦  CREATE TABLE `enum03` (
   `col1` enum('ejwuijfew','ewrwrewretr','werwre') NOT NULL
 )
 show columns from enum03;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('ejwuijfew','ewrwrewretr','werwre')  ¦  NO  ¦    ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]
@@ -165,7 +165,7 @@ pri01  ¦  CREATE TABLE `pri01` (
   `col1` enum('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew') DEFAULT NULL
 )
 show columns from pri01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew')  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table pri01;
 drop table if exists pri02;
@@ -185,7 +185,7 @@ pri02  ¦  CREATE TABLE `pri02` (
   `col2` enum('数据库','数据库系统','数据库管理系统') DEFAULT NULL
 )
 show columns from pri02;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  enum('数据库','数据库系统','数据库管理系统')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
@@ -210,7 +210,7 @@ pri03  ¦  CREATE TABLE `pri03` (
   PRIMARY KEY (`col2`)
 )
 show columns from pri03;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  enum('数据库','数据库系统','数据库管理系统')  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
@@ -235,7 +235,7 @@ pri04  ¦  CREATE TABLE `pri04` (
   `col2` enum('database','database management','database management system') DEFAULT NULL
 )
 show columns from pri04;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  enum('database','database management','database management system')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from pri04 where col2 = 'database';
@@ -323,7 +323,7 @@ insert01  ¦  CREATE TABLE `insert01` (
   PRIMARY KEY (`id`)
 )
 show columns from insert01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 order_number  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 status  ¦  enum('Pending','Processing','Completed','Cancelled')  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -426,7 +426,7 @@ drop table mysql_compat_special_ignore;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('T','E')  ¦  NO  ¦    ¦  T  ¦    ¦  
 insert into default01 values(default);
 select * from default01;
@@ -436,7 +436,7 @@ drop table default01;
 drop table if exists default02;
 create table default02 (`col1` enum('T', 'E') not null default '1');
 desc default02;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('T','E')  ¦  NO  ¦    ¦  1  ¦    ¦  
 insert into default02 values(default);
 select * from default02;
@@ -446,7 +446,7 @@ drop table default02;
 drop table if exists default03;
 create table default03 (`col1` enum('T', 'E') not null default 1);
 desc default03;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('T','E')  ¦  NO  ¦    ¦  1  ¦    ¦  
 insert into default03 values(default);
 select * from default03;
@@ -456,7 +456,7 @@ drop table default03;
 drop table if exists default04;
 create table default04 (`col1` enum('T', 'E') not null default 2);
 desc default04;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('T','E')  ¦  NO  ¦    ¦  2  ¦    ¦  
 insert into default04 values(default);
 select * from default04;
@@ -466,7 +466,7 @@ drop table default04;
 drop table if exists default05;
 create table default05 (`col1` enum('T', 'E') not null default '2');
 desc default05;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 col1  ¦  enum('T','E')  ¦  NO  ¦    ¦  2  ¦    ¦  
 insert into default05 values(default);
 select * from default05;

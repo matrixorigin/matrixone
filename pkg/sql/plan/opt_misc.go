@@ -247,6 +247,14 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		// residual and enumerate every duplicate-key match.
 		return false
 	}
+	if _, protected := builder.materializedLockKeyProjects[node.NodeId]; protected {
+		// The barrier CHECK/FK FILTER consumes this project's computed
+		// unique lock-key columns positionally, and the restored row image
+		// exports them as columns to every downstream writer. Inlining the
+		// project would re-evaluate the key expression once per consumer
+		// after arbitration rows were already filtered.
+		return false
+	}
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
 		return false
 	}
@@ -2555,16 +2563,17 @@ func (builder *QueryBuilder) sortRollupMode() int {
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
+func (builder *QueryBuilder) optimizeFilters(rootID int32, pointBudget *uint64) (int32, compositePointCapture, error) {
+	points := compositePointCapture{remaining: pointBudget}
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
-		return rootID, err
+		return rootID, points, err
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false, &points)
 	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
@@ -2574,7 +2583,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID, nil
+	points.snapshot()
+	return rootID, points, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring

@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -549,7 +548,7 @@ type loadedDir struct {
 // entry published or opened meanwhile, in their order of last use, skipping those removed
 // meanwhile.
 func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
-	lru := d.cache.(*lrucache.Cache[string, struct{}])
+	lru := d.cache
 	slices.SortFunc(dirs, func(a, b loadedDir) int { return b.lastUse.Compare(a.lastUse) })
 	if d.beforeIndexLoadedDirs != nil {
 		d.beforeIndexLoadedDirs()

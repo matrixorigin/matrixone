@@ -90,6 +90,7 @@ type s3WriterDelegate struct {
 
 	action             actionType
 	rejectZeroTemporal bool
+	fillInsertOwned    bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -159,6 +160,7 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		rejectZeroTemporal:  update.RejectZeroTemporal,
+		fillInsertOwned:     update.insertNotNullFillOwned(),
 		addAffectedRows:     update.addAffectedRowsFunc,
 		takeAffectedRows:    update.takeS3AffectedRowsFunc,
 		seenTargetRows:      update.ctr.seenTargetRows,
@@ -384,9 +386,26 @@ func (writer *s3WriterDelegate) append(
 			continue
 		}
 		insertAttrs := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).insertAttrs
-		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		tableType := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).tableType
+
+		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
+		if tableType == UpdateMainTable {
+			// Under statement IGNORE adjust NULL cells of NOT NULL columns
+			// before the shared legs below; the projection taken below and
+			// every filtered or checked copy inherit the adjusted values
+			// through the shared vectors. A constant NULL owns no backing
+			// storage, so the fill replaces it instead of writing it in
+			// place - the fill must therefore run before the projection
+			// snapshots the vector pointers. Rows with a NULL primary key
+			// are dropped here, and the projection re-counts after the
+			// drop.
+			if _, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, contextBatch, false, writer.fillInsertOwned); fillErr != nil {
+				return fillErr
+			}
+		}
+
+		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		mainTablePkProjectIdx := -1
 		mainTableNullPkFilter := false
@@ -398,7 +417,6 @@ func (writer *s3WriterDelegate) append(
 			mainTableNullPkFilter = projBat.Vecs[mainTablePkProjectIdx].HasNull()
 		}
 
-		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
