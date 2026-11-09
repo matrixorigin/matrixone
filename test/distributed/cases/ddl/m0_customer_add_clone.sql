@@ -43,11 +43,12 @@ select count(null) as count_null from customer;
 select count(distinct c_balance) as count_distinct_nullable from customer;
 select count(c.c_id) as count_outer_nullable from m0_customer_parent.customer p left join customer c on p.c_id=c.c_id and c.c_id=1;
 select c_id from customer where c_id<0;
-create table comment_control(a int, b int, primary key(a,b));
-insert into comment_control values (1,2);
+-- Generated columns keep this composite-key control outside the M0 contract in both build modes.
+create table comment_control(a int, b int, g int generated always as (a+b) stored, primary key(a,b));
+insert into comment_control(a,b) values (1,2);
 alter table comment_control add column x int comment 'kept';
 select count(*) as kept_comments from information_schema.columns where table_schema='m0_customer_child' and table_name='comment_control' and column_name='x' and column_comment='kept';
-select count(*) as comment_control_rows from comment_control where a=1 and b=2 and x is null;
+select count(*) as comment_control_rows from comment_control where a=1 and b=2 and g=3 and x is null;
 -- Partition roots and backing tables must use COPY together; stale child IDs break the next INSERT.
 create table partition_default(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2;
 insert into partition_default values(1,1);

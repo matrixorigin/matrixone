@@ -50,7 +50,7 @@ func TestM0LegacyRootCopyEstablishesContract(t *testing.T) {
 		var extra api.SchemaExtra
 		require.NoError(t, extra.Unmarshal(raw))
 		require.Nil(t, extra.M0Evolution)
-		m0Exec(t, ctx, db, "alter table "+table+" add column copied int")
+		m0Exec(t, ctx, db, "alter table "+table+" add column copied int comment 'kept'")
 		copiedID, _ := m0TableGeneration(t, ctx, db, schema, "customer")
 		require.NotEqual(t, id, copiedID, "uncontracted ADD must perform COPY")
 		require.NoError(t, db.QueryRowContext(ctx, "select extra_info from mo_catalog.mo_tables where rel_id=?", copiedID).Scan(&raw))
@@ -58,6 +58,7 @@ func TestM0LegacyRootCopyEstablishesContract(t *testing.T) {
 		require.NotNil(t, extra.M0Evolution)
 		require.Equal(t, uint32(0), extra.M0Evolution.LayoutGeneration)
 		require.Equal(t, 3, m0Count(t, ctx, db, "select count(*) from "+table+" where copied is null"))
+		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from information_schema.columns where table_schema='"+schema+"' and table_name='customer' and column_name='copied' and column_comment='kept'"))
 		m0Exec(t, ctx, db, "alter table "+table+" add column metadata_only int")
 		finalID, _ := m0TableGeneration(t, ctx, db, schema, "customer")
 		require.Equal(t, copiedID, finalID, "new root must admit subsequent M0 ADD")
