@@ -732,7 +732,7 @@ func bindPublicationScopeSelect(execCtx *ExecCtx) error {
 	sel := execCtx.stmt.(*tree.Select)
 	tcc := execCtx.ses.GetTxnCompileCtx()
 	bind := func() (*plan2.Plan, error) {
-		return plan2.BuildPlan(tcc, sel, false)
+		return plan2.BuildPlan(tcc, sel, false, nil)
 	}
 	database := publicationProbeDatabase(sel)
 	if database == "" {

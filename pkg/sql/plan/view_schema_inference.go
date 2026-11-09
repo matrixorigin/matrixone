@@ -146,11 +146,13 @@ func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) 
 }
 
 // ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
-func (c *viewSchemaCompiler) ResolveWithoutTemporaryAlias(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) ResolveWithoutTemporaryAlias(_ string, _ string, _ *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
-func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
@@ -158,7 +160,7 @@ func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) 
 		return c.resolveRoot(database, name, snapshot)
 	}
 	c.state.request.benchmark.resolve()
-	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,7 +175,7 @@ func (c *viewSchemaCompiler) resolveRoot(database, name string, snapshot *Snapsh
 		ResolveViewSchemaRoot(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
 	})
 	if !ok {
-		obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+		obj, def, err := c.CompilerContext.Resolve(database, name, snapshot, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -486,12 +488,13 @@ func (c *viewSchemaCompiler) ResolveViewUdf(name string, args []*Expr, database 
 	}
 	return c.CompilerContext.ResolveUdf(name, args)
 }
-func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
 	c.state.request.benchmark.resolve()
-	obj, def, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
+	obj, def, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot, nil)
 	if err != nil {
 		return nil, nil, err
 	}

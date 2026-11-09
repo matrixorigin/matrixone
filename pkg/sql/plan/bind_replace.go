@@ -564,7 +564,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			continue
 		}
 		idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
-			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, err
 		}

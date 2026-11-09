@@ -15,6 +15,7 @@
 package indexfile
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,9 +65,18 @@ func TestReadTarget(t *testing.T) {
 
 	sp.Proc = nil
 	_, _, err = ReadTarget(sp)
+	require.Error(t, err, "no process and no SqlContext: no transaction")
+	_, err = OpenWithProcess(sp, nil, Ref{}, "")
 	require.Error(t, err)
-	_, err = OpenWithProcess(sp, Ref{}, "")
-	require.Error(t, err)
+
+	// A background job reads in its SqlContext's transaction, as its account.
+	bg := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(context.Background(), "cn", op, 9, nil))
+	ctx, got, err = ReadTarget(bg)
+	require.NoError(t, err)
+	require.Same(t, op, got)
+	account, err = defines.GetAccountId(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(9), account)
 }
 
 func TestNewEnv(t *testing.T) {
@@ -93,12 +103,17 @@ func TestNewEnv(t *testing.T) {
 	env = NewEnv(sp, nil, nil, "")
 	require.Nil(t, env.Engine, "the test process has no storage engine")
 	require.Nil(t, env.Cache)
-	_, err := OpenWithProcess(sp, Ref{}, "")
+	_, err := OpenWithProcess(sp, nil, Ref{}, "")
 	require.ErrorContains(t, err, "storage engine")
 
 	env = NewEnv(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(proc.Ctx, "", nil, 0, nil)), &Files{Engine: eng}, nil, "")
 	require.Nil(t, env.Proc)
 	require.Nil(t, env.Txn, "no process and no transaction given")
+
+	env = NewEnv(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(proc.Ctx, "", other, 0, nil)), &Files{Engine: eng, Cache: cache}, nil, "")
+	require.Nil(t, env.Proc)
+	require.Same(t, other, env.Txn, "nil means the SqlContext's transaction")
+	require.Same(t, cache, env.Cache)
 }
 
 func TestTailFrame(t *testing.T) {

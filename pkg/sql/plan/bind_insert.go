@@ -1134,7 +1134,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // column originPkCol is a recorded PK; pkCol is the table's primary key.
 func (builder *QueryBuilder) buildIrregularHiddenDeleteByPk(bindCtx *BindContext, indexdef *IndexDef, originPkCol, pkCol string, sourceStep int32) error {
 	objRef := builder.irregularMaintObjRef
-	hiddenObjRef, hiddenTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	hiddenObjRef, hiddenTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1224,7 +1224,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	}
 
 	objRef := builder.irregularMaintObjRef
-	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1303,7 +1303,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 // for the DELETE plan.
 func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef, sourceStep int32) error {
 	objRef := builder.irregularMaintObjRef
-	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1545,7 +1545,7 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			continue
 		}
 
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -2157,7 +2157,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					lockTable = true
 				} else {
 					lockObjRef, lockTableDef, err = builder.compCtx.ResolveIndexTableByRef(
-						parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+						parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot, nil)
 					if err != nil {
 						return 0, nil, err
 					}
@@ -2715,7 +2715,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		}
 		var err error
 		idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
-			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, 0, nil, err
 		}
@@ -3619,7 +3619,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, err
 		}
@@ -3844,7 +3844,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -4268,7 +4268,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			// for the following cases, prepare for inserting data into the index table
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -6706,7 +6706,7 @@ func (builder *QueryBuilder) buildValueScan(
 					valueExprs[colIdx][rowIdx] = row.Expr
 				}
 			}
-			nodeID, err := builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+			nodeID, err := builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs, valueScanTableDef.Cols)
 			return nodeID, effectiveColNames, err
 		}
 	}
@@ -6812,9 +6812,71 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	bindCtx *BindContext,
 	colNames []string,
 	valueExprs [][]*plan.Expr,
+	targetCols []*plan.ColDef,
 ) (int32, error) {
 	if len(valueExprs) == 0 || len(valueExprs[0]) == 0 {
 		return 0, moerr.NewInternalError(builder.GetContext(), "value expressions are empty")
+	}
+
+	// A bare NULL constant is untyped, and the ordinary VALUE_SCAN takes its
+	// vector type from the destination column declaration. The lowered branches
+	// below are combined by UNION ALL, and pSpool copies branch vectors by
+	// their concrete type, so a NULL that reaches a projected or rowset branch
+	// must carry the destination column type instead of the untyped ANY. The
+	// value stays nullable: NOT NULL enforcement and assignment semantics are
+	// unchanged.
+	typedValue := func(colIdx int, expr *plan.Expr) (*plan.Expr, error) {
+		if expr.Typ.Id == int32(types.T_any) && expr.GetLit() != nil && expr.GetLit().Isnull {
+			typed := DeepCopyExpr(expr)
+			typed.Typ = targetCols[colIdx].Typ
+			typed.Typ.NotNullable = false
+			return typed, nil
+		}
+		// A vector destination must reach every branch already carrying the
+		// destination array type. The value binder materializes a vector
+		// literal into its physical element bytes inside a string-domain
+		// constant (MakeInsertValueConstExpr -> SetInsertValueString ->
+		// arrayUserVariableValueToBytes): the exact carrier the ordinary
+		// all-literal VALUE_SCAN consumes, where the scan executor copies the
+		// bytes into the declared destination-typed column. The lowered
+		// branches must keep that carrier contract: binding an assignment cast
+		// over the carrier re-parses the already-materialized bytes as text
+		// and fails with Error 20101 "malformed vector input" on the real
+		// INSERT. Re-emit the same constant in the array-domain VecVal flavor
+		// — the flavor constant folding already produces for array constants
+		// — typed with the destination column type, so every branch, the
+		// UNION ALL output and the insert layer see the array domain with the
+		// physical bytes intact. A non-literal source typed outside the array
+		// domain keeps the ordinary assignment cast below.
+		targetID := types.T(targetCols[colIdx].Typ.Id)
+		// typeswitch:partial the binder fast path materializes a raw
+		// string-domain binary carrier only for vecf32/vecf64
+		// (MakeInsertValueConstExpr -> SetInsertValueString); every other
+		// vector element type returns nil from that fast path and reaches
+		// here already cast-bound to the destination by the generic binder's
+		// forceCastExpr2 — including vecf8/vecf4, whose block-scaled casts
+		// produce stored cells rather than fixed element bytes — so only
+		// those two carriers need this array-domain re-emit.
+		if (targetID == types.T_array_float32 || targetID == types.T_array_float64) && types.T(expr.Typ.Id) != targetID {
+			if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+				if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+					typed := DeepCopyExpr(expr)
+					typed.Typ = targetCols[colIdx].Typ
+					typed.Typ.NotNullable = false
+					typed.Expr = &plan.Expr_Lit{Lit: &plan.Literal{
+						Isnull: false,
+						Value:  &plan.Literal_VecVal{VecVal: string(sval.Sval)},
+					}}
+					return typed, nil
+				}
+			}
+			casted, err := appendCastBeforeExpr(builder.GetContext(), DeepCopyExpr(expr), targetCols[colIdx].Typ)
+			if err != nil {
+				return nil, err
+			}
+			return casted, nil
+		}
+		return expr, nil
 	}
 
 	rowCount := len(valueExprs[0])
@@ -6851,8 +6913,11 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		dummyID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, rowCtx)
 		projectList := make([]*plan.Expr, projectWidth)
 		for colIdx := range colNames {
-			var err error
-			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, valueExprs[colIdx][rowIdx], rowCtx)
+			typedExpr, err := typedValue(colIdx, valueExprs[colIdx][rowIdx])
+			if err != nil {
+				return 0, err
+			}
+			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, typedExpr, rowCtx)
 			if err != nil {
 				return 0, err
 			}
@@ -6889,12 +6954,16 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		for colIdx := range colNames {
 			rowsetData.Cols[colIdx] = &plan.ColData{}
 			for _, rowIdx := range literalRows {
-				rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: valueExprs[colIdx][rowIdx]})
+				typedExpr, terr := typedValue(colIdx, valueExprs[colIdx][rowIdx])
+				if terr != nil {
+					return 0, terr
+				}
+				rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: typedExpr})
 			}
 			valueScanTableDef.Cols[colIdx] = &plan.ColDef{
 				ColId: 0,
 				Name:  fmt.Sprintf("column_%d", colIdx),
-				Typ:   valueExprs[colIdx][literalRows[0]].Typ,
+				Typ:   targetCols[colIdx].Typ,
 			}
 		}
 		if carryOrdinal {

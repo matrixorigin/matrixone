@@ -106,7 +106,7 @@ func TestDMLReturningRejectsPythonUdf(t *testing.T) {
 	defer stmts[0].Free()
 
 	ctx := &returningPythonUdfCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-	_, err = BuildPlan(ctx, stmts[0], false)
+	_, err = BuildPlan(ctx, stmts[0], false, nil)
 	require.ErrorContains(t, err, "DML RETURNING does not support external UDF in RETURNING expression")
 }
 

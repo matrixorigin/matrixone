@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -34,6 +35,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsableOrderZoneMap(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_varbinary)}
+	truncated := objectio.NewZM(types.T_varbinary, 0)
+	index.UpdateZM(truncated, bytes.Repeat([]byte{0xff}, 31))
+	require.True(t, truncated.MaxTruncated())
+	require.True(t, UsableOrderZoneMap(truncated, typ, false))
+	require.False(t, UsableOrderZoneMap(truncated, typ, true))
+	require.False(t, UsableOrderZoneMap(nil, typ, false))
+	require.False(t, UsableOrderZoneMap(truncated, plan.Type{Id: int32(types.T_int32)}, false))
+	decimal := objectio.NewZM(types.T_decimal64, 2)
+	index.UpdateZM(decimal, types.EncodeDecimal64(new(types.Decimal64)))
+	require.True(t, UsableOrderZoneMap(decimal, plan.Type{Id: int32(types.T_decimal64), Scale: 2}, false))
+	require.False(t, UsableOrderZoneMap(decimal, plan.Type{Id: int32(types.T_decimal64), Scale: 3}, false))
+}
 
 type orderedScanFailReadFS struct {
 	fileservice.FileService
@@ -99,6 +115,31 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 		require.ErrorIs(t, err, want)
 		require.Zero(t, ds.cursor)
 		require.Nil(t, ds.orderedBlocks)
+	})
+
+	t.Run("appendable_blocks_are_not_pruned", func(t *testing.T) {
+		appendableData := NewBlockListRelationData(0)
+		for i := uint16(0); i < 4; i++ {
+			blk := stats.ConstructBlockInfo(i)
+			if i == 1 { // its old zonemap would otherwise be worse than 8
+				blk.ObjectFlags |= objectio.ObjectFlag_Appendable
+			}
+			appendableData.AppendBlockInfo(&blk)
+		}
+		ds := NewRemoteDataSource(ctx, fs, timestamp.Timestamp{}, appendableData)
+		defer ds.Close()
+		ds.SetOrderBy(order(plan.OrderBySpec_ASC, false))
+		ds.SetFilterZM(threshold(8))
+		var got []uint16
+		for {
+			blk, state, err := next(ds, ctx)
+			require.NoError(t, err)
+			if state == engine.End {
+				break
+			}
+			got = append(got, blk.MetaLocation().ID())
+		}
+		require.ElementsMatch(t, []uint16{0, 1, 2, 3}, got)
 	})
 
 	for _, tc := range []struct {

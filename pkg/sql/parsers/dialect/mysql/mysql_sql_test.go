@@ -1255,6 +1255,71 @@ func TestNumericExponentStatementBoundaries(t *testing.T) {
 	require.Equal(t, float64(15), value)
 }
 
+func TestParseWithSQLModeAndFragments(t *testing.T) {
+	ctx := context.Background()
+	parser := &MySQLParser{}
+	for _, tc := range []struct {
+		name, sql, mode string
+	}{
+		{"empty", "", ""},
+		{"blank fragments", "; /* comment */; select 1;; select 2", ""},
+		{"compound", "begin select 1; select 2; end; select 3", ""},
+		{"executable comment", "/*! select 1; /* save_result */ select 2 */; select 3", ""},
+		{"quoted semicolon", `select 'a;b'; select 2`, ""},
+		{"ansi quotes", `select ";"; select 2`, "ANSI_QUOTES"},
+		{"no backslash escapes", `select 'a\'; select 2`, "NO_BACKSLASH_ESCAPES"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantFragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, tc.sql, 1, tc.mode)
+			require.NoError(t, err)
+			wantStmts, err := parser.ParseWithSQLMode(ctx, tc.sql, 1, tc.mode)
+			require.NoError(t, err)
+			want := make([]string, len(wantStmts))
+			for i, stmt := range wantStmts {
+				want[i] = tree.String(stmt, dialect.MYSQL)
+				stmt.Free()
+			}
+
+			stmts, fragments, err := parser.ParseWithSQLModeAndFragments(ctx, tc.sql, 1, tc.mode)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.Len(t, stmts, len(want))
+			for i, stmt := range stmts {
+				require.Equal(t, want[i], tree.String(stmt, dialect.MYSQL))
+			}
+			require.Equal(t, wantFragments, fragments)
+			for _, fragment := range fragments {
+				require.True(t, fragment.MatchesSource(tc.sql))
+			}
+
+			// A later parse must not change returned fragments or borrowed ASTs.
+			other, err := parser.ParseWithSQLMode(ctx, "select 99; select 100", 1, "")
+			require.NoError(t, err)
+			for _, stmt := range other {
+				stmt.Free()
+			}
+			require.Equal(t, wantFragments, fragments)
+			for i, stmt := range stmts {
+				require.Equal(t, want[i], tree.String(stmt, dialect.MYSQL))
+			}
+		})
+	}
+
+	stmts, fragments, err := parser.ParseWithSQLModeAndFragments(ctx, "select 1; select 1.5Efoo", 1, "")
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	require.Empty(t, fragments)
+	stmts, fragments, err = parser.ParseWithSQLModeAndFragments(ctx, "select 7", 1, "")
+	require.NoError(t, err)
+	defer stmts[0].Free()
+	require.Len(t, fragments, 1)
+	require.Equal(t, "select 7", fragments[0].SQL)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}

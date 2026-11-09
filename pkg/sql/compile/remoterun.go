@@ -1042,6 +1042,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Offset = t.OffsetExpr
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
+		if t.ScanCutoffLimit > 0 && t.ScanCutoffTag > 0 {
+			// For Order, Limit is an optional witness-count hint, not an
+			// output limit. Only the executing scan scope may enable it.
+			in.Limit = plan2.MakePlan2Uint64ConstExprWithType(t.ScanCutoffLimit)
+			in.TopValueTag = t.ScanCutoffTag
+		}
 	case *partition.Partition:
 		in.OrderBy = t.OrderBySpecs
 		in.Limit = t.Limit
@@ -1712,6 +1718,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
+		if value, ok := remoteOrderScanCutoffBound(opr.Limit); ok && opr.TopValueTag > 0 {
+			arg.ScanCutoffLimit = value
+			arg.ScanCutoffTag = opr.TopValueTag
+		}
 		op = arg
 	case vm.Partition:
 		arg := partition.NewArgument()

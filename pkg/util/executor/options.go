@@ -432,6 +432,14 @@ func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
 
+// WithAuthorizationSnapshot borrows a live statement admission for an
+// independent read-only SI transaction. ExecTxn retains transaction cleanup;
+// the statement owner, not the executor, ends the admission.
+func (opts Options) WithAuthorizationSnapshot(admission *client.SnapshotAdmission) Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithAuthorizationSnapshot(admission))
+	return opts
+}
+
 // WithTxnIsolation overrides the runtime default for a newly created
 // internal transaction.
 func (opts Options) WithTxnIsolation(isolation txn.TxnIsolation) Options {

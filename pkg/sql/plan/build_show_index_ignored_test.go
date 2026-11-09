@@ -78,7 +78,7 @@ func buildShowIndexIgnoredTestPlan(t *testing.T, sql string) (*planpb.Query, err
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(cc, stmt, false)
+	p, err := BuildPlan(cc, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}

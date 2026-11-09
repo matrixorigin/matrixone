@@ -57,7 +57,7 @@ func TestInsertValuesExplicitBinaryCastKeepsConversionContract(t *testing.T) {
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return p
 	}
@@ -142,7 +142,7 @@ func TestInsertValuesExplicitNumericCastKeepsLegacyLiteralCoercion(t *testing.T)
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return p
 	}
@@ -199,7 +199,7 @@ func TestInsertValuesExplicitTextCastProtectsNestedBinaryLiterals(t *testing.T) 
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		var valueExpr *planpb.Expr
 		for _, n := range p.GetQuery().GetNodes() {
@@ -263,7 +263,7 @@ func TestInsertValuesExplicitBinaryCastProtectsNumericDestination(t *testing.T) 
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		var valueExpr *planpb.Expr
 		for _, n := range p.GetQuery().GetNodes() {
@@ -353,16 +353,20 @@ func (c *doubleDeptMockContext) retypeDeptno(tbl *planpb.TableDef) {
 	tbl.Cols[0].Typ = planpb.Type{Id: int32(doubleTyp.Oid), Width: doubleTyp.Width, Scale: doubleTyp.Scale}
 }
 
-func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*planpb.ObjectRef, *planpb.TableDef, error) {
-	obj, tbl, err := c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+// The wrapper can change the descriptor, so neither resolver route publishes
+// an underlying borrowed relation as evidence for that descriptor.
+func (c *doubleDeptMockContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot, outputs *plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	outputs.Reset()
+	obj, tbl, err := c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 	if err == nil && strings.EqualFold(tableName, "dept") {
 		c.retypeDeptno(tbl)
 	}
 	return obj, tbl, err
 }
 
-func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot) (*planpb.ObjectRef, *planpb.TableDef, error) {
-	obj, tbl, err := c.MockCompilerContext.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot)
+func (c *doubleDeptMockContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot, outputs *plan2.TableResolution) (*planpb.ObjectRef, *planpb.TableDef, error) {
+	outputs.Reset()
+	obj, tbl, err := c.MockCompilerContext.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot, nil)
 	if err == nil && strings.EqualFold(tableName, "dept") {
 		c.retypeDeptno(tbl)
 	}
@@ -389,7 +393,7 @@ func TestInsertValuesNestedBinaryPreservingCastKeepsConversionContract(t *testin
 
 	// Verify the planner-visible destination metadata through the wrapper
 	// before any statement is built: real T_float64, still nullable.
-	_, checked, err := ctx.Resolve("", "dept", nil)
+	_, checked, err := ctx.Resolve("", "dept", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "deptno", checked.Cols[0].Name)
 	require.Equal(t, int32(types.T_float64), checked.Cols[0].Typ.Id,
@@ -400,7 +404,7 @@ func TestInsertValuesNestedBinaryPreservingCastKeepsConversionContract(t *testin
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := plan2.BuildPlan(ctx, stmt, false)
+		p, err := plan2.BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		var valueExpr *planpb.Expr
 		for _, n := range p.GetQuery().GetNodes() {

@@ -20,12 +20,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var scanColumns = []string{
@@ -37,12 +41,18 @@ var scanColumns = []string{
 }
 
 // openRelation opens ref's storage table in env's transaction.
-func openRelation(ctx context.Context, env *Env, ref *Ref) (engine.Relation, error) {
+func openRelation(ctx context.Context, env *Env, ref *Ref, proc *process.Process) (engine.Relation, error) {
 	db, err := env.Engine.Database(ctx, ref.DB, env.Txn)
 	if err != nil {
 		return nil, err
 	}
-	rel, err := db.Relation(ctx, ref.Table, env.Proc)
+	// A nil process is passed as an untyped nil: the storage engine then binds the relation to
+	// the transaction's process, while a typed nil binds it to none.
+	var p any
+	if proc != nil {
+		p = proc
+	}
+	rel, err := db.Relation(ctx, ref.Table, p)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +73,24 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	if err != nil {
 		return err
 	}
+	proc := env.Proc
+	if proc == nil {
+		ls, err := cnLockService(env.Service)
+		if err != nil {
+			return err
+		}
+		mp, err := mpool.NewMPool("index_file_scan", 0, mpool.NoFixed)
+		if err != nil {
+			return err
+		}
+		defer mpool.DeleteMPool(mp)
+		proc = process.NewTopProcess(ctx, mp, nil, env.Txn, nil, ls, nil, nil, nil, nil, nil)
+		defer proc.Free()
+		// rel was opened without a process, and Ranges reads the relation's process.
+		if rel, err = openRelation(ctx, env, ref, proc); err != nil {
+			return err
+		}
+	}
 	txnOffset := workspaceOffset(env)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{
 		BlockFilters: []*plan.Expr{filter},
@@ -72,7 +100,7 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	if err != nil {
 		return err
 	}
-	readers, err := rel.BuildReaders(ctx, env.Proc, filter, relData, 1, txnOffset, false,
+	readers, err := rel.BuildReaders(ctx, proc, filter, relData, 1, txnOffset, false,
 		engine.Policy_CheckAll, engine.FilterHint{})
 	if err != nil {
 		return err
@@ -85,7 +113,7 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 		}
 	}()
 
-	mp := env.Proc.Mp()
+	mp := proc.Mp()
 	for _, r := range readers {
 		for {
 			bat, err := newScanBatch(tableDef)
@@ -108,12 +136,25 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	return nil
 }
 
+// cnLockService returns the lock service of CN service. A process bound to it reports the
+// CN's service ID, under which the storage reader's prefetch finds the CN's IO pipeline.
+func cnLockService(service string) (lockservice.LockService, error) {
+	if rt := runtime.ServiceRuntime(service); rt != nil {
+		if v, ok := rt.GetGlobalVariables(runtime.LockService); ok {
+			if ls, ok := v.(lockservice.LockService); ok && ls != nil {
+				return ls, nil
+			}
+		}
+	}
+	return nil, moerr.NewInternalErrorNoCtxf("index file: no lock service for CN %q", service)
+}
+
 // workspaceOffset is the workspace position a SQL SELECT on env.Proc would read to: the
-// whole workspace for borrowed SQL that opens no statement, otherwise the statement
-// boundary.
+// whole workspace for borrowed SQL that opens no statement, and for a background job,
+// otherwise the statement boundary.
 func workspaceOffset(env *Env) int {
 	ws := env.Txn.GetWorkspace()
-	if env.Proc.IncrStatementDisabled() {
+	if env.Proc == nil || env.Proc.IncrStatementDisabled() {
 		return int(ws.WriteOffset())
 	}
 	return ws.GetSnapshotWriteOffset()

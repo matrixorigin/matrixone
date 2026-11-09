@@ -35,7 +35,8 @@ type showIndexGuardContext struct {
 	generated []string
 }
 
-func (c *showIndexGuardContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *showIndexGuardContext) Resolve(db, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if name == "renamed_child" && db == "otherdb" {
 		def := DeepCopyTableDef(c.tables["nation"], true)
 		def.Name, def.DbName = name, db
@@ -44,12 +45,13 @@ func (c *showIndexGuardContext) Resolve(db, name string, snapshot *Snapshot) (*O
 	if name == "renamed_child" || strings.HasPrefix(name, "__mo_index_") {
 		return nil, nil, errUserIndexSource
 	}
-	return c.MockCompilerContext.Resolve(db, name, snapshot)
+	return c.MockCompilerContext.Resolve(db, name, snapshot, nil)
 }
 
-func (c *showIndexGuardContext) ResolveIndexTableByRef(parent *ObjectRef, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *showIndexGuardContext) ResolveIndexTableByRef(parent *ObjectRef, name string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	c.generated = append(c.generated, name)
-	return c.MockCompilerContext.ResolveIndexTableByRef(parent, name, snapshot)
+	return c.MockCompilerContext.ResolveIndexTableByRef(parent, name, snapshot, nil)
 }
 
 func TestShowIndexGeneratedSourceIdentity(t *testing.T) {
@@ -70,7 +72,7 @@ func TestShowIndexGeneratedSourceIdentity(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		return BuildPlan(ctx, stmt, false)
+		return BuildPlan(ctx, stmt, false, nil)
 	}
 	for _, sql := range []string{
 		"show index ignored from tpch.vt",

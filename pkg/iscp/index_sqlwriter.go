@@ -25,11 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -622,7 +624,18 @@ func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[
 	// tmpfs it is charged to RAM. A CDC sync runs on a SqlContext with no process.Process, so
 	// the FileService has to come from the ISCP executor, which publishes the CN root FS.
 	// spillDir=="" (no LOCAL attached / executor not found) falls back to $TMPDIR, unchanged.
-	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension, resolveHostSpillDir(sqlproc))
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension,
+		resolveHostSpillDir(sqlproc), resolveIndexFiles(sqlproc))
+}
+
+// resolveIndexFiles is the storage engine and index-file cache a sync reads and writes its
+// model files through, from the ISCP executor; nil when there is none.
+func resolveIndexFiles(sqlproc *sqlexec.SqlProcess) *indexfile.Files {
+	exec, ok := GetExecutorRuntime(sqlproc.GetService())
+	if !ok {
+		return nil
+	}
+	return &indexfile.Files{Engine: exec.txnEngine, Cache: fileservice.GetIndexFileCache(exec.rootFS)}
 }
 
 // resolveHostSpillDir answers where this sync's model files go. Split out of NewSync so the

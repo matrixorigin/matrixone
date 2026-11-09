@@ -121,7 +121,7 @@ func TestMockCompilerContextDoesNotLeakInternalSQLExecutor(t *testing.T) {
 		// This is the same plan-building producer shape used by the frontend
 		// named-window regression, using syntax supported by this branch.
 		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-		queryPlan, err := BuildPlan(ctx, stmt, false)
+		queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		require.NotNil(t, queryPlan.GetQuery())
 

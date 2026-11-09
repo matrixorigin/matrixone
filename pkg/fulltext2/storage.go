@@ -560,7 +560,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, err
 	}
 	data, err := mmapReadOnly(f.File())
-	release := f.Keep()
+	release := f.Keep().Release
 	f.Close()
 	if err != nil {
 		release()

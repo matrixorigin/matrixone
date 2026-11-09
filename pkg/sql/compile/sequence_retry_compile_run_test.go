@@ -502,7 +502,7 @@ func newCrFixtureWindow(t *testing.T, sql string, window time.Duration) *crFixtu
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, sql, 1)
 	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 
