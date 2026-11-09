@@ -343,7 +343,7 @@ func TestPreparedFieldRoutineRetryGeneration(t *testing.T) {
 				execution := &routinePlanValidationSession{FeSession: ses, exec: catalog}
 				compiler := ses.GetTxnCompileCtx()
 				originalContext := compiler.GetContext()
-				rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, execution, compiler, prepared.PrepareStmt, false, retry)
+				rebuilt, err := buildPlanForCompileRetry(ec.reqCtx, execution, compiler, prepared.PrepareStmt, false, retry, nil)
 				require.Equal(t, originalContext, compiler.GetContext())
 				require.True(t, history == prepared.fieldTypes, "retry cannot publish replacement FIELD history")
 				require.True(t, temporalHistory == prepared.temporalTypes, "retry cannot publish replacement temporal history")
