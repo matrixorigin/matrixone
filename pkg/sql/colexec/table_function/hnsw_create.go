@@ -30,6 +30,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
@@ -109,26 +110,20 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
-		for _, sql := range deletes {
-			res, err := exec.Exec(sql, stmt)
-			res.Close()
-			if err != nil {
-				return err
-			}
-		}
-		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
-		if err != nil {
-			return err
-		}
-		if u.build != nil {
-			if err := u.build.PersistChunks(writer); err != nil {
-				return err
-			}
-		}
 		run := func(sql string) error {
 			res, err := exec.Exec(sql, stmt)
 			res.Close()
 			return err
+		}
+		for _, sql := range deletes {
+			if err := run(sql); err != nil {
+				return err
+			}
+		}
+		if u.build != nil {
+			if err := u.build.WriteIndexFiles(sqlproc, exec.Txn(), run); err != nil {
+				return err
+			}
 		}
 		for _, sql := range sqls {
 			if err := run(sql); err != nil {
@@ -429,7 +424,7 @@ type hnswBuilder interface {
 	SetQuantizeBounds(hnsw.QuantizeBounds)
 	SetRowCount(int64)
 	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
-	PersistChunks(*sqlexec.ChunkInserter) error
+	WriteIndexFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator, run func(sql string) error) error
 	Destroy() error
 	// addBytes adds a vector given in the column's encoding; an error with an unstorable code
 	// tells why the index cannot store it.
