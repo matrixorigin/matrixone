@@ -325,3 +325,51 @@ func ValidLocalRuntimeFilterDomains(q *planpb.Query) []*planpb.LocalRuntimeFilte
 func ValidLocalDomainNDV(ndv float64) bool {
 	return ndv > 1 && !math.IsNaN(ndv) && !math.IsInf(ndv, 0)
 }
+
+// pruneUsedNodes owns the final node-numbering change. Resolve each old endpoint
+// through node identity, then re-prove the annotation against the compact tree.
+// A removed endpoint cannot accidentally bind to another node that reused its ID.
+func remapLocalRuntimeFilterDomains(q *planpb.Query, oldNodes []*planpb.Node) {
+	if len(q.LocalRuntimeFilterDomains) == 0 {
+		return
+	}
+	if len(q.LocalRuntimeFilterDomains) > 4096 {
+		q.LocalRuntimeFilterDomains = nil
+		return
+	}
+	newID := func(old int32) (int32, bool) {
+		if old < 0 || int(old) >= len(oldNodes) || oldNodes[old] == nil {
+			return 0, false
+		}
+		node := oldNodes[old]
+		id := node.NodeId
+		return id, id >= 0 && int(id) < len(q.Nodes) && q.Nodes[id] == node && node.NodeType == planpb.Node_TABLE_SCAN
+	}
+	remapped := make([]*planpb.LocalRuntimeFilterDomain, 0, len(q.LocalRuntimeFilterDomains))
+	for _, hint := range q.LocalRuntimeFilterDomains {
+		if hint == nil || len(hint.Targets) > 4096 {
+			continue
+		}
+		source, ok := newID(hint.SourceScanNodeId)
+		if !ok {
+			continue
+		}
+		domain := &planpb.LocalRuntimeFilterDomain{SourceScanNodeId: source,
+			SourceColumnName: hint.SourceColumnName, KeyType: hint.KeyType}
+		for _, target := range hint.Targets {
+			if target == nil {
+				continue
+			}
+			if id, live := newID(target.ScanNodeId); live {
+				domain.Targets = append(domain.Targets, &planpb.LocalRuntimeFilterTarget{
+					ScanNodeId: id, ColumnName: target.ColumnName, ProbeNdv: target.ProbeNdv,
+				})
+			}
+		}
+		if len(domain.Targets) != 0 {
+			remapped = append(remapped, domain)
+		}
+	}
+	q.LocalRuntimeFilterDomains = remapped
+	q.LocalRuntimeFilterDomains = ValidLocalRuntimeFilterDomains(q)
+}

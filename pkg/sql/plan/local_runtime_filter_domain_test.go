@@ -143,6 +143,10 @@ func TestLocalRuntimeFilterDomainParsedQuery(t *testing.T) {
 	}
 	domains := LocalRuntimeFilterDomains(q, func(*planpb.Node, string) float64 { return 20000000 })
 	require.NotEmpty(t, domains, "real finalized SQL lineage must expose the selective domain")
+	q.LocalRuntimeFilterDomains = domains
+	(&BaseOptimizer{}).pruneUsedNodes(q)
+	domains = ValidLocalRuntimeFilterDomains(q)
+	require.NotEmpty(t, domains, "annotations must follow the production optimizer's final numbering")
 	var targets []string
 	for _, domain := range domains {
 		if domain.SourceColumnName != "p_partkey" {
@@ -153,4 +157,30 @@ func TestLocalRuntimeFilterDomainParsedQuery(t *testing.T) {
 		}
 	}
 	require.ElementsMatch(t, []string{"lineitem", "partsupp"}, targets)
+}
+
+func TestLocalRuntimeFilterDomainCompactionIdentity(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live endpoints keep identity", true: "removed endpoint cannot alias a reused ID"}[invalid], func(t *testing.T) {
+			q := localDomainTestQuery()
+			q.LocalRuntimeFilterDomains = LocalRuntimeFilterDomains(q, func(*planpb.Node, string) float64 { return 1000 })
+			source := q.Nodes[1]
+			if invalid {
+				dead := DeepCopyNode(source)
+				dead.NodeId = 0 // this number will be owned by a different live node
+				q.Nodes = append(q.Nodes, dead)
+				q.LocalRuntimeFilterDomains[0].SourceScanNodeId = int32(len(q.Nodes) - 1)
+			}
+			(&BaseOptimizer{}).pruneUsedNodes(q)
+			if invalid {
+				require.Empty(t, q.LocalRuntimeFilterDomains)
+			} else {
+				require.Len(t, q.LocalRuntimeFilterDomains, 1)
+				id := q.LocalRuntimeFilterDomains[0].SourceScanNodeId
+				require.Same(t, source, q.Nodes[id])
+				require.NotEqual(t, int32(1), id, "fixture must exercise an actual numbering change")
+				require.Len(t, ValidLocalRuntimeFilterDomains(q), 1)
+			}
+		})
+	}
 }
