@@ -54,7 +54,8 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioMerger *IOMerger
+	ioMerger     *IOMerger
+	decodedReads *decodedReadRegistry
 
 	parallelMode ParallelMode
 }
@@ -302,7 +303,6 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			zap.Any("fs-name", s.name),
 		)
 	}
-
 	// memory cache
 	if config.MemoryCapacity != nil &&
 		*config.MemoryCapacity > DisableCacheCapacity {
@@ -343,7 +343,9 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			zap.Any("config", config),
 		)
 	}
-
+	if s.memCache != nil {
+		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
+	}
 	return nil
 }
 
@@ -630,8 +632,23 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	// A merge leader must not wake its waiters until successful cache updates
-	// have completed. Cache updates are deferred below, so register this defer
+	var decodeScope *decodedReadScope
+	var decodePrepared bool
+	var fillTicket *decodedFillTicket
+	var fillAttempted bool
+	finishFill := func() {
+		ticket := fillTicket
+		fillTicket = nil
+		ticket.finish()
+	}
+	defer func() {
+		if decodeScope != nil {
+			decodeScope.finish()
+		}
+	}()
+	defer finishFill()
+	// A merge leader must not wake its waiters until caller-visible cache work
+	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
 	var finishMerge func()
 	defer func() {
@@ -721,6 +738,33 @@ read_memory_cache:
 	}
 
 read_disk_cache:
+	if !decodePrepared {
+		decodePrepared = true
+		decodeScope, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
+		if err != nil {
+			return err
+		}
+		if fillAttempted {
+			if fillTicket != nil && !fillTicket.leader {
+				if err = fillTicket.wait(ctx, sharedDecodeFillWait); err != nil {
+					finishFill()
+					return err
+				}
+			}
+			if err = readCache(ctx, s.memCache, vector); err != nil {
+				finishFill()
+				return err
+			}
+			if vector.allDone() {
+				return nil
+			}
+			if fillTicket != nil && !fillTicket.leader {
+				// This request did not receive an admitted disk-cache fill. Do
+				// not carry its notification participation into remote or S3 IO.
+				finishFill()
+			}
+		}
+	}
 	if s.diskCache != nil {
 
 		t0 := time.Now()
@@ -734,6 +778,7 @@ read_disk_cache:
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
+			finishFill()
 			return err
 		}
 		// Count bytes actually read from disk cache (entries that became done and from disk cache)
@@ -752,6 +797,18 @@ read_disk_cache:
 		if vector.allDone() {
 			return nil
 		}
+		if decodeScope != nil {
+			// A disk-cache conversion error is normally a miss. A caller stop or
+			// an observed close is terminal for this read, before any other tier.
+			if err = ctx.Err(); err != nil {
+				finishFill()
+				return err
+			}
+			if decodeScope.closedDuringDecode {
+				finishFill()
+				return sharedDecodeClosed()
+			}
+		}
 
 		// try to cache IOEntry if not caching the full file
 		if vector.Policy.CacheIOEntry() {
@@ -766,6 +823,7 @@ read_disk_cache:
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 			}()
 		}
+		finishFill()
 
 	}
 
@@ -1539,11 +1597,18 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
-	if s.memCache != nil {
-		s.memCache.Close(ctx)
+	closeCaches := func() {
+		if s.memCache != nil {
+			s.memCache.Close(ctx)
+		}
+		if s.diskCache != nil {
+			s.diskCache.Close(ctx)
+		}
 	}
-	if s.diskCache != nil {
-		s.diskCache.Close(ctx)
+	if s.decodedReads != nil {
+		s.decodedReads.close(closeCaches)
+	} else {
+		closeCaches()
 	}
 }
 

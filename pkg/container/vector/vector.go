@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -246,11 +247,11 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 // RollbackAppend restores the logical state captured before an attempted
 // append. attemptedRows is needed because grouping bits can be published
 // before a varlen copy fails and advances length.
-func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
-	if checkpoint.length < 0 || checkpoint.length > v.length ||
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) error {
+	if v == nil || checkpoint.length < 0 || checkpoint.length > v.length ||
 		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
-		attemptedRows < 0 {
-		panic("invalid vector append checkpoint")
+		attemptedRows < 0 || attemptedRows > math.MaxInt-checkpoint.length {
+		return errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtx("invalid vector append checkpoint"))
 	}
 	end := max(v.length, checkpoint.length+attemptedRows)
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
@@ -258,6 +259,15 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
 	v.sorted = checkpoint.sorted
+	return nil
+}
+
+// JoinAppendRollbackError preserves the original error after successful rollback.
+func JoinAppendRollbackError(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, rollbackErr)
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -5153,8 +5163,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
-		nulls.FilterByMaskInPlace(&v.gsp, sels, false)
-		nulls.FilterByMaskInPlace(&v.nsp, sels, false)
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, false, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, false, offset)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next() + offset
@@ -5173,8 +5183,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 				sel = itr.Next() + offset
 			}
 		}
-		nulls.FilterByMaskInPlace(&v.gsp, sels, true)
-		nulls.FilterByMaskInPlace(&v.nsp, sels, true)
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, true, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, true, offset)
 		v.length -= length
 	}
 }

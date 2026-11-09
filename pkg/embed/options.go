@@ -51,6 +51,15 @@ func WithCNCount(
 	}
 }
 
+// WithDataPath uses an existing directory for the cluster's data and generated
+// configuration. The caller owns the directory and removes it after Close.
+// An empty path retains the default temporary-directory behavior.
+func WithDataPath(path string) Option {
+	return func(c *cluster) {
+		c.options.dataPath = path
+	}
+}
+
 func WithTesting() Option {
 	return func(c *cluster) {
 		c.options.testing = true

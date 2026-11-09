@@ -422,6 +422,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if isRemote {
 				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
 			}
+			s.DataSource.OrderBy = dsc.Node.OrderBy
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -698,6 +699,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
+		in.TopValueTag = t.TopValueTag
 	// we reused ANTI to store the information here because of the lack of related structure.
 	case *intersect.Intersect, *minus.Minus, *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{}
@@ -1185,9 +1187,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterExprs = opr.RuntimeFilters
 		op = arg
 	case vm.Top:
-		op = top.NewArgument().
-			WithLimit(opr.Limit).
-			WithFs(opr.OrderBy)
+		arg := top.NewArgument().WithLimit(opr.Limit).WithFs(opr.OrderBy)
+		arg.TopValueTag = opr.TopValueTag
+		op = arg
 	// should change next day?
 	case vm.Intersect:
 		op = intersect.NewArgument()

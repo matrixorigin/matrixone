@@ -331,6 +331,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+			// The pipeline owns and closes the execution reader. A prepared
+			// scope is retained for reuse, so do not keep its closed reader
+			// (and the reader's snapshot) reachable until the next EXECUTE.
+			if s.DataSource != nil && !s.DataSource.isConst {
+				s.DataSource.R = nil
+			}
 		}
 	}()
 
@@ -765,11 +771,8 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 // this function will create a pipeline which will get data from n scan-pipeline and output it as a while to the outside.
 // return true if this was just one scan but not mergeScan.
 func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	// unexpected case.
-	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
-	}
-
+	// Each local or remote reader orders only its own blocks. Its paired Top
+	// publishes a local threshold; MergeTop still decides the global result.
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	buildStart := time.Now()
 	defer func() {

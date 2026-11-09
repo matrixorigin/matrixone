@@ -2204,8 +2204,9 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 					DBName:    newTableInfo.SourceDbName,
 					TableName: newTableInfo.SourceTblName,
 				}
+				retryable, _ := cdc.ClassifyRetryableError(err)
 				errorCtx := &cdc.ErrorContext{
-					IsRetryable: false, // Pipeline creation errors are not retryable by default
+					IsRetryable: retryable,
 				}
 				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(

@@ -1298,12 +1298,24 @@ install-static-check-tools:
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
-.PHONY: static-check
+.PHONY: static-check static-check-analysis
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
+STATIC_CHECK_VET = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+
 static-check: config err-check
-	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+	$(STATIC_CHECK_VET)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(STATIC_CHECK_GOLANGCI)
+
+# CI runs the license checks separately. Bound Go's package/build concurrency
+# as well as golangci-lint's workers when a concurrency limit is supplied.
+static-check-analysis: export GOFLAGS := $(strip $(GOFLAGS) $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),-p=$(strip $(GOLANGCI_LINT_CONCURRENCY))))
+static-check-analysis: config err-check
+	$(STATIC_CHECK_VET)
+	$(STATIC_CHECK_GOLANGCI)
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

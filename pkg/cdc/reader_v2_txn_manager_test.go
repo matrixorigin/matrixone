@@ -934,45 +934,31 @@ func TestTransactionManager_EnsureCleanup_WatermarkMismatch_Concurrent(t *testin
 	require.False(t, tm.tracker.NeedsRollback(), "tracker should be clean after EnsureCleanup")
 }
 
-// slowRecordingSinker injects small delays to simulate slow downstream without causing deadlocks.
-type slowRecordingSinker struct {
+type blockingBeginSinker struct {
 	*recordingSinker
-	delay time.Duration
+	beginStarted chan struct{}
+	releaseBegin chan struct{}
+	once         sync.Once
 }
 
-func newSlowRecordingSinker(delay time.Duration) *slowRecordingSinker {
-	return &slowRecordingSinker{
-		recordingSinker: newRecordingSinker(),
-		delay:           delay,
-	}
+func (s *blockingBeginSinker) SendBegin() {
+	s.once.Do(func() {
+		close(s.beginStarted)
+		<-s.releaseBegin
+	})
+	s.recordingSinker.SendBegin()
 }
 
-func (s *slowRecordingSinker) SendBegin() {
-	time.Sleep(s.delay)
-	s.record("begin")
-}
-
-func (s *slowRecordingSinker) SendCommit() {
-	time.Sleep(s.delay)
-	s.record("commit")
-}
-
-func (s *slowRecordingSinker) SendRollback() {
-	time.Sleep(s.delay)
-	s.record("rollback")
-}
-
-func (s *slowRecordingSinker) SendDummy() {
-	time.Sleep(s.delay / 2)
-	s.record("dummy")
-}
-
-// TestTransactionManager_SlowSinker_NoDeadlock ensures that even with a slow sinker,
-// concurrent begins do not deadlock; at worst, they serialize and take slightly longer.
+// A blocked sinker must not prevent concurrent begin calls from completing
+// after it is released.
 func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	sinker := newSlowRecordingSinker(5 * time.Millisecond)
+	sinker := &blockingBeginSinker{
+		recordingSinker: newRecordingSinker(),
+		beginStarted:    make(chan struct{}),
+		releaseBegin:    make(chan struct{}),
+	}
 	updater := newMockWatermarkUpdater()
 	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
 
@@ -980,35 +966,74 @@ func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 	toTs1 := (&fromTs).Next()
 	toTs2 := (&toTs1).Next()
 
-	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs1))
-	sinker.resetOps()
-
 	const numGoroutines = 8
-	var wg sync.WaitGroup
-	wg.Add(numGoroutines)
-
-	done := make(chan struct{})
-	start := time.Now()
-
-	for i := 0; i < numGoroutines; i++ {
+	errs := make(chan error, numGoroutines+1)
+	release := sync.OnceFunc(func() { close(sinker.releaseBegin) })
+	var workers []<-chan struct{}
+	startWorker := func(from, to types.TS, ready chan<- struct{}) {
+		done := make(chan struct{})
+		workers = append(workers, done)
 		go func() {
-			defer wg.Done()
-			// Repeatedly attempt begin on a new range; should not deadlock
-			_ = tm.BeginTransaction(ctx, toTs1, toTs2)
+			defer close(done)
+			if ready != nil {
+				ready <- struct{}{}
+			}
+			errs <- tm.BeginTransaction(ctx, from, to)
 		}()
 	}
-
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
+	t.Cleanup(func() {
+		release()
+		for _, done := range workers {
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Error("begin worker did not exit during cleanup")
+				return
+			}
+		}
+	})
+	startWorker(fromTs, toTs1, nil)
 	select {
-	case <-done:
-		// Completed; assert time bound is reasonable (no deadlock)
-		elapsed := time.Since(start)
-		require.Less(t, elapsed, 500*time.Millisecond, "should not take too long; no deadlock expected")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout indicates potential deadlock with slow sinker")
+	case <-sinker.beginStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first begin did not reach the sinker")
 	}
+
+	ready := make(chan struct{}, numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		startWorker(toTs1, toTs2, ready)
+	}
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case <-ready:
+		case <-time.After(10 * time.Second):
+			t.Fatal("begin worker did not start")
+		}
+	}
+	if tm.mu.TryLock() {
+		tm.mu.Unlock()
+		t.Fatal("transaction manager lock was released while the sinker was blocked")
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("begin completed before the sinker was released: %v", err)
+	default:
+	}
+	release()
+	for _, done := range workers {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("concurrent begins did not finish after the sinker was released")
+		}
+	}
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	expected := []string{"begin"}
+	for i := 0; i < numGoroutines; i++ {
+		expected = append(expected, "clear", "rollback", "dummy", "begin")
+	}
+	require.Equal(t, expected, sinker.opsSnapshot())
 }

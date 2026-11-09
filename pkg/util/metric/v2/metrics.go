@@ -106,6 +106,7 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(sharedDecodeCounter, SharedDecodeActive, SharedDecodeReserved)
 	registry.MustRegister(fsCacheBytes)
 	registry.MustRegister(fsCachePressureCounter)
 	registry.MustRegister(fsCachePressureEvictDuration)

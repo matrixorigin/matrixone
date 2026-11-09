@@ -15,6 +15,7 @@
 package process
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -71,6 +72,17 @@ func TestOperatorStatsCloneForExportDetachesMutableReferences(t *testing.T) {
 
 	var nilStats *OperatorStats
 	require.Nil(t, nilStats.CloneForExport())
+}
+
+func TestOperatorStatsRemoteScanCounters(t *testing.T) {
+	original := OperatorStats{InputBlocks: 3, InputRows: 24, ReadSize: 1024}
+	data, err := json.Marshal(original)
+	require.NoError(t, err)
+	var restored OperatorStats
+	require.NoError(t, json.Unmarshal(data, &restored))
+	require.Equal(t, original.InputBlocks, restored.InputBlocks)
+	require.Equal(t, original.InputRows, restored.InputRows)
+	require.Equal(t, original.ReadSize, restored.ReadSize)
 }
 
 func TestOperatorStatsResourceDelta(t *testing.T) {
