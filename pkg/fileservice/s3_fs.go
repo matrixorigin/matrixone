@@ -740,6 +740,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	vector.resetCacheAdmission()
 	if _, err := parseFilePathAtService(vector.FilePath, s.name); err != nil {
 		return err
 	}
@@ -1448,8 +1449,11 @@ func (s *S3FS) singleEntryRangeMergeKey(vector *IOVector) (IOMergeKey, bool) {
 		return IOMergeKey{}, false
 	}
 
-	canPublish := target.ToCacheData != nil && s.memCache != nil &&
+	canPublish := target.ToCacheData != nil && target.cacheAllocationMode != cacheAllocationTransient && s.memCache != nil &&
 		!vector.Policy.Any(SkipMemoryCacheReads, SkipMemoryCacheWrites)
+	if canPublish && vector.Policy.Any(MemoryCacheNoEvict) && s.memCache.cannotReserveWithoutEviction(target.CachedDataSize) {
+		canPublish = false
+	}
 	if !canPublish {
 		canPublish = s.diskCache != nil && vector.Policy.CacheIOEntry() &&
 			!vector.Policy.Any(SkipDiskCacheReads, SkipDiskCacheWrites)

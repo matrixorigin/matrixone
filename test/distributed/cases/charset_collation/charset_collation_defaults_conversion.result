@@ -48,7 +48,7 @@ native_defaults  ¦  CREATE TABLE `native_defaults` (
   `n` int DEFAULT NULL
 ) COLLATE=utf8mb4_unicode_ci
 show full columns from native_defaults;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Collation[12,64,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Privileges[12,154,0]  ¦  Comment[-1,6144,0]  𝄀
 v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 g  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
 raw  ¦  varbinary(8)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
@@ -95,7 +95,7 @@ converted  ¦  CREATE TABLE `converted` (
   KEY `iv` (`v`)
 ) COLLATE=utf8mb4_unicode_ci
 show full columns from converted;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Collation[12,64,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Privileges[12,154,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references
 alter table converted default collate=utf8mb4_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
@@ -260,7 +260,7 @@ explicit_binary  ¦  CREATE TABLE `explicit_binary` (
   `g` binary(2) GENERATED ALWAYS AS (cast(v as binary(2))) STORED
 ) CHARACTER SET=binary
 show full columns from explicit_binary;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Collation[12,64,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Privileges[12,154,0]  ¦  Comment[-1,6144,0]  𝄀
 v  ¦  varbinary(4)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 g  ¦  binary(2)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references
 create table source_like(v varchar(8)) collate=utf8mb4_bin;

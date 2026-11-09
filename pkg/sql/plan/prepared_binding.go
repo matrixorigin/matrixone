@@ -945,7 +945,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			}
 		}
 	}
-	if lowPrecisionList {
+	if lowPrecisionList || !isPreparedNumericPrefixFunction(name) {
 		return args, nil
 	}
 	positions := make(map[int]types.StringConversionKind)

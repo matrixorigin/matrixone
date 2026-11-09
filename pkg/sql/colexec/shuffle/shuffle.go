@@ -19,9 +19,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -70,18 +72,51 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 			shuffle.ShuffleType != int32(plan.ShuffleType_Hash) || shuffle.BucketNum < 1) {
 		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle requires synchronous hash routing")
 	}
+	if shuffle.OwnedOutput && (!shuffle.DrainAllBuckets || len(shuffle.ShuffleKeyColumns) == 0 ||
+		shuffle.BucketNum > MaxOwnedBuckets || shuffle.OwnedColumnCount < 1 || shuffle.allocationAccount == nil || shuffle.outputAllocation == nil) {
+		return moerr.NewInternalError(proc.Ctx, "owned shuffle requires an allocation account and synchronous complete-key routing")
+	}
 	if shuffle.OpAnalyzer == nil {
 		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, opName)
 	} else {
 		shuffle.OpAnalyzer.Reset()
 	}
 
+	if shuffle.GetShufflePool() == nil {
+		if shuffle.OwnedOutput {
+			shuffle.SetShufflePool(NewOwnedShufflePool(shuffle.BucketNum, 1, shuffle.OwnedColumnCount))
+		} else {
+			shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1, true))
+		}
+		shuffle.DrainAllBuckets = true
+	}
+	if shuffle.OwnedOutput {
+		if !shuffle.ctr.shufflePool.ownedOutput || shuffle.ctr.shufflePool.bucketNum != shuffle.BucketNum ||
+			shuffle.ctr.shufflePool.ownedColumns != shuffle.OwnedColumnCount {
+			return mpool.ErrAllocationAccountMismatch
+		}
+		if err := shuffle.ctr.shufflePool.initOwned(proc, shuffle.outputAllocation); err != nil {
+			return err
+		}
+		if err := shuffle.ctr.shufflePool.ownedFailure(proc, nil); err != nil {
+			return err
+		}
+		if shuffle.ctr.selectionMetadata == nil {
+			// Covers the bounded bucket slices and key-vector references. The
+			// row-sized backing arrays are charged directly to the account.
+			if uint64(len(shuffle.ShuffleKeyColumns)) > (math.MaxUint64-(4<<10))/16 {
+				return shuffle.ctr.shufflePool.ownedFailure(proc, mpool.ErrAllocationAccountInvalid)
+			}
+			reservation, err := shuffle.ctr.shufflePool.reserveOwnedMemory(proc, 4<<10+uint64(len(shuffle.ShuffleKeyColumns))*16)
+			if err != nil {
+				return err
+			}
+			shuffle.ctr.selectionMetadata = reservation
+			shuffle.ctr.selectionOffsets = make([]int, int(shuffle.BucketNum)*2)
+		}
+	}
 	if shuffle.ctr.sels == nil {
 		shuffle.ctr.sels = make([][]int32, shuffle.BucketNum)
-	}
-	if shuffle.GetShufflePool() == nil {
-		shuffle.SetShufflePool(NewShufflePool(shuffle.BucketNum, 1, true))
-		shuffle.DrainAllBuckets = true
 	}
 
 	if shuffle.ShuffleExpr != nil && shuffle.ctr.exprExec == nil {
@@ -95,6 +130,9 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		// Preserve cancellation and the primary execution failure for the
 		// scope collector; a generic admission error would mask their cause.
 		if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
+			return err
+		}
+		if err := process.PipelineContextError(proc.Ctx); err != nil {
 			return err
 		}
 		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
@@ -448,6 +486,9 @@ func (shuffle *Shuffle) enqueueBySels(bat *batch.Batch, proc *process.Process) e
 // Hash collisions only co-locate tuples: the receiving Group still compares
 // every equality key. Borrowed vectors never outlive the call.
 func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if shuffle.OwnedOutput && len(bat.Vecs) != shuffle.OwnedColumnCount {
+		return nil, moerr.NewInternalError(proc.Ctx, "owned shuffle input schema changed")
+	}
 	if len(shuffle.ctr.keyVectors) != len(shuffle.ShuffleKeyColumns) {
 		shuffle.ctr.keyVectors = make([]*vector.Vector, len(shuffle.ShuffleKeyColumns))
 	}
@@ -461,7 +502,15 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 	}
 	if shuffle.ctr.keyHashes == nil {
 		// NewVec defaults to Go-heap storage, which bypasses mpool capacity.
-		shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+		if shuffle.OwnedOutput {
+			var err error
+			shuffle.ctr.keyHashes, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_uint64.ToType(), shuffle.outputAllocation)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+		}
 	}
 	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), proc.Mp()); err != nil {
 		return nil, err
@@ -469,6 +518,9 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 	shuffle.ctr.keyHashes.SetLength(bat.RowCount())
 	hashes := vector.MustFixedColNoTypeCheck[uint64](shuffle.ctr.keyHashes)
 	keycodec.ComputeXXHash(shuffle.ctr.keyVectors, hashes, 0)
+	if shuffle.OwnedOutput {
+		return nil, shuffle.enqueueOwnedKey(bat, hashes, proc)
+	}
 	sels := shuffle.clearSels()
 	for row, hash := range hashes {
 		idx := hash % uint64(shuffle.BucketNum)
@@ -480,6 +532,47 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 		}
 	}
 	return nil, shuffle.enqueueBySels(bat, proc)
+}
+
+// enqueueOwnedKey builds bucket views in a single charged row-index buffer.
+// The input and these views remain live until flushPending finishes.
+func (shuffle *Shuffle) enqueueOwnedKey(bat *batch.Batch, hashes []uint64, proc *process.Process) error {
+	rows := bat.RowCount()
+	if rows > math.MaxInt32 {
+		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle batch exceeds index range")
+	}
+	if cap(shuffle.ctr.selectionBacking) < rows {
+		next, err := mpool.MakeSliceAccounted[int32](rows, proc.Mp(), shuffle.allocationAccount, mpool.AllocationOwnerSet, 13)
+		if err != nil {
+			return err
+		}
+		if shuffle.ctr.selectionBacking != nil {
+			mpool.FreeSlice(proc.Mp(), shuffle.ctr.selectionBacking)
+		}
+		shuffle.ctr.selectionBacking = next
+	}
+	backing := shuffle.ctr.selectionBacking[:rows]
+	buckets := int(shuffle.BucketNum)
+	counts, positions := shuffle.ctr.selectionOffsets[:buckets], shuffle.ctr.selectionOffsets[buckets:]
+	clear(counts)
+	for _, hash := range hashes {
+		counts[hash%uint64(buckets)]++
+	}
+	start := 0
+	for i, count := range counts {
+		end := start + count
+		shuffle.ctr.sels[i] = backing[start:end:end]
+		positions[i] = start
+		start = end
+	}
+	for row, hash := range hashes {
+		i := hash % uint64(buckets)
+		backing[positions[i]] = int32(row)
+		positions[i]++
+	}
+	// Even a single bucket is copied, so the borrowed input is never relabelled
+	// or retained as an accounted output.
+	return shuffle.enqueueBySels(bat, proc)
 }
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,

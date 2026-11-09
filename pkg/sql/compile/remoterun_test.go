@@ -603,6 +603,19 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, ownsAllocation)
 	})
 
+	t.Run("OrderScanCutoffHint", func(t *testing.T) {
+		original := order.NewArgument()
+		defer original.Release()
+		original.ScanCutoffLimit = 500005
+		original.ScanCutoffTag = 42
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredOrder := restored.(*order.Order)
+		require.Equal(t, original.ScanCutoffLimit, restoredOrder.ScanCutoffLimit)
+		require.Equal(t, original.ScanCutoffTag, restoredOrder.ScanCutoffTag)
+		require.Nil(t, restoredOrder.ScanCutoff, "execution state is not serialized")
+	})
+
 	t.Run("TopValueTag", func(t *testing.T) {
 		original := top.NewArgument().WithLimit(plan.MakePlan2Int64ConstExprWithType(3))
 		defer original.Release()

@@ -113,8 +113,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
-              Filter Cond: t1.__mo_cbkey_002c1002c2 in ()  𝄀
-              Block Filter Cond: t1.__mo_cbkey_002c1002c2 in (), (t1.c1 = 3), t1.c2 in ([1 2 3])
+              Filter Cond: t1.__mo_cbkey_002c1002c2 in (<opaque>)  𝄀
+              Block Filter Cond: t1.__mo_cbkey_002c1002c2 in (<opaque>), (t1.c1 = 3), t1.c2 in ([1 2 3])
 select count(*) from t1 where c1 = 3 and c2 in (1,2,3);
 ➤ count(*)[-5,64,0]  𝄀
 10
@@ -201,8 +201,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Filter Cond: t2.__mo_cpkey_col in ()  𝄀
-              Block Filter Cond: t2.__mo_cpkey_col in (), (t2.c1 = 3), t2.c2 in ([1 2 3])
+              Filter Cond: t2.__mo_cpkey_col in (<opaque>)  𝄀
+              Block Filter Cond: t2.__mo_cpkey_col in (<opaque>), (t2.c1 = 3), t2.c2 in ([1 2 3])
 select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
 ➤ count(*)[-5,64,0]  𝄀
 1
