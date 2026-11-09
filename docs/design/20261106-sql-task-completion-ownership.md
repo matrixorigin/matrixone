@@ -286,7 +286,9 @@ a fetch deadline while the runner is live still arms recovery and retains the
 fetch-timeout cause, whereas runner shutdown must not create a failure marker.
 Enqueued task contexts remain children of the runner, not the short fetch
 deadline. If inspection or grouping stops before enqueueing, rewind the first
-unqueued fair candidate; a normal untrusted page has already armed a new wave.
+unqueued fair candidate. For an unqueued normal candidate, arm a wave if the
+runner is live and an owner is available; reuse a generation already signaled
+by the page or a concurrent defer. Without an owner, the timer retries.
 The fallback reads an unfiltered ordered window of at most 32 lightweight rows:
 ID, status, runner, executor, parent and claim pointer. It never decodes task
 options or retains SQL bodies. Skip a row without a point lookup only when all

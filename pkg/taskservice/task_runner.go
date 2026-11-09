@@ -429,7 +429,7 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	}
 	tasks, held, err := groupSQLTaskBatch(fetchCtx, tasks)
 	if err != nil {
-		r.sqlFetch.rewind(firstID)
+		r.revisitUnqueued(ctx, firstID)
 		return false
 	}
 	if len(held) != 0 {
@@ -443,11 +443,11 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	continueBurst := true
 	for _, t := range tasks {
 		if fetchCtx.Err() != nil {
-			r.sqlFetch.rewind(t.ID)
+			r.revisitUnqueued(ctx, t.ID)
 			return false
 		}
 		if !r.addToWait(ctx, t, held[t.ID]) {
-			r.sqlFetch.rewind(t.ID)
+			r.revisitUnqueued(ctx, t.ID)
 			return false
 		}
 		if t.Metadata.Executor == task.TaskCode_SQLTask {
@@ -457,6 +457,23 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 		}
 	}
 	return continueBurst
+}
+
+// A fair cursor can rewind directly. A normal fetch has no cursor, so keep
+// recovery armed if an unqueued candidate was interrupted while the runner
+// remains live. An already-signaled generation also covers this revisit.
+func (r *taskRunner) revisitUnqueued(ctx context.Context, id uint64) {
+	if id == 0 {
+		return
+	}
+	if r.sqlFetch.last != nil {
+		r.sqlFetch.rewind(id)
+		return
+	}
+	if ctx.Err() == nil && !r.sqlFetch.active && r.sqlDeferred.Load() == r.sqlFetch.observed &&
+		sqlTaskServiceOwner(r.service) != nil {
+		r.sqlDeferred.Add(1)
+	}
 }
 
 // Leave same-parent firings in storage until one selected firing has had an

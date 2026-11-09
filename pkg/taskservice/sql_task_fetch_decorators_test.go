@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // This decorator narrows broad queries but honors an exact identity query. A
@@ -532,4 +535,36 @@ func TestSQLTaskGroupedUntrustedPageArmsOneWave(t *testing.T) {
 	require.EqualValues(t, 1, runner.sqlDeferred.Load(), "grouping must reuse the wave already armed by the untrusted page")
 	require.Len(t, runner.waitTasksC, 1)
 	runner.removeRunningTask(<-runner.waitTasksC, nil)
+}
+
+func TestSQLTaskTrustedFetchExpiryRevisitsUnqueuedCandidate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewMemTaskStorage()
+		mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", Metadata: task.TaskMetadata{ID: "wanted", Executor: task.TaskCode_TestOnly}})
+		owner := NewTaskService(runtime.DefaultRuntime(), store)
+		runner := NewTaskRunner("cn1", owner, nil, WithRunnerParallelism(1), WithRunnerFetchLimit(1), WithRunnerFetchInterval(100*time.Millisecond), WithRunnerFetchTimeout(10*time.Millisecond)).(*taskRunner)
+		entered, release := make(chan struct{}), make(chan struct{})
+		var enteredOnce, releaseOnce sync.Once
+		core := zapcore.NewCore(zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(io.Discard), zapcore.DebugLevel)
+		runner.logger = zap.New(core, zap.Hooks(func(entry zapcore.Entry) error {
+			if entry.Message == "new task fetched" {
+				enteredOnce.Do(func() { close(entered); <-release })
+			}
+			return nil
+		}))
+		t.Cleanup(func() {
+			releaseOnce.Do(func() { close(release) })
+			require.NoError(t, runner.Stop())
+			require.NoError(t, owner.Close())
+		})
+		executed := make(chan struct{}, 1)
+		runner.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { executed <- struct{}{}; return nil })
+		require.NoError(t, runner.Start())
+		<-entered // the trusted query has returned, before its candidate is queued
+		time.Sleep(20 * time.Millisecond)
+		releaseOnce.Do(func() { close(release) })
+		synctest.Wait()
+		require.Empty(t, executed)
+		require.EqualValues(t, 1, runner.sqlDeferred.Load(), "the live runner must revisit the interrupted candidate")
+	})
 }
