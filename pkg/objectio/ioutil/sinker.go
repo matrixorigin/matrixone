@@ -559,6 +559,15 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 		sinker.buf.bufStats.updateBytes(-bat.Size())
 	}
 
+	delivered := false
+	defer func() {
+		if !delivered {
+			// Release partial allocations immediately; returning to a cache
+			// alone can retain them after an allocation failure.
+			bat.Clean(sinker.mp)
+			sinker.putBackBuffer(bat)
+		}
+	}()
 	// A transferred batch, or a shared buffer supplied by a caller, can hold
 	// constant vectors or borrowed windows. They are not writable destinations.
 	for _, vec := range bat.Vecs {
@@ -569,7 +578,6 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 			}
 			vec.Free(sinker.mp)
 			if err := vec.SetAllocationAccount(selection); err != nil {
-				bat.Clean(sinker.mp)
 				return nil, err
 			}
 		} else if vec.IsConst() {
@@ -578,10 +586,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	}
 
 	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
-		// A preceding vector may have allocated before a later vector failed.
-		bat.Clean(sinker.mp)
 		return nil, err
 	}
+	delivered = true
 	return bat, nil
 }
 
@@ -804,14 +811,13 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	if sinker.schema.sortKeyIdx != -1 {
 		if sinker.config.dedupAll {
 			fSinker := sinker.getStageFileSinker()
+			defer sinker.resetFileSinker()
 			err := sinker.trySpillMergeSortAccumulate(ctx, fSinker)
 			if err != nil {
-				sinker.resetFileSinker()
 				return err
 			}
 			atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
 			err = sinker.syncFileSinker(ctx, fSinker)
-			sinker.resetFileSinker()
 			return err
 		}
 
@@ -822,14 +828,13 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 		}
 
 		fSinker := sinker.getStageFileSinker()
+		defer sinker.resetFileSinker()
 		err := sinker.trySpillMergeSortStreaming(ctx, fSinker)
 		if err != nil {
-			sinker.resetFileSinker()
 			return err
 		}
 		atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
 		err = sinker.syncFileSinker(ctx, fSinker)
-		sinker.resetFileSinker()
 		return err
 	}
 
@@ -850,16 +855,15 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 
 	// no sort key: spill directly (sync path)
 	fSinker := sinker.getStageFileSinker()
+	defer sinker.resetFileSinker()
 	sinkStart := time.Now()
 	for _, bat := range sinker.staged.inMemory {
 		if err := fSinker.Sink(ctx, bat); err != nil {
-			sinker.resetFileSinker()
 			return err
 		}
 	}
 	atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 	err := sinker.syncFileSinker(ctx, fSinker)
-	sinker.resetFileSinker()
 	return err
 }
 
@@ -889,7 +893,7 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	}
 	// The streaming callback reuses this buffer; retain one cleanup owner
 	// even when the file writer panics while processing it.
-	defer func() { sinker.putBackBuffer(buffer) }()
+	defer sinker.putBackBuffer(buffer)
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
@@ -899,7 +903,7 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 		data.CleanOnlyData()
 		return data, nil
 	}
-	buffer, err = mergeutil.MergeSortBatches(
+	_, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
 		buffer,
@@ -916,9 +920,19 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	ctx context.Context, fSinker FileSinker,
 ) error {
 	var sorted []*batch.Batch
+	var active *batch.Batch
+	defer func() {
+		if active != nil {
+			sinker.putBackBuffer(active)
+		}
+	}()
 	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sorted = append(sorted, data)
-		return sinker.fetchBuffer()
+		// sorted owns data before the next buffer is fetched.
+		active = nil
+		var err error
+		active, err = sinker.fetchBuffer()
+		return active, err
 	}
 	defer func() {
 		for i, bat := range sorted {
@@ -932,7 +946,8 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	if err != nil {
 		return err
 	}
-	buffer, err = mergeutil.MergeSortBatches(
+	active = buffer
+	_, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
 		buffer,
@@ -940,7 +955,6 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		sinker.mp,
 		sinker.putBackOneInMemory,
 	)
-	sinker.putBackBuffer(buffer)
 	if err != nil {
 		return err
 	}
@@ -988,9 +1002,11 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 		pending = nil
 		pendingSize = 0
 	}
+	defer cleanupPending()
+	var active *batch.Batch
 	defer func() {
-		if err != nil {
-			cleanupPending()
+		if active != nil {
+			sinker.putBackBuffer(active)
 		}
 	}()
 
@@ -998,6 +1014,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 		if len(pending) == 0 {
 			return nil
 		}
+		// Submit takes ownership even when it rejects the job.
 		jobData := pending
 		pending = nil
 		pendingSize = 0
@@ -1006,20 +1023,25 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 
 	streamSubmit := func(data *batch.Batch) (*batch.Batch, error) {
 		pending = append(pending, data)
+		// pending owns data from this point.
+		active = nil
 		pendingSize += data.Size()
 		if pendingSize >= submitThreshold {
 			if err := submitPending(); err != nil {
 				return nil, err
 			}
 		}
-		return sinker.fetchBuffer()
+		var err error
+		active, err = sinker.fetchBuffer()
+		return active, err
 	}
 
 	buffer, err := sinker.fetchBuffer()
 	if err != nil {
 		return err
 	}
-	buffer, err = mergeutil.MergeSortBatches(
+	active = buffer
+	_, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
 		buffer,
@@ -1027,9 +1049,6 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 		sinker.mp,
 		sinker.putBackOneInMemory,
 	)
-	if buffer != nil {
-		sinker.putBackBuffer(buffer)
-	}
 	if err != nil {
 		return err
 	}
