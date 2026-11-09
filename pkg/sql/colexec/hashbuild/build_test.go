@@ -2013,6 +2013,11 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 				[]types.Type{wideType, directType},
 				conditions,
 			)
+			t.Cleanup(func() {
+				tc.cancel()
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			})
 			spec := makeSerializedRuntimeFilterSpec(
 				t, tc.proc, 206, 100,
 				[]types.Type{directType, narrowType}, false)
@@ -2027,6 +2032,12 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 			budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
+			t.Cleanup(func() {
+				defer generation.Close()
+				tc.arg.ctr.hashmapBuilder.Free(tc.proc)
+				tc.proc.GetMessageBoard().Reset()
+				require.Zero(t, generation.Used())
+			})
 			installTestHashBuildBudget(t, tc.arg, generation)
 			makeChunk := func(start, end int) uniqueKeyBatch {
 				var nulls []uint64
@@ -2090,9 +2101,6 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 				require.Empty(t, msgs)
 				require.Nil(t, tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs)
 				require.Zero(t, generation.Used())
-				generation.Close()
-				tc.proc.Free()
-				require.Zero(t, tc.proc.Mp().CurrNB())
 				return
 			}
 			require.NoError(t, err)
@@ -2115,6 +2123,7 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 				rows := len(test.wide) - len(test.nulls)
 				require.Equal(t, int32(rows), runtimeFilter.Card)
 				payload := vector.NewVec(types.T_any.ToType())
+				defer payload.Free(tc.proc.Mp())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 				require.Equal(t, rows, payload.Length())
 				expected := make(map[string]struct{}, rows)
@@ -2137,7 +2146,6 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 					delete(expected, string(payload.GetBytesAt(i)))
 				}
 				require.Empty(t, expected)
-				payload.Free(tc.proc.Mp())
 			} else {
 				require.Zero(t, runtimeFilter.Card)
 				require.Empty(t, runtimeFilter.Data)
@@ -2145,9 +2153,6 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 
 			runtimeFilter.Destroy()
 			require.Zero(t, generation.Used(), "payload, temporary cast vectors, and executors must release their account")
-			generation.Close()
-			tc.proc.Free()
-			require.Zero(t, tc.proc.Mp().CurrNB())
 		})
 	}
 }
