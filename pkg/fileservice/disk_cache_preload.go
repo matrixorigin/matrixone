@@ -25,6 +25,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// wholeObjectSizeEstimate is the size of a whole-object file assumed before the disk
+// cache has written one.
+const wholeObjectSizeEstimate = 128 << 20
+
 const (
 	// A group is thrashing when the average share of its whole-object files read
 	// before their eviction falls below preloadUnusedShare over at least
@@ -37,7 +41,8 @@ const (
 	// preloadUsageWeight is the weight of the newest eviction in the moving average.
 	preloadUsageWeight = 0.2
 	// A group's thrashing ends after its quiet period without an eviction of its
-	// whole-object files. The period starts at preloadQuietPeriod and doubles, up to
+	// whole-object files, once another whole object fits in the disk cache. The
+	// period starts at preloadQuietPeriod and doubles, up to
 	// preloadQuietPeriodMax, each time the group thrashes again within twice the
 	// period after it ended.
 	preloadQuietPeriod    = 30 * time.Second
@@ -210,7 +215,9 @@ func (p *preloadUsage) forgetIdleGroups(now time.Time) {
 
 // narrowRead maps diskPath to group and reports whether group's whole-object
 // files are evicted before most of their bytes are read. Group 0 is no group.
-func (p *preloadUsage) narrowRead(diskPath string, group uint64) bool {
+// Thrashing ends only when fits reports room for another whole object: a group
+// that reads ranges evicts no whole-object file, whether or not its objects fit.
+func (p *preloadUsage) narrowRead(diskPath string, group uint64, fits func() bool) bool {
 	if p == nil || group == 0 {
 		return false
 	}
@@ -227,11 +234,11 @@ func (p *preloadUsage) narrowRead(diskPath string, group uint64) bool {
 	if g == nil {
 		return false
 	}
-	if now := p.now(); g.thrashing && now.Sub(g.lastEvict) > g.quiet {
+	if now := p.now(); g.thrashing && now.Sub(g.lastEvict) > g.quiet && fits() {
 		g.thrashing = false
 		g.ended = now
 		g.samples = 0
-		logutil.Info("disk cache: no eviction of a group's whole-object files for the quiet period, they fit again",
+		logutil.Info("disk cache: no eviction of a group's whole-object files for the quiet period and room for one, they fit again",
 			zap.Uint64("group", group),
 			zap.Duration("quiet-period", g.quiet),
 		)
@@ -256,4 +263,24 @@ func FullFilePreloadSkipped(ctx context.Context, fs FileService, policy Policy, 
 	}
 	w, ok := fs.(WholeObjectPreloads)
 	return ok && w.WholeObjectPreloadSkipped(filePath, GetPreloadGroup(ctx))
+}
+
+// wholeObjectFits reports whether a whole-object file, sized as the largest one written,
+// fits in the disk cache beside the cached files and the whole-object fills in progress.
+func (d *DiskCache) wholeObjectFits() bool {
+	size := d.wholeFileMax.Load()
+	if size <= 0 {
+		size = wholeObjectSizeEstimate
+	}
+	return d.cache.Used()+(d.wholeFills.Load()+1)*size <= d.capacityFunc()
+}
+
+// noteWholeFile records the size of a whole-object file written to the cache.
+func (d *DiskCache) noteWholeFile(size int64) {
+	for {
+		cur := d.wholeFileMax.Load()
+		if size <= cur || d.wholeFileMax.CompareAndSwap(cur, size) {
+			return
+		}
+	}
 }

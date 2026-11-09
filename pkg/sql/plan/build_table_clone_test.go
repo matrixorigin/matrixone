@@ -100,7 +100,8 @@ type prepareCloneSourceContext struct {
 	targetReads int
 }
 
-func (c *prepareCloneSourceContext) Resolve(db, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *prepareCloneSourceContext) Resolve(db, table string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if db == "targetdb" {
 		c.targetReads++
 		return nil, nil, errors.New("caller destination must not be resolved")
@@ -108,7 +109,7 @@ func (c *prepareCloneSourceContext) Resolve(db, table string, snapshot *Snapshot
 	if c.sourceErr != nil {
 		return nil, nil, c.sourceErr
 	}
-	return c.MockCompilerContext.Resolve(db, table, snapshot)
+	return c.MockCompilerContext.Resolve(db, table, snapshot, nil)
 }
 
 func (c *prepareCloneSourceContext) DatabaseExists(db string, snapshot *Snapshot) bool {
@@ -134,7 +135,7 @@ func TestPrepareCloneWithAccountValidatesSourceWithoutTargetProbe(t *testing.T) 
 	require.NoError(t, err)
 	defer stmt.Free()
 	prepare := &tree.PrepareStmt{Name: "p", Stmt: stmt}
-	p, err := BuildPlan(ctx, prepare, false)
+	p, err := BuildPlan(ctx, prepare, false, nil)
 	require.NoError(t, err)
 	require.Same(t, prior, ctx.GetSnapshot())
 	require.Zero(t, ctx.targetReads)
@@ -147,7 +148,7 @@ func TestPrepareCloneWithAccountValidatesSourceWithoutTargetProbe(t *testing.T) 
 	// The same shared clone privilege check rejects a snapshot scoped to a
 	// different table even when that table name resolves at its timestamp.
 	ctx.named.ExtraInfo = &planpb.SnapshotExtraInfo{Level: tree.SNAPSHOTLEVELTABLE.String(), ObjId: ^uint64(0), Name: "snap"}
-	_, err = BuildPlan(ctx, prepare, false)
+	_, err = BuildPlan(ctx, prepare, false, nil)
 	require.Error(t, err)
 	require.Same(t, prior, ctx.GetSnapshot())
 	require.Zero(t, ctx.targetReads)
@@ -158,7 +159,7 @@ func TestPrepareCloneWithAccountValidatesSourceWithoutTargetProbe(t *testing.T) 
 		previousKind := source.TableType
 		source.TableType = catalog.SystemViewRel
 		defer func() { source.TableType = previousKind }()
-		_, err = BuildPlan(ctx, prepare, false)
+		_, err = BuildPlan(ctx, prepare, false, nil)
 		require.ErrorContains(t, err, "not BASE TABLE")
 	}()
 	require.Same(t, prior, ctx.GetSnapshot())
@@ -172,14 +173,14 @@ func TestPrepareCloneWithAccountValidatesSourceWithoutTargetProbe(t *testing.T) 
 			"create table targetdb.copy clone mo_catalog.mo_tables to account tenant", 1)
 		require.NoError(t, parseErr)
 		defer systemSource.Free()
-		_, err = BuildPlan(ctx, &tree.PrepareStmt{Name: "system", Stmt: systemSource}, false)
+		_, err = BuildPlan(ctx, &tree.PrepareStmt{Name: "system", Stmt: systemSource}, false, nil)
 		require.ErrorContains(t, err, "non-sys account cannot clone data from system database")
 	}()
 	require.Same(t, prior, ctx.GetSnapshot())
 	require.Zero(t, ctx.targetReads)
 
 	ctx.sourceErr = errors.New("physical source denied")
-	_, err = BuildPlan(ctx, prepare, false)
+	_, err = BuildPlan(ctx, prepare, false, nil)
 	require.ErrorIs(t, err, ctx.sourceErr)
 	require.Same(t, prior, ctx.GetSnapshot())
 	require.Zero(t, ctx.targetReads)
@@ -230,7 +231,7 @@ func TestBuildCloneTableSnapshotResolutionErrors(t *testing.T) {
 				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				snapshotErr:         test.snapshotErr,
 			}
-			_, err = BuildPlan(ctx, stmt, false)
+			_, err = BuildPlan(ctx, stmt, false, nil)
 			require.EqualError(t, err, test.wantErr)
 
 			if test.wantUserErr {

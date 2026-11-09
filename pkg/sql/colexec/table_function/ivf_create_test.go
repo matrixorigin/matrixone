@@ -17,6 +17,7 @@ package table_function
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -222,4 +223,46 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			require.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+// A sample of rows the index cannot store still seeds the NULL centroid.
+func TestIvfCreateEndUnstorableSample(t *testing.T) {
+	oldRunSql, oldGetVersion := ivf_runSql, ivf_getVersion
+	t.Cleanup(func() { ivf_runSql, ivf_getVersion = oldRunSql, oldGetVersion })
+	var inserts []string
+	ivf_runSql = func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if !strings.HasPrefix(sql, "SELECT SAMPLE") {
+			inserts = append(inserts, sql)
+			return executor.Result{}, nil
+		}
+		typ := types.T_array_float32.ToType()
+		typ.Width = 2
+		vec := vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(vec, types.ArrayToBytes([]float32{100000, 1}), false, p.Proc.Mp()))
+		bat := batch.New([]string{"v"})
+		bat.SetVector(0, vec)
+		bat.SetRowCount(1)
+		return executor.Result{Mp: p.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
+	ivf_getVersion = func(*sqlexec.SqlProcess, vectorindex.IndexTableConfig) (int64, error) { return 3, nil }
+
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc.Ctx = context.Background()
+	installOrdinaryMaintenanceRelations(t, proc)
+	tblCfg, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`{"db":"db", "src":"t", "index":"c", "metadata":"meta", "part":"v", "datasize": 2}`), 1, proc.Mp())
+	require.NoError(t, err)
+	arg := &TableFunction{
+		Args:   []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}, Typ: plan.Type{Id: int32(types.T_varchar)}}},
+		Params: []byte(`{"lists":"2", "op_type":"vector_l2_ops", "quantization":"float16"}`),
+	}
+	st, err := ivfCreatePrepare(proc, arg)
+	require.NoError(t, err)
+	arg.ctr.argVecs = []*vector.Vector{tblCfg}
+	require.NoError(t, st.start(arg, proc, 0, nil))
+	u := st.(*ivfCreateState)
+	require.NotNil(t, u.data32)
+	require.Empty(t, u.data32)
+	require.NoError(t, u.end(arg, proc))
+	require.Len(t, inserts, 1)
+	require.Contains(t, inserts[0], "VALUES (3, 1, NULL)")
 }

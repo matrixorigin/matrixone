@@ -194,7 +194,7 @@ func TestRoutineRequestCallbacksAndCancelContexts(t *testing.T) {
 	})
 	require.Equal(t, int32(1), called)
 
-	rt.setInProcessRequest(true)
+	require.True(t, rt.beginClientRequest())
 	rt.execCallbackBasedOnRequest(false, func() {
 		atomic.AddInt32(&called, 1)
 	})

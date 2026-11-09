@@ -56,6 +56,10 @@ type TableConfig struct {
 	IndexTable    string `json:"index"`    // chunk store (FullText2Index_TblType_Storage)
 	MetadataTable string `json:"metadata"` // metadata (FullText2Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
+	// IgnoredTable is the table of the rows the index cannot read, "" when the index has none;
+	// MaxBadRecords is the number of rows it may hold.
+	IgnoredTable  string `json:"ignored,omitempty"`
+	MaxBadRecords int64  `json:"max_bad_records,omitempty"`
 	Parser        string `json:"parser,omitempty"`
 	// TokenFilters is the ordered token_filter chain (currently only "stop"),
 	// sourced from the persisted token_filter algo_param so the build (create, CDC
@@ -121,6 +125,19 @@ type TableConfig struct {
 	// so the tail/no-tail/fallback choice is bound to what was searched, not to a plan-time guess.
 	ProbeTailBar        int64  `json:"probe_tail_bar,omitempty"`
 	ProbeTailBarLogical uint32 `json:"probe_tail_bar_logical,omitempty"`
+}
+
+// MaintenanceOperands returns the relations fulltext2_create writes: the chunk store, the
+// metadata table and, when cfg has one, the ignored table.
+func MaintenanceOperands(cfg TableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.FullText2Index_TblType_Storage, Name: cfg.IndexTable},
+		{Role: catalog.FullText2Index_TblType_Metadata, Name: cfg.MetadataTable},
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
@@ -543,7 +560,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		return nil, err
 	}
 	data, err := mmapReadOnly(f.File())
-	release := f.Keep()
+	release := f.Keep().Release
 	f.Close()
 	if err != nil {
 		release()

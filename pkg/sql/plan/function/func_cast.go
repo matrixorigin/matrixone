@@ -10292,6 +10292,24 @@ func strToDatalink(
 	return nil
 }
 
+// appendBinaryToTextUtf8Warning reports Warning 1300 (ER_INVALID_CHARACTER_STRING)
+// for an explicit binary->text cast whose payload is not legal UTF-8. The
+// offending prefix is hex-encoded and bounded (32 bytes -> 64 hex chars,
+// matching the %.64s template bound).
+func appendBinaryToTextUtf8Warning(proc *process.Process, v []byte) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		n := len(v)
+		if n > 32 {
+			n = 32
+		}
+		appender.AppendWarningDiagnostic(moerr.ER_INVALID_CHARACTER_STRING,
+			fmt.Sprintf("Invalid utf8mb4 character string: '%s'", hex.EncodeToString(v[:n])))
+	}
+}
+
 func strToStr(
 	ctx context.Context,
 	proc *process.Process,
@@ -10370,6 +10388,20 @@ func strToStr(
 
 	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
 	enforceByteWidth := mode.isAssignment() && hasByteWidth
+	// An explicit binary-source CAST into UTF8-family text must not smuggle
+	// invalid UTF-8 onto the wire: the row becomes NULL with Warning 1300.
+	// Scope is strictly castModeExplicit: comparison and set-operation keys,
+	// normal and assignment modes, binary-charset text targets, and
+	// binary/geometry targets all keep their existing contracts.
+	// The effective binary source domain is authoritative
+	// (binary_string_semantics.go): static CharsetBinary type, runtime uniform
+	// marker, legacy IsBin literal flag, or a per-row sidecar. Function results
+	// such as UNHEX carry a static binary-domain varbinary type that the legacy
+	// literal flag alone misses.
+	srcUniformBinary, srcPerRowBinary := stringDomainMode(from.GetSourceVector())
+	binarySourceToText := mode == castModeExplicit && (srcUniformBinary || srcPerRowBinary) &&
+		toType.Charset != types.CharsetBinary &&
+		(toType.Oid == types.T_char || toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	if (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
 		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar || enforceByteWidth) {
 		for i = 0; i < l; i++ {
@@ -10380,12 +10412,21 @@ func strToStr(
 				}
 				continue
 			}
+			if binarySourceToText && binaryStringAt(from.GetSourceVector(), int(i), srcUniformBinary, srcPerRowBinary) && !utf8.Valid(v) {
+				appendBinaryToTextUtf8Warning(proc, v)
+				if err := to.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
 			// check the length.
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
 			}
 			s := convertByteSliceToString(v)
-			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
+			// A negative width follows the T_binary width:-1 convention and
+			// means no length limit; it must never truncate or reject.
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 0 && utf8.RuneCountInString(s) > destLen {
 				// CHAR/VARCHAR over-length handling:
 				//   - trailing-space exemption: when the excess runes are all
 				//     trailing spaces, accept by truncating even in strict mode
@@ -10436,7 +10477,7 @@ func strToStr(
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
-			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && utf8.RuneCountInString(s) > destLen {
+			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && destLen >= 0 && utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -10469,6 +10510,13 @@ func strToStr(
 			}
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
+			}
+			if binarySourceToText && binaryStringAt(from.GetSourceVector(), int(i), srcUniformBinary, srcPerRowBinary) && !utf8.Valid(v) {
+				appendBinaryToTextUtf8Warning(proc, v)
+				if err := to.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
 			if mode.isAssignment() {
 				if err := types.ValidateCollationValue(toType, v); err != nil {

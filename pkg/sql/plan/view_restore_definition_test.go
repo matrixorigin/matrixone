@@ -197,7 +197,7 @@ func TestBuildCreateViewPreservesRestoredDefinition(t *testing.T) {
 			statements, err := mysql.Parse(t.Context(), "create view restored_v as select n_name from nation", 1)
 			require.NoError(t, err)
 			defer statements[0].Free()
-			p, err := BuildPlan(compiler, statements[0], false)
+			p, err := BuildPlan(compiler, statements[0], false, nil)
 			if tc.wantError {
 				require.Error(t, err)
 				require.Nil(t, p)

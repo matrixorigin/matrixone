@@ -16,6 +16,7 @@ package group
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -149,6 +150,42 @@ func (w *spillRecordWriter) WriteSelectedFixedRows(
 		err = io.ErrShortWrite
 	}
 	return n, err
+}
+
+func (w *spillRecordWriter) WriteSelectedVarlenaRows(
+	values []types.Varlena,
+	area []byte,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if fast, ok := w.target.(interface {
+		WriteSelectedVarlenaRows([]types.Varlena, []byte, []int32) (int, error)
+	}); ok {
+		n, err := fast.WriteSelectedVarlenaRows(values, area, rows)
+		w.written += int64(n)
+		return n, err
+	}
+	start := w.written
+	var encoded [4]byte
+	for _, row := range rows {
+		if row < 0 || int(row) >= len(values) {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("invalid varlena group spill row")
+		}
+		value := values[row].GetByteSlice(area)
+		if len(value) > math.MaxInt32 {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("group spill value exceeds wire format")
+		}
+		binary.LittleEndian.PutUint32(encoded[:], uint32(len(value)))
+		if err := types.WriteFull(w, encoded[:]); err != nil {
+			return int(w.written - start), err
+		}
+		if err := types.WriteFull(w, value); err != nil {
+			return int(w.written - start), err
+		}
+	}
+	return int(w.written - start), nil
 }
 
 func newGroupSpillBuffer(
@@ -870,6 +907,11 @@ func (ctr *container) writeSpillRecord(
 }
 
 func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
+	return ctr.spillDataToDiskWithInput(proc, opAnalyzer, parentBkt, false)
+}
+
+// retainInput is used only when retrying a partially consumed input batch.
+func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket, retainInput bool) (int64, int64, error) {
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
@@ -1109,7 +1151,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	// reset ctr for next spill
-	ctr.resetForSpill()
+	ctr.resetSpillState(retainInput)
 	return totalBytes, totalRows, nil
 }
 

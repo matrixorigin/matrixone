@@ -88,7 +88,7 @@ func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sq
 	}
 
 	if stage.cached {
-		rel, err := openRelation(ctx, env, &ref)
+		rel, err := openRelation(ctx, env, &ref, env.Proc)
 		if err != nil {
 			return 0, "", err
 		}

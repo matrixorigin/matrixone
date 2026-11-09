@@ -77,7 +77,7 @@ func testPointUpdateRuntimeFiltersWithMissingStats(t *testing.T, keyType planpb.
 	stmt, err := mysql.ParseOne(t.Context(), "UPDATE index_hint_t SET a = 9 WHERE "+predicate, 1)
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	query := built.GetQuery()
 	require.NotNil(t, query)

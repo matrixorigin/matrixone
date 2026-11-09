@@ -223,7 +223,17 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		corrRef := expr.GetCorr()
+		if corrRef == nil {
+			// ENUM/SET keys bind to a display wrapper whose wrapped reference
+			// is the only column link (#31568). Without reading it here, a
+			// correlated outer key reaches an ordinary aggregate's arguments
+			// intact and group argument evaluation cannot construct its
+			// expression executor, so run the same admission checks on the
+			// wrapped reference as on a bare correlated column.
+			corrRef = displayWrappedCorrColRef(expr)
+		}
+		if corrRef != nil {
 			if depth > 0 && b.subqueryInAggregateInput {
 				// This lookup comes from the subquery used as an aggregate
 				// argument. Its ancestor reference belongs to that subquery,
@@ -234,14 +244,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			// scalar child may capture this query's input without turning that
 			// capture into a new correlated aggregate argument.
 			if (b.builder.mysqlFullGroupByCompat || b.bindingProjectedAlias && !b.insideAgg) &&
-				b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+				b.corrColRefTargetsCurrentQueryInput(corrRef) {
 				return expr, nil
 			}
 			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
-				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-					b.corrColRefTargetsGroup(corr.Corr) ||
-					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				(b.corrColRefTargetsCurrentGroup(corrRef) ||
+					b.corrColRefAllowedByCurrentQuery(corrRef) ||
+					b.corrColRefTargetsGroup(corrRef) ||
+					b.corrColRefAllowedByTargetQuery(corrRef)) {
 				return expr, nil
 			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
@@ -255,6 +265,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
+		}
+		if displayWrappedCorrColRef(expr) != nil {
+			// ENUM/SET keys bind to a display wrapper whose final argument is
+			// the only column link (#31568). Wrapping such a reference in
+			// any_value would leak a correlated expression into the aggregate
+			// list and break plan remapping downstream, so reject it here with
+			// the same error a bare correlated column gets in this mode.
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
@@ -275,12 +293,20 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
-				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-				b.corrColRefTargetsGroup(corr.Corr) ||
-				b.corrColRefAllowedByTargetQuery(corr.Corr) {
+		corrRef := expr.GetCorr()
+		if corrRef == nil {
+			// ENUM/SET keys bind to a display wrapper whose wrapped reference
+			// is the only column link (#31568): a correlated outer key stays
+			// nested there, so it must pass the same target-scope checks as a
+			// bare correlated reference in HAVING.
+			corrRef = displayWrappedCorrColRef(expr)
+		}
+		if corrRef != nil {
+			if b.corrColRefTargetsCurrentGroup(corrRef) ||
+				b.corrColRefTargetsAggregateInputParent(corrRef) ||
+				b.corrColRefAllowedByCurrentQuery(corrRef) ||
+				b.corrColRefTargetsGroup(corrRef) ||
+				b.corrColRefAllowedByTargetQuery(corrRef) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)
@@ -458,7 +484,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			(funcName == "count" || funcName == "sum" || funcName == "avg") &&
 				len(expr.GetF().Args) == 1 &&
 				expr.GetF().Args[0].Typ.Id != int32(types.T_tuple)
-		if !canRewriteDistinctArgument {
+		if uint64(f.Func.Obj)&function.Distinct != 0 && !canRewriteDistinctArgument {
 			for i := range expr.GetF().Args {
 				expr.GetF().Args[i], err = appendPadSpaceComparisonCastIfNeeded(
 					b.GetContext(), expr.GetF().Args[i])

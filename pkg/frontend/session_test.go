@@ -502,10 +502,10 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		convey.So(defDBName, convey.ShouldEqual, "")
 		convey.So(tcc.DatabaseExists("abc", &plan2.Snapshot{TS: ts}), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
+		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts}, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts}, nil)
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -515,7 +515,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 				TenantId: 0,
 			},
 		}
-		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts}, nil)
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -620,7 +620,7 @@ func TestSession_ResolveTempIndexTable(t *testing.T) {
 		// In the current bug state, the code in ResolveIndexTableByRef (after my previous fix) handles nil table but throws NoSuchTable.
 		// To reproduce the original panic (if we reverted) or the "no such table" error:
 
-		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan2.Snapshot{})
+		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan2.Snapshot{}, nil)
 
 		// If the index was correctly registered, we would mock it:
 		// ses.AddTempTable("db1", "index_table", "mo_index_table_real")

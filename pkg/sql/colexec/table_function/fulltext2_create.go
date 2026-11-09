@@ -36,11 +36,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -73,6 +75,8 @@ type fulltext2CreateState struct {
 	// which tokenizes in parallel and finishes sealed segments in the background.
 	threads int
 	pipe    *fulltext2.BuildPipeline
+	// ignored leaves out the rows whose text the index cannot read; nil without an ignored table.
+	ignored *ignoredBuild
 }
 
 func (u *fulltext2CreateState) reset(tf *TableFunction, proc *process.Process) {
@@ -103,6 +107,8 @@ func (u *fulltext2CreateState) free(tf *TableFunction, proc *process.Process, pi
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
+	u.ignored.close()
+	u.ignored = nil
 }
 
 func fulltext2CreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -139,9 +145,7 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		if err = sonic.Unmarshal([]byte(cfgstr), &cfg); err != nil {
 			return err
 		}
-		policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_create", cfg.DbName, "",
-			maintenanceOperand{Role: catalog.FullText2Index_TblType_Storage, Name: cfg.IndexTable},
-			maintenanceOperand{Role: catalog.FullText2Index_TblType_Metadata, Name: cfg.MetadataTable})
+		policy, err := prepareIndexMaintenance(proc, tf, "fulltext2_create", cfg.DbName, "", fulltext2.MaintenanceOperands(cfg)...)
 		if err != nil {
 			return err
 		}
@@ -185,6 +189,7 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		u.cur = fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
 		u.batch = tf.createResultBatch()
 		u.threads = int(vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild))
+		u.ignored = newIgnoredBuild(u.ignoredConfig(), vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
 		u.inited = true
 	}
 
@@ -199,7 +204,7 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 	}
 	terms, err := u.rowTerms(tf, proc, nthRow)
 	if err != nil {
-		return err
+		return u.leaveOut(tf, proc, nthRow, err)
 	}
 	if len(terms) == 0 {
 		return nil
@@ -316,7 +321,7 @@ func (u *fulltext2CreateState) addToPipeline(tf *TableFunction, proc *process.Pr
 	}
 	content, terms, direct, err := u.rowContent(tf, proc, nthRow)
 	if err != nil {
-		return err
+		return u.leaveOut(tf, proc, nthRow, err)
 	}
 	if (direct && len(terms) == 0) || (!direct && len(content) == 0) {
 		return nil
@@ -363,12 +368,13 @@ func (u *fulltext2CreateState) rowInclude(tf *TableFunction, nthRow int) []any {
 // shares the resolved Datalink between classification and actual acquisition.
 func fulltext2SourceColumnBytes(vec *vector.Vector, proc *process.Process, row int) ([]byte, bool, error) {
 	if vec.GetType().Oid == types.T_datalink {
-		dl, err := datalink.NewAsyncDatalink(vec.GetStringAt(row), proc)
+		url := vec.GetStringAt(row)
+		dl, err := datalink.NewAsyncDatalink(url, proc)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fulltext2.DatalinkError(url, err)
 		}
 		text, err := dl.GetPlainText(proc)
-		return text, false, err
+		return text, false, fulltext2.DatalinkError(url, err)
 	}
 	if vec.GetType().Oid == types.T_json {
 		return vec.GetRawBytesAt(row), true, nil
@@ -418,7 +424,7 @@ func (u *fulltext2CreateState) rowContent(tf *TableFunction, proc *process.Proce
 			}
 			ts, err := fulltext2.JSONTupleColumnTerms(raw, binary, opt)
 			if err != nil {
-				return nil, nil, false, err
+				return nil, nil, false, fulltext2.JSONError(err)
 			}
 			for _, t := range ts {
 				// ordinal position: a tuple term has no meaningful byte offset,
@@ -450,7 +456,7 @@ func (u *fulltext2CreateState) rowContent(tf *TableFunction, proc *process.Proce
 				ft, err = fulltext2.FlattenJSON(raw, binary)
 			}
 			if err != nil {
-				return nil, nil, false, err
+				return nil, nil, false, fulltext2.JSONError(err)
 			}
 			if buf.Len() > 0 {
 				buf.WriteByte('\n')
@@ -486,6 +492,39 @@ func (u *fulltext2CreateState) rowContent(tf *TableFunction, proc *process.Proce
 		return nil, fulltext2.JSONValueTokenize(buf.Bytes()), true, nil
 	}
 	return buf.Bytes(), nil, false, nil
+}
+
+// ignoredConfig returns the table config by which the build records the rows it leaves out.
+func (u *fulltext2CreateState) ignoredConfig() vectorindex.IndexTableConfig {
+	return vectorindex.IndexTableConfig{
+		DbName:        u.tblcfg.DbName,
+		SrcTable:      u.tblcfg.SrcTable,
+		IgnoredTable:  u.tblcfg.IgnoredTable,
+		MaxBadRecords: u.tblcfg.MaxBadRecords,
+	}
+}
+
+// leaveOut leaves source row nthRow out of the index because of err, its reason the index
+// cannot read the row's text; err is returned when it is no such reason or the index has no
+// ignored table, or one row more than the limit.
+func (u *fulltext2CreateState) leaveOut(tf *TableFunction, proc *process.Process, nthRow int, err error) error {
+	if u.ignored == nil {
+		return err
+	}
+	if _, ok := vectorindex.UnstorableCode(err); !ok {
+		return err
+	}
+	pkVec := tf.ctr.argVecs[1]
+	var pk string
+	if u.tblcfg.PKey == catalog.CPrimaryKeyColName {
+		pk = vectorindex.SerialPkString(pkVec.GetBytesAt(nthRow))
+	} else {
+		var lerr error
+		if pk, lerr = iscp.SqlLiteral(proc.Ctx, pkVec, nthRow); lerr != nil {
+			return lerr
+		}
+	}
+	return u.ignored.leaveOut(pk, err)
 }
 
 // tokenizeContent tokenizes a row's text with the index parser and token_filter chain. It
@@ -533,6 +572,20 @@ func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) err
 		u.pipe = nil
 	} else if err := u.sealSegment(proc); err != nil {
 		return err
+	}
+	if u.ignored != nil {
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		if err := u.ignored.sqls(u.ignoredConfig(), sqlproc.BuildSnapshotTS(), func(sql string) error {
+			res, err := fulltext2_runSql(sqlproc, sql)
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	// Nothing was persisted (empty corpus): leave existing tag=0 bases untouched,
 	// mirroring the prior zero-doc no-op.

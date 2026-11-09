@@ -657,13 +657,19 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
 		count := bat.RowCount()
-		evaluated := false
 		var hashBytesBefore int64
 		var compactHitRows int64
 		compactEligible := !group.DynamicGrouping && !group.ctr.groupingAware && !group.ctr.legacyH8CharSemantics &&
 			compactGroupExpressions(group.GroupBy)
 		if !group.ctr.hr.IsEmpty() {
 			hashBytesBefore = group.ctr.hr.Hash.Size()
+		}
+		if count > 0 {
+			if err = group.evaluateBuildInput(proc, bat); err != nil {
+				// A failed expression may already have side effects. There is
+				// no general safe way to replay a partially evaluated batch.
+				return false, err
+			}
 		}
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
@@ -677,16 +683,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 			for {
 				err = nil
-				if !evaluated {
-					if err = group.evaluateBuildInput(proc, bat); err != nil {
-						if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
-							continue
-						} else {
-							return false, retryErr
-						}
-					}
-					evaluated = true
-				}
 				if group.ctr.hr.IsEmpty() {
 					err = group.ctr.buildHashTable(proc.Ctx, 0)
 					if err == nil {
@@ -723,7 +719,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 									proc, mpool.ErrAllocationAccountCapacity); !retried {
 									return false, retryErr
 								}
-								evaluated = false
 								continue
 							}
 						}
@@ -809,7 +804,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					}
 				}
 				if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
-					evaluated = false
 					continue
 				} else {
 					return false, retryErr
@@ -968,7 +962,7 @@ func (group *Group) retryBuildBatchAfterCapacity(
 		return false, cause
 	}
 	before := group.ctr.hr.Hash.GroupCount()
-	bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil)
+	bytes, rows, err := group.ctr.spillDataToDiskWithInput(proc, group.OpAnalyzer, nil, true)
 	if err != nil {
 		return false, err
 	}

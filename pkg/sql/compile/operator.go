@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
@@ -302,6 +301,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*order.Order)
 		op := order.NewArgument()
 		op.OrderBySpec = t.OrderBySpec
+		op.ScanCutoffLimit = t.ScanCutoffLimit
+		op.ScanCutoffTag = t.ScanCutoffTag
+		op.ScanCutoff = t.ScanCutoff
 		op.SetInfo(&info)
 		return op
 	case vm.Product:
@@ -319,6 +321,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.VectorOpType = t.VectorOpType
+		op.Ignored = t.Ignored
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -498,7 +501,11 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		sourceArg := sourceOp.(*shuffle.Shuffle)
 		pool := dupCtx.shufflePools[sourceArg]
 		if pool == nil {
-			pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			if sourceArg.OwnedOutput {
+				pool = shuffle.NewOwnedShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.OwnedColumnCount)
+			} else {
+				pool = shuffle.NewShufflePool(sourceArg.BucketNum, int32(maxParallel), sourceArg.DrainAllBuckets)
+			}
 			dupCtx.shufflePools[sourceArg] = pool
 		}
 		op := shuffle.NewArgument()
@@ -514,6 +521,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.OwnedOutput = sourceArg.OwnedOutput
+		op.OwnedColumnCount = sourceArg.OwnedColumnCount
 		op.StringHashKey = sourceArg.StringHashKey
 		op.ShuffleKeyColumns = append([]int32(nil), sourceArg.ShuffleKeyColumns...)
 		op.SetInfo(&info)
@@ -905,23 +914,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.GetTopContext()
-	txnOp := proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(proc.GetTxnOperator().Txn().SnapshotTS) {
-			if proc.GetCloneTxnOperator() != nil {
-				txnOp = proc.GetCloneTxnOperator()
-			} else {
-				txnOp = proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(proc.GetTopContext(), proc.GetTxnOperator(), node.ScanSnapshot)
 
 	if preCtx.Ref.SchemaName != "" {
 		_, err := eng.Database(ctx, preCtx.Ref.SchemaName, txnOp)
@@ -3134,7 +3127,8 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.VectorOpType = node.ExtraOptions
+	opt, _ := tree.ParseCentroidxOption(node.ExtraOptions)
+	arg.VectorOpType = opt.OpType
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(node.OnList)
 	for i := range node.SendMsgList {
