@@ -406,6 +406,71 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestShowColumnsPreparePreservesWhereParameters(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		paramCount int
+		full       bool
+		view       bool
+	}{
+		{"table", "show columns from nation where Field = ?", 1, false, false},
+		{"full fields", "show full fields from nation where Field = ? or Field = ?", 2, true, false},
+		{"view fields", "show fields from v1 where Field = ?", 1, false, true},
+		{"full view", "show full columns from v1 where Field = ?", 1, true, true},
+	} {
+		for _, entry := range []string{"SQL", "AST"} {
+			t.Run(tc.name+"/"+entry, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				mock.ctxt.tables["v1"].ViewSql.View = `{"Stmt":"create view v1 as select n_name from nation","DefaultDatabase":"tpch"}`
+				var stmt tree.Statement
+				if entry == "SQL" {
+					stmt = tree.NewPrepareString("show_params", tc.sql)
+				} else {
+					inner, err := mysql.ParseOne(mock.ctxt.GetContext(), tc.sql, 1)
+					require.NoError(t, err)
+					stmt = tree.NewPrepareStmt("show_params", inner)
+				}
+				defer stmt.Free()
+
+				// Rebuilding the saved AST must not lose or consume its predicate.
+				for range 2 {
+					built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+					require.NoError(t, err)
+					prepared := built.GetDcl().GetPrepare()
+					require.NotNil(t, prepared)
+					require.Len(t, prepared.GetParamTypes(), tc.paramCount)
+					require.True(t, prepared.GetPlan().GetIsPrepare())
+					wantHeadings := []string{"Field", "Type", "Null", "Key", "Default", "Extra", "Comment"}
+					if tc.full {
+						wantHeadings = []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
+					}
+					require.Equal(t, wantHeadings, prepared.GetPlan().GetQuery().GetHeadings())
+					var dependencies []string
+					for _, schema := range prepared.GetSchemas() {
+						dependencies = append(dependencies, schema.GetObjName())
+					}
+					require.Contains(t, dependencies, "nation")
+					if tc.view {
+						require.Contains(t, dependencies, "v1")
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("unprepared marker remains invalid", func(t *testing.T) {
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show columns from nation where Field = ?", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
+		require.ErrorContains(t, err, "only prepare statement can use ? expr")
+		_, err = runOneStmt(mock, t, "show columns from nation where Field = 'n_name'")
+		require.NoError(t, err)
+	})
+}
+
 func TestShowColumnsTracksTargetDependency(t *testing.T) {
 	for _, sql := range []string{
 		"show columns from nation",
