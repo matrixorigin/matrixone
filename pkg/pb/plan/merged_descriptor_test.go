@@ -63,6 +63,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 
 func TestMergedQueryMetadataRoundTrip(t *testing.T) {
 	original := validIntegerPrecisionQuery()
+	original.ExecutionDependentAccess = true
 	original.SelectLockReferences = []*SelectLockReference{{
 		ObjectRef: &ObjectRef{SchemaName: "db", ObjName: "locked"},
 		ViewPath:  []*ViewStep{{DatabaseName: "db", ViewName: "v"}},
@@ -80,6 +81,7 @@ func TestMergedQueryMetadataRoundTrip(t *testing.T) {
 	var decoded Query
 	require.NoError(t, decoded.Unmarshal(encoded))
 	require.Equal(t, original.IntegerPrecision, decoded.IntegerPrecision)
+	require.True(t, decoded.ExecutionDependentAccess)
 	require.Equal(t, original.SelectLockReferences, decoded.SelectLockReferences)
 	require.Equal(t, original.RoutineDependencies, decoded.RoutineDependencies)
 	require.Equal(t, original.Nodes, decoded.Nodes)

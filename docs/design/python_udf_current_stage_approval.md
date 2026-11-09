@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r41-2026-11-02`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r42-2026-11-09`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -876,3 +876,22 @@ released 4.0.6 effects, artifact admission budget and opt-in development scope.
 It adds no Python MORPC gate; official latest remains 134. Independent
 Architecture and SQL/Planner approval of r41 remains pending; this maintenance
 does not supply it or extend production scope.
+
+
+## r42: preserve official execution-dependent access metadata (2026-11-09)
+
+The governing proposal is `python-udf-current-stage-r42-2026-11-09`. Official
+main `c99234dcf4c94d1ff9d372917cd35041f1a3a682` owns Query field 22 for
+`execution_dependent_access`. Keep that flag and SELECT-lock field 21; move the
+unmerged routine dependency envelope to field 23 and regenerate the merged
+binding/descriptor. The existing combined round-trip and deep-copy cases cover
+both the official access flag and exact routine revisions. Cached-plan admission
+keeps the official cancellation boundary after routine validation.
+
+This mechanical rebase preserves r41's pending catalog 4.0.7/50, released
+4.0.6 effects, artifact admission budget, external Python/Arrow ABI and opt-in
+development scope. Official MORPC latest remains 134; no Python gate is added.
+Earlier unmerged Query tag 22 is superseded, not a supported persisted input.
+Independent Architecture and SQL/Planner approval of r42 remains pending;
+rebase, tests and this record do not provide that approval. Historical approval
+facts and earlier revision descriptions above remain unchanged.
