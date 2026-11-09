@@ -246,8 +246,9 @@ func TestWorkingSetGrowthPreservesOwnersAndDenial(t *testing.T) {
 	require.Equal(t, int64(300), c.workspacePromise.Load())
 	require.Equal(t, int64(200), io.Capacity(), "active jobs keep their granted snapshot")
 	spec.Inputs[0].Bytes, spec.IOBytes = 700, 600
-	require.ErrorContains(t, w.TryGrow(context.Background(), spec), "cannot reserve")
-	require.ErrorContains(t, input.TryGrow(context.Background(), 700), "cannot reserve")
+	var capacity *WorkingSetCapacityError
+	require.ErrorAs(t, w.TryGrow(context.Background(), spec), &capacity)
+	require.ErrorAs(t, input.TryGrow(context.Background(), 700), &capacity)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, w.TryGrow(ctx, spec), context.Canceled)

@@ -155,7 +155,7 @@ worker wastes capacity or overcommits it. The selected mechanism charges actual
 peaks within one shared maximum and reuses the existing coordinator, envelopes
 and SinkPool, without a new worker, timer, configuration or workload threshold.
 
-## Transaction metadata in memory
+## Transaction metadata ownership
 
 Admitted INSERT and insert-only MultiUpdate keep compact object/block metadata
 in operator memory until Build completes, then emit the existing bounded
@@ -169,16 +169,23 @@ across the statements. That is an encoding estimate, not a measured simultaneous
 peak. It does not describe uncommitted-delete output, which contains raw RowIDs
 and primary keys proportional to the deleted rows. There is no evidence that
 compact metadata required file storage for this load.
-Keeping it in memory avoids temporary-volume dependencies, additional file IO,
-and a second outer serialization/replay lifecycle.
+The memory fast path avoids temporary IO for this ordinary workload; this
+sample is not a capacity bound for arbitrarily many objects or raw delete keys.
 
 For admitted imports, retained metadata and the current output share the existing
 output input-slot lease. Before vector backing grows, extend that lease through WorkingSet's
 nonblocking growth admission using the existing four-copy metadata allowance.
 This charges cumulative capacity, preserves the fixed per-frame protocol limit,
-and adds no workload threshold, configuration, queue owner or worker. A denied
-growth returns the existing capacity/cancellation error without waiting behind
-the same statement. Previously retained data remains owned until normal cleanup.
+and adds no workload threshold, configuration, queue owner or worker. Capacity
+denial switches to bounded temporary storage instead of waiting behind retained
+output. INSERT streams fixed ObjectStats records; insert-only MultiUpdate
+migrates one already-encoded row at a time into the existing frame spool. Its old
+four-copy claim covers retained input plus old/new one-row backing, and direct
+serialization adds no whole-frame encoding copy. The old vectors are retired
+only after migration succeeds. Cancellation, closed owners and malformed frames
+remain errors rather than triggering fallback. Eval can switch after partial
+consumption and resumes at the unread object/row; it never replays emitted rows.
+A single frame must still fit its admitted envelope.
 Legacy and delete-capable MultiUpdate preserve the existing per-frame temporary
 storage and delete-before-insert replay. Retire each encoded frame before the
 next window, so raw-key output need not fit in D for the whole statement.
@@ -186,7 +193,8 @@ Temporary-volume capacity retains its existing deployment requirements. These
 writers keep their existing cancellable D acquisition and release notifications;
 there is no new cumulative metadata claim or blanket rejection while output is
 pending. Reset/Free close the unlinked frame file, including partial writes and
-cancelled replay. Pure admitted imports do not open this file.
+cancelled replay. Admitted imports open temporary storage only after capacity
+denial; the same temporary-volume requirements and IO-error behavior apply.
 
 Eval retires each metadata batch after it is fully consumed. Error, cancellation,
 Reset and Free destroy remaining vectors before releasing the output lease. Verify multiple objects,
@@ -205,8 +213,15 @@ wide keys may exceed the ordinary byte target only under that reservation. This
 is bounded per-object materialization: an object that cannot fit fails admission
 before the larger allocation; it is not an external streaming sort. Growth while
 holding inputs is nonblocking, and every exit destroys vectors and the file
-sinker before releasing its slot. No storage format or new tuning parameter is
-introduced.
+sinker before releasing its slot. A transient growth denial first destroys the
+attempt's vectors and releases its ticket, then re-enters cancellable admission
+with a strictly larger complete-job floor. No input is held while waiting, and
+statically impossible floors fail before another fetch. Source downloads own a
+child context and one window of chunk jobs bounded by existing worker/semaphore
+concurrency. Failure, submission rejection and worker stop cancel and retire
+all accepted jobs before refunding the fetch slot. Query cancellation/reader
+close and semaphore release precede completion publication. No persisted storage
+format or new tuning parameter is introduced.
 
 ## Build, spill and ordinary execution
 

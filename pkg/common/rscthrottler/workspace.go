@@ -180,7 +180,8 @@ func (w *WorkingSet) TryGrow(ctx context.Context, next WorkingSetSpec) error {
 	// An already admitted owner has priority over new admission. Queuing here
 	// could wait on the very writer that is pulling this owner's next row.
 	if delta > 0 && !w.throttler.physicalFits(delta) {
-		return moerr.NewInternalErrorNoCtxf("import record growth cannot reserve %d additional bytes", delta)
+		available := int64(w.throttler.actualTotalMemory.Load()) - w.throttler.physicalUsed() - c.dataReserved.Load() - c.inputPromise.Load() - c.workspacePromise.Load()
+		return &WorkingSetCapacityError{Minimum: delta, Available: max(0, available)}
 	}
 	c.inputPromise.Add(input - w.inputBytes)
 	c.workspacePromise.Store(max(c.workspacePromise.Load(), next.IOBytes))

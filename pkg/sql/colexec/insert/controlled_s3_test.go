@@ -18,12 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -484,4 +487,103 @@ func checkControlledInsertPipeline(t *testing.T, grants int, cancelUpload, colle
 	lease, err := ws.AcquireIO(ctx, ws.IOBytes())
 	require.NoError(t, err)
 	lease.Release()
+}
+
+func TestControlledInsertMetadataSpoolsUnderPressure(t *testing.T) {
+	for _, mode := range []string{"eof", "eval_resume", "cancel", "create_error", "write_error", "read_error"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			t.Cleanup(proc.Free)
+			const total = int64(16 << 20)
+			owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total), rscthrottler.WithMemorySampleForTesting(total, 0)).(rscthrottler.WorkingSetThrottler)
+			ws, err := owner.ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 4 << 20, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: 2 << 20}}}})
+			require.NoError(t, err)
+			t.Cleanup(ws.Close)
+			lease, err := ws.AcquireInput(proc.Ctx, 0)
+			require.NoError(t, err)
+			s := &controlledS3{unit: 4 << 20, outputSlot: lease, outputMP: mpool.MustNewZero()}
+			t.Cleanup(func() { require.NoError(t, s.close()) })
+			other, ok, err := owner.TryReserveWorkingSet(proc.Ctx, rscthrottler.WorkingSetSpec{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: owner.WorkingSetHeadroom().Available - 1024}}})
+			require.NoError(t, err)
+			require.True(t, ok)
+			t.Cleanup(other.Close)
+			// Compact payload alone exceeds the fixed slot's four-copy allowance.
+			count := int(lease.Capacity()/4/int64(objectio.ObjectStatsLen)) + 1
+			if mode == "eval_resume" {
+				count = 3
+			}
+			stats := make([]objectio.ObjectStats, count)
+			for i := range stats {
+				id := objectio.NewObjectid()
+				stats[i] = *objectio.NewObjectStatsWithObjectID(&id, false, true, true)
+				require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], 8))
+				require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[i], 8*objectio.BlockMaxRows))
+			}
+			if mode == "create_error" {
+				t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+				require.Error(t, s.collectStats(proc.Ctx, stats))
+				require.Nil(t, s.statsSpool)
+				pool := s.outputMP
+				require.NoError(t, s.close())
+				require.Zero(t, pool.AllocatedBytes())
+				ws.Close()
+				other.Close()
+				require.Equal(t, total, owner.WorkingSetHeadroom().Available)
+				return
+			}
+			require.NoError(t, s.collectStats(proc.Ctx, stats))
+			start := 0
+			if mode == "eval_resume" {
+				require.Nil(t, s.statsSpool)
+				frame, err := s.next(proc.Ctx)
+				require.NoError(t, err)
+				require.Equal(t, stats[0][:], frame.Vecs[1].GetBytesAt(0))
+				require.NoError(t, s.spoolStats(proc.Ctx))
+				start = 1
+			}
+			require.NotNil(t, s.statsSpool)
+			require.Nil(t, s.stats)
+			require.Equal(t, int64(2<<20), lease.Capacity(), "never wait/grow behind another owner")
+			file := s.statsSpool
+			switch mode {
+			case "cancel":
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				cancel()
+				_, err := s.next(ctx)
+				require.ErrorIs(t, err, context.Canceled)
+			case "read_error":
+				require.NoError(t, file.Truncate(0))
+				_, err := s.next(proc.Ctx)
+				require.ErrorIs(t, err, io.EOF)
+			case "write_error":
+				require.NoError(t, file.Close())
+				require.Error(t, s.collectStats(proc.Ctx, stats[:1]))
+			default:
+				for i := start; i < len(stats); i++ {
+					frame, err := s.next(proc.Ctx)
+					require.NoError(t, err)
+					require.NotNil(t, frame)
+					require.Equal(t, stats[i][:], frame.Vecs[1].GetBytesAt(0))
+					require.Equal(t, 8, frame.Vecs[0].Length(), "one complete object per frame")
+					require.LessOrEqual(t, s.outputMP.AllocatedBytes(), lease.Capacity())
+				}
+				frame, err := s.next(proc.Ctx)
+				require.NoError(t, err)
+				require.Nil(t, frame)
+			}
+			pool := s.outputMP
+			err = s.close()
+			if mode == "write_error" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Zero(t, pool.AllocatedBytes())
+			_, err = file.Stat()
+			require.Error(t, err, "no FD survives close")
+			ws.Close()
+			other.Close()
+			require.Equal(t, total, owner.WorkingSetHeadroom().Available)
+		})
+	}
 }

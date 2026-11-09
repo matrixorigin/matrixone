@@ -373,7 +373,7 @@ func (writer *s3WriterDelegate) releaseOutputSlot() {
 // Only admitted insert-only imports retain compact output across windows.
 // Other writers keep the existing bounded frame spool and cancellable D wait.
 func (writer *s3WriterDelegate) memoryMetadata(proc *process.Process) bool {
-	return proc.Base.ImportMemory != nil && InsertOnlyOutput(writer.updateCtxs)
+	return writer.metadataSpool == nil && proc.Base.ImportMemory != nil && InsertOnlyOutput(writer.updateCtxs)
 }
 
 func (writer *s3WriterDelegate) reserveMetadata(proc *process.Process, growth, encoded int64) error {
@@ -1370,7 +1370,16 @@ func (writer *s3WriterDelegate) collectInsertStats(proc *process.Process, idx in
 			growth += metadata.Vecs[col].AppendAllocation(count, count*width)
 		}
 		if err := writer.reserveMetadata(proc, growth, 0); err != nil {
-			return err
+			var capacity *rscthrottler.WorkingSetCapacityError
+			if !writer.memoryMetadata(proc) || !errors.As(err, &capacity) {
+				return err
+			}
+			if err := writer.spillMemoryMetadata(proc); err != nil {
+				return err
+			}
+			if err := writer.reserveMetadata(proc, growth, 0); err != nil {
+				return err
+			}
 		}
 		if err := colexec.ExpandObjectStatsToBatch(mp, false, metadata, true, stats[i]); err != nil {
 			return err
@@ -1434,7 +1443,14 @@ func (writer *s3WriterDelegate) appendMetadata(proc *process.Process, action act
 	}
 	mp := writer.metadataPool()
 	if err := writer.reserveMetadata(proc, growth, srcSize); err != nil {
-		return err
+		var capacity *rscthrottler.WorkingSetCapacityError
+		if !errors.As(err, &capacity) {
+			return err
+		}
+		if err := writer.spillMemoryMetadata(proc); err != nil {
+			return err
+		}
+		return writer.spoolFrame(proc, action, idx, rows, name, src)
 	}
 	return writer.addBatchToOutput(mp, out, action, idx, rows, name, src)
 }
@@ -1457,6 +1473,18 @@ func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionT
 	if err := writer.addBatchToOutput(mp, writer.outputBat, action, idx, rows, name, src); err != nil {
 		return err
 	}
+	err := writer.writeMetadataBatch(proc, action, writer.outputBat)
+	writer.outputBat.Clean(mp)
+	writer.outputBat = nil
+	writer.buf = bytes.Buffer{}
+	return err
+}
+
+// Stream an already encoded row; do not decode/encode its source payload.
+func (writer *s3WriterDelegate) writeMetadataBatch(proc *process.Process, action actionType, data *batch.Batch) error {
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
 	if writer.metadataSpool == nil {
 		f, err := os.CreateTemp("", "mo-multi-update-*.spool")
 		if err != nil {
@@ -1473,7 +1501,7 @@ func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionT
 		return err
 	}
 	var head [9]byte
-	n := writer.outputBat.MarshalBinarySize()
+	n := data.MarshalBinarySize()
 	if err := writer.checkMetadataFrameSize(n); err != nil {
 		return err
 	}
@@ -1482,14 +1510,55 @@ func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionT
 	if _, err := writer.metadataSpool.Write(head[:]); err != nil {
 		return err
 	}
-	if err := writer.outputBat.MarshalBinaryTo(writer.metadataSpool); err != nil {
+	if err := data.MarshalBinaryTo(writer.metadataSpool); err != nil {
 		_ = writer.metadataSpool.Truncate(start)
 		return err
 	}
 	writer.metadataWritten += 9 + n
-	writer.outputBat.Clean(mp)
-	writer.outputBat = nil
-	// The serializer's old whole-frame scratch is not retained after a frame.
+	return nil
+}
+
+func (writer *s3WriterDelegate) spillMemoryMetadata(proc *process.Process) error {
+	mp := writer.metadataPool()
+	row := makeS3OutputBatch()
+	defer row.Clean(mp)
+	read := writer.metadataRead
+	for _, action := range []actionType{actionDelete, actionInsert} {
+		src := writer.metadata[action]
+		if src == nil {
+			continue
+		}
+		for i := read; i < src.RowCount(); i++ {
+			if err := context.Cause(proc.Ctx); err != nil {
+				return err
+			}
+			var growth int64
+			for col, vec := range row.Vecs {
+				growth += vec.AppendWindowAllocation(src.Vecs[col], i, i+1)
+			}
+			// The old four-copy reservation covers retained input plus old/new
+			// one-row backing. MarshalBinaryTo streams without an encoding copy.
+			peak := mp.AllocatedBytes() + int64(writer.buf.Cap()) + growth
+			if peak > writer.outputLease.Capacity() {
+				return &rscthrottler.WorkingSetCapacityError{Minimum: peak, Available: writer.outputLease.Capacity()}
+			}
+			if err := row.UnionOne(src, int64(i), mp); err != nil {
+				return err
+			}
+			if err := writer.writeMetadataBatch(proc, action, row); err != nil {
+				return err
+			}
+			row.CleanOnlyData()
+		}
+		read = 0
+	}
+	for i, data := range writer.metadata {
+		if data != nil {
+			data.Clean(mp)
+			writer.metadata[i] = nil
+		}
+	}
+	writer.metadataRead = 0
 	writer.buf = bytes.Buffer{}
 	return nil
 }
@@ -1645,7 +1714,16 @@ func (writer *s3WriterDelegate) readMetadataFrame(proc *process.Process) error {
 			growth += vec.AppendWindowAllocation(src.Vecs[i], writer.metadataRead, writer.metadataRead+1)
 		}
 		if err := writer.reserveMetadata(proc, growth, 0); err != nil {
-			return err
+			var capacity *rscthrottler.WorkingSetCapacityError
+			if !errors.As(err, &capacity) {
+				return err
+			}
+			writer.outputBat.Clean(mp)
+			writer.outputBat = nil
+			if err := writer.spillMemoryMetadata(proc); err != nil {
+				return err
+			}
+			return writer.readSpooledMetadataFrame(proc)
 		}
 		// Copy just this row: a borrowed window would serialize the complete
 		// retained varlena area again when the frame crosses a pipeline edge.

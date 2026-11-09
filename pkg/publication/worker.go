@@ -751,55 +751,74 @@ func (w *filterObjectWorker) Stop() {
 type getChunkWorker struct {
 	jobChan chan Job
 	wg      sync.WaitGroup
+	mu      sync.RWMutex
 	cancel  context.CancelFunc
 	ctx     context.Context
 	closed  atomic.Bool
 }
 
-// NewGetChunkWorker creates a new get chunk worker pool
 func NewGetChunkWorker() GetChunkWorker {
-	w := &getChunkWorker{
-		jobChan: make(chan Job, 10000),
-	}
+	w := &getChunkWorker{jobChan: make(chan Job, 10000)}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	go w.Run()
+	// Register every worker before Stop can wait for this generation.
+	w.Run()
 	return w
 }
 
+func chunkJobContext(job Job) context.Context {
+	switch j := job.(type) {
+	case *GetMetaJob:
+		return j.ctx
+	case *GetChunkJob:
+		return j.ctx
+	default:
+		return context.Background()
+	}
+}
+
+func (w *getChunkWorker) execute(job Job) {
+	ctx, cancel := context.WithCancel(chunkJobContext(job))
+	stop := context.AfterFunc(w.ctx, cancel)
+	defer stop()
+	defer cancel()
+	if context.Cause(w.ctx) != nil {
+		cancel()
+	}
+	switch j := job.(type) {
+	case *GetMetaJob:
+		j.ctx = ctx
+	case *GetChunkJob:
+		j.ctx = ctx
+	}
+	job.Execute()
+}
+
 func (w *getChunkWorker) Run() {
-	workerThreadCount := GetGetChunkWorkerThread()
-	for i := 0; i < workerThreadCount; i++ {
+	for i := 0; i < GetGetChunkWorkerThread(); i++ {
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
-			for {
-				select {
-				case <-w.ctx.Done():
-					return
-				case job := <-w.jobChan:
-					jobType := job.GetType()
-					switch jobType {
-					case JobTypeGetMeta:
-						globalJobStats.IncrementGetMetaRunning()
-						job.Execute()
-						globalJobStats.DecrementGetMetaRunning()
-					default:
-						// JobTypeGetChunk
-						globalJobStats.IncrementGetChunkRunning()
-						startTime := time.Now()
-						job.Execute()
-						duration := time.Since(startTime)
-						globalJobStats.DecrementGetChunkRunning()
-
-						// Record duration for GetChunk jobs
-						if chunkJobInfo, ok := job.(GetChunkJobInfo); ok {
-							globalJobStats.RecordGetChunkDuration(
-								chunkJobInfo.GetObjectName(),
-								chunkJobInfo.GetChunkIndex(),
-								duration,
-							)
-						}
-					}
+			// Stop cancels active jobs and closes admission; accepted jobs
+			// still execute their cancellation/terminal path before retirement.
+			for job := range w.jobChan {
+				if job.GetType() == JobTypeGetMeta {
+					globalJobStats.IncrementGetMetaRunning()
+					w.execute(job)
+					globalJobStats.DecrementGetMetaRunning()
+					continue
+				}
+				// Cache metadata before completion allows callers to recycle jobs.
+				var name string
+				var index int64
+				if info, ok := job.(GetChunkJobInfo); ok {
+					name, index = info.GetObjectName(), info.GetChunkIndex()
+				}
+				globalJobStats.IncrementGetChunkRunning()
+				start := time.Now()
+				w.execute(job)
+				globalJobStats.DecrementGetChunkRunning()
+				if name != "" {
+					globalJobStats.RecordGetChunkDuration(name, index, time.Since(start))
 				}
 			}
 		}()
@@ -807,25 +826,44 @@ func (w *getChunkWorker) Run() {
 }
 
 func (w *getChunkWorker) SubmitGetChunk(job Job) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
 	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "GetChunkWorker is closed")
+		if w.ctx != nil && context.Cause(w.ctx) != nil {
+			return context.Cause(w.ctx)
+		}
+		return moerr.NewInternalErrorNoCtx("GetChunkWorker is closed")
 	}
-	jobType := job.GetType()
-	switch jobType {
-	case JobTypeGetMeta:
-		globalJobStats.IncrementGetMetaPending()
-	default:
-		globalJobStats.IncrementGetChunkPending()
+	var stopped <-chan struct{}
+	if w.ctx != nil {
+		stopped = w.ctx.Done()
 	}
-	w.jobChan <- job
-	return nil
+	pending := &globalJobStats.GetChunkPending
+	if job.GetType() == JobTypeGetMeta {
+		pending = &globalJobStats.GetMetaPending
+	}
+	pending.Add(1)
+	select {
+	case <-stopped:
+		pending.Add(-1)
+		return context.Cause(w.ctx)
+	case <-chunkJobContext(job).Done():
+		pending.Add(-1)
+		return context.Cause(chunkJobContext(job))
+	case w.jobChan <- job:
+		return nil
+	}
 }
 
 func (w *getChunkWorker) Stop() {
-	w.closed.Store(true)
+	// Unblock submitters before waiting for their read-side admission gate.
 	w.cancel()
+	w.mu.Lock()
+	if !w.closed.Swap(true) {
+		close(w.jobChan)
+	}
+	w.mu.Unlock()
 	w.wg.Wait()
-	close(w.jobChan)
 }
 
 // ============================================================================

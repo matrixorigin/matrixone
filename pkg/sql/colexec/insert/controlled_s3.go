@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -54,6 +55,8 @@ type controlledS3 struct {
 	mu          sync.Mutex
 	granted     int64
 	mutations   int
+	statsSpool  *os.File
+	statsCount  int64
 	stats       *vector.Vector
 	read        int
 	output      *batch.Batch
@@ -371,17 +374,70 @@ func (s *controlledS3) collectStats(ctx context.Context, stats []objectio.Object
 		if bound > limit-4096 {
 			return moerr.NewInternalErrorNoCtxf("insert metadata exceeds admitted frame capacity: %d", bound)
 		}
+		if s.statsSpool != nil {
+			if err := s.writeStat(&stats[i]); err != nil {
+				return err
+			}
+			continue
+		}
 		if s.stats == nil {
 			s.stats = vector.NewOffHeapVecWithType(types.T_binary.ToType())
 		}
 		growth := s.stats.AppendAllocation(1, objectio.ObjectStatsLen)
 		if err = colexec.GrowMetadataOutput(ctx, s.outputSlot, s.outputMP.AllocatedBytes(), growth); err != nil {
-			return err
+			var capacity *rscthrottler.WorkingSetCapacityError
+			if !errors.As(err, &capacity) {
+				return err
+			}
+			if err := s.spoolStats(ctx); err != nil {
+				return err
+			}
+			if err := s.writeStat(&stats[i]); err != nil {
+				return err
+			}
+			continue
 		}
 		if err = vector.AppendBytes(s.stats, stats[i][:], false, s.outputMP); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// Fixed ObjectStats records need no serialization copy or offset index. The
+// old output promise remains owned until all retained stats have been written.
+func (s *controlledS3) writeStat(stats *objectio.ObjectStats) error {
+	if _, err := s.statsSpool.Write(stats[:]); err != nil {
+		return err
+	}
+	s.statsCount++
+	return nil
+}
+
+func (s *controlledS3) spoolStats(ctx context.Context) error {
+	f, err := os.CreateTemp("", "mo-insert-*.spool")
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(f.Name()); err != nil {
+		f.Close()
+		return err
+	}
+	s.statsSpool = f
+	for i := s.read; s.stats != nil && i < s.stats.Length(); i++ {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		stats := objectio.ObjectStats(s.stats.GetBytesAt(i))
+		if err := s.writeStat(&stats); err != nil {
+			return err
+		}
+	}
+	if s.stats != nil {
+		s.stats.Free(s.outputMP)
+		s.stats = nil
+	}
+	s.read = 0
 	return nil
 }
 
@@ -403,16 +459,26 @@ func (s *controlledS3) next(ctx context.Context) (*batch.Batch, error) {
 		s.output.Clean(s.outputMP)
 		s.output = nil
 	}
-	if s.stats == nil {
-		return nil, nil
+	var stats objectio.ObjectStats
+	if s.statsSpool != nil {
+		if int64(s.read) == s.statsCount {
+			return nil, nil
+		}
+		if _, err := s.statsSpool.ReadAt(stats[:], int64(s.read)*int64(objectio.ObjectStatsLen)); err != nil {
+			return nil, err
+		}
+	} else {
+		if s.stats == nil {
+			return nil, nil
+		}
+		if s.read == s.stats.Length() {
+			s.stats.Free(s.outputMP)
+			s.stats = nil
+			s.read = 0
+			return nil, nil
+		}
+		stats = objectio.ObjectStats(s.stats.GetBytesAt(s.read))
 	}
-	if s.read == s.stats.Length() {
-		s.stats.Free(s.outputMP)
-		s.stats = nil
-		s.read = 0
-		return nil, nil
-	}
-	stats := objectio.ObjectStats(s.stats.GetBytesAt(s.read))
 	s.output = colexec.AllocCNS3ResultBat(false, false)
 	counts := []int64{int64(stats.BlkCnt()), 1}
 	widths := []int64{int64(objectio.BlockInfoSize), int64(objectio.ObjectStatsLen)}
@@ -421,7 +487,16 @@ func (s *controlledS3) next(ctx context.Context) (*batch.Batch, error) {
 		allocation += s.output.Vecs[i].AppendAllocation(int(count), int(count*widths[i]))
 	}
 	if err := colexec.GrowMetadataOutput(ctx, s.outputSlot, s.outputMP.AllocatedBytes(), allocation); err != nil {
-		return nil, err
+		var capacity *rscthrottler.WorkingSetCapacityError
+		if s.statsSpool != nil || !errors.As(err, &capacity) {
+			return nil, err
+		}
+		s.output.Clean(s.outputMP)
+		s.output = nil
+		if err := s.spoolStats(ctx); err != nil {
+			return nil, err
+		}
+		return s.next(ctx)
 	}
 	for i, count := range counts {
 		if err := s.output.Vecs[i].PreExtendWithArea(int(count), int(count*widths[i]), s.outputMP); err != nil {
@@ -455,6 +530,11 @@ func (s *controlledS3) close() (err error) {
 		s.stats.Free(s.outputMP)
 		s.stats = nil
 	}
+	if s.statsSpool != nil {
+		err = errors.Join(err, s.statsSpool.Close())
+		s.statsSpool = nil
+	}
+	s.statsCount = 0
 	s.read = 0
 	if s.outputSlot != nil {
 		s.outputSlot.Release()

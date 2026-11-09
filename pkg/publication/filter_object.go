@@ -16,6 +16,8 @@ package publication
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -45,7 +47,7 @@ type publicationMemoryKey struct{}
 
 // One job slot owns fetch/decode, retained source vectors and final encoding.
 // Reserve before fetching; subsequent growth cannot wait on retained input.
-func reserveTombstoneRewrite(ctx context.Context, stats *objectio.ObjectStats) (*rscthrottler.InputLease, func(), error) {
+func reserveTombstoneRewrite(ctx context.Context, stats *objectio.ObjectStats, minimum int64) (*rscthrottler.InputLease, func(), error) {
 	owner, ok := ctx.Value(publicationMemoryKey{}).(rscthrottler.WorkingSetThrottler)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("publication rewrite requires CN memory admission")
@@ -54,6 +56,7 @@ func reserveTombstoneRewrite(ctx context.Context, stats *objectio.ObjectStats) (
 	if err != nil {
 		return nil, nil, err
 	}
+	peak = max(peak, minimum)
 	ticket, err := owner.ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{
 		UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Name: "publication-rewrite", Count: 1, Bytes: peak}},
 	}})
@@ -66,6 +69,21 @@ func reserveTombstoneRewrite(ctx context.Context, stats *objectio.ObjectStats) (
 		return nil, nil, err
 	}
 	return lease, func() { lease.Release(); ticket.Close() }, nil
+}
+
+type tombstoneRewriteGrowth struct{ bytes int64 }
+
+func (e *tombstoneRewriteGrowth) Error() string {
+	return "publication rewrite requires a larger job slot"
+}
+
+func growTombstoneRewrite(ctx context.Context, memory *rscthrottler.InputLease, peak int64) error {
+	err := memory.TryGrow(ctx, peak)
+	var capacity *rscthrottler.WorkingSetCapacityError
+	if errors.As(err, &capacity) {
+		return &tombstoneRewriteGrowth{bytes: peak}
+	}
+	return err
 }
 
 // CCPRTxnCacheWriter is an interface for writing objects to CCPR transaction cache
@@ -179,7 +197,7 @@ func filterAppendableObject(
 	// Get object file from upstream using GETOBJECT
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return nil, fmt.Errorf("failed to get object from upstream: %w", err)
 	}
 
 	// Check TTL after getting object
@@ -388,60 +406,73 @@ func filterNonAppendableObject(
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) (objectio.ObjectStats, error) {
-	// Check TTL before processing
-	if ttlChecker != nil && !ttlChecker() {
-		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
-	}
-	var memory *rscthrottler.InputLease
-	if isTombstone && aobjectMap != nil {
-		var release func()
-		var err error
-		memory, release, err = reserveTombstoneRewrite(ctx, stats)
-		if err != nil {
-			return objectio.ObjectStats{}, err
+	var minimum int64
+	for {
+		result, err := func() (objectio.ObjectStats, error) {
+			// Check TTL before processing
+			if ttlChecker != nil && !ttlChecker() {
+				return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
+			}
+			var memory *rscthrottler.InputLease
+			if isTombstone && aobjectMap != nil {
+				var release func()
+				var err error
+				memory, release, err = reserveTombstoneRewrite(ctx, stats, minimum)
+				if err != nil {
+					return objectio.ObjectStats{}, err
+				}
+				defer release()
+			}
+
+			// Get upstream object name from stats
+			upstreamObjectName := stats.ObjectName().String()
+
+			// Get object file from upstream
+			objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
+			if err != nil {
+				return objectio.ObjectStats{}, fmt.Errorf("failed to get object from upstream: %w", err)
+			}
+
+			// Check TTL after getting object
+			if ttlChecker != nil && !ttlChecker() {
+				return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
+			}
+
+			// Tombstone RowIDs may change order across source blocks after remapping.
+			if isTombstone && aobjectMap != nil {
+				objStats, err := rewriteNonAppendableTombstoneWithSinker(
+					ctx, objectContent, stats, localFS, mp, aobjectMap, memory,
+				)
+				if err != nil {
+					return objectio.ObjectStats{}, err
+				}
+				return objStats, nil
+			}
+
+			// For data objects (or tombstone without aobjectMap), write directly to fileservice
+			writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
+			if writeObjectWorker != nil {
+				if err := writeObjectWorker.SubmitWriteObject(writeJob); err != nil {
+					return objectio.ObjectStats{}, err
+				}
+			} else {
+				writeJob.Execute()
+			}
+			writeResult := writeJob.WaitDone().(*WriteObjectJobResult)
+			if writeResult.Err != nil {
+				return objectio.ObjectStats{}, writeResult.Err
+			}
+
+			// Return original stats (no need to create new stats since we use the same object name)
+			return *stats, nil
+		}()
+		var growth *tombstoneRewriteGrowth
+		if !errors.As(err, &growth) {
+			return result, err
 		}
-		defer release()
+		minimum = growth.bytes
 	}
 
-	// Get upstream object name from stats
-	upstreamObjectName := stats.ObjectName().String()
-
-	// Get object file from upstream
-	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
-	if err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
-	}
-
-	// Check TTL after getting object
-	if ttlChecker != nil && !ttlChecker() {
-		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
-	}
-
-	// Tombstone RowIDs may change order across source blocks after remapping.
-	if isTombstone && aobjectMap != nil {
-		objStats, err := rewriteNonAppendableTombstoneWithSinker(
-			ctx, objectContent, stats, localFS, mp, aobjectMap, memory,
-		)
-		if err != nil {
-			return objectio.ObjectStats{}, err
-		}
-		return objStats, nil
-	}
-
-	// For data objects (or tombstone without aobjectMap), write directly to fileservice
-	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
-	if writeObjectWorker != nil {
-		writeObjectWorker.SubmitWriteObject(writeJob)
-	} else {
-		writeJob.Execute()
-	}
-	writeResult := writeJob.WaitDone().(*WriteObjectJobResult)
-	if writeResult.Err != nil {
-		return objectio.ObjectStats{}, writeResult.Err
-	}
-
-	// Return original stats (no need to create new stats since we use the same object name)
-	return *stats, nil
 }
 
 // GetObjectFromUpstreamWithWorker gets object file from upstream using GETOBJECT SQL with worker pool
@@ -466,46 +497,54 @@ var GetObjectFromUpstreamWithWorker = func(
 	}
 
 	totalChunks := metaResult.TotalChunks
-
-	// Fetch data chunks starting from chunk 1
-	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
-	allChunks := make([][]byte, totalChunks)
-
-	// Submit all chunk jobs to worker pool
-	chunkJobs := make([]*GetChunkJob, totalChunks)
-	for i := int64(1); i <= totalChunks; i++ {
-		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
-		chunkJobs[i-1] = chunkJob
-		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
-		} else {
-			chunkJob.Execute()
+	ctx, cancel := context.WithCancel(ctx)
+	// Only one existing-concurrency window of jobs/results is live. Object
+	// size does not grow a second unbounded queue of completed chunk jobs.
+	window := int64(max(1, min(GetGetChunkWorkerThread(), cap(getOrCreateChunkSemaphore()))))
+	jobs := make([]*GetChunkJob, 0, min(window, totalChunks))
+	consumed := 0
+	defer func() {
+		cancel()
+		for _, job := range jobs[consumed:] {
+			job.WaitDone()
 		}
-	}
-
-	// Wait for all chunk jobs to complete, retry failed chunks
-	for i := int64(0); i < totalChunks; i++ {
-		chunkResult := chunkJobs[i].WaitDone().(*GetChunkJobResult)
-		if chunkResult.Err != nil {
-			// Retry failed chunk
-			chunkData, err := getChunkWithRetry(ctx, upstreamExecutor, objectName, i+1, getChunkWorker, subscriptionAccountName, pubName)
-			if err != nil {
+	}()
+	var objectContent []byte
+	for first := int64(1); first <= totalChunks; {
+		clear(jobs)
+		jobs = jobs[:0]
+		consumed = 0
+		end := first + min(window, totalChunks-first+1)
+		for index := first; index < end; index++ {
+			job := NewGetChunkJob(ctx, upstreamExecutor, objectName, index, subscriptionAccountName, pubName)
+			if getChunkWorker != nil {
+				if err := getChunkWorker.SubmitGetChunk(job); err != nil {
+					return nil, err
+				}
+			} else {
+				job.Execute()
+			}
+			jobs = append(jobs, job)
+		}
+		for i, job := range jobs {
+			res := job.WaitDone().(*GetChunkJobResult)
+			consumed++
+			data := res.ChunkData
+			if res.Err != nil {
+				if !(DefaultClassifier{}).IsRetryable(res.Err) {
+					return nil, res.Err
+				}
+				data, err = getChunkWithRetry(ctx, upstreamExecutor, objectName, first+int64(i), getChunkWorker, subscriptionAccountName, pubName)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err := context.Cause(ctx); err != nil {
 				return nil, err
 			}
-			allChunks[i] = chunkData
-		} else {
-			allChunks[i] = chunkResult.ChunkData
+			objectContent = append(objectContent, data...)
 		}
-	}
-
-	// Combine all chunks
-	totalLen := 0
-	for _, chunk := range allChunks {
-		totalLen += len(chunk)
-	}
-	objectContent := make([]byte, 0, totalLen)
-	for _, chunk := range allChunks {
-		objectContent = append(objectContent, chunk...)
+		first = end
 	}
 
 	return objectContent, nil
@@ -532,7 +571,9 @@ func getMetaWithRetry(
 
 		metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(metaJob)
+			if err := getChunkWorker.SubmitGetChunk(metaJob); err != nil {
+				return nil, err
+			}
 		} else {
 			metaJob.Execute()
 		}
@@ -572,7 +613,9 @@ func getChunkWithRetry(
 
 		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, chunkIndex, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
+			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
+				return nil, err
+			}
 		} else {
 			chunkJob.Execute()
 		}
@@ -710,7 +753,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 	if err != nil {
 		return objectio.ObjectStats{}, err
 	}
-	if err := memory.TryGrow(ctx, peak); err != nil {
+	if err := growTombstoneRewrite(ctx, memory, peak); err != nil {
 		return objectio.ObjectStats{}, err
 	}
 	var inputs []*batch.Batch
@@ -751,7 +794,7 @@ func rewriteNonAppendableTombstoneWithSinker(
 	if err != nil {
 		return objectio.ObjectStats{}, err
 	}
-	if err := memory.TryGrow(ctx, peak); err != nil {
+	if err := growTombstoneRewrite(ctx, memory, peak); err != nil {
 		return objectio.ObjectStats{}, err
 	}
 	file := newTombstoneFSinkerFactoryWithName(stats.ObjectName(), objectio.HiddenColumnSelection_None)(mp, localFS)

@@ -459,6 +459,16 @@ func TestRewriteTombstoneRowidsBatch_WithRowOffsetMapRewrite(t *testing.T) {
 	rowidVec.Free(mp)
 }
 
+type rewriteAdmissionProbe struct {
+	rscthrottler.WorkingSetThrottler
+	before func([]rscthrottler.WorkingSetSpec)
+}
+
+func (p *rewriteAdmissionProbe) ReserveWorkingSetCandidatesUntilFit(ctx context.Context, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
+	p.before(specs)
+	return p.WorkingSetThrottler.ReserveWorkingSetCandidatesUntilFit(ctx, specs)
+}
+
 type rewriteFileService struct {
 	fileservice.FileService
 	beforeWrite func() error
@@ -564,7 +574,10 @@ func TestRewriteNonAppendableTombstoneWithSinker_WideKeys(t *testing.T) {
 			require.NoError(t, sourceFS.Read(ctx, &content))
 			modes := []string{"success"}
 			if tc.sharedKey {
-				modes = append(modes, "deny_fetch", "deny_expansion", "cancel", "write_error")
+				modes = append(modes, "deny_fetch", "deny_expansion", "cancel", "write_error", "pressure_alias", "cancel_readmission")
+			}
+			if tc.name == "partial" {
+				modes = append(modes, "pressure_decode")
 			}
 			for _, mode := range modes {
 				t.Run(mode, func(t *testing.T) {
@@ -576,7 +589,25 @@ func TestRewriteNonAppendableTombstoneWithSinker_WideKeys(t *testing.T) {
 					}
 					owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total),
 						rscthrottler.WithMemorySampleForTesting(total, 0)).(rscthrottler.WorkingSetThrottler)
-					jobCtx, cancel := context.WithCancel(context.WithValue(ctx, publicationMemoryKey{}, owner))
+					pressure := strings.HasPrefix(mode, "pressure_") || mode == "cancel_readmission"
+					before := mp.CurrNB()
+					var held *rscthrottler.WorkingSet
+					reAdmission := make(chan struct{})
+					reservations := 0
+					probe := &rewriteAdmissionProbe{WorkingSetThrottler: owner, before: func(specs []rscthrottler.WorkingSetSpec) {
+						reservations++
+						if pressure && mode != "pressure_decode" && reservations == 1 {
+							// Pay enough to decode the tiny shared source, so the
+							// controlled denial occurs at logical alias expansion.
+							specs[0].Inputs[0].Bytes = 1 << 30
+						}
+						if pressure && reservations == 2 {
+							require.Equal(t, before, mp.CurrNB(), "retry retires decoded vectors first")
+							require.Equal(t, total-held.InputCapacity(0), owner.WorkingSetHeadroom().Available, "retry refunds its old ticket before waiting")
+							close(reAdmission)
+						}
+					}}
+					jobCtx, cancel := context.WithCancel(context.WithValue(ctx, publicationMemoryKey{}, probe))
 					t.Cleanup(cancel)
 					fetches, writes := 0, 0
 					upstream := GetObjectFromUpstreamWithWorker
@@ -584,6 +615,14 @@ func TestRewriteNonAppendableTombstoneWithSinker_WideKeys(t *testing.T) {
 					GetObjectFromUpstreamWithWorker = func(context.Context, SQLExecutor, string, GetChunkWorker, string, string) ([]byte, error) {
 						fetches++
 						require.Less(t, owner.WorkingSetHeadroom().Available, total, "reserve before fetching")
+						if pressure && fetches == 1 {
+							var ok bool
+							var err error
+							held, ok, err = owner.TryReserveWorkingSet(ctx, rscthrottler.WorkingSetSpec{UnitBytes: 1,
+								Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: owner.WorkingSetHeadroom().Available - 1024}}})
+							require.NoError(t, err)
+							require.True(t, ok)
+						}
 						if mode == "cancel" {
 							cancel()
 						}
@@ -599,22 +638,61 @@ func TestRewriteNonAppendableTombstoneWithSinker_WideKeys(t *testing.T) {
 						}
 						return nil
 					}}
-					before := mp.CurrNB()
 					job := NewFilterObjectJob(jobCtx, original.Marshal(), types.TS{}, nil, true, targetFS, mp,
 						nil, nil, "", "", nil, nil, mapping, nil)
-					job.Execute()
-					result := job.WaitDone().(*FilterObjectJobResult)
+					var result *FilterObjectJobResult
+					if pressure {
+						finished := make(chan struct{})
+						t.Cleanup(func() {
+							cancel()
+							<-finished
+							if held != nil {
+								held.Close()
+							}
+						})
+						go func() { defer close(finished); job.Execute(); result = job.WaitDone().(*FilterObjectJobResult) }()
+						select {
+						case <-reAdmission:
+						case <-finished:
+							t.Fatal("transient growth pressure escaped instead of re-admitting")
+						case <-time.After(15 * time.Second):
+							t.Fatal("re-admission did not start")
+						}
+						select {
+						case <-finished:
+							t.Fatal("completed before the independent owner released")
+						default:
+						}
+						if mode == "cancel_readmission" {
+							cancel()
+						} else {
+							held.Close()
+						}
+						select {
+						case <-finished:
+						case <-time.After(15 * time.Second):
+							t.Fatal("job did not retire")
+						}
+						if mode != "cancel_readmission" {
+							require.Equal(t, 2, fetches)
+						}
+					} else {
+						job.Execute()
+						result = job.WaitDone().(*FilterObjectJobResult)
+					}
+					if pressure && mode == "cancel_readmission" {
+						held.Close()
+					}
 					require.Equal(t, before, mp.CurrNB(), "vectors released on every exit")
 					require.Equal(t, total, owner.WorkingSetHeadroom().Available, "all promises released")
-					if mode != "success" {
+					if mode != "success" && !strings.HasPrefix(mode, "pressure_") {
 						require.Error(t, result.Err)
 						require.Equal(t, objectio.ObjectStats{}, result.DownstreamStats)
-						if mode == "deny_fetch" {
+						if mode == "deny_fetch" || mode == "deny_expansion" {
 							var capacity *rscthrottler.WorkingSetCapacityError
 							require.ErrorAs(t, result.Err, &capacity)
-						} else if mode == "deny_expansion" {
-							require.True(t, moerr.IsMoErrCode(result.Err, moerr.ErrInternal))
-						} else if mode == "cancel" {
+
+						} else if mode == "cancel" || mode == "cancel_readmission" {
 							require.ErrorIs(t, result.Err, context.Canceled)
 						} else {
 							require.ErrorIs(t, result.Err, uploadErr)

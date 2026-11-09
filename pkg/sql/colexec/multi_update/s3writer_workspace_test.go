@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -440,4 +443,108 @@ func TestLegacyMetadataWaitsForIndependentRelease(t *testing.T) {
 	}
 	require.NoError(t, w.free(proc))
 	require.Equal(t, int64(1<<20), owner.Available())
+}
+
+func TestInsertMetadataSpoolsUnderIndependentPressure(t *testing.T) {
+	for _, mode := range []string{"eof", "eval_resume", "cancel", "create_error", "write_error", "read_error"} {
+		t.Run(mode, func(t *testing.T) {
+			proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, InsertCols: []int{0}}}, false)
+			const total = int64(16 << 20)
+			owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total), rscthrottler.WithMemorySampleForTesting(total, 0)).(rscthrottler.WorkingSetThrottler)
+			ws, err := owner.ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 4 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv"}, {Count: 1, Bytes: 2 << 20}}}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, w.reset(proc)); ws.Close() })
+			proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 4 << 20, OutputBytes: 2 << 20}
+			require.NoError(t, w.ensureOutputSlot(proc))
+			other, ok, err := owner.TryReserveWorkingSet(proc.Ctx, rscthrottler.WorkingSetSpec{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: owner.WorkingSetHeadroom().Available - 1024}}})
+			require.NoError(t, err)
+			require.True(t, ok)
+			t.Cleanup(other.Close)
+			count := 171
+			if mode == "eval_resume" {
+				count = 3
+			}
+			stats := make([]objectio.ObjectStats, count)
+			for i := range stats {
+				id := objectio.NewObjectid()
+				stats[i] = *objectio.NewObjectStatsWithObjectID(&id, false, true, true)
+				require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], 8))
+				require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[i], 8*objectio.BlockMaxRows))
+			}
+			if mode == "create_error" {
+				t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+				require.Error(t, w.collectInsertStats(proc, 0, stats))
+				require.Nil(t, w.metadataSpool)
+				pool := w.metadataPool()
+				require.NoError(t, w.reset(proc))
+				require.Zero(t, pool.AllocatedBytes())
+				ws.Close()
+				other.Close()
+				require.Equal(t, total, owner.WorkingSetHeadroom().Available)
+				return
+			}
+			require.NoError(t, w.collectInsertStats(proc, 0, stats), "all frames progress without releasing the competitor")
+			start := 0
+			if mode == "eval_resume" {
+				require.Nil(t, w.metadataSpool)
+				require.NoError(t, w.readMetadataFrame(proc))
+				require.NotNil(t, w.outputBat)
+				require.NoError(t, w.spillMemoryMetadata(proc))
+				start = 1
+			}
+			require.NotNil(t, w.metadataSpool)
+			require.Equal(t, [2]*batch.Batch{}, w.metadata)
+			require.Equal(t, int64(2<<20), w.outputLease.Capacity())
+			file := w.metadataSpool
+			switch mode {
+			case "cancel":
+				parent := proc.Ctx
+				ctx, cancel := context.WithCancel(parent)
+				cancel()
+				proc.Ctx = ctx
+				require.ErrorIs(t, w.readMetadataFrame(proc), context.Canceled)
+				proc.Ctx = parent
+			case "read_error":
+				require.NoError(t, file.Truncate(0))
+				require.ErrorIs(t, w.readMetadataFrame(proc), io.EOF)
+			case "write_error":
+				require.NoError(t, file.Close())
+				require.Error(t, w.collectInsertStats(proc, 0, stats[:1]))
+			default:
+				for i := start; i < len(stats); i++ {
+					require.NoError(t, w.readMetadataFrame(proc))
+					require.NotNil(t, w.outputBat)
+					require.Equal(t, 1, w.outputBat.RowCount())
+					decoded := batch.NewOffHeapEmpty()
+					func() {
+						defer decoded.Clean(proc.Mp())
+						require.NoError(t, decoded.UnmarshalBinary(w.outputBat.Vecs[4].GetBytesAt(0)))
+						require.Equal(t, stats[i][:], decoded.Vecs[1].GetBytesAt(0))
+						require.Equal(t, 8, decoded.Vecs[0].Length())
+					}()
+				}
+				require.NoError(t, w.readMetadataFrame(proc))
+				require.Nil(t, w.outputBat, "no duplicated or missing object after switching storage")
+			}
+			pool := w.metadataPool()
+			err = w.reset(proc)
+			if mode == "write_error" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Zero(t, pool.AllocatedBytes())
+			_, err = file.Stat()
+			require.Error(t, err)
+			// A fresh Build on the same writer must start in the memory fast path.
+			require.NoError(t, w.collectInsertStats(proc, 0, stats[:1]))
+			require.Nil(t, w.metadataSpool)
+			require.NoError(t, w.readMetadataFrame(proc))
+			require.NotNil(t, w.outputBat)
+			require.NoError(t, w.reset(proc))
+			ws.Close()
+			other.Close()
+			require.Equal(t, total, owner.WorkingSetHeadroom().Available)
+		})
+	}
 }
