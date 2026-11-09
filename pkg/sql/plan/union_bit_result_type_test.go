@@ -49,7 +49,7 @@ func TestUnionPureBitBranchesKeepBitDomain(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	ctx := NewMockCompilerContext(true, proc)
 
-	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil)
+	baseRef, baseDef, err := ctx.Resolve("constraint_test", "docs_vec_raw", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, baseRef, "docs_vec_raw must resolve with an object reference")
 	require.NotNil(t, baseDef, "docs_vec_raw must resolve in the mock schema")
@@ -88,7 +88,7 @@ func TestUnionPureBitBranchesKeepBitDomain(t *testing.T) {
 		t.Helper()
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		p, err := BuildPlan(ctx, stmt, false)
+		p, err := BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err)
 		return p.GetQuery()
 	}

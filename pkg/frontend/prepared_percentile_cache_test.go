@@ -42,12 +42,12 @@ func TestShouldCachePrepareCompileRejectsPercentileParameter(t *testing.T) {
 			}},
 		}}}},
 	}}}
-	require.False(t, shouldCachePrepareCompile(prepared))
+	require.False(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 	require.True(t, plan2.PreparedPlanHasPercentileParams(prepared))
 
 	prepared.GetQuery().Nodes[0].AggList[0].GetF().Args[1] =
 		plan2.MakePlan2Float64ConstExprWithType(0.5)
-	require.True(t, shouldCachePrepareCompile(prepared))
+	require.True(t, planReuse(false, prepared, preparedPhysicalCompile).reusable)
 }
 
 func TestPreparedPercentileDisablesMixedRuntimeSpecializationCache(t *testing.T) {

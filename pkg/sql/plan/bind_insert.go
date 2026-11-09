@@ -1121,7 +1121,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 
 	objRef := builder.irregularMaintObjRef
 	entriesObjRef, entriesTableDef, err := builder.compCtx.ResolveIndexTableByRef(
-		objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+		objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1208,7 +1208,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 	}
 
 	objRef := builder.irregularMaintObjRef
-	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1287,7 +1287,7 @@ func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindConte
 // for the DELETE plan.
 func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef, sourceStep int32) error {
 	objRef := builder.irregularMaintObjRef
-	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1529,7 +1529,7 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			continue
 		}
 
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -2141,7 +2141,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					lockTable = true
 				} else {
 					lockObjRef, lockTableDef, err = builder.compCtx.ResolveIndexTableByRef(
-						parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+						parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot, nil)
 					if err != nil {
 						return 0, nil, err
 					}
@@ -2699,7 +2699,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		}
 		var err error
 		idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
-			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, 0, nil, err
 		}
@@ -3603,7 +3603,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot, nil)
 		if err != nil {
 			return 0, err
 		}
@@ -3828,7 +3828,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -4252,7 +4252,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			// for the following cases, prepare for inserting data into the index table
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot, nil)
 			if err != nil {
 				return 0, err
 			}

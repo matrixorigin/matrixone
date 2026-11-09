@@ -16,6 +16,7 @@ package s3fifo
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -87,13 +88,30 @@ func (v *panickingValue) Release() {}
 
 // When a Get's retain panics, the admission it took is released.
 func TestGetReleasesAdmissionOnPanic(t *testing.T) {
-	c := New(Options[int, *panickingValue]{Capacity: func() int64 { return 100 }, Hash: hashInt})
-	c.Set(1, &panickingValue{}, 1)
-	released := 0
-	require.Panics(t, func() {
-		c.Get(1, func(int64) (func(), error) { return func() { released++ }, nil })
-	})
-	require.Equal(t, 1, released)
+	for _, try := range []bool{false, true} {
+		t.Run(fmt.Sprintf("try=%t", try), func(t *testing.T) {
+			c := New(Options[int, *panickingValue]{Capacity: func() int64 { return 100 }, Hash: hashInt})
+			v := &panickingValue{}
+			c.Set(1, v, 1)
+			released := 0
+			lookup := c.Get
+			if try {
+				lookup = c.TryGet
+			}
+			require.Panics(t, func() {
+				lookup(1, func(int64) (func(), error) { panic("admission failed") })
+			})
+			require.Equal(t, 1, v.retains, "panicking admission must not retain the value")
+			require.True(t, c.Contains(1), "admission panic must release the shard lock")
+
+			admit := func(int64) (func(), error) { return func() { released++ }, nil }
+			require.Panics(t, func() {
+				lookup(1, admit)
+			})
+			require.Equal(t, 1, released)
+			require.True(t, c.Contains(1), "retain panic must release the shard lock")
+		})
+	}
 }
 
 // A ghost entry counts its bytes until it leaves the queue, after a hit has forgotten its key

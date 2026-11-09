@@ -1799,7 +1799,8 @@ func (c *relationStatsContext) StatsWithTableDef(*plan.ObjectRef, *plan.TableDef
 	return c.observed, nil
 }
 
-func (c *relationStatsContext) Resolve(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *relationStatsContext) Resolve(_ string, _ string, _ *plan.Snapshot, borrowOutput *splan.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	return &plan.ObjectRef{Obj: 42, ObjName: "t"}, &plan.TableDef{TblId: 42, Name: "t", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int64)}}}, Name2ColIndex: map[string]int32{"v": 0}}, nil
 }
 
@@ -1810,7 +1811,7 @@ func assertRelationScanWidth(t *testing.T, observed *statsinfo.StatsInfo, want f
 	stmt, err := mysql.ParseOne(t.Context(), "select v from t where v > 0", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := splan.BuildPlan(ctx, stmt, false)
+	built, err := splan.BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	for _, node := range built.GetQuery().Nodes {
 		if node.NodeType == plan.Node_TABLE_SCAN {

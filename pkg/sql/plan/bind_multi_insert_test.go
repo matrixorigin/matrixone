@@ -744,7 +744,7 @@ func runOneStmtWithRewriteHints(opt Optimizer, t *testing.T, sql string) (*Plan,
 	require.Len(t, stmts, 1)
 	require.NoError(t, parsers.AddRewriteHints(ctx.GetContext(), stmts, sql))
 	defer stmts[0].Free()
-	return BuildPlan(ctx, stmts[0], false)
+	return BuildPlan(ctx, stmts[0], false, nil)
 }
 
 // A subquery in a WHEN condition or in a clause's VALUES is another read
