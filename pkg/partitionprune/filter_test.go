@@ -36,6 +36,38 @@ func TestPartitionColumnUsesExplicitDottedQualifier(t *testing.T) {
 	}
 }
 
+func TestRangeFilterFoldedConstant(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+	metadata := namedRangePartitionMetadata("a")
+	for _, value := range []int64{0, 1, 2} {
+		literal := makeNamedEqualExpr(1, "t.a", value)
+		folded := makeNamedEqualExpr(1, "t.a", value)
+		folded.GetF().Args[1].Expr = &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true, Data: types.EncodeInt64(&value),
+		}}
+		before, err := folded.Marshal()
+		require.NoError(t, err)
+		stored, err := metadata.Marshal()
+		require.NoError(t, err)
+		for repeat := 0; repeat < 2; repeat++ {
+			got, err := Filter(proc, []*plan.Expr{folded}, metadata)
+			require.NoError(t, err)
+			require.Equal(t, []int{int(value)}, got)
+			control, err := Filter(proc, []*plan.Expr{literal}, metadata)
+			require.NoError(t, err)
+			require.Equal(t, control, got)
+			after, err := folded.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after, "块过滤仍需要原 Fold 表达式")
+			after, err = metadata.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, stored, after, "不能修改共享分区表达式")
+		}
+	}
+}
+
 func TestFilter(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := process.NewTopProcess(

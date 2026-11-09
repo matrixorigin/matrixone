@@ -277,6 +277,13 @@ func rangeFilterExpr(
 				// a = 1 =>
 				// p1 <= 1 < p2
 				mustReplaceCol(exprs[i], exprImpl.F.Args[1])
+				// 块过滤边界可能已物化为 Fold；通用执行器只接受普通表达式。
+				// 与 hash/list 路径一致，仅转换上面复制的分区表达式。
+				normalized, err := ConvertFoldExprToNormal(exprs[i])
+				if err != nil {
+					return nil, false, err
+				}
+				exprs[i] = normalized
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
