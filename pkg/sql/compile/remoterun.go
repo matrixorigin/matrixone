@@ -1067,12 +1067,17 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *productl2.Productl2:
 		relList, colList := getRelColList(t.Result)
+		ignored, err := productl2.EncodeIgnored(t.Ignored)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
 			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
+			Ignored:      ignored,
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
@@ -1759,6 +1764,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
 		arg.VectorOpType = t.VectorOpType
+		ignored, err := productl2.DecodeIgnored(t.Ignored)
+		if err != nil {
+			return nil, err
+		}
+		arg.Ignored = ignored
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()

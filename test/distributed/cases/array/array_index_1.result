@@ -38,6 +38,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_cosine_ops"}
 idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"2","op_type":"vector_cosine_ops"}
 idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"2","op_type":"vector_cosine_ops"}
+idx1    MULTIPLE    embedding    ivfflat    ignored    {"lists":"2","op_type":"vector_cosine_ops"}
 alter table tbl alter reindex idx1 ivfflat lists=3;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -51,6 +52,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_cosine_ops"}
 idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"3","op_type":"vector_cosine_ops"}
 idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"3","op_type":"vector_cosine_ops"}
+idx1    MULTIPLE    embedding    ivfflat    ignored    {"lists":"3","op_type":"vector_cosine_ops"}
 alter table tbl add c vecf32(3);
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -64,6 +66,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_cosine_ops"}
 idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"3","op_type":"vector_cosine_ops"}
 idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"3","op_type":"vector_cosine_ops"}
+idx1    MULTIPLE    embedding    ivfflat    ignored    {"lists":"3","op_type":"vector_cosine_ops"}
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_cosine_ops';
@@ -79,6 +82,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx2    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_cosine_ops"}
 idx2    MULTIPLE    b    ivfflat    centroids    {"lists":"2","op_type":"vector_cosine_ops"}
 idx2    MULTIPLE    b    ivfflat    entries    {"lists":"2","op_type":"vector_cosine_ops"}
+idx2    MULTIPLE    b    ivfflat    ignored    {"lists":"2","op_type":"vector_cosine_ops"}
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf32(3));
 insert into tbl values(1, "[1,2,3]","[1,2,3]");
@@ -122,6 +126,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx8    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_cosine_ops"}
 idx8    MULTIPLE    b    ivfflat    centroids    {"lists":"2","op_type":"vector_cosine_ops"}
 idx8    MULTIPLE    b    ivfflat    entries    {"lists":"2","op_type":"vector_cosine_ops"}
+idx8    MULTIPLE    b    ivfflat    ignored    {"lists":"2","op_type":"vector_cosine_ops"}
 drop table if exists tbl;
 create table tbl(a int primary key, b vecf32(3), index idx9 using ivfflat (b));
 drop table if exists tbl;
@@ -140,6 +145,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx10    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
 idx10    MULTIPLE    b    ivfflat    centroids    {"lists":"1","op_type":"vector_l2_ops"}
 idx10    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l2_ops"}
+idx10    MULTIPLE    b    ivfflat    ignored    {"lists":"1","op_type":"vector_l2_ops"}
 alter table tbl drop column b;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -165,6 +171,7 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx11    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
 idx11    MULTIPLE    b    ivfflat    centroids    {"lists":"1","op_type":"vector_l2_ops"}
 idx11    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l2_ops"}
+idx11    MULTIPLE    b    ivfflat    ignored    {"lists":"1","op_type":"vector_l2_ops"}
 alter table tbl drop index idx11;
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
