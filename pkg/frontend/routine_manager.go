@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -218,14 +219,17 @@ func (rm *RoutineManager) cancelDisconnectedRequests(
 		return
 	}
 	for _, request := range rm.longRunningRequests(now, minimum) {
-		closed, err := probe(request.conn.RawConn())
-		if err != nil {
-			logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
-			continue
-		}
-		if !closed {
-			continue
-		}
+		cancelDisconnectedRequest(request, probe)
+	}
+}
+
+func cancelDisconnectedRequest(request activeClientRequest, probe func(net.Conn) (bool, error)) {
+	closed, err := probe(request.conn.RawConn())
+	if err != nil {
+		logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
+		return
+	}
+	if closed {
 		logutil.Infof("cancel active query after client disconnect: connection=%s", request.conn.RemoteAddress())
 		request.routine.beginClose()
 	}
@@ -418,7 +422,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
-	routine.setInProcessRequest(true)
+	if !routine.setInProcessRequest(true) {
+		return io.EOF
+	}
 	defer routine.setInProcessRequest(false)
 	payload := msg
 
@@ -427,6 +433,9 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 	req := ToRequest(payload)
 	//handle request
 	err = routine.handleRequest(req)
+	if routine.isTerminalRetired() && (err == nil || skipClientQuit(err.Error())) {
+		return io.EOF
+	}
 	if err != nil {
 		if !skipClientQuit(err.Error()) {
 			ses.Error(ctx,
