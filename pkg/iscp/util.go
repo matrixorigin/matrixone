@@ -211,6 +211,39 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	return nil
 }
 
+// sqlStringRepr returns v, a value extracted with ReprNative from a column of type typ, as
+// extracted with ReprSQLString.
+func sqlStringRepr(v any, typ *types.Type) any {
+	switch x := v.(type) {
+	case types.Datetime:
+		return x.String2(typ.Scale)
+	case types.Time:
+		return x.String2(typ.Scale)
+	case types.Timestamp:
+		return x.String2(time.UTC, typ.Scale)
+	case types.Decimal64:
+		return x.Format(typ.Scale)
+	case types.Decimal128:
+		return x.Format(typ.Scale)
+	case types.Uuid:
+		return x.String()
+	}
+	return v
+}
+
+// SqlLiteral returns the SQL literal of row i of vec.
+func SqlLiteral(ctx context.Context, vec *vector.Vector, i int) (string, error) {
+	if vec.IsConst() {
+		i = 0
+	}
+	row := make([]any, 1)
+	if err := extractRowFromVector(ctx, vec, 0, row, i, ReprSQLString); err != nil {
+		return "", err
+	}
+	buf, err := convertColIntoSql(ctx, row[0], vec.GetType(), nil)
+	return string(buf), err
+}
+
 func convertColIntoSql(
 	ctx context.Context,
 	data any,
