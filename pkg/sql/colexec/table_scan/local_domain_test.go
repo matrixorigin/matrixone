@@ -55,8 +55,18 @@ func (r *localDomainTestReader) Read(_ context.Context, _ []string, _ *plan.Expr
 func (*localDomainTestReader) Close() error { return nil }
 
 func TestLocalDomainScanSourceAndProbe(t *testing.T) {
-	for _, empty := range []bool{false, true} {
-		t.Run(map[bool]string{false: "complete domain filters before output", true: "empty domain avoids probe read"}[empty], func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		empty bool
+		ndv   float64
+		pass  bool
+	}{
+		{name: "complete domain filters before output", ndv: 10000},
+		{name: "empty domain avoids probe read", empty: true, ndv: 10000},
+		{name: "unprofitable probe keeps all rows", ndv: 20, pass: true},
+		{name: "unknown probe NDV keeps all rows", pass: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.SetMessageBoard(message.NewMessageBoard())
 			t.Cleanup(proc.Free)
@@ -65,7 +75,7 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(g.Close)
 			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(g))
-			domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1)
+			domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1, 1000000)
 			t.Cleanup(domain.Close)
 			typ := plan.Type{Id: int32(types.T_int64)}
 			makeScan := func(id int) *TableScan {
@@ -82,7 +92,7 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			}
 			source := makeScan(0)
 			sourceReader := &localDomainTestReader{values: []int64{1, 2}, nullAt: -1}
-			if empty {
+			if tc.empty {
 				sourceReader.values = nil
 			}
 			source.Reader = sourceReader
@@ -90,7 +100,7 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			probe := makeScan(1)
 			probeReader := &localDomainTestReader{values: []int64{1, 2, 99, 0}, nullAt: 3}
 			probe.Reader = probeReader
-			probe.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "id"}}
+			probe.LocalDomainProbes = []runtimefilter.LocalDomainBinding{{Domain: domain, Column: "id", ProbeNDV: tc.ndv}}
 			require.NoError(t, source.Prepare(proc))
 			require.NoError(t, probe.Prepare(proc))
 			for {
@@ -102,9 +112,12 @@ func TestLocalDomainScanSourceAndProbe(t *testing.T) {
 			}
 			result, err := probe.Call(proc)
 			require.NoError(t, err)
-			if empty {
+			if tc.empty {
 				require.Nil(t, result.Batch)
 				require.Zero(t, probeReader.reads)
+			} else if tc.pass {
+				require.Equal(t, 4, result.Batch.RowCount())
+				require.True(t, result.Batch.Vecs[0].IsNull(3), "PASS must not perform even NULL rejection")
 			} else {
 				require.NotNil(t, result.Batch)
 				values := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])
@@ -128,7 +141,7 @@ func TestLocalDomainProbeConstantAndShape(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.SetMessageBoard(message.NewMessageBoard())
 			t.Cleanup(proc.Free)
-			domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1)
+			domain, _ := runtimefilter.NewLocalDomain(types.T_int64, 1000, 1, 1, 1000000)
 			t.Cleanup(domain.Close)
 			source, err := domain.Begin(proc, 0, 1)
 			require.NoError(t, err)

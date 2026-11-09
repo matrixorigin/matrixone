@@ -16,6 +16,7 @@ package runtimefilter
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 
@@ -41,7 +42,7 @@ func localDomainTestProcess(t *testing.T, capacity uint64) (*process.Process, *p
 
 func TestLocalDomainCompleteAndIndependentFanout(t *testing.T) {
 	proc, g := localDomainTestProcess(t, 16<<20)
-	d, peak := NewLocalDomain(types.T_int64, 1000, 2, 8)
+	d, peak := NewLocalDomain(types.T_int64, 1000, 2, 8, 1000000)
 	require.NotNil(t, d)
 	t.Cleanup(d.Close)
 	d.seed = 1
@@ -82,7 +83,7 @@ func TestLocalDomainFallbackAndCancellation(t *testing.T) {
 				capacity = 1
 			}
 			proc, g := localDomainTestProcess(t, capacity)
-			d, _ := NewLocalDomain(types.T_int64, 1000, 2, 4)
+			d, _ := NewLocalDomain(types.T_int64, 1000, 2, 4, 1000000)
 			t.Cleanup(d.Close)
 			if name == "closed-generation" {
 				g.Close()
@@ -125,7 +126,7 @@ func TestLocalDomainFallbackAndCancellation(t *testing.T) {
 
 func TestLocalDomainSourceIdentity(t *testing.T) {
 	proc, _ := localDomainTestProcess(t, 16<<20)
-	d, _ := NewLocalDomain(types.T_uint64, 1000, 2, 1)
+	d, _ := NewLocalDomain(types.T_uint64, 1000, 2, 1, 1000000)
 	t.Cleanup(d.Close)
 	first, err := d.Begin(proc, 0, 2)
 	require.NoError(t, err)
@@ -141,7 +142,7 @@ func TestLocalDomainSourceIdentity(t *testing.T) {
 
 func TestLocalDomainConcurrentSources(t *testing.T) {
 	proc, g := localDomainTestProcess(t, 16<<20)
-	d, _ := NewLocalDomain(types.T_int64, 1000, 8, 16)
+	d, _ := NewLocalDomain(types.T_int64, 1000, 8, 16, 1000000)
 	t.Cleanup(d.Close)
 	keys := testutil.MakeInt64Vector([]int64{1, 10001}, nil, proc.Mp())
 	t.Cleanup(func() { keys.Free(proc.Mp()) })
@@ -172,4 +173,54 @@ func TestLocalDomainConcurrentSources(t *testing.T) {
 	require.Equal(t, int64(16), rows)
 	d.Close()
 	require.Zero(t, g.Snapshot().Used)
+}
+
+func TestLocalDomainCompletedCardinalityAdmission(t *testing.T) {
+	proc, _ := localDomainTestProcess(t, 16<<20)
+	// The estimate fails the 10% ratio. Actual completed keys may still qualify.
+	d, _ := NewLocalDomain(types.T_int64, 20, 1, 2, 101)
+	require.NotNil(t, d)
+	t.Cleanup(d.Close)
+	keys := testutil.MakeInt64Vector([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, proc.Mp())
+	t.Cleanup(func() { keys.Free(proc.Mp()) })
+	source, err := d.Begin(proc, 0, 1)
+	require.NoError(t, err)
+	require.NoError(t, source.AddVector(proc.Ctx, keys, 10))
+	require.False(t, d.ProbeEligible(101), "partial membership cannot authorize rejection")
+	source.Complete(false)
+	bloom, empty, err := d.Wait(proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bloom)
+	require.False(t, empty)
+	require.True(t, d.ProbeEligible(101))
+	for _, ndv := range []float64{100, 1, 0, math.NaN(), math.Inf(1)} {
+		require.False(t, d.ProbeEligible(ndv), "each probe keeps the strict known 10%% bound")
+	}
+	snapshot := d.Snapshot()
+	require.Equal(t, int64(20), snapshot.EstimatedRows)
+	require.Equal(t, int64(10), snapshot.ObservedRows)
+	require.Equal(t, 1, snapshot.Finished)
+}
+
+func TestLocalDomainUnprofitableSourcePassesEarly(t *testing.T) {
+	proc, _ := localDomainTestProcess(t, 16<<20)
+	d, _ := NewLocalDomain(types.T_int64, 20, 2, 2, 100)
+	t.Cleanup(d.Close)
+	keys := testutil.MakeInt64Vector([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, proc.Mp())
+	t.Cleanup(func() { keys.Free(proc.Mp()) })
+	source, err := d.Begin(proc, 0, 2)
+	require.NoError(t, err)
+	require.NoError(t, source.AddVector(proc.Ctx, keys, 10))
+	// The second producer has not even started; PASS needs no absence proof.
+	bloom, empty, err := d.Wait(proc.Ctx)
+	require.NoError(t, err)
+	require.Nil(t, bloom)
+	require.False(t, empty)
+	require.Equal(t, LocalDomainUnprofitable, d.Snapshot().PassReason)
+	require.False(t, d.ProbeEligible(100))
+	second, err := d.Begin(proc, 1, 2)
+	require.NoError(t, err)
+	require.NoError(t, second.AddVector(proc.Ctx, keys, 10), "normal source execution continues")
+	source.Complete(false)
+	second.Complete(false)
 }

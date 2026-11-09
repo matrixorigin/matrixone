@@ -164,7 +164,7 @@ func TestDateNumericPersistedAdmissionAndFoldedView(t *testing.T) {
 					return nil, err
 				}
 				defer stmt.Free()
-				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false, nil)
 			}
 			_, err := build(tc.required - 1)
 			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", tc.required))

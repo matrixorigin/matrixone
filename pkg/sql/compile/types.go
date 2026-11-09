@@ -310,6 +310,12 @@ type Compile struct {
 	preparedParamValues []any
 	// Proof belongs to this bound execution and physical plan generation.
 	preparedJoinDiagnosticFree bool
+	// Validated for this execution only; never retained by a cached plan.
+	executionIntent            *plan2.ExecutionIntent
+	capturedExecutionTopology  bool
+	preflightPending           bool
+	txnOffsetPending           bool
+	preserveProcessOnPoolClear bool
 
 	execType plan2.ExecType
 
@@ -402,8 +408,9 @@ type Compile struct {
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
-	startAt       time.Time
+	buildPlanFunc         func(ctx context.Context) (*plan2.Plan, error)
+	buildFallbackPlanFunc func(ctx context.Context) (*plan2.Plan, error)
+	startAt               time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
 

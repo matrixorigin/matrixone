@@ -839,6 +839,36 @@ func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A set operation whose value-bearing branches are all legal BIT columns keeps
+// the BIT domain. The coalesce resolver falls back to the integer domain and
+// silently drops the declared bit width, which changes LENGTH bytes and the
+// outer predicates of the materialized column. The common type keeps the
+// widest declared width: narrower branches align through the supported
+// bit->bit widening cast, and an empty typed branch still contributes its
+// static width. A width outside 1..MaxBitLen is not a declared bound this rule
+// understands, so such an input keeps the historical coalesce resolution
+// instead of being silently capped.
+func setOperationPureBitCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	var maxWidth int32
+	for _, typ := range source {
+		if typ.Oid != types.T_bit {
+			return types.Type{}, false
+		}
+		if typ.Width < 1 || typ.Width > types.MaxBitLen {
+			return types.Type{}, false
+		}
+		if typ.Width > maxWidth {
+			maxWidth = typ.Width
+		}
+	}
+	result := types.T_bit.ToType()
+	result.Width = maxWidth
+	return result, true
+}
+
 // A winning text collation needs a text result type even when the safe common
 // byte bound was first chosen in the binary domain. In particular, BLOB's
 // result decoding does not preserve UTF-8 text for prepared parameters.
@@ -4434,6 +4464,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizerHints.pushDownLimitToScan = 1
 		builder.optimizerHints.pushDownTopThroughLeftJoin = 1
 	}
+	pointBudget := uint64(maxCompositePointBytes)
 	for i, rootID := range builder.qry.Steps {
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
@@ -4443,7 +4474,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID, err = builder.optimizeFilters(rootID)
+		var points compositePointCapture
+		rootID, points, err = builder.optimizeFilters(rootID, &pointBudget)
 		if err != nil {
 			return nil, err
 		}
@@ -4558,14 +4590,17 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		idxColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyForceIndexHints(rootID, nil, colRefCnt, idxColMap)
 		if err == nil {
+			builder.qry.Steps[i] = rootID
 			rootID, err = builder.applyIndices(rootID, colRefCnt, idxColMap)
 		}
 		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
-		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		builder.qry.Steps[i] = rootID
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true, nil)
 		if needsLate {
+			points.revalidate(builder)
 			builder.mergeFiltersOnCompositeKey(rootID, false)
 			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 		}
@@ -4576,6 +4611,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			sortFilterListByStats(builder.GetContext(), rootID, builder)
 			clear(colRefCnt)
 			builder.countColRefs(rootID, colRefCnt)
+			points.snapshot()
 		}
 
 		builder.generateRuntimeFilters(rootID)
@@ -4591,6 +4627,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
+		if err = points.publish(builder, rootID); err != nil {
+			return nil, err
+		}
 
 		rootNode := builder.qry.Nodes[rootID]
 
@@ -4948,6 +4987,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = pureBinaryType
 			} else if mixedTextBinary {
 				targetArgType = mixedTextBinaryType
+			} else if pureBitType, ok := setOperationPureBitCommonType(tmpArgsType); ok {
+				targetArgType = pureBitType
 			} else {
 				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
@@ -7681,7 +7722,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 			return nil
 		}
 	}
-	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot)
+	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot, nil)
 	if err != nil || tableDef == nil {
 		return nil
 	}
@@ -13949,15 +13990,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Preserve the existing probe; full resolution below owns error handling.
 		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
-		// SHOW's generated metadata sources are identified by the exact AST
-		// node, not by a name that a user predicate could also spell.
+		// SHOW sources retain their exact AST-bound authorization route.
 		parent := showIndexGeneratedSource(builder.GetContext(), tbl)
 		var obj *ObjectRef
 		var tableDef *TableDef
+		var borrow *BorrowedTable
 		if parent != nil {
-			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot)
+			obj, tableDef, err = builder.compCtx.ResolveIndexTableByRef(parent, table, snapshot, nil)
+		} else if resolver := builder.borrowingCompiler(); resolver != nil {
+			var resolved TableResolution
+			obj, tableDef, err = resolveIndexMaintenanceSource(resolver, tbl, catalogDatabase, table, snapshot, &resolved)
+			borrow = resolved.Borrow
 		} else {
-			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot)
+			obj, tableDef, err = resolveIndexMaintenanceSource(builder.compCtx, tbl, catalogDatabase, table, snapshot, nil)
 		}
 		if err != nil {
 			return 0, "", err
@@ -13990,6 +14035,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the
 		// immutable column definitions, indexes, constraints, or expressions.
+		fullTableDef := tableDef
 		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
@@ -14268,6 +14314,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
+		builder.rememberScanBorrow(nodeID, obj, fullTableDef, borrow)
 
 		node := builder.qry.Nodes[nodeID]
 		if node.TableDef != nil {

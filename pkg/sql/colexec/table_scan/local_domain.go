@@ -15,6 +15,7 @@
 package table_scan
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -39,6 +40,9 @@ type localDomainProbeState struct {
 	rejected int64
 	bypassed int64
 	pass     bool
+	ndv      float64
+	reason   runtimefilter.LocalDomainPassReason
+	snapshot runtimefilter.LocalDomainSnapshot
 }
 
 func (tableScan *TableScan) localDomainColumn(name string) int {
@@ -67,12 +71,19 @@ func (tableScan *TableScan) prepareLocalDomains(proc *process.Process) error {
 			return err
 		}
 		if !binding.Domain.Enabled() {
+			tableScan.recordLocalDomainSnapshot(binding.Domain.Snapshot(), 0)
 			producer.Complete(true)
 			continue
 		}
 		tableScan.ctr.domainSources = append(tableScan.ctr.domainSources, localDomainSourceState{producer: producer, column: column})
 	}
 	for _, binding := range tableScan.LocalDomainProbes {
+		if binding.ProbeNDV <= 1 || math.IsNaN(binding.ProbeNDV) || math.IsInf(binding.ProbeNDV, 0) {
+			if tableScan.ParallelID == 0 {
+				tableScan.OpAnalyzer.GetOpStats().AddExtraStat("RuntimeDomainInvalidProbeNDV", 1)
+			}
+			continue
+		}
 		column := tableScan.localDomainColumn(binding.Column)
 		if column < 0 || column >= len(tableScan.Types) || tableScan.Types[column].Id != int32(binding.Domain.KeyType()) {
 			binding.Domain.Disable()
@@ -82,10 +93,11 @@ func (tableScan *TableScan) prepareLocalDomains(proc *process.Process) error {
 			return err
 		}
 		if !binding.Domain.Enabled() {
+			tableScan.recordLocalDomainSnapshot(binding.Domain.Snapshot(), binding.ProbeNDV)
 			continue
 		}
 		tableScan.ctr.domainProbes = append(tableScan.ctr.domainProbes, localDomainProbeState{
-			domain: binding.Domain, column: column, mask: make([]uint8, runtimefilter.LocalDomainBatchRows),
+			domain: binding.Domain, column: column, ndv: binding.ProbeNDV, mask: make([]uint8, runtimefilter.LocalDomainBatchRows),
 		})
 	}
 	if len(tableScan.ctr.domainProbes) > 0 {
@@ -105,6 +117,12 @@ func (tableScan *TableScan) waitLocalDomains(proc *process.Process) error {
 		p.bloom, empty, err = p.domain.Wait(proc.Ctx)
 		if err != nil {
 			return err
+		}
+		p.snapshot = p.domain.Snapshot()
+		p.reason = p.snapshot.PassReason
+		if p.bloom != nil && !p.domain.ProbeEligible(p.ndv) {
+			p.bloom, empty = nil, false
+			p.reason = runtimefilter.LocalDomainUnprofitable
 		}
 		tableScan.ctr.domainEmpty = tableScan.ctr.domainEmpty || empty
 		p.pass = p.bloom == nil
@@ -191,7 +209,11 @@ func (tableScan *TableScan) releaseLocalDomains() {
 	}
 	for _, probe := range tableScan.ctr.domainProbes {
 		if tableScan.OpAnalyzer != nil {
+			tableScan.recordLocalDomainSnapshot(probe.snapshot, probe.ndv)
 			stats := tableScan.OpAnalyzer.GetOpStats()
+			if tableScan.ParallelID == 0 && probe.reason == runtimefilter.LocalDomainUnprofitable {
+				stats.AddExtraStat("RuntimeDomainProbeUnprofitable", 1)
+			}
 			stats.AddExtraStat("RuntimeDomainTestedRows", probe.tested)
 			stats.AddExtraStat("RuntimeDomainRejectedRows", probe.rejected)
 			stats.AddExtraStat("RuntimeDomainBypassedRows", probe.bypassed)
@@ -200,4 +222,25 @@ func (tableScan *TableScan) releaseLocalDomains() {
 	tableScan.ctr.domainSources, tableScan.ctr.domainProbes, tableScan.ctr.domainRows = nil, nil, nil
 	tableScan.LocalDomainBuilds, tableScan.LocalDomainProbes = nil, nil
 	tableScan.ctr.domainsReady, tableScan.ctr.domainEmpty = false, false
+}
+
+func (tableScan *TableScan) recordLocalDomainSnapshot(snapshot runtimefilter.LocalDomainSnapshot, ndv float64) {
+	if tableScan.ParallelID != 0 || tableScan.OpAnalyzer == nil {
+		return
+	}
+	stats := tableScan.OpAnalyzer.GetOpStats()
+	stats.AddExtraStat("RuntimeDomainEstimatedBuildRows", snapshot.EstimatedRows)
+	stats.AddExtraStat("RuntimeDomainObservedBuildKeys", snapshot.ObservedRows)
+	stats.AddExtraStat("RuntimeDomainFilterBytes", int64(snapshot.FilterBytes))
+	stats.AddExtraStat("RuntimeDomainPeakReservedBytes", int64(snapshot.PeakBytes))
+	stats.AddExtraStat("RuntimeDomainExpectedSources", int64(snapshot.Expected))
+	stats.AddExtraStat("RuntimeDomainFinishedSources", int64(snapshot.Finished))
+	stats.AddExtraStat("RuntimeDomainPassReason", int64(snapshot.PassReason))
+	if ndv > 0 {
+		value := int64(math.MaxInt64)
+		if ndv < float64(math.MaxInt64) {
+			value = int64(ndv)
+		}
+		stats.AddExtraStat("RuntimeDomainProbeNDV", value)
+	}
 }

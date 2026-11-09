@@ -444,7 +444,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		dbName = ctx.DefaultDatabase()
 	}
 
-	objRef, tableDef, err := resolveIndexMaintenanceSource(ctx, tableNode, dbName, tblName, nil)
+	objRef, tableDef, err := resolveIndexMaintenanceSource(ctx, tableNode, dbName, tblName, nil, nil)
 	if err != nil {
 		return err
 	}

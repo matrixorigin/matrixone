@@ -84,7 +84,7 @@ func (builder *QueryBuilder) historicalViewColumnsSQL(
 	}
 	// Only the implementation/migration gate is current. All relations in the
 	// adapted SQL will still be bound through the caller's historical snapshot.
-	currentRef, currentDef, err := ctx.Resolve("information_schema", "columns", nil)
+	currentRef, currentDef, err := ctx.Resolve("information_schema", "columns", nil, nil)
 	if err != nil {
 		return "", err
 	}

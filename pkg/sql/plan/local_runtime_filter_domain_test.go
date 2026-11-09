@@ -65,6 +65,7 @@ func TestLocalRuntimeFilterDomainCompositeLineage(t *testing.T) {
 			q.Nodes[1].RuntimeFilterProbeList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
 		}},
 		{name: "source unselective", change: func(q *planpb.Query) { q.Nodes[1].Stats.Outcnt = 1000 }},
+		{name: "estimate above ten percent waits for actual cardinality", targets: []int32{0, 3}, change: func(q *planpb.Query) { q.Nodes[1].Stats.Outcnt = 200 }},
 		{name: "source not single primary key", change: func(q *planpb.Query) {
 			q.Nodes[1].TableDef.Pkey.Names = []string{"key", "other"}
 		}},
@@ -105,7 +106,10 @@ func TestLocalRuntimeFilterDomainStatsAndCopy(t *testing.T) {
 	copy := DeepCopyQuery(q)
 	require.True(t, proto.Equal(q, copy))
 	copy.LocalRuntimeFilterDomains[0].Targets[0].ColumnName = "changed"
+	copy.LocalRuntimeFilterDomains[0].Targets[0].ProbeNdv = 1
 	require.Equal(t, "key", q.LocalRuntimeFilterDomains[0].Targets[0].ColumnName)
+	require.Equal(t, float64(1000), q.LocalRuntimeFilterDomains[0].Targets[0].ProbeNdv)
+	require.Empty(t, ValidLocalRuntimeFilterDomains(copy))
 	bytes, err := q.Marshal()
 	require.NoError(t, err)
 	var decoded planpb.Query
@@ -130,7 +134,7 @@ func TestLocalRuntimeFilterDomainParsedQuery(t *testing.T) {
 		}
 		switch n.TableDef.Name {
 		case "part":
-			n.Stats.TableCnt, n.Stats.Outcnt = 20000000, 1000000
+			n.Stats.TableCnt, n.Stats.Outcnt = 20000000, 4000000
 		case "partsupp":
 			n.Stats.TableCnt, n.Stats.Outcnt = 80000000, 80000000
 		case "lineitem":

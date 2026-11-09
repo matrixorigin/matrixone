@@ -28,7 +28,7 @@ func TestBuildPerformUsesSelectPlan(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "perform select 1", 1)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, planpb.Query_SELECT, queryPlan.GetQuery().GetStmtType())
 }
@@ -46,7 +46,7 @@ func TestBuildPerformRejectsSelectIntoOutfile(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), test.sql, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			require.EqualError(t, err, "not supported: PERFORM SELECT INTO OUTFILE")
 		})
 	}

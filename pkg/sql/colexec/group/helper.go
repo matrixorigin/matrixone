@@ -870,6 +870,11 @@ func (ctr *container) writeSpillRecord(
 }
 
 func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
+	return ctr.spillDataToDiskWithInput(proc, opAnalyzer, parentBkt, false)
+}
+
+// retainInput is used only when retrying a partially consumed input batch.
+func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket, retainInput bool) (int64, int64, error) {
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
@@ -1109,7 +1114,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	// reset ctr for next spill
-	ctr.resetForSpill()
+	ctr.resetSpillState(retainInput)
 	return totalBytes, totalRows, nil
 }
 

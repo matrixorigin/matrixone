@@ -209,10 +209,29 @@ func (c *Cache[K, V]) Used() int64 {
 
 // Get returns the value of key retained for the caller, who releases it. admit, when not nil,
 // runs before the value is retained, with the value's size; an error from it is a miss for
-// which release is not returned. admit must not call into the cache.
+// which release is not returned. Admission, Retain, and any admission release on failure run
+// under the index-shard lock and must not call into the cache.
 func (c *Cache[K, V]) Get(key K, admit func(size int64) (release func(), err error)) (value V, release func(), ok bool, err error) {
+	return c.get(key, admit, false)
+}
+
+// TryGet has Get's value and admission ownership contract, but returns a miss
+// if the index shard is locked. Admission and Retain run under that lock and
+// must not call into the cache. Hash, admission and value callbacks must also
+// be bounded when the caller requires a bounded lookup.
+func (c *Cache[K, V]) TryGet(key K, admit func(size int64) (release func(), err error)) (value V, release func(), ok bool, err error) {
+	return c.get(key, admit, true)
+}
+
+func (c *Cache[K, V]) get(key K, admit func(size int64) (release func(), err error), try bool) (value V, release func(), ok bool, err error) {
 	ix := c.indexOf(c.opts.Hash(key))
-	ix.mu.Lock()
+	if try {
+		if !ix.mu.TryLock() {
+			return value, nil, false, nil
+		}
+	} else {
+		ix.mu.Lock()
+	}
 	defer ix.mu.Unlock()
 	e := ix.index[key]
 	if e == nil {

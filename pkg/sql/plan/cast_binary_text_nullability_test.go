@@ -39,7 +39,7 @@ func buildPlanForNullability(t *testing.T, ctx *MockCompilerContext, sql string)
 	t.Helper()
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	return p
 }

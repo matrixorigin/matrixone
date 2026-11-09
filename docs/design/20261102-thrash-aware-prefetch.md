@@ -95,7 +95,8 @@ always runs out. Without the room condition, a table that still did not fit turn
 after every pause or every phase of other work, such as a TPC-H round, and downloaded at
 least four more whole objects that were evicted unread before turning on again. The
 room condition keeps the signal on while the cache is full, and lets it turn off as soon
-as whole objects fit, for example after the cache grows or the other work's files age out.
+as whole objects fit, after the cache grows or cached files are deleted. The LRU disk
+cache evicts only to make room, so files do not age out of a full cache.
 
 The signal is per table because tables in one cache need different answers. One signal
 for the whole cache switched the entries search to range reads too: warm p95 225 ms against

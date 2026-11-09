@@ -91,8 +91,10 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 		}
 		var targets []localDomainScan
 		probes := 0
+		maxProbeNDV := float64(0)
 		valid := true
 		for _, target := range descriptor.Targets {
+			maxProbeNDV = max(maxProbeNDV, target.ProbeNdv)
 			instances := scans[target.ScanNodeId]
 			if len(instances) != 1 || !localDomainScanColumn(q, target.ScanNodeId, target.ColumnName, descriptor.KeyType) {
 				valid = false
@@ -107,7 +109,7 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 			continue
 		}
 		rows := q.Nodes[descriptor.SourceScanNodeId].Stats.Outcnt
-		domain, peak := runtimefilter.NewLocalDomain(types.T(descriptor.KeyType), int64(math.Ceil(rows)), source[0].worker, probes)
+		domain, peak := runtimefilter.NewLocalDomain(types.T(descriptor.KeyType), int64(math.Ceil(rows)), source[0].worker, probes, maxProbeNDV)
 		if domain == nil || peak > runtimefilter.LocalDomainQueryCap-reserved {
 			continue
 		}
@@ -118,7 +120,7 @@ func (c *Compile) bindLocalRuntimeFilterDomains(q *plan.Query, roots []*Scope) {
 		})
 		for _, target := range descriptor.Targets {
 			scan := scans[target.ScanNodeId][0].scan
-			scan.LocalDomainProbes = append(scan.LocalDomainProbes, runtimefilter.LocalDomainBinding{Domain: domain, Column: target.ColumnName})
+			scan.LocalDomainProbes = append(scan.LocalDomainProbes, runtimefilter.LocalDomainBinding{Domain: domain, Column: target.ColumnName, ProbeNDV: target.ProbeNdv})
 		}
 	}
 }

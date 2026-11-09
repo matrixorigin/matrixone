@@ -168,7 +168,7 @@ func (p *localDomainProof) source(col localDomainColumn) bool {
 		}
 	}
 	rows, total := n.Stats.Outcnt, n.Stats.TableCnt
-	return rows > 0 && rows < 1_000_000_001 && total > 0 && rows/total < .1 &&
+	return rows > 0 && rows < 1_000_000_001 && total > 0 && rows < total &&
 		!math.IsNaN(rows) && !math.IsInf(rows, 0) && !math.IsNaN(total) && !math.IsInf(total, 0)
 }
 
@@ -250,13 +250,14 @@ func LocalRuntimeFilterDomains(q *planpb.Query, ndv func(*planpb.Node, string) f
 				continue
 			}
 			name := n.TableDef.Cols[col.col].Name
+			probeNDV := float64(0)
 			if ndv != nil {
-				probeNDV := ndv(n, name)
-				if probeNDV <= 1 || math.IsNaN(probeNDV) || math.IsInf(probeNDV, 0) || !(sourceNode.Stats.Outcnt/probeNDV < .1) {
+				probeNDV = ndv(n, name)
+				if !ValidLocalDomainNDV(probeNDV) {
 					continue
 				}
 			}
-			domain.Targets = append(domain.Targets, &planpb.LocalRuntimeFilterTarget{ScanNodeId: col.scan, ColumnName: name})
+			domain.Targets = append(domain.Targets, &planpb.LocalRuntimeFilterTarget{ScanNodeId: col.scan, ColumnName: name, ProbeNdv: probeNDV})
 		}
 		if len(domain.Targets) != 0 {
 			domains = append(domains, domain)
@@ -302,7 +303,7 @@ func ValidLocalRuntimeFilterDomains(q *planpb.Query) []*planpb.LocalRuntimeFilte
 			valid := true
 			seen := make(map[int32]bool)
 			for _, target := range hint.Targets {
-				if target == nil || seen[target.ScanNodeId] || !slices.ContainsFunc(proof.Targets, func(p *planpb.LocalRuntimeFilterTarget) bool {
+				if target == nil || !ValidLocalDomainNDV(target.ProbeNdv) || seen[target.ScanNodeId] || !slices.ContainsFunc(proof.Targets, func(p *planpb.LocalRuntimeFilterTarget) bool {
 					return p.ScanNodeId == target.ScanNodeId && p.ColumnName == target.ColumnName
 				}) {
 					valid = false
@@ -317,4 +318,10 @@ func ValidLocalRuntimeFilterDomains(q *planpb.Query) []*planpb.LocalRuntimeFilte
 		}
 	}
 	return result
+}
+
+// ValidLocalDomainNDV admits a cost hint only. Equality/source completion own
+// the row-rejection proof; a stale NDV can change profitability, not results.
+func ValidLocalDomainNDV(ndv float64) bool {
+	return ndv > 1 && !math.IsNaN(ndv) && !math.IsInf(ndv, 0)
 }
