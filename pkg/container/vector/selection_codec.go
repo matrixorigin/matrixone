@@ -132,6 +132,9 @@ func (v *Vector) marshalSelectedRowsTo(
 	rows []int32,
 	rowAt func(int) int,
 ) error {
+	if v.IsDictionary() {
+		return errDictionaryPhysicalAccess
+	}
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector rows")
 	}
