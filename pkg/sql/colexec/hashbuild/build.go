@@ -1088,6 +1088,9 @@ func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 	}
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			if cancelErr := checkHashBuildCanceled(proc); cancelErr != nil {
+				return cancelErr
+			}
 			// A comparison key outside the narrower probe domain cannot match any
 			// probe row. The optional tuple encoder may reject that narrowing;
 			// publish PASS rather than changing the join's error semantics.

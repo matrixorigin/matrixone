@@ -831,8 +831,8 @@ func TestHashmapBuilderNextUniqueChunkFailureAbandonsOptionalKeysInPlace(
 	require.True(t, fallback)
 	require.True(t, rebuildSafe)
 	require.Nil(t, tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs)
-	require.Greater(t,
-		tc.arg.ctr.hashmapBuilder.GetGroupCount(), uint64(0))
+	require.Equal(t, uint64(uniqueGrowthRows),
+		tc.arg.ctr.hashmapBuilder.GetGroupCount())
 
 	tc.arg.Free(tc.proc, false, nil)
 	generation.Close()
@@ -1928,6 +1928,7 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 		nulls      []uint64
 		split      int
 		unsigned   bool
+		canceled   bool
 		expectedRF int32
 	}{
 		{
@@ -1941,6 +1942,12 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 			wide:       []int64{math.MaxInt32 + 1},
 			direct:     []int32{11},
 			expectedRF: message.RuntimeFilter_PASS,
+		},
+		{
+			name:     "cancellation wins over narrowing overflow",
+			wide:     []int64{math.MaxInt32 + 1},
+			direct:   []int32{11},
+			canceled: true,
 		},
 		{
 			name:       "multiple chunks preserve tuple order and signed boundaries",
@@ -2066,7 +2073,29 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 				}
 			})
 
-			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+			if test.canceled {
+				ctx, cancel := context.WithCancel(tc.proc.Ctx)
+				tc.proc.Ctx = ctx
+				cancel()
+			}
+			err = tc.arg.handleRuntimeFilter(tc.proc)
+			if test.canceled {
+				require.ErrorIs(t, err, context.Canceled)
+				require.False(t, tc.arg.ctr.runtimeFilterDone)
+				receiver := message.NewMessageReceiver(
+					[]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+				msgs, done, receiveErr := receiver.ReceiveMessage(false, context.Background())
+				require.NoError(t, receiveErr)
+				require.False(t, done)
+				require.Empty(t, msgs)
+				require.Nil(t, tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs)
+				require.Zero(t, generation.Used())
+				generation.Close()
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+				return
+			}
+			require.NoError(t, err)
 			require.True(t, tc.arg.ctr.runtimeFilterDone)
 			require.Nil(t, tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs)
 
