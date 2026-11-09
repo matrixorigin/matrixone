@@ -40,7 +40,7 @@ func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocato
 		return nil
 	}
 	LogEvent(ctx, str_to_cache_data_begin)
-	cacheData, err := i.ToCacheData(ctx, bytes.NewReader(i.Data), i.Data, allocator)
+	cacheData, err := i.ToCacheData(ctx, bytes.NewReader(i.Data), i.Data, i.allocatorForDecode(allocator))
 	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
@@ -53,13 +53,18 @@ func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocato
 }
 
 func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator CacheDataAllocator) (err error) {
+	return i.readFrom(ctx, file, allocator)
+}
+
+// readFrom fills i with the next i.Size bytes of from.
+func (i *IOEntry) readFrom(ctx context.Context, from io.Reader, allocator CacheDataAllocator) (err error) {
 	LogEvent(ctx, str_ReadFromOSFile_begin)
 	defer LogEvent(ctx, str_ReadFromOSFile_end)
 
 	finally := i.prepareData(ctx)
 	defer finally(&err)
 
-	r := io.LimitReader(file, i.Size)
+	r := io.LimitReader(from, i.Size)
 	LogEvent(ctx, str_io_readfull_begin)
 	n, err := io.ReadFull(r, i.Data)
 	LogEvent(ctx, str_io_readfull_end)

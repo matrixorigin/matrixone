@@ -33,7 +33,7 @@ func TestPreparedDecimalFloatSingleSlotCache(t *testing.T) {
 	for _, first := range []string{"7", wide} {
 		t.Run(first, func(t *testing.T) {
 			base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
-			_, table, err := base.Resolve("tpch", "nation", nil)
+			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(t, err)
 			for _, col := range table.Cols {
 				if col.Name == "n_nationkey" {

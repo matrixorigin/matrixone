@@ -176,20 +176,20 @@ bool_metadata  ¦  CREATE TABLE `bool_metadata` (
   PRIMARY KEY (`id`)
 )
 show columns from bool_metadata;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 enabled  ¦  boolean  ¦  NO  ¦    ¦  true  ¦    ¦    𝄀
 disabled  ¦  boolean  ¦  YES  ¦    ¦  false
 show full columns from bool_metadata;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Collation[12,64,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Privileges[12,154,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 flag  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 enabled  ¦  boolean  ¦  null  ¦  NO  ¦    ¦  true  ¦    ¦  select,insert,update,references  ¦    𝄀
 disabled  ¦  boolean  ¦  null  ¦  YES  ¦    ¦  false  ¦    ¦  select,insert,update,references
 create view bool_metadata_view as select id, flag, cast(id as bigint unsigned) as n, cast(id as decimal(10,2)) as amount, cast('2026-01-02' as date) as day from bool_metadata;
 describe bool_metadata_view;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 flag  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 n  ¦  bigint unsigned  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀

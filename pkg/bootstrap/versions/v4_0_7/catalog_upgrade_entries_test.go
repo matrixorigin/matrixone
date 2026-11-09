@@ -252,7 +252,7 @@ func TestDaemonClaimPrecisionCheckUsesStoredType(t *testing.T) {
 func TestColumnsAndTablesAreIncludedInTenantUpgrade(t *testing.T) {
 	want := map[string]string{
 		"COLUMNS": sysview.InformationSchemaColumnsDDL,
-		"TABLES":  sysview.InformationSchemaTablesV118DDL,
+		"TABLES":  sysview.InformationSchemaTablesCurrentDDL,
 	}
 	for _, entry := range tenantUpgEntries {
 		ddl, ok := want[entry.TableName]
@@ -271,14 +271,14 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 		entry versions.UpgradeEntry
 		ddl   string
 	}{
-		{versions.InformationSchemaTablesUpgradeEntry(), sysview.InformationSchemaTablesV118DDL},
+		{versions.InformationSchemaTablesUpgradeEntry(), sysview.InformationSchemaTablesCurrentDDL},
 		{versions.InformationSchemaColumnsUpgradeEntry(), sysview.InformationSchemaColumnsDDL},
 		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsPrefixSubPartDDL},
 		{upgradeInformationSchemaTableConstraints(), sysview.InformationSchemaTableConstraintsDDL},
 		{upgradeInformationSchemaKeyColumnUsage(), sysview.InformationSchemaKeyColumnUsageDDL},
 		{upgradeInformationSchemaReferentialConstraints(), sysview.InformationSchemaReferentialConstraintsDDL},
 		{upgradeInformationSchemaCheckConstraints(), sysview.InformationSchemaCheckConstraintsDDL},
-		{upgradeInformationSchemaViews(), sysview.InformationSchemaViewsDDL},
+		{versions.InformationSchemaViewsUpgradeEntry(), sysview.InformationSchemaViewsDDL},
 		{upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL), sysview.InformationSchemaPartitionsDDL},
 		{upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL), sysview.InformationSchemaSchemataDDL},
 	}

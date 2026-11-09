@@ -4553,14 +4553,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: COMPRESS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -4570,7 +4570,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -4580,7 +4580,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -4590,7 +4590,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -5203,14 +5203,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: QUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return quoteReturnType(parameters)
+					return quoteReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -5220,7 +5220,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return quoteReturnType(parameters)
+					return quoteReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -5230,7 +5230,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return quoteReturnType(parameters)
+					return quoteReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -7389,14 +7389,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SOUNDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return soundexReturnType(parameters)
+					return soundexReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -7406,7 +7406,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return soundexReturnType(parameters)
+					return soundexReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -7416,7 +7416,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return soundexReturnType(parameters)
+					return soundexReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -7432,7 +7432,7 @@ var supportedStringBuiltIns = []FuncNew{
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		bindingOverloads:  []int{0},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           stringDomainFixedTypeMatch,
+		checkFn:           jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9516,7 +9516,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: MD5,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -15241,6 +15241,26 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// Classify catalog rows for metadata listings without resolving a relation.
+	{
+		functionId: MO_IS_PHYSICAL_INDEX,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsPhysicalIndex
+				},
+			},
+		},
+	},
+
 	// function `mo_view_definition`
 	// Used only by information_schema.VIEWS to provide a parser-aware read path
 	// for legacy ViewData rows that predate the frozen definition field.
@@ -15424,6 +15444,33 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 		},
+	},
+
+	{
+		functionId:  TEMPORAL_DATETIME_BOUND,
+		runtimeOnly: true,
+		class:       plan.Function_INTERNAL | plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
+		layout:      STANDARD_FUNCTION,
+		checkFn:     fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, args: []types.T{types.T_timestamp, types.T_int32, types.T_int32, types.T_int32},
+			executionStable: true, realTimeRelated: true,
+			retType: func([]types.Type) types.Type { return types.T_datetime.ToType() },
+			newOp:   func() executeLogicOfOverload { return temporalDatetimeBound },
+		}},
+	},
+	{
+		functionId:  TEMPORAL_TIMESTAMP_BOUND,
+		runtimeOnly: true,
+		class:       plan.Function_INTERNAL | plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
+		layout:      STANDARD_FUNCTION,
+		checkFn:     fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, args: []types.T{types.T_datetime, types.T_int32, types.T_int32, types.T_int32},
+			executionStable: true, realTimeRelated: true,
+			retType: func([]types.Type) types.Type { return types.T_timestamp.ToType() },
+			newOp:   func() executeLogicOfOverload { return temporalTimestampBound },
+		}},
 	},
 
 	// function `internal_datetime_scale`
@@ -15651,6 +15698,50 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LoadFileDatalink
+				},
+			},
+		},
+	},
+
+	// function `unzip_file`
+	{
+		functionId: UNZIP_FILE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFilePath)
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFilePath)
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFileDatalink)
 				},
 			},
 		},
@@ -17391,7 +17482,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		functionId: SHA1,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryFixedTypeMatch,
 
 		Overloads: []overload{
 			{

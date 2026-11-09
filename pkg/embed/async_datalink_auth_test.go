@@ -25,6 +25,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -147,12 +149,19 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	exec("create table changed_sources(id bigint primary key,p1 datalink,p2 datalink,status int,fulltext2 changed_ft(p1,p2))")
 	exec("insert into changed_sources values(1," + sqlquote.String(stable) + "," + sqlquote.String(remote) + ",0),(2," + sqlquote.String(stable) + "," + sqlquote.String(remote) + ",0)")
 	var changedStorage string
-	require.NoError(t, conn.QueryRowContext(t.Context(), "select index_table_name from mo_catalog.mo_indexes where name='changed_ft' and algo_table_type='ftv2_index' and table_id in(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='changed_sources') limit 1").Scan(&changedStorage))
+	var changedTableID uint64
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select index_table_name,table_id from mo_catalog.mo_indexes where name='changed_ft' and algo_table_type='ftv2_index' and table_id in(select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='changed_sources') limit 1").Scan(&changedStorage, &changedTableID))
+	require.NotZero(t, changedTableID)
 	changedTailSQL := "select coalesce(max(chunk_id),-1) from " + sqlquote.QualifiedIdent(database, changedStorage) + " where index_id='cdc_tail' and tag=1"
 	var changedBefore int64
 	require.Eventually(t, func() bool {
 		return conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&changedBefore) == nil && changedBefore >= 0
 	}, 30*time.Second, 100*time.Millisecond)
+	var changedJobID uint64
+	var activeJobs int
+	require.NoError(t, conn.QueryRowContext(t.Context(), "select coalesce(min(job_id),0),count(*) from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_changed_ft' and drop_at is null", changedTableID).Scan(&changedJobID, &activeJobs))
+	require.Equal(t, 1, activeJobs, "the fixture must pin exactly one live index job")
+	require.NotZero(t, changedJobID)
 	exec("alter stage async_source_remote set url=" + sqlquote.String("file://"+dir+"/"))
 	// Keeping an OLD source does not introduce a source or authorize a read.
 	exec("update changed_sources set status=1")
@@ -179,10 +188,25 @@ func testAsyncDatalinkSourceAdmission(t *testing.T, c Cluster, admin *sql.DB, en
 	require.NoError(t, backgroundRead(remote))
 	require.Equal(t, "matrixone stage content", resolvedText)
 	exec("update changed_sources set p1='stage://async_source_stable/file-sample_100kB.docx',p2=NULL,status=3 where id=1")
+	// The connection and transaction client both belong to CN 0. Capture once
+	// after autocommit; concurrent later commits only make this a conservative
+	// target. A tail increment alone could belong to any of the earlier writes.
+	changedCommit := service.GetTxnClient().GetLatestCommitTS()
+	require.False(t, changedCommit.IsEmpty())
 	require.Eventually(t, func() bool {
 		var now int64
-		return conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&now) == nil && now > changedBefore
-	}, 30*time.Second, 100*time.Millisecond)
+		if err := conn.QueryRowContext(t.Context(), changedTailSQL).Scan(&now); err != nil || now <= changedBefore {
+			return false
+		}
+		var watermark string
+		// A Running row can advertise the next range's start before its
+		// consumer has committed that range, so only Completed is a fence.
+		if err := conn.QueryRowContext(t.Context(), "select watermark from mo_catalog.mo_iscp_log where account_id=0 and table_id=? and job_name='index_changed_ft' and job_id=? and job_state=? and drop_at is null", changedTableID, changedJobID, iscp.ISCPJobState_Completed).Scan(&watermark); err != nil {
+			return false
+		}
+		observed, err := timestamp.ParseTimestamp(watermark)
+		return err == nil && observed.GreaterEq(changedCommit)
+	}, 30*time.Second, 100*time.Millisecond, "changed_ft job %d must reach commit %s", changedJobID, changedCommit.DebugString())
 	require.Eventually(t, func() bool {
 		return conn.QueryRowContext(t.Context(), "select count(*) from changed_sources where id=1 and match(p1,p2) against('Nulla facilisi' in natural language mode)").Scan(&count) == nil && count == 1
 	}, 30*time.Second, 100*time.Millisecond)

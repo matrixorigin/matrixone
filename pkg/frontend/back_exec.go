@@ -413,6 +413,10 @@ func doComQueryInBack(
 ) (retErr error) {
 	backSes.EnterFPrint(FPDoComQueryInBack)
 	defer backSes.ExitFPrint(FPDoComQueryInBack)
+	trustedIndexSQL := input != nil && input.isInternal() && !input.sameStatementAuthorization
+	if trustedIndexSQL {
+		execCtx.reqCtx = process.WithTrustedIndexRelationAccess(execCtx.reqCtx)
+	}
 	backSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	backSes.SetSql(input.getSql())
 
@@ -443,9 +447,9 @@ func doComQueryInBack(
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:          backSes.respr.GetStr(USERNAME),
+		User:          backSes.GetResponser().GetStr(USERNAME),
 		Host:          pu.SV.Host,
-		Database:      backSes.respr.GetStr(DBNAME),
+		Database:      backSes.GetResponser().GetStr(DBNAME),
 		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
@@ -500,6 +504,9 @@ func doComQueryInBack(
 	execCtx.input = input
 
 	proc.Base.SessionInfo.User = userNameOnly
+	if !trustedIndexSQL {
+		stampHiddenIndexCaller(proc, hiddenIndexCaller(execCtx.reqCtx))
+	}
 	cws, err := GetComputationWrapperInBack(
 		execCtx, backSes.respr.GetStr(DBNAME),
 		input,
@@ -603,6 +610,15 @@ func doComQueryInBack(
 		execCtx.proc = proc
 		execCtx.ses = backSes
 		execCtx.cws = cws
+		effectiveStmt, defaultDatabase, resolveErr := effectiveStatementForTxn(execCtx.reqCtx, backSes, stmt)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		admissionCtx := *execCtx
+		admissionCtx.effectiveTxnDefaultDatabase = defaultDatabase
+		if err = checkFrontendIndexTargetWithCatalog(&admissionCtx, effectiveStmt); err != nil {
+			return err
+		}
 		err = executeStmtWithTxn(backSes, statsArr, execCtx)
 		if err != nil {
 			return err
@@ -716,7 +732,7 @@ func bindPublicationScopeSelect(execCtx *ExecCtx) error {
 	sel := execCtx.stmt.(*tree.Select)
 	tcc := execCtx.ses.GetTxnCompileCtx()
 	bind := func() (*plan2.Plan, error) {
-		return plan2.BuildPlan(tcc, sel, false)
+		return plan2.BuildPlan(tcc, sel, false, nil)
 	}
 	database := publicationProbeDatabase(sel)
 	if database == "" {
@@ -1236,7 +1252,7 @@ func (backSes *backSession) initFeSes(
 	backSes.derivedStmt = false
 	backSes.label = make(map[string]string)
 	backSes.timeZone = ses.GetTimeZone()
-	backSes.respr = defResper
+	backSes.setResponser(defResper)
 	backSes.service = ses.GetService()
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
@@ -1391,7 +1407,7 @@ func (backSes *backSession) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := backSes.respr.GetU32(CONNID)
+	routineId := backSes.GetResponser().GetU32(CONNID)
 	// Optimize: use strconv instead of fmt.Sprintf
 	var buf [24]byte
 	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)

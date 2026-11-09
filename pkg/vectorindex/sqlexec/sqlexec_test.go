@@ -66,6 +66,47 @@ func (m *identityCapturingSQLExecutor) ExecTxn(ctx context.Context, _ func(execu
 	return nil
 }
 
+func (m *identityCapturingSQLExecutor) BindIndexMaintenanceView(ctx context.Context, _ string, opts executor.Options) error {
+	m.ctx, m.opts = ctx, opts
+	return ctx.Err()
+}
+
+func TestIndexMaintenancePolicyAndViewCancellation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.User = "reader"
+	proc.Base.SessionInfo.Account = "tenant"
+	proc.Base.SessionInfo.Role = "reader_role"
+	spy := &identityCapturingSQLExecutor{}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy)
+		}
+	})
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	policy := &executor.IndexRelationPolicy{CallerMayAccess: false}
+	sp := NewSqlProcess(proc)
+	sp.IndexRelationPolicy = policy
+	_, err := RunSql(sp, "select 1")
+	require.NoError(t, err)
+	require.NotNil(t, spy.opts.IndexRelationPolicy())
+	require.Equal(t, "reader", spy.opts.StatementOption().SessionUser())
+	require.NoError(t, RunTxn(sp, func(executor.TxnExecutor) error { return nil }))
+	require.NotNil(t, spy.opts.IndexRelationPolicy())
+	_, err = RunStreamingSql(proc.Ctx, sp, "select 1", make(chan executor.Result, 1), make(chan error, 1))
+	require.NoError(t, err)
+	require.NotNil(t, spy.opts.IndexRelationPolicy())
+	cancel()
+	require.ErrorIs(t, BindIndexMaintenanceView(sp, "select * from `db`.`v`"), context.Canceled)
+	require.Nil(t, spy.opts.IndexRelationPolicy().Spec)
+	require.Equal(t, "reader", spy.opts.StatementOption().SessionUser())
+}
+
 func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	uuid := "fulltext-publisher-identity"
 	spy := &identityCapturingSQLExecutor{}

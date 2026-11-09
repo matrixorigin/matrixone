@@ -226,6 +226,9 @@ func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors
 }
 
 func (exec *sumDecimal64FastExec) batchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if len(exec.state) == 1 && exec.state[0].length <= 256 {
+		return exec.batchFillDense(offset, groups, vectors[0])
+	}
 	vec := vectors[0]
 	vals := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 	constMask := -min(1, len(vals)-1)

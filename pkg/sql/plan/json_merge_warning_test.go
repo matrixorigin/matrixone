@@ -45,7 +45,7 @@ func buildJSONMergeWarningTestPlan(
 	require.NoError(t, err)
 	defer stmt.Free()
 	ctx.SetContext(WithJSONMergeWarningContext(context.Background(), sink, origin))
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 }
 

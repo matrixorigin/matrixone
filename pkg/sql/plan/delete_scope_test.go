@@ -93,7 +93,7 @@ func TestDeleteCTETargetScope(t *testing.T) {
 				if legacy {
 					p, err = buildDelete(stmt.(*tree.Delete), mock.CurrentContext(), false)
 				} else {
-					p, err = BuildPlan(mock.CurrentContext(), stmt, false)
+					p, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 				}
 				if tc.wantError != "" {
 					require.ErrorContains(t, err, tc.wantError)

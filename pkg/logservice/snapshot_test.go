@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/lni/vfs"
@@ -67,11 +68,13 @@ func testPrepareSnapshot(
 	metadataFile := "/snapshot.metadata"
 	err := mgr.cfg.FS.MkdirAll(mgr.snapshotPath(nid, index), defaultExportedDirMode)
 	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
-	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(
+	f, err := mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	f, err = mgr.cfg.FS.Create(
 		fmt.Sprintf("%s/snapshot-%016X.gbsnap", mgr.snapshotPath(nid, index), index))
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 }
 
 func TestInitSnapshotMgr(t *testing.T) {
@@ -108,6 +111,181 @@ func TestInitSnapshotMgr(t *testing.T) {
 	assert.Equal(t, mgr.snapshots[nid].items[1].index, snapshotIndex(1203))
 	assert.Equal(t, mgr.snapshots[nid].items[2].index, snapshotIndex(1211))
 	assert.Equal(t, mgr.snapshots[nid].items[3].index, snapshotIndex(1324))
+}
+
+func TestSnapshotManagerFreshDisk(t *testing.T) {
+	const shardID, replicaID = uint64(1), uint64(2)
+	mgr := newSnapshotManager(&Config{
+		FS:                vfs.Default,
+		SnapshotExportDir: t.TempDir(),
+	})
+
+	// A new replica has no export directory yet. Startup must create it.
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	require.Zero(t, mgr.Count(shardID, replicaID))
+	_, err := mgr.cfg.FS.Stat(mgr.exportPath(shardID, replicaID))
+	require.NoError(t, err)
+
+	// A complete snapshot without an interruption marker must survive startup.
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	require.Equal(t, 1, mgr.Count(shardID, replicaID))
+}
+
+func TestReconcileInterruptedExport(t *testing.T) {
+	const shardID, replicaID = uint64(1), uint64(2)
+	mgr := newSnapshotManager(&Config{
+		FS:                vfs.NewStrictMem(),
+		SnapshotExportDir: "/tmp/exported",
+	})
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	good := snapshotIndex(100)
+	interrupted := snapshotIndex(200)
+	testPrepareSnapshot(t, mgr, nid, good)
+	testPrepareSnapshot(t, mgr, nid, interrupted)
+	flag := mgr.cfg.FS.PathJoin(mgr.snapshotPath(nid, interrupted), "dragonboat.snapshot.message")
+	f, err := mgr.cfg.FS.Create(flag)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	// Temporary exports and unrelated names may contain the same flag. Only
+	// an exact final snapshot directory belongs to startup reconciliation.
+	temporary := mgr.snapshotPath(nid, snapshotIndex(300)) + "-2.generating"
+	require.NoError(t, mgr.cfg.FS.MkdirAll(temporary, defaultExportedDirMode))
+	f, err = mgr.cfg.FS.Create(mgr.cfg.FS.PathJoin(temporary, "dragonboat.snapshot.message"))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
+	require.NoError(t, mgr.ReconcileInterruptedExport(shardID, replicaID))
+	_, err = mgr.cfg.FS.Stat(mgr.snapshotPath(nid, interrupted))
+	require.True(t, os.IsNotExist(err), "the final directory must not block same-index export")
+	_, err = mgr.cfg.FS.Stat(mgr.snapshotPath(nid, good))
+	require.NoError(t, err)
+	_, err = mgr.cfg.FS.Stat(temporary)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	require.Equal(t, 1, mgr.Count(shardID, replicaID))
+	dir, index := mgr.EvalImportSnapshot(shardID, replicaID, uint64(good))
+	require.Equal(t, mgr.snapshotPath(nid, good), dir)
+	require.Equal(t, uint64(good), index)
+
+	// The next export can claim the same final path and become importable.
+	testPrepareSnapshot(t, mgr, nid, interrupted)
+	require.NoError(t, mgr.Add(shardID, replicaID, uint64(interrupted)))
+	require.Equal(t, 2, mgr.Count(shardID, replicaID))
+}
+
+type removeErrorFS struct{ vfs.FS }
+
+func (fs removeErrorFS) RemoveAll(string) error { return os.ErrPermission }
+
+type listErrorFS struct {
+	vfs.FS
+	path string
+}
+
+func (fs listErrorFS) List(path string) ([]string, error) {
+	if path == fs.path {
+		return nil, os.ErrPermission
+	}
+	return fs.FS.List(path)
+}
+
+func TestReconcileInterruptedExportPreservesFailedRemoval(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{
+		FS:                removeErrorFS{FS: fs},
+		SnapshotExportDir: "/tmp/exported",
+	})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	dir := mgr.snapshotPath(nid, 100)
+	require.NoError(t, fs.MkdirAll(dir, defaultExportedDirMode))
+	f, err := fs.Create(fs.PathJoin(dir, "dragonboat.snapshot.message"))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	err = mgr.ReconcileInterruptedExport(nid.shardID, nid.replicaID)
+	require.ErrorIs(t, err, os.ErrPermission)
+	_, err = fs.Stat(dir)
+	require.NoError(t, err, "a failed cleanup must leave the directory visible")
+}
+
+func TestReconcileUncertainExportsRetriesFailedQuotaCleanup(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{
+		FS:                removeErrorFS{FS: fs},
+		SnapshotExportDir: "/tmp/exported",
+	})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	testPrepareSnapshot(t, mgr, nid, 200)
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	mgr.MarkExportUncertain(nid.shardID, nid.replicaID)
+
+	_, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 1)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.NoError(t, err)
+
+	mgr.cfg.FS = fs
+	newest, trimmed, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 1)
+	require.NoError(t, err)
+	require.True(t, trimmed)
+	require.Equal(t, uint64(100), newest)
+	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
+	_, err = fs.Stat(mgr.snapshotPath(nid, 200))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestReconcileUncertainExportsPreservesViewOnScanError(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	testPrepareSnapshot(t, mgr, nid, 100)
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	testPrepareSnapshot(t, mgr, nid, 200)
+	mgr.MarkExportUncertain(nid.shardID, nid.replicaID)
+
+	mgr.cfg.FS = listErrorFS{FS: fs, path: mgr.snapshotPath(nid, 200)}
+	_, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
+	dir, index := mgr.EvalImportSnapshot(nid.shardID, nid.replicaID, 200)
+	require.Equal(t, mgr.snapshotPath(nid, 100), dir)
+	require.Equal(t, uint64(100), index)
+
+	mgr.cfg.FS = fs
+	newest, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(200), newest)
+	require.Equal(t, 2, mgr.Count(nid.shardID, nid.replicaID))
+}
+
+func TestReconcileUncertainExportsSkipsIncompleteFinal(t *testing.T) {
+	fs := vfs.NewStrictMem()
+	mgr := newSnapshotManager(&Config{FS: fs, SnapshotExportDir: "/tmp/exported"})
+	nid := nodeID{shardID: 1, replicaID: 2}
+	require.NoError(t, mgr.Init(nid.shardID, nid.replicaID))
+	testPrepareSnapshot(t, mgr, nid, 100)
+	flag := fs.PathJoin(mgr.snapshotPath(nid, 100), "dragonboat.snapshot.message")
+	f, err := fs.Create(flag)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	mgr.MarkExportUncertain(nid.shardID, nid.replicaID)
+
+	_, _, err = mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.NoError(t, err)
+	require.Zero(t, mgr.Count(nid.shardID, nid.replicaID))
+	require.NoError(t, fs.Remove(flag))
+	newest, _, err := mgr.ReconcileUncertainExports(nid.shardID, nid.replicaID, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), newest)
+	require.Equal(t, 1, mgr.Count(nid.shardID, nid.replicaID))
 }
 
 func TestInitSnapshotMgrReplacesInMemoryView(t *testing.T) {

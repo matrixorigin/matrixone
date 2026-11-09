@@ -28,6 +28,7 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -156,7 +157,6 @@ func TestClassicReadRejectsBeforeSearching(t *testing.T) {
 	for _, req := range []searchplugin.Request{
 		{QueryPayload: []byte("apple"), AlgoValues: []searchplugin.AlgoValue{boolGuard(true)}},
 		{},
-		{QueryPayload: []byte("apple"), HasMembershipFilter: true, MembershipFilter: []byte{1}},
 	} {
 		r, err := Hooks{}.NewReader(proc, spec, req)
 		require.NoError(t, err)
@@ -165,6 +165,7 @@ func TestClassicReadRejectsBeforeSearching(t *testing.T) {
 		require.NoError(t, r.Close())
 	}
 	require.Empty(t, *sqls, "a rejected search runs no SQL")
+	testutil.AssertInvalidRuntimeKeys(t, []byte{1})
 
 	// A subscribed source with an inconsistent index reference is rejected.
 	pub := classicSpec(t, ftplan.ScanOptions{SourceTable: "src", IndexTable: "idx"})
@@ -192,7 +193,7 @@ func TestClassicReadPublisherAndMembership(t *testing.T) {
 	spec.SourceTable = &plan.ObjectRef{SchemaName: "pub", ObjName: "src", SubscriptionName: "sub", PubInfo: pub}
 	spec.HiddenTables[0].Object = &plan.ObjectRef{SchemaName: "pub", ObjName: "idx", SubscriptionName: "sub", PubInfo: pub}
 	r, err := Hooks{}.NewReader(proc, spec, searchplugin.Request{
-		QueryPayload: []byte("apple"), HasMembershipFilter: true, MembershipFilter: data,
+		QueryPayload: []byte("apple"), HasMembershipFilter: true, MembershipFilter: testutil.RuntimeKeyPayload(t, data),
 	})
 	require.NoError(t, err)
 	_, err = r.Read(context.Background(), nil, nil, mp, docScoreBatch())

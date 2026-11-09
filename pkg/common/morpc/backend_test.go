@@ -1716,7 +1716,7 @@ func TestSendWithCannotConnect(t *testing.T) {
 			defer cancel()
 			req := &testMessage{id: 1}
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
 
 			resp, err := f.Get()
@@ -1724,11 +1724,13 @@ func TestSendWithCannotConnect(t *testing.T) {
 			assert.Nil(t, resp)
 		},
 		WithBackendFilter(func(Message, string) bool {
+			// Keep the short reconnect budget out of healthy fixture setup.
+			// The filter and subsequent reconnects share the write-loop owner.
+			rb.options.connectTimeout = time.Millisecond * 200
 			assert.NoError(t, rb.conn.Disconnect())
 			rb.remote = ""
 			return true
 		}),
-		WithBackendConnectTimeout(time.Millisecond*200),
 	)
 }
 

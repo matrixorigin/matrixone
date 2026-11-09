@@ -25,7 +25,9 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
-		"Query":            {"correlation": 19},
+		"Query":            {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21},
+		"Type":             {"numeric_attributes": 14},
+		"Expr":             {"candidate_filter": 27},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
@@ -34,6 +36,11 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {
+		if message.GetName() == "Expr" || message.GetName() == "FoldVal" {
+			for _, field := range message.GetField() {
+				require.NotEqual(t, "temporal_candidate_guard", field.GetName())
+			}
+		}
 		fields, ok := want[message.GetName()]
 		if !ok {
 			continue
@@ -74,4 +81,19 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 			require.Equal(t, kind, decoded.TableDef.Cols[0].ResultColumnKind)
 		})
 	}
+}
+
+func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
+	// Physical OID 32 is decimal64; numeric attribute mask 3 is normalized ZEROFILL.
+	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, ExecutionDependentAccess: true, Nodes: []*Node{{IndexScanInfo: IndexScanInfo{IsIndexScan: true, RequiresCapturedExecution: true}, FilterList: []*Expr{{
+		Typ:             Type{Id: 32, Width: 10, Scale: 2, NumericAttributes: 3},
+		CandidateFilter: true,
+		Expr:            &Expr_Fold{Fold: &FoldVal{IsConst: true, Data: []byte{1}}},
+	}}}}}
+	encoded, err := original.Marshal()
+	require.NoError(t, err)
+	require.Len(t, encoded, original.ProtoSize())
+	var decoded Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, original, &decoded)
 }

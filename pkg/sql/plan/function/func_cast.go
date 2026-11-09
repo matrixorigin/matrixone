@@ -4433,10 +4433,22 @@ func bitToStr(
 	}
 
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		// Explicit CAST(BIT AS BINARY)/(BINARY(n)) must carry the source's
+		// declared width as ceil(width/8) big-endian bytes (issue #32122:
+		// BIT(64) 258 is 0000000000000102, not the little-endian minimal
+		// 0201) before the BINARY(n) truncation/right-padding rules.
+		byteWidth := int(from.GetType().Width+7) / 8
+		if byteWidth < 1 {
+			byteWidth = 1
+		}
+		if byteWidth > 8 {
+			byteWidth = 8
+		}
+		var buf [8]byte
 		for i := 0; i < length; i++ {
 			v, null := from.GetValue(uint64(i))
-			b := uint64ToBytes(v)
-			if err := explicitCastToBinary(toType, b, null, to); err != nil {
+			binary.BigEndian.PutUint64(buf[:], v)
+			if err := explicitCastToBinary(toType, buf[8-byteWidth:], null, to); err != nil {
 				return err
 			}
 		}
@@ -10280,6 +10292,24 @@ func strToDatalink(
 	return nil
 }
 
+// appendBinaryToTextUtf8Warning reports Warning 1300 (ER_INVALID_CHARACTER_STRING)
+// for an explicit binary->text cast whose payload is not legal UTF-8. The
+// offending prefix is hex-encoded and bounded (32 bytes -> 64 hex chars,
+// matching the %.64s template bound).
+func appendBinaryToTextUtf8Warning(proc *process.Process, v []byte) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		n := len(v)
+		if n > 32 {
+			n = 32
+		}
+		appender.AppendWarningDiagnostic(moerr.ER_INVALID_CHARACTER_STRING,
+			fmt.Sprintf("Invalid utf8mb4 character string: '%s'", hex.EncodeToString(v[:n])))
+	}
+}
+
 func strToStr(
 	ctx context.Context,
 	proc *process.Process,
@@ -10358,11 +10388,32 @@ func strToStr(
 
 	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
 	enforceByteWidth := mode.isAssignment() && hasByteWidth
+	// An explicit binary-source CAST into UTF8-family text must not smuggle
+	// invalid UTF-8 onto the wire: the row becomes NULL with Warning 1300.
+	// Scope is strictly castModeExplicit: comparison and set-operation keys,
+	// normal and assignment modes, binary-charset text targets, and
+	// binary/geometry targets all keep their existing contracts.
+	// The effective binary source domain is authoritative
+	// (binary_string_semantics.go): static CharsetBinary type, runtime uniform
+	// marker, legacy IsBin literal flag, or a per-row sidecar. Function results
+	// such as UNHEX carry a static binary-domain varbinary type that the legacy
+	// literal flag alone misses.
+	srcUniformBinary, srcPerRowBinary := stringDomainMode(from.GetSourceVector())
+	binarySourceToText := mode == castModeExplicit && (srcUniformBinary || srcPerRowBinary) &&
+		toType.Charset != types.CharsetBinary &&
+		(toType.Oid == types.T_char || toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	if (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
 		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar || enforceByteWidth) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null || functionRowSkipped(selectList, i) {
+				if err := to.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if binarySourceToText && binaryStringAt(from.GetSourceVector(), int(i), srcUniformBinary, srcPerRowBinary) && !utf8.Valid(v) {
+				appendBinaryToTextUtf8Warning(proc, v)
 				if err := to.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -10457,6 +10508,13 @@ func strToStr(
 			}
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
+			}
+			if binarySourceToText && binaryStringAt(from.GetSourceVector(), int(i), srcUniformBinary, srcPerRowBinary) && !utf8.Valid(v) {
+				appendBinaryToTextUtf8Warning(proc, v)
+				if err := to.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
 			if mode.isAssignment() {
 				if err := types.ValidateCollationValue(toType, v); err != nil {
