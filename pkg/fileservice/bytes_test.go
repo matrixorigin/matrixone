@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -101,7 +102,22 @@ func TestBytesResurrection(t *testing.T) {
 	assert.Panics(t, func() { bs.Bytes() }, "use after free")
 	assert.Panics(t, func() { bs.Slice(1) }, "slice after free")
 	assert.Panics(t, func() { bs.Size() }, "size after free")
+	assert.Panics(t, func() { bs.BackingSize() }, "backing size after free")
 	assert.Equal(t, 1, deallocated, "still exactly one deallocation")
+}
+
+func TestBytesSliceRetainsBackingSize(t *testing.T) {
+	bs := DefaultCacheDataAllocator().AllocateCacheData(context.Background(), 9).(*Bytes)
+	defer bs.Release()
+	backing := bs.BackingSize()
+	assert.GreaterOrEqual(t, backing, int64(9))
+	bs.Slice(3)
+	assert.Equal(t, int64(3), bs.Size())
+	assert.Equal(t, backing, bs.BackingSize())
+
+	unknown := NewBytes(make([]byte, 1024)[100:109:109])
+	defer unknown.Release()
+	assert.Equal(t, int64(-1), unknown.BackingSize())
 }
 
 // TestBytesOrderRetainThenRelease: deterministic order where Retain wins

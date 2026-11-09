@@ -63,6 +63,9 @@ type Routine struct {
 	closeOnce sync.Once
 
 	inProcessRequest bool
+	// terminalRetired fences requests on a connection that the terminal TCP
+	// probe has retired. Unlike closing, it is not set by the FIN monitor.
+	terminalRetired  atomic.Bool
 	requestStartedAt atomic.Int64
 	closing          atomic.Bool
 
@@ -143,22 +146,34 @@ func (rt *Routine) shouldCloseConnection() bool {
 	return routineCtx != nil && context.Cause(routineCtx) != nil
 }
 
-func (rt *Routine) setInProcessRequest(b bool) {
+func (rt *Routine) setInProcessRequest(b bool) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	if b && rt.terminalRetired.Load() {
+		return false
+	}
 	rt.inProcessRequest = b
 	if b {
 		rt.requestStartedAt.Store(clientRequestClockValue(time.Now()))
 	} else {
 		rt.requestStartedAt.Store(0)
 	}
+	return true
+}
+
+func (rt *Routine) isTerminalRetired() bool {
+	return rt.terminalRetired.Load()
+}
+
+func (rt *Routine) activeRequestStartedAt() int64 {
+	if rt.closing.Load() {
+		return 0
+	}
+	return rt.requestStartedAt.Load()
 }
 
 func (rt *Routine) requestRunningLongerThan(nowValue int64, minimum time.Duration) bool {
-	if rt.closing.Load() {
-		return false
-	}
-	startedAt := rt.requestStartedAt.Load()
+	startedAt := rt.activeRequestStartedAt()
 	if startedAt == 0 {
 		return false
 	}
@@ -248,8 +263,8 @@ func (rt *Routine) cancelRequestCtx() {
 }
 
 // beginClose seals new lifecycle work and cancels current request/lifecycle
-// contexts without waiting for them. Resource cleanup remains owned by
-// cleanup's closeOnce path.
+// contexts. It does not wait for operations to finish, but it may wait for
+// their mutexes. Resource cleanup remains owned by cleanup's closeOnce path.
 func (rt *Routine) beginClose() {
 	rt.mu.Lock()
 	rt.closing.Store(true)
@@ -260,6 +275,28 @@ func (rt *Routine) beginClose() {
 		cancelRequest()
 	}
 	rt.mc.startClose()
+}
+
+// retireTerminalConnection seals request admission only when no migration or
+// reset operation is in progress. A busy routine or operation retains
+// ownership; the monitor can retry on its next pass. Cleanup remains with
+// Closed.
+func (rt *Routine) retireTerminalConnection() bool {
+	if !rt.mu.TryLock() {
+		return false
+	}
+	if rt.closing.Load() || !rt.mc.tryStartCloseWhenIdle() {
+		rt.mu.Unlock()
+		return false
+	}
+	rt.terminalRetired.Store(true)
+	rt.closing.Store(true)
+	cancelRequest := rt.cancelRequestFunc
+	rt.mu.Unlock()
+	if cancelRequest != nil {
+		cancelRequest()
+	}
+	return true
 }
 
 func (rt *Routine) getCleanupContext() context.Context {
@@ -474,8 +511,7 @@ func (rt *Routine) cleanup() {
 	//step 1: cancel the query if there is a running query.
 	//step 2: close the connection.
 	rt.closeOnce.Do(func() {
-		// Seal and cancel before waiting. beginClose itself never waits, so it is
-		// safe to call from the connection-liveness control path.
+		// Seal and cancel before waiting for lifecycle operations to finish.
 		rt.beginClose()
 		rt.mc.waitAndClose()
 		rt.killQuery(false, "")

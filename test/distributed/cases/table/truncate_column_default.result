@@ -1,0 +1,128 @@
+drop database if exists truncate_column_default;
+create database truncate_column_default;
+use truncate_column_default;
+create table default_probe (
+id int primary key,
+missing varchar(32),
+explicit_null varchar(32) default null,
+quoted_null varchar(32) default 'null',
+empty_value varchar(32) default '',
+text_value varchar(32) default 'hello',
+numeric_value int default 7
+);
+select column_name, column_default, column_default is null as default_is_null,
+hex(column_default) as default_hex, is_nullable
+from information_schema.columns
+where table_schema = 'truncate_column_default' and table_name = 'default_probe'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_default[12,-1,0]  ¦  default_is_null[-7,1,0]  ¦  default_hex[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  null  ¦  1  ¦  null  ¦  NO  𝄀
+missing  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+explicit_null  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+quoted_null  ¦  'null'  ¦  0  ¦  276E756C6C27  ¦  YES  𝄀
+empty_value  ¦  ''  ¦  0  ¦  2727  ¦  YES  𝄀
+text_value  ¦  'hello'  ¦  0  ¦  2768656C6C6F27  ¦  YES  𝄀
+numeric_value  ¦  7  ¦  0  ¦  37  ¦  YES
+show create table default_probe;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+default_probe  ¦  CREATE TABLE `default_probe` (
+  `id` int NOT NULL,
+  `missing` varchar(32) DEFAULT NULL,
+  `explicit_null` varchar(32) DEFAULT NULL,
+  `quoted_null` varchar(32) DEFAULT 'null',
+  `empty_value` varchar(32) DEFAULT '',
+  `text_value` varchar(32) DEFAULT 'hello',
+  `numeric_value` int DEFAULT 7,
+  PRIMARY KEY (`id`)
+)
+desc default_probe;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+missing  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+explicit_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+quoted_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+empty_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+text_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  hello  ¦    ¦    𝄀
+numeric_value  ¦  INT(32)  ¦  YES  ¦    ¦  7  ¦    ¦  
+insert into default_probe(id) values (1);
+select id, missing is null, explicit_null is null,
+hex(quoted_null) as quoted_null_hex, quoted_null is null as quoted_null_is_null,
+length(empty_value), text_value, numeric_value from default_probe order by id;
+➤ id[4,32,0]  ¦  missing is null[-7,1,0]  ¦  explicit_null is null[-7,1,0]  ¦  quoted_null_hex[12,-1,0]  ¦  quoted_null_is_null[-7,1,0]  ¦  length(empty_value)[-5,64,0]  ¦  text_value[12,-1,0]  ¦  numeric_value[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  6E756C6C  ¦  0  ¦  0  ¦  hello  ¦  7
+truncate table default_probe;
+select count(*) from default_probe;
+➤ count(*)[-5,64,0]  𝄀
+0
+select column_name, column_default, column_default is null as default_is_null,
+hex(column_default) as default_hex, is_nullable
+from information_schema.columns
+where table_schema = 'truncate_column_default' and table_name = 'default_probe'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_default[12,-1,0]  ¦  default_is_null[-7,1,0]  ¦  default_hex[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  null  ¦  1  ¦  null  ¦  NO  𝄀
+missing  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+explicit_null  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+quoted_null  ¦  'null'  ¦  0  ¦  276E756C6C27  ¦  YES  𝄀
+empty_value  ¦  ''  ¦  0  ¦  2727  ¦  YES  𝄀
+text_value  ¦  'hello'  ¦  0  ¦  2768656C6C6F27  ¦  YES  𝄀
+numeric_value  ¦  7  ¦  0  ¦  37  ¦  YES
+show create table default_probe;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+default_probe  ¦  CREATE TABLE `default_probe` (
+  `id` int NOT NULL,
+  `missing` varchar(32) DEFAULT NULL,
+  `explicit_null` varchar(32) DEFAULT NULL,
+  `quoted_null` varchar(32) DEFAULT 'null',
+  `empty_value` varchar(32) DEFAULT '',
+  `text_value` varchar(32) DEFAULT 'hello',
+  `numeric_value` int DEFAULT 7,
+  PRIMARY KEY (`id`)
+)
+desc default_probe;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+missing  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+explicit_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+quoted_null  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+empty_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+text_value  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  hello  ¦    ¦    𝄀
+numeric_value  ¦  INT(32)  ¦  YES  ¦    ¦  7  ¦    ¦  
+use truncate_column_default;
+select column_name, column_default, column_default is null as default_is_null,
+hex(column_default) as default_hex, is_nullable
+from information_schema.columns
+where table_schema = 'truncate_column_default' and table_name = 'default_probe'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_default[12,-1,0]  ¦  default_is_null[-7,1,0]  ¦  default_hex[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  null  ¦  1  ¦  null  ¦  NO  𝄀
+missing  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+explicit_null  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+quoted_null  ¦  'null'  ¦  0  ¦  276E756C6C27  ¦  YES  𝄀
+empty_value  ¦  ''  ¦  0  ¦  2727  ¦  YES  𝄀
+text_value  ¦  'hello'  ¦  0  ¦  2768656C6C6F27  ¦  YES  𝄀
+numeric_value  ¦  7  ¦  0  ¦  37  ¦  YES
+insert into default_probe(id) values (2);
+select id, missing is null, explicit_null is null,
+hex(quoted_null) as quoted_null_hex, quoted_null is null as quoted_null_is_null,
+length(empty_value), text_value, numeric_value from default_probe order by id;
+➤ id[4,32,0]  ¦  missing is null[-7,1,0]  ¦  explicit_null is null[-7,1,0]  ¦  quoted_null_hex[12,-1,0]  ¦  quoted_null_is_null[-7,1,0]  ¦  length(empty_value)[-5,64,0]  ¦  text_value[12,-1,0]  ¦  numeric_value[4,32,0]  𝄀
+2  ¦  1  ¦  1  ¦  6E756C6C  ¦  0  ¦  0  ¦  hello  ¦  7
+truncate table default_probe;
+select count(*) from default_probe;
+➤ count(*)[-5,64,0]  𝄀
+0
+select column_name, column_default, column_default is null as default_is_null,
+hex(column_default) as default_hex, is_nullable
+from information_schema.columns
+where table_schema = 'truncate_column_default' and table_name = 'default_probe'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_default[12,-1,0]  ¦  default_is_null[-7,1,0]  ¦  default_hex[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+id  ¦  null  ¦  1  ¦  null  ¦  NO  𝄀
+missing  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+explicit_null  ¦  null  ¦  1  ¦  null  ¦  YES  𝄀
+quoted_null  ¦  'null'  ¦  0  ¦  276E756C6C27  ¦  YES  𝄀
+empty_value  ¦  ''  ¦  0  ¦  2727  ¦  YES  𝄀
+text_value  ¦  'hello'  ¦  0  ¦  2768656C6C6F27  ¦  YES  𝄀
+numeric_value  ¦  7  ¦  0  ¦  37  ¦  YES
+drop database truncate_column_default;
