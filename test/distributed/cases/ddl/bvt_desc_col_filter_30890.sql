@@ -1,0 +1,24 @@
+-- feature: DESC/DESCRIBE/EXPLAIN tbl col_name filters like SHOW COLUMNS ... LIKE (issue #30890)
+drop database if exists desc_col_30890_db;
+create database desc_col_30890_db;
+use desc_col_30890_db;
+create table t30890 (id int primary key, val varchar(10), `MixCase` int, v_1 int, va1 int);
+desc desc_col_30890_db.t30890;
+desc desc_col_30890_db.t30890 val;
+describe desc_col_30890_db.t30890 ID;
+explain desc_col_30890_db.t30890 val;
+desc desc_col_30890_db.t30890 nosuch;
+desc desc_col_30890_db.t30890 `MixCase`;
+desc desc_col_30890_db.t30890 `v%`;
+desc desc_col_30890_db.t30890 `Mix%`;
+desc desc_col_30890_db.t30890 `v_1`;
+show columns from desc_col_30890_db.t30890 like 'val';
+show columns from desc_col_30890_db.t30890 like 'Mix%';
+use desc_col_30890_db;
+desc t30890 val;
+create or replace view vt30890 as select id, val from t30890;
+desc desc_col_30890_db.vt30890 val;
+show columns from desc_col_30890_db.vt30890 like 'val';
+drop view vt30890;
+drop database desc_col_30890_db;
+select count(*) as postdesc_absence from information_schema.columns where table_schema='desc_col_30890_db';

@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1670,7 +1671,7 @@ func assertBootstrapViews(t *testing.T, c Cluster, index int) {
 	require.NoError(t, err)
 }
 
-func TestRetiredTransactionTracePreservesRollbackArtifacts(t *testing.T) {
+func TestRetiredTransactionTracePreservesHistoricalArtifacts(t *testing.T) {
 	// Stopped restart requires an owned cluster, so release the reusable fixture
 	// through its lifecycle owner before acquiring exclusive admission.
 	require.NoError(t, CloseBaseClusterTests())
@@ -1725,13 +1726,17 @@ load-to-mo = true
 		if seed {
 			var count int
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='mo_debug'").Scan(&count))
-			require.Equal(t, 9, count)
-			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_debug.trace_features where state='disable'").Scan(&count))
-			require.Equal(t, 5, count)
-			// Historical collector rows are seeded through its former internal SQL
-			// ownership path; public writes remain subject to catalog authorization.
+			require.Zero(t, count, "fresh clusters must not create retired trace tables")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='mo_debug'").Scan(&count))
+			require.Zero(t, count, "fresh clusters must not create the retired trace database")
+			// Recreate the relevant released layout through internal SQL to exercise
+			// preservation; public writes remain subject to catalog authorization.
 			exec := cn.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
 			for _, query := range []string{
+				"create database mo_debug",
+				trace.TraceStatementTableSQL,
+				trace.FeaturesTablesSQL,
+				"insert into mo_debug.trace_features values ('txn','disable'),('txn-action','disable'),('data','disable'),('statement','disable'),('txn-workspace','disable')",
 				"insert into mo_debug.trace_statement values (1,'historical','select historical',1)",
 				"update mo_debug.trace_features set state='enable'",
 			} {

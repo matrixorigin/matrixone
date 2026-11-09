@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +68,7 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"hll_add_agg", HLL_ADD_AGG, aggexec.AggIdOfHllAdd},
 		{"hll_merge_agg", HLL_MERGE_AGG, aggexec.AggIdOfHllMerge},
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
+		{"vector_matmul", VECTOR_MATMUL, aggexec.AggIdOfVectorMatmul},
 		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
 		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
 		{"quantileExactWeighted", QUANTILE_EXACT_WEIGHTED, aggexec.AggIdOfQuantileExactWeighted},
@@ -80,6 +82,41 @@ func TestAggregateExecutorIDs(t *testing.T) {
 				encodeOverloadID(int32(test.functionID), int32(overloads[0].overloadId)),
 				test.executorID)
 		})
+	}
+}
+
+// These functions were allocated on concurrent branches. Verify name binding
+// still selects each distinct registry entry after the branches are combined.
+func TestPhysicalIndexAndBuiltinFunctionRegistration(t *testing.T) {
+	varchar := types.T_varchar.ToType()
+	int64Type := types.T_int64.ToType()
+	vec := types.New(types.T_array_float8, 4, 0)
+	tests := []struct {
+		name      string
+		args      []types.Type
+		id        int32
+		result    types.T
+		aggregate bool
+	}{
+		{"vector_matmul", []types.Type{int64Type, int64Type, vec, varchar}, VECTOR_MATMUL, types.T_json, true},
+		{"vecblock_json", []types.Type{vec}, VECBLOCK_JSON, types.T_text, false},
+		{"vecblock_binary", []types.Type{vec}, VECBLOCK_BINARY, types.T_blob, false},
+		{"unzip_file", []types.Type{varchar}, UNZIP_FILE, types.T_blob, false},
+		{"mo_is_physical_index", []types.Type{varchar, varchar, varchar}, MO_IS_PHYSICAL_INDEX, types.T_bool, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			id, _ := DecodeOverloadID(fn.GetEncodedOverloadID())
+			require.Equal(t, tc.id, id)
+			require.Equal(t, tc.result, fn.GetReturnType().Oid)
+			require.Equal(t, tc.aggregate, GetFunctionIsAggregateByName(tc.name))
+		})
+	}
+	for i, overload := range allSupportedFunctions[UNZIP_FILE].Overloads {
+		require.True(t, overload.CannotFold(), "unzip_file overload %d", i)
+		require.False(t, GetFunctionIsProvenPureFoldableById(encodeOverloadID(UNZIP_FILE, int32(i))), "unzip_file overload %d", i)
 	}
 }
 
@@ -880,12 +917,19 @@ var predefinedFunids = map[int]int{
 	MO_INDEX_SUB_PART:                 623,
 	// Exponentially weighted window statistics (issue #29945); renumbered
 	// above main's 605..623 allocation during the PR rebase.
-	EWM_MEAN:            624,
-	EWM_VAR:             625,
-	EWM_STD:             626,
-	EWM_COV:             627,
-	EWM_CORR:            628,
-	FUNCTION_END_NUMBER: 629,
+	EWM_MEAN:                 624,
+	EWM_VAR:                  625,
+	EWM_STD:                  626,
+	EWM_COV:                  627,
+	EWM_CORR:                 628,
+	VECTOR_MATMUL:            629,
+	VECBLOCK_JSON:            630,
+	VECBLOCK_BINARY:          631,
+	UNZIP_FILE:               632,
+	TEMPORAL_DATETIME_BOUND:  634,
+	TEMPORAL_TIMESTAMP_BOUND: 635,
+	MO_IS_PHYSICAL_INDEX:     633,
+	FUNCTION_END_NUMBER:      636,
 }
 
 func Test_funids(t *testing.T) {
@@ -904,4 +948,56 @@ func Test_funids(t *testing.T) {
 	for _, fid := range functionIdRegister {
 		check(int(fid))
 	}
+}
+
+// The EWM window functions and temporal planning helpers were added on
+// parallel branches. Both families must survive binding and plan encoding.
+func TestEWMAndTemporalFunctionRegistryCoexist(t *testing.T) {
+	f := types.T_float64.ToType()
+	n := types.T_int32.ToType()
+	tests := []struct {
+		name   string
+		id     int32
+		args   []types.Type
+		window bool
+	}{
+		{"ewmmean", EWM_MEAN, []types.Type{f, f}, true},
+		{"ewmvar", EWM_VAR, []types.Type{f, f}, true},
+		{"ewmstd", EWM_STD, []types.Type{f, f}, true},
+		{"ewmcov", EWM_COV, []types.Type{f, f, f}, true},
+		{"ewmcorr", EWM_CORR, []types.Type{f, f, f}, true},
+		{"__mo_temporal_datetime_bound", TEMPORAL_DATETIME_BOUND, []types.Type{types.T_timestamp.ToType(), n, n, n}, false},
+		{"__mo_temporal_timestamp_bound", TEMPORAL_TIMESTAMP_BOUND, []types.Type{types.T_datetime.ToType(), n, n, n}, false},
+	}
+	seen := make(map[int32]string)
+	for _, tc := range tests {
+		result, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+		require.NoError(t, err, tc.name)
+		encoded := result.GetEncodedOverloadID()
+		id, _ := DecodeOverloadID(encoded)
+		require.Equal(t, tc.id, id, tc.name)
+		if old, exists := seen[id]; exists {
+			require.Equal(t, old, tc.name)
+		} else {
+			seen[id] = tc.name
+		}
+		implementation, ok := GetFunctionByIdWithoutError(encoded)
+		require.True(t, ok, tc.name)
+		require.Equal(t, tc.window, implementation.IsWin(), tc.name)
+		expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: encoded, ObjName: tc.name}}}}
+		require.Equal(t, !tc.window, RequiresRuntimeEvaluation(expr), tc.name)
+		wire, err := expr.Marshal()
+		require.NoError(t, err)
+		var decoded planpb.Expr
+		require.NoError(t, decoded.Unmarshal(wire))
+		require.Equal(t, encoded, decoded.GetF().Func.Obj)
+		actual, ok := GetFunctionByIdWithoutError(decoded.GetF().Func.Obj)
+		require.True(t, ok)
+		require.Equal(t, tc.window, actual.IsWin(), tc.name)
+	}
+	require.Len(t, seen, 7)
+	_, err := GetFunctionByName(context.Background(), "__mo_temporal_bound_not_empty", []types.Type{types.T_timestamp.ToType(), n, n})
+	require.Error(t, err)
+	_, err = GetFunctionByName(context.Background(), "__mo_temporal_datetime_bound", []types.Type{types.T_timestamp.ToType(), n, n, n, types.T_bool.ToType()})
+	require.Error(t, err)
 }

@@ -311,7 +311,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 			for i, arg := range ag.GetArgExpressions() {
 				// Most aggregate arguments need no specialization discovery.
-				if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "*" && types.T(arg.Typ.Id) == types.T_decimal128 {
+				if f := arg.GetF(); f != nil && f.Func != nil && (f.Func.ObjName == "+" || f.Func.ObjName == "-" || f.Func.ObjName == "*") && types.T(arg.Typ.Id).IsDecimal() {
 					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
 				}
 			}
@@ -373,6 +373,9 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 		}
 		if id == types.T_array_bf16 || id == types.T_array_float16 {
 			width *= 2
+		}
+		if f, ok := id.BlockScaledFormat(); ok {
+			width = types.BlockScaledCellSize(f, width)
 		}
 		// T_array_int8 / T_array_uint8 are 1 byte/element -> width unchanged
 		// (width0 already counts).
@@ -654,10 +657,19 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
 		count := bat.RowCount()
-		evaluated := false
 		var hashBytesBefore int64
+		var compactHitRows int64
+		compactEligible := !group.DynamicGrouping && !group.ctr.groupingAware && !group.ctr.legacyH8CharSemantics &&
+			compactGroupExpressions(group.GroupBy)
 		if !group.ctr.hr.IsEmpty() {
 			hashBytesBefore = group.ctr.hr.Hash.Size()
+		}
+		if count > 0 {
+			if err = group.evaluateBuildInput(proc, bat); err != nil {
+				// A failed expression may already have side effects. There is
+				// no general safe way to replay a partially evaluated batch.
+				return false, err
+			}
 		}
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
@@ -671,16 +683,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 			for {
 				err = nil
-				if !evaluated {
-					if err = group.evaluateBuildInput(proc, bat); err != nil {
-						if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
-							continue
-						} else {
-							return false, retryErr
-						}
-					}
-					evaluated = true
-				}
 				if group.ctr.hr.IsEmpty() {
 					err = group.ctr.buildHashTable(proc.Ctx, 0)
 					if err == nil {
@@ -690,14 +692,20 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				if err == nil {
 					hashKeyVecs := group.ctr.hashKeyVectors(
 						group.ctr.groupByEvaluate.Vec)
-					err = group.ctr.hr.TxnItr.PreviewInsert(
-						i, n, hashKeyVecs,
-						group.ctr.hr.Hash.GroupCount(),
-						&group.ctr.hr.insertPlan)
-					if err == nil {
-						preview.values = group.ctr.hr.insertPlan.Values()
-						preview.inserted = group.ctr.hr.insertPlan.Inserted()
-						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+					var compact bool
+					if compactEligible {
+						preview, compact, err = group.ctr.previewCompactGroups(hashKeyVecs, i, n)
+					}
+					if err == nil && !compact {
+						err = group.ctr.hr.TxnItr.PreviewInsert(
+							i, n, hashKeyVecs,
+							group.ctr.hr.Hash.GroupCount(),
+							&group.ctr.hr.insertPlan)
+						if err == nil {
+							preview.values = group.ctr.hr.insertPlan.Values()
+							preview.inserted = group.ctr.hr.insertPlan.Inserted()
+							preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+						}
 					}
 					if err == nil && preview.newGroups > 0 {
 						var growth uint64
@@ -711,7 +719,6 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 									proc, mpool.ErrAllocationAccountCapacity); !retried {
 									return false, retryErr
 								}
-								evaluated = false
 								continue
 							}
 						}
@@ -729,7 +736,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					}
 					if err == nil {
 						err = group.ctr.hr.Hash.PreAlloc(
-							group.ctr.hr.insertPlan.NewGroups())
+							uint64(preview.newGroups))
 					}
 					if err == nil {
 						err = group.ctr.preflightBuildChunk(
@@ -788,11 +795,15 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 								return false, err
 							}
 						}
+						if preview.existingOnly {
+							compactHitRows += int64(n)
+						} else {
+							group.ctr.hr.publishCompactGroups(vals[:n])
+						}
 						break
 					}
 				}
 				if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
-					evaluated = false
 					continue
 				} else {
 					return false, retryErr
@@ -800,6 +811,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		} // end of mini batch for loop
 
+		if compactHitRows > 0 {
+			group.OpAnalyzer.GetOpStats().AddExtraStat("GroupCompactLookupRows", compactHitRows)
+		}
 		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
 		// Prefer subdividing eligible exact DISTINCT keys before generic Group
 		// spill. A hot group's key set can make progress only on this axis.
@@ -948,7 +962,7 @@ func (group *Group) retryBuildBatchAfterCapacity(
 		return false, cause
 	}
 	before := group.ctr.hr.Hash.GroupCount()
-	bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil)
+	bytes, rows, err := group.ctr.spillDataToDiskWithInput(proc, group.OpAnalyzer, nil, true)
 	if err != nil {
 		return false, err
 	}

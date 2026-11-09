@@ -278,8 +278,11 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
-	if types.T(colType.GetId()).IsArrayRelate() {
+	if types.T(colType.GetId()).IsArray() {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
+	}
+	if err := lowPrecisionKeyError(ctx, colType.GetId(), columnName, "primary"); err != nil {
+		return err
 	}
 	if isSetPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("SET column '%s' cannot be in primary key", columnName))
@@ -312,7 +315,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	if isGeometryPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", columnName))
 	}
-	return nil
+	return lowPrecisionKeyError(ctx, colType.GetId(), columnName, "unique")
 }
 
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {
@@ -401,6 +404,8 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
+	primaryAffected := alterColumnIsPrimary(tableDef, column)
+
 	// A replacement keeps index bindings, but never the dropped column's source
 	// mapping. Genuine removals retain the existing index cleanup authority.
 	if preserveIndexes {
@@ -445,7 +450,7 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return primaryAffected, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {

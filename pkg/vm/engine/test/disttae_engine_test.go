@@ -272,6 +272,11 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 	catalogWriteTs := txnop.Txn().CommitTS
 
+	// Check before later writes: compacted logtail blocks can conservatively
+	// include tables written after the requested interval.
+	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
+
 	// drop the first db
 	txnop = p.StartCNTxn()
 	require.Nil(t, p.D.Engine.Delete(p.Ctx, "todrop", txnop))
@@ -343,8 +348,6 @@ func TestLogtailBasic(t *testing.T) {
 
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
-	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
-	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	require.False(t, reader.IsDirtyOnTable(dbID, tableID-1))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)

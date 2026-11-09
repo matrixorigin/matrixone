@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -42,6 +43,34 @@ import (
 type blockReadTestDataSource struct {
 	deleted []uint64
 	err     error
+}
+
+type releaseCountingFS struct {
+	fileservice.FileService
+	acquired, released int
+}
+
+type releaseCountingData struct {
+	fscache.Data
+	fs *releaseCountingFS
+}
+
+func (d *releaseCountingData) Release() {
+	d.fs.released++
+	d.Data.Release()
+}
+
+func (fs *releaseCountingFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if err := fs.FileService.Read(ctx, v); err != nil {
+		return err
+	}
+	for i := range v.Entries {
+		if data := v.Entries[i].CachedData; data != nil {
+			fs.acquired++
+			v.Entries[i].CachedData = &releaseCountingData{Data: data, fs: fs}
+		}
+	}
+	return nil
 }
 
 func (*blockReadTestDataSource) Next(
@@ -121,6 +150,32 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	input.Clean(writeMP)
 	require.Zero(t, writeMP.CurrNB())
 	mpool.DeleteMPool(writeMP)
+
+	// A failure while copying the pinned cache vectors must still release the
+	// read ticket and its vectors before returning to the caller.
+	countingFS := &releaseCountingFS{FileService: fs}
+	failureMP := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(failureMP) })
+	registryFailure, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	accountFailure, err := registryFailure.Open(1)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, accountFailure.Seal().Used)
+		_, finalizeErr := registryFailure.Finalize(accountFailure)
+		require.NoError(t, finalizeErr)
+		require.Zero(t, failureMP.CurrNB())
+	})
+	selectionFailure, err := vector.NewAllocationAccountSelection(accountFailure, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	failureOutput := batch.NewWithSize(1)
+	failureOutput.Vecs[0] = vector.NewOffHeapVecWithType(typs[0])
+	t.Cleanup(func() { failureOutput.Clean(failureMP) })
+	require.NoError(t, failureOutput.Vecs[0].SetAllocationAccount(selectionFailure))
+	err = CopyBlockData(ctx, info.MetaLocation(), []int64{0}, []uint16{0}, typs[:1], failureOutput, countingFS, failureMP)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Positive(t, countingFS.acquired)
+	require.Equal(t, countingFS.acquired, countingFS.released)
 
 	queryMP := mpool.MustNewZero()
 	defer mpool.DeleteMPool(queryMP)
@@ -745,7 +800,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					rows = append(rows, int64(row))
 				}
 			}
-			bat.Shrink(rows, false)
+			require.NoError(t, bat.Shrink(rows, false, queryMP))
 			return engine.ReaderFilterResult{}, nil
 		}}
 		_, err := BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-fallback-test", output, cacheVectors, queryMP, fs, []int{0, 1}, request)
@@ -767,7 +822,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					sels = append(sels, int64(i))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}))
@@ -857,7 +912,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			[]int{0},
 			&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 				sels := []int64{1}
-				bat.Vecs[0].Shrink(sels, false)
+				require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 				bat.SetRowCount(1)
 				return engine.ReaderFilterResult{Sels: sels}, nil
 			}},
@@ -947,7 +1002,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
@@ -983,7 +1038,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Vecs[0].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
@@ -1091,7 +1146,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 				if tc.filterSels == nil {
 					return engine.ReaderFilterResult{All: true}, nil
 				}
-				bat.Vecs[0].Shrink(tc.filterSels, false)
+				require.NoError(t, bat.Vecs[0].Shrink(tc.filterSels, false, queryMP))
 				bat.SetRowCount(len(tc.filterSels))
 				return engine.ReaderFilterResult{Sels: tc.filterSels}, nil
 			}
@@ -1414,7 +1469,7 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 				visibleRowids[1].GetRowOffset(),
 			})
 			sels := []int64{1}
-			bat.Vecs[1].Shrink(sels, false)
+			require.NoError(t, bat.Vecs[1].Shrink(sels, false, queryMP))
 			bat.SetRowCount(1)
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
@@ -2093,4 +2148,66 @@ type filterPolicyFS struct {
 func (fs *filterPolicyFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	fs.policies = append(fs.policies, v.Policy)
 	return fs.FileService.Read(ctx, v)
+}
+
+// A persisted constant has a compact on-disk vector, but an ordinary scan
+// still materializes a full output column. The physical lower cost models
+// this output work, not BlockMaxRows independent disk decodes.
+func TestTemporalFullBlockConstantMaterialization(t *testing.T) {
+	ctx := t.Context()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	value := types.DatetimeFromClock(2026, 6, 1, 0, 0, 0, 0)
+	typ := types.T_datetime.ToType()
+	input := batch.NewWithSize(2)
+	var err error
+	input.Vecs[0], err = vector.NewConstFixed(typ, value, objectio.BlockMaxRows, mp)
+	require.NoError(t, err)
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	for i := range objectio.BlockMaxRows {
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, mp))
+	}
+	input.SetRowCount(objectio.BlockMaxRows)
+	arena := objectio.NewArena(0)
+	defer arena.FreeBuffers()
+	id := objectio.NewObjectid()
+	writer, err := objectio.NewObjectWriter(objectio.BuildObjectNameWithObjectID(&id), fs, 0, []uint16{1, 2}, arena)
+	require.NoError(t, err)
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(mp)
+	for _, early := range []bool{false, true} {
+		output := batch.NewWithSize(2)
+		output.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		cache := containers.NewVectors(3)
+		if early {
+			rows, err := BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 2}, []types.Type{typ, types.T_int64.ToType()}, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "events", output, cache, mp, fs, []int{0},
+				&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, loaded)
+					require.Equal(t, objectio.BlockMaxRows, bat.RowCount())
+					require.Equal(t, objectio.BlockMaxRows, bat.Vecs[0].Length())
+					require.False(t, bat.Vecs[0].IsConst())
+					return engine.ReaderFilterResult{All: true}, nil
+				}})
+			require.NoError(t, err)
+			require.Equal(t, objectio.BlockMaxRows, rows)
+		} else {
+			require.NoError(t, BlockDataRead(ctx, &info, &blockReadTestDataSource{}, []uint16{1, 2}, []types.Type{typ, types.T_int64.ToType()}, -1,
+				timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "events", output, cache, mp, fs))
+		}
+		require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+		require.Equal(t, objectio.BlockMaxRows, output.Vecs[0].Length())
+		require.False(t, output.Vecs[0].IsConst())
+		require.Equal(t, value, vector.GetFixedAtWithTypeCheck[types.Datetime](output.Vecs[0], objectio.BlockMaxRows-1))
+		output.Clean(mp)
+		cache.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
 }

@@ -79,7 +79,7 @@ func TestDirectTableMigrationSavedASTBinderCounterexample(t *testing.T) {
 	compiler := &directCompilerFixture{CompilerContext: plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), def: directTestTable()}
 	wrapper := tree.NewPrepareStmt("p", saved)
 	defer wrapper.Free()
-	_, err = plan2.BuildPlan(compiler, wrapper, false)
+	_, err = plan2.BuildPlan(compiler, wrapper, false, nil)
 	require.NoError(t, err)
 	name := saved.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.UnresolvedName)
 	require.Equal(t, 2, name.NumParts)
@@ -197,6 +197,8 @@ type directCompilerFixture struct {
 	plan2.CompilerContext
 	def          *plan.TableDef
 	resolveCount int
+	borrow       *plan2.BorrowedTable
+	borrowAsked  bool
 }
 
 func (c *directCompilerFixture) GetAccountId() (uint32, error) { return 0, nil }
@@ -210,8 +212,12 @@ func (c *directCompilerFixture) GetDatabaseId(name string, snapshot *plan.Snapsh
 	}
 	return 7, nil
 }
-func (c *directCompilerFixture) Resolve(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *directCompilerFixture) Resolve(_ string, _ string, _ *plan.Snapshot, output *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 	c.resolveCount++
+	c.borrowAsked = output != nil
+	if output != nil {
+		output.Borrow = c.borrow
+	}
 	return &plan.ObjectRef{SchemaName: "db", ObjName: "t", Obj: 11}, c.def, nil
 }
 
@@ -219,13 +225,18 @@ func (c *directCompilerFixture) Resolve(string, string, *plan.Snapshot) (*plan.O
 // replacement. Replacement metadata never reaches the binder/view expander.
 func TestDirectTableMigrationResolveDDLBarrier(t *testing.T) {
 	p := directTestProof(t)
-	base := &directCompilerFixture{def: directTestTable()}
+	borrow := &plan2.BorrowedTable{}
+	base := &directCompilerFixture{def: directTestTable(), borrow: borrow}
 	guard := &directTableMigrationCompiler{CompilerContext: base, proof: p}
-	ref, def, err := guard.Resolve("db", "t", nil)
+	var compiler plan2.CompilerContext = guard
+	output := &plan2.TableResolution{Borrow: &plan2.BorrowedTable{}}
+	ref, def, err := compiler.Resolve("db", "t", nil, output)
 	require.NoError(t, err)
 	require.NotNil(t, ref)
 	require.NotNil(t, def)
 	require.True(t, guard.resolved)
+	require.True(t, base.borrowAsked)
+	require.Same(t, borrow, output.Borrow)
 	for _, mutate := range []func(*plan.TableDef){
 		func(d *plan.TableDef) { d.Version++ },
 		func(d *plan.TableDef) { d.TblId++ },
@@ -235,19 +246,29 @@ func TestDirectTableMigrationResolveDDLBarrier(t *testing.T) {
 		base.def = directTestTable()
 		mutate(base.def)
 		guard.resolved = false
-		ref, def, err = guard.Resolve("db", "t", nil)
+		output.Borrow = borrow
+		ref, def, err = compiler.Resolve("db", "t", nil, output)
 		require.Error(t, err)
 		require.Nil(t, ref)
 		require.Nil(t, def)
 		require.False(t, guard.resolved)
+		require.Nil(t, output.Borrow)
 	}
+	base.def = directTestTable()
+	_, _, err = compiler.Resolve("db", "t", nil, nil)
+	require.NoError(t, err)
+	require.False(t, base.borrowAsked)
 	calls := base.resolveCount
-	_, _, err = guard.Resolve("foreign", "t", nil)
+	output.Borrow = borrow
+	_, _, err = compiler.Resolve("foreign", "t", nil, output)
 	require.Error(t, err)
-	_, _, err = guard.ResolveById(11, nil)
+	require.Nil(t, output.Borrow)
+	_, _, err = compiler.ResolveById(11, nil)
 	require.Error(t, err)
-	_, _, err = guard.ResolveIndexTableByRef(nil, "i", nil)
+	output.Borrow = borrow
+	_, _, err = compiler.ResolveIndexTableByRef(nil, "i", nil, output)
 	require.Error(t, err)
+	require.Nil(t, output.Borrow)
 	require.Equal(t, calls, base.resolveCount)
 }
 
@@ -279,32 +300,63 @@ func TestDirectTableMigrationRuntimePresenceAndValue(t *testing.T) {
 		{name: "optimizer_hints"}, {name: "runtime_filter_limit_in"}, {name: "runtime_filter_limit_bloom_filter"},
 	}
 	runtime := moruntime.ServiceRuntime(ses.GetService())
+	for _, variable := range vars[1:] {
+		name := variable.name
+		previous, present := runtime.GetGlobalVariables(name)
+		const testValue = int64(47)
+		runtime.SetGlobalVariables(name, testValue)
+		t.Cleanup(func() {
+			if present {
+				runtime.SetGlobalVariables(name, previous)
+			} else {
+				runtime.CompareAndDeleteGlobalVariables(name, testValue)
+			}
+		})
+	}
 	for i := range vars {
 		v, present := runtime.GetGlobalVariables(vars[i].name)
 		vars[i].runtimeValue, vars[i].runtimeValuePresent = v, present
 	}
 	require.True(t, directRuntimeMatches(ses, vars))
-	vars[0].runtimeValuePresent = !vars[0].runtimeValuePresent
-	require.False(t, directRuntimeMatches(ses, vars))
+	// Older snapshots can carry optimizer_hints as a runtime value, but it has no
+	// CN-global side effect on this main and must not influence the guard.
 	vars[0].runtimeValuePresent = !vars[0].runtimeValuePresent
 	vars[0].runtimeValue = struct{}{}
-	if vars[0].runtimeValuePresent {
+	require.True(t, directRuntimeMatches(ses, vars))
+	for _, i := range []int{1, 2} {
+		original := vars[i]
+		vars[i].runtimeValuePresent = !original.runtimeValuePresent
 		require.False(t, directRuntimeMatches(ses, vars))
+		vars[i] = original
+		require.True(t, original.runtimeValuePresent)
+		vars[i].runtimeValue = struct{}{}
+		require.False(t, directRuntimeMatches(ses, vars))
+		vars[i] = original
 	}
 	require.False(t, directRuntimeMatches(ses, vars[:2]))
+	require.False(t, directRuntimeMatches(ses, []migratedSystemVariable{vars[0], vars[2]}))
 }
 
 func TestDirectTableMigrationPublicationGenerationBarrier(t *testing.T) {
+	t.Run("unchanged workspace boundary", func(t *testing.T) {
+		f := newViewSchemaOwnedFixture(t)
+		check, err := directPublicationGuard(f.ctx, f.session, f.parent.execCtx, f.parent)
+		require.NoError(t, err)
+		f.workspace.UpdateSnapshotWriteOffset()
+		require.NoError(t, check())
+	})
 	for _, tc := range []struct {
 		name   string
-		change func(*viewSchemaOwnedFixture)
+		change func(*testing.T, *viewSchemaOwnedFixture)
 	}{
-		{"workspace revision", func(f *viewSchemaOwnedFixture) { f.workspace.UpdateSnapshotWriteOffset() }},
-		{"snapshot revision", func(f *viewSchemaOwnedFixture) { f.op.SetSnapshotTS(f.op.SnapshotTS().Next()) }},
-		{"local DDL", func(f *viewSchemaOwnedFixture) { f.session.advanceDDLVersion() }},
-		{"role identity", func(f *viewSchemaOwnedFixture) { f.session.GetTenantInfo().SetDefaultRoleID(10) }},
-		{"role grants", func(f *viewSchemaOwnedFixture) { f.session.cache.invalidate() }},
-		{"compiler owner", func(f *viewSchemaOwnedFixture) {
+		{"workspace rollback", func(t *testing.T, f *viewSchemaOwnedFixture) {
+			require.NoError(t, f.workspace.RollbackLastStatement(f.ctx))
+		}},
+		{"snapshot revision", func(_ *testing.T, f *viewSchemaOwnedFixture) { f.op.SetSnapshotTS(f.op.SnapshotTS().Next()) }},
+		{"local DDL", func(_ *testing.T, f *viewSchemaOwnedFixture) { f.session.advanceDDLVersion() }},
+		{"role identity", func(_ *testing.T, f *viewSchemaOwnedFixture) { f.session.GetTenantInfo().SetDefaultRoleID(10) }},
+		{"role grants", func(_ *testing.T, f *viewSchemaOwnedFixture) { f.session.cache.invalidate() }},
+		{"compiler owner", func(_ *testing.T, f *viewSchemaOwnedFixture) {
 			f.parent.SetExecCtx(&ExecCtx{reqCtx: f.ctx, ses: f.session, proc: f.proc})
 		}},
 	} {
@@ -315,7 +367,7 @@ func TestDirectTableMigrationPublicationGenerationBarrier(t *testing.T) {
 			check, err := directPublicationGuard(f.ctx, f.session, f.parent.execCtx, f.parent)
 			require.NoError(t, err)
 			require.NoError(t, check())
-			tc.change(f)
+			tc.change(t, f)
 			require.Error(t, check())
 		})
 	}

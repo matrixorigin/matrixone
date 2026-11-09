@@ -234,6 +234,8 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			before := storage.bytes.Load()
 			opensBefore := storage.opens.Load()
 			if mode == "cancel-between-entries" || mode == "error-between-entries" {
+				// A follower whose bytes no download covers reads them as bounded ranges.
+				fs.diskCache.finishDownload(diskPath, fs.diskCache.download(diskPath))
 				readCtx, stop := context.WithCancel(context.Background())
 				defer stop()
 				secondRead := make(chan struct{})
@@ -277,12 +279,9 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 				for _, entry := range follower.Entries {
 					require.Equal(t, data[entry.Offset:entry.Offset+entry.Size], entry.Data)
 				}
-				wantBytes := int64(30)
-				wantOpens := int64(2)
-				if mode == "dense" {
-					wantBytes = 33
-					wantOpens = 1
-				}
+				// The follower reads its ranges from the downloaded object, except a range to
+				// the end of the object, which the disk cache does not serve.
+				wantBytes, wantOpens := int64(0), int64(0)
 				if mode == "read-to-end" {
 					wantBytes = 4096
 					wantOpens = 1

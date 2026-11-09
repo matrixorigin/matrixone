@@ -329,6 +329,7 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 
 func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string]deleteSource, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
+	var tableNode *tree.TableName
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
 		alias = string(aliasTbl.As.Alias)
@@ -348,6 +349,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
+		tableNode = baseTbl
 		tblName = string(baseTbl.ObjectName)
 		dbName = string(baseTbl.SchemaName)
 	}
@@ -366,7 +368,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := resolveIndexMaintenanceSource(ctx, tableNode, dbName, tblName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1057,7 +1059,7 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
-		targetType.Id == int32(types.T_float32) || targetType.Id == int32(types.T_float64) ||
+		types.T(targetType.Id).IsFloat() ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
@@ -1335,7 +1337,7 @@ func needsSameTypeAssignmentCast(targetType Type) bool {
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
-		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
+		(types.T(targetType.Id).IsArray() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, columnName ...string) (*Expr, error) {
@@ -2115,6 +2117,21 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
+		// A BIT literal is the one origin kind in this case whose payload can
+		// bypass array parsing: SetInsertValueString's P_bit arm returns
+		// DecodeBinaryString bytes directly, while every other arm (bool,
+		// numeric, char, hexnum) is routed through the array parser with its
+		// fixed/dynamic dimension checks and those carriers are genuinely
+		// pre-parsed vector payloads. An array destination must not receive the
+		// raw bits as a fast-path constant: downstream re-emit as an
+		// array-domain constant reaches the float decoder with an unaligned
+		// payload (panic, skipping assignment validation) or, when aligned,
+		// silently decodes unvalidated bits as element floats. Return no
+		// fast-path expression so the row falls to the generic binder and its
+		// assignment cast keeps the checked string-to-array conversion.
+		if colType.Oid.IsArray() && numVal.ValType == tree.P_bit {
+			return nil, nil
+		}
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err

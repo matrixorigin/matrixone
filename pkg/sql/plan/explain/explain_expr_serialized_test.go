@@ -156,6 +156,32 @@ func TestSerializedLiteralRedactionAppliesAcrossExpressionLayouts(t *testing.T) 
 	}
 }
 
+func TestCompositeKeyInExplainShowsRedaction(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendBytes(vec, []byte{0, 1, 2}, false, mp))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	registered, err := function.GetFunctionByName(context.Background(), "in",
+		[]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()})
+	require.NoError(t, err)
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "in"},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: catalog.CPrimaryKeyColName}}},
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Data: data, Len: 1, IsSerialized: true}}},
+		},
+	}}}
+	var text bytes.Buffer
+	require.NoError(t, describeExpr(context.Background(), expr, NewExplainDefaultOptions(), &text))
+	require.Equal(t, catalog.CPrimaryKeyColName+" in (<opaque>)", text.String())
+	var jsonText bytes.Buffer
+	require.NoError(t, describeExpr(context.Background(), expr, &ExplainOptions{CompleteLiteralVectors: true}, &jsonText))
+	require.Contains(t, jsonText.String(), "serialized_vec(")
+	require.Contains(t, jsonText.String(), "0x000102")
+}
+
 func TestBinaryLiteralExplainUsesHex(t *testing.T) {
 	got := describeComparisonForLiteralTest(t, "payload", "=", "AB", types.T_varchar, true, false)
 	if want := "(payload = 0x4142)"; got != want {
@@ -337,6 +363,94 @@ func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
 	}
 }
 
+func TestLiteralVecExplainRendersLowPrecisionTypes(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	cell := func(f types.BlockScaledFormat) []byte {
+		data, err := types.AppendBlockScaled(nil, f, []float32{6, 3, -2, 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+
+	for name, test := range map[string]struct {
+		typ  types.T
+		data []byte
+		want string
+	}{
+		"bf16":    {types.T_bf16, marshalFixedAndNull(t, mp, types.T_bf16, types.BF16FromFloat32(1.5)), "[1.5, NULL]"},
+		"float16": {types.T_float16, marshalFixedAndNull(t, mp, types.T_float16, types.Float16FromFloat32(-0.25)), "[-0.25, NULL]"},
+		"float8":  {types.T_float8, marshalFixedAndNull(t, mp, types.T_float8, types.Float8FromFloat32(3)), "[3, NULL]"},
+		"float4":  {types.T_float4, marshalFixedAndNull(t, mp, types.T_float4, types.Float4FromFloat32(-6)), "[-6, NULL]"},
+		"vecf8":   {types.T_array_float8, marshalCells(t, mp, types.T_array_float8, cell(types.BlockScaledMXFP8), cell(types.BlockScaledMXFP8)), "[[6 3 -2 1], [6 3 -2 1]]"},
+		"vecf4":   {types.T_array_float4, marshalCells(t, mp, types.T_array_float4, cell(types.BlockScaledNVFP4), cell(types.BlockScaledNVFP4)), "[[6 3 -2 1], [6 3 -2 1]]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr := &planpb.Expr{
+				Typ: planpb.Type{Id: int32(test.typ)},
+				Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+					Len:  2,
+					Data: test.data,
+				}},
+			}
+			var buf bytes.Buffer
+			if err := describeExpr(t.Context(), expr, &ExplainOptions{
+				Format:                 EXPLAIN_FORMAT_JSON,
+				CompleteLiteralVectors: true,
+			}, &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("low-precision literal vector rendering: got %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	// an invalid vecf8 cell renders as its bytes
+	vec := vector.NewVec(types.T_array_float8.ToType())
+	defer vec.Free(mp)
+	if err := vector.AppendBytes(vec, []byte{1, 2, 3}, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if got := literalVecElementText(vec, 0); got != "0x010203" {
+		t.Fatalf("invalid vecf8 cell rendering: got %q", got)
+	}
+}
+
+// marshalFixedAndNull returns a marshaled vector of typ holding v and a NULL.
+func marshalFixedAndNull[T any](t *testing.T, mp *mpool.MPool, typ types.T, v T) []byte {
+	vec := vector.NewVec(typ.ToType())
+	defer vec.Free(mp)
+	var zero T
+	if err := vector.AppendFixed(vec, v, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(vec, zero, true, mp); err != nil {
+		t.Fatal(err)
+	}
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// marshalCells returns a marshaled vector of typ holding cells.
+func marshalCells(t *testing.T, mp *mpool.MPool, typ types.T, cells ...[]byte) []byte {
+	vec := vector.NewVec(typ.ToType())
+	defer vec.Free(mp)
+	for _, c := range cells {
+		if err := vector.AppendBytes(vec, c, false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestPublicSerializedINListExplainIsOpaqueAndPrintable(t *testing.T) {
 	planText := explainSQLForSerializedTest(
 		t,
@@ -389,7 +503,7 @@ func explainSQLForSerializedTest(t *testing.T, sql string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

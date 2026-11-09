@@ -360,6 +360,28 @@ func IsPublicationViewBinding(ctx context.Context) bool {
 	return value
 }
 
+type indexMaintenanceViewBindingKey struct{}
+
+// WithIndexMaintenanceViewBinding marks a private bind-only view probe.
+func WithIndexMaintenanceViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, indexMaintenanceViewBindingKey{}, true)
+}
+
+// WithoutIndexMaintenanceViewBinding prevents a separately executed nested
+// catalog statement from inheriting the probe's no-evaluation semantics.
+func WithoutIndexMaintenanceViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, indexMaintenanceViewBindingKey{}, false)
+}
+
+func IsIndexMaintenanceViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(indexMaintenanceViewBindingKey{}).(bool)
+	return value
+}
+
+func IsNoEvaluationViewBinding(ctx context.Context) bool {
+	return IsPublicationViewBinding(ctx) || IsIndexMaintenanceViewBinding(ctx)
+}
+
 // Sp variable scope
 type VarScopeKey struct{}
 

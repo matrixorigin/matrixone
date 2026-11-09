@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -146,15 +147,29 @@ func (rt *Routine) shouldCloseConnection() bool {
 	return routineCtx != nil && context.Cause(routineCtx) != nil
 }
 
-func (rt *Routine) setInProcessRequest(b bool) {
+func (rt *Routine) beginClientRequest() bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	rt.inProcessRequest = b
-	if b {
-		rt.requestStartedAt.Store(clientRequestClockValue(time.Now()))
-	} else {
-		rt.requestStartedAt.Store(0)
+	if rt.isCancelled() {
+		return false
 	}
+	rt.inProcessRequest = true
+	rt.requestStartedAt.Store(clientRequestClockValue(time.Now()))
+	return true
+}
+
+// endClientRequest hands a concurrent KILL to the connection owner after the
+// response has been attempted, without replacing an existing error.
+func (rt *Routine) endClientRequest(err error) error {
+	rt.mu.Lock()
+	rt.inProcessRequest = false
+	rt.requestStartedAt.Store(0)
+	cancelled := rt.isCancelled()
+	rt.mu.Unlock()
+	if err == nil && cancelled {
+		return io.EOF
+	}
+	return err
 }
 
 func (rt *Routine) requestRunningLongerThan(nowValue int64, minimum time.Duration) bool {
@@ -183,9 +198,10 @@ func (rt *Routine) execCallbackBasedOnRequest(want bool, callback func()) {
 
 func (rt *Routine) releaseRoutineCtx() {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if rt.cancelRoutineFunc != nil {
-		rt.cancelRoutineFunc()
+	cancel := rt.cancelRoutineFunc
+	rt.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -234,7 +250,7 @@ func (rt *Routine) getSession() *Session {
 func (rt *Routine) setCancelRequestFunc(cf context.CancelFunc) {
 	rt.mu.Lock()
 	rt.cancelRequestFunc = cf
-	closing := rt.closing.Load()
+	closing := rt.closing.Load() || rt.isCancelled()
 	rt.mu.Unlock()
 	if closing && cf != nil {
 		cf()
@@ -434,7 +450,11 @@ func (rt *Routine) countConnectionIfNeeded(ses *Session) {
 // handleSessionCommand executes commands that replace the Session generation.
 // They cannot run through handleRequest because request admission pins the old
 // generation until that function returns.
-func (rt *Routine) handleSessionCommand(ctx context.Context, req *Request) error {
+func (rt *Routine) handleSessionCommand(ctx context.Context, req *Request) (retErr error) {
+	if !rt.beginClientRequest() {
+		return io.EOF
+	}
+	defer func() { retErr = rt.endClientRequest(retErr) }()
 	oldSession := rt.getSession()
 	if oldSession == nil {
 		return moerr.NewInternalError(ctx, "cannot reset a missing session")
@@ -448,8 +468,6 @@ func (rt *Routine) handleSessionCommand(ctx context.Context, req *Request) error
 	)
 	defer cancel()
 
-	rt.setInProcessRequest(true)
-	defer rt.setInProcessRequest(false)
 	v2.StartHandleRequestCounter.Inc()
 	defer v2.EndHandleRequestCounter.Inc()
 
@@ -631,18 +649,43 @@ func (rt *Routine) killConnection(killMyself bool) {
 		//will be closed finally.
 		rt.releaseRoutineCtx()
 
-		//If it is in processing the request, it responds to the client normally
-		//before closing the network to avoid the mysql client to be hung.
-		closeConn := func() {
-			//If it is not in processing the request, just close the network
-			proto := rt.getProtocol()
-			if proto != nil {
+		// If the controller and request are idle, seal admission and close the
+		// protocol without holding the request lock across network I/O.
+		if rt.tryCloseIdleAfterKill() {
+			return
+		}
+		rt.execCallbackBasedOnRequest(false, func() {
+			if proto := rt.getProtocol(); proto != nil {
 				proto.Close()
 			}
-		}
-
-		rt.execCallbackBasedOnRequest(false, closeConn)
+		})
 	}
+}
+
+// tryCloseIdleAfterKill only claims an idle session when neither lifecycle nor
+// request admission can race the protocol close.
+func (rt *Routine) tryCloseIdleAfterKill() bool {
+	if !rt.mc.TryLock() {
+		return false
+	}
+	if rt.mc.inProgress || rt.mc.requestInProgress || rt.mc.resetWaiterPending || !rt.mu.TryLock() {
+		rt.mc.Unlock()
+		return false
+	}
+	if rt.inProcessRequest {
+		rt.mu.Unlock()
+		rt.mc.Unlock()
+		return false
+	}
+	rt.mc.closed = true
+	rt.mc.cond.Broadcast()
+	proto := rt.getProtocol()
+	rt.mu.Unlock()
+	rt.mc.Unlock()
+	if proto != nil {
+		proto.Close()
+	}
+	return true
 }
 
 // cleanup When the io is closed, the cleanup will be called in callback Closed().

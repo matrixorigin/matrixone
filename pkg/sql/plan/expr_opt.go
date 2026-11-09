@@ -678,11 +678,11 @@ type compositePartBlockFilter struct {
 	copy     *plan.Expr
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool) (map[int32][]compositePartBlockFilter, bool) {
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool, points *compositePointCapture) (map[int32][]compositePartBlockFilter, bool) {
 	var ret map[int32][]compositePartBlockFilter
 	needsLate := false
 	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
-	if blockDisabled && !deferredOnly {
+	if blockDisabled && !deferredOnly && points == nil {
 		return nil, false
 	}
 	visited := make(map[int32]struct{})
@@ -698,6 +698,9 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, defe
 				visit(childID)
 			}
 			return
+		}
+		if points != nil {
+			points.collect(builder, id, node)
 		}
 
 		if deferredOnly {
@@ -815,7 +818,7 @@ func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][
 
 func appendUniqueBlockFilter(node *plan.Node, filter *plan.Expr, copyFilter bool) {
 	for _, existing := range node.BlockFilterList {
-		if blockFilterEquivalent(existing, filter) {
+		if existing.GetCandidateFilter() == filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter) {
 			return
 		}
 	}
@@ -1068,15 +1071,13 @@ func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
 		return nil
 	}
 	allowed := compositeKeyPartColumns(node.TableDef)
-	if allowed == nil {
-		return nil
-	}
-	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok {
+	if compoundPos, ok := compoundKeyColumn(node.TableDef); ok && allowed != nil {
 		allowed[compoundPos] = struct{}{}
 	}
 	ret := node.BlockFilterList[:0]
 	for _, filter := range node.BlockFilterList {
-		if exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+		if filter.GetCandidateFilter() ||
+			(allowed != nil && exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed)) {
 			// calcScanStats replaces BlockFilterList at the end of the pass and
 			// does not mutate preserved entries. Transfer the already-independent
 			// block-filter expression instead of deep-copying it on every stats
@@ -1437,7 +1438,9 @@ func deduplicateBlockFilterList(filters []*plan.Expr) []*plan.Expr {
 		hash := blockFilterSemanticHash(filter)
 		duplicate := false
 		for _, existing := range buckets[hash] {
-			if blockFilterSemanticallyEquivalent(existing, filter) {
+			if existing.GetCandidateFilter() == filter.GetCandidateFilter() &&
+				((filter.GetCandidateFilter() && blockFilterEquivalent(existing, filter)) ||
+					(!filter.GetCandidateFilter() && blockFilterSemanticallyEquivalent(existing, filter))) {
 				duplicate = true
 				break
 			}
@@ -2705,6 +2708,10 @@ func unwrapConstLiteral(expr *plan.Expr) (*plan.Literal, plan.Type, bool) {
 		if fn == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
 			return nil, plan.Type{}, false
 		}
+		// a cast to bf16/float16/float8/float4 rounds; the source literal is not its value
+		if types.T(expr.Typ.Id).IsLowPrecisionFloat() {
+			return nil, plan.Type{}, false
+		}
 		expr = fn.Args[0]
 	}
 }
@@ -2719,6 +2726,18 @@ func buildColumnDomainExpr(ctx context.Context, colExpr *plan.Expr, values []*pl
 			DeepCopyExpr(colExpr),
 			stripped[0],
 		})
+	}
+	if types.T(colExpr.Typ.Id).IsLowPrecisionFloat() {
+		// bf16/float16/float8/float4: a disjunction of equalities
+		eqs := make([]*plan.Expr, len(stripped))
+		for i, v := range stripped {
+			eq, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{DeepCopyExpr(colExpr), v})
+			if err != nil {
+				return nil, err
+			}
+			eqs[i] = eq
+		}
+		return combinePlanDisjunction(ctx, eqs)
 	}
 	listExpr := &plan.Expr{
 		Typ: colExpr.Typ,

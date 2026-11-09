@@ -35,6 +35,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedConsumerKeepsUnaryConversionBeforePrefixAdmission(t *testing.T) {
+	textType := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name      string
+		value     any
+		decimal   bool
+		dependent bool
+	}{
+		{name: "exact", value: "-2.25", decimal: true, dependent: true},
+		{name: "invalid", value: "not-a-number", dependent: true},
+		{name: "null", value: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: textType}},
+				[]any{ParamValue{Value: tc.value, SourceType: textType, HasSourceType: true, EnableNumericPrefix: true}})
+			state := preparedBindingState(ctx)
+			prior := makePlan2Int64ConstExprWithType(42)
+			state.diagnosticCandidates = []*Expr{prior}
+			source := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			original := []*Expr{source}
+			args, err := bindPreparedConsumerArguments(ctx, "ABS", original)
+			require.NoError(t, err)
+			require.Same(t, source, original[0])
+			require.NotSame(t, source, args[0])
+			require.Equal(t, tc.decimal, types.T(args[0].Typ.Id).IsDecimal())
+			if !tc.decimal {
+				require.Equal(t, types.T_float64, types.T(args[0].Typ.Id))
+			}
+			require.Equal(t, tc.dependent, state.valueDependent)
+			require.True(t, state.diagnosticFree)
+			require.Equal(t, []*Expr{prior}, state.diagnosticCandidates)
+			args[0] = prior
+			require.Same(t, source, original[0], "consumer owns its argument slice")
+		})
+	}
+
+	source := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	original := []*Expr{source}
+	args, err := bindPreparedConsumerArguments(context.Background(), "ABS", original)
+	require.NoError(t, err)
+	require.Same(t, source, args[0], "without binding state the existing argument is retained")
+}
+
 func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -106,9 +150,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 						"select c from decimal_filters where "+tc.predicate, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-						[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}},
-						[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true, EnableNumericPrefix: tc.binding == types.T_text}})
 					require.NoError(t, err)
 					if tc.binding.IsInteger() && tc.native {
 						require.False(t, bound.ValueDependent, "safe plans reuse the existing per-execution conversion guard")
@@ -603,9 +645,7 @@ func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
 				params.CleanOnlyData()
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 				proc.SetPrepareParams(params)
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
-					[]any{ParamValue{Value: value}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}}, []any{ParamValue{Value: value}})
 				require.NoError(t, err)
 				require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
 				cast := false
@@ -799,9 +839,7 @@ func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				value := ParamValue{Value: tc.value, IsBinaryProtocol: binary}
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}},
-					[]any{value, value})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}}, []any{value, value})
 				require.NoError(t, err)
 				q := bound.Plan.GetQuery()
 				require.NotNil(t, q.Correlation)
@@ -1155,9 +1193,7 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, statement+tc.predicate, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}},
-					[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}}, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
 				require.NoError(t, err)
 				found, columnCast := false, false
 				for _, node := range bound.Plan.GetQuery().Nodes {
@@ -1588,8 +1624,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			previous := mock.ctxt.GetContext()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: tc.source, NumericType: tc.numeric, BitCountType: tc.latch}}, []any{value})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: tc.source, NumericType: tc.numeric, BitCountType: tc.latch}}, []any{value})
 			require.NoError(t, err)
 			require.Equal(t, previous, mock.ctxt.GetContext())
 			require.Equal(t, tc.dependent, bound.ValueDependent, "%s", bound.Plan.String())
@@ -1623,9 +1658,7 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
-				[]any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: sourceType}}, []any{ParamValue{Value: "你好", SourceType: sourceType, HasSourceType: true, RuntimeStringDomain: types.RuntimeStringText}})
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(bound.Plan, "left")
 			require.NotNil(t, expr)
@@ -1974,6 +2007,107 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 			if ok {
 				require.NotNil(t, resolved.GetP())
 				require.NotNil(t, peer.GetCol(), "proof must not mutate execution tree")
+			}
+		})
+	}
+}
+
+func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
+	decimalSource := types.New(types.T_decimal64, 1, 1)
+	type param struct {
+		value   any
+		binding types.Type
+	}
+	sqlDecimal := param{"0.3", decimalSource}
+	for _, tc := range []struct {
+		name      string
+		predicate string
+		params    []param
+		binary    bool
+		narrowed  int
+	}{
+		{"equal sql decimal", "f = ?", []param{sqlDecimal}, false, 1},
+		{"in sql decimal", "f in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"not in sql decimal", "f not in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"less equal sql decimal", "f <= ?", []param{sqlDecimal}, false, 1},
+		{"between sql decimal", "f between ? and ?", []param{sqlDecimal, {"2", decimalSource}}, false, 2},
+		{"equal sql integer", "f = ?", []param{{int64(257), types.T_int64.ToType()}}, false, 1},
+		{"in sql decimal and integer", "f in (?, ?)", []param{sqlDecimal, {int64(6), types.T_int64.ToType()}}, false, 2},
+		{"in binary double", "f in (?, 9)", []param{{"0.3", types.T_float64.ToType()}}, true, 1},
+		{"in binary text", "f in (?, 9)", []param{{"0.3", types.T_varchar.ToType()}}, true, 1},
+		{"equal hex float text", "f = ?", []param{{"0x1p0", types.T_varchar.ToType()}}, true, 0},
+		{"equal out of range", "f = ?", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in out of range", "f in (?, 9)", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in one sql value out of range", "f in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		{"not in one sql value out of range", "f not in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		// in range by the value CAST rounds the marker to (to odd, from the exact source)
+		{"float4 above max binary double", "h <= ?", []param{{"6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 below min binary double", "h >= ?", []param{{"-6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 above max binary text", "h <= ?", []param{{"6.0000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 above max beyond float64 binary text", "h <= ?", []param{{"6.0000000000000000000000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 max binary double", "h <= ?", []param{{"6", types.T_float64.ToType()}}, true, 1},
+		{"float4 min binary text", "h >= ?", []param{{"-6", types.T_varchar.ToType()}}, true, 1},
+		{"float8 above max binary double", "g <= ?", []param{{"448.000001", types.T_float64.ToType()}}, true, 0},
+		{"float8 below min binary text", "g >= ?", []param{{"-448.000001", types.T_varchar.ToType()}}, true, 0},
+		{"float8 max binary double", "g <= ?", []param{{"448", types.T_float64.ToType()}}, true, 1},
+		{"float16 above max binary double", "k < ?", []param{{"65505", types.T_float64.ToType()}}, true, 0},
+		{"float16 below min binary text", "k > ?", []param{{"-65505", types.T_varchar.ToType()}}, true, 0},
+		{"float16 above max sql integer", "k < ?", []param{{int64(65505), types.T_int64.ToType()}}, false, 0},
+		{"float16 max binary double", "k <= ?", []param{{"65504", types.T_float64.ToType()}}, true, 1},
+		{"bf16 above max binary double", "f < ?", []param{{"3.39e38", types.T_float64.ToType()}}, true, 0},
+		{"bf16 below min binary text", "f > ?", []param{{"-3.39e38", types.T_varchar.ToType()}}, true, 0},
+		// bf16's printed maximum narrows, as CAST accepts it by its float32 value
+		{"bf16 printed max binary double", "f = ?", []param{{"3.3895314e+38", types.T_float64.ToType()}}, true, 1},
+		{"bf16 printed min binary double", "f = ?", []param{{"-3.3895314e+38", types.T_float64.ToType()}}, true, 1},
+		{"bf16 printed max binary text", "f = ?", []param{{"3.3895314e+38", types.T_varchar.ToType()}}, true, 1},
+		{"bf16 printed min binary text", "f = ?", []param{{"-3.3895314e+38", types.T_varchar.ToType()}}, true, 1},
+		{"bf16 next float32 above max binary double", "f = ?", []param{{"3.3895316e+38", types.T_float64.ToType()}}, true, 0},
+		// as for a literal, only a column narrows the marker
+		{"bf16 expression sql decimal", "cast(id as bf16) = ?", []param{sqlDecimal}, false, 0},
+		{"float4 expression binary double", "cast(id as float4) = ?", []param{{"1.1", types.T_float64.ToType()}}, true, 0},
+		{"bf16 expression in sql decimal", "cast(id as bf16) in (?, 9)", []param{sqlDecimal}, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			bindings := make([]PreparedSourceBinding, len(tc.params))
+			values := make([]any, len(tc.params))
+			for i, p := range tc.params {
+				require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(p.value)), false, proc.Mp()))
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: p.binding}
+				value := ParamValue{Value: p.value, IsBinaryProtocol: tc.binary}
+				if !tc.binary {
+					value.EnableNumericPrefix = true
+					value.SourceType, value.HasSourceType = p.binding, true
+				}
+				values[i] = value
+			}
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select id from vecblock_t where "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+			require.NoError(t, err)
+			narrowed, filters := 0, 0
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					filters++
+					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" &&
+							types.T(expr.Typ.Id).IsLowPrecisionFloat() && function.ContainsParameter(fn.Args[0]) {
+							narrowed++
+						}
+						return nil
+					}))
+				}
+			}
+			require.Positive(t, filters)
+			require.Equal(t, tc.narrowed, narrowed, bound.Plan.String())
+			if tc.narrowed > 0 {
+				require.True(t, bound.ValueDependent, "a narrowed marker must not enter the type-only cache")
 			}
 		})
 	}

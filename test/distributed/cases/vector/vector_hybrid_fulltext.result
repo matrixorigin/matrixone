@@ -1341,6 +1341,104 @@ Project  𝄀
 select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 ➤ same_post[-7,1,0]  𝄀
 1
+create view v_ft_ivfflat as select * from t_ft_ivfflat;
+create view v_ft2_hnsw as select * from t_ft2_hnsw;
+explain select id from v_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", true)
+➤ AP QUERY PLAN ON ONE CN(12 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_ivfflat.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hybrid_ft_vec.t_ft_ivfflat  𝄀
+                    Filter Cond: (t_ft_ivfflat.tag = 1)  𝄀
+                    Block Filter Cond: (t_ft_ivfflat.tag = 1)  𝄀
+                    Runtime Filter Probe: t_ft_ivfflat.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_ivfflat.id)  𝄀
+                    Runtime Filter Build: #[15,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[13,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3, NProbe: 5  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfflat.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec.t_ft_ivfflat  𝄀
+                                      Filter Cond: (t_ft_ivfflat.tag = 1)  𝄀
+                                      Block Filter Cond: (t_ft_ivfflat.tag = 1)  𝄀
+                                      Runtime Filter Probe: t_ft_ivfflat.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select (select group_concat(id order by id) from (select id from v_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) as same_view, (select group_concat(id order by id) from (select id from (select * from t_ft_ivfflat) d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) as same_derived, (select group_concat(id order by id) from (with d as (select * from t_ft_ivfflat) select id from d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) as same_cte;
+➤ same_view[-6,8,0]  ¦  same_derived[-6,8,0]  ¦  same_cte[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select (select group_concat(id order by id) from (select id from v_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) as same_view, (select group_concat(id order by id) from (select id from (select * from t_ft_ivfflat) d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) as same_derived, (select group_concat(id order by id) from (with d as (select * from t_ft_ivfflat) select id from d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) as same_cte;
+➤ same_view[-6,8,0]  ¦  same_derived[-6,8,0]  ¦  same_cte[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+explain select id from v_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_hnsw.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hybrid_ft_vec.t_ft2_hnsw  𝄀
+                    Filter Cond: (t_ft2_hnsw.tag = 1)  𝄀
+                    Block Filter Cond: (t_ft2_hnsw.tag = 1)  𝄀
+                    Runtime Filter Probe: t_ft2_hnsw.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_hnsw.id)  𝄀
+                    Runtime Filter Build: #[15,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[13,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_hnsw.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec.t_ft2_hnsw  𝄀
+                                      Filter Cond: (t_ft2_hnsw.tag = 1)  𝄀
+                                      Block Filter Cond: (t_ft2_hnsw.tag = 1)  𝄀
+                                      Runtime Filter Probe: t_ft2_hnsw.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select (select group_concat(id order by id) from (select id from v_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) as same_view, (select group_concat(id order by id) from (select id from (select * from t_ft2_hnsw) d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) as same_derived, (select group_concat(id order by id) from (with d as (select * from t_ft2_hnsw) select id from d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) as same_cte;
+➤ same_view[-6,8,0]  ¦  same_derived[-6,8,0]  ¦  same_cte[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select (select group_concat(id order by id) from (select id from v_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) as same_view, (select group_concat(id order by id) from (select id from (select * from t_ft2_hnsw) d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) as same_derived, (select group_concat(id order by id) from (with d as (select * from t_ft2_hnsw) select id from d where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) as same_cte;
+➤ same_view[-6,8,0]  ¦  same_derived[-6,8,0]  ¦  same_cte[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from v_ft_ivfflat where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) = (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) as same_view_distance, (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from (select * from t_ft_ivfflat) d2 where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) = (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from t_ft_ivfflat where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) as same_derived_distance;
+➤ same_view_distance[-6,8,0]  ¦  same_derived_distance[-6,8,0]  𝄀
+1  ¦  1
+select (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from v_ft2_hnsw where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) = (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) as same_view_distance, (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from (select * from t_ft2_hnsw) d2 where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) = (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from t_ft2_hnsw where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) as same_derived_distance;
+➤ same_view_distance[-6,8,0]  ¦  same_derived_distance[-6,8,0]  𝄀
+1  ¦  1
+select (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from v_ft_ivfflat where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) = (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from t_ref_ft where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) as same_as_exact;
+➤ same_as_exact[-6,8,0]  𝄀
+1
+select (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from v_ft2_hnsw where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) = (select group_concat(concat(id, ':', round(d, 4)) order by id) from (select id, l2_distance(v,'[0,0,0]') d from t_ref_ft2 where match(body) against('needle') and tag = 1 order by d limit 3 by rank with option 'mode=pre') x) as same_as_exact;
+➤ same_as_exact[-6,8,0]  𝄀
+1
+drop view v_ft_ivfflat;
+drop view v_ft2_hnsw;
 select * from hnsw_search('{}', '{}', '[0,0,0]');
 not supported: table function 'hnsw_search' not supported
 select * from ivfpq_search('{}', '{}', '[0,0,0]');

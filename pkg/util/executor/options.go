@@ -130,6 +130,37 @@ func (opts Options) WithDatabase(database string) Options {
 	return opts
 }
 
+// WithIndexMaintenanceSpec supplies provenance for exactly one generated TVF
+// statement. It must not be applied to a transaction's arbitrary SQL.
+func (opts Options) WithIndexMaintenanceSpec(spec *IndexMaintenanceSpec) Options {
+	opts.indexMaintenanceSpec = spec.Clone()
+	return opts
+}
+
+func (opts Options) IndexMaintenanceSpec() *IndexMaintenanceSpec {
+	return opts.indexMaintenanceSpec.Clone()
+}
+
+func (opts Options) WithIndexMaintenanceValidator(validator IndexMaintenanceValidator) Options {
+	opts.indexMaintenanceValidator = validator
+	return opts
+}
+
+func (opts Options) IndexMaintenanceValidator() IndexMaintenanceValidator {
+	return opts.indexMaintenanceValidator
+}
+
+// WithIndexRelationPolicy restricts resolution of every statement in this
+// invocation, including statements executed by an ExecTxn callback.
+func (opts Options) WithIndexRelationPolicy(policy *IndexRelationPolicy) Options {
+	opts.indexRelationPolicy = policy.Clone()
+	return opts
+}
+
+func (opts Options) IndexRelationPolicy() *IndexRelationPolicy {
+	return opts.indexRelationPolicy.Clone()
+}
+
 // WithAccountID execute sql in account
 func (opts Options) WithAccountID(accountID uint32) Options {
 	opts.accountID = accountID
@@ -303,6 +334,14 @@ func (opts StatementOption) SessionIdentity() (accountName, roleName string) {
 	return opts.accountName, opts.roleName
 }
 
+// WithSessionUser propagates the authenticated user name to child SQL.
+func (opts StatementOption) WithSessionUser(userName string) StatementOption {
+	opts.userName = userName
+	return opts
+}
+
+func (opts StatementOption) SessionUser() string { return opts.userName }
+
 func (opts StatementOption) WithUserID(userID uint32) StatementOption {
 	opts.userId = userID
 	return opts
@@ -391,6 +430,14 @@ func (opts Options) WithUserTxn() Options {
 
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
+}
+
+// WithAuthorizationSnapshot borrows a live statement admission for an
+// independent read-only SI transaction. ExecTxn retains transaction cleanup;
+// the statement owner, not the executor, ends the admission.
+func (opts Options) WithAuthorizationSnapshot(admission *client.SnapshotAdmission) Options {
+	opts.txnOpts = append(opts.txnOpts, client.WithAuthorizationSnapshot(admission))
+	return opts
 }
 
 // WithTxnIsolation overrides the runtime default for a newly created

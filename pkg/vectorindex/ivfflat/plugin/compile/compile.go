@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -247,10 +248,10 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	}
 
 	// 4.b + 4.c: build the index. Both kmeans (4.b) and entry assignment (4.c)
-	// scan the source table, but queries never re-read it (re-rank fetches only a
-	// handful of rows), so run the build's reads with SkipMemoryCacheWrites — this
-	// one-shot source scan must not evict the index-entry working set the queries
-	// actually hit from the fileservice cache. The optional-interface keeps the
+	// scan the whole source table, while queries read only the candidate rows of
+	// it, so run the build's reads with SkipMemoryCacheWrites — this one-shot
+	// source scan must not evict the working set the queries hit from the
+	// fileservice cache. The optional-interface keeps the
 	// CompileContext interface (and its plugin mocks) untouched; non-supporting
 	// contexts just build directly.
 	buildIndex := func() error {
@@ -428,6 +429,12 @@ func ivfIndexCentroidsTable(
 
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 	indexName := indexDef.IndexName
+	runBuild := func() error {
+		if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+			return ctx.RunSql(sql)
+		}
+		return maintenance.RunSQL(ctx, sql, "ivf_create", indexName)
+	}
 
 	if async {
 		if forceSync {
@@ -437,7 +444,7 @@ func ivfIndexCentroidsTable(
 			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
 				return err
 			}
-			if err = ctx.RunSql(sql); err != nil {
+			if err = runBuild(); err != nil {
 				return err
 			}
 			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end"); err != nil {
@@ -464,7 +471,7 @@ func ivfIndexCentroidsTable(
 	if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
 		return err
 	}
-	if err = ctx.RunSql(sql); err != nil {
+	if err = runBuild(); err != nil {
 		return err
 	}
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end")

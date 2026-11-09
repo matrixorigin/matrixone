@@ -265,7 +265,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
 	// FSP is supplied as the single argument and overrides this below.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -290,7 +290,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	// SYSDATE() follows the same default FSP=0 rule as NOW() and
 	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -496,9 +496,10 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
-	defExprInShowColumns       = 4 //default expr in the show columns.
-	generatedExprOrigin  uint8 = 5 // generated column expression origin string
-	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	defExprInShowColumns        = 4 //default expr in the show columns.
+	generatedExprOrigin   uint8 = 5 // generated column expression origin string
+	generatedExprExtra    uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	generatedDefaultExtra uint8 = 7 // expression default Extra: "DEFAULT_GENERATED" or ""
 )
 
 // Geometry subtype and SRID live in the column type's Scale and Width (see
@@ -566,10 +567,19 @@ func geometryShowColumnType(typ *types.Type) string {
 
 // columnDefaultValue renders a stored default for information_schema.COLUMNS
 // and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
-// its value, like MySQL. Other defaults keep their origin text.
-func columnDefaultValue(origin string) []byte {
+// its value, like MySQL. Expression-classified defaults keep their origin
+// text; literal-classified DECIMAL/BIT defaults render the resolved value at
+// the declared type (issue #31161), and every unrecognized shape falls back
+// to the origin text.
+func columnDefaultValue(def *plan.Default) []byte {
+	origin := def.OriginString
 	if origin == "" || strings.EqualFold(origin, "null") {
 		return nil
+	}
+	if !isExpressionDefault(def.Expr, origin) {
+		if rendered, ok := renderTypedLiteralDefault(def); ok {
+			return functionUtil.QuickStrToBytes(rendered)
+		}
 	}
 	n := len(origin)
 	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
@@ -593,10 +603,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 	tp, null := p2.GetValue(0)
 	if null {
-		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 6], but got NULL")
+		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 7], but got NULL")
 	}
-	if tp > generatedExprExtra {
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 6], but got %d", tp))
+	if tp > generatedDefaultExtra {
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 7], but got %d", tp))
 	}
 
 	var f func(s []byte) ([]byte, error)
@@ -618,7 +628,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return columnDefaultValue(def.OriginString), nil
+			return columnDefaultValue(def), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
@@ -670,7 +680,23 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return columnDefaultValue(def.OriginString), nil
+			return columnDefaultValue(def), nil
+		}
+	case generatedDefaultExtra:
+		// EXTRA for a column default: DEFAULT_GENERATED for an expression
+		// default, empty otherwise (issue #31161). The SQL surfaces compare
+		// length(...) > 0, so a literal default returns a non-NULL empty
+		// string.
+		f = func(s []byte) ([]byte, error) {
+			def := new(plan.Default)
+			err := types.Decode(s, def)
+			if err != nil {
+				return nil, err
+			}
+			if isExpressionDefault(def.Expr, def.OriginString) {
+				return functionUtil.QuickStrToBytes(defaultGeneratedExtra), nil
+			}
+			return []byte{}, nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
@@ -1151,6 +1177,15 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 			return int64(typ.Width), true
 		}
 		return 22, true
+	case types.T_bf16:
+		// the significand bits, the implicit leading bit included
+		return 8, true
+	case types.T_float16:
+		return 11, true
+	case types.T_float8:
+		return 4, true
+	case types.T_float4:
+		return 2, true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width > 0 {
 			return int64(typ.Width), true
@@ -1618,6 +1653,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 			v, null := fp.GetValue(idx)
 			return float64(v), null, nil
 		}
+	case types.T_bf16:
+		p.float = lowPrecisionIntervalFloat[types.BF16](v)
+	case types.T_float16:
+		p.float = lowPrecisionIntervalFloat[types.Float16](v)
+	case types.T_float8:
+		p.float = lowPrecisionIntervalFloat[types.Float8](v)
+	case types.T_float4:
+		p.float = lowPrecisionIntervalFloat[types.Float4](v)
 	case types.T_int64:
 		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
 		p.float = func(idx uint64) (float64, bool, error) {
@@ -1745,6 +1788,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
 	}
 	return p, nil
+}
+
+func lowPrecisionIntervalFloat[T types.LowPrecFloat](v *vector.Vector) func(uint64) (float64, bool, error) {
+	fp := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(idx uint64) (float64, bool, error) {
+		v, null := fp.GetValue(idx)
+		return float64(v.ToFloat32()), null, nil
+	}
 }
 
 func (p intervalParam) useDecimalComparison() bool {
@@ -2906,6 +2957,7 @@ func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultW
 }
 
 func makeUUIDSwapFlagGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
+	// typeswitch:partial low-precision floats (bf16/f16/f8/f4) are rejected as index keys (lowPrecisionKeyError), so this physical-serial path never receives them
 	switch param.GetType().Oid {
 	case types.T_bool:
 		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
@@ -3705,6 +3757,7 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 }
 
 func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
+	// typeswitch:partial scalar low-precision floats (bf16/f16/f8/f4) are not serial/key-packable: rejected as index keys (lowPrecisionKeyError) and the default returns the unsupported-type error
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3766,6 +3819,22 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 			val := vector.GetFixedAtNoTypeCheck[float64](v, idx)
 			ps.EncodeFloat64(val)
 		}, nil
+	case types.T_bf16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeBF16(vector.GetFixedAtNoTypeCheck[types.BF16](v, idx))
+		}, nil
+	case types.T_float16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat16(vector.GetFixedAtNoTypeCheck[types.Float16](v, idx))
+		}, nil
+	case types.T_float8:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat8(vector.GetFixedAtNoTypeCheck[types.Float8](v, idx))
+		}, nil
+	case types.T_float4:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat4(vector.GetFixedAtNoTypeCheck[types.Float4](v, idx))
+		}, nil
 	case types.T_date:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Date](v, idx)
@@ -3820,6 +3889,7 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
@@ -3917,6 +3987,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		panic("for builtInSerial(), bitmap should not be nil")
 	}
 	hasNull := v.HasNull()
+	// typeswitch:partial scalar low-precision floats (bf16/f16/f8/f4) are not serial/key-packable: rejected as index keys (lowPrecisionKeyError) and not packed by serial
 	switch v.GetType().Oid {
 	case types.T_bool:
 		s := vector.ExpandFixedCol[bool](v)
@@ -4334,6 +4405,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
@@ -4409,6 +4481,18 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_bf16:
+		rs := vector.MustFunctionResult[types.BF16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float16:
+		rs := vector.MustFunctionResult[types.Float16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float8:
+		rs := vector.MustFunctionResult[types.Float8](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float4:
+		rs := vector.MustFunctionResult[types.Float4](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
@@ -4447,6 +4531,7 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
@@ -4465,7 +4550,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
+func serialExtractExceptStrings[T types.Number | types.BF16 | types.Float16 | types.Float8 | types.Float4 | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4548,9 +4633,30 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 	return nil
 }
 
+// serialExtractCheckCell validates an element extracted as a vecf8/vecf4 value: it must be
+// a stored cell of that format and, when the type declares a dimension, of that dimension.
+func serialExtractCheckCell(typ *types.Type, value []byte) error {
+	f, ok := typ.Oid.BlockScaledFormat()
+	if !ok {
+		return nil
+	}
+	c, err := types.ParseBlockScaledCell(value)
+	if err != nil {
+		return err
+	}
+	if c.Format != f {
+		return moerr.NewInvalidInputNoCtxf("%s cell is not a %s cell", c.Format, f)
+	}
+	if int(typ.Width) != types.MaxArrayDimension && int(typ.Width) != c.Dim {
+		return moerr.NewArrayDefMismatchNoCtx(int(typ.Width), c.Dim)
+	}
+	return nil
+}
+
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
+	resTyp := result.GetResultVector().GetType()
 
 	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
 	if p2.WithAnyNullValue() {
@@ -4578,6 +4684,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			}
 
 			if value, ok := el.([]byte); ok {
+				if err := serialExtractCheckCell(resTyp, value); err != nil {
+					return err
+				}
 				if err := result.AppendBytes(value, false); err != nil {
 					return err
 				}
@@ -4615,6 +4724,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 		}
 
 		if value, ok := tuple[v2].([]byte); ok {
+			if err := serialExtractCheckCell(resTyp, value); err != nil {
+				return err
+			}
 			if err := result.AppendBytes(value, false); err != nil {
 				return err
 			}
@@ -5274,6 +5386,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			return err
 		}
 		if isNull {
+			// Invalid bytes for the requested charset already produced NULL;
+			// attach the boundary diagnostic MySQL requires (Warning 1300).
+			appendBinaryToTextUtf8Warning(proc, value)
 			err = rs.AppendMustNullForBytesResult()
 		} else {
 			err = rs.AppendMustBytesValue(value)

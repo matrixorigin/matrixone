@@ -64,7 +64,12 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	}
 
 	for i := range node.BlockFilterList {
-		node.BlockFilterList[i] = r.constantFold(node.BlockFilterList[i], proc)
+		original := node.BlockFilterList[i]
+		folded := r.constantFold(original, proc)
+		if folded != nil && original.GetCandidateFilter() {
+			folded.CandidateFilter = true
+		}
+		node.BlockFilterList[i] = folded
 	}
 
 	for i := range node.ProjectList {
@@ -139,6 +144,9 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if expr == nil {
 		return expr
 	}
+	if function.RequiresRuntimeEvaluation(expr) {
+		return expr
+	}
 
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is meaningful as an argument to temporal functions, but the
@@ -190,7 +198,9 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 
 			// Nullable IN-lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
-				vec.InplaceSortAndCompact()
+				if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+					return expr
+				}
 			}
 
 			data, err := vec.MarshalBinary()
@@ -1286,7 +1296,7 @@ func ContainsTruncatedFloatTextConversion(expr *plan.Expr) bool {
 			id, _ := function.DecodeOverloadID(fn.Func.Obj)
 			target := types.T(expr.Typ.Id)
 			if (id == function.CAST || id == function.CAST_STRICT || id == function.CAST_ASSIGN || id == function.CAST_IGNORE) &&
-				(target == types.T_float32 || target == types.T_float64) && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+				target.IsFloat() && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
 				source := fn.Args[0]
 				if lit := source.GetLit(); lit != nil && !lit.Isnull && !lit.IsBin {
 					if value, ok := lit.Value.(*plan.Literal_Sval); ok && function.FloatTextTruncated(value.Sval) {

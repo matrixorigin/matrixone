@@ -451,7 +451,9 @@ func directRuntimeMatches(ses *Session, vars []migratedSystemVariable) bool {
 			return false
 		}
 	}
-	return count == 3
+	// optimizer_hints has no CN-global runtime side effect; main exports only
+	// the two runtime filter limits as CN-global side effects.
+	return count == 2
 }
 
 func directTypedMode(ctx context.Context, vars []*query.MigrateSystemVariable) (string, []migratedSystemVariable, error) {
@@ -564,7 +566,8 @@ type directTableMigrationCompiler struct {
 	resolved bool
 }
 
-func (c *directTableMigrationCompiler) Resolve(db, name string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *directTableMigrationCompiler) Resolve(db, name string, snapshot *plan.Snapshot, output *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	output.Reset()
 	p := c.proof
 	account, err := c.GetAccountId()
 	if err != nil {
@@ -573,7 +576,13 @@ func (c *directTableMigrationCompiler) Resolve(db, name string, snapshot *plan.S
 	if snapshot != nil || c.GetSnapshot() != nil || account != p.AccountID || db != p.DatabaseName || name != p.TableName {
 		return nil, nil, directMigrationRefusal()
 	}
-	ref, def, err := c.CompilerContext.Resolve(db, name, snapshot)
+	// Do not publish a borrowed relation until its catalog identity is verified.
+	var resolved plan2.TableResolution
+	var requested *plan2.TableResolution
+	if output != nil {
+		requested = &resolved
+	}
+	ref, def, err := c.CompilerContext.Resolve(db, name, snapshot, requested)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -583,13 +592,17 @@ func (c *directTableMigrationCompiler) Resolve(db, name string, snapshot *plan.S
 		return nil, nil, directMigrationRefusal()
 	}
 	c.resolved = true
+	if output != nil {
+		output.Borrow = resolved.Borrow
+	}
 	return ref, def, nil
 }
 
 func (c *directTableMigrationCompiler) ResolveById(uint64, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	return nil, nil, directMigrationRefusal()
 }
-func (c *directTableMigrationCompiler) ResolveIndexTableByRef(*plan.ObjectRef, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *directTableMigrationCompiler) ResolveIndexTableByRef(_ *plan.ObjectRef, _ string, _ *plan.Snapshot, output *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	output.Reset()
 	return nil, nil, directMigrationRefusal()
 }
 

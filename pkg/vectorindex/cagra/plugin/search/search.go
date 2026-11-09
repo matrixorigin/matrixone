@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -192,6 +193,11 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 		metric.QuantizationType(idxcfg.CuvsCagra.Quantization) == metric.Quantization_F32 {
 		idxcfg.CuvsCagra.Quantization = uint16(metric.Quantization_F16)
 	}
+	// A query vector the index cannot store is rejected.
+	if err := cuvscdc.CheckQuery(req.QueryPayload, queryType, queryType == types.T_array_float32 &&
+		metric.QuantizationType(idxcfg.CuvsCagra.Quantization) == metric.Quantization_F16); err != nil {
+		return nil, err
+	}
 	tblcfg := vectorindex.IndexTableConfig{
 		DbName:             spec.SourceTable.SchemaName,
 		SrcTable:           spec.SourceTableDef.Name,
@@ -228,7 +234,7 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 	}
 	if req.HasMembershipFilter {
 		if s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
-			proc.GetService(), "cagra", spec.SourceTableDef, req.MembershipFilter); err != nil {
+			proc.Ctx, proc.GetService(), "cagra", spec.SourceTableDef, req.MembershipFilter); err != nil {
 			return nil, err
 		}
 	}

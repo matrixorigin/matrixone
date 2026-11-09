@@ -806,12 +806,17 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 
 			case JoinSideMark:
+				// Only existential markers may use the broader totality proof.
+				// Recheck the current inputs and predicates: earlier rewrites may
+				// have changed them since the marker was created. IN/ANY/ALL keep
+				// their existing three-valued conversion gate.
+				if !builder.subqueryPredicatePlanningDisabled() &&
+					!areTruncationSafePredicates(node.OnList) &&
+					!(node.MarkExistenceOnly && builder.existentialJoinPredicatesAreTotal(node.OnList, node.Children...)) {
+					cantPushdown = append(cantPushdown, filter)
+					break
+				}
 				if isMarkColumn(filter, node.BindingTags[0]) {
-					if !builder.subqueryPredicatePlanningDisabled() &&
-						!areTruncationSafePredicates(node.OnList) {
-						cantPushdown = append(cantPushdown, filter)
-						break
-					}
 					node.JoinType = plan.Node_SEMI
 					if !builder.subqueryPredicatePlanningDisabled() {
 						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
@@ -823,11 +828,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					funcID, _ := function.DecodeOverloadID(fExpr.Func.GetObj())
 					if funcID == function.ISTRUE && len(fExpr.Args) == 1 &&
 						isMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
-						if !builder.subqueryPredicatePlanningDisabled() &&
-							!areTruncationSafePredicates(node.OnList) {
-							cantPushdown = append(cantPushdown, filter)
-							break
-						}
 						node.JoinType = plan.Node_SEMI
 						if !builder.subqueryPredicatePlanningDisabled() {
 							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
@@ -837,11 +837,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					}
 					if filter.Typ.NotNullable && fExpr.Func.ObjName == "not" && len(fExpr.Args) == 1 &&
 						isTrueMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
-						if !builder.subqueryPredicatePlanningDisabled() &&
-							!areTruncationSafePredicates(node.OnList) {
-							cantPushdown = append(cantPushdown, filter)
-							break
-						}
 						node.JoinType = plan.Node_ANTI
 						if !builder.subqueryPredicatePlanningDisabled() {
 							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
@@ -1615,7 +1610,8 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 &&
 		(node.Limit != nil || node.Offset != nil) {
 		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN && !scanHasFullTextBooleanComposition(child) {
+		if (child.NodeType == plan.Node_TABLE_SCAN && !scanHasFullTextBooleanComposition(child)) ||
+			builder.canPushLimitToSort(node, child) {
 			if limit, offset, ok := composePagination(
 				child.Limit, child.Offset, node.Limit, node.Offset,
 			); ok {
@@ -1638,6 +1634,49 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 			}
 		}
 	}
+}
+
+// canPushLimitToSort recognizes the row-preserving boundary above a derived
+// table's ordering. Give the existing sort ownership of the composed pagination
+// so compilation can choose Top-N, without pushing demand below the ordering.
+func (builder *QueryBuilder) canPushLimitToSort(project, sort *plan.Node) bool {
+	if sort.NodeType != plan.Node_SORT || len(project.Children) != 1 || len(sort.Children) != 1 ||
+		len(project.OrderBy) != 0 || project.RankOption != nil || sort.RankOption != nil ||
+		len(project.FilterList) != 0 || len(sort.FilterList) != 0 {
+		return false
+	}
+	// The final PROJECT's literal LIMIT 0 also suppresses producer steps.
+	// Moving it to SORT would omit only the consumer, leaving recursive CTE
+	// producers waiting for receivers that compilation never constructs.
+	if limit, ok := getLiteralUint64(project.Limit); ok && limit == 0 {
+		return false
+	}
+	if _, expands := DecodeGroupingSetExpandOption(project.ExtraOptions); expands {
+		return false
+	}
+	// Computed ordering can become a specialized search whose candidate budget
+	// is not interchangeable with outer pagination. Preserve that boundary,
+	// including keys still materialized by an input PROJECT before inlining.
+	for _, order := range sort.OrderBy {
+		if order.Expr.GetCol() == nil {
+			return false
+		}
+	}
+	var inputProjection []*plan.Expr
+	input := builder.qry.Nodes[sort.Children[0]]
+	if input.NodeType == plan.Node_PROJECT {
+		inputProjection = input.ProjectList
+	}
+	// SORT applies its own projection after ordering/pagination. Neither that
+	// projection nor the outer one may hide evaluations when demand moves.
+	for _, exprs := range [3][]*plan.Expr{project.ProjectList, sort.ProjectList, inputProjection} {
+		for _, expr := range exprs {
+			if expr.GetCol() == nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {

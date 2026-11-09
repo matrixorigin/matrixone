@@ -46,7 +46,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if len(dbName) == 0 {
 		dbName = ctx.DefaultDatabase()
 	}
-	_, t, err := ctx.Resolve(dbName, tblName, nil)
+	_, t, err := resolveIndexMaintenanceSource(ctx, tbl, dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}

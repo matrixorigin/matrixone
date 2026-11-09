@@ -226,6 +226,8 @@ message IndexScanInfo {
   repeated string parts = 4;
   bool is_unique = 5;
   string index_table_name = 6;
+  // This physical access requires the captured execution and local placement.
+  bool requires_captured_execution = 7;
 }
 
 enum AggregateConfigType {
@@ -326,6 +328,10 @@ message Expr {
   }
 
   int32 aux_id = 16;
+  // Keep these flags next to aux_id so they use its alignment padding.
+  // A proved necessary storage condition; early filtering preserves diagnostics.
+  // The complete SQL residual remains authoritative.
+  bool candidate_filter = 27;
   double ndv = 17;
   double selectivity = 18;
   // prepared_numeric is explicit planner metadata, not an executor memo
@@ -1381,6 +1387,9 @@ message Node {
   // MARK only: a proven Boolean existence consumer with total, pure predicates.
   // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
   bool mark_existence_only = 96;
+
+  // TABLE_SCAN only: the scan reads a small share of each object it touches.
+  bool narrow_scan = 97;
 }
 
 message SnapshotExtraInfo {
@@ -1909,6 +1918,10 @@ message Query {
   IntegerPrecisionGraph integer_precision = 20;
   // Logical targets of exclusive SELECT locks, retained across optimization.
   repeated SelectLockReference select_lock_references = 21;
+
+  // Access-path choice depends on execution-time values or context.
+  // Rebuild from the original owner instead of reusing a physical choice.
+  bool execution_dependent_access = 22;
 }
 
 message TransationControl {

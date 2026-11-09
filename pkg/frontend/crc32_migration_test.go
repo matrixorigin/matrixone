@@ -38,7 +38,7 @@ func crc32MigrationTestPlan(t testing.TB, sql string) *plan.Plan {
 	t.Helper()
 	stmt := tree.NewPrepareString("migration_scalar", sql)
 	defer stmt.Free()
-	p, err := plan2.BuildPlan(plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false)
+	p, err := plan2.BuildPlan(plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	return p
 }
