@@ -200,6 +200,11 @@ func newDiskCache(
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.cached(path)
+		if o := ret.download(path); o != nil {
+			if n := o.takeServed(); n > 0 {
+				ret.preloads.read(path, n)
+			}
+		}
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -712,7 +717,7 @@ func (d *DiskCache) writeEntry(
 ) (bool, error) {
 	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(entry.Data)), nil
-	}, false, claimPublication, false)
+	}, false, claimPublication, notWholeFill)
 	if writeErr != nil {
 		return false, d.observeWriteResult(diskPath, writeErr)
 	}
@@ -730,7 +735,7 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
-	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, false)
+	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil, notWholeFill)
 }
 
 func (d *DiskCache) removeEmptyDirectory(path string) {
@@ -825,7 +830,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 	claimPublication func() bool,
-	trackDownload bool,
+	fill wholeFill,
 ) (written bool, err error) {
 	defer func() {
 		d.evictForDiskFull(ctx, err)
@@ -898,8 +903,8 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	}()
 	var download *objectDownload
 	var dst io.Writer = f
-	if trackDownload {
-		download = d.startDownload(diskPath, f.Name())
+	if fill != notWholeFill {
+		download = d.startDownload(diskPath, f.Name(), fill == storageFill)
 		dst = downloadProgressWriter{w: f, download: download}
 		endUpdate := doneUpdate
 		doneUpdate = func() error {
@@ -1417,13 +1422,47 @@ func (d *DiskCache) setFile(
 	openReader func(context.Context) (io.ReadCloser, error),
 	asyncFinalize bool,
 ) error {
+	return d.fillFile(ctx, filePath, openReader, asyncFinalize, storageFill)
+}
+
+// setFileContent caches content already in memory as the whole file of filePath.
+func (d *DiskCache) setFileContent(
+	ctx context.Context,
+	filePath string,
+	content []byte,
+	asyncFinalize bool,
+) error {
+	return d.fillFile(ctx, filePath, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(content)), nil
+	}, asyncFinalize, contentFill)
+}
+
+// wholeFill is how a write fills a disk-cache file.
+type wholeFill int
+
+const (
+	// notWholeFill writes a range or an index file.
+	notWholeFill wholeFill = iota
+	// contentFill writes a whole object from bytes in memory.
+	contentFill
+	// storageFill downloads a whole object from object storage.
+	storageFill
+)
+
+func (d *DiskCache) fillFile(
+	ctx context.Context,
+	filePath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	fill wholeFill,
+) error {
 	path, err := ParsePath(filePath)
 	if err != nil {
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
 	d.wholeFills.Add(1)
-	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, true)
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil, fill)
 	d.wholeFills.Add(-1)
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
