@@ -193,24 +193,38 @@ firing; service decorators must preserve the query condition.
 
 ## Bounded recovery work and scheduling
 
-Normal runner fetching keeps its existing single query. An unclaimed SQL defer
-(including a busy guard, exhausted credit, unavailable store, or failed CAS)
-or a nonempty receipt worker enables exceptional fetching. A monotonic
-failure generation prevents a concurrent defer from being lost while a scan
-finishes. A complete scan with no newer defer and an idle receipt worker exits
-this mode.
+Normal runner fetching keeps its existing service query. An unclaimed SQL
+defer (including a busy guard, exhausted credit, unavailable store, or failed
+CAS) or a nonempty receipt worker enables exceptional fetching. A full normal
+page with locally running or recently completed entries removed after LIMIT
+also arms a fair wave when queue capacity remains. A short or empty normal
+page from an untrusted service or storage decorator likewise arms a wave:
+the decorator may have filtered rows after LIMIT. Reuse the existing query and
+holder path; do not issue a separate trust probe. A monotonic failure
+generation prevents a concurrent defer from being lost while a scan finishes.
+A complete scan with no withheld siblings, no newer defer and an idle receipt
+worker exits this mode.
+If the obstruction remains, a later normal poll can arm another bounded wave;
+an untrusted decorator that repeatedly returns short pages can therefore cause
+continuing periodic scans, whose cost must be measured.
 
 The runner groups a fetched batch by canonical SQL parent and submits at most
 one firing per parent, choosing the smallest task ID as a stable order. It
 leaves siblings in storage and continues submitting other parents and non-SQL
 tasks. This avoids repeatedly racing the parent admission guard; the guard
 remains necessary so a stalled admission cannot occupy every runner slot.
-Grouping enters exceptional fetching once and rewinds its cursor before the
-earliest withheld sibling. The selected runner entry records whether siblings
-were withheld. After that executor returns a selected, non-deferred outcome,
+Grouping enters exceptional fetching once. Within a fair wave, it records a
+single withheld-work flag and continues the cursor past the inspected page;
+when the wave finishes, that flag starts a new wave to revisit the withheld
+siblings. Immediately rewinding every grouped sibling could reduce a 32-row
+page to one task per turn and delay unrelated parents behind a blocked one.
+An entry rejected because the runner queue is full still rewinds immediately.
+The selected runner entry records whether siblings were withheld. After that
+executor returns a selected, non-deferred outcome,
 the runner removes it, releases its slot and offers a nonblocking wakeup to
 the existing fetch loop. Guard contention or any other deferred outcome does
-not wake immediately. A wakeup is a scheduling hint, not evidence of claim,
+not wake immediately. The hint checks runner lifecycle, not the removed entry's
+context, which removal cancels. A wakeup is a scheduling hint, not evidence of claim,
 completion or rollback. It causes at most four fetch attempts, and the runner
 allows at most 32 additional attempts per configured fetch interval. A full
 queue, cancellation or storage error stops the burst; the normal timer
@@ -330,7 +344,10 @@ cancellation, timeout, real and unknown SQL errors, and recovery after a long
 metadata outage. Challenge same-parent bursts, long and blocked admissions,
 unrelated work, coalesced wakes, queue-full rewind, wave rollover and shutdown.
 Challenge raw-page snapshots with concurrent allocation, nullable or malformed
-data, decorators and cancellation. Challenge stale batches with concurrent admission, malformed
+data, decorators and cancellation, including a late allocation behind a locally
+running or post-LIMIT-filtered prefix. Challenge a blocked parent with more
+than one page of withheld siblings followed by another parent. Challenge stale
+batches with concurrent admission, malformed
 IDs, generation bounds, and large backlogs. Validate fresh and upgraded
 catalogs, SQL permission/warning behavior, one- and multi-CN operation,
 non-SQL isolation, fixed logging, queue bounds and no business replay.
