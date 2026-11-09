@@ -2014,7 +2014,7 @@ func TestGenViewTableDefPreservesJSONValueReturnType(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateView().GetTableDef()
 	require.NotNil(t, tableDef)
@@ -2026,7 +2026,7 @@ func TestGenViewTableDefPreservesJSONValueReturnType(t *testing.T) {
 	reparsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
 	require.NoError(t, err)
 	defer reparsed.Free()
-	rebound, err := BuildPlan(ctx, reparsed, false)
+	rebound, err := BuildPlan(ctx, reparsed, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, tableDef.Cols[0].Typ, rebound.GetDdl().GetCreateView().GetTableDef().Cols[0].Typ)
 }

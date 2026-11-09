@@ -148,7 +148,7 @@ func TestJSONValueBindingDoesNotRequireFeatureProtocol(t *testing.T) {
 			defer stmt.Free()
 			for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion134} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-				_, err = BuildPlan(compilerContext, stmt, false)
+				_, err = BuildPlan(compilerContext, stmt, false, nil)
 				require.NoError(t, err)
 			}
 		})
@@ -204,7 +204,7 @@ func TestJSONValueImplicitTypeSurvivesSQLRoundTrip(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			cols := built.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			defaultOrigin := cols[1].GetDefault().GetOriginString()
@@ -215,7 +215,7 @@ func TestJSONValueImplicitTypeSurvivesSQLRoundTrip(t *testing.T) {
 				`create table jv_origin_reparsed (doc json, d varchar(32) default `+defaultOrigin+`, g varchar(32) generated always as (`+generatedOrigin+`) stored)`, 1)
 			require.NoError(t, err)
 			defer reparsed.Free()
-			rebound, err := BuildPlan(ctx, reparsed, false)
+			rebound, err := BuildPlan(ctx, reparsed, false, nil)
 			require.NoError(t, err)
 			reboundCols := rebound.GetDdl().GetCreateTable().GetTableDef().GetCols()
 			require.Equal(t, cols[1].GetDefault(), reboundCols[1].GetDefault())

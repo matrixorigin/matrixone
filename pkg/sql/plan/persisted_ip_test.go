@@ -1493,7 +1493,7 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
@@ -1522,7 +1522,7 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, calendarSQL, 1)
 		require.NoError(t, err)
-		built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: calendarSQL}, stmt, false)
+		built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: calendarSQL}, stmt, false, nil)
 		stmt.Free()
 		if version < defines.MORPCVersion112 {
 			require.ErrorContains(t, err, "protocol version 112")
