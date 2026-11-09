@@ -3,6 +3,7 @@
 -- @desc: COPY ALTER preserves historical data, views, allocator and foreign keys across publication and rollback
 -- @label:bvt
 -- ALGORITHM=COPY is existing ALTER TABLE syntax; ADD/DROP PRIMARY KEY exercises the COPY ALTER path under test.
+drop snapshot if exists alter_copy_publication_snap;
 drop database if exists alter_copy_publication;
 create database alter_copy_publication;
 use alter_copy_publication;
@@ -28,6 +29,10 @@ select parent_id,v from v_t order by id;
 select count(*) as primary_columns from information_schema.columns where table_schema='alter_copy_publication' and table_name='t' and column_key='PRI';
 alter table t algorithm=copy, add primary key(id);
 select parent_id,v from t order by id;
+insert into t(parent_id,v) values(999,'invalid parent');
+delete from parent_t where id=1;
+select count(*) as row_count from t;
+select count(*) as parent_count from parent_t;
 select count(*) as foreign_keys from information_schema.table_constraints where table_schema='alter_copy_publication' and table_name='t' and constraint_type='FOREIGN KEY';
 drop snapshot alter_copy_publication_snap;
 drop view v_t;

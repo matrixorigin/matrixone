@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/stretchr/testify/require"
@@ -126,6 +127,7 @@ func issue28319MainIndependentPublication(t *testing.T, add bool) {
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
 		for _, table := range []string{"a", "b"} {
+			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s", name, table)))
 			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s where (id=1 and v=10) or (id=2 and v=20)", name, table)))
 			var tableName, ddl string
 			require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("show create table %s.%s", name, table)).Scan(&tableName, &ddl))
@@ -234,6 +236,7 @@ func issue28319MainKillAfterCopy(t *testing.T, add bool) {
 		case <-ctx.Done():
 			t.Fatal("killed ALTER did not terminate")
 		}
+		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
 		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=10) or (id=2 and v=20)"))
 		var table, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, "show create table "+name+".t").Scan(&table, &ddl))
@@ -489,7 +492,11 @@ func issue28319MainHeldGate(t *testing.T, add bool) {
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
 		for _, tbl := range []string{"a", "b"} {
+			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s", name, tbl)))
 			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s where (id=1 and v=10) or (id=2 and v=20)", name, tbl)))
+			var tableName, ddl string
+			require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("show create table %s.%s", name, tbl)).Scan(&tableName, &ddl))
+			require.Equal(t, add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
 		}
 	})
 }
@@ -550,11 +557,12 @@ func TestIssue28319MainSameTableRejectsStaleCopy(t *testing.T) {
 		release()
 		select {
 		case e := <-done:
-			require.Error(t, e)
+			requireIssue277xxMySQLError(t, e, moerr.ErrTxnWriteConflict)
 		case <-ctx.Done():
 			t.Fatal("stale ALTER did not terminate")
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
+		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
 		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=10) or (id=2 and v=20)"))
 		var tbl, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, "show create table "+name+".t").Scan(&tbl, &ddl))
@@ -639,6 +647,7 @@ func issue28319RefreshCopyFailure(t *testing.T, add bool) {
 		}
 		require.True(t, injected.Load())
 		require.EqualValues(t, 2, observer.copies.Load())
+		require.Equal(t, 3, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
 		require.Equal(t, 3, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=10) or (id=2 and v=20) or (id=3 and v=30)"))
 		var tbl, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, "show create table "+name+".t").Scan(&tbl, &ddl))

@@ -1,3 +1,4 @@
+drop snapshot if exists alter_copy_publication_snap;
 drop database if exists alter_copy_publication;
 create database alter_copy_publication;
 use alter_copy_publication;
@@ -47,6 +48,16 @@ parent_id    v
 1    first
 2    second
 1    third
+insert into t(parent_id,v) values(999,'invalid parent');
+Cannot add or update a child row: a foreign key constraint fails
+delete from parent_t where id=1;
+Cannot delete or update a parent row: a foreign key constraint fails
+select count(*) as row_count from t;
+row_count
+3
+select count(*) as parent_count from parent_t;
+parent_count
+2
 select count(*) as foreign_keys from information_schema.table_constraints where table_schema='alter_copy_publication' and table_name='t' and constraint_type='FOREIGN KEY';
 foreign_keys
 1
