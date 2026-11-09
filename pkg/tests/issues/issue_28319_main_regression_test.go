@@ -16,6 +16,7 @@ package issues
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,6 +31,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/stretchr/testify/require"
 )
+
+func issue28319Rows(t *testing.T, ctx context.Context, db *sql.DB, table string) [][2]int {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, "select id,v from "+table+" order by id,v")
+	require.NoError(t, err)
+	defer rows.Close()
+	var got [][2]int
+	for rows.Next() {
+		var row [2]int
+		require.NoError(t, rows.Scan(&row[0], &row[1]))
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+	return got
+}
+
+func TestIssue28319MainRowOracleRejectsDuplicate(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db := openIssue277xxDB(t, cn.GetServiceConfig().CN.Frontend.Port)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancel()
+		const name = "issue28319_row_oracle"
+		resetIssue277xxDatabase(t, ctx, db, name)
+		defer func() {
+			clean, stop := context.WithTimeout(context.Background(), 15*time.Second)
+			defer stop()
+			if _, err := db.ExecContext(clean, "drop database if exists "+name); err != nil {
+				t.Errorf("database cleanup: %v", err)
+			}
+		}()
+		execSQLRequire(t, ctx, db, "create table "+name+".t(id int,v int)")
+		execSQLRequire(t, ctx, db, "insert into "+name+".t values (1,11),(1,11)")
+		// Both former count checks accept this wrong result.
+		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
+		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=11) or (id=2 and v=20)"))
+		got := issue28319Rows(t, ctx, db, name+".t")
+		require.Equal(t, [][2]int{{1, 11}, {1, 11}}, got)
+		require.NotEqual(t, [][2]int{{1, 11}, {2, 20}}, got)
+	})
+}
 
 func TestIssue28319MainAddPKIndependentPublication(t *testing.T) {
 	issue28319MainIndependentPublication(t, true)
@@ -127,8 +171,7 @@ func issue28319MainIndependentPublication(t *testing.T, add bool) {
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
 		for _, table := range []string{"a", "b"} {
-			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s", name, table)))
-			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s where (id=1 and v=10) or (id=2 and v=20)", name, table)))
+			require.Equal(t, [][2]int{{1, 10}, {2, 20}}, issue28319Rows(t, ctx, db, name+"."+table))
 			var tableName, ddl string
 			require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("show create table %s.%s", name, table)).Scan(&tableName, &ddl))
 			require.Equal(t, add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
@@ -236,8 +279,7 @@ func issue28319MainKillAfterCopy(t *testing.T, add bool) {
 		case <-ctx.Done():
 			t.Fatal("killed ALTER did not terminate")
 		}
-		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
-		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=10) or (id=2 and v=20)"))
+		require.Equal(t, [][2]int{{1, 10}, {2, 20}}, issue28319Rows(t, ctx, db, name+".t"))
 		var table, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, "show create table "+name+".t").Scan(&table, &ddl))
 		require.Equal(t, !add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
@@ -324,15 +366,14 @@ func issue28319MainConcurrentWrite(t *testing.T, add bool, write string) {
 			t.Fatal("ALTER did not complete")
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
-		expectedCount, condition := 3, "(id=1 and v=10) or (id=2 and v=20) or (id=3 and v=30)"
+		expected := [][2]int{{1, 10}, {2, 20}, {3, 30}}
 		if write == "update" {
-			expectedCount, condition = 2, "(id=1 and v=11) or (id=2 and v=20)"
+			expected = [][2]int{{1, 11}, {2, 20}}
 		}
 		if write == "delete" {
-			expectedCount, condition = 1, "id=2 and v=20"
+			expected = [][2]int{{2, 20}}
 		}
-		require.Equal(t, expectedCount, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.t", name)))
-		require.Equal(t, expectedCount, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.t where %s", name, condition)))
+		require.Equal(t, expected, issue28319Rows(t, ctx, db, name+".t"))
 		var tableName, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("show create table %s.t", name)).Scan(&tableName, &ddl))
 		require.Equal(t, add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
@@ -378,8 +419,7 @@ func issue28319PublicationFailure(t *testing.T, add bool) {
 		require.True(t, injected.Load())
 		observer.beforeSourceDrop = nil
 		require.EqualValues(t, 1, observer.copies.Load())
-		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.t", name)))
-		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.t where (id=1 and v=10) or (id=2 and v=20)", name)))
+		require.Equal(t, [][2]int{{1, 10}, {2, 20}}, issue28319Rows(t, ctx, db, name+".t"))
 		var tableName, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("show create table %s.t", name)).Scan(&tableName, &ddl))
 		require.Equal(t, !add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
@@ -448,7 +488,6 @@ func issue28319MainHeldGate(t *testing.T, add bool) {
 		defer restore()
 		done := make(chan error, 2)
 		for _, tbl := range []string{"a", "b"} {
-			tbl := tbl
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
@@ -492,8 +531,7 @@ func issue28319MainHeldGate(t *testing.T, add bool) {
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
 		for _, tbl := range []string{"a", "b"} {
-			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s", name, tbl)))
-			require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, fmt.Sprintf("select count(*) from %s.%s where (id=1 and v=10) or (id=2 and v=20)", name, tbl)))
+			require.Equal(t, [][2]int{{1, 10}, {2, 20}}, issue28319Rows(t, ctx, db, name+"."+tbl))
 			var tableName, ddl string
 			require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("show create table %s.%s", name, tbl)).Scan(&tableName, &ddl))
 			require.Equal(t, add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
@@ -562,8 +600,7 @@ func TestIssue28319MainSameTableRejectsStaleCopy(t *testing.T) {
 			t.Fatal("stale ALTER did not terminate")
 		}
 		require.EqualValues(t, 2, observer.copies.Load())
-		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
-		require.Equal(t, 2, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=10) or (id=2 and v=20)"))
+		require.Equal(t, [][2]int{{1, 10}, {2, 20}}, issue28319Rows(t, ctx, db, name+".t"))
 		var tbl, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, "show create table "+name+".t").Scan(&tbl, &ddl))
 		require.Contains(t, strings.ToUpper(ddl), "PRIMARY KEY")
@@ -647,8 +684,7 @@ func issue28319RefreshCopyFailure(t *testing.T, add bool) {
 		}
 		require.True(t, injected.Load())
 		require.EqualValues(t, 2, observer.copies.Load())
-		require.Equal(t, 3, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t"))
-		require.Equal(t, 3, queryIssue277xxInt(t, ctx, db, "select count(*) from "+name+".t where (id=1 and v=10) or (id=2 and v=20) or (id=3 and v=30)"))
+		require.Equal(t, [][2]int{{1, 10}, {2, 20}, {3, 30}}, issue28319Rows(t, ctx, db, name+".t"))
 		var tbl, ddl string
 		require.NoError(t, db.QueryRowContext(ctx, "show create table "+name+".t").Scan(&tbl, &ddl))
 		require.Equal(t, !add, strings.Contains(strings.ToUpper(ddl), "PRIMARY KEY"))
