@@ -350,3 +350,78 @@ func TestLooseGroupByHavingCorrelatedKeyRejected(t *testing.T) {
 		require.NotNil(t, p)
 	})
 }
+
+// TestCorrelatedAggregateArgsOnEnumSetKeysMatchIntPolicy extends the #31568
+// proof to direct outer-column aggregate arguments (review follow-up). An
+// ordinary aggregate's arguments cannot carry a live correlation: the subquery
+// machinery only rewrites permitted correlated shapes, and group argument
+// evaluation has no Expr_Corr implementation. Before this regression the
+// display wrapper hid the correlation from HavingBinder's insideAgg branch,
+// the binder admitted the plan with the correlation intact inside MAX/COUNT
+// arguments, and execution failed with an unsupported-expression NYI while
+// the same query with an INT key was rejected at bind time.
+func TestCorrelatedAggregateArgsOnEnumSetKeysMatchIntPolicy(t *testing.T) {
+	pairs := []struct{ special, plain string }{
+		{
+			"select l.id, (select max(l.k) from enum_r r) from enum_l l",
+			"select l.id, (select max(l.k) from int2_r r) from int2_l l",
+		},
+		{
+			"select l.id, (select count(l.k) from enum_r r) from enum_l l",
+			"select l.id, (select count(l.k) from int2_r r) from int2_l l",
+		},
+		{
+			"select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.k)='a')",
+			"select l.id from int2_l l where exists(select 1 from int2_r r group by r.id having max(l.k)=1)",
+		},
+		{
+			"select l.id from enump_l l group by l.id having exists(select max(l.k) from enump_r r group by r.id)",
+			"select l.id from intp_l l group by l.id having exists(select max(l.k) from intp_r r group by r.id)",
+		},
+		{
+			"select l.id, (select max(l.k) from set_r r) from set_l l",
+			"select l.id, (select max(l.k) from int2_r r) from int2_l l",
+		},
+		{
+			"select l.id, (select count(l.k) from set_r r) from set_l l",
+			"select l.id, (select count(l.k) from int2_r r) from int2_l l",
+		},
+		{
+			"select l.id from set_l l where exists(select 1 from set_r r group by r.id having max(l.k)='a')",
+			"select l.id from int2_l l where exists(select 1 from int2_r r group by r.id having max(l.k)=1)",
+		},
+		{
+			"select l.id from setp_l l group by l.id having exists(select max(l.k) from setp_r r group by r.id)",
+			"select l.id from intp_l l group by l.id having exists(select max(l.k) from intp_r r group by r.id)",
+		},
+	}
+	for _, pair := range pairs {
+		specialErr := correlatedHavingErrFor(t, pair.special)
+		plainErr := correlatedHavingErrFor(t, pair.plain)
+		if plainErr == nil {
+			require.NoErrorf(t, specialErr,
+				"special-typed key rejected while the INT key plans: %q", pair.special)
+		} else {
+			require.Errorf(t, specialErr,
+				"special-typed key accepted while the INT key is rejected: %q", pair.special)
+			require.ErrorContainsf(t, specialErr, "correlated columns in aggregate function",
+				"special-typed key must get the correlated-aggregate NYI, not an invalid plan: %q", pair.special)
+		}
+	}
+
+	// The aggregate-argument subquery exception stays intact: the correlation
+	// belongs to the subquery's own WHERE, so the wrapper is admitted through
+	// the subqueryInAggregateInput path and flattened exactly like a bare INT
+	// reference, instead of dying in the aggregate argument.
+	for _, sql := range []string{
+		"select max((select r.id from enum_r r where r.k=l.k)) from enum_l l",
+		"select max((select r.id from set_r r where r.k=l.k)) from set_l l",
+		"select max((select r.id from int_r r where r.id=l.id)) from int_l l",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, err := runOneStmt(newCorrelatedSpecialTypeMock(t), t, sql)
+			require.NoError(t, err)
+			require.NotNil(t, p)
+		})
+	}
+}

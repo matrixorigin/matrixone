@@ -223,7 +223,17 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		corrRef := expr.GetCorr()
+		if corrRef == nil {
+			// ENUM/SET keys bind to a display wrapper whose wrapped reference
+			// is the only column link (#31568). Without reading it here, a
+			// correlated outer key reaches an ordinary aggregate's arguments
+			// intact and group argument evaluation cannot construct its
+			// expression executor, so run the same admission checks on the
+			// wrapped reference as on a bare correlated column.
+			corrRef = displayWrappedCorrColRef(expr)
+		}
+		if corrRef != nil {
 			if depth > 0 && b.subqueryInAggregateInput {
 				// This lookup comes from the subquery used as an aggregate
 				// argument. Its ancestor reference belongs to that subquery,
@@ -234,14 +244,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			// scalar child may capture this query's input without turning that
 			// capture into a new correlated aggregate argument.
 			if (b.builder.mysqlFullGroupByCompat || b.bindingProjectedAlias && !b.insideAgg) &&
-				b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+				b.corrColRefTargetsCurrentQueryInput(corrRef) {
 				return expr, nil
 			}
 			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
-				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-					b.corrColRefTargetsGroup(corr.Corr) ||
-					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				(b.corrColRefTargetsCurrentGroup(corrRef) ||
+					b.corrColRefAllowedByCurrentQuery(corrRef) ||
+					b.corrColRefTargetsGroup(corrRef) ||
+					b.corrColRefAllowedByTargetQuery(corrRef)) {
 				return expr, nil
 			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")

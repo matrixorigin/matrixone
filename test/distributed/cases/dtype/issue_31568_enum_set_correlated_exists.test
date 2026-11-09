@@ -71,6 +71,29 @@ select l.id from set_l l where exists(select r.k from set_r r group by r.k havin
 select l.id from set_l l where not exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
 select l.id from set_l l group by l.id having exists(select r.k from set_r r group by r.k having r.k=l.k) order by l.id;
 
+-- direct outer-column aggregate arguments (#31568 review follow-up): the
+-- correlation cannot become an ordinary aggregate's argument, so planning
+-- fails with the same correlated-aggregate NYI as the INT twins instead of
+-- admitting a plan whose aggregate argument cannot be evaluated.
+select l.id, (select max(l.k) from enum_r r) from enum_l l;
+select l.id, (select count(l.k) from enum_r r) from enum_l l;
+select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.k)='a');
+select l.id from enum_l l group by l.id having exists(select max(l.k) from enum_r r group by r.id);
+select l.id, (select max(l.k) from set_r r) from set_l l;
+select l.id, (select count(l.k) from set_r r) from set_l l;
+select l.id from set_l l where exists(select 1 from set_r r group by r.id having max(l.k)='a');
+select l.id from set_l l group by l.id having exists(select max(l.k) from set_r r group by r.id);
+-- INT twins of the same four shapes keep their existing bind-time rejection.
+select l.id, (select max(l.id) from enum_r r) from enum_l l;
+select l.id, (select count(l.id) from enum_r r) from enum_l l;
+select l.id from enum_l l where exists(select 1 from enum_r r group by r.id having max(l.id)=1);
+select l.id from enum_l l group by l.id having exists(select max(l.id) from enum_r r group by r.id);
+-- positive controls: a non-aggregate correlated scalar subquery in the
+-- projection keeps working end-to-end for ENUM/SET keys like the INT control.
+select l.id, (select r.id from enum_r r where l.k=r.k) from enum_l l order by l.id;
+select l.id, (select r.id from enum_r r where l.id=r.id) from enum_l l order by l.id;
+select l.id, (select r.id from set_r r where l.k=r.k) from set_l l order by l.id;
+
 -- after all the above, source data is intact and the connection is healthy.
 select 1, count(*) from enum_l;
 select 1, count(*) from enum_r;
