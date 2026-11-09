@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -248,8 +247,7 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	old := NewFulltext2Search(cfg)
 	old.idx = NewIndex(nil, nil)
 	old.loaded = true
-	oldEntry := &veccache.VectorIndexSearch{Algo: old}
-	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	oldEntry := veccache.NewVectorIndexSearch(old)
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
 
 	// Production mutation order: record the reason before evicting the local
@@ -270,8 +268,7 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
 	replacement.loaded = true
-	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
-	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	replacementEntry := veccache.NewVectorIndexSearch(replacement)
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
 
 	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
@@ -312,8 +309,7 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	old := NewFulltext2Search(cfg)
 	old.idx = NewIndex(nil, nil)
 	old.loaded = true
-	oldEntry := &veccache.VectorIndexSearch{Algo: old}
-	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	oldEntry := veccache.NewVectorIndexSearch(old)
 	oldEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
 
@@ -335,8 +331,7 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	replacement := NewFulltext2Search(cfg)
 	replacement.idx = NewIndex(nil, nil)
 	replacement.loaded = true
-	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
-	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	replacementEntry := veccache.NewVectorIndexSearch(replacement)
 	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
 
 	loadGen := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))

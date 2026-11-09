@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"context"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -479,4 +480,101 @@ func TestCompactSegmentsNoDelta(t *testing.T) {
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, 0, nlive)
+}
+
+func TestLoadAllBasesReleasesPartialViewsOnPanic(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	loadedBasePool.clearIndex(index)
+	t.Cleanup(func() { loadedBasePool.clearIndex(index) })
+	generation := beginLoadGeneration(index)
+	defer endLoadGeneration(generation)
+	b := NewBuilder("s0", int32(types.T_int64))
+	feed(t, b, int64(1), "hello")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	buf, err := seg.Serialize()
+	require.NoError(t, err)
+	var lease *segmentLease
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "'s1'"):
+			loadedBasePool.mu.Lock()
+			for key, entry := range loadedBasePool.entries {
+				if key.index == index && key.id == "s0" {
+					lease = entry.lease
+				}
+			}
+			loadedBasePool.mu.Unlock()
+			panic("metadata failure")
+		case strings.Contains(sql, "checksum"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), 0)}}, nil
+		default:
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{twoIdBatch(mp, "s0", "s1")}}, nil
+		}
+	})
+	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
+		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
+		return executor.Result{}, nil
+	})
+	require.Panics(t, func() { _, _ = loadAllBases(sp, cfg, nil, generation) })
+	require.NotNil(t, lease)
+	lease.mu.Lock()
+	refs, template := lease.refs, lease.template
+	lease.mu.Unlock()
+	require.Zero(t, refs)
+	require.Nil(t, template)
+}
+
+func TestLoadFromStorageCleansTempFileAfterStreamPanic(t *testing.T) {
+	sp, _ := mockSqlProc(t)
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	swapRunStreamingSql(t, func(context.Context, *sqlexec.SqlProcess, string, chan executor.Result, chan error) (executor.Result, error) {
+		panic("stream panic")
+	})
+	_, err := loadFromStorageMetadata(sp, testStorageCfg(), "base", "unused", 1, 0, nil)
+	require.ErrorContains(t, err, "stream panic")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestFulltext2LoadPanicReportsFailure(t *testing.T) {
+	sp, _ := mockSqlProc(t)
+	var got LoadEvent
+	restore := setLoadObserver(func(event LoadEvent) { got = event })
+	defer restore()
+	swapRunSql(t, func(*sqlexec.SqlProcess, string) (executor.Result, error) { panic("load panic") })
+	s := NewFulltext2Search(testStorageCfg())
+	require.Panics(t, func() { _ = s.Load(sp) })
+	s.Destroy()
+	require.True(t, got.LoadError)
+	require.False(t, got.LoadSuccess)
+}
+
+func TestLoadFromStorageDrainsStreamAfterConsumerPanic(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	before := mp.CurrNB()
+	producerDone := make(chan struct{})
+	swapRunStreamingSql(t, func(ctx context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
+		defer close(producerDone)
+		bad := int64Batch(mp, 0) // A malformed row has no data column.
+		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{bad}}
+		<-ctx.Done()
+		return executor.Result{}, ctx.Err()
+	})
+	require.Panics(t, func() { _, _ = loadFromStorageMetadata(sp, testStorageCfg(), "base", "unused", 1, 0, nil) })
+	select {
+	case <-producerDone:
+	case <-time.After(time.Second):
+		t.Fatal("producer did not stop")
+	}
+	require.Equal(t, before, mp.CurrNB())
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }

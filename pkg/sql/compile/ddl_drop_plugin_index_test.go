@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -47,13 +46,10 @@ func (s *stubIndexSearch) Destroy()                       { s.destroyed = true }
 
 // seedCachedIndex puts an entry in the vector-index cache under key, as a
 // completed search would, and returns the stub so the test can see Destroy().
-// The Cond is built exactly as VectorIndexCache.Search builds it — Destroy()
-// broadcasts on it.
 func seedCachedIndex(t *testing.T, key string) *stubIndexSearch {
 	t.Helper()
 	algo := &stubIndexSearch{}
-	entry := &veccache.VectorIndexSearch{Algo: algo}
-	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	entry := veccache.NewVectorIndexSearch(algo)
 	veccache.Cache.IndexMap.Store(key, entry)
 	t.Cleanup(func() { veccache.Cache.IndexMap.Delete(key) })
 	return algo

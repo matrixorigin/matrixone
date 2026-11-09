@@ -53,7 +53,7 @@ func startCacheSearch(c *VectorIndexCache, proc *sqlexec.SqlProcess, algo Vector
 }
 
 func TestAwaitDestroyedHonorsCanceledContext(t *testing.T) {
-	s := newVectorIndexSearch(&MockSearch{})
+	s := NewVectorIndexSearch(&MockSearch{})
 	s.markDestroyed()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -254,17 +254,6 @@ func TestSearchPreservesAlgorithmInvalidState(t *testing.T) {
 	}
 }
 
-type pausedLocker struct {
-	sync.Locker
-	entered, release chan struct{}
-	once             sync.Once
-}
-
-func (l *pausedLocker) Lock() {
-	l.Locker.Lock()
-	l.once.Do(func() { close(l.entered); <-l.release })
-}
-
 func TestFollowerRetriesWithoutWaitingForForeignTeardown(t *testing.T) {
 	for _, into := range []bool{false, true} {
 		name := "Search"
@@ -273,25 +262,17 @@ func TestFollowerRetriesWithoutWaitingForForeignTeardown(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			c := NewVectorIndexCache()
-			old := newVectorIndexSearch(&MockSearch{})
-			lock := &pausedLocker{Locker: old.Mutex.RLocker(), entered: make(chan struct{}), release: make(chan struct{})}
-			old.Cond = sync.NewCond(lock)
-			old.evicting.Store(true)
+			old := NewVectorIndexSearch(&MockSearch{})
 			c.IndexMap.Store("key", old)
-			var release sync.Once
 			t.Cleanup(func() {
-				release.Do(func() { close(lock.release) })
 				old.Destroy()
 				c.Destroy()
 			})
 			result := startCacheSearch(c, nil, &MockSearch{}, into)
-			select {
-			case <-lock.entered:
-			case <-time.After(5 * time.Second):
-				t.Fatal("follower did not acquire the old entry")
-			}
+			require.Eventually(t, func() bool { return old.loadWaiters.Load() > 0 }, 5*time.Second, time.Millisecond)
+			old.evicting.Store(true)
 			require.True(t, c.IndexMap.CompareAndDelete("key", old))
-			release.Do(func() { close(lock.release) })
+			old.markRemoved()
 			select {
 			case err := <-result:
 				require.NoError(t, err)

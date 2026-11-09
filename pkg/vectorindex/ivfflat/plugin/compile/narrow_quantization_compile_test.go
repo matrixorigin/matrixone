@@ -452,8 +452,7 @@ func (f *fakeCachedIndex) Destroy()                         { f.destroyed.Store(
 // seedCache parks a fake index under the given cache key and returns it.
 func seedCache(key string) *fakeCachedIndex {
 	algo := &fakeCachedIndex{}
-	s := &cache.VectorIndexSearch{Algo: algo}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := cache.NewVectorIndexSearch(algo)
 	cache.Cache.IndexMap.Store(key, s)
 	return algo
 }

@@ -16,7 +16,6 @@ package cache
 
 import (
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -34,14 +33,14 @@ func (*searchIntoError) SearchInto(*sqlexec.SqlProcess, any, vectorindex.Runtime
 
 func TestVectorIndexSearchIntoStatusAndDelegation(t *testing.T) {
 	mock := &MockSearch{}
-	s := &VectorIndexSearch{Algo: mock}
-	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s := NewVectorIndexSearch(mock)
 	require.NoError(t, s.Load(nil))
 	require.NoError(t, s.SearchInto(nil, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{}))
 
 	s.Status.Store(STATUS_DESTROYED)
 	require.ErrorContains(t, s.SearchInto(nil, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{}), "Index destroyed")
 	s.Status.Store(STATUS_ERROR)
+	s.loadResult.Store(&entryLoadResult{err: errors.New("Load index error")})
 	require.ErrorContains(t, s.SearchInto(nil, nil, vectorindex.RuntimeConfig{}, &vectorindex.SearchOutput{}), "Load index error")
 	s.Destroy()
 }

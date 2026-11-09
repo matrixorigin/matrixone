@@ -305,8 +305,10 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace, generation loadGeneration) ([]*Segment, error) {
 	indexKey := cfg.DbName + "." + cfg.IndexTable
 	committed := false
+	var bases []*Segment
 	defer func() {
 		if !committed {
+			freeSegs(bases)
 			// A later base can fail after earlier segments have been acquired.
 			// Roll back only claims held by this load; another generation may have
 			// reused or committed the same immutable base in the meantime.
@@ -327,17 +329,19 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 		return nil, err
 	}
 	var ids []string
-	for _, bat := range res.Batches {
-		if bat == nil {
-			continue
+	func() {
+		defer res.Close()
+		for _, bat := range res.Batches {
+			if bat == nil {
+				continue
+			}
+			for i := 0; i < bat.RowCount(); i++ {
+				ids = append(ids, bat.Vecs[0].GetStringAt(i))
+			}
 		}
-		for i := 0; i < bat.RowCount(); i++ {
-			ids = append(ids, bat.Vecs[0].GetStringAt(i))
-		}
-	}
-	res.Close()
+	}()
 
-	bases := make([]*Segment, 0, len(ids))
+	bases = make([]*Segment, 0, len(ids))
 	used := make(map[baseKey]struct{}, len(ids))
 	for _, id := range ids {
 		var metaStart time.Time
@@ -349,15 +353,12 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 			trace.addInternalSQL(time.Since(metaStart))
 		}
 		if lerr != nil {
-			freeSegs(bases)
 			return nil, lerr
 		}
 		if !found {
-			freeSegs(bases)
 			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s metadata not found", id))
 		}
 		if filesize <= 0 {
-			freeSegs(bases)
 			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
 		}
 		key := baseKey{index: indexKey, id: id, checksum: checksum, filesize: filesize}
@@ -369,7 +370,6 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 			// mmap (+ a linked /tmp spill file on the fallback path), so returning without
 			// freeing leaks them, and a retrying caller (query reload / MERGE) accumulates
 			// both. Mirrors LoadTailSegments' freeSegs(bases) on its own error path.
-			freeSegs(bases)
 			return nil, lerr
 		}
 		bases = append(bases, m)
@@ -430,18 +430,25 @@ func loadFromStorageMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id, c
 	if err != nil {
 		return nil, err
 	}
-	cleanup := func() {
-		fp.Close()
-		if path != "" {
-			os.Remove(path)
+	var data []byte
+	transferred := false
+	defer func() {
+		if fp != nil {
+			_ = fp.Close()
 		}
-	}
+		if !transferred {
+			if data != nil {
+				_ = munmap(data)
+			}
+			if path != "" {
+				_ = os.Remove(path)
+			}
+		}
+	}()
 	if err = fp.Truncate(filesize); err != nil {
-		cleanup()
 		return nil, err
 	}
 	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp, trace); err != nil {
-		cleanup()
 		return nil, err
 	}
 	// mmap the file read-only (shared across queries; FST + positions are views into
@@ -450,15 +457,13 @@ func loadFromStorageMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id, c
 	if trace != nil {
 		mmapStart = time.Now()
 	}
-	data, err := mmapReadOnly(fp)
+	data, err = mmapReadOnly(fp)
 	if trace != nil {
 		trace.addMmap(time.Since(mmapStart))
 	}
-	fp.Close()
+	_ = fp.Close()
+	fp = nil
 	if err != nil {
-		if path != "" {
-			os.Remove(path)
-		}
 		return nil, err
 	}
 	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
@@ -471,20 +476,16 @@ func loadFromStorageMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id, c
 		trace.addChecksum(time.Since(checksumStart))
 	}
 	if actualChecksum != checksum {
-		_ = munmap(data)
-		if path != "" {
-			os.Remove(path)
-		}
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
 	}
 	// The Segment OWNS the mapping (+ path for the /tmp fallback): Free() munmaps and,
 	// if linked, deletes it.
 	m := &Segment{Id: id, mmapData: data, mmapPath: path}
 	if err := m.decodeSegment(data); err != nil {
-		m.Free()
 		return nil, err
 	}
 	m.Recency = recency
+	transferred = true
 	return m, nil
 }
 
@@ -756,6 +757,9 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 	wg.Add(1)
 	go func() {
 		defer func() {
+			if p := recover(); p != nil {
+				errorCh <- moerr.ConvertPanicError(ctx, p)
+			}
 			close(streamCh)
 			wg.Done()
 		}()
@@ -771,6 +775,16 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 		}
 	}()
 
+	drained := false
+	defer func() {
+		if !drained {
+			cancel(nil)
+			for res := range streamCh {
+				res.Close()
+			}
+			wg.Wait()
+		}
+	}()
 	var loopErr error
 	closed := false
 	seen := make(map[int64]struct{}) // chunk_ids already written, to catch duplicates
@@ -781,48 +795,50 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 				closed = true
 				break
 			}
-			for _, bat := range res.Batches {
-				if bat == nil || bat.RowCount() == 0 {
-					continue
-				}
-				cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-				for i, cid := range cids {
-					data := bat.Vecs[1].GetRawBytesAt(i)
-					off := (cid - baseChunk) * int64(vectorindex.MaxChunkSize)
-					if off < 0 || off+int64(len(data)) > bound {
-						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
-							fmt.Sprintf("fulltext2 chunk_id %d out of range [base %d, bound %d]", cid, baseChunk, bound))
+			func() {
+				defer res.Close()
+				for _, bat := range res.Batches {
+					if bat == nil || bat.RowCount() == 0 {
+						continue
+					}
+					cids := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+					for i, cid := range cids {
+						data := bat.Vecs[1].GetRawBytesAt(i)
+						off := (cid - baseChunk) * int64(vectorindex.MaxChunkSize)
+						if off < 0 || off+int64(len(data)) > bound {
+							loopErr = moerr.NewInternalError(sqlproc.GetContext(),
+								fmt.Sprintf("fulltext2 chunk_id %d out of range [base %d, bound %d]", cid, baseChunk, bound))
+							break
+						}
+						// A duplicate (index_id, chunk_id) row would write its region twice and
+						// inflate `written`, letting the caller's written==filesize check pass while
+						// a DIFFERENT chunk's region is never filled (a hole the CRC only catches
+						// after a full stream+mmap). Reject the duplicate here, fail-fast.
+						if _, dup := seen[cid]; dup {
+							loopErr = moerr.NewInternalError(sqlproc.GetContext(),
+								fmt.Sprintf("fulltext2 duplicate chunk_id %d", cid))
+							break
+						}
+						seen[cid] = struct{}{}
+						var writeStart time.Time
+						if trace != nil {
+							writeStart = time.Now()
+						}
+						if _, e := fp.WriteAt(data, off); e != nil {
+							loopErr = e
+							break
+						}
+						if trace != nil {
+							trace.addTempWrite(time.Since(writeStart))
+						}
+						written += int64(len(data))
+						nchunks++
+					}
+					if loopErr != nil {
 						break
 					}
-					// A duplicate (index_id, chunk_id) row would write its region twice and
-					// inflate `written`, letting the caller's written==filesize check pass while
-					// a DIFFERENT chunk's region is never filled (a hole the CRC only catches
-					// after a full stream+mmap). Reject the duplicate here, fail-fast.
-					if _, dup := seen[cid]; dup {
-						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
-							fmt.Sprintf("fulltext2 duplicate chunk_id %d", cid))
-						break
-					}
-					seen[cid] = struct{}{}
-					var writeStart time.Time
-					if trace != nil {
-						writeStart = time.Now()
-					}
-					if _, e := fp.WriteAt(data, off); e != nil {
-						loopErr = e
-						break
-					}
-					if trace != nil {
-						trace.addTempWrite(time.Since(writeStart))
-					}
-					written += int64(len(data))
-					nchunks++
 				}
-				if loopErr != nil {
-					break
-				}
-			}
-			res.Close()
+			}()
 			if loopErr != nil {
 				closed = true
 			}
@@ -841,6 +857,7 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 		res.Close()
 	}
 	wg.Wait()
+	drained = true
 	if loopErr == nil {
 		select {
 		case e := <-errorCh:
