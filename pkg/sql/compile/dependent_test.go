@@ -294,7 +294,7 @@ func TestDependentNativeStages(t *testing.T) {
 			stmts, err := mysql.Parse(proc.Ctx, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, query.Correlation)
 			budget, err := proc.GetExecutionResourceBudget()
@@ -436,7 +436,7 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 	stmts, err := mysql.Parse(proc.Ctx, `SELECT (SELECT (SELECT MAX(n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY<=n1.N_NATIONKEY)) FROM NATION n1`, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+	q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, q.Correlation)
 	scans := 0
@@ -523,7 +523,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 				stmts, err := mysql.Parse(proc.Ctx, `SELECT (SELECT (SELECT n.N_NATIONKEY)) FROM NATION n`, 1)
 				require.NoError(t, err)
 				defer stmts[0].Free()
-				q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+				q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 				require.NoError(t, err)
 				require.NotNil(t, q.Correlation)
 				var scan *plan.Node

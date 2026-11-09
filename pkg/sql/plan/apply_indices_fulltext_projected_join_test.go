@@ -282,7 +282,7 @@ func TestFullTextProjectedMatchStopsAtDerivedPagination(t *testing.T) {
 			cc.tables["base"], cc.objects["base"] = makeFullTextJoinTestTableDef("base", false), &planpb.ObjectRef{SchemaName: "test", ObjName: "base"}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, q.sql, 1)
 			require.NoError(t, err)
-			p, err := BuildPlan(cc, stmt, false)
+			p, err := BuildPlan(cc, stmt, false, nil)
 			stmt.Free()
 			require.NoError(t, err)
 			query := p.GetQuery()

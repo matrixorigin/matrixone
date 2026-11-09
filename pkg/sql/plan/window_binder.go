@@ -841,7 +841,7 @@ func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder)
 	dependencies = appendPrepareSchemas(dependencies, dependencyRule.schemas...)
 	for _, dependency := range dependencyRule.indexDependencies {
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			dependency.baseRef, dependency.tableName, dependency.snapshot)
+			dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 		if err != nil {
 			return err
 		}

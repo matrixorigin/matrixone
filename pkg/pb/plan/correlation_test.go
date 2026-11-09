@@ -162,6 +162,16 @@ func TestCorrelationExpressionWalk(t *testing.T) {
 		}
 		return nil
 	}), stop)
+	wide := &Expr{Expr: &Expr_F{F: &Function{Args: make([]*Expr, 40)}}}
+	for i := range wide.GetF().Args {
+		wide.GetF().Args[i] = &Expr{AuxId: int32(i + 1)}
+	}
+	visited = nil
+	require.NoError(t, VisitExprTree(wide, func(e *Expr) error { visited = append(visited, e.AuxId); return nil }))
+	require.Len(t, visited, 41)
+	for i, id := range visited {
+		require.Equal(t, int32(i), id, "a wide expression retains its visitation order")
+	}
 	// Depth must consume explicit traversal state, not one Go frame per level.
 	for i := 0; i < 10000; i++ {
 		e = &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{e}}}}
