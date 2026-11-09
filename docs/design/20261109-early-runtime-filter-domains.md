@@ -198,7 +198,7 @@ rows, filter bytes, completion and per-target PASS reasons in physical stats.
 
 ## Eager-stage profitability envelope
 
-Current-main SF10 all22 qualification shows a confirmed Q9 gain but a confirmed
+Earlier eager-domain revisions showed a confirmed Q9 gain alongside a confirmed
 Q10 regression. Q10 already performs selective return-flag filtering in the scan;
 post-filter membership cannot eliminate that string-comparison work and adds
 source construction/synchronization. A bounded coalescing experiment reduced
