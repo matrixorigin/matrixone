@@ -16,6 +16,16 @@ package vectorindex
 
 import "github.com/matrixorigin/matrixone/pkg/logutil"
 
+// CleanupFailedLoad preserves the load failure if destroying its partial result panics.
+func CleanupFailedLoad(name string, destroy func()) {
+	defer func() {
+		if p := recover(); p != nil {
+			logutil.Errorf("%s cleanup panicked: %v", name, p)
+		}
+	}()
+	destroy()
+}
+
 // DestroyIndexResources attempts every owned resource and returns the first
 // panic so the caller can preserve its own error or propagate cleanup failure.
 func DestroyIndexResources[T interface{ Destroy() error }](name string, resources []T) (firstPanic any) {

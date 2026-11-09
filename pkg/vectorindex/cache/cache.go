@@ -41,6 +41,10 @@ const (
 	evictionTTL        = "ttl_expired"
 	evictionGeneration = "generation_changed"
 	evictionShutdown   = "process_shutdown"
+
+	// Recovery is only needed after an invalidation callback panics. Bound the
+	// work it can retain if several independent entries fail at once.
+	maxConcurrentInvalidationRecoveries = 8
 )
 
 /*
@@ -660,6 +664,7 @@ type VectorIndexCache struct {
 	lifecycleMu    sync.Mutex
 	shutdownErr    error          // protected by lifecycleMu
 	cleanups       sync.WaitGroup // admission is protected by lifecycleMu
+	recoveries     int            // active recovery cleanups, protected by lifecycleMu
 	hkTicks        int            // HouseKeeping tick counter, gates the IsStale sweep cadence
 	staleChecking  atomic.Bool    // single-flight guard for the async freshness sweep
 }
@@ -679,6 +684,24 @@ func (c *VectorIndexCache) beginCleanup() bool {
 	}
 	c.cleanups.Add(1)
 	return true
+}
+
+func (c *VectorIndexCache) beginRecovery() bool {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.exited.Load() || c.recoveries >= maxConcurrentInvalidationRecoveries {
+		return false
+	}
+	c.recoveries++
+	c.cleanups.Add(1)
+	return true
+}
+
+func (c *VectorIndexCache) endRecovery() {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	c.recoveries--
+	c.cleanups.Done()
 }
 
 // beginShutdown publishes the first failure before closing the cache signal.
@@ -793,12 +816,20 @@ func (c *VectorIndexCache) evictEntryOwned(key string, expected *VectorIndexSear
 		// Waiters can fail immediately while recovery fences the old entry.
 		algo.invalidationResult.Store(&entryLoadResult{err: invalidationErr})
 		algo.markEvictionResultReady()
-		if (reason == evictionTTL || reason == evictionGeneration) && !c.exited.Load() {
-			if _, ok := algo.Algo.(cacheInvalidationRecoverer); ok && c.beginCleanup() {
+		if reason == evictionTTL || reason == evictionGeneration {
+			if _, ok := algo.Algo.(cacheInvalidationRecoverer); ok {
+				if !c.beginRecovery() {
+					if !c.exited.Load() {
+						logutil.Errorf("[veccache] invalidation recovery limit %d reached", maxConcurrentInvalidationRecoveries)
+					}
+					// Shutdown takes this claimed entry after registered owners finish.
+					c.failInvalidation(invalidationErr)
+					return false
+				}
 				// A slow reader/load must not stall housekeeping for other keys.
-				// The registered cleanup retains this key until repair and destroy.
+				// The registered cleanup retains this key until repair completes.
 				go func() {
-					defer c.cleanups.Done()
+					defer c.endRecovery()
 					defer func() {
 						if p := recover(); p != nil {
 							logutil.Errorf("[veccache] index invalidation cleanup panicked: %v", p)
@@ -973,6 +1004,19 @@ func (c *VectorIndexCache) Destroy() {
 			return true
 		})
 		c.cleanups.Wait()
+		// An invalidation that could not start recovery left its claimed entry
+		// in the map. No registered owner can still be using a claim after Wait.
+		c.IndexMap.Range(func(key, value any) bool {
+			if k, ok := key.(string); ok {
+				entry := value.(*VectorIndexSearch)
+				if entry.evicting.Load() {
+					c.finishEviction(k, entry, nil)
+				} else {
+					c.evictEntryOwned(k, entry, evictionShutdown)
+				}
+			}
+			return true
+		})
 		runLifecycleHooks(true)
 	})
 }
@@ -1156,7 +1200,7 @@ func (c *VectorIndexCache) Remove(key string) {
 // RemoveWithReason is the internal reason-aware variant used by FULLTEXT2.
 // The empty reason preserves the historical behavior for all other algorithms.
 // If a recoverable invalidation callback panics, the old key remains reserved
-// and searches receive that error until asynchronous recovery finishes.
+// while recovery runs. If recovery cannot be admitted, shutdown owns the claim.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
 }
