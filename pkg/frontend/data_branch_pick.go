@@ -765,7 +765,7 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
-	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select)
+	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select, nil)
 	if err != nil {
 		return nil, err
 	}

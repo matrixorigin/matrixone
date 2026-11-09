@@ -52,7 +52,7 @@ func TestInternalLocalExecutionAvoidsRemoteScheduling(t *testing.T) {
 			stmts, err := mysql.Parse(ctx, "select 1", 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := plan2.NewBaseOptimizer(compilerCtx).Optimize(stmts[0], false)
+			query, err := plan2.NewBaseOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
 			backend := &schedulerTestEngine{

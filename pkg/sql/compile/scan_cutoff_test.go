@@ -119,7 +119,7 @@ func TestPaginationCutoffFromSQL(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, stmts, 1)
 			c.stmt = stmts[0]
-			c.pn, err = plan2.BuildPlan(ctx, stmts[0], false)
+			c.pn, err = plan2.BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			var scan, sort *plan.Node
 			for _, n := range c.pn.GetQuery().Nodes {

@@ -503,7 +503,7 @@ func explainSQLForSerializedTest(t *testing.T, sql string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
+	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

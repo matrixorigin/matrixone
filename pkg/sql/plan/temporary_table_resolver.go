@@ -23,5 +23,5 @@ func resolveTemporaryTable(ctx CompilerContext, db, name string, snapshot *Snaps
 	}); ok {
 		return resolver.ResolveTemporaryTable(db, name, snapshot)
 	}
-	return ctx.Resolve(db, name, snapshot)
+	return ctx.Resolve(db, name, snapshot, nil)
 }

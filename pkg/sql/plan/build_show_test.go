@@ -246,7 +246,7 @@ func TestCoverage_buildShowCreatePublications(t *testing.T) {
 		return
 	}
 	for _, stmt := range stmts {
-		_, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		_, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		if err != nil {
 			// May fail due to mock limitations but should not panic
 			t.Logf("BuildPlan for show create publication: %v", err)
@@ -263,7 +263,7 @@ func TestCoverage_buildShowPublicationCoverage(t *testing.T) {
 		return
 	}
 	for _, stmt := range stmts {
-		_, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		_, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 		if err != nil {
 			t.Logf("BuildPlan for show publication coverage: %v", err)
 		}
@@ -318,12 +318,13 @@ type showTablesBootstrapContext struct {
 	privilegeLookups int
 }
 
-func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot, borrowOutput *TableResolution) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
 		c.privilegeLookups++
 		return nil, nil, nil
 	}
-	return c.CompilerContext.Resolve(database, table, snapshot)
+	return c.CompilerContext.Resolve(database, table, snapshot, nil)
 }
 
 func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
@@ -344,7 +345,7 @@ func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
 				stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				built, err := BuildPlan(ctx, stmt, false)
+				built, err := BuildPlan(ctx, stmt, false, nil)
 				if mode == "internal" {
 					require.NoError(t, err)
 					require.NotNil(t, built.GetQuery())
@@ -368,7 +369,7 @@ func TestShowTablesUserVisibilityPlan(t *testing.T) {
 			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			filtered := false
 			for _, node := range built.GetQuery().GetNodes() {
@@ -603,7 +604,7 @@ func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
 			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			require.True(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_"))
 			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
@@ -623,7 +624,7 @@ func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
 		stmt := stmts[0]
 		sc, ok := stmt.(*tree.ShowColumns)
 		require.True(t, ok, sql)
-		_, err = BuildPlan(ctx, stmt, false)
+		_, err = BuildPlan(ctx, stmt, false, nil)
 		require.NoError(t, err, sql)
 		return sc, func() { stmt.Free() }
 	}
@@ -635,7 +636,7 @@ func TestDescColNameKeepsSavedASTPristine(t *testing.T) {
 	// statement (#32197 review).
 	sc, free := build("desc nation n_name")
 	require.Nil(t, sc.Like, "saved prepared AST must stay pristine: the derived LIKE must not persist past the first build")
-	replan, err := BuildPlan(ctx, sc, false)
+	replan, err := BuildPlan(ctx, sc, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, replan)
 	require.Nil(t, sc.Like, "a replan of the saved AST must regenerate the derived predicate, not retain it")
@@ -668,7 +669,7 @@ func TestShowMetadataFiltersPhysicalIndexesBeforeProjection(t *testing.T) {
 			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			query := built.GetQuery()
 			require.NotNil(t, query)

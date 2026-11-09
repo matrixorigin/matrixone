@@ -123,7 +123,7 @@ func runFkIssue31317Stmt(t testing.TB, ctx *MockCompilerContext, sql string) (*P
 		return nil, err
 	}
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, false, nil)
 }
 
 func assertErrForeignKeyOnPartitioned(t testing.TB, err error, what string) {

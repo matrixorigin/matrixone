@@ -2409,7 +2409,7 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		node.Stats.ForceOneCN = force
+		node.Stats.ForceOneCN = force || CapturedExecutionIndexScan(node)
 	} else if node.NodeType == plan.Node_JOIN {
 		if node.JoinType == plan.Node_DEDUP && !node.Stats.HashmapStats.Shuffle {
 			force = true
@@ -2619,7 +2619,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
+			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil, nil)
 			if e != nil {
 				err = e
 				return

@@ -2247,6 +2247,15 @@ func (s *logTailSubscriber) client() *service.LogtailClient {
 	return client
 }
 
+// tryClient lets optional observations decline while transport state changes.
+func (s *logTailSubscriber) tryClient() *service.LogtailClient {
+	if !s.mu.TryRLock() {
+		return nil
+	}
+	defer s.mu.RUnlock()
+	return s.logTailClient
+}
+
 func (s *logTailSubscriber) closeClient() error {
 	s.transportMu.Lock()
 	defer s.transportMu.Unlock()

@@ -33,7 +33,7 @@ import (
 func preparedCompositePointTable(t *testing.T) (*plan2.MockCompilerContext, *plan.TableDef) {
 	t.Helper()
 	base := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
-	_, table, err := base.Resolve("tpch", "partsupp", nil)
+	_, table, err := base.Resolve("tpch", "partsupp", nil, nil)
 	require.NoError(t, err)
 	keys := []string{"ps_partkey", "ps_suppkey", "ps_comment"}
 	for _, col := range table.Cols {
@@ -150,7 +150,7 @@ func TestPreparedCompositePointRetryKeepsBindings(t *testing.T) {
 	require.NoError(t, err)
 	retry := cw.preparedExecutionRetry()
 	require.NotNil(t, retry)
-	rebuilt, err := buildPlanForCompileRetry(execCtx.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry)
+	rebuilt, err := buildPlanForCompileRetry(execCtx.reqCtx, ses, ctx, prepared.PrepareStmt, false, retry, nil)
 	require.NoError(t, err)
 	for i, value := range values {
 		got, err := cw.proc.GetPrepareParamsAt(i)
@@ -227,11 +227,12 @@ type preparedCompositePointIndexCompiler struct {
 	index *plan.TableDef
 }
 
-func (c *preparedCompositePointIndexCompiler) ResolveIndexTableByRef(ref *plan.ObjectRef, name string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *preparedCompositePointIndexCompiler) ResolveIndexTableByRef(ref *plan.ObjectRef, name string, snapshot *plan2.Snapshot, output *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	output.Reset()
 	if name == c.index.Name {
 		return &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(c.index.TblId)}, plan2.DeepCopyTableDef(c.index, true), nil
 	}
-	return c.preparedStatsTestCompiler.ResolveIndexTableByRef(ref, name, snapshot)
+	return c.preparedStatsTestCompiler.ResolveIndexTableByRef(ref, name, snapshot, output)
 }
 
 func TestPreparedCompositePointEliminatedByIndexReusesCache(t *testing.T) {

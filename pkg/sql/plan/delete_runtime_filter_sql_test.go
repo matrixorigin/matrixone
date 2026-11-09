@@ -135,7 +135,7 @@ func TestBoundedDeleteIndexRuntimeFilterSQL(t *testing.T) {
 		return builder, query, targetTag
 	}
 
-	publicPlan, err := BuildPlan(newContext(), parse(99), false)
+	publicPlan, err := BuildPlan(newContext(), parse(99), false, nil)
 	require.NoError(t, err)
 	publicScan, publicJoin, _ := boundedDeleteSQLTarget(t, publicPlan.GetQuery(), targetID)
 	t.Run("BuildPlan", func(t *testing.T) {

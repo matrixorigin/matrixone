@@ -146,7 +146,7 @@ func TestNativeViewMetadataTwoCNOriginOwnership(t *testing.T) {
 							statements, err := mysql.Parse(request.Context(), query, 1)
 							require.NoError(t, err)
 							defer statements[0].Free()
-							p, err := plan.BuildPlan(compiler, statements[0], false)
+							p, err := plan.BuildPlan(compiler, statements[0], false, nil)
 							require.NoError(t, err)
 							func() {
 								c := compile.NewCompile(localAddr, database, query, "", "",
