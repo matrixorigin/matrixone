@@ -479,6 +479,7 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
+		ExecutionDependentAccess: true,
 		SelectLockReferences: []*planpb.SelectLockReference{{
 			ObjectRef: &planpb.ObjectRef{SchemaName: "db", ObjName: "locked"},
 			ViewPath:  []*planpb.ViewStep{{DatabaseName: "db", ViewName: "lock_view"}},
@@ -564,6 +565,7 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Len(t, cloned.BackgroundQueries, 2)
 	require.Nil(t, cloned.BackgroundQueries[1])
 	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
+	require.True(t, cloned.ExecutionDependentAccess)
 	require.Equal(t, source.RoutineDependencies, cloned.RoutineDependencies)
 	require.NotSame(t, source.RoutineDependencies[0], cloned.RoutineDependencies[0])
 	require.NotSame(t, source.RoutineDependencies[0].FunctionRef, cloned.RoutineDependencies[0].FunctionRef)

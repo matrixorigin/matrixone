@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r41-2026-11-02` |
+| Design revision | `python-udf-current-stage-r42-2026-11-09` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `ea184ad90624ae3dba8ced628ac019271a6c309c` (official SELECT-lock authorization metadata preserved; existing MORPC gates through 134 and pending consolidated 4.0.7 unchanged) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r41 contract follows the official release-boundary consolidation in main 3f484ec428b2fdaeda333c82b8d562fdb5dbe71a: the same nine routine migrations extend the pending 4.0.7 target, with no separate development-history successor or Python MORPC gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `c99234dcf4c94d1ff9d372917cd35041f1a3a682` (official SELECT-lock and execution-dependent access metadata preserved; existing MORPC gates through 134 and pending consolidated 4.0.7 unchanged) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r42 contract preserves r41's release-boundary consolidation and follows official main c99234dcf4c94d1ff9d372917cd35041f1a3a682: keep execution-dependent access at Query field 22 and move the unmerged routine envelope to field 23. The same nine routine migrations extend the pending 4.0.7 target, with no separate development-history successor or Python MORPC gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -152,14 +152,17 @@ plans still validate exact catalog identity and namespace; physical evaluators
 still validate account, descriptors and the external worker contract.
 
 The shared `Query` protobuf preserves official `correlation = 19`,
-`integer_precision = 20`, and `select_lock_references = 21`; this PR uses the
-next free field, `routine_dependencies = 22`. All four survive serialization
-and generated descriptor lookup; deep-copy preserves independent lock and
-routine identities without aliasing. Official main
-`ea184ad90624ae3dba8ced628ac019271a6c309c` uses field 21 for exclusive SELECT
-lock authorization targets, so the unmerged routine envelope moves to 22.
-Earlier candidate routine tags 20/21 are replaced, never interpreted as aliases
-of official fields with different semantics.
+`integer_precision = 20`, `select_lock_references = 21`, and
+`execution_dependent_access = 22`; this PR uses the next free field,
+`routine_dependencies = 23`. All five survive serialization and generated
+descriptor lookup; deep-copy preserves independent lock and routine identities
+without aliasing and retains the official execution-dependent access flag.
+Official main `c99234dcf4c94d1ff9d372917cd35041f1a3a682` owns field 22 for
+execution-dependent access-path selection, so the unmerged routine envelope
+moves to 23. Earlier candidate routine tags 20/21/22 are replaced, never
+interpreted as aliases of official fields with different semantics.
+Cached-plan admission retains the official cancellation check after metadata
+validation and preserves the existing parsed-statement and transaction owners.
 Routine dependencies belong to executable plans and in-memory cache/prepared
 validation. Catalog revisions persist typed definitions and fingerprints,
 not this Query envelope. Rebuild plans and sessions on the supported full-cluster
