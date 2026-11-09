@@ -111,7 +111,121 @@ func TestDictionaryReadComposeAndFlatten(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalBinary(wire))
 	require.Equal(t, int64(123), GetFixedAtNoTypeCheck[int64](decoded, 0))
 	wire[0] = DICTIONARY
-	require.Error(t, decoded.UnmarshalBinary(wire), "wire input cannot carry a dictionary class")
+	require.NoError(t, decoded.UnmarshalBinary(wire), "legacy class 2 carries materialized row buffers")
+	require.False(t, decoded.IsDictionary())
+	require.Equal(t, int64(123), GetFixedAtNoTypeCheck[int64](decoded, 0))
+}
+
+func TestLegacyClassDecodeNormalization(t *testing.T) {
+	type encodedClass struct {
+		name    string
+		tag     byte
+		invalid bool
+	}
+	for _, kind := range []string{"fixed", "varlen", "json", "constant", "constant_null"} {
+		t.Run(kind, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			var source *Vector
+			var err error
+			t.Cleanup(func() {
+				if source != nil {
+					source.Free(mp)
+				}
+			})
+			switch kind {
+			case "constant":
+				source, err = NewConstFixed(types.T_int64.ToType(), int64(11), 3, mp)
+				require.NoError(t, err)
+			case "constant_null":
+				source = NewConstNull(types.T_int64.ToType(), 3, mp)
+			case "fixed":
+				source = NewVec(types.T_int64.ToType())
+				for row, value := range []int64{11, 22, 33} {
+					require.NoError(t, AppendFixed(source, value, row == 1, mp))
+				}
+			default:
+				typ := types.T_varchar.ToType()
+				values := [][]byte{[]byte("short"), nil, []byte("a value longer than the inline string representation")}
+				if kind == "json" {
+					typ = types.T_json.ToType()
+					values = [][]byte{jsonAdmissionValue(t, `[1]`), nil, jsonAdmissionValue(t, `{"value":"longer than inline storage"}`)}
+				}
+				source = NewVec(typ)
+				for row, value := range values {
+					require.NoError(t, AppendBytes(source, value, row == 1, mp))
+				}
+			}
+			wire, err := source.MarshalBinary()
+			require.NoError(t, err)
+			var legacy bytes.Buffer
+			require.NoError(t, source.MarshalBinaryWithBufferV1(&legacy))
+			classes := []encodedClass{{name: "original", tag: byte(source.class)}}
+			if !source.IsConst() {
+				classes = append(classes, encodedClass{name: "legacy", tag: DICTIONARY})
+			}
+			if kind == "fixed" {
+				classes = append(classes, encodedClass{name: "unknown", tag: DICTIONARY + 1, invalid: true})
+			}
+			for _, class := range classes {
+				t.Run(class.name, func(t *testing.T) {
+					for _, mode := range []string{"binary", "trusted", "copy", "legacy_v1", "reader"} {
+						t.Run(mode, func(t *testing.T) {
+							encoded := bytes.Clone(wire)
+							if mode == "legacy_v1" {
+								encoded = bytes.Clone(legacy.Bytes())
+							}
+							encoded[0] = class.tag
+							before := bytes.Clone(encoded)
+							target := NewVec(types.T_any.ToType())
+							t.Cleanup(func() { target.Free(mp) })
+							var decodeErr error
+							switch mode {
+							case "binary":
+								decodeErr = target.UnmarshalBinary(encoded)
+							case "trusted":
+								if !class.invalid {
+									checked := NewVec(types.T_any.ToType())
+									t.Cleanup(func() { checked.Free(mp) })
+									require.NoError(t, checked.UnmarshalBinary(encoded))
+								}
+								decodeErr = target.UnmarshalBinaryTrusted(encoded)
+							case "copy":
+								decodeErr = target.UnmarshalBinaryWithCopy(encoded, mp)
+							case "legacy_v1":
+								decodeErr = target.UnmarshalBinaryV1(encoded)
+							case "reader":
+								decodeErr = target.UnmarshalWithReader(bytes.NewReader(encoded), mp)
+							}
+							require.Equal(t, before, encoded, "decoding must not rewrite shared input bytes")
+							require.False(t, target.IsDictionary(), "row-buffer codecs cannot construct a dictionary backing")
+							if class.invalid {
+								require.Error(t, decodeErr)
+								return
+							}
+							require.NoError(t, decodeErr)
+							require.Equal(t, source.class, target.class)
+							require.Equal(t, *source.GetType(), *target.GetType())
+							require.Equal(t, source.Length(), target.Length())
+							for row := 0; row < source.Length(); row++ {
+								require.Equal(t, source.IsNull(uint64(row)), target.IsNull(uint64(row)))
+								if !source.IsNull(uint64(row)) {
+									if source.GetType().IsVarlen() {
+										require.Equal(t, source.GetBytesAt(row), target.GetBytesAt(row))
+									} else {
+										require.Equal(t, source.GetRawBytesAt(row), target.GetRawBytesAt(row))
+									}
+								}
+							}
+						})
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestDictionaryStringsAndProvenance(t *testing.T) {

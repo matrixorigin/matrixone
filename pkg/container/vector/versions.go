@@ -76,7 +76,7 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
-	if v.IsDictionary() || (len(data) > 0 && data[0] > CONSTANT) {
+	if v.IsDictionary() || (len(data) > 0 && data[0] > DICTIONARY) {
 		return moerr.NewInvalidInputNoCtx("invalid legacy vector representation")
 	}
 	// Keep the legacy decoder contract for unrelated types. JSON needs complete
@@ -122,7 +122,7 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 		)
 	}
 	// read class
-	v.class = int(data[0])
+	v.class = int(decodedPhysicalClass(data[0]))
 	data = data[1:]
 
 	// read typ

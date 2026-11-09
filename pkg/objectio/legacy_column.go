@@ -270,6 +270,11 @@ func readLegacyColumnLayout(source io.ReaderAt, originSize int64) (legacyColumnL
 		layout.nullsOffset+layout.nullsLength+1 != originSize {
 		return layout, moerr.NewInvalidInputNoCtx("invalid legacy object column layout")
 	}
+	// Legacy class 2 stores materialized row buffers, not a dictionary base
+	// and selection. Publish the physical window as FLAT after reading it.
+	if layout.class == vector.DICTIONARY {
+		layout.class = vector.FLAT
+	}
 	expectedData := int64(layout.typ.TypeSize())
 	if layout.class != vector.CONSTANT {
 		expectedData *= int64(layout.rows)

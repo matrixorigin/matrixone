@@ -47,8 +47,12 @@ and their final release belong to the backing owner. No selected-row fraction
 relabels a physical allocation.
 
 Current and legacy serializers reject dictionary headers before emitting bytes;
-decoders reject the reserved class on input. Explicitly materialized flat output
-uses the existing format. This stage adds no transport opcode or SQL type.
+callers materialize logical rows before using those physical codecs. Existing
+row-buffer encodings with legacy class byte 2 remain readable and decode as FLAT,
+because those formats contain per-row values rather than a base and selection.
+Whole-column, copied, streaming, V1 and object-window readers use the same physical
+interpretation without rewriting shared input bytes. Existing class, bounds and
+payload validation is retained. This stage adds no transport opcode or SQL type.
 
 Validation covers flat/constant sources, selection composition/order/repetition,
 NULL/grouping, inline/area strings and provenance, source reuse, legacy alias

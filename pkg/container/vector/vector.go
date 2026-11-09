@@ -4960,6 +4960,16 @@ type vectorBinaryLayout struct {
 	sorted bool
 }
 
+// decodedPhysicalClass preserves the legacy row-buffer class 2. Its encoded
+// values are already materialized; the format contains no dictionary base or
+// selection. Decode it as FLAT without rewriting the caller's input bytes.
+func decodedPhysicalClass(class byte) byte {
+	if class == DICTIONARY {
+		return FLAT
+	}
+	return class
+}
+
 type vectorBinaryCursor struct {
 	data   []byte
 	offset int
@@ -5047,8 +5057,9 @@ func decodeVectorBinaryLayout(
 	if err != nil {
 		return vectorBinaryLayout{}, err
 	}
+	physicalClass := decodedPhysicalClass(class[0])
 	if err = validateVectorBinary(
-		class[0],
+		physicalClass,
 		typ,
 		length,
 		vectorData,
@@ -5059,7 +5070,7 @@ func decodeVectorBinaryLayout(
 		return vectorBinaryLayout{}, err
 	}
 	return vectorBinaryLayout{
-		class:  class[0],
+		class:  physicalClass,
 		typ:    typ,
 		length: int(length),
 		data:   vectorData,
@@ -5316,9 +5327,11 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	}()
 	var err error
 
-	if v.class, err = types.ReadByteAsInt(r); err != nil {
+	encodedClass, err := types.ReadByteAsInt(r)
+	if err != nil {
 		return err
 	}
+	v.class = int(decodedPhysicalClass(byte(encodedClass)))
 
 	if v.typ, err = types.ReadType(r); err != nil {
 		return err
