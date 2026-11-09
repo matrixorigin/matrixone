@@ -41,9 +41,9 @@ type localDomainProbeState struct {
 	pass     bool
 }
 
-func (t *TableScan) localDomainColumn(name string) int {
+func (tableScan *TableScan) localDomainColumn(name string) int {
 	index := -1
-	for i, attr := range t.Attrs {
+	for i, attr := range tableScan.Attrs {
 		if strings.EqualFold(attr, name) {
 			if index >= 0 {
 				return -1
@@ -54,15 +54,15 @@ func (t *TableScan) localDomainColumn(name string) int {
 	return index
 }
 
-func (t *TableScan) prepareLocalDomains(proc *process.Process) error {
-	t.ctr.domainsReady, t.ctr.domainEmpty = false, false
-	for _, binding := range t.LocalDomainBuilds {
-		column := t.localDomainColumn(binding.Column)
-		if column < 0 || column >= len(t.Types) || t.Types[column].Id != int32(binding.Domain.KeyType()) {
+func (tableScan *TableScan) prepareLocalDomains(proc *process.Process) error {
+	tableScan.ctr.domainsReady, tableScan.ctr.domainEmpty = false, false
+	for _, binding := range tableScan.LocalDomainBuilds {
+		column := tableScan.localDomainColumn(binding.Column)
+		if column < 0 || column >= len(tableScan.Types) || tableScan.Types[column].Id != int32(binding.Domain.KeyType()) {
 			binding.Domain.Disable()
 			continue
 		}
-		producer, err := binding.Domain.Begin(proc, int(t.ParallelID), max(1, int(t.GetMaxParallel())))
+		producer, err := binding.Domain.Begin(proc, int(tableScan.ParallelID), max(1, int(tableScan.GetMaxParallel())))
 		if err != nil {
 			return err
 		}
@@ -70,11 +70,11 @@ func (t *TableScan) prepareLocalDomains(proc *process.Process) error {
 			producer.Complete(true)
 			continue
 		}
-		t.ctr.domainSources = append(t.ctr.domainSources, localDomainSourceState{producer: producer, column: column})
+		tableScan.ctr.domainSources = append(tableScan.ctr.domainSources, localDomainSourceState{producer: producer, column: column})
 	}
-	for _, binding := range t.LocalDomainProbes {
-		column := t.localDomainColumn(binding.Column)
-		if column < 0 || column >= len(t.Types) || t.Types[column].Id != int32(binding.Domain.KeyType()) {
+	for _, binding := range tableScan.LocalDomainProbes {
+		column := tableScan.localDomainColumn(binding.Column)
+		if column < 0 || column >= len(tableScan.Types) || tableScan.Types[column].Id != int32(binding.Domain.KeyType()) {
 			binding.Domain.Disable()
 			continue
 		}
@@ -84,39 +84,39 @@ func (t *TableScan) prepareLocalDomains(proc *process.Process) error {
 		if !binding.Domain.Enabled() {
 			continue
 		}
-		t.ctr.domainProbes = append(t.ctr.domainProbes, localDomainProbeState{
+		tableScan.ctr.domainProbes = append(tableScan.ctr.domainProbes, localDomainProbeState{
 			domain: binding.Domain, column: column, mask: make([]uint8, runtimefilter.LocalDomainBatchRows),
 		})
 	}
-	if len(t.ctr.domainProbes) > 0 {
-		t.ctr.domainRows = make([]int64, 0, runtimefilter.LocalDomainBatchRows)
+	if len(tableScan.ctr.domainProbes) > 0 {
+		tableScan.ctr.domainRows = make([]int64, 0, runtimefilter.LocalDomainBatchRows)
 	}
 	return nil
 }
 
-func (t *TableScan) waitLocalDomains(proc *process.Process) error {
-	if t.ctr.domainsReady {
+func (tableScan *TableScan) waitLocalDomains(proc *process.Process) error {
+	if tableScan.ctr.domainsReady {
 		return nil
 	}
-	for i := range t.ctr.domainProbes {
-		p := &t.ctr.domainProbes[i]
+	for i := range tableScan.ctr.domainProbes {
+		p := &tableScan.ctr.domainProbes[i]
 		var empty bool
 		var err error
 		p.bloom, empty, err = p.domain.Wait(proc.Ctx)
 		if err != nil {
 			return err
 		}
-		t.ctr.domainEmpty = t.ctr.domainEmpty || empty
+		tableScan.ctr.domainEmpty = tableScan.ctr.domainEmpty || empty
 		p.pass = p.bloom == nil
 	}
-	t.ctr.domainsReady = true
+	tableScan.ctr.domainsReady = true
 	return nil
 }
 
-func (t *TableScan) applyLocalDomains(proc *process.Process) error {
-	bat := t.ctr.buf
-	for i := range t.ctr.domainSources {
-		s := &t.ctr.domainSources[i]
+func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
+	bat := tableScan.ctr.buf
+	for i := range tableScan.ctr.domainSources {
+		s := &tableScan.ctr.domainSources[i]
 		start := time.Now()
 		if err := s.producer.AddVector(proc.Ctx, bat.Vecs[s.column], bat.RowCount()); err != nil {
 			return err
@@ -125,8 +125,8 @@ func (t *TableScan) applyLocalDomains(proc *process.Process) error {
 		s.rows += int64(bat.RowCount())
 	}
 	var combined []uint8
-	for i := range t.ctr.domainProbes {
-		p := &t.ctr.domainProbes[i]
+	for i := range tableScan.ctr.domainProbes {
+		p := &tableScan.ctr.domainProbes[i]
 		if p.pass || bat.RowCount() > len(p.mask) {
 			p.bypassed += int64(bat.RowCount())
 			continue
@@ -168,36 +168,36 @@ func (t *TableScan) applyLocalDomains(proc *process.Process) error {
 	if combined == nil {
 		return nil
 	}
-	t.ctr.domainRows = t.ctr.domainRows[:0]
+	tableScan.ctr.domainRows = tableScan.ctr.domainRows[:0]
 	for row, keep := range combined {
 		if keep != 0 {
-			t.ctr.domainRows = append(t.ctr.domainRows, int64(row))
+			tableScan.ctr.domainRows = append(tableScan.ctr.domainRows, int64(row))
 		}
 	}
-	if len(t.ctr.domainRows) == bat.RowCount() {
+	if len(tableScan.ctr.domainRows) == bat.RowCount() {
 		return nil
 	}
-	return shrinkPopulatedVecs(bat, t.ctr.domainRows, proc.Mp())
+	return shrinkPopulatedVecs(bat, tableScan.ctr.domainRows, proc.Mp())
 }
 
-func (t *TableScan) releaseLocalDomains() {
-	for _, source := range t.ctr.domainSources {
+func (tableScan *TableScan) releaseLocalDomains() {
+	for _, source := range tableScan.ctr.domainSources {
 		source.producer.Complete(true)
-		if t.OpAnalyzer != nil {
-			stats := t.OpAnalyzer.GetOpStats()
+		if tableScan.OpAnalyzer != nil {
+			stats := tableScan.OpAnalyzer.GetOpStats()
 			stats.AddExtraStat("RuntimeDomainBuildRows", source.rows)
 			stats.AddExtraStat("RuntimeDomainBuildElapsedNs", int64(source.elapsed))
 		}
 	}
-	for _, probe := range t.ctr.domainProbes {
-		if t.OpAnalyzer != nil {
-			stats := t.OpAnalyzer.GetOpStats()
+	for _, probe := range tableScan.ctr.domainProbes {
+		if tableScan.OpAnalyzer != nil {
+			stats := tableScan.OpAnalyzer.GetOpStats()
 			stats.AddExtraStat("RuntimeDomainTestedRows", probe.tested)
 			stats.AddExtraStat("RuntimeDomainRejectedRows", probe.rejected)
 			stats.AddExtraStat("RuntimeDomainBypassedRows", probe.bypassed)
 		}
 	}
-	t.ctr.domainSources, t.ctr.domainProbes, t.ctr.domainRows = nil, nil, nil
-	t.LocalDomainBuilds, t.LocalDomainProbes = nil, nil
-	t.ctr.domainsReady, t.ctr.domainEmpty = false, false
+	tableScan.ctr.domainSources, tableScan.ctr.domainProbes, tableScan.ctr.domainRows = nil, nil, nil
+	tableScan.LocalDomainBuilds, tableScan.LocalDomainProbes = nil, nil
+	tableScan.ctr.domainsReady, tableScan.ctr.domainEmpty = false, false
 }

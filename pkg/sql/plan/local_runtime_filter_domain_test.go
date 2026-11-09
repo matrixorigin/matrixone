@@ -86,7 +86,7 @@ func TestLocalRuntimeFilterDomainCompositeLineage(t *testing.T) {
 				require.Len(t, domains, 1)
 				require.Equal(t, int32(1), domains[0].SourceScanNodeId)
 				require.Equal(t, "key", domains[0].SourceColumnName)
-				var targets []int32
+				targets := make([]int32, 0, len(domains[0].Targets))
 				for _, target := range domains[0].Targets {
 					targets = append(targets, target.ScanNodeId)
 				}
