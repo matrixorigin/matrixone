@@ -258,7 +258,7 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 		file := NewReopenableSpillFile(
 			func(context.Context) (*os.File, error) { return os.Open(name) },
 			func() error { return os.Remove(name) },
-			7, 11, func() { releases.Add(1) },
+			7, 11, func(removed bool) { require.True(t, removed); releases.Add(1) },
 		)
 		t.Cleanup(func() { require.NoError(t, file.Close()) })
 		return file

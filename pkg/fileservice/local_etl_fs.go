@@ -37,7 +37,8 @@ type LocalETLFS struct {
 	rootPath string
 
 	sync.RWMutex
-	dirFiles map[string]*os.File
+	dirFiles  map[string]*os.File
+	spillRoot spillRootHolder
 }
 
 var _ FileService = new(LocalETLFS)
@@ -72,6 +73,7 @@ func (l *LocalETLFS) Name() string {
 }
 
 func (l *LocalETLFS) Close(ctx context.Context) {
+	l.spillRoot.close()
 	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
 
@@ -711,5 +713,5 @@ func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
 }
 
 func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
-	return createAndRemoveMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath, unlinkLocalFile)
+	return createAndRemoveMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath, unlinkAnonymousLocalFile)
 }
