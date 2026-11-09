@@ -250,7 +250,7 @@ func TestLoadCommentIgnorePlanEntries(t *testing.T) {
 			if legacy {
 				result, err = buildLoad(load, ctx, false)
 			} else {
-				result, err = BuildPlan(ctx, stmt, false)
+				result, err = BuildPlan(ctx, stmt, false, nil)
 			}
 			require.NoError(t, err)
 			var scan *planpb.Node

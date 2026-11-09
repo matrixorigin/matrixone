@@ -38,6 +38,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -302,12 +303,21 @@ type Compile struct {
 	// nil for every native statement.
 	siriusRead *siriusReadOwner
 
-	pn *plan.Plan
+	pn                       *plan.Plan
+	indexMaintenanceSpec     *executor.IndexMaintenanceSpec
+	indexMaintenanceLiterals []string
+	indexMaintenanceNodeID   int32
 	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
 	// alone cannot recover the source type of each original parameter.
 	preparedParamValues []any
 	// Proof belongs to this bound execution and physical plan generation.
 	preparedJoinDiagnosticFree bool
+	// Validated for this execution only; never retained by a cached plan.
+	executionIntent            *plan2.ExecutionIntent
+	capturedExecutionTopology  bool
+	preflightPending           bool
+	txnOffsetPending           bool
+	preserveProcessOnPoolClear bool
 
 	execType plan2.ExecType
 
@@ -401,8 +411,9 @@ type Compile struct {
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
-	startAt       time.Time
+	buildPlanFunc         func(ctx context.Context) (*plan2.Plan, error)
+	buildFallbackPlanFunc func(ctx context.Context) (*plan2.Plan, error)
+	startAt               time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck
 

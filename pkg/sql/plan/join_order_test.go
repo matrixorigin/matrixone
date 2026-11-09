@@ -306,7 +306,7 @@ func TestBoundPlanOrdersDimensionsByFactKeyActiveDomain(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
 	defer stmts[0].Free()
-	built, err := BuildPlan(ctx, stmts[0], false)
+	built, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 
 	var firstDimension string

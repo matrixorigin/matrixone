@@ -379,6 +379,31 @@ var (
 		},
 	)
 
+	// FSDiskCacheDownloadReadCounter counts the reads of objects being downloaded to the
+	// disk cache, by how each was served: from bytes already written, after waiting
+	// for them, or by a range read after a timed-out or declined wait.
+	FSDiskCacheDownloadReadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_download_read_total",
+			Help:      "Total number of reads of objects being downloaded to the disk cache, by outcome",
+		}, []string{"type"})
+	FSDiskCacheDownloadReadWrittenCounter  = FSDiskCacheDownloadReadCounter.WithLabelValues("written")
+	FSDiskCacheDownloadReadWaitedCounter   = FSDiskCacheDownloadReadCounter.WithLabelValues("waited")
+	FSDiskCacheDownloadReadTimedOutCounter = FSDiskCacheDownloadReadCounter.WithLabelValues("timed-out")
+	FSDiskCacheDownloadReadDeclinedCounter = FSDiskCacheDownloadReadCounter.WithLabelValues("declined")
+
+	// FSDiskCacheDownloadDeclinedBytesCounter counts the bytes that reads of objects being
+	// downloaded fetch again from object storage instead of waiting for the download.
+	FSDiskCacheDownloadDeclinedBytesCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_download_declined_bytes_total",
+			Help:      "Total bytes read from object storage by reads that did not wait for the download of their object",
+		})
+
 	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
 	// dropped when the bounded asynchronous queue cannot admit more work.
 	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(

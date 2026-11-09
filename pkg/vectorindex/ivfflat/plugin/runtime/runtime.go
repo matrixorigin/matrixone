@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
@@ -43,6 +44,14 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 
 // CatalogHooks implements plugin/catalog.Hooks for IVF-FLAT.
 type CatalogHooks struct{}
+
+// MaintenanceOperands projects config fields onto the relations IVF consumes.
+func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.MaintenanceOperand {
+	return []vectorindex.MaintenanceOperand{
+		{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Name: cfg.MetadataTable},
+		{Role: catalog.SystemSI_IVFFLAT_TblType_Centroids, Name: cfg.IndexTable},
+	}
+}
 
 // HiddenTableTypes — IVF-FLAT uses three hidden tables (metadata,
 // centroids, entries) vs two for HNSW/CAGRA/IVF-PQ. Order is irrelevant;

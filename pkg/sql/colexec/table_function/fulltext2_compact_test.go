@@ -69,6 +69,7 @@ func makeStrConstExpr(s string) *plan.Expr {
 
 func TestFulltext2CompactPrepareArgCount(t *testing.T) {
 	proc := testutil.NewProc(t)
+	installOrdinaryMaintenanceRelations(t, proc)
 
 	// too few / too many args are rejected by prepare.
 	for _, n := range []int{0, 1, 3, 7} {
@@ -98,6 +99,7 @@ func TestFulltext2CompactPrepareArgCount(t *testing.T) {
 func TestFulltext2CompactStartValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	installOrdinaryMaintenanceRelations(t, proc)
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
 
 	good := func() []*vector.Vector {
@@ -148,6 +150,7 @@ func TestFulltext2CompactStartValidation(t *testing.T) {
 func TestFulltext2CompactStartOptionalArgs(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	installOrdinaryMaintenanceRelations(t, proc)
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
 
 	// 6 args: capacity + position_free=true + posting_capacity=4096 all parsed.
@@ -182,6 +185,7 @@ func TestFulltext2CompactStartOptionalArgs(t *testing.T) {
 
 func TestFulltext2CompactEndNotInited(t *testing.T) {
 	proc := testutil.NewProc(t)
+	installOrdinaryMaintenanceRelations(t, proc)
 	st := &fulltext2CompactState{}
 	// end() before start() must be a no-op (no CompactSegments / DB access).
 	require.NoError(t, st.end(&TableFunction{}, proc))

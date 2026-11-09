@@ -1,0 +1,22 @@
+drop database if exists rc_write_dependency;
+create database rc_write_dependency;
+use rc_write_dependency;
+create table inventory(account_id int unsigned,database_id bigint unsigned,epoch bigint unsigned,primary key(account_id,database_id));
+insert into inventory values(0,42,1);
+set session transaction isolation level read committed;
+begin;
+update inventory set epoch=epoch+1 where account_id=0 and database_id=42 and epoch=1;
+use rc_write_dependency;
+set session transaction isolation level read committed;
+begin;
+update inventory set epoch=epoch+1 where account_id=0 and database_id=42 and epoch=1;
+commit;
+-- @regex("^w-w conflict: tableID: [0-9]+, optimistic RC snapshot advance$", true)
+select epoch from inventory;
+w-w conflict
+rollback;
+select account_id,database_id,epoch from inventory;
+account_id	database_id	epoch
+0	42	2
+set session transaction isolation level repeatable read;
+drop database rc_write_dependency;

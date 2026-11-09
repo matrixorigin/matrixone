@@ -45,7 +45,7 @@ func TestCreateExternalTableParamMetadataRoundTrips(t *testing.T) {
 		require.True(t, ok)
 		require.NotNil(t, create.Param)
 
-		pn, err := BuildPlan(ctx, create, false)
+		pn, err := BuildPlan(ctx, create, false, nil)
 		require.NoError(t, err, "the SET form is accepted by CREATE EXTERNAL TABLE")
 
 		var property string

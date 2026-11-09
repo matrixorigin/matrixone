@@ -967,16 +967,23 @@ const (
 	EWM_CORR = 628
 
 	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
-	UNZIP_FILE = 632
+	UNZIP_FILE           = 632
+	MO_IS_PHYSICAL_INDEX = 633
+
+	// Internal temporal candidate helpers.
+	TEMPORAL_DATETIME_BOUND  = 634
+	TEMPORAL_TIMESTAMP_BOUND = 635
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 633
+	FUNCTION_END_NUMBER = 636
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
-	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
-	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+	"__mo_temporal_datetime_bound":  TEMPORAL_DATETIME_BOUND,
+	"__mo_temporal_timestamp_bound": TEMPORAL_TIMESTAMP_BOUND,
+	"timestampadd_second_interval":  TIMESTAMPADD_SECOND_INTERVAL,
+	"_check_async_datalink_source":  CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
@@ -1088,6 +1095,7 @@ var functionIdRegister = map[string]int32{
 	"ewmcov":                       EWM_COV,
 	"ewmcorr":                      EWM_CORR,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_is_physical_index":         MO_IS_PHYSICAL_INDEX,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
 	"mrank":                        MRANK,

@@ -6135,6 +6135,12 @@ func (txn *Transaction) transferTombstonesByCommit(ctx context.Context) error {
 		return nil
 	}
 
+	// Also retry validation after an earlier failed advance; a statement error
+	// must not allow COMMIT to use the already advanced read snapshot unchecked.
+	if err := txn.validateOptimisticWritesLocked(ctx); err != nil {
+		return err
+	}
+
 	if txn.transfer.pendingTransfer ||
 		forceTransfer(ctx) ||
 		!skipTransfer(ctx, txn) {
@@ -6356,12 +6362,19 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 // frontend admission or a new user Compile/Reset. Borrowed SQL never advances the
 // boundary, or a mid-statement dump can compact entries covered by it.
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
-	txn.beginCatalogMutation()
-	defer txn.endCatalogMutation()
 	txn.Lock()
 	defer txn.Unlock()
-	txn.snapshotWriteOffset.Store(int64(len(txn.writes)))
-	txn.adjustWriteOffset = len(txn.writes)
+	next := len(txn.writes)
+	// An unchanged statement boundary does not change the catalog read domain.
+	// In particular a normal readonly Compile must not invalidate the native
+	// metadata it just resolved. Both boundaries must agree before skipping.
+	if txn.snapshotWriteOffset.Load() == int64(next) && txn.adjustWriteOffset == next {
+		return
+	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
+	txn.snapshotWriteOffset.Store(int64(next))
+	txn.adjustWriteOffset = next
 }
 
 // ApproximateInMemInsertSize returns the approximate total size of in-memory

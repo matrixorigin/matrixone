@@ -77,9 +77,15 @@ func TestPartitionMetadataCacheReadBinding(t *testing.T) {
 	name := "before"
 	queries := 0
 	advanceDuringRead := false
+	advanceWorkspaceDuringRead := false
 	lookup := executor.NewMemExecutor(func(query string) (executor.Result, error) {
 		queries++
 		if strings.Contains(query, catalog.MOPartitionTables) {
+			if advanceWorkspaceDuringRead {
+				workspace.revision++
+				workspace.stable = false // a parallel COPY data producer, not DDL
+				advanceWorkspaceDuringRead = false
+			}
 			if advanceDuringRead {
 				op.stamp.Revision++
 				advanceDuringRead = false
@@ -139,11 +145,27 @@ func TestPartitionMetadataCacheReadBinding(t *testing.T) {
 	_, _, err = s.GetMetadata(ctx, 7, op)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "a changed cache-hit generation must retry")
 	op.onGet = nil
+	workspace.revision++
+	advanceWorkspaceDuringRead = true
+	name = "parallel-data-write"
+	got, _, err = s.GetMetadata(ctx, 7, op)
+	require.NoError(t, err, "data writes do not change the metadata snapshot")
+	require.Equal(t, "parallel-data-write", got.TableName)
+	workspace.stable = true
+	beforeDataRead := queries
+	name = "after-data-write"
+	got, _, err = s.GetMetadata(ctx, 7, op)
+	require.NoError(t, err)
+	require.Equal(t, "after-data-write", got.TableName)
+	require.Equal(t, beforeDataRead+2, queries, "an unsettled read must not publish a cache entry")
 	workspace.stable = false
 	name = "unsettled"
 	got, _, err = s.GetMetadata(ctx, 7, op)
 	require.NoError(t, err)
 	require.Equal(t, "unsettled", got.TableName, "an unstable workspace cannot use the previous cache entry")
+	advanceDuringRead = true
+	_, _, err = s.GetMetadata(ctx, 7, op)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "snapshot generation must remain bound even during data writes")
 	workspace.stable = true
 	workspace.revision++
 	name = "unstamped-first"

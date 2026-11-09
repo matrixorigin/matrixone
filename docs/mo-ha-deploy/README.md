@@ -2,7 +2,7 @@
 
 两台机器，用 DRBD 块级复制整个数据目录，Pacemaker 保证严格单活。
 MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `docker-compose` 资源代理启停
-（**不进 systemd**）。RPO = 0，实测切换 12–18s。
+（**不进 systemd**）。同步复制的 RPO=0 以 DRBD 正常连接、双端同步及隔离机制通过验收为前提；切换时间受故障检测、隔离和 MO 恢复耗时影响。
 
 支持 RHEL / CentOS / Rocky / AlmaLinux 与 Debian / Ubuntu。
 
@@ -46,8 +46,6 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
 
-`check` 会核对 quorum / STONITH / DRBD Promoted / 各资源状态，并探测 MO 客户端端口是否已监听；若配置了 `MO_ROOT_PASSWORD`，还会用 `mysql` 客户端（宿主机或容器内）做一次 `select 1` 登录验证（未配置则跳过）。注意容器 Started 只说明进程在跑，不代表 SQL 已可用。
-
 ## 三、验证
 
 ```bash
@@ -56,7 +54,7 @@ sudo drbdadm status mo   # 活动侧 Primary，对侧 peer-disk:UpToDate
 mysql -h 127.0.0.1 -P 6001 -u root -p111 -e "select 1"
 ```
 
-故障演练（对**非活动**节点断电，确认自动切换且数据不丢）：
+隔离代理演练（对**非活动**节点重启，验证 fencing 和重新入群；不代替活动节点故障接管测试）：
 
 ```bash
 sudo stonith_admin --reboot <非活动节点>
@@ -64,7 +62,7 @@ sudo pcs stonith history
 sudo pcs status
 ```
 
-被断电的节点重新上电后会自己回到集群，DRBD 自动重新同步到 `UpToDate`。
+预期被隔离节点重新上电、集群服务启动并恢复通信后重新入群，DRBD 重新同步到双端 `UpToDate`。活动节点断网测试还应验收：对端完成隔离并接管，恢复网卡后原节点无需手动启动即可回到 `Online`，DRBD 补齐数据，始终只有一个 Primary。业务可继续留在接管节点。
 
 ## 四、fencing 参数
 
@@ -84,7 +82,14 @@ FENCE_SHARED_IP="10.0.0.50"; FENCE_PLUG_SELF="3"; FENCE_PLUG_PEER="4"
 # 虚拟化平台：单入口，用 VM 标识区分
 FENCE_SCENARIO="vmware"
 FENCE_SHARED_IP="vcenter.lab"; FENCE_PLUG_SELF="vm-101"; FENCE_PLUG_PEER="vm-102"
+
+# Proxmox：VMID 映射到节点；显式填写当前 agent 要求的 vmtype
+FENCE_SCENARIO="proxmox"
+FENCE_SHARED_IP="pve.example.com"; FENCE_PLUG_SELF="101"; FENCE_PLUG_PEER="102"
+FENCE_LOGIN="hauser@pve"; FENCE_PASSWORD="..."
+FENCE_EXTRA="ipport=8006,vmtype=qemu"
 ```
+
 
 fencing 不能省，也不能用假实现。上线前务必对非活动节点实弹演练一次。
 
@@ -108,3 +113,10 @@ fencing 不能省，也不能用假实现。上线前务必对非活动节点实
 | `deploy.env.example` | 参数模板，复制后修改 |
 | `mo-config/` | MatrixOne all-in-one compose 与 launch/log/tn/cn 配置模板 |
 | `agents/heartbeat/docker-compose` | OCF 资源代理（EL9 的 resource-agents 不含，随包下发） |
+| `backups/20261105-before-fixes/` | 本次修改前的原脚本、env 模板及 SHA-256 校验值 |
+| `backups/20261105-before-proxmox-fix/` | 集成 Proxmox 自动发现修复前的脚本 |
+
+
+备份与修改前原件已逐字节校验。若需回退仓库交付文件，将备份中的 `mo-ha-deploy.sh` 和 `deploy.env.example` 复制回本目录；这只回退文件，不会回滚已执行的系统/集群操作。
+
+相关官方说明：[pcs 离线配置与差异提交](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/configuring_and_managing_high_availability_clusters/assembly_pcs-operation-configuring-and-managing-high-availability-clusters)、[Pacemaker DRBD 克隆参数示例](https://github.com/ClusterLabs/pacemaker/blob/main/doc/sphinx/Pacemaker_Administration/pcs-crmsh.rst)、[fence_pve 代理参数](https://github.com/ClusterLabs/fence-agents/blob/main/agents/pve/fence_pve.py)。

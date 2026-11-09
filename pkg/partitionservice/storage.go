@@ -57,10 +57,13 @@ type partitionMetadataScope struct {
 	workspaceRevision uint64
 }
 
-func (s partitionMetadataScope) matches(other partitionMetadataScope) bool {
+func (s partitionMetadataScope) sameTransaction(other partitionMetadataScope) bool {
 	return s.account == other.account && s.transactionID == other.transactionID &&
-		s.snapshot.Equal(other.snapshot) && s.transactionRev == other.transactionRev &&
-		s.workspaceRevision == other.workspaceRevision
+		s.snapshot.Equal(other.snapshot) && s.transactionRev == other.transactionRev
+}
+
+func (s partitionMetadataScope) matches(other partitionMetadataScope) bool {
+	return s.sameTransaction(other) && s.workspaceRevision == other.workspaceRevision
 }
 
 type partitionMetadataCacheEntry struct {
@@ -87,11 +90,8 @@ func partitionMetadataReadScope(op client.TxnOperator, account uint32) (partitio
 		return partitionMetadataScope{}, false, nil
 	}
 	revision, stable := visibility.CatalogVisibility()
-	if !stable {
-		return partitionMetadataScope{}, false, nil
-	}
 	return partitionMetadataScope{account: account, transactionID: stamp.TransactionID,
-		snapshot: stamp.Snapshot, transactionRev: stamp.Revision, workspaceRevision: revision}, true, nil
+		snapshot: stamp.Snapshot, transactionRev: stamp.Revision, workspaceRevision: revision}, stable, nil
 }
 
 func NewStorage(
@@ -152,13 +152,16 @@ func (s *storage) GetMetadata(
 				if err != nil {
 					return partition.PartitionMetadata{}, false, err
 				}
-				if !stable || !scope.matches(current) {
+				if !scope.sameTransaction(current) {
 					return partition.PartitionMetadata{}, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 				}
 				if err := ctx.Err(); err != nil {
 					return partition.PartitionMetadata{}, false, err
 				}
-				return *proto.Clone(&cached.metadata).(*partition.PartitionMetadata), true, nil
+				if stable && scope.matches(current) {
+					return *proto.Clone(&cached.metadata).(*partition.PartitionMetadata), true, nil
+				}
+				// A workspace-only change is a cache miss, not a schema verdict.
 			}
 		}
 		opts = opts.WithDisableIncrStatement()
@@ -302,13 +305,23 @@ func (s *storage) GetMetadata(
 	if err = ctx.Err(); err != nil {
 		return partition.PartitionMetadata{}, false, err
 	}
-	if txnOp != nil && scoped {
+	if txnOp != nil && scope.transactionID != "" {
 		current, stable, scopeErr := partitionMetadataReadScope(txnOp, accountID)
 		if scopeErr != nil {
 			return partition.PartitionMetadata{}, false, scopeErr
 		}
-		if !stable || !scope.matches(current) {
+		if !scope.sameTransaction(current) {
 			return partition.PartitionMetadata{}, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		// CatalogVisibility also covers data writes and physical workspace
+		// maintenance. A parallel COPY producer can change it while these
+		// ordinary metadata SELECTs run at the same transaction snapshot.
+		// That forbids caching this result; it is not evidence that the
+		// schema changed. Actual snapshot/transaction drift still retries.
+		// As with the SQL executor, the caller owns serialization of catalog
+		// mutations; a visibility stamp is not a concurrent-DDL read lock.
+		if !scoped || !stable || !scope.matches(current) {
+			return metadata, found, nil
 		}
 		if found {
 			owned := *proto.Clone(&metadata).(*partition.PartitionMetadata)

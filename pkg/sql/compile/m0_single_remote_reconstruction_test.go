@@ -215,7 +215,7 @@ func TestM0SingleRemoteRebuildDispatchAndReceive(t *testing.T) {
 		defer received.release()
 		require.Zero(t, received.TxnOffset)
 		received.Proc.Ctx = c.proc.Ctx
-		readers, err := received.buildReaders(c)
+		readers, _, err := received.buildReaders(c)
 		require.NoError(t, err)
 		require.Len(t, readers, 1)
 		require.NoError(t, readers[0].Close())

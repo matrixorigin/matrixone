@@ -468,7 +468,7 @@ func TestM0RemoteSingleScopeRetainsShippedTombstones(t *testing.T) {
 			return []engine.Reader{new(readutil.EmptyReader)}, nil
 		})
 	watermark.result = ts
-	rebuiltReaders, err := received.buildReaders(c)
+	rebuiltReaders, _, err := received.buildReaders(c)
 	require.NoError(t, err)
 	require.Len(t, rebuiltReaders, 1)
 	require.NoError(t, rebuiltReaders[0].Close())
@@ -508,13 +508,13 @@ func TestM0RemoteSingleScopeRetainsShippedTombstones(t *testing.T) {
 			return []engine.Reader{new(readutil.EmptyReader)}, nil
 		})
 	before := rangeCalls
-	readers, err := received.buildReaders(c)
+	readers, _, err := received.buildReaders(c)
 	require.ErrorContains(t, err, "watermark precedes")
 	require.Empty(t, readers)
 	require.Equal(t, before, rangeCalls, "stale watermark must fail before ranges")
 	require.Equal(t, ts.Prev(), watermark.want)
 	watermark.result = ts
-	readers, err = received.buildReaders(c)
+	readers, _, err = received.buildReaders(c)
 	require.NoError(t, err)
 	require.Len(t, readers, 1)
 	require.NoError(t, readers[0].Close())
@@ -844,7 +844,7 @@ func TestM0RemotePublishedTableReaderAccount(t *testing.T) {
 	s := &Scope{IsRemote: true, NodeInfo: engine.Node{CNCNT: 2, Mcpu: 1, Data: readutil.NewBlockListRelationData(0)}, DataSource: &Source{
 		SchemaName: "db", RelationName: "customer", TableDef: def, node: node, Timestamp: ts,
 	}}
-	readers, err := s.buildReaders(c)
+	readers, _, err := s.buildReaders(c)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		for _, reader := range readers {
@@ -941,7 +941,7 @@ func TestM0RemoteHistoricalSnapshotReaderAccount(t *testing.T) {
 				s := &Scope{Proc: pipeline, IsRemote: true, NodeInfo: engine.Node{CNCNT: cnCount, Mcpu: 1, Data: readutil.NewBlockListRelationData(0)}, DataSource: &Source{
 					SchemaName: dbName, RelationName: tableName, Attributes: []string{"a"}, TableDef: def, node: node, Timestamp: old,
 				}}
-				readers, err := s.buildReaders(c)
+				readers, _, err := s.buildReaders(c)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					for _, reader := range readers {
@@ -1110,7 +1110,7 @@ func testM0RemoteReaderBuildGenerationChange(t *testing.T, cancelDuringBuild, re
 	s := &Scope{IsRemote: true, NodeInfo: engine.Node{CNCNT: 2, Mcpu: 1, Data: readutil.NewBlockListRelationData(0)}, DataSource: &Source{
 		SchemaName: "db", RelationName: "customer", TableDef: def, node: node, Timestamp: ts,
 	}}
-	readers, err := s.buildReaders(c)
+	readers, _, err := s.buildReaders(c)
 	require.Error(t, err)
 	if cancelDuringBuild {
 		require.ErrorIs(t, err, context.Canceled)

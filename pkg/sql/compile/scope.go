@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -370,6 +371,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("error", err.Error()))
 		}
 		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err = resolveSenderPipelineError(s, err)
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -409,7 +411,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 
 				buildStart := time.Now()
-				readers, err := s.buildReaders(c)
+				readers, _, err := s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
 					return err
@@ -613,7 +615,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			// the unsubmitted scope through the ordinary start-failure cleanup so
 			// that receiver has a terminal signal to drain.
 			claimedPreScopes[i] = true
-			cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
+			cause = cleanScopeTreeWithStartFail(scope, cause, c.isPrepare)
 			if completions != nil {
 				completions[i].finish(newScopeRunResult(cause, scope))
 			}
@@ -627,7 +629,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// Ordinary branches were initialized serially by Compile.Run. Repeating
 		// initialization here would rebuild DOP clones' filters concurrently.
 		if initErr := s.initLazyPreScope(scope, c); initErr != nil {
-			cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
+			initErr = cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
 			s.cancelMergeSiblingsOnError(initErr)
 			publishPreScopeResult(i, newScopeRunResult(initErr, scope))
 			return initErr
@@ -648,7 +650,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					err = scope.RemoteRun(c)
 				default:
 					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-					cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
+					err = cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
 				publishPreScopeResult(i, newScopeRunResult(err, scope))
@@ -657,7 +659,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		// build routine failed.
 		if submitPreScope != nil {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
-			cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
+			submitPreScope = cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
 			publishPreScopeResult(i, newScopeRunResult(submitPreScope, scope))
 		}
@@ -668,12 +670,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.LazyPreScopes {
 		if len(s.PreScopes) < 2 || len(s.RemoteReceivRegInfos) != 0 {
 			err = moerr.NewInternalErrorNoCtx("invalid lazy union all scope topology")
-			cleanScopeTreeWithStartFail(s, err, c.isPrepare)
+			err = cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 			return err
 		}
 		clearStarter, deferFirst, installErr := installSequentialBranchStarter(s.RootOp, startPreScope, waitPreScope)
 		if installErr != nil {
-			cleanScopeTreeWithStartFail(s, installErr, c.isPrepare)
+			installErr = cleanScopeTreeWithStartFail(s, installErr, c.isPrepare)
 			return installErr
 		}
 		defer clearStarter()
@@ -685,7 +687,10 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			for i := range claimedPreScopes {
 				if !claimedPreScopes[i] {
 					claimedPreScopes[i] = true
-					cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+					cleanupErr := cleanScopeTreeWithStartFail(s.PreScopes[i], cause, c.isPrepare)
+					if err == nil && cleanupErr != nil && !process.IsPipelineCancellationError(cleanupErr) {
+						err = cleanupErr
+					}
 				}
 			}
 		}()
@@ -838,16 +843,24 @@ func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
 // Its input producers (including DOP clones and remote notifiers) may never
 // exist. Disable input waits, but still reset every operator to release owned
 // resources and publish the actual outcome to the containing scope's consumers.
-func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
+func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) error {
 	if sp == nil {
-		return
+		return fail
 	}
 	if fail == process.ErrPipelineStopped {
 		fail = nil
+		if sp.Proc != nil && sp.Proc.Base != nil {
+			fail = sp.Proc.GetQueryContextError()
+		}
 	}
+	result := fail
 	for _, preScope := range sp.PreScopes {
-		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+		childErr := cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
+		if result == nil && childErr != nil && !process.IsPipelineCancellationError(childErr) {
+			result = childErr
+		}
 	}
+	fail = resolveSenderPipelineError(sp, result)
 	_ = vm.HandleAllOp(sp.RootOp, func(_ vm.Operator, op vm.Operator) error {
 		if m, ok := op.(*merge.Merge); ok {
 			m.DisableReceiverWaitForStartFailure(sp.Proc)
@@ -859,6 +872,28 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 	}
 	p := pipeline.New(0, nil, sp.RootOp)
 	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
+	return fail
+}
+
+// An owned local exchange sits immediately below its Dispatch. Resolve its
+// pool outcome before the sender publishes a terminal signal and before the
+// scope result is collected. Query-level cancellation remains authoritative.
+func resolveSenderPipelineError(s *Scope, err error) error {
+	if s == nil || s.Proc == nil || s.Proc.Base == nil {
+		return err
+	}
+	sender, ok := s.RootOp.(*dispatch.Dispatch)
+	if !ok || sender.GetOperatorBase().NumChildren() != 1 {
+		return err
+	}
+	router, ok := sender.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	if !ok || !router.OwnedOutput {
+		return err
+	}
+	if s.Proc.GetQueryContextError() != nil {
+		return err
+	}
+	return router.ResolvePipelineError(err)
 }
 
 // The original sender's Reset publishes one End. Before DOP workers exist,
@@ -960,8 +995,7 @@ func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
 	if c != nil && c.proc != nil && c.proc.Cancel != nil {
 		c.proc.Cancel(err)
 	}
-	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
-	return err
+	return cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 }
 
 func validateRemoteRunAddress(scopeAddr, localAddr string) error {
@@ -1078,6 +1112,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 				s.Proc.Ctx,
 				queryCtx,
 			)
+			err = resolveSenderPipelineError(s, err)
 			if process.IsPipelineCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
 			}
@@ -1151,39 +1186,50 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 // this function will create a pipeline which will get data from n scan-pipeline and output it as a while to the outside.
 // return true if this was just one scan but not mergeScan.
 func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	// unexpected case.
-	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
-	}
-
+	// Each local or remote reader orders only its own blocks. Its paired Top
+	// publishes a local threshold; MergeTop still decides the global result.
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	buildStart := time.Now()
 	defer func() {
 		stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 	}()
-	readers, err := s.buildReaders(c)
+	readers, cutoffDataSupported, err := s.buildReaders(c)
 	if err != nil {
 		return nil, err
+	}
+	orderedReaders := cutoffDataSupported && len(readers) != 0 && len(s.DataSource.RecvMsgList) == 1 && len(s.DataSource.OrderBy) == 1
+	for _, reader := range readers {
+		reader.SetOrderBy(s.DataSource.OrderBy)
+		reader.SetIndexParam(s.DataSource.IndexReaderParam)
+		if orderedReaders && !readutil.SupportsScanCutoff(reader) {
+			orderedReaders = false
+		}
+	}
+	var cutoffTag int32
+	if orderedReaders {
+		cutoffTag = initScanCutoff(s)
+	} else {
+		clearScanCutoffs(s.RootOp)
 	}
 	// only one scan reader, it can just run without any merge.
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
-		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 		return s, nil
 	}
 
 	ms, ss := newParallelScope(s)
+	if cutoffTag != 0 {
+		// The clones now own the only execution references. The source tree is
+		// retained for reuse/analysis and must not retain a prior generation.
+		clearScanCutoffs(s.RootOp)
+	}
 	for i := range ss {
 		recvMsgList := slices.Clone(s.DataSource.RecvMsgList)
 		for j := range recvMsgList {
-			if recvMsgList[j].MsgType == int32(message.MsgTopValue) {
+			if recvMsgList[j].MsgType == int32(message.MsgTopValue) && recvMsgList[j].MsgTag != cutoffTag {
 				recvMsgList[j].MsgTag += int32(i) << 16
 			}
 		}
-
-		readers[i].SetOrderBy(s.DataSource.OrderBy)
-		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
 			R:                  readers[i],
@@ -2083,11 +2129,11 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 	return ctx
 }
 
-func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, cutoffDataSupported bool, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
-		return emptyScanReaders(s.NodeInfo.Mcpu), nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), false, nil
 	}
 
 	// receive runtime filter and optimize the datasource.
@@ -2100,7 +2146,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		return
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
-		return s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
+		readers, err = s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
+		return
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
@@ -2112,7 +2159,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// DROP and constant-false predicates prove that this scan has no rows.
 		// Skipping only range collection still lets relation readers scan memory.
 		s.NodeInfo.Data = nil // No reader owns the assigned ranges or tombstones.
-		return emptyScanReaders(s.NodeInfo.Mcpu), nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), false, nil
 	}
 	blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
 	if err != nil {
@@ -2124,15 +2171,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if s.IsRemote && activeM0Enabled {
 		txnOp, bindingCtx, checkErr := c.getCompileTableScanDataSourceTxn(s)
 		if checkErr != nil {
-			return nil, checkErr
+			return nil, false, checkErr
 		}
 		m0ReadTxn = txnOp
 		if s.NodeInfo.CNCNT == 1 {
 			if s.Proc == nil || c.proc.Base == nil {
-				return nil, moerr.NewInternalErrorNoCtx("M0: remote snapshot admission has no process")
+				return nil, false, moerr.NewInternalErrorNoCtx("M0: remote snapshot admission has no process")
 			}
 			if checkErr = activeM0WaitRemoteReadSnapshot(s.Proc.Ctx, c.proc.Base.TxnClient, txnOp.SnapshotTS()); checkErr != nil {
-				return nil, checkErr
+				return nil, false, checkErr
 			}
 		}
 		// The relation was opened under the snapshot/publication account in
@@ -2146,7 +2193,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 		validateGeneration, checkErr := c.captureM0ReadGenerations(txnOp)
 		if checkErr != nil {
-			return nil, checkErr
+			return nil, false, checkErr
 		}
 		defer func() {
 			if err != nil {
@@ -2177,6 +2224,13 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	err = s.getRelDataWithTxn(c, blockFilterList, m0ReadTxn)
 	if err != nil {
 		return
+	}
+	// Classify the actual ranges before readers take ownership and Data is
+	// cleared. Unknown and composite implementations have no proven ordering
+	// contract; calling their GetType can itself be unsupported.
+	switch s.NodeInfo.Data.(type) {
+	case *readutil.BlockListRelData, *readutil.ObjListRelData:
+		cutoffDataSupported = true
 	}
 
 	switch {

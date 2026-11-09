@@ -167,7 +167,7 @@ func TestM0RemoteDecodedScopeReadsSerializedAppendObject(t *testing.T) {
 	db := mock_frontend.NewMockDatabase(ctrl)
 	db.EXPECT().Relation(gomock.Any(), "customer", gomock.Any()).Return(rel, nil)
 	c.e = &m0SerializedReaderEngine{readerPathCaptureEngine: &readerPathCaptureEngine{database: db}, fs: fs}
-	readers, err := received.buildReaders(c)
+	readers, _, err := received.buildReaders(c)
 	require.NoError(t, err)
 	require.Len(t, readers, 1)
 	t.Cleanup(func() { _ = readers[0].Close() })

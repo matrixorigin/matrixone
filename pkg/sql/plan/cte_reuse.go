@@ -703,7 +703,7 @@ func cteReuseFitsStorage(stats *planpb.Stats, outputTypes []planpb.Type, spillEl
 	if fixedWidth && estimatedBytes <= cteReuseEstimatedMaterializedBytesLimit {
 		return true
 	}
-	declaredRowSize, sizeKnown := materializedDeclaredRowSize(outputTypes)
+	declaredRowSize, sizeKnown := MaterializedDeclaredRowSize(outputTypes)
 	return spillEligible && sizeKnown &&
 		declaredRowSize <= float64(materialized.MaxSpillBatchBytes)/2 &&
 		estimatedBytes <= cteReuseEstimatedSpillBytesLimit
@@ -716,7 +716,7 @@ func cteEstimatedMaterializedBytes(
 	if stats == nil || !finitePositive(stats.Outcnt) || !finitePositive(stats.Rowsize) {
 		return 0, false, false
 	}
-	declaredRowSize, sizeKnown := materializedDeclaredRowSize(outputTypes)
+	declaredRowSize, sizeKnown := MaterializedDeclaredRowSize(outputTypes)
 	if !sizeKnown {
 		return 0, false, false
 	}

@@ -3962,7 +3962,7 @@ func isSingleValueZoneMap(zm objectio.ZoneMap) bool {
 	if !zm.IsInited() {
 		return false
 	}
-	return compute.Compare(zm.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) == 0
+	return compute.Compare(zm.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) == 0 && !zm.MayHaveUnboundedByteMax()
 }
 
 func foldAndZoneMap(

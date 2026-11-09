@@ -1,5 +1,45 @@
 # M0 restricted metadata-only ADD prototype
 
+
+## Partition ALTER integration repair, 2026-11-09
+
+This revision merges frozen main `c99234dcf4c94d1ff9d372917cd35041f1a3a682`
+into published candidate `51079193fc618fd9c99d9c990d11a9d2cf1b4f07`.
+Conflict resolution preserves upstream index-maintenance bindings, reader cutoff
+results and usable order-zone-map checks alongside AR-1 CREATE authority,
+nullable-expression protection and public COLUMNS ordinals.
+
+Partition metadata SELECTs borrowing an ALTER transaction no longer reorder the
+parent statement's pending writes when the SELECT produced no workspace data.
+Root statements, DML and SELECTs that produced data retain workspace adjustment.
+Generic workspace visibility changes invalidate metadata cache use/publication;
+they do not alone prove a schema change during parallel COPY. Account,
+transaction and snapshot generation changes still cause retry. Catalog mutation
+serialization remains the caller's responsibility.
+
+The canonical `auto_increment/auto_increment.sql` regression now includes
+partitioned ADD/DROP INDEX between allocator reset and the final insert. The SQL
+integration regression asserts rows `(1,10)`, `(2,20)`, `(100,30)`. External BVT
+execution remains pending; authoring an expected result is not a BVT PASS.
+
+Necessary recovery boundaries are retained. The separate linter change is
+[matrixorigin/linter#56](https://github.com/matrixorigin/linter/pull/56), proposing
+three exact synchronous function owners for four recover expressions. MatrixOne's
+fixed linter dependency is unchanged pending rule acceptance; this revision does
+not claim official SCA closure or that all existing CI failures are repaired.
+
+Focused validation passed: the exact-row partition ALTER SQL in default and
+M0, the real M0 relation-authority SQL, partition allocator COPY in both modes,
+and three partition-metadata cache roots under race. Both modes passed affected
+incremental lint; the selected tests used vet=all. Earlier unchanged conflict
+regressions are reused with their original source-bound receipts. Formatting
+and the candidate-relative-to-frozen-main diff check passed; upstream-only BVT
+expected-output trailing spaces were retained rather than rewritten.
+
+These repair results are separate from the historical integration counts below.
+Current-head CI, external BVT, Linux qualification, maintainer acceptance and QA
+remain independent pending gates. No performance experiment was run.
+
 ## Incremental base integration, 2026-11-06
 
 This revision merges frozen main `a86c130cc09c5859e1651d49746a35bc79c2c07a`
