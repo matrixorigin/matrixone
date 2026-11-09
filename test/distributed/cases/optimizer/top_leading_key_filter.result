@@ -57,6 +57,22 @@ select id, k from history order by k desc, id desc limit 20;
 3  ¦  7
 select id, k from history where k < 0 order by k desc, id desc limit 3;
 ➤ id[4,32,0]  ¦  k[4,32,0]
+select id, k from history order by k desc, id asc, k asc limit 3;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+4  ¦  10  𝄀
+1  ¦  9  𝄀
+8  ¦  9
+select id, k from history order by k asc, id desc, k desc limit 3;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+3  ¦  7  𝄀
+2  ¦  8  𝄀
+9  ¦  9
+set session optimizer_hints = 'execType=1,sendMessageFromTopToScan=1';
+select id, k from history order by k desc, id asc, k asc limit 3;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+4  ¦  10  𝄀
+1  ¦  9  𝄀
+8  ¦  9
 set session optimizer_hints = 'execType=2';
 select id, k from history order by k desc, id desc limit 3;
 ➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
@@ -77,8 +93,18 @@ select id, k from history order by k desc, id desc limit 2 offset 1;
 ➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
 9  ¦  9  𝄀
 8  ¦  9
+select id, k from history order by k desc, id asc, k asc limit 3;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+4  ¦  10  𝄀
+1  ¦  9  𝄀
+8  ¦  9
 set session optimizer_hints = 'execType=2,sendMessageFromTopToScan=1';
 select id, k from history order by k desc, id asc limit 3;
+➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
+4  ¦  10  𝄀
+1  ¦  9  𝄀
+8  ¦  9
+select id, k from history order by k desc, id asc, k asc limit 3;
 ➤ id[4,32,0]  ¦  k[4,32,0]  𝄀
 4  ¦  10  𝄀
 1  ¦  9  𝄀

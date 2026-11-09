@@ -148,6 +148,83 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func TestMergeTopRepeatedOrderKey(t *testing.T) {
+	for _, mode := range []struct {
+		name  string
+		limit int64
+	}{
+		{"heap_replacement", 1},
+		{"all_rows", 3},
+	} {
+		for _, tt := range []struct {
+			name          string
+			first, second plan.OrderBySpec_OrderByFlag
+			input, want   []any
+		}{
+			{"ascending", plan.OrderBySpec_ASC, plan.OrderBySpec_DESC,
+				[]any{int64(2), int64(1)}, []any{int64(1), int64(2)}},
+			{"descending", plan.OrderBySpec_DESC, plan.OrderBySpec_ASC,
+				[]any{int64(1), int64(2)}, []any{int64(2), int64(1)}},
+			{"ascending_null", plan.OrderBySpec_ASC, plan.OrderBySpec_DESC,
+				[]any{int64(2), nil, int64(1)}, []any{nil, int64(1), int64(2)}},
+			{"descending_null", plan.OrderBySpec_DESC, plan.OrderBySpec_ASC,
+				[]any{nil, int64(1), int64(2)}, []any{int64(2), int64(1), nil}},
+			{"nulls_first", plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST, plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST,
+				[]any{int64(1), nil, int64(2)}, []any{nil, int64(2), int64(1)}},
+			{"nulls_last", plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST, plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+				[]any{nil, int64(2), int64(1)}, []any{int64(1), int64(2), nil}},
+		} {
+			t.Run(mode.name+"/"+tt.name, func(t *testing.T) {
+				typ := types.T_int64.ToType()
+				tc := newTestCase(t, nil, []types.Type{typ}, mode.limit, []*plan.OrderBySpec{
+					{Expr: newExpression(0), Flag: tt.first},
+					{Expr: newExpression(0), Flag: tt.second},
+				})
+				child := colexec.NewMockOperator()
+				tc.arg.AppendChild(child)
+				t.Cleanup(func() {
+					tc.arg.Free(tc.proc, false, nil)
+					child.Free(tc.proc, false, nil)
+					tc.cancel()
+					tc.proc.Free()
+					require.Zero(t, tc.proc.Mp().CurrNB())
+				})
+				for _, value := range tt.input {
+					bat := batch.NewWithSize(1)
+					child.WithBatchs([]*batch.Batch{bat})
+					if value == nil {
+						bat.Vecs[0] = vector.NewConstNull(typ, 1, tc.proc.Mp())
+					} else {
+						bat.Vecs[0] = vector.NewVec(typ)
+						require.NoError(t, vector.AppendFixed(bat.Vecs[0], value.(int64), false, tc.proc.Mp()))
+					}
+					bat.SetRowCount(1)
+				}
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.Equal(t, vm.ExecStop, result.Status)
+				require.NotNil(t, result.Batch)
+				require.Len(t, result.Batch.Vecs, 1)
+				var got []any
+				vec := result.Batch.Vecs[0]
+				for row := 0; row < result.Batch.RowCount(); row++ {
+					if vec.IsNull(uint64(row)) {
+						got = append(got, nil)
+					} else {
+						got = append(got, vector.GetFixedAtWithTypeCheck[int64](vec, row))
+					}
+				}
+				want := tt.want
+				if mode.limit == 1 {
+					want = want[:1]
+				}
+				require.Equal(t, want, got)
+			})
+		}
+	}
+}
+
 func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
 	paramExpr := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_varchar)},
