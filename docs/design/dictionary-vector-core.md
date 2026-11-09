@@ -57,3 +57,49 @@ serialization rejection. SQL/BVT producers remain unreachable in this stage;
 existing batch/Arrow consumers stay on flat/constant data. Performance acceptance
 is the series' neutral foundation gate over Q1–Q22 plus Total, rather than a
 producer speedup claim. Results belong in appended PR/issue comments.
+
+## Lease-backed descriptor revision
+
+Owner: #32383 / #32394. The requester approved the implementation plan after
+choosing deterministic header savings plus the original neutral TPC-H gate;
+a confirmed Q6 speedup is diagnostic rather than an additional adoption rule.
+The rejected field-tail experiment remains separate.
+
+Remove Vector.dictionary and preserve every ordinary Vector field offset.
+For DIST only, the existing dataLease interface owns dictionaryVector, an
+immutable descriptor with its own atomic reference count, base, selection and
+logical-area summary. It implements the existing BufferLease interface; Bytes
+returns nil because the dictionary has no contiguous physical payload.
+AccountedBytes returns the checked immutable sum of base/selection retained
+bounds. Ordinary data/area leases retain their existing contracts. No public
+API, encoded class, schema, cache, registry or additional Vector field is added.
+
+Construction retains the base and mapping only after metadata admission; the
+private descriptor starts with one reference before publication. Empty selections
+remain ordinary vectors without a descriptor. Retain fails after zero or before
+counter overflow, even if callers separately keep the children alive. The unique
+1-to-0 Release drops mapping and base exactly once; over-release is an invariant
+failure. Descriptor members are immutable, so readers and accounting do not race
+with final release. Physical payload charges stay with the original owner.
+
+Free/reset clear dataLease and the dictionary class before releasing the
+composite owner, so generic backing cleanup cannot release it again.
+EnsureFlat/EnsureWritable publish their replacement only after selected payload
+and metadata allocations succeed; the old descriptor is then retired. Failure
+preserves the original representation. Physical accessors and old byte-window
+or rebinding APIs continue rejecting DIST. Read views resolve the descriptor once.
+BorrowedAccountedBytes must not add the dictionary bounds again after the data
+lease already contributes them; Allocated retains its existing full-pin estimate
+plus owned metadata.
+
+Validation adds final-release, retained-holder, non-resurrection, overflow and
+construction/COW failure cases using tiny existing fixtures; exercise descriptor
+sharing under the race detector and real batch/Arrow/cleanup consumers. Preserve
+the checked-empty regression test. Measure reflection layout against main and
+forced heap header allocation: on the pinned amd64 Go1.27.1 profile, restore
+480 bytes and the480-byte class instead of488 rounded to512. Run isolated all22
+SF10/SF100 five-pair memory/disk comparisons, cold full suites excluded, unchanged
+Holm/separate-Total/no-spill/swap/OOM rules, and the approved process CPU guard.
+No dataset/result verification or numerical retries. Publish new source-pinned
+results before collapsing superseded comments. Leave current failures visible
+until a replacement is actually qualified.
