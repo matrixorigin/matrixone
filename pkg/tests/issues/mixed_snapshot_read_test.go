@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -108,6 +110,25 @@ func TestMixedSnapshotBinaryPrepare(t *testing.T) {
 			})
 		}
 		t.Run("remote-pipeline", func(t *testing.T) {
+			peer, err := cluster.GetCNService(1)
+			require.NoError(t, err)
+			coordinator := cn.RawService().(cnservice.Service)
+			peerID := peer.RawService().(cnservice.Service).ID()
+			// SQL ready 不代表另一 CN 已进入协调者的 query worker 集合。
+			// 先等待可观察的拓扑前提，不能用重跑查询掩盖本地执行。
+			require.Eventually(t, func() bool {
+				clusterservice.GetMOCluster(coordinator.ID()).ForceRefresh(true)
+				nodes, err := coordinator.GetEngine().Nodes(false, "sys", "dump", nil)
+				if err != nil || len(nodes) != 2 {
+					return false
+				}
+				for _, node := range nodes {
+					if node.Id == peerID {
+						return true
+					}
+				}
+				return false
+			}, 15*time.Second, 100*time.Millisecond, "两个 CN 必须先进入协调者的可用 query worker 集合")
 			oldForce := plan2.GetForceScanOnMultiCN()
 			plan2.SetForceScanOnMultiCN(true)
 			defer plan2.SetForceScanOnMultiCN(oldForce)
