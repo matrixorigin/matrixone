@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -884,6 +885,84 @@ func nullsFromBools(nullList []bool) *nulls.Nulls {
 		}
 	}
 	return nsp
+}
+
+func TestBuiltInMoShowVisibleBinDefaultNulls(t *testing.T) {
+	cases := []struct {
+		origin string
+		shown  string
+		null   bool
+	}{
+		{origin: "", null: true},
+		{origin: "'null'", shown: "null"},
+		{origin: "null", null: true},
+		{origin: "''", shown: ""},
+		{origin: "NULL", null: true},
+		{origin: "'NULL'", shown: "NULL"},
+		{origin: "NuLl", null: true},
+		{origin: "'hello'", shown: "hello"},
+		{origin: "'it''s'", shown: "it''''s"},
+		{origin: "9", shown: "9"},
+		{origin: "current_timestamp()", shown: "current_timestamp()"},
+		{origin: "(json_array())", shown: "(json_array())"},
+	}
+	for _, mode := range []struct {
+		name string
+		id   uint8
+	}{
+		{name: "column_default", id: defaultExpr},
+		{name: "show_columns", id: defExprInShowColumns},
+		{name: "on_update", id: onUpdateExpr},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			var encoded, wanted []string
+			var inputNulls, wantedNulls []bool
+			for _, tc := range cases {
+				var payload []byte
+				var err error
+				want, isNull := tc.origin, tc.null
+				if mode.id == onUpdateExpr {
+					payload, err = types.Encode(&plan.OnUpdate{OriginString: tc.origin})
+					isNull = tc.origin == ""
+				} else {
+					payload, err = types.Encode(&plan.Default{OriginString: tc.origin, NullAbility: true})
+					if mode.id == defExprInShowColumns {
+						want = tc.shown
+					}
+				}
+				require.NoError(t, err)
+				if isNull {
+					want = ""
+				}
+				encoded = append(encoded, string(payload))
+				inputNulls = append(inputNulls, false)
+				wanted = append(wanted, want)
+				wantedNulls = append(wantedNulls, isNull)
+			}
+			// Empty catalog bytes and SQL NULL input both remain SQL NULL.
+			encoded = append(encoded, "", "")
+			inputNulls = append(inputNulls, false, true)
+			wanted = append(wanted, "", "")
+			wantedNulls = append(wantedNulls, true, true)
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), encoded, inputNulls),
+				NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{mode.id}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), builtInMoShowVisibleBin)
+			ok, info := testCase.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("malformed_default", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string([]byte{0xff})}, nil),
+			NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{defaultExpr}, nil),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, nil), builtInMoShowVisibleBin)
+		ok, info := testCase.RunAndFree()
+		require.True(t, ok, info)
+	})
 }
 
 func Test_BuiltIn_MoShowVisibleBinGeometry(t *testing.T) {
