@@ -435,7 +435,8 @@ func (r *taskRunner) fetchTasks(ctx context.Context) bool {
 	if len(held) != 0 {
 		if r.sqlFetch.active {
 			r.sqlFetch.pendingWork = true
-		} else {
+		} else if r.sqlDeferred.Load() == r.sqlFetch.observed {
+			// Normal fetching may already have armed the same revisit.
 			r.sqlDeferred.Add(1)
 		}
 	}

@@ -519,3 +519,17 @@ func TestSQLTaskLiveFetchDeadlineTriggersRecovery(t *testing.T) {
 		require.Positive(t, runner.sqlDeferred.Load(), "a live-runner fetch timeout must arm recovery")
 	})
 }
+
+func TestSQLTaskGroupedUntrustedPageArmsOneWave(t *testing.T) {
+	store := NewMemTaskStorage()
+	for i := range 2 {
+		mustAddTestAsyncTask(t, store, 1, task.AsyncTask{Status: task.TaskStatus_Running, TaskRunner: "cn1", ParentTaskID: "sql-task:1", Metadata: task.TaskMetadata{ID: fmt.Sprintf("firing-%d", i), Executor: task.TaskCode_SQLTask}})
+	}
+	owner := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { require.NoError(t, owner.Close()) })
+	runner := NewTaskRunner("cn1", &forwardTaskService{TaskService: owner}, nil, WithRunnerParallelism(2)).(*taskRunner)
+	runner.fetchTasks(context.Background())
+	require.EqualValues(t, 1, runner.sqlDeferred.Load(), "grouping must reuse the wave already armed by the untrusted page")
+	require.Len(t, runner.waitTasksC, 1)
+	runner.removeRunningTask(<-runner.waitTasksC, nil)
+}
