@@ -272,7 +272,7 @@ func TestFollowerRetriesWithoutWaitingForForeignTeardown(t *testing.T) {
 			require.Eventually(t, func() bool { return old.loadWaiters.Load() > 0 }, 5*time.Second, time.Millisecond)
 			old.evicting.Store(true)
 			require.True(t, c.IndexMap.CompareAndDelete("key", old))
-			old.markRemoved()
+			old.markEvictionResultReady()
 			select {
 			case err := <-result:
 				require.NoError(t, err)

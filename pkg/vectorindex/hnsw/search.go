@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -224,29 +223,9 @@ func (s *HnswSearch[T]) Contains(key int64) (bool, error) {
 func (s *HnswSearch[T]) Destroy() {
 	indexes := s.Indexes
 	s.Indexes = nil
-	if p := destroyModels(indexes); p != nil {
+	if p := vectorindex.DestroyIndexResources("HNSW model", indexes); p != nil {
 		panic(p)
 	}
-}
-
-// destroyModels attempts every model even if an earlier cleanup fails.
-func destroyModels[T types.RealNumbers](indexes []*HnswModel[T]) (firstPanic any) {
-	for _, idx := range indexes {
-		func() {
-			defer func() {
-				if p := recover(); p != nil {
-					logutil.Errorf("HNSW model cleanup panic: %v", p)
-					if firstPanic == nil {
-						firstPanic = p
-					}
-				}
-			}()
-			if err := idx.Destroy(); err != nil {
-				logutil.Errorf("HNSW model cleanup failed: %v", err)
-			}
-		}()
-	}
-	return firstPanic
 }
 
 // load metadata from database
@@ -289,7 +268,7 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 	loaded := false
 	defer func() {
 		if !loaded {
-			destroyModels(indexes)
+			vectorindex.DestroyIndexResources("HNSW model", indexes)
 		}
 	}()
 	for _, idx := range indexes {

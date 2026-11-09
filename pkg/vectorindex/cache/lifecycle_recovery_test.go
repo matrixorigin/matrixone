@@ -40,6 +40,18 @@ type recoveryAlgo struct {
 var supersededCause = moerr.NewInvalidStateNoCtx("generation superseded")
 var errSupersededForTest = NewRetryableLoadError(supersededCause)
 
+func TestExhaustedEvictionReturnsRetryableMessage(t *testing.T) {
+	err := exhaustedLoadError(errIndexDestroyed)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	require.ErrorContains(t, err, "retry the query")
+	msg := &pipelinepb.Message{Err: pipelinepb.EncodedMessageError(context.Background(), err)}
+	decoded, ok := msg.TryToGetMoErr()
+	require.True(t, ok)
+	require.True(t, moerr.IsMoErrCode(decoded, moerr.ErrInvalidState))
+	require.ErrorContains(t, decoded, "retry the query")
+	require.Same(t, supersededCause, exhaustedLoadError(errSupersededForTest))
+}
+
 func (a *recoveryAlgo) Load(*sqlexec.SqlProcess) error {
 	n := a.loads.Add(1)
 	if a.started != nil {
@@ -226,7 +238,7 @@ func TestFollowerRetryBudgetDoesNotWaitForFinalTeardown(t *testing.T) {
 			require.Eventually(t, func() bool { return old.loadWaiters.Load() == 1 }, time.Second, time.Millisecond)
 			old.evicting.Store(true)
 			require.True(t, c.IndexMap.CompareAndDelete("key", old))
-			old.markRemoved()
+			old.markEvictionResultReady()
 			select {
 			case <-a.loadStarted:
 			case <-time.After(time.Second):

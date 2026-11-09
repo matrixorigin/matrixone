@@ -89,7 +89,7 @@ type Fulltext2Search struct {
 }
 
 var errLoadGenerationSuperseded = veccache.NewRetryableLoadError(
-	moerr.NewInvalidStateNoCtx("fulltext2 load superseded by a newer generation"),
+	moerr.NewInvalidStateNoCtx("fulltext2 load superseded by a newer generation; retry the query"),
 )
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -253,6 +253,19 @@ func (s *Fulltext2Search) OnCacheInvalidated(reason string) {
 		return
 	}
 	invalidateLoadGeneration(s.cfg, LoadMissReason(reason))
+}
+
+// RecoverCacheInvalidation repairs only the local registry updates performed
+// for TTL and generation-change notifications. Pool eviction runs separately
+// from the cache lifecycle hook, so a failed notification has not touched it.
+func (s *Fulltext2Search) RecoverCacheInvalidation(reason string) error {
+	if reason != string(LoadMissTTLExpired) && reason != string(LoadMissGenerationChange) {
+		return moerr.NewInvalidStateNoCtx("fulltext2 invalidation reason is not locally recoverable")
+	}
+	if !fenceLoadGeneration(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)) {
+		return moerr.NewInvalidStateNoCtx("fulltext2 invalidation registry is unavailable")
+	}
+	return nil
 }
 
 // SetLoadWaiters is an internal cache hook used only to complete load

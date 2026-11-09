@@ -144,7 +144,7 @@ func TestHnswLoadPanicReleasesEarlierModels(t *testing.T) {
 		{Id: "first", Checksum: checksum, FileSize: info.Size()},
 		{Id: "second", Checksum: checksum, FileSize: info.Size()},
 	}
-	t.Cleanup(func() { destroyModels(indexes) })
+	t.Cleanup(func() { vectorindex.DestroyIndexResources("HNSW model", indexes) })
 	var firstPath string
 	calls := 0
 	runSql_streaming = func(_ context.Context, _ *sqlexec.SqlProcess, _ string, out chan executor.Result, _ chan error) (executor.Result, error) {

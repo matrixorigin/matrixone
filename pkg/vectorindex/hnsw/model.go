@@ -15,9 +15,7 @@
 package hnsw
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"os"
 	"runtime"
 	"sync"
@@ -29,9 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -511,106 +507,10 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 	return nil
 }
 
-// streamIndexToFile owns the producer until all delivered results are closed.
-// A consumer panic still cancels and joins the producer before unwinding.
+// streamIndexToFile writes the model chunks while sqlexec owns the stream.
 func (idx *HnswModel[T]) streamIndexToFile(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig, fp *os.File) error {
 	sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
-	stream := make(chan executor.Result, 2)
-	errors := make(chan error, 2)
-	producerDone := make(chan error, 1)
-	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-	defer cancel(nil)
-
-	go func() {
-		var producerErr error
-		defer func() {
-			if p := recover(); p != nil {
-				producerErr = moerr.ConvertPanicError(ctx, p)
-			}
-			close(stream)
-			producerDone <- producerErr
-		}()
-		_, producerErr = runSql_streaming(ctx, sqlproc, sql, stream, errors)
-	}()
-
-	joined := false
-	defer func() {
-		if !joined {
-			cancel(nil)
-			for res := range stream {
-				res.Close()
-			}
-			<-producerDone
-		}
-	}()
-
-	var loopErr error
-	closed := false
-	for !closed && loopErr == nil {
-		closed, loopErr = idx.loadChunk(ctx, sqlproc, stream, errors, fp)
-	}
-	if loopErr != nil {
-		cancel(loopErr)
-	}
-	for res := range stream {
-		res.Close()
-	}
-	producerErr := <-producerDone
-	joined = true
-	if loopErr != nil {
-		return loopErr
-	}
-	select {
-	case err := <-errors:
-		return err
-	default:
-		return producerErr
-	}
-}
-
-// load chunk from database
-func (idx *HnswModel[T]) loadChunk(ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	stream_chan chan executor.Result,
-	error_chan chan error,
-	fp *os.File) (stream_closed bool, err error) {
-	var res executor.Result
-	var ok bool
-
-	procCtx := sqlproc.GetContext()
-
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
-	case <-ctx.Done():
-		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
-	}
-
-	defer res.Close()
-	bat := res.Batches[0]
-
-	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-	for i, chunkId := range chunkIds {
-		data := bat.Vecs[1].GetRawBytesAt(i)
-
-		offset := chunkId * vectorindex.MaxChunkSize
-		_, err = fp.Seek(offset, io.SeekStart)
-		if err != nil {
-			return false, err
-		}
-
-		_, err = fp.Write(data)
-		if err != nil {
-			return false, err
-		}
-	}
-	return false, nil
+	return sqlexec.StreamChunksToFile(sqlproc, sql, fp, runSql_streaming)
 }
 
 // load index from database

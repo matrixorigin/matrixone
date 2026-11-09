@@ -37,6 +37,12 @@ import (
 // cadence — the bound on how long a remote CN can serve a stale index before it ages out.
 const stalenessCheckEveryNTicks = 4
 
+const (
+	evictionTTL        = "ttl_expired"
+	evictionGeneration = "generation_changed"
+	evictionShutdown   = "process_shutdown"
+)
+
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
    Implement the VectorIndexSearchIf such as HnswSearch to able to use VectorIndexCache.
@@ -97,6 +103,9 @@ func exhaustedLoadError(err error) error {
 	var marker retryableLoadError
 	if errors.As(err, &marker) {
 		return marker.cause
+	}
+	if errors.Is(err, errIndexDestroyed) {
+		return moerr.NewInvalidStateNoCtx("index changed while loading; retry the query")
 	}
 	return err
 }
@@ -166,6 +175,13 @@ type cacheInvalidationAware interface {
 	OnCacheInvalidated(reason string)
 }
 
+// A recoverer can repair only the named entry after its failed callback, with
+// no effects on resources belonging to other entries. It runs behind the old
+// entry's write lock, before a replacement can be admitted.
+type cacheInvalidationRecoverer interface {
+	RecoverCacheInvalidation(reason string) error
+}
+
 type loadWaiterAware interface {
 	SetLoadWaiters(int64)
 }
@@ -215,17 +231,19 @@ type VectorIndexSearch struct {
 	destroyOnce      sync.Once
 	ready            chan struct{}
 	readyOnce        sync.Once
-	removed          chan struct{}
-	removedOnce      sync.Once
-	done             <-chan struct{} // owned and closed by the containing cache
-	loadResult       atomic.Pointer[entryLoadResult]
-	destroyResult    atomic.Pointer[entryLoadResult]
+	// Closed after removal or after an invalidation failure is published.
+	evictionResultReady chan struct{}
+	evictionResultOnce  sync.Once
+	done                <-chan struct{} // owned and closed by the containing cache
+	loadResult          atomic.Pointer[entryLoadResult]
+	destroyResult       atomic.Pointer[entryLoadResult]
+	invalidationResult  atomic.Pointer[entryLoadResult]
 }
 
 type entryLoadResult struct{ err error }
 
 func newVectorIndexSearch(algo VectorIndexSearchIf) *VectorIndexSearch {
-	s := &VectorIndexSearch{Algo: algo, destroyed: make(chan struct{}), ready: make(chan struct{}), removed: make(chan struct{})}
+	s := &VectorIndexSearch{Algo: algo, destroyed: make(chan struct{}), ready: make(chan struct{}), evictionResultReady: make(chan struct{})}
 	return s
 }
 
@@ -233,8 +251,8 @@ func (s *VectorIndexSearch) markReady() {
 	s.readyOnce.Do(func() { close(s.ready) })
 }
 
-func (s *VectorIndexSearch) markRemoved() {
-	s.removedOnce.Do(func() { close(s.removed) })
+func (s *VectorIndexSearch) markEvictionResultReady() {
+	s.evictionResultOnce.Do(func() { close(s.evictionResultReady) })
 }
 
 func (s *VectorIndexSearch) terminalLoadError() error {
@@ -244,32 +262,65 @@ func (s *VectorIndexSearch) terminalLoadError() error {
 	return nil
 }
 
+func (s *VectorIndexSearch) invalidationError(ctx context.Context) error {
+	if result := s.invalidationResult.Load(); result != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return result.err
+	}
+	return nil
+}
+
+func (s *VectorIndexSearch) observedLoadError(ctx context.Context) error {
+	if err := s.terminalLoadError(); err != nil {
+		if invalidationErr := s.invalidationError(ctx); invalidationErr != nil {
+			return invalidationErr
+		}
+		return err
+	}
+	return nil
+}
+
 func (s *VectorIndexSearch) awaitReady(ctx context.Context) error {
 	select {
 	case <-s.ready:
 		if err := s.terminalLoadError(); err != nil {
+			if invalidationErr := s.invalidationError(ctx); invalidationErr != nil {
+				return invalidationErr
+			}
 			return err
 		}
+		// An invalidation result is published only after evicting becomes true.
 		if s.evicting.Load() {
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
 			return errIndexDestroyed
 		}
 		return nil
 	default:
 	}
 	if s.evicting.Load() {
-		if err := s.terminalLoadError(); err != nil {
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
 			return err
 		}
 		return errIndexDestroyed
 	}
-	if err := s.terminalLoadError(); err != nil {
+	if err := s.observedLoadError(ctx); err != nil {
 		return err
 	}
 	s.loadWaiters.Add(1)
 	defer s.loadWaiters.Add(-1)
 	select {
 	case <-s.ready:
-		if err := s.terminalLoadError(); err != nil {
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -277,12 +328,18 @@ func (s *VectorIndexSearch) awaitReady(ctx context.Context) error {
 		}
 		select {
 		case <-s.done:
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
 			return errCacheClosed
 		default:
 			return nil
 		}
-	case <-s.removed:
-		if err := s.terminalLoadError(); err != nil {
+	case <-s.evictionResultReady:
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -290,7 +347,10 @@ func (s *VectorIndexSearch) awaitReady(ctx context.Context) error {
 		}
 		return errIndexDestroyed
 	case <-s.done:
-		if err := s.terminalLoadError(); err != nil {
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -323,27 +383,42 @@ func (s *VectorIndexSearch) awaitDestroyed(ctx context.Context) error {
 	if s.destroyed == nil {
 		return nil
 	}
-	select {
-	case <-s.destroyed:
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	evictionResult := s.evictionResultReady
+	for {
 		select {
+		case <-s.destroyed:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			select {
+			case <-s.done:
+				return errCacheClosed
+			default:
+			}
+			if result := s.destroyResult.Load(); result != nil {
+				return result.err
+			}
+			return nil
+		case <-evictionResult:
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			// Normal eviction removes the map entry before destruction finishes.
+			evictionResult = nil
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-s.done:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
 			return errCacheClosed
-		default:
 		}
-		if result := s.destroyResult.Load(); result != nil {
-			return result.err
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.done:
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return errCacheClosed
 	}
 }
 
@@ -368,6 +443,25 @@ func (s *VectorIndexSearch) notifyCacheInvalidated(reason string) (err error) {
 		}
 	})
 	return nil
+}
+
+// recoverInvalidation fences the old load and readers before asking the
+// algorithm owner to repair its own state. The entry still occupies its key.
+func (s *VectorIndexSearch) recoverInvalidation(reason string) (supported bool, err error) {
+	recoverer, ok := s.Algo.(cacheInvalidationRecoverer)
+	if !ok {
+		return false, nil
+	}
+	supported = true
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	defer func() {
+		if p := recover(); p != nil {
+			err = moerr.ConvertPanicError(context.Background(), p)
+		}
+	}()
+	err = recoverer.RecoverCacheInvalidation(reason)
+	return
 }
 
 func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
@@ -684,7 +778,7 @@ func (c *VectorIndexCache) evictEntryOwned(key string, expected *VectorIndexSear
 		return false
 	}
 	algo, ok := value.(*VectorIndexSearch)
-	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == evictionTTL) {
 		return false
 	}
 	value, loaded = c.IndexMap.Load(key)
@@ -694,17 +788,73 @@ func (c *VectorIndexCache) evictEntryOwned(key string, expected *VectorIndexSear
 	// Publish the invalidation while the old entry still occupies the key. A
 	// replacement can only be inserted after CompareAndDelete, so it cannot
 	// observe a later generation bump from the old entry's blocked destroy.
-	if err := algo.notifyCacheInvalidated(reason); err != nil {
-		logutil.Errorf("[veccache] index invalidation failed; shutting down cache: %v", err)
-		if c.beginShutdown(err) {
-			go c.Destroy()
+	invalidationErr := algo.notifyCacheInvalidated(reason)
+	if invalidationErr != nil {
+		// Waiters can fail immediately while recovery fences the old entry.
+		algo.invalidationResult.Store(&entryLoadResult{err: invalidationErr})
+		algo.markEvictionResultReady()
+		if (reason == evictionTTL || reason == evictionGeneration) && !c.exited.Load() {
+			if _, ok := algo.Algo.(cacheInvalidationRecoverer); ok && c.beginCleanup() {
+				// A slow reader/load must not stall housekeeping for other keys.
+				// The registered cleanup retains this key until repair and destroy.
+				go func() {
+					defer c.cleanups.Done()
+					defer func() {
+						if p := recover(); p != nil {
+							logutil.Errorf("[veccache] index invalidation cleanup panicked: %v", p)
+							c.failInvalidation(invalidationErr)
+							if value, ok := c.IndexMap.Load(key); ok && value == algo {
+								c.finishEviction(key, algo, invalidationErr)
+							}
+						}
+					}()
+					c.recoverEviction(key, algo, reason, invalidationErr)
+				}()
+				return false
+			}
 		}
+		c.failInvalidation(invalidationErr)
 	}
+	return c.finishEviction(key, algo, invalidationErr)
+}
+
+// recoverEviction retains the cleanup registration and key reservation while
+// waiting for old users to leave. Shutdown joins it before lifecycle hooks.
+func (c *VectorIndexCache) recoverEviction(key string, algo *VectorIndexSearch, reason string, invalidationErr error) {
+	if c.exited.Load() {
+		c.beginShutdown(invalidationErr)
+		c.finishEviction(key, algo, invalidationErr)
+		return
+	}
+	supported, err := algo.recoverInvalidation(reason)
+	if err != nil {
+		logutil.Errorf("[veccache] index invalidation recovery failed: %v", err)
+	}
+	if supported && err == nil {
+		logutil.Errorf("[veccache] index invalidation failed; recovered entry: %v", invalidationErr)
+	} else {
+		c.failInvalidation(invalidationErr)
+	}
+	c.finishEviction(key, algo, invalidationErr)
+}
+
+func (c *VectorIndexCache) failInvalidation(err error) {
+	logutil.Errorf("[veccache] index invalidation failed; shutting down cache: %v", err)
+	if c.beginShutdown(err) {
+		go c.Destroy()
+	}
+}
+
+func (c *VectorIndexCache) finishEviction(key string, algo *VectorIndexSearch, invalidationErr error) bool {
 	if !c.IndexMap.CompareAndDelete(key, algo) {
+		if invalidationErr != nil {
+			c.failInvalidation(invalidationErr)
+		}
 		return false
 	}
-	algo.markRemoved()
-	algo.Destroy()
+	// Once detached, this owner must attempt destruction even if signaling fails.
+	defer algo.Destroy()
+	algo.markEvictionResultReady()
 	return true
 }
 
@@ -717,7 +867,7 @@ func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch
 		return
 	}
 	if c.IndexMap.CompareAndDelete(key, algo) {
-		algo.markRemoved()
+		algo.markEvictionResultReady()
 		algo.destroyFailedLoad()
 	}
 }
@@ -728,6 +878,15 @@ func (c *VectorIndexCache) HouseKeeping() {
 		return
 	}
 	defer c.cleanups.Done()
+
+	// Sweep algorithm-owned idle resources before an entry's synchronous
+	// destruction can block this housekeeping pass.
+	if !c.exited.Load() {
+		runLifecycleHooks(false)
+	}
+	if c.exited.Load() {
+		return
+	}
 
 	type expiredEntry struct {
 		key  string
@@ -750,16 +909,13 @@ func (c *VectorIndexCache) HouseKeeping() {
 		if !entry.algo.Expired() && !entry.algo.stale.Load() {
 			continue
 		}
-		reason := "ttl_expired"
+		reason := evictionTTL
 		if entry.algo.stale.Load() {
-			reason = "generation_changed"
+			reason = evictionGeneration
 		}
 		if c.evictEntryOwned(entry.key, entry.algo, reason) {
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
 		}
-	}
-	if !c.exited.Load() {
-		runLifecycleHooks(false)
 	}
 }
 
@@ -812,7 +968,7 @@ func (c *VectorIndexCache) Destroy() {
 		// remove all keys
 		c.IndexMap.Range(func(key, value any) bool {
 			if k, ok := key.(string); ok {
-				c.evictEntryOwned(k, value.(*VectorIndexSearch), "process_shutdown")
+				c.evictEntryOwned(k, value.(*VectorIndexSearch), evictionShutdown)
 			}
 			return true
 		})
@@ -835,7 +991,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 }
 
 // search limits each request to one retry. The map remains the single-flight
-// owner; followers wait for removal, while the creator waits for its own
+// owner; followers wait for an eviction result, while the creator waits for its
 // algorithm's destruction before reusing it.
 func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput, into bool) (any, []float64, error) {
@@ -866,6 +1022,9 @@ func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newal
 		var err error
 		if !loaded {
 			err = entry.Load(sqlproc)
+			if e := entry.invalidationError(ctx); e != nil {
+				return nil, nil, e
+			}
 			if err != nil {
 				retry := errors.Is(err, errIndexDestroyed) || IsRetryableLoadError(err)
 				if entry.evicting.Load() {
@@ -883,6 +1042,9 @@ func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newal
 						return nil, nil, e
 					}
 					if c.exited.Load() {
+						if e := entry.invalidationError(ctx); e != nil {
+							return nil, nil, e
+						}
 						return nil, nil, c.resolveShutdown(errCacheClosed)
 					}
 					return nil, nil, exhaustedLoadError(err)
@@ -896,6 +1058,9 @@ func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newal
 					return nil, nil, e
 				}
 				if c.exited.Load() {
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
 					return nil, nil, c.resolveShutdown(errCacheClosed)
 				}
 			}
@@ -914,11 +1079,17 @@ func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newal
 			if !errors.Is(err, errIndexDestroyed) {
 				return nil, nil, c.resolveShutdown(err)
 			}
+			if e := entry.invalidationError(ctx); e != nil {
+				return nil, nil, e
+			}
 			if attempt >= 1 {
 				if e := ctx.Err(); e != nil {
 					return nil, nil, e
 				}
 				if c.exited.Load() {
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
 					return nil, nil, c.resolveShutdown(errCacheClosed)
 				}
 				if result := entry.loadResult.Load(); result != nil && IsRetryableLoadError(result.err) {
@@ -932,12 +1103,18 @@ func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newal
 				}
 			} else {
 				select {
-				case <-entry.removed:
+				case <-entry.evictionResultReady:
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
 					if e := ctx.Err(); e != nil {
 						return nil, nil, e
 					}
 				case <-entry.done:
 					if e := ctx.Err(); e != nil {
+						return nil, nil, e
+					}
+					if e := entry.invalidationError(ctx); e != nil {
 						return nil, nil, e
 					}
 					return nil, nil, c.resolveShutdown(errCacheClosed)
@@ -958,6 +1135,9 @@ func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newal
 			if e := ctx.Err(); e != nil {
 				return nil, nil, e
 			}
+			if e := entry.invalidationError(ctx); e != nil {
+				return nil, nil, e
+			}
 			return nil, nil, c.resolveShutdown(errCacheClosed)
 		}
 	}
@@ -975,6 +1155,8 @@ func (c *VectorIndexCache) Remove(key string) {
 
 // RemoveWithReason is the internal reason-aware variant used by FULLTEXT2.
 // The empty reason preserves the historical behavior for all other algorithms.
+// If a recoverable invalidation callback panics, the old key remains reserved
+// and searches receive that error until asynchronous recovery finishes.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
 }

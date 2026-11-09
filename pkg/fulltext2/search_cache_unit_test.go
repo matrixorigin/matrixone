@@ -236,6 +236,116 @@ func (*cachedFulltextFixture) Search(*sqlexec.SqlProcess, any, vectorindex.Runti
 	return nil, nil, nil
 }
 
+type panickingFulltextInvalidation struct {
+	*cachedFulltextFixture
+	loadStarted, releaseLoad, notified chan struct{}
+	panicBeforeHook                    bool
+}
+
+func (s *panickingFulltextInvalidation) Load(*sqlexec.SqlProcess) error {
+	close(s.loadStarted)
+	<-s.releaseLoad
+	return nil
+}
+
+func (s *panickingFulltextInvalidation) OnCacheInvalidated(reason string) {
+	if !s.panicBeforeHook || reason != string(LoadMissGenerationChange) {
+		s.Fulltext2Search.OnCacheInvalidated(reason)
+	}
+	if reason == string(LoadMissGenerationChange) {
+		close(s.notified)
+		panic(moerr.NewInvalidStateNoCtx("injected fulltext invalidation failure"))
+	}
+}
+
+func TestFulltextInvalidationFailureIsIsolatedByCache(t *testing.T) {
+	for _, panicBeforeHook := range []bool{true, false} {
+		t.Run(map[bool]string{true: "before-hook", false: "after-hook"}[panicBeforeHook], func(t *testing.T) {
+			badCfg := TableConfig{DbName: "recovery-cache-test", IndexTable: "bad"}
+			otherCfg := TableConfig{DbName: "recovery-cache-test", IndexTable: "other"}
+			badKey := loadReasonKey(badCfg.DbName, badCfg.IndexTable)
+			otherKey := loadReasonKey(otherCfg.DbName, otherCfg.IndexTable)
+			badGeneration := beginLoadGeneration(badKey)
+			otherGeneration := beginLoadGeneration(otherKey)
+			t.Cleanup(func() {
+				endLoadGeneration(badGeneration)
+				endLoadGeneration(otherGeneration)
+				clearLoadGeneration(badKey)
+				clearLoadGeneration(otherKey)
+			})
+			c := veccache.NewVectorIndexCache()
+			bad := &panickingFulltextInvalidation{
+				cachedFulltextFixture: &cachedFulltextFixture{NewFulltext2Search(badCfg)},
+				loadStarted:           make(chan struct{}), releaseLoad: make(chan struct{}), notified: make(chan struct{}),
+				panicBeforeHook: panicBeforeHook,
+			}
+			var once sync.Once
+			release := func() { once.Do(func() { close(bad.releaseLoad) }) }
+			t.Cleanup(func() {
+				release()
+				done := make(chan struct{})
+				go func() { c.Destroy(); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("cache shutdown did not finish")
+				}
+			})
+			other := &cachedFulltextFixture{NewFulltext2Search(otherCfg)}
+			_, _, err := c.Search(nil, "other", other, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+			owner := make(chan error, 1)
+			go func() { _, _, e := c.Search(nil, "bad", bad, nil, vectorindex.RuntimeConfig{}); owner <- e }()
+			select {
+			case <-bad.loadStarted:
+			case <-time.After(time.Second):
+				t.Fatal("fulltext load did not start")
+			}
+			removed := make(chan struct{})
+			go func() { c.RemoveWithReason("bad", string(LoadMissGenerationChange)); close(removed) }()
+			select {
+			case <-bad.notified:
+			case <-time.After(time.Second):
+				t.Fatal("fulltext invalidation did not run")
+			}
+			follower := make(chan error, 1)
+			go func() {
+				_, _, e := c.Search(nil, "bad", &cachedFulltextFixture{NewFulltext2Search(badCfg)}, nil, vectorindex.RuntimeConfig{})
+				follower <- e
+			}()
+			select {
+			case e := <-follower:
+				require.ErrorContains(t, e, "injected fulltext invalidation failure")
+			case <-time.After(time.Second):
+				t.Fatal("fulltext follower waited for the blocked load")
+			}
+			_, _, err = c.Search(nil, "other", other, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+			require.True(t, loadGenerationCurrent(otherGeneration))
+			if panicBeforeHook {
+				require.True(t, loadGenerationCurrent(badGeneration), "repair must wait for the old load")
+			}
+			release()
+			select {
+			case e := <-owner:
+				require.ErrorContains(t, e, "injected fulltext invalidation failure")
+			case <-time.After(time.Second):
+				t.Fatal("fulltext load owner did not return")
+			}
+			select {
+			case <-removed:
+			case <-time.After(time.Second):
+				t.Fatal("fulltext invalidation did not return")
+			}
+			require.Eventually(t, func() bool { _, found := c.IndexMap.Load("bad"); return !found }, time.Second, time.Millisecond)
+			require.False(t, loadGenerationCurrent(badGeneration))
+			require.True(t, loadGenerationCurrent(otherGeneration))
+			_, _, err = c.Search(nil, "bad", &cachedFulltextFixture{NewFulltext2Search(badCfg)}, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+		})
+	}
+}
+
 func seedFulltextCache(t *testing.T, s *Fulltext2Search) *veccache.VectorIndexSearch {
 	t.Helper()
 	c := veccache.Cache

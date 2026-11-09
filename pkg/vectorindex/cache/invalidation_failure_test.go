@@ -83,6 +83,228 @@ func requireInvalidationFailure(t *testing.T, err error) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState), "%v", err)
 }
 
+type recoverableInvalidationAlgo struct {
+	invalidationFailureAlgo
+	loadStarted, releaseLoad     chan struct{}
+	repairStarted, releaseRepair chan struct{}
+	repairErr                    error
+	panicRepair                  bool
+	repairs                      atomic.Int32
+}
+
+func (a *recoverableInvalidationAlgo) Load(*sqlexec.SqlProcess) error {
+	if a.loadStarted != nil {
+		close(a.loadStarted)
+		<-a.releaseLoad
+	}
+	return nil
+}
+
+func (a *recoverableInvalidationAlgo) RecoverCacheInvalidation(string) error {
+	a.repairs.Add(1)
+	if a.repairStarted != nil {
+		close(a.repairStarted)
+		<-a.releaseRepair
+	}
+	if a.panicRepair {
+		panic("repair panic")
+	}
+	return a.repairErr
+}
+
+func TestInvalidationRecoveryFencesLoadAndIsolatesKey(t *testing.T) {
+	for _, into := range []bool{false, true} {
+		for _, housekeeping := range []bool{false, true} {
+			t.Run(map[bool]string{false: "Search", true: "SearchInto"}[into]+"/"+map[bool]string{false: "remove", true: "housekeeping"}[housekeeping], func(t *testing.T) {
+				c := NewVectorIndexCache()
+				bad := &recoverableInvalidationAlgo{
+					invalidationFailureAlgo: invalidationFailureAlgo{cause: moerr.NewInvalidStateNoCtx("invalidation panic")},
+					loadStarted:             make(chan struct{}), releaseLoad: make(chan struct{}),
+					repairStarted: make(chan struct{}), releaseRepair: make(chan struct{}),
+				}
+				var loadOnce, repairOnce sync.Once
+				releaseLoad := func() { loadOnce.Do(func() { close(bad.releaseLoad) }) }
+				releaseRepair := func() { repairOnce.Do(func() { close(bad.releaseRepair) }) }
+				t.Cleanup(func() { releaseLoad(); releaseRepair(); waitForCacheShutdown(t, c) })
+				other := &recoveryAlgo{}
+				require.NoError(t, searchForInvalidationTest(c, nil, "other", other, into))
+
+				owner := make(chan error, 1)
+				go func() { owner <- searchForInvalidationTest(c, nil, "bad", bad, into) }()
+				select {
+				case <-bad.loadStarted:
+				case <-time.After(time.Second):
+					t.Fatal("load did not start")
+				}
+				v, ok := c.IndexMap.Load("bad")
+				require.True(t, ok)
+				entry := v.(*VectorIndexSearch)
+				follower := make(chan error, 1)
+				go func() { follower <- searchForInvalidationTest(c, nil, "bad", &recoveryAlgo{}, into) }()
+				require.Eventually(t, func() bool { return entry.loadWaiters.Load() == 1 }, time.Second, time.Millisecond)
+
+				removed := make(chan struct{})
+				if housekeeping {
+					entry.stale.Store(true)
+				}
+				go func() {
+					if housekeeping {
+						c.HouseKeeping()
+					} else {
+						c.RemoveWithReason("bad", "generation_changed")
+					}
+					close(removed)
+				}()
+				select {
+				case err := <-follower:
+					requireInvalidationFailure(t, err)
+				case <-time.After(time.Second):
+					t.Fatal("follower waited for the blocked load")
+				}
+				require.Zero(t, bad.repairs.Load(), "repair must wait for the old load")
+				require.NoError(t, searchForInvalidationTest(c, nil, "other", &recoveryAlgo{}, into))
+				fresh := &recoveryAlgo{}
+				requireInvalidationFailure(t, searchForInvalidationTest(c, nil, "bad", fresh, into))
+				require.Zero(t, fresh.loads.Load(), "replacement started before repair")
+				select {
+				case <-removed:
+				case <-time.After(time.Second):
+					t.Fatal("eviction blocked on old load")
+				}
+
+				releaseLoad()
+				select {
+				case err := <-owner:
+					requireInvalidationFailure(t, err)
+				case <-time.After(time.Second):
+					t.Fatal("load owner did not observe invalidation")
+				}
+				select {
+				case <-bad.repairStarted:
+				case <-time.After(time.Second):
+					t.Fatal("repair did not start after the load completed")
+				}
+				requireInvalidationFailure(t, searchForInvalidationTest(c, nil, "bad", fresh, into))
+				releaseRepair()
+				require.Eventually(t, func() bool { return bad.destroys.Load() == 1 }, time.Second, time.Millisecond)
+				require.False(t, c.exited.Load())
+				require.EqualValues(t, 1, bad.repairs.Load())
+				require.EqualValues(t, 1, bad.destroys.Load())
+				require.NoError(t, searchForInvalidationTest(c, nil, "bad", fresh, into))
+				require.EqualValues(t, 1, fresh.loads.Load())
+			})
+		}
+	}
+}
+
+func TestInvalidationRepairFailureClosesCache(t *testing.T) {
+	for _, panicRepair := range []bool{false, true} {
+		t.Run(map[bool]string{false: "error", true: "panic"}[panicRepair], func(t *testing.T) {
+			c := NewVectorIndexCache()
+			bad := &recoverableInvalidationAlgo{
+				invalidationFailureAlgo: invalidationFailureAlgo{cause: moerr.NewInvalidStateNoCtx("invalidation panic")},
+				repairErr:               moerr.NewInternalErrorNoCtx("repair failed"), panicRepair: panicRepair,
+			}
+			require.NoError(t, searchForInvalidationTest(c, nil, "bad", bad, false))
+			c.RemoveWithReason("bad", "generation_changed")
+			require.Eventually(t, c.exited.Load, time.Second, time.Millisecond, "failed repair must shut down the cache")
+			require.True(t, waitForCacheShutdown(t, c))
+			requireInvalidationFailure(t, searchForInvalidationTest(c, nil, "other", &recoveryAlgo{}, false))
+			require.EqualValues(t, 1, bad.repairs.Load())
+			require.EqualValues(t, 1, bad.destroys.Load())
+		})
+	}
+}
+
+func TestShutdownWaitsForAsynchronousInvalidationRecovery(t *testing.T) {
+	c := NewVectorIndexCache()
+	bad := &recoverableInvalidationAlgo{
+		invalidationFailureAlgo: invalidationFailureAlgo{cause: moerr.NewInvalidStateNoCtx("invalidation panic")},
+		repairStarted:           make(chan struct{}), releaseRepair: make(chan struct{}),
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { close(bad.releaseRepair) }) }
+	t.Cleanup(func() { release(); waitForCacheShutdown(t, c) })
+	require.NoError(t, searchForInvalidationTest(c, nil, "bad", bad, false))
+	c.RemoveWithReason("bad", "generation_changed")
+	select {
+	case <-bad.repairStarted:
+	case <-time.After(time.Second):
+		t.Fatal("repair did not start")
+	}
+	done := make(chan struct{})
+	go func() { c.Destroy(); close(done) }()
+	require.Eventually(t, c.exited.Load, time.Second, time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("shutdown did not wait for the registered repair")
+	default:
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not finish after repair")
+	}
+	require.EqualValues(t, 1, bad.destroys.Load())
+}
+
+func TestUnsupportedInvalidationClosesCacheBeforeBlockedLoadFinishes(t *testing.T) {
+	c := NewVectorIndexCache()
+	bad := &recoverableInvalidationAlgo{
+		invalidationFailureAlgo: invalidationFailureAlgo{cause: moerr.NewInvalidStateNoCtx("invalidation panic")},
+		loadStarted:             make(chan struct{}), releaseLoad: make(chan struct{}),
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { close(bad.releaseLoad) }) }
+	t.Cleanup(func() { release(); waitForCacheShutdown(t, c) })
+	owner := make(chan error, 1)
+	go func() { owner <- searchForInvalidationTest(c, nil, "bad", bad, false) }()
+	select {
+	case <-bad.loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("load did not start")
+	}
+	removed := make(chan struct{})
+	go func() { c.RemoveWithReason("bad", "rebuild"); close(removed) }()
+	require.Eventually(t, c.exited.Load, time.Second, time.Millisecond)
+	requireInvalidationFailure(t, searchForInvalidationTest(c, nil, "other", &recoveryAlgo{}, false))
+	require.Zero(t, bad.repairs.Load())
+	release()
+	select {
+	case err := <-owner:
+		requireInvalidationFailure(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("load owner did not return")
+	}
+	select {
+	case <-removed:
+	case <-time.After(time.Second):
+		t.Fatal("invalidation did not finish")
+	}
+}
+
+func TestPublishedInvalidationErrorTakesPrecedence(t *testing.T) {
+	entry := newVectorIndexSearch(&recoveryAlgo{})
+	loadErr := moerr.NewInvalidStateNoCtx("load failed")
+	invalidationErr := moerr.NewInvalidStateNoCtx("invalidation failed")
+	entry.loadResult.Store(&entryLoadResult{err: loadErr})
+	entry.evicting.Store(true)
+	entry.invalidationResult.Store(&entryLoadResult{err: invalidationErr})
+	entry.markReady()
+	entry.markEvictionResultReady()
+	entry.markDestroyed()
+	done := make(chan struct{})
+	close(done)
+	entry.done = done
+	require.Same(t, invalidationErr, entry.awaitReady(context.Background()))
+	require.Same(t, invalidationErr, entry.awaitDestroyed(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, entry.awaitReady(ctx), context.Canceled)
+	require.ErrorIs(t, entry.awaitDestroyed(ctx), context.Canceled)
+}
+
 func TestInvalidationPanicClosesCache(t *testing.T) {
 	for _, trigger := range []string{"remove", "shutdown"} {
 		for _, into := range []bool{false, true} {
@@ -94,6 +316,11 @@ func TestInvalidationPanicClosesCache(t *testing.T) {
 				other := &recoveryAlgo{}
 				require.NoError(t, searchForInvalidationTest(c, nil, "bad", bad, into))
 				require.NoError(t, searchForInvalidationTest(c, nil, "other", other, into))
+				if trigger == "remove" {
+					v, ok := c.IndexMap.Load("bad")
+					require.True(t, ok)
+					v.(*VectorIndexSearch).ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+				}
 
 				done := make(chan struct{})
 				go func() {
@@ -109,6 +336,7 @@ func TestInvalidationPanicClosesCache(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("invalidation or shutdown did not finish")
 				}
+				require.True(t, c.exited.Load(), "invalidation must shut down the cache before test cleanup")
 				require.True(t, waitForCacheShutdown(t, c))
 				fresh := &recoveryAlgo{}
 				err := searchForInvalidationTest(c, nil, "new", fresh, into)
@@ -152,7 +380,7 @@ func TestInvalidationPanicUnblocksLoadingWaiter(t *testing.T) {
 			follower := startCacheSearch(c, nil, &recoveryAlgo{}, into)
 			require.Eventually(t, func() bool { return entry.loadWaiters.Load() == 1 }, time.Second, time.Millisecond)
 
-			c.RemoveWithReason("bad", "ttl_expired")
+			c.RemoveWithReason("bad", "generation_changed")
 			select {
 			case err := <-follower:
 				requireInvalidationFailure(t, err)
@@ -203,7 +431,7 @@ func TestShutdownUnblocksRemovedWaiterAndJoinsEviction(t *testing.T) {
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
 	removed := make(chan struct{})
-	go func() { c.RemoveWithReason("blocked", "ttl_expired"); close(removed) }()
+	go func() { c.RemoveWithReason("blocked", "generation_changed"); close(removed) }()
 	t.Cleanup(func() {
 		release()
 		select {
@@ -324,6 +552,51 @@ type blockingDestroyAlgo struct {
 func (a *blockingDestroyAlgo) Destroy() {
 	close(a.started)
 	<-a.release
+}
+
+func TestHousekeepingSweepsIdleResourcesBeforeBlockedDestroy(t *testing.T) {
+	c := NewVectorIndexCache()
+	algo := &blockingDestroyAlgo{started: make(chan struct{}), release: make(chan struct{})}
+	require.NoError(t, searchForInvalidationTest(c, nil, "key", algo, false))
+	value, ok := c.IndexMap.Load("key")
+	require.True(t, ok)
+	value.(*VectorIndexSearch).stale.Store(true)
+	hookRan := make(chan struct{}, 1)
+	lifecycleHooks.Lock()
+	previous := lifecycleHooks.hooks
+	lifecycleHooks.hooks = []func(bool){func(shutdown bool) {
+		if !shutdown {
+			hookRan <- struct{}{}
+		}
+	}}
+	lifecycleHooks.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(algo.release) }) }
+	done := make(chan struct{})
+	go func() { c.HouseKeeping(); close(done) }()
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("housekeeping did not finish")
+		}
+		waitForCacheShutdown(t, c)
+		lifecycleHooks.Lock()
+		lifecycleHooks.hooks = previous
+		lifecycleHooks.Unlock()
+	})
+	select {
+	case <-hookRan:
+	case <-time.After(time.Second):
+		t.Fatal("idle resource sweep waited for index destruction")
+	}
+	select {
+	case <-algo.started:
+	case <-time.After(time.Second):
+		t.Fatal("index destruction did not start")
+	}
+	release()
 }
 
 func TestSearchAdmissionDoesNotWaitForDestroy(t *testing.T) {

@@ -173,9 +173,11 @@ func (p *tailPool) evictLocked(now time.Time) (retire []*tailState) {
 }
 
 func (p *tailPool) evict(now time.Time) {
-	p.mu.Lock()
-	retire := p.evictLocked(now)
-	p.mu.Unlock()
+	retire := func() []*tailState {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.evictLocked(now)
+	}()
 	retireTailStates(retire)
 }
 
