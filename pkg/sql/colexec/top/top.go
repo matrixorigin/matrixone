@@ -206,11 +206,6 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 	}
 
 	if len(ctr.cmps) == 0 {
-		mp := make(map[int]int)
-		for i, pos := range ctr.poses {
-			mp[int(pos)] = i
-		}
-
 		if ctr.bat == nil {
 			if ctr.spilling {
 				ctr.bat = batch.NewOffHeapWithSize(len(ctr.poses))
@@ -231,19 +226,15 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 
 		if ctr.spilling {
 			ctr.spillCmpPoses = make([]int32, len(ctr.poses))
-			for idx := range ctr.poses {
+			for idx, pos := range ctr.poses {
 				ctr.spillCmpPoses[idx] = int32(idx)
-				var desc, nullsLast bool
-				pos := ctr.poses[idx]
-				if posIdx, ok := mp[int(pos)]; ok {
-					desc = ap.Fs[posIdx].Flag&plan.OrderBySpec_DESC != 0
-					if ap.Fs[posIdx].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
-						nullsLast = false
-					} else if ap.Fs[posIdx].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
-						nullsLast = true
-					} else {
-						nullsLast = desc
-					}
+				flag := ap.Fs[idx].Flag
+				desc := flag&plan.OrderBySpec_DESC != 0
+				nullsLast := desc
+				if flag&plan.OrderBySpec_NULLS_FIRST != 0 {
+					nullsLast = false
+				} else if flag&plan.OrderBySpec_NULLS_LAST != 0 {
+					nullsLast = true
 				}
 				ctr.cmps = append(
 					ctr.cmps,
@@ -251,6 +242,13 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				)
 			}
 		} else {
+			mp := make(map[int]int)
+			for i, pos := range ctr.poses {
+				// The first specification for a repeated column determines its order.
+				if _, exists := mp[int(pos)]; !exists {
+					mp[int(pos)] = i
+				}
+			}
 			for i := 0; i < len(bat.Vecs); i++ {
 				var desc, nullsLast bool
 				if pos, ok := mp[i]; ok {
