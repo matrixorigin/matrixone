@@ -2229,6 +2229,21 @@ func constructEwmConfig(
 		if err != nil {
 			return nil, nil, err
 		}
+		// The §7 signature tables the half-life as a numeric constant: the
+		// bind-time literal rows reject a boolean there (the window
+		// binder's literal validator), and a decay that resolves to the
+		// tag per execution — a deferred conditional such as
+		// CASE WHEN ? > 0 THEN 'halflife' ELSE 'x' END — must not widen
+		// that rule with the shared evaluator's boolean-as-0/1 view, or a
+		// `TRUE` behind the tag would silently become HalfLife=1. The
+		// isBool bit keeps the resolved domain visible before the
+		// collapse; string-typed prepared markers keep the numeric-text
+		// parse below, and booleans behind a NON-tag decay remain the
+		// adjust/ignoreNA policies they always were.
+		if hArg.isBool {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
 		if hArg.isString {
 			// h prepared markers resolve to text like decay markers do.
 			v, perr := strconv.ParseFloat(strings.TrimSpace(hArg.str), 64)
@@ -2305,12 +2320,15 @@ func constructEwmConfig(
 
 // ewmEvaluatedArg carries one evaluated decay/policy constant: the
 // string view (the 'halflife' tag), the numeric view (booleans arrive as
-// 0/1) and the NULL bit.
+// 0/1) and the NULL bit. isBool keeps the resolved value's own domain
+// visible before that boolean/numeric collapse, so slots with a
+// numeric-only contract can reject a genuine boolean.
 type ewmEvaluatedArg struct {
 	isString bool
 	str      string
 	num      float64
 	isNull   bool
+	isBool   bool
 }
 
 // ewmEvaluateConstantVector materializes one semantically constant decay
@@ -2351,6 +2369,7 @@ func ewmEvaluateConstantArg(
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
+		out.isBool = true
 		out.num = 0.0
 		if vector.MustFixedColWithTypeCheck[bool](vec)[0] {
 			out.num = 1.0
