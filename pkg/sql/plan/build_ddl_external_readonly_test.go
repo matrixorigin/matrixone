@@ -63,7 +63,7 @@ func durableExternalCreateSQL(t *testing.T, ddl string) string {
 	defer stmt.Free()
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	for _, def := range p.GetDdl().GetCreateTable().GetTableDef().GetDefs() {
 		for _, kv := range def.GetProperties().GetProperties() {
@@ -184,7 +184,7 @@ func TestBuildTruncateReadOnlyFileExternalRejectedAcrossDurableShapes(t *testing
 			ctx.objects[shape.tableName] = &ObjectRef{SchemaName: "tpch", ObjName: shape.tableName}
 			ctx.tables[shape.tableName] = externalTableDef(shape.tableName, shape.createSQL)
 
-			p, err := BuildPlan(ctx, stmt, false)
+			p, err := BuildPlan(ctx, stmt, false, nil)
 			require.Error(t, err,
 				"TRUNCATE on the read-only file mapping %q must not produce plan %v", shape.name, p)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
@@ -212,7 +212,7 @@ func TestBuildTruncateWritableFileExternalOptionShapeKeepsDedicatedError(t *test
 	ctx.objects["wo"] = &ObjectRef{SchemaName: "tpch", ObjName: "wo"}
 	ctx.tables["wo"] = externalTableDef("wo", createSQL)
 
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 	require.Contains(t, err.Error(),
@@ -252,7 +252,7 @@ func TestBuildTruncateKafkaExternalTableKeepsNoOpPlan(t *testing.T) {
 	ctx.objects["ext_kafka"] = &ObjectRef{SchemaName: "tpch", ObjName: "ext_kafka"}
 	ctx.tables["ext_kafka"] = newKafkaEnvelopeExternalTable("ext_kafka")
 
-	p, err := BuildPlan(ctx, stmt, false)
+	p, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetDdl().GetTruncateTable())
 }
@@ -280,7 +280,7 @@ func TestBuildAlterReadOnlyFileExternalReportsAlterContractAcrossShapes(t *testi
 				ctx.objects[shape.tableName] = &ObjectRef{SchemaName: "tpch", ObjName: shape.tableName}
 				ctx.tables[shape.tableName] = externalTableDef(shape.tableName, shape.createSQL)
 
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 				require.Contains(t, err.Error(), "ALTER TABLE on a read-only external table")
@@ -300,7 +300,7 @@ func TestBuildAlterKafkaExternalTableKeepsExistingError(t *testing.T) {
 	ctx.objects["ext_kafka"] = &ObjectRef{SchemaName: "tpch", ObjName: "ext_kafka"}
 	ctx.tables["ext_kafka"] = newKafkaEnvelopeExternalTable("ext_kafka")
 
-	_, err = BuildPlan(ctx, stmt, false)
+	_, err = BuildPlan(ctx, stmt, false, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 	require.Contains(t, err.Error(),
@@ -325,7 +325,7 @@ func TestBuildAlterReadOnlyFileExternalDelegatesIndexSubactions(t *testing.T) {
 				def := externalTableDef(shape.tableName, shape.createSQL)
 				ctx.tables[shape.tableName] = def
 
-				_, err = BuildPlan(ctx, stmt, false)
+				_, err = BuildPlan(ctx, stmt, false, nil)
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moErrCode), "%v", err)
 				require.Contains(t, err.Error(), fragment)
