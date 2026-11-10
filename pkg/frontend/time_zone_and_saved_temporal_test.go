@@ -15,10 +15,12 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -82,4 +84,38 @@ func TestConvertRowsIntoBatchTemporalText(t *testing.T) {
 	bad.AddRow([]any{int64(1)})
 	_, _, err = convertRowsIntoBatchInLocation(pool, bad.Columns, bad.Data, session)
 	require.Error(t, err)
+}
+
+// SET GLOBAL time_zone rejects an unknown zone like SET SESSION does, instead
+// of persisting a value every new session then fails to load (issue #31714).
+func TestSetGlobalTimeZoneRejectsUnknownZone(t *testing.T) {
+	ctx := context.Background()
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ses := &Session{feSessionImpl: feSessionImpl{service: ""}}
+	ses.SetTenantInfo(getDefaultAccount())
+	initTestSessionSysVars(ses)
+
+	stubGlobalSysVarPersistence(t,
+		sysVarSet{"time_zone", "Mars/Phobos"},
+		sysVarSet{"time_zone", "+25:00"},
+		sysVarSet{"time_zone", "+08:00"},
+		sysVarSet{"time_zone", "UTC"},
+	)
+
+	for _, bad := range []string{"Mars/Phobos", "+25:00"} {
+		require.Error(t, ses.SetGlobalSysVar(ctx, "time_zone", bad), bad)
+		val, err := ses.GetGlobalSysVar("time_zone")
+		require.NoError(t, err)
+		require.Equal(t, "SYSTEM", val, "rejected %q must not replace the global value", bad)
+	}
+
+	for _, good := range []string{"+08:00", "UTC"} {
+		require.NoError(t, ses.SetGlobalSysVar(ctx, "time_zone", good), good)
+		val, err := ses.GetGlobalSysVar("time_zone")
+		require.NoError(t, err)
+		require.Equal(t, good, val)
+	}
 }

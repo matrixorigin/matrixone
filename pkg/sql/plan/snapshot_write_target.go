@@ -144,7 +144,7 @@ func tableHasColumn(ctx CompilerContext, ref snapshotTableRef, column string) bo
 	if schema == "" {
 		schema = ctx.DefaultDatabase()
 	}
-	_, def, err := ctx.Resolve(schema, string(ref.name.ObjectName), nil)
+	_, def, err := ctx.Resolve(schema, string(ref.name.ObjectName), nil, nil)
 	if err != nil || def == nil {
 		return false
 	}

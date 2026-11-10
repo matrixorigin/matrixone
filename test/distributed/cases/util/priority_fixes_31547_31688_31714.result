@@ -1,3 +1,20 @@
+select @@global.time_zone;
+➤ @@global.time_zone[-1,16383,0]  𝄀
+SYSTEM
+set global time_zone = 'Mars/Phobos';
+unknown time zone Mars/Phobos
+set global time_zone = '+25:00';
+wrong date/time format specifier: +25:00
+set global time_zone = 'not a zone';
+unknown time zone not a zone
+select @@global.time_zone;
+➤ @@global.time_zone[-1,16383,0]  𝄀
+SYSTEM
+set time_zone = 'Mars/Phobos';
+unknown time zone Mars/Phobos
+select @@session.time_zone;
+➤ @@time_zone[-1,16383,0]  𝄀
+SYSTEM
 drop database if exists diff_save_result_temporal;
 create database diff_save_result_temporal;
 use diff_save_result_temporal;
@@ -42,3 +59,53 @@ where c1.v <=> c2.v and c1.v3 <=> c2.v3 and c1.d <=> c2.d and c1.t <=> c2.t and 
 3
 set time_zone = 'SYSTEM';
 drop database diff_save_result_temporal;
+drop database if exists snap_write_target;
+create database snap_write_target;
+use snap_write_target;
+create table snap_t(id int primary key, v varchar(10));
+create table o(id int primary key, v varchar(10));
+insert into snap_t values (1, 'a');
+insert into o values (1, 'o');
+drop snapshot if exists snap_write_target_sp;
+create snapshot snap_write_target_sp for table snap_write_target snap_t;
+insert into snap_t values (2, 'b');
+insert into snap_t{snapshot='snap_write_target_sp'} values (50, 'fifty');
+not supported: INSERT on a snapshot-qualified table 'snap_t'
+replace into snap_t{snapshot='snap_write_target_sp'} values (51, 'x');
+not supported: REPLACE on a snapshot-qualified table 'snap_t'
+update snap_t{snapshot='snap_write_target_sp'} set v = 'UPD' where id = 1;
+not supported: UPDATE on a snapshot-qualified table 'snap_t'
+update snap_t{snapshot='snap_write_target_sp'} s join o on o.id = s.id set s.v = 'J';
+not supported: UPDATE on a snapshot-qualified table 'snap_t'
+delete from snap_t{snapshot='snap_write_target_sp'} where id = 1;
+not supported: DELETE on a snapshot-qualified table 'snap_t'
+delete s from snap_t{snapshot='snap_write_target_sp'} s join o on s.id = o.id;
+not supported: DELETE on a snapshot-qualified table 'snap_t'
+alter table snap_t{snapshot='snap_write_target_sp'} add column extra int default 7;
+not supported: ALTER TABLE on a snapshot-qualified table 'snap_t'
+truncate table snap_t{snapshot='snap_write_target_sp'};
+not supported: TRUNCATE TABLE on a snapshot-qualified table 'snap_t'
+drop table snap_t{snapshot='snap_write_target_sp'};
+not supported: DROP TABLE on a snapshot-qualified table 'snap_t'
+select * from snap_t order by id;
+➤ id[4,32,0]  ¦  v[12,10,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b
+select * from snap_t{snapshot='snap_write_target_sp'} order by id;
+➤ id[4,32,0]  ¦  v[12,10,0]  𝄀
+1  ¦  a
+update o join snap_t{snapshot='snap_write_target_sp'} s on o.id = s.id set o.v = s.v;
+select * from o order by id;
+➤ id[4,32,0]  ¦  v[12,10,0]  𝄀
+1  ¦  a
+create table copied(id int primary key, v varchar(10));
+insert into copied select * from snap_t{snapshot='snap_write_target_sp'};
+select * from copied order by id;
+➤ id[4,32,0]  ¦  v[12,10,0]  𝄀
+1  ¦  a
+delete o from o join snap_t{snapshot='snap_write_target_sp'} s on s.id = o.id;
+select count(*) from o;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop snapshot snap_write_target_sp;
+drop database snap_write_target;
