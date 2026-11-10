@@ -919,6 +919,7 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
 		"select n_name from nation minus all select n_name from nation2", // not support
+		"(((select missing from nation)) union ((select missing from nation)))",
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -942,6 +943,12 @@ func TestUnionUntypedNullOutputType(t *testing.T) {
 		{"nested nulls", "select 2 as c union all (select null union all select null)", types.T_int64, true},
 		{"nested nulls left", "(select null as c union all select null) union all select 2", types.T_int64, true},
 		{"nested distinct nulls", "select 2 as c union all (select null union select null)", types.T_int64, true},
+		{"folded parenthesized nulls", "select 2 as c union all select 10 union all (((select null)) union ((select null))) order by c", types.T_int64, true},
+		{"folded nulls reversed", "(((select null as c)) union ((select null as c))) union all select 2 union all select 10 order by c", types.T_int64, true},
+		{"folded count", "select count(*) as c from nation union all (((select null)) union ((select null)))", types.T_int64, true},
+		{"folded typed char", "select 2 as c union all (((select cast(null as char))) union ((select cast(null as char))))", types.T_varchar, true},
+		{"folded derived null", "select 2 as c union all (((select c from (select null as c) d)) union ((select c from (select null as c) d)))", types.T_varchar, true},
+		{"folded independent columns", "select c from (select 2 as c,'a' as d union all (((select null as c,null as d)) union ((select null as c,null as d)))) u", types.T_int64, true},
 		{"branch order limit", "select 2 as c union all (select null as c order by c limit 1)", types.T_int64, true},
 		{"parenthesized branch order limit", "select 2 as c union all (select (null) as c order by c limit 1)", types.T_int64, true},
 		{"nested parenthesized nulls", "select 2 as c union all (select (null) union select (null))", types.T_int64, true},

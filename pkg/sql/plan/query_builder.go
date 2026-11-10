@@ -2409,7 +2409,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					Limit:   astLimit,
 					OrderBy: astOrderBy,
 				}
-				return builder.bindSelect(tmpSltStmt, ctx, isRoot)
+				nodeID, err := builder.bindSelect(tmpSltStmt, ctx, isRoot)
+				if err != nil {
+					return 0, err
+				}
+				// This synthetic SELECT DISTINCT * preserves the arm's column
+				// provenance; it is not a user-written derived-table boundary.
+				subCtx := builder.ctxByNode[ctx.bindings[0].nodeId]
+				ctx.bareNulls = maps.Clone(subCtx.bareNulls)
+				return nodeID, nil
 			}
 
 		case *tree.SelectClause:
