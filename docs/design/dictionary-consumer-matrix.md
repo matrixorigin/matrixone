@@ -1,0 +1,85 @@
+# Dictionary consumer migration matrix
+
+Owner: #32385 / #32386, parent #32379. Prerequisite: #32405.
+Approved combined design: `20261110-dictionary-dependent-prs.md`.
+This matrix records implementation progress, not a capability declaration.
+No production capability or producer is enabled until its closure passes.
+
+| Closure | Current state | Required closure before admission |
+|---|---|---|
+| Function parameter wrappers | Implemented; vector owning-package tests pass | Fixed/varlen logical reads, conversion, cached-shape changes, raw-slice rejection |
+| Function overloads/executors | Fallback implemented/tested; direct capability still disabled | Finish direct overload and specialized-path coverage; preserve masking/diagnostic order |
+| Vector/batch gather | Direct gathers implemented/tested; admission still disabled | Finish accounted preflight/alias rollback controls for operator use |
+| Hash preparation/probe | Integer/composite/string/float selected paths implemented/tested; admission still disabled | Complete type/metadata and operator-boundary coverage |
+| HashBuild | Pending; flat required | Retained batches, unique key collection, spill and optional runtime filters |
+| HashJoin | Pending; flat required | Residual-free INNER/probe SEMI/ANTI; other modes normalize |
+| Aggregates/Group | Pending; flat required | COUNT/SUM/AVG/MIN/MAX input and preflight; unconverted modes normalize |
+| Shuffle | Pending; flat required | Selected routing/payload, whole-batch handoff, reset-before-children and cancellation |
+| Filter/Projection | Pending; flat required | Consumer reads, selections, forwarding and final-output boundary |
+| Reader/TableScan | Pending; flat required | Separate non-shrinking selection callback, ownership admission, existing predicate order and fallback |
+| Sort/window/frontend/spill/network | Explicit normalization | Keep existing formats and unknown-consumer default from #32405 |
+
+## Contract and evidence
+
+Values use selected physical indices; null/grouping/provenance use logical indices.
+No raw getter or wrapper secretly allocates/materializes. Borrowed parameter
+wrappers hold no independent lease and are only valid while the source is live.
+The allocation owner, cancellation/reset/free closure and actual dependent test
+must be recorded for every enabled consumer.
+
+Performance uses one process/configuration, one load/open, six full suites,
+first cold suite excluded, profiling/accounting over the five warm suites.
+All Q1-Q22 and Total are reported. No benchmark-time result verification.
+Final combined acceptance additionally requires attributable Q12 gain at SF10
+and SF100 memory profiles, no unexplained all-query/Total regression, and no
+SF100 spill. Results are appended as issue/PR comments.
+
+### First implementation evidence
+
+2026-11-10: scalar Go 1.27.1 / GOAMD64=v3, controlled CGo wrapper,
+`go test -count=1 -timeout=120s ./pkg/container/vector` passed (0.357s).
+New cases cover fixed/varlen selections, repetition, NULLs, constant/all-NULL
+backing, input identity, cached representation transitions and raw-slice rejection.
+No SQL producer is enabled; this is consumer infrastructure evidence only.
+Matching native source and original jemalloc build flags were verified against
+`dictionary-boundaries` before reusing its native artifacts for the test.
+
+### Consumer implementation checkpoint
+
+Expression compatibility storage now belongs to FunctionExpressionExecutor,
+including normal/masked/folding entry points and Reset/Free. Unknown overloads
+normalize; no overload has been opted in yet. Accounted input cannot silently
+be copied into an unaccounted destination. Real lower-expression tests cover
+scratch reuse, masking, source immutability and reset. Owning colexec tests passed
+(0.181s) before the subsequent gather-all guard; rerun the affected closure when
+operator admission is complete, rather than claiming final qualification now.
+
+Vector UnionOne/UnionMulti/Union/UnionInt32/Copy and bulk UnionBatch now use
+logical metadata with selected physical payload. GetUnionAllFunction routes
+selected inputs through the direct bulk gather. Bulk flags and NULLs are covered
+by focused tests; operator-owned preflight and alias failure controls remain.
+
+Hash-map selected integer, composite CHAR/string and float probes are covered.
+The float control explicitly checks -0/+0 equality and NaN nonmatching. The
+hashmap owning package passed (0.022s); the subsequent NaN control passed (0.017s).
+The nullable H8 test uses i32 (domain + value fits eight bytes); nonnullable H8
+uses i64. SQL's wider nullable keys belong to the string hash map.
+
+No operator admission or dictionary originator is enabled. No benchmark or
+production-readiness claim is made by this checkpoint. Remaining work follows
+the matrix above, including explicit spill/transport normalization and producer
+admission before #32386 can qualify.
+
+Latest checkpoint: all three owning packages passed together (vector 0.466s,
+colexec 0.172s, hashmap 0.023s). The final fixed-byte read-view change then
+passed the focused dictionary controls in all three packages (0.014s, 0.051s,
+0.015s). Fixed and varlen hash payloads now resolve backing/mapping once per
+batch; no type-erased getter or per-row dictionary resolution is needed in
+those selected encoding loops. Fast production-convention checks passed;
+full pre-push SCA and final performance acceptance have not been run.
+
+Next implementation closure: close CopyIntoBatches selected ingress and
+HashBuild recovery projections (which still call physical GetArea), then
+selected spill serialization and real build/probe tests before admission.
+Shuffle routing, aggregate direct reads, specialized expression direct support,
+producer eligibility and the separate reader selection callback remain pending.

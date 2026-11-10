@@ -1364,7 +1364,10 @@ type executeRetainedBytesOfOverload func() uint64
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
-	overloadId int
+	// dictionaryInput is opt-in: every execution path must use logical reads,
+	// including specialized/native branches and parameter wrapper raw access.
+	dictionaryInput bool
+	overloadId      int
 
 	// args records some type information about this overload.
 	// in most case, it records, in order, which parameter types the overload required.
@@ -1419,6 +1422,10 @@ type overload struct {
 	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
 }
+
+// AcceptsDictionaryInput reports a proven read-only input capability. Unknown
+// overloads require explicit executor-owned normalization.
+func (ov *overload) AcceptsDictionaryInput() bool { return ov.dictionaryInput }
 
 // IsVolatile retains the legacy conservative evaluation policy. For value
 // repeatability within one execution, use GetFunctionValueUnstableByID.

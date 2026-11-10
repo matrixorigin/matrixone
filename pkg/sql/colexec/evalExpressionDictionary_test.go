@@ -1,0 +1,77 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package colexec
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	typ := types.T_varchar.ToType()
+	source := testutil.MakeVarcharVector([]string{"AA", "A LONG STRING BEYOND INLINE STORAGE", "unused"}, []uint64{2}, mp)
+	t.Cleanup(func() { source.Free(mp) })
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = dict
+	input.SetRowCount(4)
+	t.Cleanup(func() { input.Clean(mp) })
+	column := &plan.Expr{Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	expression := bindTestFunction(t, proc, "lower", column)
+	executor, err := NewExpressionExecutor(proc, expression)
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	check := func(mask []bool) {
+		t.Helper()
+		result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+		require.NoError(t, err)
+		require.Equal(t, 4, result.Length())
+		require.Equal(t, "a long string beyond inline storage", string(result.GetBytesAt(0)))
+		require.Equal(t, "a long string beyond inline storage", string(result.GetBytesAt(2)))
+		require.True(t, result.IsNull(3))
+		if mask == nil {
+			require.Equal(t, "aa", string(result.GetBytesAt(1)))
+		} else {
+			require.True(t, result.IsNull(1))
+		}
+		require.True(t, dict.IsDictionary())
+		require.Equal(t, "A LONG STRING BEYOND INLINE STORAGE", string(dict.GetBytesAt(0)))
+	}
+	check(nil)
+	root := executor.(*FunctionExpressionExecutor)
+	scratch := root.dictionaryScratch[0]
+	check(nil)
+	require.Same(t, scratch, root.dictionaryScratch[0], "reuse bounded argument storage")
+	check([]bool{true, false, true, false})
+	executor.ResetForNextQuery()
+	require.Nil(t, root.dictionaryScratch)
+	check(nil)
+}

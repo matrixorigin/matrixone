@@ -404,6 +404,30 @@ func ResolveVarlenaReadView(v *Vector) VarlenaReadView {
 	return VarlenaReadView{FixedReadView: ResolveFixedReadView[types.Varlena](v), Area: base.area}
 }
 
+// FixedBytesReadView exposes immutable physical-width value bytes to key
+// codecs. Selection maps logical rows; constant payload uses byte offset zero.
+// Its borrowed slices have the same lifetime as FixedReadView.
+type FixedBytesReadView struct {
+	Values    []byte
+	Selection []int64
+	Width     int
+	Constant  bool
+}
+
+func ResolveFixedBytesReadView(v *Vector) FixedBytesReadView {
+	if !v.typ.IsFixedLen() {
+		panic(moerr.NewInvalidInputNoCtx("fixed byte read view requires fixed-width input"))
+	}
+	base := v
+	var selection []int64
+	if v.IsDictionary() {
+		backing := v.dictionaryState()
+		base = backing.base.vec
+		selection = backing.rows.storageFixed()[:v.length]
+	}
+	return FixedBytesReadView{Values: base.data, Selection: selection, Width: v.typ.TypeSize(), Constant: base.IsConst()}
+}
+
 // EnsureFlat materializes only the selected logical rows. No physical getter
 // allocates implicitly. Failure leaves the original representation intact.
 func (v *Vector) EnsureFlat(mp *mpool.MPool) error {

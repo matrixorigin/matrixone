@@ -133,12 +133,17 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		// storage. Floats still need canonicalization, and NULL/const inputs
 		// still use the generic codec below.
 		if vec.GetType().TypeSize() == 8 && vec.GetType().Oid != types.T_float64 &&
-			!vec.IsConst() && !vec.GetNulls().Any() {
+			!vec.IsConst() && !vec.IsDictionary() && !vec.GetNulls().Any() {
 			copy(types.EncodeSlice(itr.keys[:count]), vec.GetData()[start*8:(start+count)*8])
 			return
 		}
 	}
 	for _, vec := range vecs {
+		if vec.IsDictionary() {
+			itr.fillDictionaryKey(vec, start, count)
+			continue
+		}
+
 		switch vec.GetType().TypeSize() {
 		case 1:
 			fillKeys[uint8](itr, vec, 1, start, count)
@@ -681,4 +686,50 @@ func (m *IntHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 
 func (m *IntHashMap) FillGroupHashes(dst []uint64) []uint64 {
 	return m.hashMap.FillGroupHashes(dst)
+}
+
+// fillDictionaryKey writes selected values into existing iterator-owned H8
+// scratch, preserving the ordinary typed equality codec and NULL domain.
+func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, count int) {
+	typ := *vec.GetType()
+	var strings vector.VarlenaReadView
+	var fixed vector.FixedBytesReadView
+	if typ.IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	} else {
+		fixed = vector.ResolveFixedBytesReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		key := types.EncodeSlice(itr.keys[i : i+1])
+		offset := int(itr.keyOffs[i])
+		if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				key[offset] = 1
+				itr.keyOffs[i]++
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		if itr.mp.hasNull {
+			key[offset] = 0
+			offset++
+		}
+		if typ.IsVarlen() {
+			physical := int(strings.Selection[row])
+			if strings.Constant {
+				physical = 0
+			}
+			value := strings.Values[physical].GetByteSlice(strings.Area)
+			if typ.Oid == types.T_char && !itr.mp.legacyCharPadding {
+				value = keycodec.CanonicalCharValue(value)
+			}
+			copy(key[offset:], value)
+			itr.keyOffs[i] = uint32(offset + len(value))
+		} else {
+			encoded := keycodec.AppendCanonicalValue(key[:offset], typ, dictionaryFixedBytes(fixed, row))
+			itr.keyOffs[i] = uint32(len(encoded))
+		}
+	}
 }

@@ -44,8 +44,9 @@ func (fF *functionFolding) reset(_ *mpool.MPool) {
 
 type functionInformationForEval struct {
 	// basic information for the function.
-	fid        int32
-	overloadID int64
+	dictionaryInput bool
+	fid             int32
+	overloadID      int64
 
 	// whether the function is volatile or time-dependent.
 	// they were used to determine whether the function can be folded.
@@ -97,6 +98,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	// reset the function information.
 	expr.functionInformationForEval.reset()
 	expr.freeIffNullResults()
+	expr.freeDictionaryParameters()
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -311,7 +313,11 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		evalProc.Ctx = proc.Ctx
 		evalProc.WarningSink = probe
 	}
-	if err := expr.evalFn(expr.parameterResults, expr.resultVector, evalProc, execLen, nil); err != nil {
+	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults)
+	if normalizeErr != nil {
+		return normalizeErr
+	}
+	if err := expr.evalFn(parameters, expr.resultVector, evalProc, execLen, nil); err != nil {
 		if probe != nil {
 			// Selection owns failures as well as warnings. Leave the expression
 			// executable so an inactive branch never observes a probe failure.

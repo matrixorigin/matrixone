@@ -106,6 +106,17 @@ func markNonMatchingNaNs(
 			oid != types.T_array_bf16 && oid != types.T_array_float16 {
 			continue
 		}
+		if vec.IsDictionary() {
+			if oid == types.T_float32 {
+				marked = markDictionaryFloatNaNs[float32](vec, start, count, zValues, nonMatching) || marked
+				continue
+			}
+			if oid == types.T_float64 {
+				marked = markDictionaryFloatNaNs[float64](vec, start, count, zValues, nonMatching) || marked
+				continue
+			}
+		}
+
 		nulls := vec.GetNulls()
 		grouping := vec.GetGrouping()
 		isConst := vec.IsConst()
@@ -1098,4 +1109,38 @@ func updateHashTableRows(rows *uint64, hasNull bool, vs []uint64, zvs []int64) {
 		}
 	}
 	*rows = groupCount
+}
+
+func markDictionaryFloatNaNs[T ~float32 | ~float64](vec *vector.Vector, start, count int, zValues []int64, nonMatching []bool) bool {
+	view := vector.ResolveFixedReadView[T](vec)
+	marked := false
+	for i := 0; i < count; i++ {
+		row := start + i
+		if view.AllNull || view.Nulls.Contains(uint64(row)) || vec.GetGrouping().Contains(uint64(row)) {
+			continue
+		}
+		physical := int(view.Selection[row])
+		if view.Constant {
+			physical = 0
+		}
+		if math.IsNaN(float64(view.Values[physical])) {
+			nonMatching[i] = true
+			zValues[i] = 0
+			marked = true
+		}
+	}
+	return marked
+}
+
+// The caller has already excluded logical NULL/grouping rows.
+func dictionaryFixedBytes(view vector.FixedBytesReadView, row int) []byte {
+	physical := row
+	if view.Selection != nil {
+		physical = int(view.Selection[row])
+	}
+	if view.Constant {
+		physical = 0
+	}
+	offset := physical * view.Width
+	return view.Values[offset : offset+view.Width]
 }

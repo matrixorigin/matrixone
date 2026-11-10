@@ -7044,17 +7044,23 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		v.clearBinaryStringAt(int(vi))
 		return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 	}
+	dataSource, dataRow := w, wi
+	if w.IsDictionary() {
+		var row int
+		dataSource, row = w.dictionaryPhysicalRow(int(wi))
+		dataRow = int64(row)
+	}
 	if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
-		copy(v.data[vi*int64(sz):(vi+1)*int64(sz)], w.data[wi*int64(sz):(wi+1)*int64(sz)])
+		copy(v.data[vi*int64(sz):(vi+1)*int64(sz)], dataSource.data[dataRow*int64(sz):(dataRow+1)*int64(sz)])
 	} else {
 		var err error
 		vva := MustFixedColNoTypeCheck[types.Varlena](v)
-		wva := MustFixedColNoTypeCheck[types.Varlena](w)
-		if wva[wi].IsSmall() {
-			vva[vi] = wva[wi]
+		wva := MustFixedColNoTypeCheck[types.Varlena](dataSource)
+		if wva[dataRow].IsSmall() {
+			vva[vi] = wva[dataRow]
 		} else {
-			bs := wva[wi].GetByteSlice(w.area)
+			bs := wva[dataRow].GetByteSlice(dataSource.area)
 			err = BuildVarlenaFromByteSlice(v, &vva[vi], &bs, mp)
 			if err != nil {
 				return err
@@ -7086,6 +7092,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		if w.IsDictionary() {
+			return v.UnionBatch(w, 0, w.length, nil, mp)
+		}
+
 		// A Window retains the area lease but may alias our owned descriptors.
 		if v.dataAliases(w) {
 			return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
@@ -8571,11 +8581,17 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	if w.IsConst() {
 		sel = 0
 	}
+	dataSource, dataRow := w, sel
+	if w.IsDictionary() {
+		var physicalRow int
+		dataSource, physicalRow = w.dictionaryPhysicalRow(int(sel))
+		dataRow = int64(physicalRow)
+	}
 	if varlen {
 		var vs, ws []types.Varlena
 		ToSliceNoTypeCheck(v, &vs)
-		ToSliceNoTypeCheck(w, &ws)
-		err := BuildVarlenaFromVarlena(v, &vs[oldLen], &ws[sel], &w.area, mp)
+		ToSliceNoTypeCheck(dataSource, &ws)
+		err := BuildVarlenaFromVarlena(v, &vs[oldLen], &ws[dataRow], &dataSource.area, mp)
 		if err != nil {
 			return err
 		}
@@ -8588,20 +8604,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		switch tlen {
 		case 8:
 			p1 := unsafe.Pointer(&v.data[oldLen*8])
-			p2 := unsafe.Pointer(&w.data[sel*8])
+			p2 := unsafe.Pointer(&dataSource.data[dataRow*8])
 			*(*int64)(p1) = *(*int64)(p2)
 		case 4:
 			p1 := unsafe.Pointer(&v.data[oldLen*4])
-			p2 := unsafe.Pointer(&w.data[sel*4])
+			p2 := unsafe.Pointer(&dataSource.data[dataRow*4])
 			*(*int32)(p1) = *(*int32)(p2)
 		case 2:
 			p1 := unsafe.Pointer(&v.data[oldLen*2])
-			p2 := unsafe.Pointer(&w.data[sel*2])
+			p2 := unsafe.Pointer(&dataSource.data[dataRow*2])
 			*(*int16)(p1) = *(*int16)(p2)
 		case 1:
-			v.data[oldLen] = w.data[sel]
+			v.data[oldLen] = dataSource.data[dataRow]
 		default:
-			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], dataSource.data[int(dataRow)*tlen:(int(dataRow)+1)*tlen])
 		}
 	}
 
@@ -8641,6 +8657,14 @@ func appendSelectedGrouping[T int32 | int64](
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
+	if w.IsDictionary() {
+		for i := 0; i < cnt; i++ {
+			if err := v.UnionOne(w, sel, mp); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if cnt == 0 {
 		return nil
 	}
@@ -8806,6 +8830,14 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
+		return nil
+	}
+	if w.IsDictionary() {
+		for _, row := range sels {
+			if err := v.UnionOne(w, int64(row), mp); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if v.dataAliases(w) {
@@ -9163,6 +9195,10 @@ func (v *Vector) unionBatch(
 	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
+	}
+
+	if w.IsDictionary() {
+		return v.unionDictionaryBatch(w, offset, cnt, flags, stringSourceOverrides, addCnt, areaWasDisjoint, mp)
 	}
 
 	if w.IsConst() {

@@ -1,8 +1,8 @@
 # Dictionary dependent PR delivery design
 
 Owner: #32379. Proposed follow-ups: #32385, #32386, #32387, #32388.
-Status: design for requester review; no production implementation authorized by
-this document alone. #32405 keeps its accepted boundary-only scope.
+Status: combined consumer and scan/filter producer design approved by the requester
+on 2026-11-10; implementation in progress. #32405 keeps its accepted boundary-only scope.
 
 ## Baseline and invariant
 
@@ -23,10 +23,11 @@ input only after every reachable physical/native access is either converted or
 explicitly normalized at its owning boundary. A dictionary-aware forwarder must
 also declare possible dictionary output so an unsupported next edge is safe.
 
-## PR A: consumer migration (#32385)
+## Combined PR, part A: consumer migration (#32385)
 
-Depends on #32405. No operator originates dictionary selections in this PR.
-Forwarding declarations are permitted but cannot create SQL dictionary inputs.
+Depends on #32405. Implement this consumer part before enabling part B.
+The same implementation PR covers #32385 and #32386; no producer is enabled
+until its complete consumer/normalization path is covered.
 
 - Resolve fixed/varlen read views once per input batch. Preserve existing direct
   flat/constant loops and scalar broadcast; selected loops index the immutable
@@ -57,11 +58,12 @@ rows, NULL/grouping, inline/area strings and metadata; compare to independently
 specified logical outputs. Exercise selected keys and payload separately,
 function fallback, failed copy, reset/reuse, stopped cancellation and actual
 join/aggregate callbacks. Run affected owning packages; race only shared/async
-closures. Neutral TPC-H acceptance; no claimed workload speedup.
+closures. The completed combined PR uses part B's Q12 speedup and all-query regression gate;
+do not run a separate neutral acceptance campaign between these commits.
 
-## PR B: scan/filter/projection selections (#32386)
+## Combined PR, part B: scan/filter/projection selections (#32386)
 
-Depends on A. Primary target Q12. Recheck the current physical plan before
+Shares one PR with A. Primary target Q12. Recheck the current physical plan before
 implementation and qualification. The retained current plan is:
 
     LINEITEM reader with pushed predicates -> shuffle -> hash build
@@ -140,10 +142,10 @@ activation/benefit at both scales and all-query/Total behavior.
 
 ## Delivery and future verification protocol
 
-Submit one templated draft per stage after its real code and cheapest functional
-proof exist. Do not submit empty placeholders. Draft development may stack;
+Submit one templated draft for combined A/B after real code and cheapest functional
+proof exist; C and D remain separate PRs. Do not submit empty placeholders. Draft development may stack;
 production enablement and final isolated qualification wait for prerequisites
-to merge. Keep #32405 acceptance running independently of A development.
+to merge. #32405 is ready for review; combined A/B development may stack before its merge.
 
 The requester replaced the repeated-process protocol for future PRs:
 

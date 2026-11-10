@@ -126,6 +126,39 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if withDomain {
 			prefix = 1
 		}
+		if vec.IsDictionary() {
+			var strings vector.VarlenaReadView
+			if vec.GetType().IsVarlen() {
+				strings = vector.ResolveVarlenaReadView(vec)
+			}
+			for i := 0; i < count; i++ {
+				row := start + i
+				size := 0
+				if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+					size = 1
+				} else if vec.IsNull(uint64(row)) {
+					if itr.mp.hasNull {
+						size = 1
+					}
+				} else {
+					if vec.GetType().IsFixedLen() {
+						size = prefix + vec.GetType().TypeSize()
+					} else {
+						physical := int(strings.Selection[row])
+						if strings.Constant {
+							physical = 0
+						}
+						value := strings.Values[physical].GetByteSlice(strings.Area)
+						size = prefix + 4 + keycodec.CanonicalValueSize(*vec.GetType(), value)
+					}
+				}
+				if err := add(i, size); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
 		if vec.IsGrouping() {
 			for i := 0; i < count; i++ {
 				if err := add(i, 1); err != nil {
@@ -383,6 +416,11 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		return
 	}
 	for _, vec := range vecs {
+		if vec.IsDictionary() {
+			itr.fillDictionaryKeys(vec, start, count)
+			continue
+		}
+
 		if isFlatCharStringHashKey(vec) {
 			fillFlatCharStringHashKey(itr, vec, count, start)
 			continue
@@ -458,7 +496,7 @@ func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, sta
 		typ := vec.GetType()
 		// typeswitch:partial bf16/float16/float8/float4 zeros are stored as +0 (CanonicalLowPrecFloat), so their bytes are the key
 		if !typ.IsFixedLen() || typ.Oid == types.T_float32 || typ.Oid == types.T_float64 ||
-			vec.IsConst() || vec.HasGrouping() || vec.GetNulls().Any() {
+			vec.IsConst() || vec.IsDictionary() || vec.HasGrouping() || vec.GetNulls().Any() {
 			return false
 		}
 		width := typ.TypeSize()
@@ -1425,4 +1463,52 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 
 func (m *StrHashMap) FillGroupHashes(dst []uint64) []uint64 {
 	return m.hashMap.FillGroupHashes(dst)
+}
+
+// fillDictionaryKeys uses the common equality codec and the existing key frame.
+// Admission/sizing has already reserved each complete key before this pass.
+func (itr *strHashmapIterator) fillDictionaryKeys(vec *vector.Vector, start, count int) {
+	typ := *vec.GetType()
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	var strings vector.VarlenaReadView
+	var fixed vector.FixedBytesReadView
+	if typ.IsVarlen() {
+		strings = vector.ResolveVarlenaReadView(vec)
+	} else {
+		fixed = vector.ResolveFixedBytesReadView(vec)
+	}
+	for i := 0; i < count; i++ {
+		row := start + i
+		if vec.IsGrouping() || withDomain && vec.GetGrouping().Contains(uint64(row)) {
+			itr.keys[i] = append(itr.keys[i], 2)
+			continue
+		}
+		if vec.IsNull(uint64(row)) {
+			if itr.mp.hasNull {
+				itr.keys[i] = append(itr.keys[i], 1)
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		key := itr.keys[i]
+		if withDomain {
+			key = append(key, 0)
+		}
+		if typ.IsVarlen() {
+			physical := int(strings.Selection[row])
+			if strings.Constant {
+				physical = 0
+			}
+			value := strings.Values[physical].GetByteSlice(strings.Area)
+			prefix := len(key)
+			key = append(key, 0, 0, 0, 0)
+			key = keycodec.AppendCanonicalValue(key, typ, value)
+			length := uint32(len(key) - prefix - 4)
+			copy(key[prefix:prefix+4], util.UnsafeToBytes(&length))
+		} else {
+			key = keycodec.AppendCanonicalValue(key, typ, dictionaryFixedBytes(fixed, row))
+		}
+		itr.keys[i] = key
+	}
 }
