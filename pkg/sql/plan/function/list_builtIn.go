@@ -10017,6 +10017,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToQuarter
 				},
 			},
+			{
+				// TEXT must bind directly: QUARTER's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose components the string
+				// path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToQuarter
+				},
+			},
 		},
 	},
 
@@ -10109,6 +10125,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToDayName
 				},
 			},
+			{
+				// TEXT must bind directly: DAYNAME's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose calendar weekday the
+				// string path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDayName
+				},
+			},
 		},
 	},
 
@@ -10160,6 +10192,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringToMonthName
 				},
 			},
+			{
+				// TEXT must bind directly: MONTHNAME's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose month name the string
+				// path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToMonthName
+				},
+			},
 		},
 	},
 
@@ -10204,6 +10252,23 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDay
+				},
+			},
+			{
+				// TEXT must bind directly: DAYOFMONTH's DATE overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose day component the
+				// string path deliberately preserves (0000-01-01 keeps day
+				// 1 and 2024-00-15 keeps day 15 instead of NULLing).
+				overloadId: 4,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -11096,6 +11161,22 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToWeekOfYear
+				},
+			},
+			{
+				// TEXT must bind directly: WEEKOFYEAR's DATE overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose strToDate rejects
+				// year-zero and incomplete dates whose calendar week number
+				// the string path deliberately preserves.
+				overloadId: 4,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},

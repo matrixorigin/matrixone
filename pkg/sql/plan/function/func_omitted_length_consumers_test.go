@@ -296,3 +296,85 @@ func TestTimestampDiffTextKeepsStringTemporalOverloads(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is 'timestampdiff text/date keeps time-of-day', err info is '%s'", info))
 	})
 }
+
+// TestDateStringExtractorsBindTextDirectly covers the date-extraction
+// regressions raised by PR review: DAYOFMONTH, QUARTER, DAYNAME, MONTHNAME
+// and WEEKOFYEAR each keep a string parsing overload that preserves
+// year-zero and incomplete-date components (0000-01-01 keeps January and
+// day 1, 2024-00-15 keeps day 15), while their DATE overloads consume a
+// strToDate cast that rejects those strings and NULLs them. The widened TEXT
+// target (#32336, #32374) casts to DATE and VARCHAR at the same preferLevel,
+// so the by-cast tie kept each first DATE overload; direct TEXT overloads
+// restore the pre-widening string semantics.
+func TestDateStringExtractorsBindTextDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name string
+		ret  types.T
+	}{
+		{"dayofmonth", types.T_uint8},
+		{"quarter", types.T_uint8},
+		{"dayname", types.T_varchar},
+		{"monthname", types.T_varchar},
+		{"weekofyear", types.T_int64},
+	} {
+		t.Run("binds/"+tc.name, func(t *testing.T) {
+			get, err := GetFunctionByName(proc.Ctx, tc.name, []types.Type{types.T_text.ToType()})
+			require.NoError(t, err)
+			require.Equal(t, tc.ret, get.GetReturnType().Oid,
+				"the TEXT overload must keep its VARCHAR peer's return type")
+			_, shouldCast := get.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast,
+				"%s(text) must bind the string overload directly, not tie into the DATE overload through an equal-cost cast", tc.name)
+		})
+	}
+
+	// Executor-level parity with T_text operands: the values are the ones the
+	// VARCHAR overloads already pin in TestDateStringExtractorsYearZeroAnd-
+	// LegacyDelimiters (func_unary_test.go), including year-zero and legacy
+	// delimiter strings. A tie into the DATE overload would NULL every row
+	// that strToDate cannot parse; of the composed edge strings, only the
+	// name/week extractors NULL the incomplete date 2024-00-15, while
+	// DAYOFMONTH keeps its day component and QUARTER reports 0.
+	inputs := []string{"0000-01-01", "2024/01/15", "2024:01:15T12:34:56", "0000-02-29", "2024-00-15"}
+	for _, tc := range []struct {
+		name   string
+		result FunctionTestResult
+		op     fEvalFn
+	}{
+		{
+			name:   "dayofmonth",
+			result: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{1, 15, 15, 0, 15}, []bool{false, false, false, true, false}),
+			op:     DateStringToDay,
+		},
+		{
+			name:   "quarter",
+			result: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{1, 1, 1, 0, 0}, []bool{false, false, false, true, false}),
+			op:     DateStringToQuarter,
+		},
+		{
+			name:   "dayname",
+			result: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"Sunday", "Monday", "Monday", "", ""}, []bool{false, false, false, true, true}),
+			op:     DateStringToDayName,
+		},
+		{
+			name:   "monthname",
+			result: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"January", "January", "January", "", ""}, []bool{false, false, false, true, true}),
+			op:     DateStringToMonthName,
+		},
+		{
+			name:   "weekofyear",
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{52, 3, 3, 0, 0}, []bool{false, false, false, true, true}),
+			op:     DateStringToWeekOfYear,
+		},
+	} {
+		t.Run("values/"+tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), inputs, nil)},
+				tc.result, tc.op)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s keeps the string parsing values on TEXT', err info is '%s'", tc.name, info))
+		})
+	}
+}

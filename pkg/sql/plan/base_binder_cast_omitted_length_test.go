@@ -271,3 +271,98 @@ func TestOmittedLengthStrToDateAcceptsTextFormat(t *testing.T) {
 		require.Len(t, fn.Args, 3, sql)
 	}
 }
+
+// TestOmittedLengthTextKeepsOperatorRewrites guards the "+" and "-" operator
+// rewrites for the widened TEXT cast target (#32336, #32374): the date
+// arithmetic rewrite for INTERVAL operands and the string concatenation
+// rewrite must keep firing when an operand is the omitted-length
+// CAST/CONVERT-to-CHAR result, so compositions keep binding instead of
+// failing through the numeric operator tables.
+func TestOmittedLengthTextKeepsOperatorRewrites(t *testing.T) {
+	t.Run("interval_addition", func(t *testing.T) {
+		for _, sql := range []string{
+			"select cast('2024-01-01 12:34:56' as char) + interval 1 day",
+			"select convert('2024-01-01 12:34:56', char) + interval 1 day",
+			"select interval 1 day + cast('2024-01-01 12:34:56' as char)",
+			"select interval 1 day + convert('2024-01-01 12:34:56', char)",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			require.Equal(t, int32(types.T_text), bound.Typ.Id, sql,
+				"the TEXT date_add overload returns TEXT like its VARCHAR peer")
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "date_add", fn.Func.GetObjName(), sql)
+			require.Len(t, fn.Args, 3, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql,
+				"the TEXT cast result must reach date_add through its TEXT overload, with no narrowing cast")
+		}
+	})
+
+	t.Run("interval_subtraction", func(t *testing.T) {
+		for _, sql := range []string{
+			"select cast('2024-03-31 12:34:56' as char) - interval 1 day",
+			"select convert('2024-03-31 12:34:56', char) - interval 1 day",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			require.Equal(t, int32(types.T_text), bound.Typ.Id, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "date_sub", fn.Func.GetObjName(), sql)
+			require.Len(t, fn.Args, 3, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql,
+				"the TEXT cast result must reach date_sub through its TEXT overload, with no narrowing cast")
+		}
+	})
+
+	t.Run("string_concatenation", func(t *testing.T) {
+		for _, tc := range []struct {
+			sql         string
+			left, right int32
+		}{
+			{"select cast('a' as char) + 'b'", int32(types.T_text), int32(types.T_varchar)},
+			{"select convert('a', char) + 'b'", int32(types.T_text), int32(types.T_varchar)},
+			{"select 'a' + cast('b' as char)", int32(types.T_varchar), int32(types.T_text)},
+			{"select 'a' + convert('b', char)", int32(types.T_varchar), int32(types.T_text)},
+			{"select cast('a' as char) + cast('b' as char)", int32(types.T_text), int32(types.T_text)},
+			{"select convert('a', char) + convert('b', char)", int32(types.T_text), int32(types.T_text)},
+		} {
+			bound := bindFirstSelectExpr(t, tc.sql)
+			require.Equal(t, int32(types.T_varchar), bound.Typ.Id, tc.sql,
+				"concat keeps its VARCHAR result for mixed TEXT operands")
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "concat", fn.Func.GetObjName(), tc.sql)
+			require.Len(t, fn.Args, 2, tc.sql)
+			require.Equal(t, tc.left, fn.Args[0].Typ.Id, tc.sql,
+				"concat keeps the TEXT operand as is, with no narrowing cast")
+			require.Equal(t, tc.right, fn.Args[1].Typ.Id, tc.sql,
+				"concat keeps the TEXT operand as is, with no narrowing cast")
+		}
+	})
+}
+
+// TestOmittedLengthTextKeepsDateExtractionStringPaths guards the
+// DAYOFMONTH/QUARTER/DAYNAME/MONTHNAME/WEEKOFYEAR compositions: the widened
+// TEXT cast results must bind each consumer's string overload directly, not
+// the first DATE overload through an equal-cost implicit cast whose
+// strToDate rejects year-zero and incomplete dates.
+func TestOmittedLengthTextKeepsDateExtractionStringPaths(t *testing.T) {
+	for _, tc := range []struct {
+		sql string
+		ret int32
+	}{
+		{"select dayofmonth(cast('0000-01-01' as char))", int32(types.T_uint8)},
+		{"select dayofmonth(convert('2024-00-15', char))", int32(types.T_uint8)},
+		{"select quarter(cast('0000-01-01' as char))", int32(types.T_uint8)},
+		{"select quarter(convert('0000-01-01', char))", int32(types.T_uint8)},
+		{"select dayname(cast('0000-01-01' as char))", int32(types.T_varchar)},
+		{"select dayname(convert('0000-01-01', char))", int32(types.T_varchar)},
+		{"select monthname(cast('0000-01-01' as char))", int32(types.T_varchar)},
+		{"select monthname(convert('0000-01-01', char))", int32(types.T_varchar)},
+		{"select weekofyear(cast('0000-01-01' as char))", int32(types.T_int64)},
+		{"select weekofyear(convert('0000-01-01', char))", int32(types.T_int64)},
+	} {
+		bound := bindFirstSelectExpr(t, tc.sql)
+		require.Equal(t, tc.ret, bound.Typ.Id, tc.sql)
+		fn := boundExprFn(t, bound)
+		require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, tc.sql,
+			"the TEXT cast result must reach the string overload directly, not cast to DATE or DATETIME")
+	}
+}

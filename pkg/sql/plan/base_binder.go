@@ -3361,6 +3361,17 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
 }
 
+// isVarcharOrTextExprType reports whether an expression type is one of the
+// string kinds the "+" and "-" operator rewrites treat as a date operand or
+// concatenate: VARCHAR plus the unbounded TEXT target of omitted-length
+// CAST/CONVERT-to-CHAR (#32336, #32374). The widened cast results must keep
+// these rewrites or composed statements like
+// CAST('2024-01-01' AS CHAR) + INTERVAL 1 DAY stop binding. CHAR literals
+// are unchanged: they never matched these rewrites before the widening.
+func isVarcharOrTextExprType(id int32) bool {
+	return id == int32(types.T_varchar) || id == int32(types.T_text)
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 	if name == NameApproxPercentile {
@@ -3500,10 +3511,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if isVarcharOrTextExprType(args[0].Typ.Id) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].Typ.Id == int32(types.T_interval) && isVarcharOrTextExprType(args[1].Typ.Id) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -3518,7 +3529,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if isVarcharOrTextExprType(args[0].Typ.Id) && isVarcharOrTextExprType(args[1].Typ.Id) {
 			name = "concat"
 		}
 		if err != nil {
@@ -3544,7 +3555,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if isVarcharOrTextExprType(args[0].Typ.Id) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {

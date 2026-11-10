@@ -177,3 +177,49 @@ select timestampdiff(hour, cast('2024-01-01 01:00:00' as char), cast('2024-01-03
 timestampdiff(hour, convert('2024-01-01 01:00:00', char), convert('2024-01-03 00:30:00', char)) as tsdiff_pair_convert;
 ➤ tsdiff_pair_cast[-5,64,0]  ¦  tsdiff_pair_convert[-5,64,0]  𝄀
 47  ¦  47
+select cast('2024-01-01' as char) + interval 1 day as add_day_cast,
+convert('2024-01-01', char) + interval 1 day as add_day_convert;
+➤ add_day_cast[12,0,0]  ¦  add_day_convert[12,0,0]  𝄀
+2024-01-02  ¦  2024-01-02
+select interval 1 day + cast('2024-01-01 12:34:56' as char) as add_rev_cast,
+interval 1 day + convert('2024-01-01 12:34:56', char) as add_rev_convert;
+➤ add_rev_cast[12,0,0]  ¦  add_rev_convert[12,0,0]  𝄀
+2024-01-02 12:34:56  ¦  2024-01-02 12:34:56
+select cast('2024-03-31' as char) - interval 1 day as sub_day_cast,
+convert('2024-03-31', char) - interval 1 day as sub_day_convert;
+➤ sub_day_cast[12,0,0]  ¦  sub_day_convert[12,0,0]  𝄀
+2024-03-30  ¦  2024-03-30
+select cast('a' as char) + 'b' as concat_text_varchar_cast,
+convert('a', char) + 'b' as concat_text_varchar_convert,
+'a' + cast('b' as char) as concat_varchar_text_cast,
+'a' + convert('b', char) as concat_varchar_text_convert;
+➤ concat_text_varchar_cast[12,-1,0]  ¦  concat_text_varchar_convert[12,-1,0]  ¦  concat_varchar_text_cast[12,-1,0]  ¦  concat_varchar_text_convert[12,-1,0]  𝄀
+ab  ¦  ab  ¦  ab  ¦  ab
+select cast('a' as char) + cast('b' as char) as concat_two_cast,
+convert('a', char) + convert('b', char) as concat_two_convert;
+➤ concat_two_cast[12,-1,0]  ¦  concat_two_convert[12,-1,0]  𝄀
+ab  ¦  ab
+select dayofmonth(cast('0000-01-01' as char)) as dayofmonth_cast,
+dayofmonth(convert('2024-00-15', char)) as dayofmonth_convert;
+➤ dayofmonth_cast[-6,8,0]  ¦  dayofmonth_convert[-6,8,0]  𝄀
+1  ¦  15
+select quarter(cast('0000-01-01' as char)) as quarter_cast,
+dayname(cast('0000-01-01' as char)) as dayname_cast,
+monthname(cast('0000-01-01' as char)) as monthname_cast,
+weekofyear(cast('0000-01-01' as char)) as weekofyear_cast;
+➤ quarter_cast[-6,8,0]  ¦  dayname_cast[12,-1,0]  ¦  monthname_cast[12,-1,0]  ¦  weekofyear_cast[-5,64,0]  𝄀
+1  ¦  Sunday  ¦  January  ¦  52
+select quarter(convert('0000-01-01', char)) as quarter_convert,
+dayname(convert('0000-01-01', char)) as dayname_convert,
+monthname(convert('0000-01-01', char)) as monthname_convert,
+weekofyear(convert('0000-01-01', char)) as weekofyear_convert;
+➤ quarter_convert[-6,8,0]  ¦  dayname_convert[12,-1,0]  ¦  monthname_convert[12,-1,0]  ¦  weekofyear_convert[-5,64,0]  𝄀
+1  ¦  Sunday  ¦  January  ¦  52
+select year(cast('2024-06-05' as char)) as year_valid_cast,
+year(convert('2024-06-05', char)) as year_valid_convert;
+➤ year_valid_cast[-5,64,0]  ¦  year_valid_convert[-5,64,0]  𝄀
+2024  ¦  2024
+select month(cast('2024-06-05' as char)) as month_valid_cast,
+month(convert('2024-06-05', char)) as month_valid_convert;
+➤ month_valid_cast[-6,8,0]  ¦  month_valid_convert[-6,8,0]  𝄀
+6  ¦  6
