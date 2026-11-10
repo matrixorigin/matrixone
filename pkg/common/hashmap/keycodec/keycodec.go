@@ -649,6 +649,11 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	}
 
 	for _, vec := range keyVecs {
+		if vec.IsDictionary() {
+			computeGroupingXXHash(vec, hashValues[:min(rowCount, vec.Length())])
+			continue
+		}
+
 		if vec.GetGrouping().GetBitmap().CountRange(0, uint64(rowCount)) > 0 {
 			computeGroupingXXHash(vec, hashValues)
 			continue
@@ -814,6 +819,19 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 // Keeping this contract in keycodec prevents statistics, hash joins, and GROUP
 // BY from silently defining different equality domains.
 func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
+	if vec.IsDictionary() {
+		switch vec.GetType().Oid {
+		case types.T_float32:
+			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(vector.GetFixedAtNoTypeCheck[float32](vec, row))
+			scratch = append(scratch, value[:]...)
+			return scratch, scratch
+		case types.T_float64:
+			value := CanonicalFloat64Bytes(vector.GetFixedAtNoTypeCheck[float64](vec, row))
+			scratch = append(scratch, value[:]...)
+			return scratch, scratch
+		}
+	}
+
 	if vec.IsConst() {
 		row = 0
 	}

@@ -1103,3 +1103,27 @@ func TestCanonicalVecBlockKeyMatchesEquality(t *testing.T) {
 	require.Equal(t, []byte{1, 2, 3}, AppendCanonicalValue(nil, f8, []byte{1, 2, 3}))
 	require.Equal(t, 3, CanonicalValueSize(f8, []byte{1, 2, 3}))
 }
+
+func TestComputeXXHashDictionaryFloatLogicalRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_float64.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(source, []float64{math.Copysign(0, -1), 1.5, 0}, []bool{false, false, true}, mp))
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { dict.Free(mp) })
+	control := vector.NewVec(types.T_float64.ToType())
+	t.Cleanup(func() { control.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(control, []float64{1.5, 0, 1.5, 0}, []bool{false, false, false, true}, mp))
+	want, got := make([]uint64, 4), make([]uint64, 4)
+	ComputeXXHash([]*vector.Vector{control}, want, 7)
+	ComputeXXHash([]*vector.Vector{dict}, got, 7)
+	require.Equal(t, want, got)
+}

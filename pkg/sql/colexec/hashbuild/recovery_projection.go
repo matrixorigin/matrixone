@@ -229,6 +229,17 @@ func unionBatchAreaProjection(
 	if start < 0 || rows < 0 {
 		return 0, 0, process.ErrExecutionResourceInvalid
 	}
+	if src.IsDictionary() {
+		if start > src.Length() || rows > src.Length()-start {
+			return 0, 0, process.ErrExecutionResourceInvalid
+		}
+		payload, err := selectedVarlenaPayload(src, start, rows)
+		if err != nil || payload > math.MaxInt {
+			return 0, 0, process.ErrExecutionResourceInvalid
+		}
+		return int(payload), payload, nil
+	}
+
 	if src.IsConst() {
 		if rows > 0 && src.Length() == 0 {
 			return 0, 0, process.ErrExecutionResourceInvalid
@@ -266,6 +277,34 @@ func unionBatchAreaProjection(
 }
 
 func selectedVarlenaPayload(src *vector.Vector, start, rows int) (uint64, error) {
+	if src.IsDictionary() {
+		if start < 0 || rows < 0 || start > src.Length() || rows > src.Length()-start {
+			return 0, process.ErrExecutionResourceInvalid
+		}
+		view := vector.ResolveVarlenaReadView(src)
+		var payload uint64
+		for row := start; row < start+rows; row++ {
+			if view.AllNull || view.Nulls.Contains(uint64(row)) {
+				continue
+			}
+			physical := int(view.Selection[row])
+			if view.Constant {
+				physical = 0
+			}
+			value := view.Values[physical]
+			if value.IsSmall() {
+				continue
+			}
+			_, length := value.OffsetLen()
+			var err error
+			payload, err = recoveryCheckedAdd(payload, uint64(length))
+			if err != nil {
+				return 0, err
+			}
+		}
+		return payload, nil
+	}
+
 	values, _ := vector.MustVarlenaRawData(src)
 	end := start + rows
 	if start < 0 || rows < 0 || end > len(values) {

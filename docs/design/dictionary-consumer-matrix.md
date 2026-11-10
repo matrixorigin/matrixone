@@ -11,7 +11,7 @@ No production capability or producer is enabled until its closure passes.
 | Function overloads/executors | Fallback implemented/tested; direct capability still disabled | Finish direct overload and specialized-path coverage; preserve masking/diagnostic order |
 | Vector/batch gather | Direct gathers implemented/tested; admission still disabled | Finish accounted preflight/alias rollback controls for operator use |
 | Hash preparation/probe | Integer/composite/string/float selected paths implemented/tested; admission still disabled | Complete type/metadata and operator-boundary coverage |
-| HashBuild | Pending; flat required | Retained batches, unique key collection, spill and optional runtime filters |
+| HashBuild | Direct-column, non-dedup mode admitted and endpoint tested | Finish selected fault/pressure controls before producer rollout; computed keys and dedup stay flat |
 | HashJoin | Pending; flat required | Residual-free INNER/probe SEMI/ANTI; other modes normalize |
 | Aggregates/Group | Pending; flat required | COUNT/SUM/AVG/MIN/MAX input and preflight; unconverted modes normalize |
 | Shuffle | Pending; flat required | Selected routing/payload, whole-batch handoff, reset-before-children and cancellation |
@@ -65,7 +65,7 @@ hashmap owning package passed (0.022s); the subsequent NaN control passed (0.017
 The nullable H8 test uses i32 (domain + value fits eight bytes); nonnullable H8
 uses i64. SQL's wider nullable keys belong to the string hash map.
 
-No operator admission or dictionary originator is enabled. No benchmark or
+At that first checkpoint no operator admission or dictionary originator was enabled. No benchmark or
 production-readiness claim is made by this checkpoint. Remaining work follows
 the matrix above, including explicit spill/transport normalization and producer
 admission before #32386 can qualify.
@@ -83,3 +83,22 @@ HashBuild recovery projections (which still call physical GetArea), then
 selected spill serialization and real build/probe tests before admission.
 Shuffle routing, aggregate direct reads, specialized expression direct support,
 producer eligibility and the separate reader selection callback remain pending.
+
+### HashBuild ingress checkpoint
+
+Direct-column non-dedup HashBuild now declares dictionary read capability.
+Computed keys/dedup retain the flat compatibility edge. A real MockOperator ->
+HashBuild -> JoinMap test proves three selected rows, two groups, expected probes,
+unchanged dictionary ingress and final memory cleanup. Accounted retained-copy
+integration also passes through colexec.Batches with flat destination ownership.
+
+Spill-recovery projection now sums selected varlen rows, including duplicates,
+without calling physical GetArea on a dictionary. Shared spill routing uses
+logical dictionary keys and canonical floating bytes. Spill partitions already
+use UnionInt32 into owned flat scratch before existing serialization; no wire
+format changes are introduced.
+
+Focused ingress/recovery/retention checks passed. Owning HashBuild (0.267s) and
+keycodec (0.041s) package checks passed. No dictionary producer is enabled yet;
+operator consumer migration, selected pressure controls, reader/filter producers
+and Q12 performance qualification remain required for the combined PR.

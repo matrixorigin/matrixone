@@ -74,4 +74,30 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 	executor.ResetForNextQuery()
 	require.Nil(t, root.dictionaryScratch)
 	check(nil)
+	t.Run("accounted-build-retention", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		require.NoError(t, err)
+		var retained Batches
+		t.Cleanup(func() { retained.Clean(mp) })
+		require.NoError(t, retained.CopyIntoBatchesWithAllocation(input, proc, selection))
+		require.Len(t, retained.Buf, 1)
+		require.Equal(t, 4, retained.Buf[0].RowCount())
+		got := retained.Buf[0].Vecs[0]
+		require.False(t, got.IsDictionary())
+		require.Same(t, selection, got.AllocationAccountSelection())
+		require.Equal(t, "A LONG STRING BEYOND INLINE STORAGE", string(got.GetBytesAt(0)))
+		require.Equal(t, "AA", string(got.GetBytesAt(1)))
+		require.True(t, got.IsNull(3))
+		require.True(t, dict.IsDictionary())
+	})
+
 }
