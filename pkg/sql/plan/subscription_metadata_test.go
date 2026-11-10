@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
@@ -167,7 +169,7 @@ func (c *subscriptionMetadataTestContext) Resolve(
 
 func subscriptionStatisticsTestView() (*ObjectRef, *TableDef) {
 	viewData, _ := json.Marshal(ViewData{
-		Stmt:            sysview.InformationSchemaStatisticsDDL,
+		Stmt:            sysview.InformationSchemaStatisticsPrefixSubPartDDL,
 		DefaultDatabase: INFORMATION_SCHEMA,
 		SecurityType:    "DEFINER",
 	})
@@ -462,10 +464,22 @@ func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *tes
 	// There is deliberately no publisher node to carry the existing node-level
 	// cache markers. Ordinary cache admission must therefore use the preserved
 	// STATISTICS origin-view dependency instead.
+	//
+	// The local projection is not plan-cacheable by design: the published
+	// CARDINALITY estimate is a real-time function, and bindProjection applies
+	// the engine's uniform not-cacheable rule to every projection carrying one,
+	// exactly as the PARTITIONS view's mo_table_rows/mo_table_size base
+	// projections. Zero visible subscriptions means no node may carry any
+	// publisher scope, while the live estimate itself must stay projected.
+	liveEstimateNodes := 0
 	for _, node := range queryPlan.GetQuery().GetNodes() {
-		require.False(t, node.GetNotCacheable())
+		if node.GetNotCacheable() {
+			liveEstimateNodes++
+		}
 		require.Empty(t, node.GetObjRef().GetSubscriptionName())
 	}
+	require.Positive(t, liveEstimateNodes,
+		"the local STATISTICS branch must keep projecting the live CARDINALITY estimate")
 }
 
 func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
@@ -1105,7 +1119,7 @@ func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *tes
 }
 
 func TestRewriteSubscriptionStatisticsAccountScopesVisibilityCTE(t *testing.T) {
-	statements, err := mysql.Parse(context.Background(), sysview.InformationSchemaStatisticsDDL, 1)
+	statements, err := mysql.Parse(context.Background(), sysview.InformationSchemaStatisticsPrefixSubPartDDL, 1)
 	require.NoError(t, err)
 	require.Len(t, statements, 1)
 	defer statements[0].Free()
@@ -1171,6 +1185,247 @@ func TestRewriteSubscriptionStatisticsAccountRejectsUnsupportedVisibilityCTE(t *
 	require.True(t, ok)
 	require.False(t, rewriteSubscriptionStatisticsAccount(stmt, 42),
 		"an unrecognized visibility CTE must fail closed")
+}
+
+// statisticsFunctionCallCollector records the printed form of every call to one
+// function so rewrites can be asserted without depending on plan shapes.
+type statisticsFunctionCallCollector struct {
+	functionName string
+	calls        []string
+}
+
+func (c *statisticsFunctionCallCollector) Enter(expr tree.Expr) (tree.Expr, bool) {
+	function, ok := expr.(*tree.FuncExpr)
+	if !ok || function.FuncName == nil ||
+		!strings.EqualFold(function.FuncName.Origin(), c.functionName) {
+		return expr, false
+	}
+	c.calls = append(c.calls, tree.String(expr, dialect.MYSQL))
+	return expr, true
+}
+
+func (c *statisticsFunctionCallCollector) Exit(expr tree.Expr) (tree.Expr, bool) {
+	return expr, true
+}
+
+func collectStatisticsFunctionCalls(
+	t *testing.T,
+	stmt *tree.Select,
+	functionName string,
+) []string {
+	t.Helper()
+	clause := selectClauseOf(stmt)
+	require.NotNil(t, clause)
+	collector := &statisticsFunctionCallCollector{functionName: functionName}
+	for i := range clause.Exprs {
+		if clause.Exprs[i].Expr != nil {
+			clause.Exprs[i].Expr, _ = clause.Exprs[i].Expr.Accept(collector)
+		}
+	}
+	calls := append([]string(nil), collector.calls...)
+	sort.Strings(calls)
+	return calls
+}
+
+func parseStatisticsBodyForTest(t *testing.T, sql string) *tree.Select {
+	t.Helper()
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	t.Cleanup(func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	})
+	view, ok := statements[0].(*tree.CreateView)
+	require.True(t, ok)
+	require.NotNil(t, view.AsSource)
+	return view.AsSource
+}
+
+func TestRewriteSubscriptionStatisticsNdvArgumentsBakePublisherAccountIntoBranch(t *testing.T) {
+	view := parseStatisticsBodyForTest(t, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+
+	// Before the rewrite the CARDINALITY estimate is evaluated with the raw
+	// catalog identity the publisher branch scans: tbl.reldatabase. The fourth
+	// input carries the index's recorded algo_params so a character-prefix
+	// part renders its unavailable estimate rather than the column's (#30910).
+	// The projection calls the distinct-value estimator twice - the
+	// unavailable-estimate probe and the published value - beside one
+	// NULL-row population call whose group CARDINALITY counts (#30910).
+	// The tree formatter renders an empty char literal without quotes, so the
+	// ifnull(...) fallback argument prints blank.
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ))",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ))",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction))
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction))
+
+	pubMeta := &plan.SubscriptionMeta{
+		AccountId:   17,
+		AccountName: "pub_account",
+		DbName:      "pub_db",
+		SubName:     "sub_alias_db",
+	}
+	rewriteSubscriptionStatisticsNdvArguments(view, pubMeta)
+
+	// The branch arms of the subscription UNION run as parallel scopes, so an
+	// internal per-row subscription resolution on the shared session executor
+	// would interleave their internal result sets and corrupt them. The
+	// estimate and the NULL population therefore carry the branch's publisher
+	// account as an in-band config argument while resolving the branch's own
+	// published database, table, column and metadata identities at runtime.
+	// The tree formatter renders the char config literal without quotes.
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=17)",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=17)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction))
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name, pubacct=17)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction))
+
+	// Re-running the rewrite over the already-configured calls must not
+	// append a second config argument.
+	rewriteSubscriptionStatisticsNdvArguments(view, pubMeta)
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=17)",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=17)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction))
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name, pubacct=17)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction))
+
+	// The generated-index EXPRESSION projection is account-independent and
+	// must stay untouched by the publisher-account bake-in.
+	require.Equal(t, []string{
+		"mo_show_visible_bin(tcl.attr_generated, 5)",
+	}, collectStatisticsFunctionCalls(t, view, "mo_show_visible_bin"))
+}
+
+func TestRewriteSubscriptionStatisticsNdvArgumentsLeavesNilMetaUnchanged(t *testing.T) {
+	view := parseStatisticsBodyForTest(t, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+
+	rewriteSubscriptionStatisticsNdvArguments(view, nil)
+	rewriteSubscriptionStatisticsNdvArguments(nil, nil)
+
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ))",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ))",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction),
+		"a nil meta must not change any argument")
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction),
+		"a nil meta must not change any argument")
+
+	// The nil metas above must leave the body intact for a retry: a single
+	// later valid rewrite still configures every call exactly once.
+	rewriteSubscriptionStatisticsNdvArguments(view, &plan.SubscriptionMeta{AccountId: 17})
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=17)",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=17)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction))
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name, pubacct=17)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction))
+}
+
+// TestRewriteSubscriptionStatisticsNdvArgumentsBakesSysPublisherAccount pins
+// the sys-publisher shape of the rewrite (#30910): every `from sys
+// publication` subscription records mo_subs.pub_account_id = 0, so a meta
+// with account id zero (or an omitted account id, the proto zero value) must
+// bake "pubacct=0" instead of leaving the branch on the direct resolution
+// that names the physical published database under the subscriber account.
+func TestRewriteSubscriptionStatisticsNdvArgumentsBakesSysPublisherAccount(t *testing.T) {
+	view := parseStatisticsBodyForTest(t, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+
+	rewriteSubscriptionStatisticsNdvArguments(view, &plan.SubscriptionMeta{AccountId: 0})
+
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=0)",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=0)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction))
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name, pubacct=0)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction))
+
+	// Re-running the rewrite over the already-configured calls must not
+	// append a second config argument, and the baked sys identity must never
+	// be silently reidentified as a different publisher: each branch tree is
+	// parsed fresh and rewritten exactly once in production.
+	rewriteSubscriptionStatisticsNdvArguments(view, &plan.SubscriptionMeta{AccountId: 17})
+	require.Equal(t, []string{
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=0)",
+		"mo_table_col_ndv(tbl.reldatabase, tbl.relname, idx.column_name, ifnull(idx.algo_params, ), pubacct=0)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNdvFunction))
+	require.Equal(t, []string{
+		"mo_table_col_nullcnt(tbl.reldatabase, tbl.relname, idx.column_name, pubacct=0)",
+	}, collectStatisticsFunctionCalls(t, view, informationSchemaStatisticsNullCntFunction))
+}
+
+func TestRewriteSubscriptionStatisticsNdvArgumentsCoversProjectionWhereGroupByHavingAndUnionArms(t *testing.T) {
+	view := parseStatisticsBodyForTest(t, `create view v as
+select mo_table_col_ndv(w.reldatabase, w.relname, w.column_name, w.algo_params) as proj,
+       mo_table_col_ndv(w.reldatabase, w.relname, w.direct_column) as direct
+from mo_catalog.mo_indexes w
+where mo_table_col_ndv(w.reldatabase, w.relname, w.column_name, w.algo_params) > 0
+group by mo_table_col_ndv(w.reldatabase, w.relname, w.column_name, w.algo_params)
+having mo_table_col_ndv(w.reldatabase, w.relname, w.column_name, w.algo_params) > 0
+union all
+select mo_table_col_ndv(y.reldatabase, y.relname, y.column_name, y.algo_params) as proj
+from mo_catalog.mo_columns y`)
+
+	rewriteSubscriptionStatisticsNdvArguments(view, &plan.SubscriptionMeta{AccountId: 9})
+
+	body := tree.String(view, dialect.MYSQL)
+	require.Contains(t, body, "mo_table_col_ndv(w.reldatabase, w.relname, w.column_name, w.algo_params, pubacct=9)",
+		"projection, WHERE, GROUP BY and HAVING estimates must carry the branch's publisher account")
+	require.Contains(t, body, "mo_table_col_ndv(y.reldatabase, y.relname, y.column_name, y.algo_params, pubacct=9)",
+		"a union-arm estimate must carry the branch's publisher account")
+	// The plain three-argument direct form keeps its documented resolution and
+	// must not receive a config argument.
+	require.Contains(t, body, "mo_table_col_ndv(w.reldatabase, w.relname, w.direct_column)",
+		"the plain direct-estimator form must stay unconfigured")
+	require.NotContains(t, body, "mo_table_col_ndv(w.reldatabase, w.relname, w.direct_column, ",
+		"the plain direct-estimator form must not gain arguments")
+}
+
+func TestRewriteSubscriptionStatisticsNullCntArgumentsCoverProjectionWhereGroupByHavingAndUnionArms(t *testing.T) {
+	// The NULL-row population call published beside the distinct-value
+	// estimate must bake the branch's publisher account through exactly the
+	// same walk, or a subscriber branch evaluates it against the publisher's
+	// physical schema and the whole STATISTICS read fails (#30910).
+	view := parseStatisticsBodyForTest(t, `create view v as
+select mo_table_col_nullcnt(w.reldatabase, w.relname, w.column_name) as proj
+from mo_catalog.mo_tables w
+where mo_table_col_nullcnt(w.reldatabase, w.relname, w.column_name) > 0
+group by mo_table_col_nullcnt(w.reldatabase, w.relname, w.column_name)
+having mo_table_col_nullcnt(w.reldatabase, w.relname, w.column_name) > 0
+union all
+select mo_table_col_nullcnt(y.reldatabase, y.relname, y.column_name) as proj
+from mo_catalog.mo_columns y`)
+
+	rewriteSubscriptionStatisticsNdvArguments(view, &plan.SubscriptionMeta{AccountId: 9})
+
+	body := tree.String(view, dialect.MYSQL)
+	require.Contains(t, body, "mo_table_col_nullcnt(w.reldatabase, w.relname, w.column_name, pubacct=9)",
+		"projection, WHERE, GROUP BY and HAVING NULL populations must carry the branch's publisher account")
+	require.Contains(t, body, "mo_table_col_nullcnt(y.reldatabase, y.relname, y.column_name, pubacct=9)",
+		"a union-arm NULL population must carry the branch's publisher account")
+
+	// Neighbor statistics calls keep their own argument lists: each configured
+	// call receives one config argument of its own and neither function reads
+	// the other's lists.
+	mixed := parseStatisticsBodyForTest(t, `create view v as
+select mo_table_col_nullcnt(w.reldatabase, a.relname, w.column_name),
+       mo_table_col_ndv(w.reldatabase, b.relname, w.column_name, b.algo_params)
+from mo_catalog.mo_tables w`)
+	rewriteSubscriptionStatisticsNdvArguments(mixed, &plan.SubscriptionMeta{AccountId: 9})
+	mixedBody := tree.String(mixed, dialect.MYSQL)
+	require.Contains(t, mixedBody, "mo_table_col_nullcnt(w.reldatabase, a.relname, w.column_name, pubacct=9)")
+	require.Contains(t, mixedBody, "mo_table_col_ndv(w.reldatabase, b.relname, w.column_name, b.algo_params, pubacct=9)")
 }
 
 func TestSubscriptionMetadataNameKeyUsesIdentifierCanonicalization(t *testing.T) {
@@ -1328,4 +1583,509 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	tableFunction.Func.Exprs = tree.Exprs{tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
 	_, err = builder.buildSubscriptionTables(tableFunction, tablesCtx, nil, nil)
 	require.ErrorContains(t, err, "invalid input args length")
+}
+
+func TestUserSuppliedStatisticsConfigStripsOutsidePublisherBranch(t *testing.T) {
+	bakeScopeBuilder := &QueryBuilder{
+		queryingSubscriptionMetadata: &SubscriptionMetadata{Meta: &SubscriptionMeta{}},
+	}
+	plainBuilder := &QueryBuilder{}
+	configLiteral := func(id string) tree.Expr {
+		return tree.NewNumVal(
+			statisticsPublicationAccountConfigPrefix+id,
+			statisticsPublicationAccountConfigPrefix+id,
+			false, tree.P_char,
+		)
+	}
+	notConfig := func(text string) tree.Expr {
+		return tree.NewNumVal(text, text, false, tree.P_char)
+	}
+	db := notConfig("db")
+	table := notConfig("t")
+	column := notConfig("c")
+	algo := notConfig("")
+	intArg := tree.NewNumVal(int64(1), "1", false, tree.P_int64)
+	for _, test := range []struct {
+		name     string
+		builder  *QueryBuilder
+		funcName string
+		args     tree.Exprs
+		want     tree.Exprs
+	}{
+		{
+			name:     "nil builder strips a config literal from the algo-params slot",
+			builder:  nil,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, configLiteral("0")},
+			want:     tree.Exprs{db, table, column},
+		},
+		{
+			name:     "direct query scope strips the trailing ndv config literal",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, algo, configLiteral("42")},
+			want:     tree.Exprs{db, table, column, algo},
+		},
+		{
+			name:     "the baked-arity ndv trailing argument is removed whatever its form",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, algo, &tree.Tuple{}},
+			want:     tree.Exprs{db, table, column, algo},
+		},
+		{
+			name:     "direct query scope strips the trailing nullcnt config literal",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNullCntFunction,
+			args:     tree.Exprs{db, table, column, configLiteral("42")},
+			want:     tree.Exprs{db, table, column},
+		},
+		{
+			// the identity arguments spell object names: a table legally named
+			// pubacct=7 keeps its literal bound at the plain nullcnt arity
+			// (this is the shape SHOW INDEX generates: db and table literals
+			// plus an idx.column_name reference)
+			name:     "a config-shaped table literal stays bound on the plain nullcnt surface",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNullCntFunction,
+			args:     tree.Exprs{db, configLiteral("7"), table},
+			want:     tree.Exprs{db, configLiteral("7"), table},
+		},
+		{
+			name:     "a baked-arity nullcnt call drops its trailing argument but keeps a config-shaped table literal",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNullCntFunction,
+			args:     tree.Exprs{db, configLiteral("7"), table, column},
+			want:     tree.Exprs{db, configLiteral("7"), table},
+		},
+		{
+			// R1 protects the baked config slot; the styled column literal at
+			// the third identity position is an object name and stays bound
+			name:     "R1 drops the trailing config while an identity-position config-shaped literal stays bound",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, configLiteral("1"), column, configLiteral("999999")},
+			want:     tree.Exprs{db, table, configLiteral("1"), column},
+		},
+		{
+			name:     "a config-shaped db literal of the plain ndv surface stays bound",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{configLiteral("42"), table, column, algo},
+			want:     tree.Exprs{configLiteral("42"), table, column, algo},
+		},
+		{
+			name:     "a config-shaped column literal of the plain nullcnt surface stays bound",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNullCntFunction,
+			args:     tree.Exprs{db, table, configLiteral("42")},
+			want:     tree.Exprs{db, table, configLiteral("42")},
+		},
+		{
+			// the only plain-surface parameter that is not an object name is
+			// ndv's algo-params slot: the strip applies there while the
+			// identity literals around it keep their spelled forms
+			name:     "the algo-position strip keeps config-shaped identity literals around it",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args: tree.Exprs{
+				configLiteral("0"),
+				configLiteral("0"),
+				configLiteral("0"),
+				configLiteral("7"),
+			},
+			want: tree.Exprs{
+				configLiteral("0"),
+				configLiteral("0"),
+				configLiteral("0"),
+			},
+		},
+		{
+			name:     "config-shaped calls keep declared spelling case-insensitively",
+			builder:  plainBuilder,
+			funcName: "MO_TABLE_COL_NULLCNT",
+			args:     tree.Exprs{db, table, column, configLiteral("0")},
+			want:     tree.Exprs{db, table, column},
+		},
+		{
+			name:     "numeric literals are never treated as the config channel",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{intArg, table, column, configLiteral("0")},
+			want:     tree.Exprs{intArg, table, column},
+		},
+		{
+			name:     "marker text the estimator cannot decode stays bound on the plain surface",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, notConfig("pubacct=x")},
+			want:     tree.Exprs{db, table, column, notConfig("pubacct=x")},
+		},
+		{
+			name:     "calls beyond the baked arity are left to the normal overload errors",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, algo, configLiteral("42"), notConfig("extra")},
+			want:     tree.Exprs{db, table, column, algo, configLiteral("42"), notConfig("extra")},
+		},
+		{
+			name:     "bake scope keeps the appended ndv config argument exactly where it sits",
+			builder:  bakeScopeBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, algo, configLiteral("42")},
+			want:     tree.Exprs{db, table, column, algo, configLiteral("42")},
+		},
+		{
+			name:     "bake scope keeps the appended nullcnt config argument",
+			builder:  bakeScopeBuilder,
+			funcName: informationSchemaStatisticsNullCntFunction,
+			args:     tree.Exprs{db, table, column, configLiteral("42")},
+			want:     tree.Exprs{db, table, column, configLiteral("42")},
+		},
+		{
+			name:     "plain ndv arity is untouched",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNdvFunction,
+			args:     tree.Exprs{db, table, column, algo},
+			want:     tree.Exprs{db, table, column, algo},
+		},
+		{
+			name:     "plain nullcnt arity is untouched",
+			builder:  plainBuilder,
+			funcName: informationSchemaStatisticsNullCntFunction,
+			args:     tree.Exprs{db, table, column},
+			want:     tree.Exprs{db, table, column},
+		},
+		{
+			name:     "unrelated estimator never strips config-shaped literals",
+			builder:  plainBuilder,
+			funcName: "mo_table_col_max",
+			args:     tree.Exprs{db, table, column, configLiteral("0")},
+			want:     tree.Exprs{db, table, column, configLiteral("0")},
+		},
+		{
+			name:     "unrelated function literals stay out of scope",
+			builder:  plainBuilder,
+			funcName: "concat",
+			args:     tree.Exprs{db, configLiteral("0")},
+			want:     tree.Exprs{db, configLiteral("0")},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				userSuppliedStatisticsConfigStripped(test.builder, test.funcName, test.args))
+		})
+	}
+}
+
+// statisticsEstimatorShapes walks the compiled statement for bound calls of
+// the statistics estimators and reports "<functionId>:<argCount>" per call.
+func statisticsEstimatorShapes(
+	t *testing.T,
+	query *Query,
+	wantedIDs map[int32]bool,
+) []string {
+	t.Helper()
+
+	exprs := make([]*plan.Expr, 0, 16)
+	for _, node := range query.GetNodes() {
+		exprs = append(exprs, node.GetProjectList()...)
+		exprs = append(exprs, node.GetFilterList()...)
+		exprs = append(exprs, node.GetOnList()...)
+		exprs = append(exprs, node.GetGroupBy()...)
+	}
+
+	shapes := make([]string, 0, 8)
+	var visit func(expr *plan.Expr)
+	visit = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if funcID, _ := function.DecodeOverloadID(fn.GetFunc().GetObj()); wantedIDs[funcID] {
+				shapes = append(shapes, fmt.Sprintf("%d:%d", funcID, len(fn.GetArgs())))
+			}
+			for _, arg := range fn.GetArgs() {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, sub := range list.List {
+				visit(sub)
+			}
+		}
+	}
+	for _, expr := range exprs {
+		visit(expr)
+	}
+	return shapes
+}
+
+// statisticsEstimatorConfigLeftBehind reports whether any bound constant
+// argument anywhere in the compiled statement matches the publication-config
+// prefix, i.e. whether a config string survived binding outside its scope.
+func statisticsEstimatorConfigLeftBehind(
+	t *testing.T,
+	query *Query,
+) bool {
+	t.Helper()
+
+	exprs := make([]*plan.Expr, 0, 16)
+	for _, node := range query.GetNodes() {
+		exprs = append(exprs, node.GetProjectList()...)
+		exprs = append(exprs, node.GetFilterList()...)
+		exprs = append(exprs, node.GetOnList()...)
+		exprs = append(exprs, node.GetGroupBy()...)
+	}
+
+	configured := false
+	var visit func(expr *plan.Expr)
+	visit = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if lit := expr.GetLit(); lit != nil && !lit.GetIsnull() {
+			if sval := lit.GetSval(); strings.Contains(sval, statisticsPublicationAccountConfigPrefix) {
+				configured = true
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.GetArgs() {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, sub := range list.List {
+				visit(sub)
+			}
+		}
+	}
+	for _, expr := range exprs {
+		visit(expr)
+	}
+	return configured
+}
+
+// statisticsEstimatorArgContains reports whether any bound call of the
+// given estimator function carries a string argument containing needle.
+// Identity arguments (db/table/column literals) legitimately contain the
+// publication-config prefix when the object is legally named that way, so
+// styled-identifier plans assert through this helper instead.
+func statisticsEstimatorArgContains(
+	t *testing.T,
+	query *Query,
+	funcionID int32,
+	needle string,
+) bool {
+	t.Helper()
+
+	exprs := make([]*plan.Expr, 0, 16)
+	for _, node := range query.GetNodes() {
+		exprs = append(exprs, node.GetProjectList()...)
+		exprs = append(exprs, node.GetFilterList()...)
+		exprs = append(exprs, node.GetOnList()...)
+		exprs = append(exprs, node.GetGroupBy()...)
+	}
+
+	found := false
+	var visit func(expr *plan.Expr)
+	visit = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if funcID, _ := function.DecodeOverloadID(fn.GetFunc().GetObj()); funcID == funcionID {
+				for _, arg := range fn.GetArgs() {
+					if lit := arg.GetLit(); lit != nil && !lit.GetIsnull() {
+						if strings.Contains(lit.GetSval(), needle) {
+							found = true
+						}
+					}
+				}
+			}
+			for _, arg := range fn.GetArgs() {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, sub := range list.List {
+				visit(sub)
+			}
+		}
+	}
+	for _, expr := range exprs {
+		visit(expr)
+	}
+	return found
+}
+
+func TestUserSuppliedStatisticsConfigIsDroppedAtBinding(t *testing.T) {
+	optimizer, _ := newSubscriptionMetadataTestOptimizer(t)
+
+	plainPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','')")
+	require.NoError(t, err)
+	configuredPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','','pubacct=42')")
+	require.NoError(t, err, "the user-supplied config argument must be stripped, not rejected")
+
+	wantedNdv := map[int32]bool{function.MO_TABLE_COL_NDV: true}
+	plain := statisticsEstimatorShapes(t, plainPlan.GetQuery(), wantedNdv)
+	configured := statisticsEstimatorShapes(t, configuredPlan.GetQuery(), wantedNdv)
+	require.NotEmpty(t, plain)
+	require.Equal(t, plain, configured,
+		"a config-shaped direct call must bind to the same estimator call as the identical plain call")
+	require.False(t, statisticsEstimatorConfigLeftBehind(t, configuredPlan.GetQuery()),
+		"the config string must not survive as a bound argument of a direct query")
+
+	// the same literal typed in a plaintext user overload shape - the ndv
+	// algo_params slot - must bind to the plain caller call too: the argument
+	// position cannot change the published estimate
+	// (30910-unhappy-pubacct-isolation-v2)
+	plainAlgoSlotPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey')")
+	require.NoError(t, err)
+	configuredAlgoSlotPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','pubacct=42')")
+	require.NoError(t, err, "a config literal typed in the algo-params slot must be stripped, not rejected")
+	require.Equal(t,
+		statisticsEstimatorShapes(t, plainAlgoSlotPlan.GetQuery(), wantedNdv),
+		statisticsEstimatorShapes(t, configuredAlgoSlotPlan.GetQuery(), wantedNdv),
+		"a config literal in the algo-params slot must bind to the same estimator call as the plain call")
+	require.False(t, statisticsEstimatorConfigLeftBehind(t, configuredAlgoSlotPlan.GetQuery()),
+		"the config string must not survive as a bound argument in a plaintext overload shape")
+
+	// legal identifiers that merely equal the marker text are object names,
+	// not config arguments (pre-PR review P2): SHOW INDEX supplies db/table
+	// as literals, so a table legally named 'pubacct=0' must keep binding
+	// the plain estimator call, with its styled literal surviving binding
+	// as the table identity argument
+	styledNullCntPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_nullcnt('tpch','pubacct=0','n_nationkey')")
+	require.NoError(t, err, "a quoted table named pubacct=0 must bind the plain nullcnt call")
+	wantedNullCnt := map[int32]bool{function.MO_TABLE_COL_NULLCNT: true}
+	require.Equal(t, []string{fmt.Sprintf("%d:%d",
+		function.MO_TABLE_COL_NULLCNT, statisticsNullCntConfigArity)},
+		statisticsEstimatorShapes(t, styledNullCntPlan.GetQuery(), wantedNullCnt),
+		"the styled table literal must keep the plain 3-argument nullcnt call")
+	require.True(t,
+		statisticsEstimatorArgContains(t, styledNullCntPlan.GetQuery(), function.MO_TABLE_COL_NULLCNT, "pubacct=0"),
+		"the styled table literal must survive binding as the table identity argument")
+
+	styledNdvPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','pubacct=0','n_nationkey','')")
+	require.NoError(t, err, "a quoted table named pubacct=0 must bind the plain ndv call")
+	require.Equal(t, []string{fmt.Sprintf("%d:%d",
+		function.MO_TABLE_COL_NDV, statisticsNdvConfigArity)},
+		statisticsEstimatorShapes(t, styledNdvPlan.GetQuery(), wantedNdv),
+		"the styled table literal must keep the plain 4-argument ndv call")
+	require.True(t,
+		statisticsEstimatorArgContains(t, styledNdvPlan.GetQuery(), function.MO_TABLE_COL_NDV, "pubacct=0"),
+		"the styled table literal must survive binding as the table identity argument")
+
+	// identity preservation composes with the algo-slot strip: the config
+	// literal in the algo slot is removed while the styled table literal
+	// stays bound, so the call binds to the plain 3-argument plan
+	styledSlotPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','pubacct=0','n_nationkey','pubacct=42')")
+	require.NoError(t, err, "a config literal in the algo slot must be stripped beside a styled table literal")
+	require.Equal(t,
+		statisticsEstimatorShapes(t, plainAlgoSlotPlan.GetQuery(), wantedNdv),
+		statisticsEstimatorShapes(t, styledSlotPlan.GetQuery(), wantedNdv),
+		"a config literal in the algo-params slot must bind to the same estimator call as the plain call")
+	require.True(t,
+		statisticsEstimatorArgContains(t, styledSlotPlan.GetQuery(), function.MO_TABLE_COL_NDV, "pubacct=0"),
+		"the styled table literal must survive binding as the table identity argument")
+
+	// the db and column identity positions keep styled literals as well
+	styledDbPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('pubacct=42','nation','n_nationkey')")
+	require.NoError(t, err, "a database legally named pubacct=42 must bind the plain ndv call")
+	require.True(t,
+		statisticsEstimatorArgContains(t, styledDbPlan.GetQuery(), function.MO_TABLE_COL_NDV, "pubacct=42"),
+		"the styled db literal must survive binding as the db identity argument")
+	styledColumnPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_nullcnt('tpch','nation','pubacct=42')")
+	require.NoError(t, err, "a column legally named pubacct=42 must bind the plain nullcnt call")
+	require.True(t,
+		statisticsEstimatorArgContains(t, styledColumnPlan.GetQuery(), function.MO_TABLE_COL_NULLCNT, "pubacct=42"),
+		"the styled column literal must survive binding as the column identity argument")
+
+	// only the config literal is removed: genuine algo_params text survives
+	// the strip and keeps the 4-argument operator shape
+	plainRealAlgoPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','auto')")
+	require.NoError(t, err)
+	configuredRealAlgoPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','auto','pubacct=42')")
+	require.NoError(t, err, "the config literal must be removed beside genuine algo_params")
+	require.Equal(t,
+		statisticsEstimatorShapes(t, plainRealAlgoPlan.GetQuery(), wantedNdv),
+		statisticsEstimatorShapes(t, configuredRealAlgoPlan.GetQuery(), wantedNdv),
+		"a config literal beside genuine algo_params must still bind to the same call")
+
+	plainNullCnt, err := runOneStmt(optimizer, t,
+		"select mo_table_col_nullcnt('tpch','nation','n_nationkey')")
+	require.NoError(t, err)
+	configuredNullCnt, err := runOneStmt(optimizer, t,
+		"select mo_table_col_nullcnt('tpch','nation','n_nationkey','pubacct=42')")
+	require.NoError(t, err, "the user-supplied nullcnt config argument must be stripped, not rejected")
+	require.Equal(t,
+		statisticsEstimatorShapes(t, plainNullCnt.GetQuery(), wantedNullCnt),
+		statisticsEstimatorShapes(t, configuredNullCnt.GetQuery(), wantedNullCnt),
+		"a config-shaped direct nullcnt call must bind to the same plain call")
+
+	_, err = runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','','pubacct=42','extra')")
+	require.Error(t, err,
+		"arities beyond the config position have no overload and must fail closed")
+	_, err = runOneStmt(optimizer, t,
+		"select mo_table_col_nullcnt('tpch','nation','n_nationkey','pubacct=42','extra')")
+	require.Error(t, err,
+		"a nullcnt config literal beside a surplus argument has no overload and must fail closed")
+	_, err = runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','pubacct=notanumber','extra','beyond')")
+	require.Error(t, err,
+		"marker text the estimator cannot decode is not a config literal and beyond-arity calls must fail to the normal arity error")
+	// the baked-arity trailing argument is removed whatever it is: an inert
+	// trailing string leaves the same estimator call as the plain 4-argument
+	// spelling of the same arguments
+	notMarkerAlgoPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','pubacct=notanumber')")
+	require.NoError(t, err)
+	notMarkerBakedArityPlan, err := runOneStmt(optimizer, t,
+		"select mo_table_col_ndv('tpch','nation','n_nationkey','pubacct=notanumber','extra')")
+	require.NoError(t, err,
+		"an inert baked-arity call keeps its decodable-looking algo string: only the trailing argument is removed")
+	require.Equal(t,
+		statisticsEstimatorShapes(t, notMarkerAlgoPlan.GetQuery(), wantedNdv),
+		statisticsEstimatorShapes(t, notMarkerBakedArityPlan.GetQuery(), wantedNdv),
+		"an inert trailing argument must not leave any other difference from the plain call")
+}
+
+func TestSubscriptionStatisticsBakedConfigBindsInsidePublisherScope(t *testing.T) {
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
+	queryPlan, err := runOneStmt(optimizer, t,
+		"select table_schema, index_schema, table_name, index_name "+
+			"from information_schema.statistics "+
+			"where table_schema = 'sub_db' and table_name = 'nation'")
+	require.NoError(t, err)
+	require.Nil(t, ctx.GetQueryingSubscription(), "planning must restore the session compiler context")
+
+	wanted := map[int32]bool{
+		function.MO_TABLE_COL_NDV:     true,
+		function.MO_TABLE_COL_NULLCNT: true,
+	}
+	counts := make(map[string]int)
+	for _, shape := range statisticsEstimatorShapes(t, queryPlan.GetQuery(), wanted) {
+		counts[shape]++
+	}
+	bakedNdv := counts[fmt.Sprintf("%d:%d",
+		function.MO_TABLE_COL_NDV, statisticsNdvConfigArity+1)]
+	bakedNullCnt := counts[fmt.Sprintf("%d:%d",
+		function.MO_TABLE_COL_NULLCNT, statisticsNullCntConfigArity+1)]
+	require.Positive(t, bakedNdv,
+		"the baked subscription branch must bind ndv with its config argument (authorized publisher scope)")
+	require.Positive(t, bakedNullCnt,
+		"the baked subscription branch must bind nullcnt with its config argument (authorized publisher scope)")
 }

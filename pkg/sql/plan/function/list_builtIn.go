@@ -16382,6 +16382,165 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_table_col_ndv`
+	// Estimated distinct values of a column published by the engine
+	// statistics. NULL distinguishes an unavailable estimate from the known
+	// zero that ANALYZE publishes for an empty table. The three-argument form
+	// publishes the column's own estimate; the four-argument form takes the
+	// index metadata's algo_params as its fourth input and renders NULL for a
+	// key part configured with a character prefix, whose truncated population
+	// has no published estimate (#30910). The five-argument form additionally
+	// carries the in-band publisher account config of a bound subscription
+	// branch and resolves the publisher's statistics directly, rendering NULL
+	// for names that no longer resolve at the reading transaction.
+	{
+		functionId: MO_TABLE_COL_NDV,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableColNdv
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableColNdv
+				},
+			},
+			{
+				overloadId: 2,
+				args: []types.T{
+					types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar,
+					types.T_varchar,
+				},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableColNdv
+				},
+			},
+		},
+	},
+
+	// function `mo_table_col_nullcnt`
+	// The published NULL-value count of one column. The index CARDINALITY
+	// publications consume it to count the NULL value group MySQL index
+	// statistics give an indexed column, so an all-NULL or partially NULL
+	// populated key part publishes a key population instead of a false known
+	// zero (#30910), while the plain mo_table_col_ndv keeps the raw distinct
+	// estimate. NULL distinguishes an unpublished column from a published 0.
+	// The four-argument form carries a bound subscription branch's in-band
+	// publisher account config and resolves the publisher's statistics
+	// directly, rendering NULL for unresolvable publication-bound names.
+	{
+		functionId: MO_TABLE_COL_NULLCNT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableColNullCnt
+				},
+			},
+			{
+				overloadId: 1,
+				args: []types.T{
+					types.T_varchar, types.T_varchar, types.T_varchar,
+					types.T_varchar,
+				},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableColNullCnt
+				},
+			},
+		},
+	},
+
+	// function `mo_table_index_size`
+	// Estimated storage bytes of a table's hidden secondary/unique index
+	// objects, mirroring the mo_table_size backing of INDEX_LENGTH consumers.
+	{
+		functionId: MO_TABLE_INDEX_SIZE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableIndexSize
+				},
+			},
+		},
+	},
+
+	// function `mo_table_data_size`
+	// Estimated storage bytes of a table's base objects, excluding the hidden
+	// index objects mo_table_index_size publishes. DATA_LENGTH consumers use
+	// it so legacy statistics mode (where mo_table_size reports data plus
+	// index bytes) still decomposes data versus index bytes exactly once.
+	{
+		functionId: MO_TABLE_DATA_SIZE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoTableDataSize
+				},
+			},
+		},
+	},
+
 	// function `roles_graphml`
 	{
 		functionId: ROLES_GRAPHML,

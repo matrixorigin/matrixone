@@ -228,5 +228,8 @@ func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
 // Refresh STATISTICS for tenants that completed an earlier v4.0.6 offset.
 
 func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
-	return versions.InformationSchemaViewUpgradeEntry("STATISTICS", sysview.InformationSchemaStatisticsPrefixSubPartDDL, defines.MORPCVersion107)
+	// The shared registry entry publishes the current STATISTICS identity:
+	// #30935's retained prefix lengths plus #30910/#31164's cardinality
+	// estimates, never the byte-stable historical template.
+	return versions.InformationSchemaStatisticsUpgradeEntry()
 }

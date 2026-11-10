@@ -1018,11 +1018,11 @@ var (
 		"if(relkind = 'r','Tae',NULL) AS ENGINE,"+
 		"if(relkind = 'v',NULL,10) AS VERSION,"+
 		"'Compressed' AS ROW_FORMAT,"+
-		"if(relkind = 'v', NULL, 0) AS TABLE_ROWS,"+
-		"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,"+
-		"if(relkind = 'v', NULL, 0) AS DATA_LENGTH,"+
+		"if(relkind = 'v', NULL, mo_table_rows_stat) AS TABLE_ROWS,"+
+		"if(relkind = 'v', NULL, case when mo_table_rows_stat > 0 then mo_table_data_size_stat div mo_table_rows_stat else 0 end) AS AVG_ROW_LENGTH,"+
+		"if(relkind = 'v', NULL, mo_table_data_size_stat) AS DATA_LENGTH,"+
 		"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,"+
-		"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,"+
+		"if(relkind = 'v', NULL, mo_table_index_size_stat) AS INDEX_LENGTH,"+
 		"if(relkind = 'v', NULL, 0) AS DATA_FREE,"+
 		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,"+
 		"created_time AS CREATE_TIME,"+
@@ -1032,8 +1032,19 @@ var (
 		"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
+		"FROM ("+
+		// mo_table_data_size publishes the base-table bytes distinct from the
+		// hidden index bytes of mo_table_index_size: the legacy mo_table_size
+		// implementation reports data plus index totals, so routing
+		// DATA_LENGTH through it would double count the index bytes next to
+		// INDEX_LENGTH in legacy statistics mode and engine fallback.
+		"SELECT tbl.reldatabase, tbl.relname, tbl.relkind, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, "+
+		"case when tbl.relkind in ('r','m') then mo_table_rows(tbl.reldatabase, tbl.relname) else 0 end AS mo_table_rows_stat, "+
+		"case when tbl.relkind in ('r','m') then mo_table_data_size(tbl.reldatabase, tbl.relname) else 0 end AS mo_table_data_size_stat, "+
+		"case when tbl.relkind in ('r','m') then mo_table_index_size(tbl.reldatabase, tbl.relname) else 0 end AS mo_table_index_size_stat "+
 		"FROM __mo_visible_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'"+
+		") tbl",
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
@@ -1117,9 +1128,9 @@ var (
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
 		informationSchemaViewsSourceSQL
 	// InformationSchemaStatisticsDDL is the historical STATISTICS
-	// template: SUB_PART is the unconditional SQL NULL persisted by every
-	// pre-fix binary. Historical upgrade handlers keep publishing this
-	// text, so its identity stays byte-stable.
+	// template: SUB_PART is the unconditional SQL NULL and CARDINALITY the
+	// constant zero persisted by every pre-fix binary. Historical upgrade
+	// handlers keep publishing this text, so its identity stays byte-stable.
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
@@ -1150,12 +1161,32 @@ var (
 		catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate("tbl"))
 	// The current definition reports the retained prefix length of each
 	// index part from the canonical mo_indexes.algo_params metadata and
-	// remains SQL NULL when the whole column is indexed (#30935).
+	// remains SQL NULL when the whole column is indexed (#30935), and
+	// publishes the engine's per-part cardinality estimate instead of the
+	// historical constant zero (#30910/#31164).
 	InformationSchemaStatisticsPrefixSubPartDDL = strings.NewReplacer(
 		"NULL AS `SUB_PART`,",
 		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) AS `SUB_PART`,",
 		"`idx`.`ordinal_position`, `idx`.`column_name`, `tcl`.`attnotnull`,",
 		"`idx`.`ordinal_position`, `idx`.`column_name`, `idx`.`algo_params`, `tcl`.`attnotnull`,",
+		// Index cardinality reports the published distinct-value estimate of
+		// the index prefix ending at each part (#30910/#31164): the first part
+		// is the indexed column's own distinct count, while a later part would
+		// need the distinct count of the whole multi-column prefix, which the
+		// engine's statistics do not publish. A first part configured with a
+		// character prefix likewise has no published estimate (its population
+		// is the truncated LEFT(column, length)), so the index's recorded
+		// metadata is passed along and any unavailable prefix estimate
+		// renders NULL instead of substituting the part's standalone column
+		// estimate or a false zero, and hidden generated index parts keep the
+		// NULL of their COLUMN_NAME projection. MySQL index statistics count
+		// the equal NULL values of the indexed column as one value group, so
+		// a visible first part adds the published NULL population as one key
+		// group on top of the distinct-value estimate: an all-NULL populated
+		// index reports 1, not the false known zero the raw NDV publishes,
+		// while an empty analyzed table still reports the known 0.
+		"0 AS `CARDINALITY`,",
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, if(`idx`.`ordinal_position` = 1, case when mo_table_col_ndv(`tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`column_name`, ifnull(`idx`.`algo_params`, '')) is null then null else mo_table_col_ndv(`tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`column_name`, ifnull(`idx`.`algo_params`, '')) + if(coalesce(mo_table_col_nullcnt(`tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`column_name`), 0) > 0, 1, 0) end, NULL)) AS `CARDINALITY`,",
 	).Replace(InformationSchemaStatisticsDDL)
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +

@@ -1715,10 +1715,11 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 				require.Equal(t, []string{"information_schema.TABLES"}, created, "only the TABLES publish fails; the PARTITIONS rail and trace views never run")
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, 7, creates, "TABLES, VIEWS, PARTITIONS, and the four trace views")
+				require.Equal(t, 8, creates, "TABLES, VIEWS, PARTITIONS, STATISTICS, and the four trace views")
 				require.Equal(t, "information_schema.TABLES", created[0], "the TABLES consumer publishes before the PARTITIONS refresh rail")
 				require.Equal(t, "information_schema.VIEWS", created[1])
-				require.Equal(t, "information_schema.`PARTITIONS`", created[2], "PARTITIONS reconciles before the four trace views")
+				require.Equal(t, "information_schema.`PARTITIONS`", created[2], "PARTITIONS reconciles before the STATISTICS refresh rail and the four trace views")
+				require.Equal(t, "information_schema.`STATISTICS`", created[3], "the STATISTICS refresh rail runs after PARTITIONS and before the four trace views")
 				require.True(t, s.viewMetadataIngressReady.Load())
 			}
 		})
@@ -1767,6 +1768,12 @@ func TestCNReconcilesStalePartitionsBeforeIngress(t *testing.T) {
 							return stringResult(sysview.InformationSchemaPartitionsDDL), nil
 						}
 						return stringResult(oldPartitions), nil
+					case strings.Contains(sql, "tbl.relname = 'STATISTICS'"):
+						// The startup rail also converges the STATISTICS
+						// identity; answer the current definition in every
+						// mode so this test keeps isolating the PARTITIONS
+						// reconciliation.
+						return stringResult(sysview.InformationSchemaStatisticsPrefixSubPartDDL), nil
 					}
 				}
 				if strings.HasPrefix(sql, "CREATE VIEW ") || strings.HasPrefix(sql, "CREATE OR REPLACE VIEW ") {
@@ -1919,6 +1926,8 @@ func (e existingSystemViewsTxn) Exec(sql string, opts executor.StatementOption) 
 			definition = sysview.InformationSchemaPartitionsDDL
 		case strings.Contains(sql, "tbl.relname = 'VIEWS'"):
 			definition = sysview.InformationSchemaViewsDDL
+		case strings.Contains(sql, "tbl.relname = 'STATISTICS'"):
+			definition = sysview.InformationSchemaStatisticsPrefixSubPartDDL
 		}
 		if definition != "" {
 			result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())

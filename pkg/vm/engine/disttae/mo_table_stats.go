@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1752,6 +1753,23 @@ type statsList struct {
 	stats map[string]any
 }
 
+// tableStatsRecord builds one insert-values record for the mo_table_stats
+// persistence SQL. Database and table names are legal identifier text and may
+// contain single quotes (a table can be named odd'name), so they must be
+// interpolated as escaped SQL string literals: a raw literal would turn the
+// whole bulk insert into a syntax error and the affected tables would never
+// get their statistics published, permanently reading as zero.
+func tableStatsRecord(
+	acc, db, tbl int64,
+	dbName, tblName, statsJSON, stdTime string,
+	tookMicros int64,
+) string {
+	return fmt.Sprintf("(%d,%d,%d,%s,%s,'%s','%s',%d)",
+		acc, db, tbl,
+		sqlquote.String(dbName), sqlquote.String(tblName),
+		statsJSON, stdTime, tookMicros)
+}
+
 func GetMOTableStatsExecutor(
 	service string,
 	eng engine.Engine,
@@ -3344,7 +3362,12 @@ func (d *dynamicCtx) bulkUpdateTableStatsList(
 			return false
 		}
 
-		vals = append(vals, fmt.Sprintf("(%d,%d,%d,'%s','%s','%s','%s',%d)",
+		// Database and table names are legal identifier text and may contain
+		// single quotes (a table can be named odd'name). tableStatsRecord
+		// interpolates them as escaped SQL string literals: a raw '%s' turns
+		// the whole bulk insert into a syntax error, so the affected tables
+		// never get stats published and permanently read as zero.
+		vals = append(vals, tableStatsRecord(
 			tbl.acc, tbl.db, tbl.tbl,
 			tbl.dbName, tbl.tblName,
 			string(val),
@@ -3389,12 +3412,15 @@ func (d *dynamicCtx) bulkUpdateTableOnlyTS(
 	}()
 
 	for i := range tbls {
-		vals = append(vals, fmt.Sprintf("(%d,%d,%d,'%s','%s','{}','%s',0)",
+		// Same quoting constraint as bulkUpdateTableStatsList: names may
+		// legally contain single quotes.
+		vals = append(vals, tableStatsRecord(
 			tbls[i].acc, tbls[i].db, tbls[i].tbl,
-			tbls[i].dbName, tbls[i].tblName,
+			tbls[i].dbName, tbls[i].tblName, "{}",
 			tbls[i].snapshot.ToTimestamp().
 				ToStdTime().
-				Format("2006-01-02 15:04:05.000000")))
+				Format("2006-01-02 15:04:05.000000"),
+			0))
 	}
 
 	sql := fmt.Sprintf(bulkInsertOrUpdateOnlyTSSQL,

@@ -897,3 +897,89 @@ func TestInformationSchemaCurrentColumnsFiltersPhysicalIndexes(t *testing.T) {
 	require.Len(t, statements, 1)
 	statements[0].Free()
 }
+
+// TestInformationSchemaStatisticsPublicationWiring pins the issues
+// #30910/#31164 contract: information_schema.TABLES projects the engine's
+// published row/size observations instead of constant zeros, STATISTICS
+// reports the published per-column distinct estimate, unavailable estimates
+// render NULL, and the relkind gating keeps the statistics probes off views
+// and external objects.
+func TestInformationSchemaStatisticsPublicationWiring(t *testing.T) {
+	statsWiring := []string{
+		"case when tbl.relkind in ('r','m') then mo_table_rows(tbl.reldatabase, tbl.relname) else 0 end AS mo_table_rows_stat",
+		"case when tbl.relkind in ('r','m') then mo_table_data_size(tbl.reldatabase, tbl.relname) else 0 end AS mo_table_data_size_stat",
+		"case when tbl.relkind in ('r','m') then mo_table_index_size(tbl.reldatabase, tbl.relname) else 0 end AS mo_table_index_size_stat",
+		"if(relkind = 'v', NULL, mo_table_rows_stat) AS TABLE_ROWS",
+		"if(relkind = 'v', NULL, mo_table_data_size_stat) AS DATA_LENGTH",
+		"if(relkind = 'v', NULL, mo_table_index_size_stat) AS INDEX_LENGTH",
+		"case when mo_table_rows_stat > 0 then mo_table_data_size_stat div mo_table_rows_stat else 0 end",
+	}
+	for _, expected := range statsWiring {
+		assert.Contains(t, InformationSchemaTablesV41DDL, expected)
+		assert.Contains(t, InformationSchemaTablesDDL, expected)
+		assert.Contains(t, InformationSchemaTablesV118DDL, expected)
+	}
+	assert.NotContains(t, InformationSchemaTablesV41DDL, "0) AS TABLE_ROWS")
+
+	// The subscription derivation markers must keep binding so the union
+	// branch still maps the visible-tables scan onto mo_subscription_tables
+	// and neutralizes internal_auto_increment for foreign-account rows.
+	assert.Contains(t, InformationSchemaTablesV41DDL,
+		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,")
+	assert.Contains(t, InformationSchemaTablesV41DDL, "FROM __mo_visible_tables tbl ")
+	assert.Contains(t, InformationSchemaTablesV41DDL, "WHERE tbl.account_id = current_account_id() and")
+	assert.Contains(t, InformationSchemaTablesDDL, "FROM mo_subscription_tables() tbl ")
+	// The union keeps the local account's live internal_auto_increment but
+	// neutralizes it for foreign subscription rows; the collation/timestamp
+	// adaptation belongs to the V118 historical layer, not the union view.
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,")
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"if(relkind = 'v', NULL, cast(0 as bigint unsigned)) AS `AUTO_INCREMENT`,")
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"'utf8mb4_general_ci' AS TABLE_COLLATION,")
+	assert.Contains(t, InformationSchemaTablesV118DDL,
+		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,")
+
+	// statistics.cardinality reports the published distinct-value estimate of
+	// each index part prefix; only the first part has a published single-column
+	// estimate, later composite parts render NULL rather than substituting the
+	// part column's own estimate, hidden generated parts render NULL and no
+	// false constant zero remains. A first part configured with a character
+	// prefix is additionally guarded by the index's recorded algo_params (#30910):
+	// the truncated population has no published estimate, so the metadata is
+	// passed to mo_table_col_ndv and an unavailable prefix estimate renders NULL.
+	// MySQL index statistics count the equal NULL values of the indexed column
+	// as one key group, so a visible first part adds the published NULL
+	// population (mo_table_col_nullcnt) as one group on top of the distinct
+	// estimate instead of publishing an all-NULL key population as zero.
+	// The estimate projection rides the current definition only: the historical
+	// template stays byte-stable as every pre-fix binary published it
+	// (#30935), so crossing tenants converge through the same-version registry
+	// entries that publish the current text.
+	assert.Contains(t, InformationSchemaStatisticsPrefixSubPartDDL,
+		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, if(`idx`.`ordinal_position` = 1,"+
+			" case when mo_table_col_ndv(`tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`column_name`,"+
+			" ifnull(`idx`.`algo_params`, '')) is null then null else"+
+			" mo_table_col_ndv(`tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`column_name`,"+
+			" ifnull(`idx`.`algo_params`, '')) +"+
+			" if(coalesce(mo_table_col_nullcnt(`tbl`.`reldatabase`, `tbl`.`relname`, `idx`.`column_name`), 0) > 0, 1, 0)"+
+			" end, NULL)) AS `CARDINALITY`")
+	assert.NotContains(t, InformationSchemaStatisticsPrefixSubPartDDL, "0 AS `CARDINALITY`")
+	assert.Contains(t, InformationSchemaStatisticsDDL, "0 AS `CARDINALITY`,")
+	assert.NotContains(t, InformationSchemaStatisticsDDL, "mo_table_col_ndv(")
+
+	for _, ddl := range []string{
+		InformationSchemaTablesV41DDL,
+		InformationSchemaTablesDDL,
+		InformationSchemaTablesV118DDL,
+		InformationSchemaStatisticsDDL,
+		InformationSchemaStatisticsPrefixSubPartDDL,
+	} {
+		statements, err := mysql.Parse(context.Background(), ddl, 1)
+		assert.NoError(t, err)
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}
+}

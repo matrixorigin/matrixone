@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statsinfopb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -252,14 +255,20 @@ func isSubscribedTable(
 		ctx = defines.AttachAccountId(ctx, uint32(sysAccountID))
 		defer cancel()
 
+		// The publisher's database and table names flow into a mo_catalog
+		// query as string literals and may legally contain quotes (for
+		// example a subscribed table named odd'name). Quote them through the
+		// shared escape helper so one quoted identifier cannot break out of
+		// the literal and fail every information_schema.TABLES read of the
+		// subscription.
 		sql = fmt.Sprintf(`
 					select 
     					reldatabase_id, rel_id 
 					from 
 					    mo_catalog.mo_tables 
 					where 
-					    account_id = %d and reldatabase = '%s' and relname = '%s';`,
-			meta.AccountId, meta.DbName, tblName)
+					    account_id = %d and reldatabase = %s and relname = %s;`,
+			meta.AccountId, sqlquote.String(meta.DbName), sqlquote.String(tblName))
 
 		ctx = process.ContextWithWarningSink(ctx, proc.WarningSink)
 		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql)
@@ -770,6 +779,443 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 
 //#endregion
 
+//#region MoTableIndexSize
+
+// indexSizeCandidateTableNames returns the hidden object names backing the
+// secondary and unique indexes of tableDef. The prefix filter mirrors the
+// SHOW TABLE STATUS Index_length scope, and the empty-name guard keeps the
+// known legacy empty IndexTableName tolerant instead of failing whole calls.
+func indexSizeCandidateTableNames(tableDef *plan.TableDef) []string {
+	var names []string
+	if tableDef == nil {
+		return names
+	}
+	for _, idef := range tableDef.Indexes {
+		if idef == nil {
+			continue
+		}
+		name := idef.IndexTableName
+		if name == "" {
+			continue
+		}
+		if strings.HasPrefix(name, catalog.UniqueIndexTableNamePrefix) ||
+			strings.HasPrefix(name, catalog.SecondaryIndexTableNamePrefix) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// MoTableIndexSize returns the estimated bytes stored by a table's hidden
+// secondary/unique index objects. It backs information_schema.TABLES
+// INDEX_LENGTH the same way mo_table_size backs DATA_LENGTH, so both columns
+// stay sourced from one statistics implementation.
+func MoTableIndexSize(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	if GetUseOldImplVariable(proc) {
+		return moTableIndexSizeOld(ivecs, result, proc, length)
+	}
+	return moTableIndexSizeNew(ivecs, result, proc, length)
+}
+
+// moTableIndexSizeOld resolves each hidden index object directly and sums the
+// engine-reported sizes, mirroring the old mo_table_size implementation.
+func moTableIndexSizeOld(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+) (err error) {
+	rs := vector.MustFunctionResult[int64](result)
+	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
+	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableIndexSize: txn operator is nil")
+	}
+	txn := proc.GetTxnOperator()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		foolCtx := proc.Ctx
+
+		db, dbnull := dbs.GetStrValue(i)
+		tbl, tblnull := tbls.GetStrValue(i)
+		if dbnull || tblnull {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		dbStr, tblStr := string(db), string(tbl)
+
+		if ok, ferr := specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && ferr == nil {
+			if err = rs.Append(int64(0), false); err != nil {
+				return err
+			}
+			continue
+		} else if ferr != nil {
+			return ferr
+		}
+
+		dbo, derr := e.Database(foolCtx, dbStr, txn)
+		if derr != nil {
+			return derr
+		}
+
+		accId, aerr := defines.GetAccountId(foolCtx)
+		if aerr != nil {
+			return aerr
+		}
+
+		if sub, serr := isSubscribedTable(proc, accId, dbo, dbStr, tblStr); serr != nil {
+			return serr
+		} else if sub.valid {
+			// hidden index objects live in the publishing account's database
+			foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
+			dbo, derr = e.Database(foolCtx, sub.oriDatabaseName, txn)
+			if derr != nil {
+				return derr
+			}
+		}
+
+		rel, rerr := dbo.Relation(foolCtx, tblStr, nil)
+		if rerr != nil {
+			return rerr
+		}
+
+		var sum int64
+		for _, hidden := range indexSizeCandidateTableNames(rel.GetTableDef(foolCtx)) {
+			irel, ierr := dbo.Relation(foolCtx, hidden, nil)
+			if ierr != nil {
+				logutil.Info("moTableIndexSizeOld->Relation",
+					zap.String("originTable", tblStr),
+					zap.String("indexTableName", hidden),
+					zap.Error(ierr))
+				continue
+			}
+			size, serr := getTableSize(foolCtx, dbo, irel)
+			if serr != nil {
+				logutil.Info("moTableIndexSizeOld->getTableSize",
+					zap.String("originTable", tblStr),
+					zap.String("indexTableName", hidden),
+					zap.Error(serr))
+				continue
+			}
+			if size > uint64(math.MaxInt64-sum) {
+				sum = math.MaxInt64
+				break
+			}
+			sum += int64(size)
+		}
+
+		if err = rs.Append(sum, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// moTableIndexSizeNew flattens every (account, database, hidden index table)
+// triplet across the batch and asks the shared mo_table_stats size executor
+// for all of them at once, then sums each row's slice.
+func moTableIndexSizeNew(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+) (err error) {
+	var (
+		ret                   []uint64
+		positions             []int
+		ends                  []int
+		accIds, dbIds, tblIds []uint64
+
+		dbBytes, tblBytes []byte
+		dbNull, tblNull   bool
+		dbName, tblName   string
+	)
+
+	rs := vector.MustFunctionResult[int64](result)
+	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
+	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	eng, eok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if !eok || eng == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableIndexSize: mo table engine is nil")
+	}
+	if proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableIndexSize: txn operator is nil")
+	}
+	txn := proc.GetTxnOperator()
+	accountId := proc.Ctx.Value(defines.TenantIDKey{}).(uint32)
+
+	forceUpdate := GetForceUpdateVariable(proc)
+	resetUpdateTime := GetResetUpdateTimeVariable(proc)
+
+	positions = make([]int, length)
+	ends = make([]int, length)
+
+	defer func() {
+		if err != nil {
+			logutil.Error("MoTableIndexSize",
+				zap.Error(err),
+				zap.String("db", dbName),
+				zap.String("table", tblName),
+				zap.Uint32("account id", accountId))
+		}
+	}()
+
+	resolve := func() ([]uint64, []uint64, []uint64, error) {
+		for i := uint64(0); i < uint64(length); i++ {
+			positions[i] = len(tblIds)
+			ends[i] = len(tblIds)
+
+			dbBytes, dbNull = dbs.GetStrValue(i)
+			tblBytes, tblNull = tbls.GetStrValue(i)
+			if dbNull || tblNull {
+				positions[i] = -1
+				continue
+			}
+			dbName, tblName = string(dbBytes), string(tblBytes)
+
+			if ok, ferr := specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && ferr == nil {
+				continue
+			} else if ferr != nil {
+				return nil, nil, nil, ferr
+			}
+
+			db, derr := eng.Database(proc.Ctx, dbName, txn)
+			if derr != nil {
+				if moerr.IsMoErrCode(derr, moerr.OkExpectedEOB) {
+					return nil, nil, nil, moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbName, "OkExpectedEOB")
+				}
+				return nil, nil, nil, derr
+			}
+
+			ctx := proc.Ctx
+			acc := uint64(accountId)
+			if sub, serr := isSubscribedTable(proc, accountId, db, dbName, tblName); serr != nil {
+				return nil, nil, nil, serr
+			} else if sub.valid {
+				// hidden index objects live in the publishing account's database
+				acc = sub.oriAccId
+				ctx = defines.AttachAccountId(ctx, uint32(sub.oriAccId))
+				if db, derr = eng.Database(ctx, sub.oriDatabaseName, txn); derr != nil {
+					return nil, nil, nil, derr
+				}
+			}
+
+			rel, rerr := db.Relation(ctx, tblName, nil)
+			if rerr != nil {
+				if moerr.IsMoErrCode(rerr, moerr.OkExpectedEOB) {
+					return nil, nil, nil, moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+						dbName, tblName, "OkExpectedEOB")
+				}
+				return nil, nil, nil, rerr
+			}
+
+			for _, hidden := range indexSizeCandidateTableNames(rel.GetTableDef(ctx)) {
+				irel, ierr := db.Relation(ctx, hidden, nil)
+				if ierr != nil {
+					logutil.Info("moTableIndexSizeNew->Relation",
+						zap.String("originTable", tblName),
+						zap.String("indexTableName", hidden),
+						zap.Error(ierr))
+					continue
+				}
+				accIds = append(accIds, acc)
+				dbIds = append(dbIds, uint64(irel.GetDBID(ctx)))
+				tblIds = append(tblIds, uint64(irel.GetTableID(ctx)))
+			}
+			ends[i] = len(tblIds)
+		}
+		return accIds, dbIds, tblIds, nil
+	}
+
+	fn := GetMoTableSizeFunc.Load()
+	if fn == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableIndexSize: statistics executor is nil")
+	}
+	var handled bool
+	ret, err, handled = (*fn)(
+		proc.Ctx, eng, resolve,
+		forceUpdate,
+		resetUpdateTime)
+	if err != nil {
+		return err
+	}
+	if !handled {
+		if cerr := proc.Ctx.Err(); cerr != nil {
+			return cerr
+		}
+		return moTableIndexSizeOld(ivecs, result, proc, length)
+	}
+	if len(ret) != len(tblIds) {
+		return moerr.NewInternalError(proc.Ctx, "MoTableIndexSize: invalid statistics cardinality")
+	}
+	for i := 0; i < length; i++ {
+		null := positions[i] < 0
+		var sum int64
+		if !null {
+			for _, v := range ret[positions[i]:ends[i]] {
+				if v > uint64(math.MaxInt64-sum) {
+					sum = math.MaxInt64
+					break
+				}
+				sum += int64(v)
+			}
+		}
+		if err = rs.Append(sum, null); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+//#endregion
+
+//#region MoTableDataSize
+
+// MoTableDataSize returns the estimated storage bytes of a table's base
+// objects, excluding the hidden secondary/unique index objects published by
+// mo_table_index_size. DATA_LENGTH (and the AVG_ROW_LENGTH ratio) source it
+// because the legacy mo_table_size implementation reports data plus index
+// bytes: routing DATA_LENGTH through it would double count the index bytes
+// next to INDEX_LENGTH in legacy statistics mode and in engine fallback.
+// mo_table_size keeps its published mode-dependent totals unchanged; this
+// builtin is the stable base-byte source shared by both statistics modes.
+func MoTableDataSize(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	if GetUseOldImplVariable(proc) {
+		return moTableDataSizeOld(ivecs, result, proc, length, selectList)
+	}
+	return MoTableDataSizeNew(ivecs, result, proc, length, selectList)
+}
+
+// MoTableDataSizeNew follows the new statistics implementation: the shared
+// resolver batches the (account, database, table) triplets and the registered
+// size executor publishes the alpha-backed base-table bytes. Engine fallback
+// keeps the data/index decomposition on the per-relation legacy path.
+func MoTableDataSizeNew(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	return MoTableSizeRowsHelper(ivecs, result, proc, length, selectList, &GetMoTableSizeFunc, moTableDataSizeOld)
+}
+
+// moTableDataSizeOld mirrors the legacy mo_table_size resolution (special
+// tables, subscription metadata, engine metadata resolution) but appends only
+// the base-object size, leaving the hidden index objects to
+// mo_table_index_size.
+func moTableDataSizeOld(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	rs := vector.MustFunctionResult[int64](result)
+	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
+	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableDataSize: txn operator is nil")
+	}
+	txn := proc.GetTxnOperator()
+
+	var ok bool
+	for i := uint64(0); i < uint64(length); i++ {
+		foolCtx := proc.Ctx
+
+		db, dbnull := dbs.GetStrValue(i)
+		tbl, tblnull := tbls.GetStrValue(i)
+		if dbnull || tblnull {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			var rel engine.Relation
+			dbStr, tblStr := string(db), string(tbl)
+
+			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
+				if err = rs.Append(int64(0), false); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err != nil {
+				return err
+			}
+
+			var dbo engine.Database
+			dbo, err = e.Database(foolCtx, dbStr, txn)
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_data_size",
+						fmt.Sprintf("%s-%s", dbStr, tblStr))
+				}
+				return err
+			}
+
+			var accId uint32
+			accId, err = defines.GetAccountId(foolCtx)
+			if err != nil {
+				return err
+			}
+
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accId, dbo, dbStr, tblStr); err != nil {
+				logutil.Error("moTableDataSizeOld",
+					zap.String("source", "isSubscribeTable"),
+					zap.Error(err))
+				return err
+			} else if sub.valid {
+				// subscription
+				foolCtx = defines.AttachAccountId(foolCtx, uint32(sub.oriAccId))
+				dbo, err = e.Database(foolCtx, sub.oriDatabaseName, txn)
+				if err != nil {
+					return err
+				}
+			}
+
+			rel, err = dbo.Relation(foolCtx, tblStr, nil)
+			if err != nil {
+				return err
+			}
+
+			var oSize uint64
+			if oSize, err = originalTableSize(foolCtx, dbo, rel); err != nil {
+				return err
+			}
+
+			if err = rs.Append(int64(oSize), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+//#endregion
+
 var specialRegexp = regexp.MustCompile(fmt.Sprintf("%s|%s|%s",
 	catalog.MO_TABLES, catalog.MO_DATABASE, catalog.MO_COLUMNS))
 
@@ -926,6 +1372,458 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 	}
 	return nil
 }
+
+//#region MoTableColNdv
+
+// ndvEstimateFromStatsInfo extracts the published distinct-value estimate of
+// one column. A missing statistics object, an unpublished column or a
+// non-finite estimate means "unknown" and renders NULL instead of a false
+// known zero; a published estimate is rounded and stays bounded by the
+// published table row count when that bound is finite and positive.
+// The supplied column name is resolved to the statistics source's canonical
+// name before the lookup (#30910): mo_indexes and mo_columns keep the
+// declared spelling, while the statistics publish each column under the
+// engine's canonical lowercased name, so an exact miss falls back to the
+// canonical spelling.
+func ndvEstimateFromStatsInfo(info *statsinfopb.StatsInfo, column string) *int64 {
+	if info == nil {
+		return nil
+	}
+	ndv, ok := info.NdvMap[column]
+	if !ok {
+		ndv, ok = info.NdvMap[strings.ToLower(column)]
+	}
+	if !ok || math.IsNaN(ndv) || math.IsInf(ndv, 0) || ndv < 0 {
+		return nil
+	}
+	if info.TableCnt > 0 && !math.IsInf(info.TableCnt, 0) && !math.IsNaN(info.TableCnt) &&
+		ndv > info.TableCnt {
+		ndv = info.TableCnt
+	}
+	value := int64(math.Round(ndv))
+	if value < 0 {
+		value = 0
+	}
+	return &value
+}
+
+// indexPartPrefixTruncatesColumn reports whether the recorded index metadata
+// configures a character-prefix length for the given index key part. A
+// truncated key population describes LEFT(column, length), and the engine's
+// statistics publish only the full-column distinct-value estimate, so the
+// part's cardinality must render NULL instead of substituting the
+// full-column estimate (#30910). Recorded metadata that cannot be decoded
+// renders the estimate unavailable rather than guessing. Matching is
+// case-insensitive because mo_indexes keeps the column's declared spelling
+// while the params key uses the parser's compared spelling.
+func indexPartPrefixTruncatesColumn(indexParams, column string) bool {
+	if indexParams == "" {
+		return false
+	}
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexParams)
+	if err != nil {
+		return true
+	}
+	for part, length := range prefixLengths {
+		if length > 0 && strings.EqualFold(part, column) {
+			return true
+		}
+	}
+	return false
+}
+
+// MoTableColNdv returns the engine-statistics distinct-value estimate of one
+// column, published by ANALYZE TABLE and the engine's maintained statistics.
+// Resolution follows the mo_table_col_max family, including subscription and
+// cluster-table account switching; unavailable estimates render NULL.
+// The optional fourth parameter is the index metadata's algo_params: when the
+// index part is configured with a character prefix the estimate is unavailable
+// and renders NULL, never the full-column NDV of the truncated column.
+//#region PublicationStatisticsConfig
+
+// statisticsPublicationConfigPrefix is the in-band config prefix a bound
+// publisher branch appends to the statistics estimator calls of the persisted
+// STATISTICS body. The persisted body keeps the plain direct shapes; only the
+// publisher branch of the subscription UNION carries this argument, so no
+// user-visible signature depends on the format.
+const statisticsPublicationConfigPrefix = "pubacct="
+
+// publicationAccountIDFromConfig parses the in-band publisher account marker.
+// An absent prefix or an overflowing id means the call is not
+// publication-bound and the caller keeps its direct resolution semantics.
+// Zero is the sys account id: every publication created by the sys session
+// (`from sys publication` subscriptions included) records
+// mo_subs.pub_account_id = 0, so a baked "pubacct=0" is a valid binding.
+func publicationAccountIDFromConfig(config string) (uint32, bool) {
+	rest, ok := strings.CutPrefix(config, statisticsPublicationConfigPrefix)
+	if !ok || rest == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(rest, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(id), true
+}
+
+// publicationAccountIDFromVecArg reads the in-band publisher account config of
+// one input row. A NULL config input means the same as an absent one.
+func publicationAccountIDFromVecArg(
+	cfg vector.FunctionParameterWrapper[types.Varlena],
+	i uint64,
+) (uint32, bool) {
+	if cfg == nil {
+		return 0, false
+	}
+	rawCfg, cfgNull := cfg.GetStrValue(i)
+	if cfgNull {
+		return 0, false
+	}
+	return publicationAccountIDFromConfig(string(rawCfg))
+}
+
+// publishedColStats resolves one publication-bound estimate input to the
+// relation statistics under the published account. A resolution failure
+// renders an unavailable estimate (a nil info) instead of failing the whole
+// metadata read: publisher branch rows are guarded by the branch's visibility
+// predicates already, and a database or relation name that no longer resolves
+// at the reading transaction (for example a historical subscription alias
+// recorded by a snapshot read) publishes NULL per CARDINALITY's contract
+// rather than aborting the query (#30910).
+func publishedColStats(
+	ctx context.Context,
+	e engine.Engine,
+	txn client.TxnOperator,
+	pubAccountID uint32,
+	dbName, tblName string,
+) (*statsinfopb.StatsInfo, error) {
+	pubCtx := defines.AttachAccountId(ctx, pubAccountID)
+	dbo, err := e.Database(pubCtx, dbName, txn)
+	if err != nil {
+		return nil, nil
+	}
+	rel, err := dbo.Relation(pubCtx, tblName, nil)
+	if err != nil {
+		return nil, nil
+	}
+	// A non-blocking read answers from the published cache only; it never
+	// waits to synthesize a new estimate for this projection.
+	return rel.Stats(pubCtx, false)
+}
+
+//#endregion
+
+func MoTableColNdv(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if !ok || proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableColNdv: txn operator is nil")
+	}
+	txn := proc.GetTxnOperator()
+
+	dbNames := vector.GenerateFunctionStrParameter(ivecs[0])
+	tableNames := vector.GenerateFunctionStrParameter(ivecs[1])
+	columnNames := vector.GenerateFunctionStrParameter(ivecs[2])
+	var indexParams vector.FunctionParameterWrapper[types.Varlena]
+	var publicationConfig vector.FunctionParameterWrapper[types.Varlena]
+	if len(ivecs) > 3 {
+		indexParams = vector.GenerateFunctionStrParameter(ivecs[3])
+	}
+	if len(ivecs) > 4 {
+		publicationConfig = vector.GenerateFunctionStrParameter(ivecs[4])
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+
+	sysAccountCtx := proc.Ctx
+	if accountId, aerr := defines.GetAccountId(proc.Ctx); aerr != nil {
+		return aerr
+	} else if accountId != uint32(sysAccountID) {
+		sysAccountCtx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		db, dbNull := dbNames.GetStrValue(i)
+		table, tableNull := tableNames.GetStrValue(i)
+		column, columnNull := columnNames.GetStrValue(i)
+		if dbNull || tableNull || columnNull {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		dbStr, tableStr, columnStr := string(db), string(table), string(column)
+		// absent metadata (the three-argument call) means no prefix is
+		// configured; NULL metadata behaves like the empty string so a
+		// legacy unparametrized index still publishes its full-column
+		// estimate rather than a false NULL
+		indexParamsStr := ""
+		if len(ivecs) > 3 {
+			if params, paramsNull := indexParams.GetStrValue(i); !paramsNull {
+				indexParamsStr = string(params)
+			}
+		}
+
+		ctx := proc.Ctx
+		if isClusterTable(dbStr, tableStr) {
+			// the physical object of a cluster table is owned by the sys account
+			ctx = sysAccountCtx
+		}
+
+		var info *statsinfopb.StatsInfo
+		if pubAccountID, pubBound := publicationAccountIDFromVecArg(publicationConfig, i); pubBound {
+			// A publisher branch resolves through its baked publisher
+			// account without any per-row subscription metadata lookup:
+			// the branch arms of the subscription UNION run as parallel
+			// scopes, and an internal metadata resolution on the shared
+			// session executor from more than one arm interleaves internal
+			// result sets and corrupts them. Unresolvable names publish
+			// the unavailable estimate as NULL.
+			if info, err = publishedColStats(ctx, e, txn, pubAccountID, dbStr, tableStr); err != nil {
+				return err
+			}
+			if info == nil {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		} else {
+			dbo, derr := e.Database(ctx, dbStr, txn)
+			if derr != nil {
+				// keep the missing-database error in the same user-facing form as
+				// the mo_table_rows/mo_table_size family instead of leaking the
+				// internal OkExpectedEOB marker
+				if moerr.IsMoErrCode(derr, moerr.OkExpectedEOB) {
+					return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbStr, "OkExpectedEOB")
+				}
+				return derr
+			}
+
+			if dbo.IsSubscription(ctx) {
+				var sub *plan.SubscriptionMeta
+				if sub, derr = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); derr != nil {
+					return derr
+				}
+				if sub != nil && !pubsub.InSubMetaTables(sub, tableStr) {
+					return moerr.NewInternalErrorf(ctx, "table %s not found in publication %s", tableStr, sub.Name)
+				}
+
+				// the publish-side account owns the statistics
+				ctx = defines.AttachAccountId(ctx, uint32(sub.AccountId))
+				if dbo, derr = e.Database(ctx, sub.DbName, txn); derr != nil {
+					return derr
+				}
+			}
+
+			rel, rerr := dbo.Relation(ctx, tableStr, nil)
+			if rerr != nil {
+				return rerr
+			}
+
+			// A non-blocking read answers from the published cache only; it never
+			// waits to synthesize a new estimate for this projection.
+			info, rerr = rel.Stats(ctx, false)
+			if rerr != nil {
+				return rerr
+			}
+		}
+
+		// A character-prefix key part describes a truncated population and the
+		// statistics publish no per-prefix estimate: the part's cardinality is
+		// unavailable and must render NULL, never the full-column estimate
+		// (#30910). The relation is resolved first so name and scope errors
+		// keep their existing user-visible forms.
+		if indexPartPrefixTruncatesColumn(indexParamsStr, columnStr) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if value := ndvEstimateFromStatsInfo(info, columnStr); value == nil {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.Append(*value, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+//#endregion
+
+//#region MoTableColNullCnt
+
+// nullCntFromStatsInfo extracts the published count of NULL values of one
+// column. A missing statistics object or an unpublished column means
+// "unknown" and renders NULL instead of a false known zero. The column name
+// resolves to the statistics source's canonical name before the lookup, the
+// same fallback the distinct-value accessor uses (#30910).
+func nullCntFromStatsInfo(info *statsinfopb.StatsInfo, column string) *int64 {
+	if info == nil {
+		return nil
+	}
+	cnt, ok := info.NullCntMap[column]
+	if !ok {
+		cnt, ok = info.NullCntMap[strings.ToLower(column)]
+	}
+	if !ok {
+		return nil
+	}
+	if cnt > math.MaxInt64 {
+		cnt = math.MaxInt64
+	}
+	value := int64(cnt)
+	if value < 0 {
+		return nil
+	}
+	return &value
+}
+
+// MoTableColNullCnt returns the engine-statistics NULL-value count of one
+// column, published by ANALYZE TABLE alongside the distinct-value estimate.
+// The index CARDINALITY publications (information_schema.STATISTICS and
+// SHOW INDEX) consume it to count the NULL value group MySQL index statistics
+// give an indexed column: equal NULL values form one key group, so a
+// populated nullable index publishes the distinct estimate plus one when
+// NULLs are present, instead of the raw NDV's zero for an all-NULL
+// population (#30910). The plain distinct-value estimator keeps its own
+// contract; this builtin is the NULL-population projection. Resolution
+// follows MoTableColNdv, including subscription and cluster-table account
+// switching and the publication-bound arm that resolves the publisher
+// identity baked by the subscription branch without per-row internal
+// lookups; unpublished columns and unresolvable publication-bound names
+// render NULL.
+func MoTableColNullCnt(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if !ok || proc.GetTxnOperator() == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableColNullCnt: txn operator is nil")
+	}
+	txn := proc.GetTxnOperator()
+
+	dbNames := vector.GenerateFunctionStrParameter(ivecs[0])
+	tableNames := vector.GenerateFunctionStrParameter(ivecs[1])
+	columnNames := vector.GenerateFunctionStrParameter(ivecs[2])
+	var publicationConfig vector.FunctionParameterWrapper[types.Varlena]
+	if len(ivecs) > 3 {
+		publicationConfig = vector.GenerateFunctionStrParameter(ivecs[3])
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+
+	sysAccountCtx := proc.Ctx
+	if accountId, aerr := defines.GetAccountId(proc.Ctx); aerr != nil {
+		return aerr
+	} else if accountId != uint32(sysAccountID) {
+		sysAccountCtx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		db, dbNull := dbNames.GetStrValue(i)
+		table, tableNull := tableNames.GetStrValue(i)
+		column, columnNull := columnNames.GetStrValue(i)
+		if dbNull || tableNull || columnNull {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		dbStr, tableStr, columnStr := string(db), string(table), string(column)
+
+		ctx := proc.Ctx
+		if isClusterTable(dbStr, tableStr) {
+			// the physical object of a cluster table is owned by the sys account
+			ctx = sysAccountCtx
+		}
+
+		var info *statsinfopb.StatsInfo
+		if pubAccountID, pubBound := publicationAccountIDFromVecArg(publicationConfig, i); pubBound {
+			// The publisher branch resolves through its baked publisher
+			// account with no per-row internal subscription lookup, and an
+			// unresolvable historical name renders the unavailable NULL
+			// population instead of failing the metadata read; see
+			// MoTableColNdv's publication arm for the shared rationale.
+			if info, err = publishedColStats(ctx, e, txn, pubAccountID, dbStr, tableStr); err != nil {
+				return err
+			}
+			if info == nil {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		} else {
+			dbo, derr := e.Database(ctx, dbStr, txn)
+			if derr != nil {
+				// keep the missing-database error in the same user-facing form as
+				// the mo_table_rows/mo_table_size family instead of leaking the
+				// internal OkExpectedEOB marker
+				if moerr.IsMoErrCode(derr, moerr.OkExpectedEOB) {
+					return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbStr, "OkExpectedEOB")
+				}
+				return derr
+			}
+
+			if dbo.IsSubscription(ctx) {
+				var sub *plan.SubscriptionMeta
+				if sub, derr = proc.GetSessionInfo().SqlHelper.GetSubscriptionMeta(dbStr); derr != nil {
+					return derr
+				}
+				if sub != nil && !pubsub.InSubMetaTables(sub, tableStr) {
+					return moerr.NewInternalErrorf(ctx, "table %s not found in publication %s", tableStr, sub.Name)
+				}
+
+				// the publish-side account owns the statistics
+				ctx = defines.AttachAccountId(ctx, uint32(sub.AccountId))
+				if dbo, derr = e.Database(ctx, sub.DbName, txn); derr != nil {
+					return derr
+				}
+			}
+
+			rel, rerr := dbo.Relation(ctx, tableStr, nil)
+			if rerr != nil {
+				return rerr
+			}
+
+			// A non-blocking read answers from the published cache only; it never
+			// waits to synthesize a new estimate for this projection.
+			info, rerr = rel.Stats(ctx, false)
+			if rerr != nil {
+				return rerr
+			}
+		}
+
+		if value := nullCntFromStatsInfo(info, columnStr); value == nil {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err = rs.Append(*value, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+//#endregion
 
 func getValueInStr(value any) string {
 	switch v := value.(type) {

@@ -499,6 +499,17 @@ func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
 				return err
 			}
 
+			// Same-version refresh rail for STATISTICS (#30910/#31164): the
+			// current identity publishes the engine's cardinality estimates
+			// next to the retained prefix lengths, and this reconciliation
+			// converges a persisted older current definition for the system
+			// account with the same idempotent no-op definition check.
+			// Crossing tenants keep using the v4_0_7 tenant upgrade entry.
+			statistics := versions.InformationSchemaStatisticsUpgradeEntry()
+			if err := statistics.UpgradeAfterProtocolCheck(txn, catalog.System_Account); err != nil {
+				return err
+			}
+
 			return motrace.InitSchemaViewsWithTxn(ctx, txn)
 		}, opts)
 		if err == nil || !isSystemViewRetryableError(err) {
@@ -548,6 +559,7 @@ func SystemViewsExist(ctx context.Context, exec executor.SQLExecutor) (bool, err
 			versions.InformationSchemaTablesUpgradeEntry(),
 			versions.InformationSchemaViewsUpgradeEntry(),
 			versions.InformationSchemaPartitionsUpgradeEntry(),
+			versions.InformationSchemaStatisticsUpgradeEntry(),
 		} {
 			complete, err = entry.CheckFunc(txn, catalog.System_Account)
 			if err != nil || !complete {

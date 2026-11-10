@@ -564,7 +564,14 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		}()
 
 		sqlBuilder := strings.Builder{}
-		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_size(db, tbl) from (values ")
+		// SHOW TABLE STATUS must render the same base-object bytes the TABLES
+		// view publishes for Data_length and Avg_row_length. mo_table_size
+		// keeps its mode-dependent blend: the legacy implementation reports
+		// base plus hidden-index bytes, so taking it here double counts the
+		// index bytes next to the separately computed Index_length in legacy
+		// statistics mode (#30910). mo_table_data_size is the stable
+		// base-data source shared by both statistics modes.
+		sqlBuilder.WriteString("select tbl, mo_table_rows(db, tbl), mo_table_data_size(db, tbl) from (values ")
 		for i, tblName := range tblNames {
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
