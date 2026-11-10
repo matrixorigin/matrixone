@@ -194,12 +194,13 @@ func BlockDataReadWithFilter(
 	if applyFilter == nil || applyFilter.Apply == nil {
 		return 0, moerr.NewInvalidInputNoCtx("nil residual block filter")
 	}
-	if applyFilter.Exact != nil && len(columns) > 0 && len(earlyColumns) == len(columns) {
-		// Exact filtering consumes the full requested schema. The legacy
-		// late-materialization contract still requires a proper subset.
+	if (applyFilter.Exact != nil || applyFilter.Select != nil) && len(columns) > 0 && len(earlyColumns) == len(columns) {
+		// Exact and selection-only filtering may consume the full requested
+		// schema without changing its eager scheduling. Legacy Apply-only
+		// late materialization still requires a proper subset.
 		for i, pos := range earlyColumns {
 			if pos != i {
-				return 0, moerr.NewInvalidInputNoCtx("invalid complete exact-filter column positions")
+				return 0, moerr.NewInvalidInputNoCtx("invalid complete filter column positions")
 			}
 		}
 	} else if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {

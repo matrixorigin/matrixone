@@ -764,58 +764,67 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		return err
 	}
 
-	t.Run("dictionary selection preserves physical late rows", func(t *testing.T) {
-		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
-		require.NoError(t, err)
-		account, err := registry.Open(1 << 20)
-		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
-		require.NoError(t, err)
-		output.Clean(queryMP)
-		output = batch.NewOffHeapWithSize(len(colTypes))
-		t.Cleanup(func() {
-			output.Clean(queryMP)
-			cacheVectors.Free(queryMP)
-			require.Zero(t, account.Snapshot().Used)
-			_, _, err := registry.CompleteTerminal(account)
+	for _, complete := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dictionary late rows", true: "dictionary complete columns"}[complete], func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 			require.NoError(t, err)
-			output = batch.NewWithSize(len(colTypes))
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+			require.NoError(t, err)
+			output.Clean(queryMP)
+			output = batch.NewOffHeapWithSize(len(colTypes))
+			t.Cleanup(func() {
+				output.Clean(queryMP)
+				cacheVectors.Free(queryMP)
+				require.Zero(t, account.Snapshot().Used)
+				_, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+				output = batch.NewWithSize(len(colTypes))
+				for i := range colTypes {
+					output.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
+				}
+			})
+			require.NoError(t, output.SetAllocationAccount(selection))
 			for i := range colTypes {
-				output.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
+				output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], selection)
+				require.NoError(t, err)
+			}
+			early := []int{0}
+			if complete {
+				early = []int{0, 1}
+			}
+			calls := 0
+			request := &engine.ReaderFilterRequest{
+				OutputAllocation: selection,
+				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+					t.Fatal("selected read must not rerun Apply")
+					return engine.ReaderFilterResult{}, nil
+				},
+				Select: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					calls++
+					require.Equal(t, early, loaded)
+					require.Equal(t, 7, bat.RowCount())
+					if !complete {
+						require.Zero(t, bat.Vecs[1].Length(), "late payload must remain unloaded")
+					}
+					return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+				},
+			}
+			_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
+				objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read", output, cacheVectors, queryMP, fs, early, request)
+			require.NoError(t, err)
+			require.Equal(t, 1, calls)
+			require.Equal(t, 3, output.RowCount())
+			require.True(t, output.Vecs[0].IsDictionary())
+			require.Equal(t, complete, output.Vecs[1].IsDictionary())
+			for i, want := range []int32{1, 4, 6} {
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], i))
+				require.Equal(t, []byte("payload-"+string(rune('0'+want))), output.Vecs[1].GetBytesAt(i))
 			}
 		})
-		require.NoError(t, output.SetAllocationAccount(selection))
-		for i := range colTypes {
-			output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], selection)
-			require.NoError(t, err)
-		}
-		calls := 0
-		request := &engine.ReaderFilterRequest{
-			OutputAllocation: selection,
-			Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
-				t.Fatal("selected read must not rerun Apply")
-				return engine.ReaderFilterResult{}, nil
-			},
-			Select: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-				calls++
-				require.Equal(t, []int{0}, loaded)
-				require.Equal(t, 7, bat.RowCount())
-				require.Zero(t, bat.Vecs[1].Length(), "late payload must remain unloaded")
-				return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
-			},
-		}
-		_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
-			objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read", output, cacheVectors, queryMP, fs, []int{0}, request)
-		require.NoError(t, err)
-		require.Equal(t, 1, calls)
-		require.Equal(t, 3, output.RowCount())
-		require.True(t, output.Vecs[0].IsDictionary())
-		require.False(t, output.Vecs[1].IsDictionary())
-		for i, want := range []int32{1, 4, 6} {
-			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], i))
-			require.Equal(t, []byte("payload-"+string(rune('0'+want))), output.Vecs[1].GetBytesAt(i))
-		}
-	})
+
+	}
 
 	t.Run("exact selection observes tombstones and owns output", func(t *testing.T) {
 		intType := colTypes[0]

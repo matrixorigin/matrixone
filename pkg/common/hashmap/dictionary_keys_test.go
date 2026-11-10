@@ -97,7 +97,7 @@ func TestDictionaryCompositeStringHashKeys(t *testing.T) {
 			rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
 			require.NoError(t, err)
 			t.Cleanup(rows.Release)
-			var selected []*vector.Vector
+			selected := make([]*vector.Vector, 0, 2)
 			for _, source := range []*vector.Vector{fixed, text} {
 				base, err := vector.FreezeVector(source, mp, nil)
 				require.NoError(t, err)
