@@ -102,10 +102,11 @@ func mockHandleFactory(fromDSN uint64, onApplyCB func(*entry.Entry)) func(*entry
 }
 
 type mockDriver struct {
-	truncatedPSN uint64
-	recordSpecs  [][5]uint64
-	skipMap      map[uint64]map[uint64]uint64
-	maxClient    int
+	truncatedPSN    uint64
+	checkpointedDSN uint64
+	recordSpecs     [][5]uint64
+	skipMap         map[uint64]map[uint64]uint64
+	maxClient       int
 }
 
 func newMockDriver(
@@ -140,6 +141,10 @@ func (d *mockDriver) getTruncatedPSNFromBackend(ctx context.Context) (uint64, er
 	return d.truncatedPSN, nil
 }
 
+func (d *mockDriver) getWALTruncateFromBackend(ctx context.Context) (uint64, uint64, error) {
+	return d.truncatedPSN, d.checkpointedDSN, nil
+}
+
 func (d *mockDriver) readFromBackend(
 	ctx context.Context, firstPSN uint64, maxSize int,
 ) (nextPSN uint64, records []logservice.LogRecord, err error) {
@@ -162,10 +167,11 @@ func (d *mockDriver) readFromBackend(
 
 type mockBackend struct {
 	sync.RWMutex
-	store     []logservice.LogRecord
-	nextPSN   uint64
-	truncated uint64
-	shardId   uint64
+	store           []logservice.LogRecord
+	nextPSN         uint64
+	truncated       uint64
+	checkpointedDSN uint64
+	shardId         uint64
 }
 
 func NewMockBackend() *mockBackend {
@@ -208,11 +214,34 @@ func (c *mockBackend) GetTruncatedLsn(
 	return c.truncated, nil
 }
 
+func (c *mockBackend) GetWALTruncate(ctx context.Context) (uint64, uint64, error) {
+	c.RLock()
+	defer c.RUnlock()
+	return c.truncated, c.checkpointedDSN, nil
+}
+
+func (c *mockBackend) TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error {
+	c.Lock()
+	defer c.Unlock()
+	if checkpointedDSN < c.checkpointedDSN {
+		return moerr.NewInternalError(ctx, "checkpointed DSN cannot move backwards")
+	}
+	if err := c.truncateLocked(ctx, psn); err != nil {
+		return err
+	}
+	c.checkpointedDSN = checkpointedDSN
+	return nil
+}
+
 func (c *mockBackend) Truncate(
 	ctx context.Context, psnIntent uint64,
 ) (err error) {
 	c.Lock()
 	defer c.Unlock()
+	return c.truncateLocked(ctx, psnIntent)
+}
+
+func (c *mockBackend) truncateLocked(ctx context.Context, psnIntent uint64) (err error) {
 	if psnIntent <= c.truncated {
 		err = moerr.NewInvalidTruncateLsn(ctx, c.shardId, psnIntent)
 		return
@@ -289,6 +318,14 @@ func (c *mockBackendClient) Truncate(
 	return c.store.Truncate(ctx, psnIntent)
 }
 
+func (c *mockBackendClient) TruncateWAL(ctx context.Context, psn, checkpointedDSN uint64) error {
+	return c.store.TruncateWAL(ctx, psn, checkpointedDSN)
+}
+
+func (c *mockBackendClient) GetWALTruncate(ctx context.Context) (uint64, uint64, error) {
+	return c.store.GetWALTruncate(ctx)
+}
+
 func (c *mockBackendClient) Read(
 	ctx context.Context, firstPSN, maxSize uint64,
 ) (records []logservice.LogRecord, nextPSN uint64, err error) {
@@ -305,6 +342,15 @@ func (c *mockBackendClient) SetRequiredLsn(ctx context.Context, lsn logservice.L
 	panic("not implemented")
 }
 func (c *mockBackendClient) GetRequiredLsn(_ context.Context) (logservice.Lsn, error) {
+	panic("not implemented")
+}
+func (c *mockBackendClient) GetRequiredLsnState(_ context.Context) (logservice.Lsn, uint64, uint64, error) {
+	panic("not implemented")
+}
+func (c *mockBackendClient) SetRequiredLsnIfCurrent(_ context.Context, _, _ logservice.Lsn, _, _ uint64) error {
+	panic("not implemented")
+}
+func (c *mockBackendClient) ClaimRequiredLsn(_ context.Context, _ logservice.Lsn, _, _, _, _ uint64) error {
 	panic("not implemented")
 }
 func (c *mockBackendClient) GetLogRecordSize() int {

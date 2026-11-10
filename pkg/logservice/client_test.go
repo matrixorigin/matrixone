@@ -826,6 +826,13 @@ func TestClientAppend(t *testing.T) {
 		lsn, err = c.Append(ctx, rec)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(5), lsn)
+
+		walClient, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer walClient.Close()
+		lsn, err = walClient.(*managedClient).AppendWAL(ctx, rec)
+		require.NoError(t, err)
+		assert.Greater(t, lsn, uint64(5))
 	}
 	RunClientTest(t, false, nil, fn)
 }
@@ -972,12 +979,28 @@ func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, err := c.Append(ctx, rec)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		err = c.Truncate(ctx, 4)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+		psn, dsn, err := c.GetWALTruncate(ctx)
+		require.NoError(t, err)
+		writeCfg := cfg
+		writeCfg.ReadOnly = false
+		writer, err := NewClient(ctx, "", writeCfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, writer.Close()) }()
+		lsn, err := writer.Append(ctx, rec)
+		require.NoError(t, err)
+		err = c.TruncateWAL(ctx, lsn, dsn+1)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		gotPSN, gotDSN, err := c.GetWALTruncate(ctx)
+		require.NoError(t, err)
+		require.Equal(t, psn, gotPSN)
+		require.Equal(t, dsn, gotDSN)
 	}
 	RunClientTest(t, true, nil, fn)
 }
@@ -1082,6 +1105,77 @@ func TestClientRequiredLsn(t *testing.T) {
 	RunClientTest(t, false, nil, fn)
 }
 
+func TestClientConditionalRequiredLsnReset(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, _ *Service, _ ClientConfig, c Client) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		leaderID, term, err := c.(StandbyClient).GetLeaderState(ctx)
+		require.NoError(t, err)
+		require.NotZero(t, leaderID)
+		require.NotZero(t, term)
+		require.NoError(t, c.SetRequiredLsn(ctx, 100))
+		lsn, revision, owner, err := c.GetRequiredLsnState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, Lsn(100), lsn)
+		require.Zero(t, owner)
+		require.NoError(t, c.ClaimRequiredLsn(ctx, lsn, revision, 11, term, leaderID))
+		require.NoError(t, c.SetRequiredLsnIfCurrent(ctx, 0, 100, revision+1, 11))
+		lsn, revision, owner, err = c.GetRequiredLsnState(ctx)
+		require.NoError(t, err)
+		require.Zero(t, lsn)
+		require.Equal(t, uint64(11), owner)
+		require.NoError(t, c.ClaimRequiredLsn(ctx, 0, revision, 22, term, leaderID))
+		require.Error(t, c.SetRequiredLsnIfCurrent(ctx, 500, 0, revision, 11))
+		require.NoError(t, c.SetRequiredLsnIfCurrent(ctx, 1, 0, revision+1, 22))
+		require.Error(t, c.SetRequiredLsn(ctx, 500))
+		got, err := c.GetRequiredLsn(ctx)
+		require.NoError(t, err)
+		require.Equal(t, Lsn(1), got)
+	})
+}
+
+func TestManagedLSNOperationsLeaveIsolatedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, _ *Service, cfg ClientConfig, _ Client) {
+		operations := []struct {
+			name string
+			call func(context.Context, Client) error
+		}{
+			{"latest", func(ctx context.Context, c Client) error {
+				_, err := c.GetLatestLsn(ctx)
+				return err
+			}},
+			{"required", func(ctx context.Context, c Client) error {
+				_, err := c.GetRequiredLsn(ctx)
+				return err
+			}},
+			{"set required", func(ctx context.Context, c Client) error {
+				return c.SetRequiredLsn(ctx, 100)
+			}},
+		}
+		for _, operation := range operations {
+			t.Run(operation.name, func(t *testing.T) {
+				address, drop, cleanup := startDroppingResponseProxy(t, cfg.ServiceAddresses[0])
+				defer cleanup()
+				proxyCfg := cfg
+				proxyCfg.ServiceAddresses = []string{address}
+				ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+				defer cancel()
+				client, err := NewClient(ctx, "", proxyCfg)
+				require.NoError(t, err)
+				defer client.Close()
+				_, err = client.GetRequiredLsn(ctx)
+				require.NoError(t, err)
+				drop.Store(true)
+				client.(*managedClient).cfg.ServiceAddresses = cfg.ServiceAddresses
+				start := time.Now()
+				require.NoError(t, operation.call(ctx, client))
+				require.Less(t, time.Since(start), 15*time.Second)
+				require.NoError(t, ctx.Err())
+			})
+		}
+	})
+}
+
 func TestClientGetLeaderID(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		sc := c.(StandbyClient)
@@ -1090,6 +1184,10 @@ func TestClientGetLeaderID(t *testing.T) {
 		leaderID, err := sc.GetLeaderID(ctx) // return the max index
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), leaderID)
+		stateLeaderID, term, err := sc.GetLeaderState(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, leaderID, stateLeaderID)
+		assert.NotZero(t, term)
 	}
 	RunClientTest(t, false, nil, fn)
 }
