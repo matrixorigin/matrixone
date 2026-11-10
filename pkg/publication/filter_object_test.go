@@ -16,16 +16,21 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -367,7 +372,7 @@ func TestRewriteNonAppendableTombstoneWithSinker_ContentTooSmall(t *testing.T) {
 
 	amap := NewAObjectMap()
 	_, err = rewriteNonAppendableTombstoneWithSinker(
-		context.Background(), []byte("short"), &stats, nil, mp, amap,
+		context.Background(), []byte("short"), &stats, nil, mp, amap, nil,
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "object content too small")
@@ -452,4 +457,313 @@ func TestRewriteTombstoneRowidsBatch_WithRowOffsetMapRewrite(t *testing.T) {
 	assert.Equal(t, uint32(99), rowids[0].GetRowOffset())
 
 	rowidVec.Free(mp)
+}
+
+type rewriteAdmissionProbe struct {
+	rscthrottler.WorkingSetThrottler
+	before func([]rscthrottler.WorkingSetSpec)
+}
+
+func (p *rewriteAdmissionProbe) ReserveWorkingSetCandidatesUntilFit(ctx context.Context, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
+	p.before(specs)
+	return p.WorkingSetThrottler.ReserveWorkingSetCandidatesUntilFit(ctx, specs)
+}
+
+type rewriteFileService struct {
+	fileservice.FileService
+	beforeWrite func() error
+}
+
+func (f *rewriteFileService) Write(ctx context.Context, v fileservice.IOVector) error {
+	if err := f.beforeWrite(); err != nil {
+		return err
+	}
+	return f.FileService.Write(ctx, v)
+}
+
+func TestRewriteNonAppendableTombstoneWithSinker_WideKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		rows      int
+		width     int
+		remap     bool
+		sharedKey bool
+	}{
+		{"partial", 2000, 32 << 10, false, false},
+		{"wide_full", objectio.BlockMaxRows, 16 << 10, true, false},
+		{"multi_block", objectio.BlockMaxRows + 1, 2 << 10, true, false},
+		{"aliased", objectio.BlockMaxRows, 16 << 10, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			newFS := func(t *testing.T) *fileservice.LocalFS {
+				fs, err := fileservice.NewLocalFS(ctx, "SHARED", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { fs.Close(ctx) })
+				return fs
+			}
+			sourceFS := newFS(t)
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			attrs, typs := objectio.GetTombstoneSchema(types.T_varchar.ToType(), objectio.HiddenColumnSelection_None)
+			objectID := objectio.NewObjectid()
+			name := objectio.BuildObjectNameWithObjectID(&objectID)
+			source := newTombstoneFSinkerFactoryWithName(name, objectio.HiddenColumnSelection_None)(mp, sourceFS)
+			t.Cleanup(func() { require.NoError(t, source.Close()) })
+			suffix := strings.Repeat("x", tc.width-8)
+			key := func(row int) string {
+				if tc.sharedKey {
+					row = 0
+				}
+				return fmt.Sprintf("%08d", row) + suffix
+			}
+			mapping := NewAObjectMap()
+			want := make(map[types.Rowid]int, tc.rows)
+			dataObjects := make(map[types.Objectid]int)
+			for start := 0; start < tc.rows; start += objectio.BlockMaxRows {
+				func() {
+					input := batch.NewWithSchema(false, attrs, typs)
+					defer input.Clean(mp)
+					n := min(objectio.BlockMaxRows, tc.rows-start)
+					// Source objects are ordered; remapping reverses both object
+					// order and row offsets, including across the block boundary.
+					dataID := types.Objectid{byte(1 + start/objectio.BlockMaxRows)}
+					targetID := dataID
+					if tc.remap {
+						targetID[0] = 4 - dataID[0]
+						var stats objectio.ObjectStats
+						require.NoError(t, objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(&targetID)))
+						offsets := make(map[uint32]uint32, n)
+						for row := 0; row < n; row++ {
+							offsets[uint32(row)] = uint32(n - 1 - row)
+						}
+						mapping.Set(dataID.String(), &AObjectMapping{DownstreamStats: stats, RowOffsetMap: offsets})
+					}
+					blockID := objectio.NewBlockidWithObjectID(&dataID, 0)
+					require.NoError(t, objectio.ConstructRowidColumnTo(input.Vecs[0], &blockID, 0, uint32(n), mp))
+					if tc.sharedKey {
+						constant, err := vector.NewConstBytes(typs[1], []byte(key(0)), n, mp)
+						require.NoError(t, err)
+						defer constant.Free(mp)
+						// A real flat on-disk vector can share one varlen value.
+						require.NoError(t, input.Vecs[1].UnionBatch(constant, 0, n, nil, mp))
+					} else {
+						for row := 0; row < n; row++ {
+							require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(key(start+row)), false, mp))
+						}
+					}
+					for row := 0; row < n; row++ {
+						offset := row
+						if tc.remap {
+							offset = n - 1 - row
+						}
+						want[types.NewRowIDWithObjectIDBlkNumAndRowID(targetID, 0, uint32(offset))] = start + row
+					}
+					dataObjects[targetID] = n
+					input.SetRowCount(n)
+					require.NoError(t, source.Sink(ctx, input))
+				}()
+			}
+			original, err := source.Sync(ctx)
+			require.NoError(t, err)
+			require.EqualValues(t, (tc.rows+objectio.BlockMaxRows-1)/objectio.BlockMaxRows, original.BlkCnt())
+			file, err := sourceFS.StatFile(ctx, name.String())
+			require.NoError(t, err)
+			content := fileservice.IOVector{FilePath: name.String(), Entries: []fileservice.IOEntry{{Offset: 0, Size: file.Size}}}
+			t.Cleanup(func() { objectio.ReleaseIOVector(&content) })
+			require.NoError(t, sourceFS.Read(ctx, &content))
+			modes := []string{"success"}
+			if tc.sharedKey {
+				modes = append(modes, "deny_fetch", "deny_expansion", "cancel", "write_error", "pressure_alias", "cancel_readmission")
+			}
+			if tc.name == "partial" {
+				modes = append(modes, "pressure_decode")
+			}
+			for _, mode := range modes {
+				t.Run(mode, func(t *testing.T) {
+					total := int64(64 << 30)
+					if mode == "deny_fetch" {
+						total = 1
+					} else if mode == "deny_expansion" {
+						total = 256 << 20
+					}
+					owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total),
+						rscthrottler.WithMemorySampleForTesting(total, 0)).(rscthrottler.WorkingSetThrottler)
+					pressure := strings.HasPrefix(mode, "pressure_") || mode == "cancel_readmission"
+					before := mp.CurrNB()
+					var held *rscthrottler.WorkingSet
+					reAdmission := make(chan struct{})
+					reservations := 0
+					probe := &rewriteAdmissionProbe{WorkingSetThrottler: owner, before: func(specs []rscthrottler.WorkingSetSpec) {
+						reservations++
+						if pressure && mode != "pressure_decode" && reservations == 1 {
+							// Pay enough to decode the tiny shared source, so the
+							// controlled denial occurs at logical alias expansion.
+							specs[0].Inputs[0].Bytes = 1 << 30
+						}
+						if pressure && reservations == 2 {
+							require.Equal(t, before, mp.CurrNB(), "retry retires decoded vectors first")
+							require.Equal(t, total-held.InputCapacity(0), owner.WorkingSetHeadroom().Available, "retry refunds its old ticket before waiting")
+							close(reAdmission)
+						}
+					}}
+					jobCtx, cancel := context.WithCancel(context.WithValue(ctx, publicationMemoryKey{}, probe))
+					t.Cleanup(cancel)
+					fetches, writes := 0, 0
+					upstream := GetObjectFromUpstreamWithWorker
+					t.Cleanup(func() { GetObjectFromUpstreamWithWorker = upstream })
+					GetObjectFromUpstreamWithWorker = func(context.Context, SQLExecutor, string, GetChunkWorker, string, string) ([]byte, error) {
+						fetches++
+						require.Less(t, owner.WorkingSetHeadroom().Available, total, "reserve before fetching")
+						if pressure && fetches == 1 {
+							var ok bool
+							var err error
+							held, ok, err = owner.TryReserveWorkingSet(ctx, rscthrottler.WorkingSetSpec{UnitBytes: 1,
+								Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: owner.WorkingSetHeadroom().Available - 1024}}})
+							require.NoError(t, err)
+							require.True(t, ok)
+						}
+						if mode == "cancel" {
+							cancel()
+						}
+						return content.Entries[0].Data, nil
+					}
+					uploadErr := errors.New("injected write failure")
+					targetFS := &rewriteFileService{FileService: newFS(t), beforeWrite: func() error {
+						writes++
+						require.GreaterOrEqual(t, total-owner.WorkingSetHeadroom().Available,
+							int64(tc.rows*tc.width), "materialized output must have an active reservation")
+						if mode == "write_error" {
+							return uploadErr
+						}
+						return nil
+					}}
+					job := NewFilterObjectJob(jobCtx, original.Marshal(), types.TS{}, nil, true, targetFS, mp,
+						nil, nil, "", "", nil, nil, mapping, nil)
+					var result *FilterObjectJobResult
+					if pressure {
+						finished := make(chan struct{})
+						t.Cleanup(func() {
+							cancel()
+							<-finished
+							if held != nil {
+								held.Close()
+							}
+						})
+						go func() { defer close(finished); job.Execute(); result = job.WaitDone().(*FilterObjectJobResult) }()
+						select {
+						case <-reAdmission:
+						case <-finished:
+							t.Fatal("transient growth pressure escaped instead of re-admitting")
+						case <-time.After(15 * time.Second):
+							t.Fatal("re-admission did not start")
+						}
+						select {
+						case <-finished:
+							t.Fatal("completed before the independent owner released")
+						default:
+						}
+						if mode == "cancel_readmission" {
+							cancel()
+						} else {
+							held.Close()
+						}
+						select {
+						case <-finished:
+						case <-time.After(15 * time.Second):
+							t.Fatal("job did not retire")
+						}
+						if mode != "cancel_readmission" {
+							require.Equal(t, 2, fetches)
+						}
+					} else {
+						job.Execute()
+						result = job.WaitDone().(*FilterObjectJobResult)
+					}
+					if pressure && mode == "cancel_readmission" {
+						held.Close()
+					}
+					require.Equal(t, before, mp.CurrNB(), "vectors released on every exit")
+					require.Equal(t, total, owner.WorkingSetHeadroom().Available, "all promises released")
+					if mode != "success" && !strings.HasPrefix(mode, "pressure_") {
+						require.Error(t, result.Err)
+						require.Equal(t, objectio.ObjectStats{}, result.DownstreamStats)
+						if mode == "deny_fetch" || mode == "deny_expansion" {
+							var capacity *rscthrottler.WorkingSetCapacityError
+							require.ErrorAs(t, result.Err, &capacity)
+
+						} else if mode == "cancel" || mode == "cancel_readmission" {
+							require.ErrorIs(t, result.Err, context.Canceled)
+						} else {
+							require.ErrorIs(t, result.Err, uploadErr)
+						}
+						if mode == "deny_fetch" {
+							require.Zero(t, fetches)
+						} else {
+							require.Equal(t, 1, fetches)
+						}
+						if mode != "write_error" {
+							require.Zero(t, writes)
+						}
+						return
+					}
+					require.NoError(t, result.Err)
+					require.Equal(t, 1, writes, "the fixed object is committed once")
+					rewritten := result.DownstreamStats
+					require.EqualValues(t, tc.rows, rewritten.Rows())
+					require.True(t, rewritten.GetCNCreated())
+					require.Equal(t, name, rewritten.ObjectName())
+					seen := make(map[types.Rowid]bool, tc.rows)
+					locations := make(map[int]objectio.Location)
+					var previous types.Rowid
+					objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+						func() {
+							loc := objectio.Location(info.MetaLoc[:])
+							locations[int(loc.ID())] = loc
+							reader, err := ioutil.NewObjectReader(targetFS, loc)
+							require.NoError(t, err)
+							got, release, err := reader.LoadColumns(ctx, []uint16{0, 1}, typs, loc.ID(), mp)
+							require.NoError(t, err)
+							defer release()
+							require.EqualValues(t, loc.Rows(), got.RowCount(), "locations match real block rows")
+							for row, id := range vector.MustFixedColNoTypeCheck[types.Rowid](got.Vecs[0]) {
+								expected, ok := want[id]
+								require.True(t, ok)
+								require.False(t, seen[id])
+								if len(seen) > 0 {
+									require.True(t, previous.LT(&id), "global RowID order after remapping")
+								}
+								seen[id], previous = true, id
+								require.Equal(t, key(expected), string(got.Vecs[1].GetBytesAt(row)))
+							}
+						}()
+						return true
+					}, rewritten)
+					require.Len(t, seen, tc.rows)
+					for id, expected := range dataObjects {
+						next := true
+						deleted := 0
+						_, _, _, err := ioutil.CheckTombstoneFile(ctx, id[:], func() (*objectio.ObjectStats, error) {
+							if !next {
+								return nil, nil
+							}
+							next = false
+							return &rewritten, nil
+						}, func(_ *objectio.ObjectStats, block int) (bool, error) {
+							blockID := objectio.NewBlockidWithObjectID(&id, 0)
+							mask, err := ioutil.FillBlockDeleteMask(ctx, &types.TS{}, &blockID, locations[block], targetFS, true)
+							if err != nil {
+								return false, err
+							}
+							defer mask.Release()
+							deleted += mask.Count()
+							return true, nil
+						}, targetFS)
+						require.NoError(t, err)
+						require.Equal(t, expected, deleted, "real tombstone reader finds all remapped deletes")
+					}
+				})
+			}
+		})
+	}
 }

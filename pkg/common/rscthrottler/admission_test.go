@@ -239,22 +239,27 @@ func TestWorkingSetGrowthPreservesOwnersAndDenial(t *testing.T) {
 	require.NoError(t, w.TryGrow(context.Background(), spec), "shared W already covers this increase")
 	require.Equal(t, int64(250), w.IOBytes())
 	spec.Inputs[0].Bytes = 150
-	require.NoError(t, w.TryGrow(context.Background(), spec))
+	require.NoError(t, input.TryGrow(context.Background(), 150))
+	require.Error(t, input.TryGrow(context.Background(), -1))
 	require.Equal(t, int64(150), input.Capacity())
 	require.Equal(t, int64(250), c.inputPromise.Load())
 	require.Equal(t, int64(300), c.workspacePromise.Load())
 	require.Equal(t, int64(200), io.Capacity(), "active jobs keep their granted snapshot")
 	spec.Inputs[0].Bytes, spec.IOBytes = 700, 600
-	require.ErrorContains(t, w.TryGrow(context.Background(), spec), "cannot reserve")
+	var capacity *WorkingSetCapacityError
+	require.ErrorAs(t, w.TryGrow(context.Background(), spec), &capacity)
+	require.ErrorAs(t, input.TryGrow(context.Background(), 700), &capacity)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, w.TryGrow(ctx, spec), context.Canceled)
+	require.ErrorIs(t, input.TryGrow(ctx, 700), context.Canceled)
 	require.Equal(t, int64(150), input.Capacity(), "denial and cancellation publish no partial grant")
 	require.Equal(t, int64(250), w.IOBytes())
 	w.Close()
 	require.ErrorIs(t, w.TryGrow(context.Background(), spec), ErrWorkingSetClosed)
 	require.Equal(t, int64(250), c.inputPromise.Load(), "active input remains charged after close")
 	input.Release()
+	require.ErrorIs(t, input.TryGrow(context.Background(), 100), ErrWorkingSetClosed)
 	require.Equal(t, int64(100), c.inputPromise.Load())
 	io.Release()
 	other.Close()
@@ -658,4 +663,91 @@ func TestSharedPoolsConcurrentGrantsHaveOnePhysicalOwner(t *testing.T) {
 	}
 	require.Equal(t, 1, count, "the two independently legal quotas cannot both spend the same physical headroom")
 	require.Equal(t, int64(500), c.dataReserved.Load())
+}
+
+func TestMemoryAdmissionWorkerRetiresBeforeRestart(t *testing.T) {
+	m, c, queued := admissionFixture(t, 1000, 900, 950)
+	firstEntered, secondEntered := make(chan struct{}), make(chan struct{})
+	firstRelease, secondRelease := make(chan struct{}), make(chan struct{})
+	var releaseFirst, releaseSecond sync.Once
+	var calls atomic.Int32
+	c.reclaim = func(*memThrottler) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstEntered)
+			<-firstRelease
+			// This callback runs under reclaimMu. Make the next generation's
+			// recovery observable without relying on the periodic clock.
+			c.lastReclaim = time.Time{}
+		case 2:
+			close(secondEntered)
+			<-secondRelease
+		}
+	}
+	type request struct {
+		cancel context.CancelFunc
+		result chan error
+		joined bool
+	}
+	var requests []*request
+	var generations []chan struct{}
+	t.Cleanup(func() {
+		for _, r := range requests {
+			r.cancel()
+		}
+		releaseFirst.Do(func() { close(firstRelease) })
+		releaseSecond.Do(func() { close(secondRelease) })
+		for _, r := range requests {
+			if !r.joined {
+				await(t, r.result)
+			}
+		}
+		for _, done := range generations {
+			await(t, done)
+		}
+	})
+	enqueue := func() *request {
+		ctx, cancel := context.WithCancel(context.Background())
+		r := &request{cancel: cancel, result: make(chan error, 1)}
+		requests = append(requests, r)
+		go func() { r.result <- m.AcquireContext(ctx, 100) }()
+		require.Equal(t, "data", await(t, queued))
+		return r
+	}
+	generation := func() chan struct{} {
+		c.mu.Lock()
+		done := c.workerDone
+		c.mu.Unlock()
+		require.NotNil(t, done)
+		generations = append(generations, done)
+		return done
+	}
+	cancelRequest := func(r *request) {
+		r.cancel()
+		err := await(t, r.result)
+		r.joined = true
+		require.ErrorIs(t, err, context.Canceled)
+	}
+	first := enqueue()
+	await(t, firstEntered)
+	original := generation()
+	cancelRequest(first)
+	// Cancellation must finish while recovery is still blocked. Repeated
+	// canceled requests must retain the same recovery-generation owner.
+	for range 4 {
+		r := enqueue()
+		require.Equal(t, original, generation(), "a retiring worker still owns recovery")
+		cancelRequest(r)
+	}
+	next := enqueue()
+	require.Equal(t, original, generation())
+	releaseFirst.Do(func() { close(firstRelease) })
+	await(t, original)
+	await(t, secondEntered)
+	replacement := generation()
+	require.NotEqual(t, original, replacement, "queued work restarts after retirement")
+	cancelRequest(next)
+	releaseSecond.Do(func() { close(secondRelease) })
+	await(t, replacement)
+	require.Equal(t, int32(2), calls.Load())
 }

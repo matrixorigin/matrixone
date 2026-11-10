@@ -155,8 +155,14 @@ func (c *memoryCoordinator) removeAdmissionLocked(n *admissionWaiter) {
 }
 
 func (c *memoryCoordinator) startWorkerLocked() {
-	if c.workerStop != nil {
-		return
+	// A closed stop channel requests retirement; it does not transfer the
+	// recovery owner while the old worker can still be blocked in reclaim.
+	if c.workerDone != nil {
+		select {
+		case <-c.workerDone:
+		default:
+			return
+		}
 	}
 	stop, done, signal := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
 	c.workerStop, c.workerDone, c.workerWake = stop, done, signal
@@ -165,7 +171,18 @@ func (c *memoryCoordinator) startWorkerLocked() {
 }
 
 func (c *memoryCoordinator) run(stop <-chan struct{}, done chan<- struct{}, signal <-chan struct{}) {
-	defer close(done)
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.workerStop = nil
+		c.workerWake = nil
+		close(done)
+		// Requests may arrive while this generation drains. Cancellation
+		// never waits for recovery; the exiting owner hands off queued work.
+		if len(c.queue) > 0 {
+			c.startWorkerLocked()
+		}
+	}()
 	ticks := c.ticks
 	if ticks == nil {
 		ticker := time.NewTicker(admissionFallbackInterval)

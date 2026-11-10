@@ -72,7 +72,8 @@ func TestImportRecordGrowthReservesCompleteLayout(t *testing.T) {
 	require.Equal(t, meta.WorkingSet.IOBytes(), io.Capacity())
 	source, workspace = input.Capacity(), meta.WorkingSet.IOBytes()
 	_, err = meta.GrowRecord(context.Background(), int64(config.LargestEntryLimit))
-	require.ErrorContains(t, err, "cannot reserve", "real oversized records must not bypass the physical bound")
+	var capacity *rscthrottler.WorkingSetCapacityError
+	require.ErrorAs(t, err, &capacity, "real oversized records must not bypass the physical bound")
 	require.Equal(t, source, input.Capacity())
 	require.Equal(t, workspace, meta.WorkingSet.IOBytes())
 	require.Zero(t, manifest.Producers[0].RecordBytes, "building growth choices must not mutate the compiler graph")
