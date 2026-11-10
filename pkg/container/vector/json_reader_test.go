@@ -94,6 +94,33 @@ func TestJSONReaderRejectsUnselectedCorruptionAndDescriptors(t *testing.T) {
 	require.Nil(t, reader)
 }
 
+func TestJSONReaderBuilderTypedAppend(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	builder, err := NewJSONReaderBuilder(mp, nil)
+	require.NoError(t, err)
+	defer builder.Close()
+	value, err := types.ParseStringToByteJson(`{"keep":1}`)
+	require.NoError(t, err)
+	require.NoError(t, builder.AppendByteJson(value, false))
+	binary.LittleEndian.PutUint64(value.Data[len(value.Data)-8:], 9)
+	require.Error(t, builder.AppendByteJson(bytejson.ByteJson{Type: 0xff}, false))
+	require.NoError(t, builder.AppendByteJson(bytejson.ByteJson{}, true))
+	reader, err := builder.Finish()
+	require.NoError(t, err)
+	defer reader.Close()
+	require.Equal(t, 2, reader.Length(), "failed admission must not publish a row")
+	result, err := reader.Query(0, jsonReaderPath(t, "$.keep"))
+	require.NoError(t, err)
+	defer result.Close()
+	text, err := result.Text()
+	require.NoError(t, err)
+	require.Equal(t, "1", text)
+	wasNull, err := reader.IsNull(1)
+	require.NoError(t, err)
+	require.True(t, wasNull)
+}
+
 func TestJSONReaderBuilderViewsAndOwnedOutput(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()

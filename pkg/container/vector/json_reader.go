@@ -182,6 +182,16 @@ func (b *JSONReaderBuilder) Append(raw []byte, null bool) error {
 	return AppendBytes(b.column, raw, null, b.mp)
 }
 
+// AppendByteJson uses the same complete admission and direct encoded copy as
+// ordinary vector construction, without an intermediate Marshal allocation.
+// The caller keeps value stable during this call; no writable alias is kept.
+func (b *JSONReaderBuilder) AppendByteJson(value bytejson.ByteJson, null bool) error {
+	if b == nil || b.column == nil {
+		return io.ErrClosedPipe
+	}
+	return AppendByteJson(b.column, value, null, b.mp)
+}
+
 func (b *JSONReaderBuilder) Finish() (JSONReader, error) {
 	if b == nil || b.column == nil {
 		return nil, io.ErrClosedPipe
