@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r42-2026-11-09`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r43-2026-11-10`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -895,3 +895,21 @@ Earlier unmerged Query tag 22 is superseded, not a supported persisted input.
 Independent Architecture and SQL/Planner approval of r42 remains pending;
 rebase, tests and this record do not provide that approval. Historical approval
 facts and earlier revision descriptions above remain unchanged.
+
+
+## r43: preserve official local runtime-filter domains (2026-11-10)
+
+The governing proposal is `python-udf-current-stage-r43-2026-11-10`.
+Official main `2f6fcc772175d0c0e80ad97aac6d44360c513347` owns Query field 23
+for `local_runtime_filter_domains`. Keep that field and its independent target
+copying, retain execution-dependent access at 22 and SELECT locks at 21, and
+move the unmerged routine envelope to 24. Regenerate the merged binding and
+descriptor; combined round-trip and deep-copy cases retain both metadata
+families and prove that copied targets do not alias the original plan.
+
+This mechanical allocation repair preserves r42's routine contract, pending
+catalog 4.0.7/50, MORPC 134, external Python/Arrow ABI, artifact budget and opt-in
+development scope. Earlier unmerged Query tag 23 is superseded, not a supported
+persisted input. Independent Architecture and SQL/Planner approval of r43 remains
+pending; rebase and validation do not supply that approval. Historical decisions
+and descriptions above remain unchanged.

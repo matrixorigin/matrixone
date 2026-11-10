@@ -480,6 +480,10 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
 		ExecutionDependentAccess: true,
+		LocalRuntimeFilterDomains: []*planpb.LocalRuntimeFilterDomain{{
+			SourceScanNodeId: 1, SourceColumnName: "id", KeyType: int32(types.T_int64),
+			Targets: []*planpb.LocalRuntimeFilterTarget{{ScanNodeId: 2, ColumnName: "parent_id", ProbeNdv: 10}, nil},
+		}, nil},
 		SelectLockReferences: []*planpb.SelectLockReference{{
 			ObjectRef: &planpb.ObjectRef{SchemaName: "db", ObjName: "locked"},
 			ViewPath:  []*planpb.ViewStep{{DatabaseName: "db", ViewName: "lock_view"}},
@@ -566,6 +570,11 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Nil(t, cloned.BackgroundQueries[1])
 	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
 	require.True(t, cloned.ExecutionDependentAccess)
+	require.Equal(t, source.LocalRuntimeFilterDomains, cloned.LocalRuntimeFilterDomains)
+	require.NotSame(t, source.LocalRuntimeFilterDomains[0], cloned.LocalRuntimeFilterDomains[0])
+	require.NotSame(t, source.LocalRuntimeFilterDomains[0].Targets[0], cloned.LocalRuntimeFilterDomains[0].Targets[0])
+	cloned.LocalRuntimeFilterDomains[0].Targets[0].ColumnName = "changed"
+	require.Equal(t, "parent_id", source.LocalRuntimeFilterDomains[0].Targets[0].ColumnName)
 	require.Equal(t, source.RoutineDependencies, cloned.RoutineDependencies)
 	require.NotSame(t, source.RoutineDependencies[0], cloned.RoutineDependencies[0])
 	require.NotSame(t, source.RoutineDependencies[0].FunctionRef, cloned.RoutineDependencies[0].FunctionRef)
