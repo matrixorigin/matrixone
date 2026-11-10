@@ -183,8 +183,15 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 	g.samples++
 	g.lastEvict = now
 	if !g.thrashing && (g.samples >= preloadUsageMinSamples && g.average < preloadUnusedShare ||
-		g.samples >= preloadUsageMoreSamples && g.average < preloadThrashingShare) {
+		g.samples >= preloadUsageMoreSamples && g.average < preloadThrashingShare) &&
+		!p.lessReadGroupEvicting(g, now) {
 		g.thrashing = true
+		// The other groups' evictions so far were partly made by this group's files.
+		for _, o := range p.groups {
+			if !o.thrashing {
+				o.samples = 0
+			}
+		}
 		if !g.ended.IsZero() && now.Sub(g.ended) < 2*g.quiet {
 			g.quiet = min(2*g.quiet, preloadQuietPeriodMax)
 		} else {
@@ -197,6 +204,18 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 			zap.Duration("quiet-period", g.quiet),
 		)
 	}
+}
+
+// lessReadGroupEvicting reports whether another group not thrashing, whose files are
+// read less than g's, had a whole-object file evicted within its quiet period: that
+// group thrashes first.
+func (p *preloadUsage) lessReadGroupEvicting(g *groupUsage, now time.Time) bool {
+	for _, o := range p.groups {
+		if o != g && !o.thrashing && o.samples > 0 && o.average < g.average && now.Sub(o.lastEvict) <= o.quiet {
+			return true
+		}
+	}
+	return false
 }
 
 // forgetIdleGroups forgets the groups with no eviction, and no end of thrashing,

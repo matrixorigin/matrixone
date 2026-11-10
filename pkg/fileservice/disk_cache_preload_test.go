@@ -82,6 +82,38 @@ func TestPreloadUsageGroupsAreSeparate(t *testing.T) {
 	require.False(t, p.narrowRead("/cache/z", 3, roomFor), "a group with no evictions")
 }
 
+// A group thrashes only after the groups read less than it that are evicting, and the
+// evictions of the others before it thrashed no longer count.
+func TestPreloadUsageLeastReadGroupThrashesFirst(t *testing.T) {
+	p, _ := newTestPreloadUsage()
+	for i := 0; i < preloadUsageMinSamples-1; i++ {
+		evict(p, 1, i, 0, 100) // the base table
+	}
+	for i := 0; i < 2*preloadUsageMoreSamples; i++ {
+		evict(p, 2, i, 30, 100) // the entries table
+	}
+	require.False(t, p.narrowRead("/cache/y", 2, roomFor), "the base table is read less and evicting")
+	evict(p, 1, preloadUsageMinSamples, 0, 100)
+	require.True(t, p.narrowRead("/cache/x", 1, roomFor))
+	for i := 0; i < preloadUsageMoreSamples-1; i++ {
+		evict(p, 2, 100+i, 30, 100)
+	}
+	require.False(t, p.narrowRead("/cache/y", 2, roomFor), "its evictions start again")
+	evict(p, 2, 200, 30, 100)
+	require.True(t, p.narrowRead("/cache/y", 2, roomFor))
+}
+
+// A group read less that stopped evicting does not hold back another.
+func TestPreloadUsageIdleLessReadGroupDoesNotHoldBack(t *testing.T) {
+	p, clock := newTestPreloadUsage()
+	evict(p, 1, 0, 0, 100)
+	clock.t = clock.t.Add(preloadQuietPeriod + time.Second)
+	for i := 0; i < preloadUsageMoreSamples; i++ {
+		evict(p, 2, i, 30, 100)
+	}
+	require.True(t, p.narrowRead("/cache/y", 2, roomFor))
+}
+
 func TestPreloadUsageIgnoresFilesOfNoNarrowRead(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	for i := 0; i < 20; i++ {

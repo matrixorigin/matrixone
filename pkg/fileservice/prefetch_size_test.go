@@ -66,6 +66,22 @@ func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
 	require.False(t, d.cache.Contains(b))
 }
 
+// A narrow read's prefetch of a cached object leaves it where it is in the eviction order.
+func TestNarrowPrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
+	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 1)
+	d := fs.diskCache
+	ctx := context.Background()
+	a, b := d.pathForFile("a"), d.pathForFile("b")
+	d.cache.Set(ctx, a, struct{}{}, 1)
+	d.cache.Set(ctx, b, struct{}{}, 1)
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1, Narrow: true}))
+	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
+	d.cache.ForceEvict(ctx, 1)
+	require.False(t, d.cache.Contains(a))
+	require.True(t, d.cache.Contains(b))
+}
+
 // A download at a size other than the object's caches nothing.
 func TestS3FSPrefetchObjectOfWrongSizeCachesNothing(t *testing.T) {
 	for _, delta := range []int{-1000, 1000} {

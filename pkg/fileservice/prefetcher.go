@@ -30,12 +30,15 @@ import (
 // ObjectPrefetch asks to download, ahead of the read, the object at FilePath, of Size
 // bytes, which the read reaches at Due, in Unix nanoseconds, and of whose Blocks blocks
 // it reads Reads, 0 when unknown. The download is dropped if Scan ends before it starts.
+// A Narrow read, which reads a small share of each object, leaves a cached object where it
+// is in the eviction order.
 type ObjectPrefetch struct {
 	FilePath string
 	Size     int64
 	Due      int64
 	Reads    int
 	Blocks   int
+	Narrow   bool
 	Scan     *PrefetchScan
 }
 
@@ -152,8 +155,8 @@ type prefetcher struct {
 	run    func(context.Context, ObjectPrefetch)
 	ctx    context.Context
 	cancel context.CancelFunc
-	have   func(filePath string) bool // the object is cached or being downloaded
-	limit  func() int64               // the most bytes queued
+	have   func(filePath string, use bool) bool // the object is cached, which use marks used, or being downloaded
+	limit  func() int64                         // the most bytes queued
 	max    int
 	queued atomic.Int64
 
@@ -167,7 +170,7 @@ type prefetcher struct {
 	wg          sync.WaitGroup
 }
 
-func newPrefetcher(max int, limit func() int64, have func(string) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
+func newPrefetcher(max int, limit func() int64, have func(string, bool) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{run: run, ctx: ctx, cancel: cancel, have: have, limit: limit, max: max, entries: make(map[string]*prefetchEntry)}
 }
@@ -191,7 +194,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		}
 		return
 	}
-	if p.have(req.FilePath) {
+	if p.have(req.FilePath, !req.Narrow) {
 		metric.FSPrefetchCachedCounter.Inc()
 		return
 	}
@@ -343,9 +346,9 @@ func (s *S3FS) prefetchQueueLimit(workers int) func() int64 {
 	}
 }
 
-// haveObject reports whether the whole object of filePath is cached, which it marks used,
+// haveObject reports whether the whole object of filePath is cached, which use marks used,
 // or being downloaded.
-func (s *S3FS) haveObject(filePath string) bool {
+func (s *S3FS) haveObject(filePath string, use bool) bool {
 	path, err := parseFilePathAtService(filePath, s.name)
 	if err != nil {
 		return true
@@ -353,6 +356,9 @@ func (s *S3FS) haveObject(filePath string) bool {
 	diskPath := s.diskCache.pathForFile(path.File)
 	if s.diskCache.download(diskPath) != nil {
 		return true
+	}
+	if !use {
+		return s.diskCache.cache.Contains(diskPath)
 	}
 	_, ok := s.diskCache.cache.Get(context.Background(), diskPath)
 	return ok
