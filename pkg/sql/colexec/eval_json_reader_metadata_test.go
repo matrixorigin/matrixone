@@ -30,7 +30,8 @@ import (
 
 func TestJSONProjectionPreparationWithoutDemandDoesNotAllocate(t *testing.T) {
 	leaf := &FunctionExpressionExecutor{}
-	nodes := []*FunctionExpressionExecutor{leaf}
+	nodes := make([]*FunctionExpressionExecutor, 0, 81)
+	nodes = append(nodes, leaf)
 	var root ExpressionExecutor = leaf
 	for range 80 {
 		node := &FunctionExpressionExecutor{parameterExecutor: []ExpressionExecutor{root, root}}
