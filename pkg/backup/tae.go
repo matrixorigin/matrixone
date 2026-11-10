@@ -1032,6 +1032,15 @@ func checksumFile(ctx context.Context, fs fileservice.FileService, name string) 
 
 	err = fs.Read(ctx, ioVec)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			// An object-storage SDK can turn a legitimate zero-length object
+			// into a read EOF: MinIO's eager not-found probe reads EOF from
+			// an empty response and returns the error without handing over a
+			// reader. Prove emptiness on the same fs/name before hashing
+			// empty content; every other outcome keeps the original
+			// failure.
+			return verifyEmptyObjectChecksum(ctx, fs, name, reader, err)
+		}
 		return nil, err
 	}
 	defer func() {
@@ -1045,6 +1054,72 @@ func checksumFile(ctx context.Context, fs fileservice.FileService, name string) 
 		return nil, err
 	}
 	return hasher.Sum(nil), nil
+}
+
+// verifyEmptyObjectChecksum converts a read EOF into the empty-content
+// checksum only when the very same fs/name proves to be an existing
+// zero-length object. Object-storage SDKs surface such a target as a read
+// error instead of a success with an empty reader, yet a zero-length backup
+// object is legitimate. Every other outcome keeps checksumFile's original
+// semantics: a missing or non-empty object, an unreadable stat, and any
+// observed cancellation still fail with their own cause, so only the
+// surrounding checksum phase may retry, never the provider copy.
+func verifyEmptyObjectChecksum(
+	ctx context.Context,
+	fs fileservice.FileService,
+	name string,
+	reader io.ReadCloser,
+	readErr error,
+) ([]byte, error) {
+	// A cancellation carried by the read error itself keeps its causality
+	// and must not be erased by a subsequent close failure; the close is
+	// still met exactly once before anything is returned.
+	readCanceled := errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded)
+	var closeErr error
+	if reader != nil {
+		// A failed Read may still have handed over a reader. Meet the close
+		// obligation here exactly once; a close failure must never be
+		// reported as a verified checksum.
+		closeErr = reader.Close()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// A cancellation observed up to and including the close keeps its
+		// causality.
+		return nil, ctxErr
+	}
+	if readCanceled {
+		if closeErr != nil {
+			// Keep both causes: the read cancellation is not replaced by
+			// the close failure, and neither becomes a success.
+			return nil, errors.Join(readErr, closeErr)
+		}
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	entry, statErr := fs.StatFile(ctx, name)
+	if statErr != nil {
+		// A cancellation observed during the stat keeps its causality
+		// instead of being masked by the original EOF. Any other stat
+		// failure is the reason this object could not be proven empty; the
+		// checksum-phase retry policy already decides which ones retry.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, statErr
+	}
+	// A cancellation observed up to and including the stat keeps its
+	// causality before any substitute read failure or empty success.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if entry.Size != 0 {
+		// EOF on a non-empty object is a read failure, not empty content.
+		return nil, readErr
+	}
+	sum := sha256.Sum256(nil)
+	return sum[:], nil
 }
 
 func (c backupFileCopier) streamCopyFile(
