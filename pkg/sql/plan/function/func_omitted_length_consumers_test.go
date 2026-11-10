@@ -851,6 +851,124 @@ func TestRoundTruncateCeilFloorTextKeepUnsignedUpperRange(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("case is 'round keeps NULL rows', err info is '%s'", info))
 }
 
+// TestRoundFamilyTemporalInputsKeepBindTimeRejection covers the CI follow-up
+// (PROXY compose run 42899048729,
+// test/distributed/cases/function/func_coalesce.test rows 133/144): the
+// direct dual-domain TEXT overloads above accept any source through its
+// implicit T_text cast, and DATE/DATETIME/TIME/TIMESTAMP/UUID have a
+// preferLevel-2 T_text rule but no numeric rule, so those inputs stopped
+// rejecting at bind time and started returning the TEXT executors' runtime
+// cast errors: SELECT ROUND(COALESCE(a,a)) FROM t1 over a DATE column
+// returned 'invalid argument cast to int, bad value 2000-01-01' instead of
+// the pinned 'invalid argument function round, bad value [DATE]'. The
+// T_text overload arguments now ignore non-TEXT inputs, so the temporal
+// sources keep the base's bind-time rejection while every bare TEXT input
+// keeps the direct dual-domain overload, and the string-typed sources keep
+// their pre-widening routes (int64 for ROUND/TRUNCATE, the string parser for
+// the one-argument CEIL/FLOOR).
+func TestRoundFamilyTemporalInputsKeepBindTimeRejection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// The sources that reach T_text implicitly and have no numeric path:
+	// binding must fail exactly as it did before the TEXT overloads joined
+	// (the first two stages are func_coalesce.result's pinned error rows).
+	bindRejected := func(name string, args []types.Type, wantStage string) {
+		t.Helper()
+		_, err := GetFunctionByName(proc.Ctx, name, args)
+		require.Error(t, err, "%s(%v) must stay bind-rejected", name, args)
+		require.ErrorContains(t, err, wantStage)
+	}
+
+	bindRejected("round", []types.Type{types.T_date.ToType()},
+		"invalid argument function round, bad value [DATE]")
+	bindRejected("round", []types.Type{types.T_datetime.ToType()},
+		"invalid argument function round, bad value [DATETIME]")
+	for _, tc := range []struct {
+		name string
+		arg  types.T
+	}{
+		{"round", types.T_time},
+		{"round", types.T_timestamp},
+		{"round", types.T_uuid},
+		{"truncate", types.T_time},
+		{"truncate", types.T_timestamp},
+	} {
+		bindRejected(tc.name, []types.Type{tc.arg.ToType()},
+			fmt.Sprintf("invalid argument function %s, bad value [%s]", tc.name, tc.arg.String()))
+	}
+
+	// The digits forms: base had no (temporal, int64) route either, so with
+	// the TEXT overloads gone these keep failing to bind as well.
+	bindRejected("round", []types.Type{types.T_date.ToType(), types.T_int64.ToType()},
+		"invalid argument function round, bad value [DATE")
+	bindRejected("round", []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()},
+		"invalid argument function round, bad value [DATETIME")
+	bindRejected("truncate", []types.Type{types.T_date.ToType(), types.T_int64.ToType()},
+		"invalid argument function truncate, bad value [DATE")
+	bindRejected("ceil", []types.Type{types.T_datetime.ToType(), types.T_int64.ToType()},
+		"invalid argument function ceil, bad value [DATETIME")
+	bindRejected("floor", []types.Type{types.T_date.ToType(), types.T_int64.ToType()},
+		"invalid argument function floor, bad value [DATE")
+
+	// Counterexamples: the fix must not narrow the intended reach.
+	// Bare TEXT inputs keep binding the direct dual-domain TEXT overloads.
+	for _, tc := range []struct {
+		name string
+		args []types.T
+	}{
+		{"round", []types.T{types.T_text}},
+		{"round", []types.T{types.T_text, types.T_int64}},
+		{"truncate", []types.T{types.T_text}},
+		{"truncate", []types.T{types.T_text, types.T_int64}},
+		{"ceil", []types.T{types.T_text, types.T_int64}},
+		{"floor", []types.T{types.T_text, types.T_int64}},
+	} {
+		args := make([]types.Type, len(tc.args))
+		for i, a := range tc.args {
+			args[i] = a.ToType()
+		}
+		get, err := GetFunctionByName(proc.Ctx, tc.name, args)
+		require.NoError(t, err)
+		require.Equal(t, types.T_decimal128, get.GetReturnType().Oid,
+			"%s(text...) must keep the direct dual-domain TEXT overload", tc.name)
+		_, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.False(t, shouldCast, "%s(text...) must still bind directly", tc.name)
+	}
+
+	// The one-argument CEIL/FLOOR string parsers stay reachable for TEXT and
+	// VARCHAR inputs with the string-parsing FLOAT64 return type.
+	for _, name := range []string{"ceil", "floor"} {
+		get, err := GetFunctionByName(proc.Ctx, name,
+			[]types.Type{types.T_text.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64, get.GetReturnType().Oid,
+			"%s(text) must keep the string parser overload", name)
+
+		get, err = GetFunctionByName(proc.Ctx, name,
+			[]types.Type{types.T_varchar.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64, get.GetReturnType().Oid,
+			"%s(varchar) must keep the string parser overload", name)
+		_, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.False(t, shouldCast, "%s(varchar) must bind its own overload directly", name)
+	}
+
+	// ROUND and TRUNCATE of VARCHAR/CHAR keep the pre-widening INT64 route
+	// (their preferLevel-1 T_int64 rule): the fix must not move those onto
+	// the TEXT overloads.
+	for _, name := range []string{"round", "truncate"} {
+		for _, s := range []types.T{types.T_varchar, types.T_char} {
+			get, err := GetFunctionByName(proc.Ctx, name, []types.Type{s.ToType()})
+			require.NoError(t, err)
+			require.Equal(t, types.T_int64, get.GetReturnType().Oid,
+				"%s(%s) must keep the INT64 route", name, s.String())
+			_, shouldCast := get.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast,
+				"%s(%s) keeps binding the INT64 overload by implicit cast", name, s.String())
+		}
+	}
+}
+
 // TestDateTextKeepsStringParser covers the regression raised by PR review:
 // DATE(T#32336-widened TEXT) tied into DATE's first DATE overload, and the
 // inserted strToDate cast rejected the compact yyyymmddhhmmss spelling

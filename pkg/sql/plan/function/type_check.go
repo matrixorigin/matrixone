@@ -206,6 +206,65 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+// a fixed type match method with the T_text arguments of the overload table
+// kept exact: an overload position typed T_text only accepts an input that is
+// already T_text and never receives one through an implicit cast.
+//
+// ROUND/TRUNCATE/CEIL/FLOOR use it for their direct TEXT overloads: a bare
+// TEXT input still matches them directly and keeps the restored dual-domain
+// results, while sources that reach T_text only through an implicit cast
+// (DATE, DATETIME, ...) keep the bind-time rejection they had before those
+// overloads joined the tables, instead of migrating to the TEXT executors'
+// runtime cast errors. Matching against every non-TEXT overload keeps
+// fixedTypeMatch semantics, including the cost order.
+func fixedTypeMatchWithExactText(overloads []overload, inputs []types.Type) checkResult {
+	minIndex := -1
+	minCost := math.MaxInt
+	for i, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+
+		textArgsExact := true
+		for j := range ov.args {
+			if ov.args[j] == types.T_text && inputs[j].Oid != types.T_text {
+				textArgsExact = false
+				break
+			}
+		}
+		if !textArgsExact {
+			continue
+		}
+
+		sta, cos := tryToMatch(inputs, ov.args)
+		if sta == matchFailed {
+			continue
+		} else if sta == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		} else {
+			if cos < minCost {
+				minIndex = i
+				minCost = cos
+			}
+		}
+	}
+	if minIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	castType := make([]types.Type, len(inputs))
+	ov := overloads[minIndex]
+	for i := range castType {
+		if ov.args[i] == inputs[i].Oid {
+			castType[i] = inputs[i]
+		} else {
+			castType[i] = ov.args[i].ToType()
+			SetTargetScaleFromSource(&inputs[i], &castType[i])
+		}
+	}
+	return newCheckResultWithCast(minIndex, castType)
+}
+
 // a fixed type match method without any type convert. (const null exception)
 // if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {
