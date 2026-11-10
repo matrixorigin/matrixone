@@ -56,8 +56,8 @@ type Shuffle struct {
 	vm.OperatorBase
 }
 
-// AcceptsDictionary admits synchronous complete-key routing whose data
-// partitions are copied into existing statement-accounted output buffers.
+// AcceptsDictionary admits direct-key hash/range routing and the synchronous
+// complete-key mode. Data partitions use the existing accounted flat buffers.
 func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
 	if child == 0 && !shuffle.OwnedOutput && len(shuffle.ShuffleKeyColumns) == 0 && shuffle.ShuffleExpr == nil && shuffle.BucketNum > 0 {
 		return shuffle.ShuffleType == int32(plan.ShuffleType_Hash) || shuffle.ShuffleType == int32(plan.ShuffleType_Range)

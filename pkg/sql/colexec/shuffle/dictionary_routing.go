@@ -62,25 +62,25 @@ func dictionaryIntegerSels[T dictionaryShuffleInteger](ap *Shuffle, key *vector.
 	}
 }
 
-func (ap *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	key := bat.Vecs[ap.ShuffleColIdx]
-	ap.clearSels()
+func (shuffle *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	key := bat.Vecs[shuffle.ShuffleColIdx]
+	shuffle.clearSels()
 	// typeswitch:partial Matches the planner-admitted legacy shuffle key domains.
 	switch key.GetType().Oid {
 	case types.T_int16:
-		dictionaryIntegerSels[int16](ap, key, true)
+		dictionaryIntegerSels[int16](shuffle, key, true)
 	case types.T_int32:
-		dictionaryIntegerSels[int32](ap, key, true)
+		dictionaryIntegerSels[int32](shuffle, key, true)
 	case types.T_int64:
-		dictionaryIntegerSels[int64](ap, key, true)
+		dictionaryIntegerSels[int64](shuffle, key, true)
 	case types.T_uint16:
-		dictionaryIntegerSels[uint16](ap, key, false)
+		dictionaryIntegerSels[uint16](shuffle, key, false)
 	case types.T_uint32:
-		dictionaryIntegerSels[uint32](ap, key, false)
+		dictionaryIntegerSels[uint32](shuffle, key, false)
 	case types.T_uint64:
-		dictionaryIntegerSels[uint64](ap, key, false)
+		dictionaryIntegerSels[uint64](shuffle, key, false)
 	case types.T_decimal64:
-		dictionaryIntegerSels[types.Decimal64](ap, key, false)
+		dictionaryIntegerSels[types.Decimal64](shuffle, key, false)
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
 		view := vector.ResolveVarlenaReadView(key)
 		for row := 0; row < key.Length(); row++ {
@@ -91,18 +91,18 @@ func (ap *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Process)
 					physical = 0
 				}
 				value := &view.Values[physical]
-				if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
-					bucket = stringHashToRangeForType(ap, *key.GetType(), value.GetByteSlice(view.Area), uint64(ap.BucketNum))
+				if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
+					bucket = stringHashToRangeForType(shuffle, *key.GetType(), value.GetByteSlice(view.Area), uint64(shuffle.BucketNum))
 				} else {
 					raw := plan2.VarlenaToUint64(value, view.Area)
-					if len(ap.ShuffleRangeUint64) > 0 {
-						bucket = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, raw)
+					if len(shuffle.ShuffleRangeUint64) > 0 {
+						bucket = plan2.GetRangeShuffleIndexUnsignedSlice(shuffle.ShuffleRangeUint64, raw)
 					} else {
-						bucket = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), raw, uint64(ap.BucketNum))
+						bucket = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(shuffle.ShuffleColMin), uint64(shuffle.ShuffleColMax), raw, uint64(shuffle.BucketNum))
 					}
 				}
 			}
-			ap.ctr.sels[bucket] = append(ap.ctr.sels[bucket], int32(row))
+			shuffle.ctr.sels[bucket] = append(shuffle.ctr.sels[bucket], int32(row))
 		}
 	case types.T_decimal128:
 		view := vector.ResolveFixedReadView[types.Decimal128](key)
@@ -114,9 +114,9 @@ func (ap *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Process)
 					physical = 0
 				}
 				value := view.Values[physical]
-				bucket = plan2.SimpleInt64HashToRange(value.B0_63^value.B64_127, uint64(ap.BucketNum))
+				bucket = plan2.SimpleInt64HashToRange(value.B0_63^value.B64_127, uint64(shuffle.BucketNum))
 			}
-			ap.ctr.sels[bucket] = append(ap.ctr.sels[bucket], int32(row))
+			shuffle.ctr.sels[bucket] = append(shuffle.ctr.sels[bucket], int32(row))
 		}
 	case types.T_uuid:
 		view := vector.ResolveFixedReadView[types.Uuid](key)
@@ -127,13 +127,13 @@ func (ap *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Process)
 				if view.Constant {
 					physical = 0
 				}
-				bucket = plan2.SimpleInt64HashToRange(uuidHash(view.Values[physical]), uint64(ap.BucketNum))
+				bucket = plan2.SimpleInt64HashToRange(uuidHash(view.Values[physical]), uint64(shuffle.BucketNum))
 			}
-			ap.ctr.sels[bucket] = append(ap.ctr.sels[bucket], int32(row))
+			shuffle.ctr.sels[bucket] = append(shuffle.ctr.sels[bucket], int32(row))
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!")
 	}
 	// Existing pool buffers own the flat gather before the child can be reused.
-	return nil, ap.enqueueBySels(bat, proc)
+	return nil, shuffle.enqueueBySels(bat, proc)
 }
