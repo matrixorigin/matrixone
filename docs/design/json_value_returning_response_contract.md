@@ -1,0 +1,537 @@
+# JSON_VALUE RETURNING and response contract
+
+Issue: #28037
+
+Compatibility note (2026-11-05): this candidate follows MatrixOne's
+[shutdown-upgrade contract](../../.agents/skills/mo-dev/references/upgrade-compatibility.md).
+It introduces no JSON_VALUE-specific MORPC generation or peer gate. Existing
+independent capability gates remain unchanged. Performance, supported-release
+upgrade, recovery and review evidence remain separate acceptance items.
+
+## Contract
+
+`JSON_VALUE` accepts a document and path, with optional `RETURNING`, `ON EMPTY`,
+and `ON ERROR` clauses. MatrixOne keeps its existing extension that permits an
+expression (including a prepared marker) as the path. In the clause-bearing
+form, a NULL path returns SQL NULL, and every non-NULL path is validated before
+the SQL NULL document shortcut; an invalid path remains a statement error. Bare
+two-argument calls preserve the legacy SQL NULL document shortcut, including
+when the supplied path is invalid. The new grammar accepts the same expression
+path as the legacy form.
+
+For clause-bearing calls, the default return type is nullable `VARCHAR(512)`
+in `utf8mb4_bin`. Bare two-argument overloads 0/1 retain their legacy unbounded
+VARCHAR metadata and text behavior. Supported
+explicit targets are `CHAR`, `BINARY`, `SIGNED`, `UNSIGNED`, `DECIMAL`, `FLOAT`,
+`DOUBLE`, `DATE`, `TIME`, `DATETIME`, `YEAR`, and `JSON`. `DEFAULT` values are
+signed literals and are converted and validated while binding/preparing the
+statement. A default NULL, expression, column, or parameter is rejected.
+
+The extraction state is separated from response policy. A row can be SQL NULL,
+path NULL, empty, a single JSON value, multiple values, a document conversion
+error, or a hard error. Empty rows use `ON EMPTY`; multiple matches and value
+conversion errors use `ON ERROR`. Malformed source JSON is a statement error and
+does not enter the `ON ERROR` response policy. Invalid paths and excessive JSON
+depth are hard errors. After the clause-form path check, SQL NULL documents and
+JSON null values return SQL NULL directly.
+
+For a single scalar match, explicit character targets return canonical text
+(strings are unquoted), `RETURNING JSON` preserves JSON values, and
+numeric/temporal targets use strict conversion. The omitted `RETURNING` form
+keeps the legacy text behavior for composite values. A composite value selected
+by an explicit scalar target, or a conversion that exceeds the target or loses
+data, is an `ON ERROR` event rather than a silently truncated value.
+
+## Plan representation
+
+The parser creates a dedicated JSON_VALUE expression carrying the document,
+path, target type, and both response policies. Its formatter preserves an omitted
+target so reparsing retains `VARCHAR(512)` rather than an explicit `CHAR(512)`,
+and preserves explicit policies. The binder keeps an expression with no
+`RETURNING`, `ON EMPTY`, or `ON ERROR` clause on the existing two-argument
+JSON_VALUE overload. When any new clause is present, it lowers the expression
+to an internal seven-argument JSON_VALUE overload. The target type is carried
+by the existing plan `Expr_T`; response modes are integer constants and
+validated defaults are typed constants. The internal overload is not reachable
+through the public grammar, and no protobuf change is required.
+
+The executor performs extraction first and applies the selected policy per row.
+It does not use a limiting ordinary cast for a document or prepared value. The
+function remains nullable and handles policy arguments itself instead of relying
+on generic strict-function NULL short-circuiting.
+
+## Compatibility and rollout
+
+Existing two-argument calls remain on the legacy two-argument plan with their
+original type, collation and unbounded text behavior; the new default applies
+only when a RETURNING/ON EMPTY/ON ERROR clause selects overload 2. Existing persisted generated
+values are not automatically recomputed. Upgrade validation covers views,
+generated columns, indexes, values over the 512-character boundary, and the
+explicit rebuild procedure.
+
+### Shutdown-upgrade compatibility (candidate revision 14)
+
+A supported upgrade stops all services, replaces their binaries, and restarts
+against the existing data. Mixed-running-version operation, old-peer rejoin,
+and downgrade are not supported. The seven-argument overload does not change
+RPC framing and therefore adds no feature-specific protocol version or peer,
+placement, sender, receiver, or persisted-expression admission gate. Existing
+function-lookup bounds checking remains in place.
+
+The new binary must read supported released data: legacy persisted expressions,
+views, generated values and index metadata keep their original semantics and
+are not automatically recomputed. The source for compatibility validation is a
+pinned supported release and its actual data, including retained snapshots or
+backups; an earlier unpublished main commit is not a release fixture. Existing
+historical upgrade/restart reports remain attributed to their actual binary
+and data identities, not relabelled as final release validation.
+
+Other features in the same expression or owner retain their own existing
+admission floors. For example, functional indexes, signed WEEK/DAYOFYEAR,
+collation-aware LEAST/GREATEST, JSON text processing, float conversions,
+JSON MIN/MAX and ODKU keep their independent contracts. Adding JSON_VALUE must
+neither raise nor lower those floors, including for algorithm-expression-only
+owners, folded views and both expression orders. In particular, the existing
+v129 opaque-JSON text contract also applies when JSON_VALUE consumes a
+JSON-typed input; VARCHAR-only inputs do not acquire that floor merely because
+they use the seven-argument overload. SQL ON UPDATE does not accept
+JSON_VALUE; testing the internal owner walker does not imply SQL support.
+Prepared handles are session state, not durable catalog objects.
+
+Strict temporal conversions do not discard components: DATE rejects date-time
+spellings including midnight; TIME rejects date-bearing values while preserving
+ordinary TIME/duration spellings. Both executor conversion and DEFAULT binding
+use these boundaries. Runtime loss follows ON ERROR; invalid DEFAULT ON EMPTY
+or ON ERROR fails bind/prepare even when unused. Existing fractional precision,
+zero-date and ordinary CAST semantics remain unchanged.
+
+### Immutable JSON ownership redesign (candidate revision 15)
+
+Complete canonical validation belongs to a published immutable data version.
+The owner covers payload, descriptors, NULL/constant metadata and logical row
+mapping. A lease proves lifetime only; neither a lease, a Vector address nor an
+admitted boolean proves that externally writable aliases are absent.
+
+An arbitrary mutable Vector is snapshotted while the caller keeps it stable.
+Descriptors and payload are copied into private, statement-accounted storage;
+that copy is validated before publication. No existing mutable Vector is sealed
+in place. A private builder can instead copy and admit each appended document,
+then transfer its unpublished storage without a second walk. Failed admission
+publishes no reader; failed append leaves earlier builder rows available.
+
+The state transitions are private construction -> full validation -> readonly
+publication -> last-reference release. Reader windows retain their owner and
+narrow only the row domain. Queries return opaque results with independent
+references. They export owned text or copy JSON into an explicit destination;
+they never export ByteJson.Data, a mutable Vector or a payload/descriptor slice.
+Independent references may read concurrently. Closing a handle must not race
+with an operation on that same handle. Mutable source writes during snapshot
+construction are unsupported; later source writes cannot affect a snapshot.
+
+Malformed unselected descendants must be rejected on admission. Queries of a
+published version do not recheck unvisited bytes. Ordinary mutable inputs retain
+full validation on every public JSON_VALUE call, including mutation/reuse tests.
+Malformed documents remain hard errors for every ON ERROR policy. Header-only
+validation and a second unchecked local decoder are rejected alternatives.
+
+The implementation is staged: a private Vector reader/builder foundation,
+ObjectIO scan integration, in-memory and remote batch publication, private JSON
+expression results, then both JSON_VALUE overload families. A new internal
+reader parameter path must preserve existing general expression interfaces and
+share one owner across different paths. Unsupported conversions explicitly
+materialize and lose their qualification; receiving peers re-admit bytes. No
+qualification is serialized and no feature-specific MORPC gate is introduced.
+
+Only JSON_VALUE consumers request new preparation. A normal scan or expression
+that does not consume JSON_VALUE must not pay for a new snapshot. Existing
+materialization should become private publication where possible; a snapshot
+per expression or per query is not an acceptable substitute. Sources with no
+exclusive ownership proof copy once at publication. Arbitrary mutable-input
+benchmarks retain their defensive path and are reported separately.
+
+For document size N and K lookups, the target is V(N) + optional C(N) + K*Q(P),
+not K*(V(N)+Q(P)). Full validation and necessary copying stay inside preparation
+or end-to-end timed loops. Validation must not increase with the number of
+lookups on one published version. Output work may depend on the selected
+subtree. Peak backing storage must not multiply by the number of paths.
+
+Acceptance requires matching five-pair measurements: 4096-element resident
+small-path and 64-row expression medians <=1.20 times the matched legacy base;
+single-query end-to-end SQL median <=1.10 times that base, including admission,
+copying and scan. Test 1/2/8 paths, 16/4096 unrelated elements, integers, strings,
+mixed values, wide objects and deep documents. These are targets, not results.
+
+This revision is a development candidate. Design closure requires a separate
+review of producer-to-consumer ownership, output isolation, allocation failure,
+cancellation, reset/reuse and actual performance. The reader foundation alone
+does not establish production integration, independent approval or acceptance.
+
+### Producer publication implementation (candidate revision 16)
+
+The storage admission path now has a request-scoped `JSONReadSet`. A prepared
+JSON_VALUE projection requests logical source columns before a synchronous
+reader call. The physical reader binds those ordinals to its resolved column
+sequence numbers; ObjectIO publishes a retained sealed cache version while the
+cache entry is pinned. Ordinary output vectors remain mutable and are not used
+as evidence of that version. The scope owns all published handles until the
+projection retains them or the read/reset/free/error path closes the scope.
+Repeated publication of the same logical column disables the scope, because
+concatenation requires an explicit new row domain.
+
+Storage tombstones compose the exact pre-shrink row positions into accounted
+selection views. Selected ObjectIO loads publish selected views rather than
+copying a second payload. Eager filters compose surviving row positions before
+projection. Other transformations must discard qualification until their exact
+mapping is implemented and tested. Mapping is never inferred from equal row
+counts or a Vector address.
+
+In-memory reader delivery and sharding receive delivery copy writable inputs
+into private snapshots. The receiving peer validates its own version; it does
+not accept a remote qualification bit. The sharding envelope decoder returns
+errors for malformed input instead of panicking in the response callback.
+Preparation costs remain real work; producer-side snapshot publication is not
+zero-copy publication. Direct JSON_ARRAY/JSON_OBJECT producers write through their shared constructor
+row sinks into a private builder and publish without materializing an ordinary
+JSON result. Generic remote pipeline receivers, constant/version sharing and
+remaining transformations still require integration before acceptance.
+
+Internal ownership review confirms the intended terminal paths: a partially
+published scope releases already published columns on failure, selection is
+failure-atomic, every retained result pins its backing independently, and scan
+Reset/Free releases an unconsumed publication. This is an implementation review,
+not independent reviewer approval or measured performance acceptance. Updated
+normal/race/SQL and five-pair performance evidence remain mandatory.
+
+### Constructor and mutable-input boundaries (candidate revision 17)
+
+Direct JSON_ARRAY/JSON_OBJECT consumers use the same row conversion functions
+as ordinary execution, with a sink exposing only checked append operations.
+The sink cannot expose a mutable Vector. Publication occurs only after every
+selected output row has been admitted; a later conversion, allocation or cancel
+error closes the entire unpublished builder. Mutable JSON operands are checked
+before constructor traversal, and the final result retains complete canonical
+admission including unselected descendants.
+
+Mutable varlen reads check descriptor row and payload bounds before returning
+borrowed bytes. This is a bounded accessor, not immutable qualification or a
+second JSON decoder. The JSON_VALUE fallback still validates each complete
+document; only a published owner can skip that walk. Restoring a corrupted
+mutable descriptor restores normal execution. Cancellation and append failures
+remain terminal errors. The private cursor takes a parsed path by value to
+avoid forcing the caller's path object onto the heap through an interface;
+there is no path cache and the public QueryWithExists signature is unchanged.
+
+### Row domains and execution lifetime (candidate revision 18)
+
+A snapshot may receive its producer's explicit batch row count. Flat columns
+must match that count; a constant retains one physical, completely validated
+value while its private metadata adopts the logical batch domain. The mutable
+source is never resized. Type-size metadata is checked before copying, because
+the ordinary duplication primitive uses that size for descriptor slicing.
+
+Cursors retain their own backing lease and refer to immutable row coordinates.
+Closing the source handle revokes that handle without rewriting coordinates
+still used by cursors. The last lease releases column and mapping backing;
+closed cursors cannot revive when another cursor is opened. Scan projection
+preparation forwards the caller's allocation selection to private expression
+producers and ordinary result storage.
+
+The synchronous read request is hidden from DataSource.Next's internal reads.
+Only the final persisted materialization or memory delivery may publish its
+version. An exhausted empty merge child can rebind the schema because it has
+published no version; rebinding an already published scope discards it.
+
+During binding, cancellation comes from the live top-level request, since the
+Process may retain an ended pipeline context. During execution it comes from
+the active pipeline. This preserves DEFAULT/DDL folding and still terminates
+canceled execution without applying ON ERROR.
+
+### General pipeline delivery (candidate revision 19)
+
+The standalone Projection prepares the same JSON document bindings as fused
+projections. After its child delivers an actual batch through the existing VM
+call, it may request versions from an optional producer publication interface.
+Merge and ValueScan publish requested columns at that delivery boundary. Their
+ordinary batches can still have writable aliases, so this path copies and fully
+validates each requested column once. It does not infer exclusive ownership
+from a pipeline lease or an ordinary result Vector.
+
+Returned handles belong to the consuming projection, which releases every
+handle on successful evaluation, partial binding failure, expression failure,
+or cancellation. The producer retains no cross-call publication state. Grouping
+set continuation uses already computed, owned projection results. Unsupported
+operators do not propagate qualification implicitly; their ordinary output is
+re-admitted at the next consuming boundary. No signal, ACK, spool, or wire
+protocol changes are required. Only prepared JSON_VALUE column consumers request
+publication, and all paths for one column bind to the same delivered version.
+
+Local candidate checks cover the actual Merge publication consumed by two
+paths, partial-publication rollback, and the production remote message-fragment
+receive/decode/forward path into Merge and Projection. The latter replaces RPC
+transport with its message channel; it is not two-CN SQL acceptance. Scoped race
+checks and four existing SQL integration roots passed for this revision. The
+initial local channel fixture used the wrong expected producer count and timed
+out; the corrected fixture passed. These checks do not establish performance
+acceptance or replace the remaining BVT and persistence gates.
+
+### Parent demand before storage delivery (candidate revision 20)
+
+A standalone Projection declares requested JSON document output ordinals before
+calling its direct producer. A TableScan with an identity output (including an empty projection list) or a
+direct local-column projection maps those output ordinals to storage columns
+and binds them to its storage Read scope. After VM delivery, the consumer retains those exact readers
+and the scan ends the scope. Applying an inline filter composes the existing
+scope row map; it does not re-admit or copy selected documents.
+
+A transformed scan output must not reuse output ordinals as physical storage
+ordinals. Such an output follows explicit mutable admission until its producer
+provides an exact mapping. Missing or disabled storage publications likewise
+retain full mutable admission. Demand contains column ordinals only, never a
+Vector address, and does not retain qualification across Read calls. Partial
+publication, row-domain mismatch and cancellation close both the retained
+handles and the originating scope.
+
+The contract executor parses each selected row's path once and passes that
+result to extraction. Validation still precedes the contract's document-NULL
+handling; the legacy overload keeps its historical NULL short circuit. This
+reuse is confined to one row evaluation and adds no path cache.
+
+### Capability-only expression transport (candidate revision 21)
+
+The private expression getter returns the closed reader without a synthetic
+mutable metadata Vector. The JSON_VALUE invocation reserves document slot zero
+for that separate capability and leaves its Vector slot nil. This is only an
+in-process executor convention: ordinary expression interfaces, stored plans
+and wire batches are unchanged. The reader remains the authority for document
+type, NULLs and row mapping; the mutable source's later metadata cannot change
+an existing frozen version. Generic consumers still explicitly materialize.
+
+A cursor can load a frozen row, parse a path with the existing parser, and
+return owned text with selection flags through one call. An absent input
+short-circuits path evaluation for the legacy text operation. Invalid paths are
+tagged for the SQL layer to retain its existing error text. The typed contract
+keeps its path-before-NULL validation order. Both operations use the existing
+query and formatter and expose no ByteJson or backing slices. It introduces neither
+path caching nor another JSON decoder. Entry and successful-return cancellation
+checks use the same captured binding/runtime context; an in-flight cancellation
+is a terminal error and never becomes a NULL/default response.
+
+The repeated SQL benchmark explicitly checks results before timing and can warm
+cache admission. It is a resident SQL control, not evidence for the separate
+cold first-admission gate. Matched runs fix both arms to ERROR logging so SQL
+INFO writes do not dominate measurement; earlier INFO runs remain separate.
+
+### Private constant constructors (candidate revision 22)
+
+A JSON_ARRAY/JSON_OBJECT used as a JSON_VALUE document publishes constant
+construction directly into its private reader. It does not first create a
+mutable folded JSON Vector. The executor owns this constant version for the
+current query; row-dependent paths use retained coordinate views of its one
+physical document rather than rebuilding and readmitting it for each batch.
+
+If the consumer's remaining parameters also fold, JSON_VALUE evaluates from
+that reader and retains its ordinary folded scalar result. This preserves
+constant-result folding without exposing the document backing. Constructor
+errors still terminate evaluation. Reset and Free close the executor's reader
+reference; the next execution constructs and admits a fresh version. Independent
+retained views follow the existing lease lifetime. Generic constructor consumers
+continue to use their ordinary expression interface.
+
+### JSON cast producer boundary (candidate revision 23)
+
+A CAST-to-JSON document consumer can use the same private producer path for
+string and existing JSON inputs. The ordinary CAST and private output share the
+existing row conversions; the private sink copies and fully admits the result
+before publication. No ordinary result Vector is sealed or upgraded. Mutable
+input descriptors are checked before reading their payload. An identity JSON
+cast copies its input into the private sink and admits that copy; it does not
+infer qualification from the source Vector.
+
+The initial private CAST domain is text/binary strings and JSON. Other CAST
+domains retain their existing conversion dispatch and explicit mutable result
+boundary, including low-precision numeric bridges. Constant private casts follow
+the same folding, row-view and Reset rules as the private JSON constructors.
+SQL cast modes, binary subtype handling, parser errors and ordinary output
+behavior remain owned by the existing cast implementation.
+
+### Binary JSON literal publication (candidate revision 24)
+
+The constant folder represents a JSON value as a typed binary-payload literal.
+When that literal is a JSON_VALUE document, executor construction copies it
+directly into a private builder and completes admission before publishing the
+input. It does not create an intermediate mutable constant Vector. The plan's
+immutable string is the reconstruction seed, not a read qualification.
+
+Constant-result folding consumes the same opaque reader; row-dependent paths
+use retained views of its one physical row. Reset releases the private version
+and the next execution copies and fully admits the seed again. An explicit
+ordinary Eval materializes independent writable output through the existing
+fallible reader boundary. Free releases both the reader and materialized output.
+The enclosing plan/literal encoding and wire format do not change.
+
+### Full validation budget accounting (candidate revision 25)
+
+Each object key is charged against the remaining-byte budget before any value
+or scalar callback is visited. Canonical validation also requires ordered,
+nonoverlapping, UTF-8 keys. The key-table entry count is bounded by the
+validated serialized table size. These checks also bound ordinary validation
+where overlapping key ranges may otherwise amplify traversal work.
+
+### Canonical string runs (candidate revision 26)
+
+The complete stored-document validator can handle adjacent string scalars in a
+single traversal run. Each descriptor, shortest length prefix, range and UTF-8
+payload is still checked. Running byte and node charges are checked before
+processing each member and committed before any other scalar callback or child
+descent. The string rule is the existing canonical string rule, not a trust
+assertion about the input. Generic validators retain their scalar callbacks and
+their existing behavior for callers with different string semantics. Tests must
+compare the stored validator with the existing budgeted walk on valid and
+malformed encodings, including limits and later-descriptor mutations.
+
+### Contiguous key UTF-8 runs (candidate revision 27)
+
+Canonical object validation still checks each key's bounds, byte budget,
+nonoverlap and ordering. Adjacent key payload ranges may share one UTF-8 scan:
+each nonempty key must start at a UTF-8 rune boundary, and a gap ends the run
+before the gap bytes. Therefore no rune can be made valid by joining two
+individually invalid keys, and unreferenced padding is not validated as a key.
+The scan completes before any value callback or child descent. Generic object
+validation retains its existing behavior. Tests cover split UTF-8 sequences,
+invalid and valid Unicode keys, empty keys, gaps, ordering and overlap.
+
+## Required evidence
+
+- Temporal helper, executor and binder tests plus canonical JSON_VALUE BVT:
+  NULL/DEFAULT/ERROR ON ERROR, unused defaults, column inputs, legacy controls,
+  generated/indexed values, CREATE/ALTER VIEW and prepared reuse.
+- Same-binary tests for absence of a JSON_VALUE floor and for independent floors
+  in real SQL DDL, persisted owners, placement, sender, receiver and stream;
+  injected protocol numbers do not model a supported mixed-version cluster.
+- Actual pinned supported release data followed by shutdown upgrade: read and
+  rebind legacy persisted metadata and values, then exercise new expressions.
+  Restart and backup/restore checks cover supported data and independent existing
+  admission state. A CN-only restart is not full storage recovery.
+- Exact-content static checks, related package tests, canonical BVT comparison,
+  benchmark measurements and exact-head CI. A skipped upgrade job is NOT_RUN.
+- Review and deployment QA remain separate; this document and local tests do not
+  establish reviewer acceptance.
+
+### Persistence acceptance for shutdown upgrade
+
+| Boundary | Required terminal result | Evidence boundary |
+| --- | --- | --- |
+| Supported release data -> new reader | Legacy views, DEFAULTs, stored generated values and indexes retain results, types and overloads 0/1; 512/513-character controls remain unbounded. Fresh writes and indexed reads agree with scans; existing values are not silently recomputed. | Pin release tag, resolved commit, binaries and data identity. Historical receipts remain historical; final supported-release validation is still required. |
+| New expressions and independent admission | Create/read DEFAULT, generated, check, index and view owners; combined expressions retain unrelated floors and a failed ALTER leaves existing metadata intact. | Same-binary injected-floor and SQL tests validate local behavior; no new JSON_VALUE floor is asserted. |
+| Restart and backup/restore | Restart the deployment against existing data and restore an older supported backup on the new binary; verify old and new owners, index contents and subsequent writes. | A CN-only restart does not prove storage recovery or full deployment restore. Existing independent admission state must remain valid. |
+| Prepared plans -> new session | Re-prepare legacy and clause-bearing SQL after upgrade/restart; verify defaults, response policies and metadata. | Same-binary prepared tests do not prove the upgraded-session outcome. |
+
+### Performance acceptance
+
+Use `BenchmarkJSONAdmissionExistingPaths` and
+`BenchmarkJSONValueLegacySmallPath` with identical 16/4096-element documents,
+`$.keep`, Go/platform/native inputs and serial single-CPU runs on base and head.
+Record ns/op, B/op, allocs/op, document bytes and repeat variation. Warm up and
+verify bytes/results outside timing; reset/copy/admission/execution work stays
+inside its respective timed loop. Benchmark setup owns and releases its vectors;
+the admitted-execution measurement intentionally excludes ingestion.
+
+The redesign target base is `22a02c581feaf56cf5ce0c319bcac8635c901369`;
+the starting PR head is `7714b82bef18d89fec2f45e6df90e43ce0ea0e82`. Earlier
+`bab4b3286a0dd5683a9b291763817722233e586c` receipts remain historical. A comparison may
+use a Go source overlay restoring every base-modified Go file and removing every
+PR-added Go file, with the same two benchmark files retained in both arms. Record
+the overlay and exact inputs; do not label a handwritten DecodeJson substitute
+or the seven-argument benchmark as legacy execution. Neither a matched comparison
+nor functional success approves the cost. Record a retained-cost or consolidation
+decision against measured common-path overhead before final acceptance. Both
+existing scalar/structural and new canonical/range/UTF-8 invariants must survive
+any later consolidation in the existing validation owner.
+
+The candidate repair consolidates canonical admission into the existing bounded
+structural traversal and reuses the scalar validator. It eliminates the second
+descendant traversal and width-dependent child/frame slice allocations, while
+retaining canonical ranges/key order/UTF-8, scalar encoding/nonfinite checks,
+depth and both serialized-byte and node/entry work budgets. The ordinary mutable-input executor
+still validates descendants on every call. Immutable-reader queries instead reuse
+the complete admission of their private version, as described above; a lease or
+mutable Vector is never promoted into that capability. Incremental publication of this repair does not
+approve its remaining cost or the complete design/persistence acceptance gate.
+Measurements and the independent decision belong in the task/PR evidence rather
+than a permanent execution diary here.
+
+### Evidence status
+
+Historical measurements and revision-4 validation diary remain in git/PR history
+at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
+new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
+generic vector ingestion/unmarshal and cannot answer their regression cost.
+
+Earlier local, CI, BVT, benchmark and upgrade receipts remain tied to their
+actual revisions, binaries and environments. They do not validate this candidate
+or establish the final supported-release upgrade, full recovery, deployment QA,
+or acceptance of the legacy lookup cost. A focused base/head ingestion/unmarshal
+and legacy two-argument JSON_VALUE comparison must include actual measurements,
+equivalent inputs, environment and variation, plus a retained-cost decision.
+Structural and canonical JSON safety checks remain required while that evidence
+is pending.
+
+### Private cache ownership boundary (candidate revision 28)
+
+The pre-existing ObjectIO validation marker is not an immutable-ownership
+proof: its validator accepts caller-owned `fscache.Data`, and its public rehome
+callback can retain the source or destination writable bytes. Both behaviors
+are covered by reproductions. JSON readers therefore must not derive a private
+owner from that marker alone.
+
+A requested JSON column may be published from a distinct ObjectIO-owned cache
+version only when its constructor created a fresh allocation, retained every
+writable view locally through decompression and complete validation, and
+published the wrapper without exposing those views. The constructor obtains
+fresh storage through a FileService allocator adapter restricted to the known
+allocator implementations; it uses non-recycled allocation and falls back to
+the FileService default for an unknown allocator. Selection of an allocator, a
+lease, or a marker does not by itself upgrade pre-existing data. Only the
+constructor performing the entire private creation and validation can publish
+the capability. Non-JSON_VALUE reads keep their existing path.
+
+The new private wrapper must not lend its backing to the public cache-rehome
+callback. Rehoming passes a copy and drops JSON-reader qualification, because
+the callback can retain or replace its output. Ordinary or remotely received
+cache data is copied and fully admitted before use as a JSON reader; an old
+reader remains stable if the source changes, and a new admission observes the
+changed source or rejects it. Query result, descriptor, row map, null metadata
+and lifetime rules remain unchanged. A safe cache miss can use the direct
+private constructor; a pre-existing unqualified cache hit incurs explicit
+readmission, shared by the consuming batch's JSON_VALUE expressions.
+
+Review decision: the previous general cache marker cannot support the claimed
+immutability contract and its use as reader authority is rejected. The revised
+boundary must pass alias-retention, malicious-allocator, rehome, independent
+reader/lease, production scan and end-to-end cost checks before acceptance.
+This is a development review decision, not an external reviewer approval.
+
+### Failed admission and evaluation order (candidate revision 29)
+
+An eager batch snapshot can encounter a malformed document that the original
+JSON_VALUE evaluator would never read, for example because its path is NULL or
+the row is masked. Returning that candidate-admission error before expression
+evaluation changes both overloads' short-circuit and error precedence. Tests
+reproduce this mismatch.
+
+The snapshot operation will distinguish only a failed document/descriptor
+validation from allocation, accounting, cancellation and programming errors.
+A failed validation publishes no reader and confers no trust; the caller uses
+the existing ordinary evaluator, which fully validates each document it
+actually reads and preserves the original path, mask, DEFAULT and error order.
+Other failures remain terminal. This exceptional fallback is scoped to the
+current evaluation; successful versions retain the existing one-snapshot,
+shared-reader path, and no error is routed to ON ERROR merely by deferring it.
+Batch publishers may decline a malformed candidate without retaining partial
+qualification; a later consumer makes the same safe decision.
+
+Review decision: a failure classification is not evidence of validity and
+never permits unchecked bytes into the trusted query path. Complete admission
+remains mandatory for every published document version, including unselected
+descendants. Tests must cover both overloads, active versus skipped corruption,
+error precedence, and allocation/cancellation failures before acceptance.
