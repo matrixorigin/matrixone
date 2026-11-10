@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -524,11 +525,13 @@ func jsonValueTextResult(
 					return err, nil
 				}
 			}
-			value, err := jsonValueTextBytes(extracted.text, target)
+			value, err := jsonValueText(extracted.text, target)
 			if err != nil {
 				return err, nil
 			}
-			return nil, rs.AppendBytes(value, false)
+			// AppendBytes validates and copies synchronously into caller-owned
+			// storage; the temporary view of value must not escape this call.
+			return nil, rs.AppendBytes(util.UnsafeStringToBytes(value), false)
 		},
 		rs.AppendMustNullForBytesResult,
 		func(row uint64, onEmpty bool) error {
@@ -614,18 +617,18 @@ func jsonValueFixedResult[T types.FixedSizeTExceptStrType](
 		}, readers...)
 }
 
-func jsonValueTextBytes(value string, target types.Type) ([]byte, error) {
+func jsonValueText(value string, target types.Type) (string, error) {
 	if !utf8.ValidString(value) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid UTF-8 JSON_VALUE result")
+		return "", moerr.NewInvalidInputNoCtx("invalid UTF-8 JSON_VALUE result")
 	}
 	if target.Oid == types.T_binary || target.Oid == types.T_varbinary || target.Charset == types.CharsetBinary {
 		if target.Width > 0 && len(value) > int(target.Width) {
-			return nil, moerr.NewDataTruncatedNoCtx("JSON_VALUE", "result exceeds binary width")
+			return "", moerr.NewDataTruncatedNoCtx("JSON_VALUE", "result exceeds binary width")
 		}
 	} else if target.Width > 0 && len(value) > int(target.Width) && utf8.RuneCountInString(value) > int(target.Width) {
-		return nil, moerr.NewDataTruncatedNoCtx("JSON_VALUE", "result exceeds character width")
+		return "", moerr.NewDataTruncatedNoCtx("JSON_VALUE", "result exceeds character width")
 	}
-	return []byte(value), nil
+	return value, nil
 }
 
 func jsonValueScalarText(extracted jsonValueExtracted) (string, error) {
@@ -1033,7 +1036,9 @@ func jsonValueLegacyReader(reader vector.JSONReader, ivecs []*vector.Vector, res
 			}
 			continue
 		}
-		if err := writer.AppendBytes([]byte(selected.Text), false); err != nil {
+		// The writer copies before returning, so this read-only view cannot
+		// escape or expose the retained document backing.
+		if err := writer.AppendBytes(util.UnsafeStringToBytes(selected.Text), false); err != nil {
 			return err
 		}
 	}

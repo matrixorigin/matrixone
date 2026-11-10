@@ -17,6 +17,8 @@ package function
 import (
 	"context"
 	"encoding/binary"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -357,5 +359,59 @@ func TestJSONValueRejectsForgedReader(t *testing.T) {
 			require.Error(t, err, "an arbitrary interface wrapper must not acquire a validated-reader capability")
 			require.False(t, forged.inspected, "reject the wrapper before calling any interface method")
 		})
+	}
+}
+
+func TestJSONValueReaderTextOutputIsOwned(t *testing.T) {
+	for _, contract := range []bool{false, true} {
+		for _, constOutput := range []bool{false, true} {
+			for _, sample := range []struct{ name, value string }{
+				{"empty", ""},
+				{"inline", "short"},
+				{"long-unicode", strings.Repeat("猫🌟", 180)},
+			} {
+				name := "legacy"
+				if contract {
+					name = "contract"
+				}
+				if constOutput {
+					name += "/constant-output"
+				}
+				name += "/" + sample.name
+				t.Run(name, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					text := sample.value
+					raw := mustJsonBinaryString(t, `{"keep":"`+text+`"}`)
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(types.T_json.ToType(), []string{raw}, nil),
+						NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.keep"}, nil),
+					}
+					textType := types.New(types.T_varchar, 512, 0)
+					if contract {
+						inputs = append(inputs,
+							NewFunctionTestConstInput(textType, []string{""}, []bool{true}),
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+							NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}))
+					}
+					fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(textType, false, []string{text}, nil), JsonValue)
+					defer fc.Free()
+					reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+					require.NoError(t, err)
+					defer reader.Close()
+					require.NoError(t, fc.result.PreExtendAndReset(1))
+					if constOutput {
+						require.NoError(t, vector.SetConstBytes(fc.result.GetResultVector(), []byte("seed"), 1, proc.Mp()))
+					}
+					require.NoError(t, JsonValueWithReader(reader, fc.parameters, fc.result, proc, 1, nil))
+					reader.Close()
+					fc.parameters[0].GetBytesAt(0)[0] = 0xfd
+					runtime.GC()
+					require.False(t, fc.result.GetResultVector().IsNull(0))
+					require.Equal(t, text, string(fc.result.GetResultVector().GetBytesAt(0)))
+				})
+			}
+		}
 	}
 }

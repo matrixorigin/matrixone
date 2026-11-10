@@ -176,30 +176,30 @@ func TestJSONValueTemporalConversionBoundaries(t *testing.T) {
 }
 
 func TestJSONValueTextAndScalarBoundaries(t *testing.T) {
-	require.Equal(t, []byte("abc"), func() []byte {
-		value, err := jsonValueTextBytes("abc", types.New(types.T_varchar, 3, 0))
+	require.Equal(t, "abc", func() string {
+		value, err := jsonValueText("abc", types.New(types.T_varchar, 3, 0))
 		require.NoError(t, err)
 		return value
 	}())
-	_, err := jsonValueTextBytes("abcd", types.New(types.T_varchar, 3, 0))
+	_, err := jsonValueText("abcd", types.New(types.T_varchar, 3, 0))
 	require.Error(t, err)
-	_, err = jsonValueTextBytes("abc", types.New(types.T_binary, 2, 0))
+	_, err = jsonValueText("abc", types.New(types.T_binary, 2, 0))
 	require.Error(t, err)
-	_, err = jsonValueTextBytes(string([]byte{0xff}), types.T_varchar.ToType())
+	_, err = jsonValueText(string([]byte{0xff}), types.T_varchar.ToType())
 	require.Error(t, err)
 	// Byte length can exceed a character width even when the character count
 	// fits. Conversely invalid short input must still fail UTF-8 validation.
-	_, err = jsonValueTextBytes("éé", types.New(types.T_varchar, 2, 0))
+	_, err = jsonValueText("éé", types.New(types.T_varchar, 2, 0))
 	require.NoError(t, err)
-	_, err = jsonValueTextBytes("ééa", types.New(types.T_varchar, 2, 0))
+	_, err = jsonValueText("ééa", types.New(types.T_varchar, 2, 0))
 	require.Error(t, err)
-	_, err = jsonValueTextBytes("é", types.New(types.T_binary, 1, 0))
+	_, err = jsonValueText("é", types.New(types.T_binary, 1, 0))
 	require.Error(t, err)
-	_, err = jsonValueTextBytes(string([]byte{0xff}), types.New(types.T_varchar, 2, 0))
+	_, err = jsonValueText(string([]byte{0xff}), types.New(types.T_varchar, 2, 0))
 	require.Error(t, err)
-	_, err = jsonValueTextBytes(strings.Repeat("猫", 512), types.New(types.T_varchar, 512, 0))
+	_, err = jsonValueText(strings.Repeat("猫", 512), types.New(types.T_varchar, 512, 0))
 	require.NoError(t, err)
-	_, err = jsonValueTextBytes(strings.Repeat("猫", 513), types.New(types.T_varchar, 512, 0))
+	_, err = jsonValueText(strings.Repeat("猫", 513), types.New(types.T_varchar, 512, 0))
 	require.Error(t, err)
 
 	composite := jsonValueTestExtracted(t, `{"a":1}`)
