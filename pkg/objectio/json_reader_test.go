@@ -526,6 +526,8 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	require.Equal(t, "1", text)
 }
 
+type wrappedCacheJSONReader struct{ vector.JSONReader }
+
 func TestCacheJSONReaderRepeatView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
@@ -542,6 +544,9 @@ func TestCacheJSONReaderRepeatView(t *testing.T) {
 	data.Release()
 	require.NoError(t, err)
 	defer reader.Close()
+	require.True(t, IsPrivateJSONCacheReader(reader))
+	require.False(t, IsPrivateJSONCacheReader(&wrappedCacheJSONReader{JSONReader: reader}))
+	require.False(t, IsPrivateJSONCacheReader(nil))
 	_, err = reader.Repeat(3, 1)
 	require.Error(t, err)
 	_, err = reader.Repeat(0, -1)
@@ -551,6 +556,7 @@ func TestCacheJSONReaderRepeatView(t *testing.T) {
 	repeated, err := reader.Repeat(1, 100_000)
 	require.NoError(t, err)
 	defer repeated.Close()
+	require.True(t, IsPrivateJSONCacheReader(repeated))
 	require.Equal(t, before, mp.CurrNB())
 	window, err := repeated.Window(40_000, 40_003)
 	require.NoError(t, err)
@@ -577,6 +583,7 @@ func TestCacheJSONReaderRepeatView(t *testing.T) {
 	window.Close()
 	selected.Close()
 	again.Close()
+	require.False(t, IsPrivateJSONCacheReader(again))
 	result, err := cursor.QueryText(2, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "2", result.Text)

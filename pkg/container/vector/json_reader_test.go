@@ -452,6 +452,8 @@ func TestJSONReaderSnapshotRejectsTypeBeforeCopy(t *testing.T) {
 	reader.Close()
 }
 
+type wrappedJSONReader struct{ JSONReader }
+
 func TestJSONReaderRepeatView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
@@ -464,6 +466,9 @@ func TestJSONReaderRepeatView(t *testing.T) {
 	reader, err := builder.Finish()
 	require.NoError(t, err)
 	defer reader.Close()
+	require.True(t, IsPrivateJSONReader(reader))
+	require.False(t, IsPrivateJSONReader(&wrappedJSONReader{JSONReader: reader}))
+	require.False(t, IsPrivateJSONReader(nil))
 	_, err = reader.Repeat(-1, 1)
 	require.Error(t, err)
 	_, err = reader.Repeat(3, 1)
@@ -475,6 +480,7 @@ func TestJSONReaderRepeatView(t *testing.T) {
 	repeated, err := reader.Repeat(1, 100_000)
 	require.NoError(t, err)
 	defer repeated.Close()
+	require.True(t, IsPrivateJSONReader(repeated))
 	require.Equal(t, before, mp.CurrNB())
 	require.Equal(t, 100_000, repeated.Length())
 	window, err := repeated.Window(32_000, 32_003)
@@ -506,6 +512,7 @@ func TestJSONReaderRepeatView(t *testing.T) {
 	window.Close()
 	selected.Close()
 	again.Close()
+	require.False(t, IsPrivateJSONReader(again))
 	result, err := cursor.QueryText(2, []byte("$.keep"), false)
 	require.NoError(t, err)
 	require.Equal(t, "2", result.Text)

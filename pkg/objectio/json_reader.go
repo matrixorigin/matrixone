@@ -38,6 +38,13 @@ type cacheJSONReader struct {
 	repeatedRow int
 }
 
+// IsPrivateJSONCacheReader recognizes only a live private cache-backed owner.
+// Implementing or wrapping JSONReader cannot confer this identity.
+func IsPrivateJSONCacheReader(reader vector.JSONReader) bool {
+	private, ok := reader.(*cacheJSONReader)
+	return ok && private != nil && private.lease != nil
+}
+
 func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, selection *vector.AllocationAccountSelection, capacity int64, releasePin func()) (vector.JSONReader, error) {
 	data.Retain()
 	column := new(vector.Vector)

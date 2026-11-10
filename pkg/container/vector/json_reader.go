@@ -94,6 +94,13 @@ type jsonReader struct {
 	repeatedRow int
 }
 
+// IsPrivateJSONReader recognizes this package's live immutable owner without
+// granting admission to another implementation of the JSONReader interface.
+func IsPrivateJSONReader(reader JSONReader) bool {
+	private, ok := reader.(*jsonReader)
+	return ok && private != nil && private.lease != nil
+}
+
 // NewJSONReaderSnapshot copies both descriptors and payloads, then validates
 // the private copy before publication. A borrowed lease on source is not proof
 // of JSON validity or of exclusive ownership. All backing allocations use the
