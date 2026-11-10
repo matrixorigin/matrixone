@@ -1,5 +1,8 @@
 # Immutable JSON read ownership
 
+Owning issue: #28037. Consumer: [PR #28275](https://github.com/matrixorigin/matrixone/pull/28275).
+The ownership foundation is organized as a separate dependency of that PR.
+
 This dependency provides binary JSON admission and opaque, immutable read
 owners. SQL syntax, overloads, response policies, persisted expression admission,
 and operator delivery belong to consumers and are outside this change.
