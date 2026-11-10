@@ -19,9 +19,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func (tableScan *TableScan) ensureJSONState(proc *process.Process, entries int) (*jsonScanState, error) {
+	if tableScan.ctr.jsonState == nil {
+		metadata, err := colexec.NewJSONMetadataScope(proc, tableScan.OutputAllocation, entries)
+		if err != nil {
+			return nil, err
+		}
+		tableScan.ctr.jsonState = &jsonScanState{metadata: metadata}
+	} else if err := tableScan.ctr.jsonState.metadata.Ensure(entries); err != nil {
+		return nil, err
+	}
+	return tableScan.ctr.jsonState, nil
+}
+
+func (tableScan *TableScan) jsonPublication() *objectio.JSONReadSet {
+	if state := tableScan.ctr.jsonState; state != nil {
+		return state.publication
+	}
+	return nil
+}
 
 // RequestJSONInputs supplies demand before Read. Only identity outputs and
 // direct local column projections have an exact storage-column mapping.
@@ -32,32 +53,31 @@ func (tableScan *TableScan) RequestJSONInputs(proc *process.Process, columns []i
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
-	if len(columns) == 0 {
-		tableScan.ctr.jsonRequestMeta.Close()
-		tableScan.ctr.jsonRequestMeta = nil
-		tableScan.ctr.jsonDeliveryColumns = nil
-		tableScan.ctr.jsonColumns = tableScan.JSONInputColumns()
+	internalColumns := tableScan.JSONInputColumns()
+	if len(columns) == 0 && len(internalColumns) == 0 {
+		tableScan.ctr.jsonState.close()
+		tableScan.ctr.jsonState = nil
 		return nil
 	}
-	internalColumns := tableScan.JSONInputColumns()
 	if len(columns) > int(^uint(0)>>1)-len(internalColumns)-1 {
 		return moerr.NewInvalidInputNoCtx("JSON input request is too large")
 	}
 	entries := len(columns) + len(internalColumns) + 1
-	if tableScan.ctr.jsonRequestMeta == nil {
-		scope, err := colexec.NewJSONMetadataScope(proc, tableScan.OutputAllocation, entries)
-		if err != nil {
-			return err
-		}
-		tableScan.ctr.jsonRequestMeta = scope
-	} else if err := tableScan.ctr.jsonRequestMeta.Ensure(entries); err != nil {
+	state, err := tableScan.ensureJSONState(proc, entries)
+	if err != nil {
 		return err
 	}
-	if tableScan.ctr.jsonDeliveryColumns == nil {
-		tableScan.ctr.jsonDeliveryColumns = make(map[int]int, len(columns))
+	if len(columns) == 0 {
+		state.delivery = nil
+		state.columns = internalColumns
+		return nil
 	}
-	clear(tableScan.ctr.jsonDeliveryColumns)
-	requested := internalColumns
+	if state.delivery == nil {
+		state.delivery = make(map[int]int, len(columns))
+	}
+	clear(state.delivery)
+	requested := make([]int, 0, len(internalColumns)+len(columns))
+	requested = append(requested, internalColumns...)
 	for _, output := range columns {
 		source := output
 		if len(tableScan.ProjectList) != 0 {
@@ -70,7 +90,7 @@ func (tableScan *TableScan) RequestJSONInputs(proc *process.Process, columns []i
 			}
 			source = int(column.ColPos)
 		}
-		tableScan.ctr.jsonDeliveryColumns[output] = source
+		state.delivery[output] = source
 		duplicate := false
 		for _, existing := range requested {
 			if existing == source {
@@ -82,18 +102,19 @@ func (tableScan *TableScan) RequestJSONInputs(proc *process.Process, columns []i
 			requested = append(requested, source)
 		}
 	}
-	tableScan.ctr.jsonColumns = requested
+	state.columns = requested
 	return nil
 }
 
 // PublishJSONInputs retains the actual Read's versions and ends its scope.
 // Unsupported or missing publications are admitted as ordinary mutable input.
 func (tableScan *TableScan) PublishJSONInputs(proc *process.Process, input *batch.Batch, columns []int) (versions *colexec.JSONInputVersions, err error) {
-	publication := tableScan.ctr.jsonPublication
+	state := tableScan.ctr.jsonState
+	publication := tableScan.jsonPublication()
 	if publication == nil {
 		return colexec.PublishJSONInputSnapshotsForEvaluation(proc, input, columns)
 	}
-	defer func() { publication.Close(); tableScan.ctr.jsonPublication = nil }()
+	defer state.closePublication()
 	if len(columns) == 0 {
 		return nil, nil
 	}
@@ -120,7 +141,7 @@ func (tableScan *TableScan) PublishJSONInputs(proc *process.Process, input *batc
 			return nil, moerr.NewInvalidInputNoCtx("JSON publication input column mismatch")
 		}
 		var source vector.JSONReader
-		if storageColumn, mapped := tableScan.ctr.jsonDeliveryColumns[column]; mapped {
+		if storageColumn, mapped := state.delivery[column]; mapped {
 			source = publication.Readers()[storageColumn]
 		}
 		if source != nil {

@@ -73,8 +73,6 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
-	jsonInputs    colexec.JSONProjectionInputs
-	jsonColumns   []int
 	buf           *batch.Batch
 	expandBuf     *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
@@ -87,9 +85,7 @@ type container struct {
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
-	projection.ctr.jsonInputs.Close()
-	projection.ctr.jsonInputs = nil
-	projection.ctr.jsonColumns = nil
+	colexec.CloseJSONProjectionExecutors(projection.ctr.projExecutors)
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
 	projection.ctr.inputSeen = false
@@ -108,15 +104,13 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
-	projection.ctr.jsonInputs.Close()
+	colexec.CloseJSONProjectionExecutors(projection.ctr.projExecutors)
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {
 			projection.ctr.projExecutors[i].Free()
 		}
 	}
 	projection.ctr.projExecutors = nil
-	projection.ctr.jsonInputs = nil
-	projection.ctr.jsonColumns = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

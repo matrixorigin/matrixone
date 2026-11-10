@@ -66,7 +66,6 @@ func TestEvalJSONReaderSelectionAndReset(t *testing.T) {
 				require.Equal(t, want, string(out.GetBytesAt(i)))
 			}
 		}
-		require.Nil(t, fn.jsonReader)
 	}
 	func() {
 		savedType := *bat.Vecs[0].GetType()
@@ -133,7 +132,9 @@ func TestProjectionJSONReaderPublicationAndReuse(t *testing.T) {
 	}}
 	require.NoError(t, projection.PrepareProjection(proc))
 	defer projection.FreeProjection(proc)
-	require.Len(t, projection.jsonInputs, 3)
+	state := jsonProjectionState(projection.ProjectExecutors)
+	require.NotNil(t, state)
+	require.Len(t, state.inputs, 3)
 	// One private column backing is shared by the two bound consumers.
 	before := proc.Mp().CurrNB()
 	probe, err := vector.NewJSONReaderSnapshot(bat.Vecs[0], proc.Mp())
@@ -149,7 +150,7 @@ func TestProjectionJSONReaderPublicationAndReuse(t *testing.T) {
 	require.Equal(t, "1", string(out.Vecs[0].GetBytesAt(0)))
 	require.Equal(t, "2", string(out.Vecs[1].GetBytesAt(0)))
 	require.Equal(t, int64(7), vector.MustFixedColWithTypeCheck[int64](out.Vecs[2])[0])
-	for _, input := range projection.jsonInputs {
+	for _, input := range state.inputs {
 		require.Nil(t, input.source.reader)
 	}
 	require.NoError(t, vector.SetBytesAt(bat.Vecs[0], 0, makeDoc(`{"keep":9,"other":8}`), proc.Mp()))
@@ -166,6 +167,37 @@ func TestProjectionJSONReaderPublicationAndReuse(t *testing.T) {
 	require.Equal(t, before, proc.Mp().CurrNB(), "published input must not allocate another column backing")
 	require.Equal(t, "9", string(out.Vecs[0].GetBytesAt(0)))
 	require.Equal(t, 1, published.Length(), "projection borrows rather than consumes the publication")
+}
+
+func TestProjectionJSONValueInsideConstructor(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	defer bat.Clean(proc.Mp())
+	doc, err := types.ParseStringToByteJson(`{"keep":5}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(bat.Vecs[0], doc, false, proc.Mp()))
+	bat.SetRowCount(1)
+	column := &plan.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	literal := func(value string) *plan.Expr {
+		return &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+	}
+	inner := bindTestFunction(t, proc, "json_value", column, literal("$.keep"))
+	constructor := bindTestFunction(t, proc, "json_object", literal("outer"), inner)
+	outer := bindTestFunction(t, proc, "json_value", constructor, literal("$.outer"))
+	projection := &Projection{ProjectList: []*plan.Expr{outer}}
+	require.NoError(t, projection.PrepareProjection(proc))
+	defer projection.FreeProjection(proc)
+	require.Equal(t, []int{0}, projection.JSONInputColumns())
+	out, err := projection.EvalProjection(bat, proc)
+	require.NoError(t, err)
+	require.Equal(t, "5", string(out.Vecs[0].GetBytesAt(0)))
+	projection.ResetProjection(proc)
+	require.NoError(t, projection.PrepareProjection(proc))
+	out, err = projection.EvalProjection(bat, proc)
+	require.NoError(t, err)
+	require.Equal(t, "5", string(out.Vecs[0].GetBytesAt(0)))
 }
 
 func TestProjectionJSONValuePreservesNullPathShortCircuit(t *testing.T) {
@@ -289,7 +321,7 @@ func TestJSONValueConsumesPrivateConstructor(t *testing.T) {
 			require.NoError(t, err)
 			defer executor.Free()
 			outer := executor.(*FunctionExpressionExecutor)
-			producer := outer.parameterExecutor[0].(*FunctionExpressionExecutor)
+			producer := outer.parameterExecutor[0].(*jsonConstructorExpressionExecutor)
 			for _, mask := range [][]bool{nil, {true, false, true}, {false, false, false}} {
 				output, err := executor.Eval(proc, []*batch.Batch{bat}, mask)
 				require.NoError(t, err)
@@ -301,7 +333,6 @@ func TestJSONValueConsumesPrivateConstructor(t *testing.T) {
 					}
 				}
 				require.Nil(t, producer.resultVector.GetResultVector(), "constructor must not initialize or export a mutable JSON result")
-				require.Nil(t, outer.jsonReader)
 			}
 			executor.ResetForNextQuery()
 			if name == "cast" {
@@ -352,7 +383,7 @@ func TestJSONValuePrivateConstantConstructor(t *testing.T) {
 				require.NoError(t, err)
 				defer executor.Free()
 				outer := executor.(*FunctionExpressionExecutor)
-				producer := outer.parameterExecutor[0].(*FunctionExpressionExecutor)
+				producer := outer.parameterExecutor[0].(*jsonConstructorExpressionExecutor)
 				check := func(want string, mask []bool) {
 					t.Helper()
 					output, err := executor.Eval(proc, []*batch.Batch{bat}, mask)
@@ -365,20 +396,20 @@ func TestJSONValuePrivateConstantConstructor(t *testing.T) {
 							require.Equal(t, want, string(output.GetBytesAt(row)))
 						}
 					}
-					require.NotNil(t, producer.jsonConstructorConstant)
-					require.Equal(t, 1, producer.jsonConstructorConstant.Length())
+					require.NotNil(t, producer.constant)
+					require.Equal(t, 1, producer.constant.Length())
 					require.Nil(t, producer.resultVector.GetResultVector(), "constant admission must not export an ordinary JSON Vector")
 					require.Equal(t, !dynamicPath, outer.folded.canFold, "an entirely constant consumer must retain result folding")
 				}
 				check("5", nil)
-				version := producer.jsonConstructorConstant
+				version := producer.constant
 				check("5", nil)
-				require.Same(t, version, producer.jsonConstructorConstant)
+				require.Same(t, version, producer.constant)
 				if dynamicPath {
 					check("5", []bool{true, false, true})
 				}
 				executor.ResetForNextQuery()
-				require.Nil(t, producer.jsonConstructorConstant)
+				require.Nil(t, producer.constant)
 				if name == "cast" {
 					input := producer.parameterExecutor[0].(*FixedVectorExpressionExecutor).resultVector
 					raw := input.GetBytesAt(0)
@@ -388,7 +419,7 @@ func TestJSONValuePrivateConstantConstructor(t *testing.T) {
 					vector.MustFixedColNoTypeCheck[int64](input)[0] = 9
 				}
 				check("9", nil)
-				require.NotSame(t, version, producer.jsonConstructorConstant)
+				require.NotSame(t, version, producer.constant)
 			})
 		}
 	}

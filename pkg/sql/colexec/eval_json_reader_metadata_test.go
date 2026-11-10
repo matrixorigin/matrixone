@@ -45,6 +45,12 @@ func TestJSONProjectionPreparationWithoutDemandDoesNotAllocate(t *testing.T) {
 		}
 	})
 	require.Zero(t, allocations)
+	allocations = testing.AllocsPerRun(10, func() {
+		if err := PrepareJSONProjectionExecutors(nil, roots, nil); err != nil {
+			panic("unrelated projection prepared JSON state")
+		}
+	})
+	require.Zero(t, allocations)
 	for _, node := range nodes {
 		require.False(t, node.jsonProjectionProbe)
 	}
@@ -70,6 +76,15 @@ func TestJSONProjectionMetadataReleaseAndFailureRollback(t *testing.T) {
 	require.NoError(t, err)
 	inputs.Close()
 	require.Equal(t, before, budget.Snapshot().Used)
+	roots := []ExpressionExecutor{jsonFn}
+	require.NoError(t, PrepareJSONProjectionExecutors(proc, roots, nil))
+	require.NotSame(t, jsonFn, roots[0])
+	require.Equal(t, []int{0}, JSONProjectionColumns(roots))
+	require.Greater(t, budget.Snapshot().Used, before)
+	CloseJSONProjectionExecutors(roots)
+	CloseJSONProjectionExecutors(roots)
+	require.Same(t, jsonFn, roots[0])
+	require.Equal(t, before, budget.Snapshot().Used)
 
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
 	require.NoError(t, err)
@@ -91,6 +106,24 @@ func TestJSONProjectionMetadataReleaseAndFailureRollback(t *testing.T) {
 	require.Nil(t, inputs)
 	require.Same(t, column, jsonFn.parameterExecutor[0], "failed preparation must restore the original executor")
 	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestJSONProjectionFindsNestedConstructorInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	before := budget.Snapshot().Used
+	column := &ColumnExpressionExecutor{typ: types.T_json.ToType(), relIndex: 0, colIndex: 0}
+	inner := &FunctionExpressionExecutor{functionInformationForEval: functionInformationForEval{fid: function.JSON_VALUE}, parameterExecutor: []ExpressionExecutor{column}}
+	constructor := &jsonConstructorExpressionExecutor{FunctionExpressionExecutor: &FunctionExpressionExecutor{parameterExecutor: []ExpressionExecutor{inner}}}
+	outer := &FunctionExpressionExecutor{functionInformationForEval: functionInformationForEval{fid: function.JSON_VALUE}, parameterExecutor: []ExpressionExecutor{constructor}}
+	roots := []ExpressionExecutor{outer}
+	require.NoError(t, PrepareJSONProjectionExecutors(proc, roots, nil))
+	require.Equal(t, []int{0}, JSONProjectionColumns(roots))
+	require.IsType(t, &JSONReaderExpressionExecutor{}, inner.parameterExecutor[0])
+	CloseJSONProjectionExecutors(roots)
+	require.Same(t, column, inner.parameterExecutor[0])
+	require.Equal(t, before, budget.Snapshot().Used)
 }
 
 func TestJSONMetadataScopeGrowthAndClose(t *testing.T) {
@@ -170,5 +203,42 @@ func TestJSONLiteralExecutorMetadataLifecycle(t *testing.T) {
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
 	source.Free()
+	require.Equal(t, before, budget.Snapshot().Used)
+}
+
+func TestJSONConstructorExecutorMetadataLifecycle(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	before := budget.Snapshot().Used
+	expr := NewFunctionExpressionExecutor()
+	source, err := newJSONConstructorExpressionExecutor(proc, expr, nil)
+	require.NoError(t, err)
+	require.Greater(t, budget.Snapshot().Used, before)
+	source.ResetForNextQuery()
+	require.Equal(t, before, budget.Snapshot().Used)
+	require.NoError(t, source.ensureMetadata())
+	require.Greater(t, budget.Snapshot().Used, before)
+	source.Free()
+	source.Free()
+	require.Equal(t, before, budget.Snapshot().Used)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	capacity := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonConstructorExpressionExecutor{}))
+	account, err := registry.Open(capacity - 1)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	expr = NewFunctionExpressionExecutor()
+	source, err = newJSONConstructorExpressionExecutor(proc, expr, selection)
+	require.Error(t, err)
+	require.Nil(t, source)
+	expr.Free()
+	require.Zero(t, account.Seal().Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 	require.Equal(t, before, budget.Snapshot().Used)
 }

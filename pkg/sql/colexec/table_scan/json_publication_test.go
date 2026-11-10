@@ -146,7 +146,7 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 	} else {
 		result, err := scan.Call(proc)
 		require.NoError(t, err)
-		require.NotNil(t, scan.ctr.jsonPublication)
+		require.NotNil(t, scan.jsonPublication())
 		changed, err := types.ParseStringToByteJson(`{"keep":9}`)
 		require.NoError(t, err)
 		changedRaw, err := changed.Marshal()
@@ -168,7 +168,7 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 	if selection != nil {
 		require.Same(t, selection, output.Vecs[0].AllocationAccountSelection())
 	}
-	require.Nil(t, scan.ctr.jsonPublication)
+	require.Nil(t, scan.jsonPublication())
 }
 
 func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
@@ -205,8 +205,8 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 			set.BindColumns([]uint16{0, 1})
 			set.Publish(0, version)
 			scan := &TableScan{}
-			scan.ctr.jsonPublication = set
 			require.NoError(t, scan.RequestJSONInputs(proc, []int{0, 1}))
+			scan.ctr.jsonState.publication = set
 			input.Vecs[1].GetBytesAt(0)[0] = 0xfd
 			if mode == "cancel" {
 				ctx, cancel := context.WithCancel(proc.Ctx)
@@ -225,7 +225,7 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 				require.Error(t, err)
 				require.Nil(t, versions)
 			}
-			require.Nil(t, scan.ctr.jsonPublication)
+			require.Nil(t, scan.jsonPublication())
 			_, err = version.Window(0, 1)
 			require.Error(t, err, "the Read scope must release its reference on every failure")
 			scan.Reset(proc, false, nil)
@@ -249,8 +249,24 @@ func TestTableScanJSONRequestMetadataReleasedOnReset(t *testing.T) {
 	require.Equal(t, charged, budget.Snapshot().Used, "the same demand reuses one request scope")
 	scan.Reset(proc, false, nil)
 	require.Equal(t, before, budget.Snapshot().Used)
-	require.Nil(t, scan.ctr.jsonRequestMeta)
+	require.Nil(t, scan.ctr.jsonState)
 	require.NoError(t, scan.RequestJSONInputs(proc, []int{0}))
 	scan.Free(proc, false, nil)
+	require.Equal(t, before, budget.Snapshot().Used)
+}
+
+func TestTableScanWithoutJSONDemandDoesNotAllocateState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	before := budget.Snapshot().Used
+	scan := &TableScan{}
+	allocations := testing.AllocsPerRun(10, func() {
+		if err := scan.RequestJSONInputs(proc, nil); err != nil {
+			panic("unexpected JSON request error")
+		}
+	})
+	require.Zero(t, allocations)
+	require.Nil(t, scan.ctr.jsonState)
 	require.Equal(t, before, budget.Snapshot().Used)
 }

@@ -22,8 +22,6 @@ import (
 )
 
 type Projection struct {
-	jsonAllocation   *vector.AllocationAccountSelection
-	jsonInputs       JSONProjectionInputs
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
 	ProjectExecutors []ExpressionExecutor
@@ -44,7 +42,6 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 	if len(projection.ProjectList) == 0 {
 		return
 	}
-	projection.jsonAllocation = selection
 	projection.ProjectAllocSize = 0
 	if projection.ProjectExecutors == nil {
 		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
@@ -53,11 +50,8 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 			return
 		}
 	}
-	if projection.jsonInputs == nil {
-		projection.jsonInputs, err = PrepareJSONProjectionInputs(proc, projection.ProjectExecutors, selection)
-		if err != nil {
-			return err
-		}
+	if err = PrepareJSONProjectionExecutors(proc, projection.ProjectExecutors, selection); err != nil {
+		return err
 	}
 	if projection.projectBat == nil {
 		projection.projectBat = batch.NewOffHeapWithSize(len(projection.ProjectList))
@@ -112,8 +106,7 @@ func (projection *Projection) evalProjection(bat *batch.Batch, proc *process.Pro
 }
 
 func (projection *Projection) ResetProjection(proc *process.Process) {
-	projection.jsonInputs.Close()
-	projection.jsonInputs = nil
+	CloseJSONProjectionExecutors(projection.ProjectExecutors)
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].ResetForNextQuery()
@@ -123,15 +116,13 @@ func (projection *Projection) ResetProjection(proc *process.Process) {
 }
 
 func (projection *Projection) FreeProjection(proc *process.Process) {
-	projection.jsonInputs.Close()
+	CloseJSONProjectionExecutors(projection.ProjectExecutors)
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].Free()
 		}
 	}
 	projection.ProjectExecutors = nil
-	projection.jsonInputs = nil
-	projection.jsonAllocation = nil
 
 	if projection.projectBat != nil {
 		// allways call batch.Clean, even if there is no data

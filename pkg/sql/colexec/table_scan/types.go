@@ -34,13 +34,10 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
-	jsonColumns               []int
-	jsonDeliveryColumns       map[int]int
-	jsonPublication           *objectio.JSONReadSet
-	jsonRequestMeta           *colexec.JSONMetadataScope
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
+	jsonState                 *jsonScanState
 	filterExecutors           []colexec.ExpressionExecutor
 	runtimeFilterExecutors    []colexec.ExpressionExecutor
 	allFilterExecutors        []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
@@ -48,13 +45,39 @@ type container struct {
 	earlyColumns              []int
 	lateColumns               []int
 	filterRows                []int64
-	filterReadMetrics         bool
-	filterLateMaterialized    bool
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
 	metricView                *batch.Batch
+	filterReadMetrics         bool
+	filterLateMaterialized    bool
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
+}
+
+// jsonScanState is allocated and charged only when this scan has JSON_VALUE
+// demand. Its publication has a shorter, individual Read lifetime.
+type jsonScanState struct {
+	columns     []int
+	delivery    map[int]int
+	publication *objectio.JSONReadSet
+	metadata    *colexec.JSONMetadataScope
+}
+
+func (state *jsonScanState) closePublication() {
+	if state != nil && state.publication != nil {
+		state.publication.Close()
+		state.publication = nil
+	}
+}
+
+func (state *jsonScanState) close() {
+	if state != nil {
+		state.closePublication()
+		state.columns = nil
+		state.delivery = nil
+		state.metadata.Close()
+		state.metadata = nil
+	}
 }
 
 type TableScan struct {
@@ -112,15 +135,8 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	clear(tableScan.ctr.jsonDeliveryColumns)
-	tableScan.ctr.jsonDeliveryColumns = nil
-	tableScan.ctr.jsonColumns = nil
-	tableScan.ctr.jsonRequestMeta.Close()
-	tableScan.ctr.jsonRequestMeta = nil
-	if tableScan.ctr.jsonPublication != nil {
-		tableScan.ctr.jsonPublication.Close()
-		tableScan.ctr.jsonPublication = nil
-	}
+	tableScan.ctr.jsonState.close()
+	tableScan.ctr.jsonState = nil
 
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
@@ -160,14 +176,8 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
-	tableScan.ctr.jsonDeliveryColumns = nil
-	tableScan.ctr.jsonColumns = nil
-	tableScan.ctr.jsonRequestMeta.Close()
-	tableScan.ctr.jsonRequestMeta = nil
-	if tableScan.ctr.jsonPublication != nil {
-		tableScan.ctr.jsonPublication.Close()
-		tableScan.ctr.jsonPublication = nil
-	}
+	tableScan.ctr.jsonState.close()
+	tableScan.ctr.jsonState = nil
 
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
@@ -222,16 +232,16 @@ func (tableScan *TableScan) closeReader() {
 func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	var err error
 	output := input
+	state := tableScan.ctr.jsonState
 	if len(tableScan.ProjectList) != 0 {
-		if tableScan.ctr.jsonPublication != nil {
-			output, err = tableScan.EvalProjectionWithJSONReaders(input, proc, tableScan.ctr.jsonPublication.Readers())
+		if state != nil && state.publication != nil {
+			output, err = tableScan.EvalProjectionWithJSONReaders(input, proc, state.publication.Readers())
 		} else {
 			output, err = tableScan.EvalProjection(input, proc)
 		}
 	}
-	if tableScan.ctr.jsonPublication != nil && (err != nil || len(tableScan.ctr.jsonDeliveryColumns) == 0) {
-		tableScan.ctr.jsonPublication.Close()
-		tableScan.ctr.jsonPublication = nil
+	if state != nil && (err != nil || len(state.delivery) == 0) {
+		state.closePublication()
 	}
 	return output, err
 }

@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -149,16 +150,75 @@ func jsonConstantReaderView(reader vector.JSONReader, length int) (vector.JSONRe
 	return reader.Repeat(0, length)
 }
 
-func (expr *FunctionExpressionExecutor) jsonReaderInput(proc *process.Process, batches []*batch.Batch, selected []bool) (vector.JSONReader, error) {
-	if !expr.supportsJSONReaderConstructor() {
-		return nil, nil
+// jsonConstructorExpressionExecutor exists only for a constructor consumed
+// directly by JSON_VALUE. Its metadata and constant version belong to the
+// current execution, rather than every ordinary function executor.
+type jsonConstructorExpressionExecutor struct {
+	*FunctionExpressionExecutor
+	proc      *process.Process
+	selection *vector.AllocationAccountSelection
+	constant  vector.JSONReader
+	release   func()
+}
+
+func newJSONConstructorExpressionExecutor(proc *process.Process, expr *FunctionExpressionExecutor, selection *vector.AllocationAccountSelection) (*jsonConstructorExpressionExecutor, error) {
+	admission, err := function.JSONReaderMemoryAdmissionForEvaluation(proc)
+	if err != nil {
+		return nil, err
 	}
-	if expr.jsonConstructorInput && expr.folded.needFoldingCheck {
-		if err := expr.doFold(proc, proc.GetBaseProcessRunningStatus()); err != nil {
+	release, err := vector.ReserveJSONReaderMetadata(selection, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonConstructorExpressionExecutor{})))
+	if err != nil {
+		return nil, err
+	}
+	return &jsonConstructorExpressionExecutor{FunctionExpressionExecutor: expr, proc: proc, selection: selection, release: release}, nil
+}
+
+func (source *jsonConstructorExpressionExecutor) ensureMetadata() error {
+	if source.release != nil {
+		return nil
+	}
+	admission, err := function.JSONReaderMemoryAdmissionForEvaluation(source.proc)
+	if err != nil {
+		return err
+	}
+	source.release, err = vector.ReserveJSONReaderMetadata(source.selection, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonConstructorExpressionExecutor{})))
+	return err
+}
+
+func (source *jsonConstructorExpressionExecutor) ResetForNextQuery() {
+	if source.constant != nil {
+		source.constant.Close()
+		source.constant = nil
+	}
+	if source.release != nil {
+		source.release()
+		source.release = nil
+	}
+	if source.FunctionExpressionExecutor != nil {
+		source.FunctionExpressionExecutor.ResetForNextQuery()
+	}
+}
+
+func (source *jsonConstructorExpressionExecutor) Free() {
+	source.ResetForNextQuery()
+	if source.FunctionExpressionExecutor != nil {
+		source.FunctionExpressionExecutor.Free()
+		source.FunctionExpressionExecutor = nil
+	}
+	source.proc = nil
+}
+
+func (source *jsonConstructorExpressionExecutor) jsonReaderInput(proc *process.Process, batches []*batch.Batch, selected []bool) (vector.JSONReader, error) {
+	if err := source.ensureMetadata(); err != nil {
+		return nil, err
+	}
+	expr := source.FunctionExpressionExecutor
+	if expr.folded.needFoldingCheck {
+		if err := expr.doFoldWithJSONConstructor(proc, proc.GetBaseProcessRunningStatus(), source); err != nil {
 			return nil, err
 		}
 	}
-	if reader := expr.jsonConstructorConstant; reader != nil {
+	if reader := source.constant; reader != nil {
 		// A scalar constructor has one physical document. Views repeat its
 		// row coordinate, without repeating payload copies or admission.
 		return jsonConstantReaderView(reader, expressionRowCount(batches))

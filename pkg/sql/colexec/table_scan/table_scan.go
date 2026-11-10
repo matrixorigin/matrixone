@@ -94,7 +94,13 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	tableScan.ctr.jsonColumns = tableScan.JSONInputColumns()
+	if columns := tableScan.JSONInputColumns(); len(columns) != 0 {
+		state, stateErr := tableScan.ensureJSONState(proc, len(columns)+1)
+		if stateErr != nil {
+			return stateErr
+		}
+		state.columns = columns
+	}
 	if tableScan.ctr.buf == nil {
 		tableScan.ctr.buf = batch.NewOffHeapWithSize(len(tableScan.Types))
 		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
@@ -109,10 +115,10 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (callResult vm.CallResult, callErr error) {
+	state := tableScan.ctr.jsonState
 	defer func() {
-		if callErr != nil && tableScan.ctr.jsonPublication != nil {
-			tableScan.ctr.jsonPublication.Close()
-			tableScan.ctr.jsonPublication = nil
+		if callErr != nil {
+			state.closePublication()
 		}
 	}()
 	start := time.Now()
@@ -125,10 +131,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (callResult vm.CallResul
 	}()
 
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		if tableScan.ctr.jsonPublication != nil {
-			tableScan.ctr.jsonPublication.Close()
-			tableScan.ctr.jsonPublication = nil
-		}
+		state.closePublication()
 		return vm.CancelResult, err
 	}
 
@@ -157,20 +160,17 @@ func (tableScan *TableScan) Call(proc *process.Process) (callResult vm.CallResul
 			newCtx = fileservice.WithFileServicePolicy(newCtx, fileservice.GetFileServicePolicy(newCtx)|tableScan.ReadPolicy)
 			newCtx = fileservice.WithPreloadGroup(newCtx, tableScan.TableID)
 		}
-		if tableScan.ctr.jsonPublication != nil {
-			tableScan.ctr.jsonPublication.Close()
-			tableScan.ctr.jsonPublication = nil
-		}
-		if len(tableScan.ctr.jsonColumns) != 0 {
+		state.closePublication()
+		if state != nil && len(state.columns) != 0 {
 			admission, err := function.JSONReaderMemoryAdmission(proc)
 			if err != nil {
 				return vm.CancelResult, err
 			}
-			tableScan.ctr.jsonPublication, err = objectio.NewJSONReadSetWithAdmission(tableScan.ctr.jsonColumns, tableScan.OutputAllocation, admission)
+			state.publication, err = objectio.NewJSONReadSetWithAdmission(state.columns, tableScan.OutputAllocation, admission)
 			if err != nil {
 				return vm.CancelResult, err
 			}
-			newCtx = objectio.WithJSONReadSet(newCtx, tableScan.ctr.jsonPublication)
+			newCtx = objectio.WithJSONReadSet(newCtx, state.publication)
 		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
@@ -426,7 +426,7 @@ func (tableScan *TableScan) evalFilter(
 				}
 
 				if loadedColumns == nil {
-					if err := tableScan.ctr.jsonPublication.SelectRows(sels, proc.Mp()); err != nil {
+					if err := tableScan.jsonPublication().SelectRows(sels, proc.Mp()); err != nil {
 						return engine.ReaderFilterResult{}, err
 					}
 					if err := shrinkPopulatedVecs(bat, sels, proc.Mp()); err != nil {

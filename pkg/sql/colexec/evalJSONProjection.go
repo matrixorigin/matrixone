@@ -36,6 +36,68 @@ type projectionJSONInput struct {
 	scope    *JSONMetadataScope
 }
 
+// jsonProjectionRoot keeps JSON-only state alongside an existing executor.
+// Ordinary projections retain exactly their existing executor storage.
+type jsonProjectionRoot struct {
+	ExpressionExecutor
+	inputs     JSONProjectionInputs
+	columns    []int
+	allocation *vector.AllocationAccountSelection
+}
+
+// PrepareJSONProjectionExecutors installs an accounted wrapper only when a
+// projection has JSON_VALUE document-column demand.
+func PrepareJSONProjectionExecutors(proc *process.Process, roots []ExpressionExecutor, selection *vector.AllocationAccountSelection) error {
+	if len(roots) == 0 || jsonProjectionState(roots) != nil {
+		return nil
+	}
+	inputs, err := PrepareJSONProjectionInputs(proc, roots, selection)
+	if err != nil || len(inputs) == 0 {
+		return err
+	}
+	roots[0] = &jsonProjectionRoot{ExpressionExecutor: roots[0], inputs: inputs, columns: inputs.Columns(), allocation: selection}
+	return nil
+}
+
+func jsonProjectionState(roots []ExpressionExecutor) *jsonProjectionRoot {
+	if len(roots) == 0 {
+		return nil
+	}
+	state, _ := roots[0].(*jsonProjectionRoot)
+	return state
+}
+
+func JSONProjectionColumns(roots []ExpressionExecutor) []int {
+	if state := jsonProjectionState(roots); state != nil {
+		return state.columns
+	}
+	return nil
+}
+
+func BindJSONProjectionExecutors(proc *process.Process, roots []ExpressionExecutor, input *batch.Batch, published map[int]vector.JSONReader) error {
+	if state := jsonProjectionState(roots); state != nil {
+		return state.inputs.Bind(proc, input, state.allocation, published)
+	}
+	return nil
+}
+
+func ReleaseJSONProjectionExecutors(roots []ExpressionExecutor) {
+	if state := jsonProjectionState(roots); state != nil {
+		state.inputs.Release()
+	}
+}
+
+func CloseJSONProjectionExecutors(roots []ExpressionExecutor) {
+	if state := jsonProjectionState(roots); state != nil {
+		roots[0] = state.ExpressionExecutor
+		state.inputs.Close()
+		state.inputs = nil
+		state.columns = nil
+		state.allocation = nil
+		state.ExpressionExecutor = nil
+	}
+}
+
 func projectionJSONSource(expr *FunctionExpressionExecutor) *ColumnExpressionExecutor {
 	if expr.fid != function.JSON_VALUE || len(expr.parameterExecutor) == 0 {
 		return nil
@@ -58,6 +120,8 @@ func hasJSONProjectionSource(roots []ExpressionExecutor) bool {
 			return visit(expr.executor)
 		case *memoExpressionExecutor:
 			return expr.state != nil && visit(expr.state.executor)
+		case *jsonConstructorExpressionExecutor:
+			return expr.FunctionExpressionExecutor != nil && visit(expr.FunctionExpressionExecutor)
 		case *FunctionExpressionExecutor:
 			if expr.jsonProjectionProbe {
 				return false
@@ -82,6 +146,10 @@ func hasJSONProjectionSource(roots []ExpressionExecutor) bool {
 		case *memoExpressionExecutor:
 			if expr.state != nil {
 				clearMarks(expr.state.executor)
+			}
+		case *jsonConstructorExpressionExecutor:
+			if expr.FunctionExpressionExecutor != nil {
+				clearMarks(expr.FunctionExpressionExecutor)
 			}
 		case *FunctionExpressionExecutor:
 			if !expr.jsonProjectionProbe {
@@ -138,6 +206,10 @@ func PrepareJSONProjectionInputs(proc *process.Process, roots []ExpressionExecut
 		case *memoExpressionExecutor:
 			if expr.state != nil {
 				visit(expr.state.executor)
+			}
+		case *jsonConstructorExpressionExecutor:
+			if expr.FunctionExpressionExecutor != nil {
+				visit(expr.FunctionExpressionExecutor)
 			}
 		case *FunctionExpressionExecutor:
 			if seen[expr] {
@@ -327,12 +399,14 @@ func (projection *Projection) bindJSONInputs(proc *process.Process, input *batch
 	if len(published) != 0 {
 		readers = published[0]
 	}
-	return projection.jsonInputs.Bind(proc, input, projection.jsonAllocation, readers)
+	return BindJSONProjectionExecutors(proc, projection.ProjectExecutors, input, readers)
 }
-func (projection *Projection) releaseJSONInputs() { projection.jsonInputs.Release() }
+func (projection *Projection) releaseJSONInputs() {
+	ReleaseJSONProjectionExecutors(projection.ProjectExecutors)
+}
 func (projection *Projection) JSONInputColumns() []int {
 	if len(projection.ProjectList) == 0 {
 		return nil
 	}
-	return projection.jsonInputs.Columns()
+	return JSONProjectionColumns(projection.ProjectExecutors)
 }

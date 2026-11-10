@@ -92,10 +92,6 @@ func (fI *functionInformationForEval) reset() {
 }
 
 func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
-	if expr.jsonConstructorConstant != nil {
-		expr.jsonConstructorConstant.Close()
-		expr.jsonConstructorConstant = nil
-	}
 	// reset the constant folding state.
 	expr.folded.reset(expr.m)
 	// reset the function information.
@@ -150,16 +146,30 @@ func (expr *FunctionExpressionExecutor) tryFoldParameter(
 		}
 		return true, nil
 	}
+	if constructor, ok := parameter.(*jsonConstructorExpressionExecutor); ok {
+		if err := constructor.ensureMetadata(); err != nil {
+			return false, err
+		}
+		functionParameter := constructor.FunctionExpressionExecutor
+		if err := functionParameter.doFoldWithJSONConstructor(proc, atRuntime, constructor); err != nil {
+			return false, err
+		}
+		if constructor.constant != nil {
+			expr.parameterResults[index] = nil
+			return true, nil
+		}
+		if functionParameter.folded.canFold {
+			expr.parameterResults[index] = functionParameter.getFoldedVector(1)
+			return true, nil
+		}
+		return false, nil
+	}
 	if functionParameter, ok := parameter.(*FunctionExpressionExecutor); ok {
 		if err := functionParameter.doFold(proc, atRuntime); err != nil {
 			return false, err
 		}
 		if functionParameter.folded.canFold {
 			expr.parameterResults[index] = functionParameter.getFoldedVector(1)
-			return true, nil
-		}
-		if expr.fid == function.JSON_VALUE && index == 0 && functionParameter.jsonConstructorConstant != nil {
-			expr.parameterResults[index] = nil
 			return true, nil
 		}
 		return false, nil
@@ -330,8 +340,8 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	var documentReader vector.JSONReader
 	if expr.fid == function.JSON_VALUE && len(expr.parameterExecutor) > 0 {
 		switch input := expr.parameterExecutor[0].(type) {
-		case *FunctionExpressionExecutor:
-			documentReader = input.jsonConstructorConstant
+		case *jsonConstructorExpressionExecutor:
+			documentReader = input.constant
 		case *jsonLiteralExpressionExecutor:
 			documentReader = input.reader
 		}
@@ -372,6 +382,10 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 }
 
 func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime bool) (err error) {
+	return expr.doFoldWithJSONConstructor(proc, atRuntime, nil)
+}
+
+func (expr *FunctionExpressionExecutor) doFoldWithJSONConstructor(proc *process.Process, atRuntime bool, constructor *jsonConstructorExpressionExecutor) (err error) {
 	if !expr.folded.needFoldingCheck {
 		return nil
 	}
@@ -428,12 +442,12 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 			execLen = expr.parameterResults[0].Length()
 		}
 	}
-	if expr.jsonConstructorInput && execLen == 1 {
+	if constructor != nil && execLen == 1 {
 		reader, err := function.EvalJSONConstructorReader(expr.fid, expr.semanticParameterVectors(expr.parameterResults), proc, 1, nil, expr.allocation)
 		if err != nil {
 			return err
 		}
-		expr.jsonConstructorConstant = reader
+		constructor.constant = reader
 		return nil
 	}
 
