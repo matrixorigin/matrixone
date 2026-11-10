@@ -58,6 +58,11 @@ The plan marks these scans. The mark is a hint, not a policy: it lets the scan s
 object prefetch, and its table's signal decides whether it does. Other vector and fulltext
 joins can adopt the mark when measured.
 
+The join back no longer goes through the signal: it reads only the primary key and the
+projected or filter columns, never the vector column, so it never fills whole objects and
+prefetches only those columns' ranges (see the [object prefetcher design](20261110-object-prefetcher.md)).
+The signal still decides for the entries search.
+
 ### The disk cache keeps one signal per table (decision)
 
 Each narrow read tells the disk cache which table it reads for. The cache maps each

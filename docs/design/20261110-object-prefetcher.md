@@ -65,7 +65,7 @@ For each object in its prefetch window, a scan passes:
 - the object and its size, from the catalog;
 - when the scan expects to reach it, from the scan's position and pace;
 - the share of the object's blocks the scan reads;
-- whether the plan marks the scan a narrow read;
+- for the IVF-Flat row fetch, the ranges of the columns it reads;
 - a token for the scan, which ends when the scan closes.
 
 The pace is measured. A scan uses its own pace once it has read enough blocks over
@@ -96,9 +96,8 @@ loses little by reading its ranges.
 - An object is never queued while it is queued, downloading or cached.
 - A request for an object that is already cached marks the object as used in the disk
   cache's recency order, so eviction removes objects that no scan asked for first. A
-  narrow read's request leaves the object where it is: a narrow read uses a small share
-  of each object, and keeping such objects would evict the files other reads use and
-  delay the thrash signal that switches the narrow read to ranges.
+  request of ranges does not: a scan that reads only some columns of an object does not
+  keep the whole object.
 - A read of an object that is being downloaded takes its bytes from the download, as
   the cache-ownership design specifies.
 - A read that reaches an object whose download is still queued drops that download and
@@ -130,6 +129,24 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
 - Closing the file service drops every queued download, cancels the downloads that
   are running and waits for them, bounded by the caller's context. Closing the disk
   cache also cancels running prefetch downloads.
+
+### The IVF-Flat row fetch prefetches only its columns (decision)
+
+The base-table scan of an IVF-Flat join back from candidates to rows reads a few rows of
+each object, and only the primary key and the projected or filter columns, never the
+vector column, which holds nearly all of a base object's bytes. It never downloads a
+whole object, neither ahead of the scan nor on a read. Ahead of the scan, it prefetches
+for each object the ranges of the columns it reads, across all the object's blocks.
+
+- An object stores its data column by column: the chunks of one column for every block
+  lie one after another, whatever the column's type, and the object's metadata records
+  where that run starts and how long it is. Each column is one range per object.
+- Each range is downloaded on its own and cached as it is, so later reads of the column
+  in any block of the object are served from the disk cache, as from a whole object.
+- A request of ranges is skipped while cached ranges cover them or the whole object is
+  cached. Requests of ranges for one object add up, and a request of the whole object
+  takes over a queued request of ranges.
+- The entries search keeps whole-object prefetch: it reads the vector column.
 
 ### Parallel range downloads of whole objects (decision)
 
@@ -173,12 +190,17 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
   objects a scan needed next aged out of the LRU. With partial cache, one traced TPC-H run filled
   54 GB into the disk cache against 29 GB for the parent build, and its first round
   took 49.4 s against 26.7–36.2 s for the parent build.
-- **Mark cached objects used for narrow reads too.** The IVF-Flat join-back reads about
-  0.1% of each base-table object, yet its requests kept those objects newest. The entries
+- **Let the thrash signal decide the row fetch's whole objects.** The signal turned the
+  base table to range reads only after it had downloaded whole objects, about 140 MB each
+  for a read of under 1 MB, and those downloads evicted the entries files. Its column
+  ranges are about 0.3% of each object's bytes.
+- **Whole-object requests from the IVF-Flat join-back.** The join-back reads about 0.1%
+  of each base-table object, yet its requests kept those objects newest. The entries
   table's files, read 30–100%, were evicted instead, and the base table's first eviction
   came 2–3 s later. On local object storage the first filtered round took 16.7–19.6 s
   against 9.2–14.5 s for the parent build; on the emulated remote store the entries table
-  also switched to ranges and the second filtered round took 29 s against 12 s.
+  also switched to ranges and the second filtered round took 29 s against 12 s. The
+  join-back now prefetches only its columns.
 - **Limit split downloads by the connections they hold.** That limit counts
   connections, not downloads, and with the prefetcher running it stopped splitting
   almost every download. The first TPC-H round took 36.8 s, against 23.6–31.9 s when
@@ -215,7 +237,7 @@ A dropped request costs nothing: the scan's read falls back to the normal read p
   - a read dropping a queued download;
   - an ended scan dropping its downloads;
   - close cancelling running downloads;
-  - a prefetch of a cached object protecting it from eviction, except a narrow read's.
+  - a prefetch of a cached object protecting it from eviction, except a prefetch of ranges.
 - **Downloads:**
   - split downloads read their parts and publish one file;
   - a read waits only for its own part;

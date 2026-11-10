@@ -66,8 +66,8 @@ func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
 	require.False(t, d.cache.Contains(b))
 }
 
-// A narrow read's prefetch of a cached object leaves it where it is in the eviction order.
-func TestNarrowPrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
+// A prefetch of ranges of a cached object leaves it where it is in the eviction order.
+func TestRangePrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 1)
 	d := fs.diskCache
 	ctx := context.Background()
@@ -75,11 +75,40 @@ func TestNarrowPrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 	d.cache.Set(ctx, a, struct{}{}, 1)
 	d.cache.Set(ctx, b, struct{}{}, 1)
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
-	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1, Narrow: true}))
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1, Ranges: []PrefetchRange{{Offset: 0, Size: 1}}}))
 	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
 	d.cache.ForceEvict(ctx, 1)
 	require.False(t, d.cache.Contains(a))
 	require.True(t, d.cache.Contains(b))
+}
+
+// A prefetch of ranges downloads each range on its own, not the prefetch ranges around it,
+// and caches no whole object; once they are cached, a prefetch of them is not queued.
+func TestS3FSPrefetchRanges(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 256<<10, false, 300<<10)
+	ctx := context.Background()
+	req := ObjectPrefetch{
+		FilePath: "object",
+		Size:     30,
+		Ranges:   []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}},
+	}
+	fs.prefetchObject(ctx, req)
+	require.Equal(t, int64(2), storage.reads.Load())
+	require.Equal(t, int64(30), storage.bytes.Load(), "not the bytes between the ranges")
+	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.True(t, fs.haveObject(req))
+
+	got := readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10)
+	require.Equal(t, data[200<<10+5:200<<10+15], got)
+	require.Equal(t, int64(2), storage.reads.Load(), "a read within a range is served from the cache")
+
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, req))
+	require.False(t, fs.prefetcher.isQueued("object"), "its ranges are cached")
+	other := req
+	other.Ranges = []PrefetchRange{{Offset: 1000, Size: 10}}
+	require.NoError(t, fs.PrefetchObject(ctx, other))
+	require.True(t, fs.prefetcher.isQueued("object"))
 }
 
 // A download at a size other than the object's caches nothing.

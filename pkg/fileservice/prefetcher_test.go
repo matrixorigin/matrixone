@@ -46,7 +46,7 @@ func (r *prefetchRecorder) run(_ context.Context, req ObjectPrefetch) {
 func TestPrefetcherDownloadsInQueueOrder(t *testing.T) {
 	r := newPrefetchRecorder()
 	have := map[string]bool{"cached": true}
-	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(path string, _ bool) bool { return have[path] }, r.run)
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(req ObjectPrefetch) bool { return have[req.FilePath] }, r.run)
 	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
 	require.Equal(t, "first", <-r.started)
 
@@ -72,7 +72,7 @@ func TestPrefetcherDownloadsInQueueOrder(t *testing.T) {
 // those reads need first.
 func TestPrefetcherFullQueueDropsNewest(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(0, func() int64 { return 250 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(0, func() int64 { return 250 }, func(ObjectPrefetch) bool { return false }, r.run)
 	for _, path := range []string{"a", "b", "c"} {
 		p.add(ObjectPrefetch{FilePath: path, Size: 100})
 	}
@@ -100,7 +100,7 @@ func TestPrefetchQueueLimit(t *testing.T) {
 // A read that reaches a queued object drops its download.
 func TestPrefetcherRemove(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
 	require.Equal(t, "first", <-r.started)
 	for _, path := range []string{"a", "b", "c"} {
@@ -125,7 +125,7 @@ func TestPrefetcherRemove(t *testing.T) {
 // are asked for in, and a request that needs a queued object sooner moves it up.
 func TestPrefetcherDownloadsSoonestFirst(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
 	require.Equal(t, "first", <-r.started)
 	p.add(ObjectPrefetch{FilePath: "far", Size: 100, Due: 900})
@@ -146,7 +146,7 @@ func TestPrefetcherDownloadsSoonestFirst(t *testing.T) {
 // those needed sooner.
 func TestPrefetcherDownloadsLargerShareFirst(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
 	require.Equal(t, "first", <-r.started)
 	p.add(ObjectPrefetch{FilePath: "tenth", Size: 100, Due: 10, Reads: 6, Blocks: 57})
@@ -168,7 +168,7 @@ func TestPrefetcherDownloadsLargerShareFirst(t *testing.T) {
 // A download not started is dropped once every read it is for ended.
 func TestPrefetcherDropsEndedScans(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
 	require.Equal(t, "first", <-r.started)
 	a, b := new(PrefetchScan), new(PrefetchScan)
@@ -192,13 +192,27 @@ func TestPrefetcherDropsEndedScans(t *testing.T) {
 func TestObjectPrefetchMerge(t *testing.T) {
 	got := ObjectPrefetch{Size: 7, Due: 20, Reads: 1, Blocks: 10}.merge(ObjectPrefetch{Size: 7, Due: 30, Reads: 9, Blocks: 10})
 	require.Equal(t, ObjectPrefetch{Size: 7, Due: 20, Reads: 9, Blocks: 10}, got)
+
+	id, cat, name := PrefetchRange{Offset: 0, Size: 10}, PrefetchRange{Offset: 100, Size: 20}, PrefetchRange{Offset: 50, Size: 5}
+	columns := ObjectPrefetch{Size: 30, Ranges: []PrefetchRange{id, cat}}
+	got = columns.merge(ObjectPrefetch{Size: 15, Ranges: []PrefetchRange{id, name}})
+	require.Equal(t, []PrefetchRange{id, cat, name}, got.Ranges, "the ranges add up")
+	require.Equal(t, int64(35), got.Size)
+	require.Equal(t, []PrefetchRange{id, cat}, columns.Ranges)
+
+	got = columns.merge(ObjectPrefetch{Size: 1000})
+	require.Nil(t, got.Ranges, "the whole object takes over")
+	require.Equal(t, int64(1000), got.Size)
+	got = ObjectPrefetch{Size: 1000}.merge(columns)
+	require.Nil(t, got.Ranges, "the whole object stays whole")
+	require.Equal(t, int64(1000), got.Size)
 }
 
 // A queue at its most bytes makes room for an object needed sooner by dropping the one
 // needed last.
 func TestPrefetcherFullQueueDropsFarthest(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(0, func() int64 { return 200 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(0, func() int64 { return 200 }, func(ObjectPrefetch) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 100, Due: 100})
 	p.add(ObjectPrefetch{FilePath: "b", Size: 100, Due: 300})
 	p.add(ObjectPrefetch{FilePath: "c", Size: 100, Due: 200})
@@ -213,7 +227,7 @@ func TestPrefetcherFullQueueDropsFarthest(t *testing.T) {
 // Close cancels the running downloads instead of waiting for them to end.
 func TestPrefetcherCloseCancelsRunning(t *testing.T) {
 	started := make(chan struct{})
-	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string, bool) bool { return false }, func(ctx context.Context, _ ObjectPrefetch) {
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(ObjectPrefetch) bool { return false }, func(ctx context.Context, _ ObjectPrefetch) {
 		close(started)
 		<-ctx.Done()
 	})
@@ -225,7 +239,7 @@ func TestPrefetcherCloseCancelsRunning(t *testing.T) {
 // A full queue drops a download whose reads all ended before it drops a live one.
 func TestPrefetcherFullQueueDropsEndedFirst(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(0, func() int64 { return 200 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(0, func() int64 { return 200 }, func(ObjectPrefetch) bool { return false }, r.run)
 	ended := new(PrefetchScan)
 	p.add(ObjectPrefetch{FilePath: "ended", Size: 100, Due: 1, Scan: ended})
 	p.add(ObjectPrefetch{FilePath: "live", Size: 100, Due: 2})
@@ -240,7 +254,7 @@ func TestPrefetcherFullQueueDropsEndedFirst(t *testing.T) {
 // A request larger than the queue holds drops nothing queued.
 func TestPrefetcherOversizedRequestDropsNothing(t *testing.T) {
 	r := newPrefetchRecorder()
-	p := newPrefetcher(0, func() int64 { return 200 }, func(string, bool) bool { return false }, r.run)
+	p := newPrefetcher(0, func() int64 { return 200 }, func(ObjectPrefetch) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 100, Due: 100})
 	p.add(ObjectPrefetch{FilePath: "b", Size: 100, Due: 200})
 	p.add(ObjectPrefetch{FilePath: "big", Size: 300, Due: 1})

@@ -30,16 +30,21 @@ import (
 // ObjectPrefetch asks to download, ahead of the read, the object at FilePath, of Size
 // bytes, which the read reaches at Due, in Unix nanoseconds, and of whose Blocks blocks
 // it reads Reads, 0 when unknown. The download is dropped if Scan ends before it starts.
-// A Narrow read, which reads a small share of each object, leaves a cached object where it
-// is in the eviction order.
+// With Ranges, only those ranges of the object, of Size bytes in all, are downloaded.
 type ObjectPrefetch struct {
 	FilePath string
 	Size     int64
 	Due      int64
 	Reads    int
 	Blocks   int
-	Narrow   bool
+	Ranges   []PrefetchRange
 	Scan     *PrefetchScan
+}
+
+// PrefetchRange is a range of an object.
+type PrefetchRange struct {
+	Offset int64
+	Size   int64
 }
 
 // PrefetchScan is the read prefetches are for. A nil PrefetchScan never ends.
@@ -60,10 +65,24 @@ func (s *PrefetchScan) live() bool {
 
 // merge returns the prefetch of the object for both r and o: the sooner Due and the
 // larger share.
+// A request of the whole object takes over one of ranges, and ranges add up.
 func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	r.Due = min(r.Due, o.Due)
 	if o.share() > r.share() {
 		r.Reads, r.Blocks = o.Reads, o.Blocks
+	}
+	switch {
+	case len(r.Ranges) == 0:
+	case len(o.Ranges) == 0:
+		r.Ranges, r.Size = nil, o.Size
+	default:
+		r.Ranges = slices.Clone(r.Ranges)
+		for _, x := range o.Ranges {
+			if !slices.Contains(r.Ranges, x) {
+				r.Ranges = append(r.Ranges, x)
+				r.Size += x.Size
+			}
+		}
 	}
 	return r
 }
@@ -155,8 +174,8 @@ type prefetcher struct {
 	run    func(context.Context, ObjectPrefetch)
 	ctx    context.Context
 	cancel context.CancelFunc
-	have   func(filePath string, use bool) bool // the object is cached, which use marks used, or being downloaded
-	limit  func() int64                         // the most bytes queued
+	have   func(ObjectPrefetch) bool // what the request downloads is cached or being downloaded
+	limit  func() int64              // the most bytes queued
 	max    int
 	queued atomic.Int64
 
@@ -170,7 +189,7 @@ type prefetcher struct {
 	wg          sync.WaitGroup
 }
 
-func newPrefetcher(max int, limit func() int64, have func(string, bool) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
+func newPrefetcher(max int, limit func() int64, have func(ObjectPrefetch) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{run: run, ctx: ctx, cancel: cancel, have: have, limit: limit, max: max, entries: make(map[string]*prefetchEntry)}
 }
@@ -189,12 +208,14 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		e.addScan(req.Scan)
 		metric.FSPrefetchMergedCounter.Inc()
 		if e.index >= 0 {
+			size := e.req.Size
 			e.req = e.req.merge(req)
+			p.queuedBytes += e.req.Size - size
 			heap.Fix(&p.queue, e.index)
 		}
 		return
 	}
-	if p.have(req.FilePath, !req.Narrow) {
+	if p.have(req) {
 		metric.FSPrefetchCachedCounter.Inc()
 		return
 	}
@@ -346,10 +367,11 @@ func (s *S3FS) prefetchQueueLimit(workers int) func() int64 {
 	}
 }
 
-// haveObject reports whether the whole object of filePath is cached, which use marks used,
-// or being downloaded.
-func (s *S3FS) haveObject(filePath string, use bool) bool {
-	path, err := parseFilePathAtService(filePath, s.name)
+// haveObject reports whether the whole object of req is cached or being downloaded, or,
+// for a request of ranges, whether cached ranges cover them. A request of the whole object
+// marks a cached one used.
+func (s *S3FS) haveObject(req ObjectPrefetch) bool {
+	path, err := parseFilePathAtService(req.FilePath, s.name)
 	if err != nil {
 		return true
 	}
@@ -357,20 +379,36 @@ func (s *S3FS) haveObject(filePath string, use bool) bool {
 	if s.diskCache.download(diskPath) != nil {
 		return true
 	}
-	if !use {
-		return s.diskCache.cache.Contains(diskPath)
+	if len(req.Ranges) > 0 {
+		if s.diskCache.cache.Contains(diskPath) {
+			return true
+		}
+	} else if _, ok := s.diskCache.cache.Get(context.Background(), diskPath); ok {
+		return true
 	}
-	_, ok := s.diskCache.cache.Get(context.Background(), diskPath)
-	return ok
+	if len(req.Ranges) == 0 {
+		return false
+	}
+	key := s.diskCache.rangeObjectKey(path.File)
+	for _, r := range req.Ranges {
+		if _, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size); !ok {
+			return false
+		}
+	}
+	return true
 }
 
-// prefetchObject downloads the whole object of req at its known size.
+// prefetchObject downloads the whole object of req at its known size, or its ranges.
 func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	if closing := s.diskCache.async.ctx; closing != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
 		defer context.AfterFunc(closing, cancel)()
+	}
+	if len(req.Ranges) > 0 {
+		s.prefetchRanges(ctx, req)
+		return
 	}
 	path, err := parseFilePathAtService(req.FilePath, s.name)
 	if err != nil {
@@ -381,6 +419,26 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 		metric.FSPrefetchFailedCounter.Inc()
 		logutil.Debug("fileservice: prefetch object", zap.String("path", req.FilePath), zap.Error(err))
 		return
+	}
+	metric.FSPrefetchDownloadedCounter.Inc()
+}
+
+// prefetchRanges reads each range of req into the disk cache on its own, so the bytes
+// between them are not read.
+func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
+	for _, r := range req.Ranges {
+		vector := &IOVector{
+			FilePath: req.FilePath,
+			Entries:  []IOEntry{{Offset: r.Offset, Size: r.Size}},
+			Policy:   SkipMemoryCacheWrites | SkipFullFilePreloads | ColumnPrefetch,
+		}
+		err := s.Read(ctx, vector)
+		vector.Release()
+		if err != nil {
+			metric.FSPrefetchFailedCounter.Inc()
+			logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))
+			return
+		}
 	}
 	metric.FSPrefetchDownloadedCounter.Inc()
 }

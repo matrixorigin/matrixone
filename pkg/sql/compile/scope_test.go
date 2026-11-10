@@ -647,7 +647,7 @@ func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 			require.NoError(t, scope.Run(&Compile{proc: proc}))
 			want := fileservice.Policy(0)
 			if skip {
-				want = fileservice.NarrowRead
+				want = fileservice.SkipFullFilePreloads | fileservice.ColumnPrefetch
 			}
 			require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
 			wantGroup := uint64(0)

@@ -1766,6 +1766,12 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			idx++
 		}
 		end = max(end, idx)
+		if policy.Any(fileservice.ColumnPrefetch) {
+			if err := ls.prefetchColumns(ctx, blk, seqNums, due); err != nil {
+				logutil.Debug("prefetch columns", zap.String("blk", blk.String()), zap.Error(err))
+			}
+			continue
+		}
 		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
 		}
@@ -1785,8 +1791,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 			}
 			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
 				FilePath: blk.MetaLocation().Name().String(),
-				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Narrow: policy.Any(fileservice.NarrowRead),
-				Scan: ls.rc.prefetchScan,
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
 			})
 		} else {
 			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
@@ -1799,6 +1804,40 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	}
 
 	ls.rc.batchPrefetchCursor = max(end, begin)
+}
+
+// prefetchColumns asks to download, from the object of blk, the ranges that hold the
+// columns seqNums across all its blocks, which the scan reaches at due.
+func (ls *LocalDisttaeDataSource) prefetchColumns(ctx context.Context, blk *objectio.BlockInfo, seqNums []uint16, due int64) error {
+	prefetcher, ok := ls.fs.(fileservice.ObjectPrefetcher)
+	if !ok {
+		return nil
+	}
+	loc := blk.MetaLocation()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, ls.fs)
+	if err != nil {
+		return err
+	}
+	data := meta.MustDataMeta()
+	if ls.rc.prefetchScan == nil {
+		ls.rc.prefetchScan = new(fileservice.PrefetchScan)
+	}
+	req := fileservice.ObjectPrefetch{FilePath: loc.Name().String(), Due: due, Scan: ls.rc.prefetchScan}
+	for _, seq := range seqNums {
+		if seq > data.BlockHeader().MaxSeqnum() {
+			continue
+		}
+		ext := data.MustGetColumn(seq).Location()
+		if ext.Length() == 0 {
+			continue
+		}
+		req.Ranges = append(req.Ranges, fileservice.PrefetchRange{Offset: int64(ext.Offset()), Size: int64(ext.Length())})
+		req.Size += int64(ext.Length())
+	}
+	if len(req.Ranges) == 0 {
+		return nil
+	}
+	return prefetcher.PrefetchObject(ctx, req)
 }
 
 const (
