@@ -71,6 +71,26 @@ select c from string_result order by c;
 select c, c+1 as next_value from unsigned_result order by c;
 select c, c+1 as next_value from decimal_result order by c;
 
+-- 裸 NULL 的占位宽度不参与 CHAR/VARCHAR 扩宽，显式类型和真实字符串仍参与。
+-- @metacmp(true)
+select cast('a' as char(1)) as c union all select null order by c;
+-- @metacmp(true)
+select null as c union all select cast('ab' as varchar(2)) order by c;
+create table width_char as select cast('a' as char(1)) as c union all select null;
+create table width_varchar as select null as c union all select cast('ab' as varchar(2));
+create table width_nested as select cast('a' as char(1)) as c union all (((select null)) union ((select null)));
+create table width_char_wide as select cast('a' as char(1)) as c union all select cast('abcdefgh' as char(8));
+create table width_varchar_wide as select cast('ab' as varchar(2)) as c union all select cast('abcdefgh' as varchar(8));
+create table width_typed as select cast('a' as char(1)) as c union all select cast(null as char(8));
+select table_name,data_type,character_maximum_length,is_nullable from information_schema.columns
+where table_schema='union_null_type' and table_name like 'width_%' and column_name='c' order by table_name;
+select c from width_char order by c;
+select c from width_varchar order by c;
+select c from width_nested order by c;
+select c from width_char_wide order by c;
+select c from width_varchar_wide order by c;
+select c from width_typed order by c;
+
 -- 全 NULL 和非集合 SELECT 仍须能执行；共享集合入口不破坏过滤语义。
 select null as c;
 select null as c union all select null;

@@ -1000,6 +1000,57 @@ func TestUnionUntypedNullOutputType(t *testing.T) {
 	}
 }
 
+func TestUnionUntypedNullStringWidth(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		query    string
+		typ      types.T
+		width    int32
+		nullable bool
+	}{
+		{"char null right", "select cast('a' as char(1)) as c union all select null", types.T_char, 1, true},
+		{"char null left", "select null as c union all select cast('a' as char(1))", types.T_char, 1, true},
+		{"varchar null right", "select cast('ab' as varchar(2)) as c union all select null", types.T_varchar, 2, true},
+		{"varchar null left", "select null as c union all select cast('ab' as varchar(2))", types.T_varchar, 2, true},
+		{"nested char", "select cast('a' as char(1)) as c union all (select null union select null)", types.T_char, 1, true},
+		{"nested varchar", "(select null as c union all select cast('ab' as varchar(2))) union all select null", types.T_varchar, 2, true},
+		{"folded char", "select cast('a' as char(1)) as c union all (((select null)) union ((select null)))", types.T_char, 1, true},
+		{"real char widening", "select cast('a' as char(1)) as c union all select cast('abcdefgh' as char(8))", types.T_char, 8, false},
+		{"real varchar widening", "select cast('ab' as varchar(2)) as c union all select cast('abcdefgh' as varchar(8))", types.T_varchar, 8, false},
+		{"typed char null", "select cast('a' as char(1)) as c union all select cast(null as char(8))", types.T_char, 8, true},
+		{"typed varchar null", "select cast('ab' as varchar(2)) as c union all select cast(null as varchar(8))", types.T_varchar, 8, true},
+		{"all null fallback", "select null as c union all select null", types.T_text, 4, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, ctas := range []bool{false, true} {
+				name, sql := "select", test.query
+				if ctas {
+					name, sql = "ctas", "create table union_string_width as "+sql
+				}
+				t.Run(name, func(t *testing.T) {
+					p, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+					require.NoError(t, err)
+					var typ plan.Type
+					if ctas {
+						col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+						typ = col.Typ
+						require.Equal(t, test.nullable, col.Default.NullAbility)
+					} else {
+						query := p.GetQuery()
+						require.Len(t, query.Steps, 1)
+						output := query.Nodes[query.Steps[0]].ProjectList
+						require.Len(t, output, 1)
+						typ = output[0].Typ
+					}
+					require.Equal(t, int32(test.typ), typ.Id)
+					require.Equal(t, test.width, typ.Width)
+					require.Equal(t, !test.nullable, typ.NotNullable)
+				})
+			}
+		})
+	}
+}
+
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
