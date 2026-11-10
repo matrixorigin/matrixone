@@ -192,3 +192,22 @@ acceptable way to build a constant view. The compact mapping removes that array
 and its second, accounted copy. Tests must cover nulls, nested selection/window,
 reader closure, independent cursor lifetime and final account release for both
 private and cache-backed owners.
+
+### Closed reader consumption (candidate revision 32)
+
+The Go JSONReader interface alone does not seal its implementations: another
+package can wrap a real owner and override its query methods. JSON_VALUE's
+reader entry must therefore accept only the concrete private Vector owner or
+the concrete private ObjectIO cache owner, checking identity before calling any
+interface method. Windows, selections and repeat views preserve those concrete
+owner types. An unrelated implementation or a wrapper around a valid owner is
+rejected; it cannot manufacture read authority by exposing a bool, a lease, a
+buffer address or arbitrary callbacks. The identity predicates confer no new
+qualification and accept no byte payload.
+
+Review decision: interface documentation by itself does not meet the closed
+capability requirement. Add a forged-reader regression and preserve deterministic
+cancellation tests without letting production accept arbitrary readers. Earlier
+references to sealed interfaces mean this enforced consumption boundary, not a
+claim that the Go compiler prevents other packages from implementing an exported
+interface.
