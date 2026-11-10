@@ -36,7 +36,7 @@ internal error: l2 distance: vector magnitude is too large, the result overflows
 select inner_product('[1e30,1e30]', '[1e30,1e30]');
 internal error: inner product: vector magnitude is too large, the result overflows the element domain
 select l2_distance('[]', '[]');
-internal error: malformed vector input: []
+invalid input: malformed vector input: []
 select inner_product(cast('[1,2]' as vecf64(2)), cast('[3,4]' as vecf32(2))) mixed;
 ➤ mixed[8,53,31]  𝄀
 -11.0

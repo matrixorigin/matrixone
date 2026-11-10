@@ -269,7 +269,7 @@ func issue31882ValuesSubqueryAndNull(t *testing.T, conn *sql.Conn) {
 
 	// Public-SQL BIT carrier witness (PR32350 review P2): a raw BIT payload
 	// is never a parsed vector carrier, so the statement must surface the
-	// checked string-to-array conversion (Error 20101 "malformed vector
+	// checked string-to-array conversion (Error 20301 "malformed vector
 	// input" from the array parser), and the same connection must keep
 	// accepting genuine vector literals afterwards.
 	_, err = conn.ExecContext(ctx,
@@ -277,8 +277,8 @@ func issue31882ValuesSubqueryAndNull(t *testing.T, conn *sql.Conn) {
 	require.Error(t, err, "the raw BIT payload must not pass the vector assignment unchecked")
 	require.ErrorAs(t, err, &mysqlErr,
 		"the BIT rejection must surface as the driver's typed MySQL error")
-	require.Equal(t, uint16(20101), mysqlErr.Number,
-		"the checked vector conversion error is moerr.ErrInternal malformed vector input")
+	require.Equal(t, uint16(20301), mysqlErr.Number,
+		"the checked vector conversion error is moerr.ErrInvalidInput malformed vector input")
 	require.ErrorContains(t, err, "malformed vector input")
 	_, err = conn.ExecContext(ctx,
 		`insert into t_values_subquery_null values (8, (select 8), 8.80, 'h', '[1,2,3]')`)
