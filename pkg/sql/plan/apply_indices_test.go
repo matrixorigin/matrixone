@@ -910,6 +910,45 @@ func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
 	require.Nil(t, indexScan.IndexReaderParam)
 }
 
+func TestScopedForceIndexPreservesFilterEvaluationDomain(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		hint   string
+		suffix string
+	}{
+		{name: "order by", hint: "force index for order by(idx_a)", suffix: "order by a"},
+		{name: "group by", hint: "force index for group by(idx_a)", suffix: "group by a"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			planScan := func(t *testing.T, inValue string) *planpb.Node {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addIndexHintChoiceTableForTest(mock)
+				mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
+
+				queryPlan, err := runOneStmt(likePrefixPlanOptimizer(mock, 32768), t,
+					"select a from index_hint_t "+test.hint+
+						" where a like 'abc%' and a in ("+inValue+",'abc1') "+test.suffix)
+				require.NoError(t, err)
+				indexScan := findFirstIndexScanNode(queryPlan)
+				require.NotNil(t, indexScan)
+				require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+				require.NotEmpty(t, indexScan.FilterList)
+				return indexScan
+			}
+
+			t.Run("throwing bounds retain decoded filters", func(t *testing.T) {
+				indexScan := planScan(t, "regexp_replace('x','[','y')")
+				requireFuncNames(t, indexScan.FilterList, "in")
+				requireNoFuncNames(t, indexScan.FilterList, "prefix_in", "prefix_between", "prefix_in_range")
+			})
+			t.Run("literal bounds retain serialized access", func(t *testing.T) {
+				indexScan := planScan(t, "'abcX'")
+				requireFuncNames(t, indexScan.FilterList, "prefix_in")
+			})
+		})
+	}
+}
+
 func TestForceIndexOrderAcceptsEqualityFixedLeadingPrefix(t *testing.T) {
 	tests := []struct {
 		name       string

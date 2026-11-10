@@ -1564,8 +1564,10 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 	}
 	// Group/order hint processing runs before ordinary index selection. Reuse
 	// its serialized range access here instead of reducing the range to a
-	// decoded residual over the whole covering index.
-	if usableRegularHintIndex(idxDef) && node != nil && node.Stats != nil && node.TableDef != nil && hintedIndexContainsQualifyingRows(idxDef, node) {
+	// decoded residual over the whole covering index. A different driving
+	// predicate must not expose errors on rows the decoded filters would skip.
+	if usableRegularHintIndex(idxDef) && node != nil && node.Stats != nil && node.TableDef != nil &&
+		hintedIndexContainsQualifyingRows(idxDef, node) && regularIndexFiltersHaveStableEvaluation(node) {
 		costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 		if match, _ := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx); match != nil && match.filterType != EqualIndexCondition {
 			scanSnapshot := node.ScanSnapshot
