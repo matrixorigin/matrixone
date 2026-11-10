@@ -26,7 +26,7 @@ import (
 // vecf8/vecf4 casts: text "[...]", a BLOB of little-endian float32 elements (the binary
 // vector input of vecf32), vecf32 and vecf8/vecf4 sources quantize into the target cell
 // format; the exact text (a JSON object, types.BlockScaledToJSON) and the stored cell as a
-// BLOB (vecblock_binary) build the cell as written; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
+// BLOB (vecblock_binary) build the cell as written; vecf8/vecf4 sources dequantize to vecf32 or vecf64. Text targets are not
 // casts, as for vecf32; values render as text through the output path.
 
 func init() {
@@ -35,7 +35,7 @@ func init() {
 		supportedTypeCast[s] = append(supportedTypeCast[s], blockScaled...)
 	}
 	for _, s := range blockScaled {
-		supportedTypeCast[s] = append(supportedTypeCast[s], types.T_array_float32, types.T_array_float8, types.T_array_float4)
+		supportedTypeCast[s] = append(supportedTypeCast[s], types.T_array_float32, types.T_array_float64, types.T_array_float8, types.T_array_float4)
 	}
 }
 
@@ -140,15 +140,17 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 	return nil
 }
 
-// blockScaledToOthers casts a vecf8/vecf4 source to vecf32.
+// blockScaledToOthers casts a vecf8/vecf4 source to vecf32 or vecf64.
 func blockScaledToOthers(proc *process.Process, from *vector.Vector, toType types.Type,
 	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
-	if toType.Oid != types.T_array_float32 {
+	// typeswitch:partial vecf8/vecf4 dequantize only to vecf32 and vecf64
+	if toType.Oid != types.T_array_float32 && toType.Oid != types.T_array_float64 {
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
 	src := vector.GenerateFunctionStrParameter(from)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var arr []float32
+	var arr64 []float64
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := src.GetStrValue(i)
 		if null || castRowSkipped(selectList, i) {
@@ -164,9 +166,22 @@ func blockScaledToOthers(proc *process.Process, from *vector.Vector, toType type
 		if err := checkVectorCastDim(toType, c.Dim); err != nil {
 			return err
 		}
-		arr = append(arr[:0], make([]float32, c.Dim)...)
+		if cap(arr) < c.Dim {
+			arr = make([]float32, c.Dim)
+		}
+		arr = arr[:c.Dim]
 		c.Dequantize(arr)
-		if err := rs.AppendBytes(types.ArrayToBytes(arr), false); err != nil {
+		var cell []byte
+		if toType.Oid == types.T_array_float64 {
+			arr64 = arr64[:0]
+			for _, v := range arr {
+				arr64 = append(arr64, float64(v))
+			}
+			cell = types.ArrayToBytes(arr64)
+		} else {
+			cell = types.ArrayToBytes(arr)
+		}
+		if err := rs.AppendBytes(cell, false); err != nil {
 			return err
 		}
 	}
