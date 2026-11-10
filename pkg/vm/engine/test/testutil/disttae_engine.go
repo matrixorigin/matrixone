@@ -251,36 +251,40 @@ func NewTestDisttaeEngine(
 
 	// This fixture skips frontend bootstrap. Build the real inventory definition
 	// without requiring mo_indexes, which individual engine tests own themselves.
-	bootstrap, err := de.txnClient.New(de.ctx, de.Now())
+	bootstrapCtx, cancelBootstrap := context.WithTimeout(de.ctx, time.Minute)
+	defer cancelBootstrap()
+	bootstrap, err := de.txnClient.New(bootstrapCtx, de.Now())
 	if err != nil {
 		return de, err
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = bootstrap.Rollback(de.ctx)
+			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(bootstrapCtx), 10*time.Second)
+			defer cancel()
+			_ = bootstrap.Rollback(rollbackCtx)
 		}
 	}()
-	if err = de.Engine.New(de.ctx, bootstrap); err != nil {
+	if err = de.Engine.New(bootstrapCtx, bootstrap); err != nil {
 		return de, err
 	}
 	const temporaryInventory = "mo_indexes_inventory_fixture"
 	ddl := strings.Replace(catalog.MoDatabaseInventoryDDL, catalog.MODatabaseInventory, temporaryInventory, 1)
-	result, err := sqlExecutor.Exec(de.ctx, ddl, executor.Options{}.WithTxn(bootstrap).
+	result, err := sqlExecutor.Exec(bootstrapCtx, ddl, executor.Options{}.WithTxn(bootstrap).
 		WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
 	if err != nil {
 		return de, err
 	}
 	result.Close()
-	database, err := de.Engine.Database(de.ctx, catalog.MO_CATALOG, bootstrap)
+	database, err := de.Engine.Database(bootstrapCtx, catalog.MO_CATALOG, bootstrap)
 	if err != nil {
 		return de, err
 	}
-	temporary, err := database.Relation(de.ctx, temporaryInventory, nil)
+	temporary, err := database.Relation(bootstrapCtx, temporaryInventory, nil)
 	if err != nil {
 		return de, err
 	}
-	defs, err := temporary.TableDefs(de.ctx)
+	defs, err := temporary.TableDefs(bootstrapCtx)
 	if err != nil {
 		return de, err
 	}
@@ -293,13 +297,13 @@ func NewTestDisttaeEngine(
 			}
 		}
 	}
-	if err = database.Create(de.ctx, catalog.MODatabaseInventory, defs); err != nil {
+	if err = database.Create(bootstrapCtx, catalog.MODatabaseInventory, defs); err != nil {
 		return de, err
 	}
-	if err = database.Delete(de.ctx, temporaryInventory); err != nil {
+	if err = database.Delete(bootstrapCtx, temporaryInventory); err != nil {
 		return de, err
 	}
-	if err = bootstrap.Commit(de.ctx); err != nil {
+	if err = bootstrap.Commit(bootstrapCtx); err != nil {
 		return de, err
 	}
 	committed = true
