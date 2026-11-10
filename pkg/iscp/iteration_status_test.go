@@ -16,16 +16,20 @@ package iscp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -79,10 +83,108 @@ type statusTestTxn struct {
 	client.TxnOperator
 	commits, rollbacks int
 	commitErr          error
+	rollbackErr        error
 }
 
-func (t *statusTestTxn) Commit(context.Context) error   { t.commits++; return t.commitErr }
-func (t *statusTestTxn) Rollback(context.Context) error { t.rollbacks++; return nil }
+func (t *statusTestTxn) Commit(context.Context) error    { t.commits++; return t.commitErr }
+func (t *statusTestTxn) Rollback(context.Context) error  { t.rollbacks++; return t.rollbackErr }
+func (t *statusTestTxn) SnapshotTS() timestamp.Timestamp { return timestamp.Timestamp{} }
+
+type initPanicExecutor struct {
+	calls   int
+	panicAt int
+}
+
+func (e *initPanicExecutor) Exec(context.Context, string, executor.Options) (executor.Result, error) {
+	e.calls++
+	if e.calls == e.panicAt {
+		panic("initializer panic")
+	}
+	return executor.Result{}, nil
+}
+
+func (*initPanicExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+	panic("unexpected transaction")
+}
+
+func TestProcessInitSQLFinalizationOutcome(t *testing.T) {
+	operationErr := errors.New("initializer failed")
+	finalizeErr := errors.New("transaction outcome unknown")
+	for _, tc := range []struct {
+		name        string
+		operation   error
+		commitErr   error
+		rollbackErr error
+		uncertain   bool
+		commits     int
+		rollbacks   int
+	}{
+		{name: "success", commits: 1},
+		{name: "commit acknowledgement lost", commitErr: finalizeErr, uncertain: true, commits: 1},
+		{name: "confirmed rollback", operation: operationErr, rollbacks: 1},
+		{name: "rollback failed", operation: operationErr, rollbackErr: finalizeErr, uncertain: true, rollbacks: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := &statusTestTxn{commitErr: tc.commitErr, rollbackErr: tc.rollbackErr}
+			ctx := defines.AttachAccountId(t.Context(), 0)
+			uncertain := false
+			err := processInitSQL(ctx, "", statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, "W10=", "", "", "", func(*sqlexec.SqlProcess) error { return tc.operation }, nil, &uncertain)
+			if tc.operation != nil {
+				require.ErrorIs(t, err, tc.operation)
+				if tc.rollbackErr == nil {
+					require.Same(t, tc.operation, err)
+				}
+			}
+			if tc.commitErr != nil || tc.rollbackErr != nil {
+				require.ErrorIs(t, err, finalizeErr)
+			}
+			if tc.operation == nil && tc.commitErr == nil {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.uncertain, uncertain)
+			require.Equal(t, tc.commits, txn.commits)
+			require.Equal(t, tc.rollbacks, txn.rollbacks)
+		})
+	}
+}
+
+func TestProcessInitSQLRollsBackOnCallbackPanic(t *testing.T) {
+	const service = "iscp-init-panic-test"
+	for _, phase := range []string{"before", "statement", "complete"} {
+		t.Run(phase, func(t *testing.T) {
+			txn := &statusTestTxn{}
+			sqlExec := &initPanicExecutor{}
+			if phase == "statement" {
+				sqlExec.panicAt = 2
+			}
+			rt := commonruntime.DefaultRuntime()
+			rt.SetGlobalVariables(commonruntime.InternalSQLExecutor, sqlExec)
+			commonruntime.SetupServiceBasedRuntime(service, rt)
+			ctx := defines.AttachAccountId(t.Context(), 0)
+			before := func(*sqlexec.SqlProcess) error {
+				if phase == "before" {
+					panic("initializer panic")
+				}
+				return nil
+			}
+			complete := func(*sqlexec.SqlProcess, types.TS) error {
+				if phase == "complete" {
+					panic("initializer panic")
+				}
+				return nil
+			}
+			require.PanicsWithValue(t, "initializer panic", func() {
+				sql := base64.StdEncoding.EncodeToString([]byte(`["first", "second"]`))
+				_ = processInitSQL(ctx, service, statusTestEngine{}, &statusTestClient{ops: []*statusTestTxn{txn}}, sql, "", "", "", before, complete, nil)
+			})
+			require.Zero(t, txn.commits)
+			require.Equal(t, 1, txn.rollbacks)
+			if phase == "statement" || phase == "complete" {
+				require.Equal(t, 2, sqlExec.calls)
+			}
+		})
+	}
+}
 
 func durableStatusResult(t *testing.T, mp *mpool.MPool, status *JobStatus, state int8, watermark types.TS) executor.Result {
 	t.Helper()

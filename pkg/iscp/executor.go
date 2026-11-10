@@ -119,9 +119,13 @@ func ISCPTaskExecutorFactory(
 			return
 		}
 
-		if err = exec.Start(); err != nil {
-			return
+		if err = exec.start(false); err != nil {
+			if !errors.Is(err, errExecutorPaused) {
+				return
+			}
+			logutil.Info("ISCP-Task initial admission stopped while paused", zap.Error(err))
 		}
+		err = nil
 		exec.waitForTermination(ctx)
 		exec.Stop()
 		return
@@ -239,7 +243,7 @@ func (exec *ISCPTaskExecutor) deleteTableEntry(table *TableEntry) {
 }
 
 func (exec *ISCPTaskExecutor) Resume() error {
-	err := exec.Start()
+	err := exec.start(true)
 	if err != nil {
 		return err
 	}
@@ -254,35 +258,85 @@ func (exec *ISCPTaskExecutor) Cancel() error {
 	// may hold the lock while doing recovery I/O; its generation context is
 	// derived from ownerCtx and must remain cancelable during that wait.
 	exec.terminateLifetime()
-	exec.runningMu.Lock()
-	defer exec.runningMu.Unlock()
-	exec.stopLocked()
+	exec.Stop()
 	return nil
 }
 
-// A failed worker cannot safely release its admitted generations. Stop that
-// generation and let the task owner reload durable state before rescheduling.
+// A failed worker cannot safely release its admitted generations. Stop the
+// generation and rebuild from durable state before admitting more work.
 func (exec *ISCPTaskExecutor) abandonWorker(failed Worker) {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
 	if !exec.running || exec.worker != failed || exec.isTerminated() {
 		return
 	}
-	exec.terminateLifetime()
-	exec.stopLocked()
+	exec.stopGenerationLocked(false)
+	parent := exec.ownerCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	exec.recoveryMu.Lock()
+	if exec.pauseRequested || exec.isTerminated() {
+		exec.recoveryMu.Unlock()
+		UnregisterExecutorRuntime(exec.cnUUID, exec)
+		return
+	}
+	recoveryCtx, recoveryCancel := context.WithCancel(parent)
+	exec.recoveryCancel = recoveryCancel
+	exec.recoveryMu.Unlock()
+	err := exec.initStateLocked(recoveryCtx)
+	exec.recoveryMu.Lock()
+	exec.recoveryCancel = nil
+	paused := exec.pauseRequested
+	exec.recoveryMu.Unlock()
+	if err != nil {
+		interrupted := recoveryCtx.Err() != nil && errors.Is(err, recoveryCtx.Err())
+		recoveryCancel()
+		UnregisterExecutorRuntime(exec.cnUUID, exec)
+		logutil.Error("ISCP-Task recovery failed", zap.Error(err))
+		if !interrupted && !paused {
+			exec.terminateLifetime()
+		}
+		return
+	}
+	generationCancel := exec.cancel
+	exec.cancel = func() { generationCancel(); recoveryCancel() }
+	go exec.run(exec.ctx, exec.worker)
 }
 
 func (exec *ISCPTaskExecutor) Restart() error {
 	exec.Stop()
-	err := exec.Start()
+	err := exec.start(true)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 func (exec *ISCPTaskExecutor) Start() error {
+	return exec.start(true)
+}
+
+var errExecutorPaused = moerr.NewInternalErrorNoCtx("ISCP executor is paused")
+
+func (exec *ISCPTaskExecutor) start(resume bool) error {
+	exec.recoveryMu.Lock()
+	epoch := exec.stopEpoch
+	exec.recoveryMu.Unlock()
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
+	exec.recoveryMu.Lock()
+	if epoch != exec.stopEpoch {
+		exec.recoveryMu.Unlock()
+		return errors.Join(errExecutorPaused, context.Canceled)
+	}
+	if exec.pauseRequested && !resume {
+		exec.recoveryMu.Unlock()
+		return errExecutorPaused
+	}
+	if resume {
+		exec.pauseRequested = false
+	}
+	exec.recoveryMu.Unlock()
 	if exec.isTerminated() {
 		return moerr.NewInternalErrorNoCtx("ISCP-Task Executor is canceled")
 	}
@@ -293,10 +347,29 @@ func (exec *ISCPTaskExecutor) Start() error {
 	if parent == nil {
 		parent = context.Background()
 	}
-	err := exec.initStateLocked(parent)
+	initCtx, initCancel := context.WithCancel(parent)
+	exec.recoveryMu.Lock()
+	if epoch != exec.stopEpoch {
+		exec.recoveryMu.Unlock()
+		initCancel()
+		return errors.Join(errExecutorPaused, context.Canceled)
+	}
+	exec.recoveryCancel = initCancel
+	exec.recoveryMu.Unlock()
+	err := exec.initStateLocked(initCtx)
+	exec.recoveryMu.Lock()
+	exec.recoveryCancel = nil
+	paused := exec.pauseRequested
+	exec.recoveryMu.Unlock()
 	if err != nil {
+		initCancel()
+		if paused {
+			return errors.Join(errExecutorPaused, err)
+		}
 		return err
 	}
+	generationCancel := exec.cancel
+	exec.cancel = func() { generationCancel(); initCancel() }
 	go exec.run(exec.ctx, exec.worker)
 	return nil
 }
@@ -375,12 +448,23 @@ func (exec *ISCPTaskExecutor) initStateLocked(parent context.Context) (err error
 }
 
 func (exec *ISCPTaskExecutor) Stop() {
+	exec.recoveryMu.Lock()
+	exec.stopEpoch++
+	exec.pauseRequested = true
+	if exec.recoveryCancel != nil {
+		exec.recoveryCancel()
+	}
+	exec.recoveryMu.Unlock()
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
 	exec.stopLocked()
 }
 
 func (exec *ISCPTaskExecutor) stopLocked() {
+	exec.stopGenerationLocked(true)
+}
+
+func (exec *ISCPTaskExecutor) stopGenerationLocked(unregister bool) {
 	if !exec.running {
 		return
 	}
@@ -391,7 +475,9 @@ func (exec *ISCPTaskExecutor) stopLocked() {
 	exec.cancel()
 	exec.worker.Stop()
 	exec.wg.Wait()
-	UnregisterExecutorRuntime(exec.cnUUID, exec)
+	if unregister {
+		UnregisterExecutorRuntime(exec.cnUUID, exec)
+	}
 	exec.ctx, exec.cancel = nil, nil
 	exec.worker = nil
 }
@@ -830,13 +916,13 @@ func (exec *ISCPTaskExecutor) loadReplay(
 			zap.Error(err),
 		)
 	}()
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp replay")
 	if err != nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, txn.Rollback(ctx))
@@ -1237,6 +1323,9 @@ func retry(
 	for i := 0; i < retryTimes; i++ {
 		select {
 		case <-ctx.Done():
+			if err != nil && !errors.Is(err, ctx.Err()) {
+				return errors.Join(err, ctx.Err())
+			}
 			return ctx.Err()
 		default:
 		}
@@ -1254,7 +1343,10 @@ func retry(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			if errors.Is(err, ctx.Err()) {
+				return err
+			}
+			return errors.Join(err, ctx.Err())
 		case <-timer.C:
 		}
 		interval *= 2

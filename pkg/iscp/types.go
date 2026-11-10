@@ -167,6 +167,11 @@ type ISCPTaskExecutor struct {
 
 	running   bool
 	runningMu sync.Mutex
+	// recoveryMu lets Pause interrupt recovery while recovery owns runningMu.
+	recoveryMu     sync.Mutex
+	recoveryCancel context.CancelFunc
+	pauseRequested bool
+	stopEpoch      uint64
 
 	runtimeMu        sync.Mutex
 	fencedJobs       map[JobRuntimeKey]JobFence
