@@ -774,7 +774,7 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
-	var addMonth, addYear int64
+	var addMonth, addYear, scale int64
 	switch its {
 	case MicroSecond:
 		if (nums > 0 && int64(dt) > math.MaxInt64-nums) || (nums < 0 && int64(dt) < math.MinInt64-nums) {
@@ -800,15 +800,15 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		}
 		return newDate, true
 	case Second:
-		nums *= MicroSecsPerSec
+		scale = MicroSecsPerSec
 	case Minute:
-		nums *= MicroSecsPerSec * SecsPerMinute
+		scale = MicroSecsPerSec * SecsPerMinute
 	case Hour:
-		nums *= MicroSecsPerSec * SecsPerHour
+		scale = MicroSecsPerSec * SecsPerHour
 	case Day:
-		nums *= MicroSecsPerSec * SecsPerDay
+		scale = MicroSecsPerSec * SecsPerDay
 	case Week:
-		nums *= MicroSecsPerSec * SecsPerWeek
+		scale = MicroSecsPerSec * SecsPerWeek
 	case Month:
 		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
@@ -825,7 +825,22 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
+	// Scaling the step to microseconds can wrap int64, which turns a huge step
+	// into a small or zero shift and still reports it as valid. Apply the same
+	// bounds the MicroSecond case already applies.
+	if scale != 0 {
+		if nums > math.MaxInt64/scale || nums < math.MinInt64/scale {
+			return 0, false
+		}
+		nums *= scale
+	}
+	if (nums > 0 && int64(dt) > math.MaxInt64-nums) || (nums < 0 && int64(dt) < math.MinInt64-nums) {
+		return 0, false
+	}
 	newDate := dt + Datetime(nums)
+	if newDate < 0 {
+		return 0, false
+	}
 	y, m, d, _ := newDate.ToDate().Calendar(true)
 	if !ValidDatetime(y, m, d) {
 		return 0, false

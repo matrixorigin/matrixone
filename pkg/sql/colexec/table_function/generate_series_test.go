@@ -424,6 +424,59 @@ func TestGenerateDatetimeSeriesRejectsInvalidNextStep(t *testing.T) {
 	}
 }
 
+func TestGenerateDatetimeSeriesRejectsOverflowingUnitStep(t *testing.T) {
+	proc := testutil.NewProc(t)
+	start := types.DatetimeFromClock(2020, 1, 1, 0, 0, 0, 0)
+	end := types.DatetimeFromClock(2021, 1, 1, 0, 0, 0, 0)
+
+	for _, shape := range []struct {
+		name   string
+		newVec func() *vector.Vector
+		build  func(*genDatetimeState, *batch.Batch, int, *process.Process) error
+	}{
+		{
+			name:   "datetime",
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6)) },
+			build:  buildNextDatetimeBatch,
+		},
+		{
+			name:   "string",
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType()) },
+			build:  buildNextDatetimeStringBatch,
+		},
+	} {
+		for _, unit := range []struct {
+			name string
+			tp   types.IntervalType
+		}{
+			{name: "second", tp: types.Second},
+			{name: "minute", tp: types.Minute},
+			{name: "hour", tp: types.Hour},
+			{name: "day", tp: types.Day},
+			{name: "week", tp: types.Week},
+		} {
+			t.Run(shape.name+"/"+unit.name, func(t *testing.T) {
+				state := &genDatetimeState{
+					start: start,
+					end:   end,
+					next:  start,
+					step:  1 << 58,
+					tp:    unit.tp,
+					scale: 6,
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = shape.newVec()
+				owner := &generateSeriesArg{batch: bat}
+				t.Cleanup(func() { owner.free(nil, proc, false, nil) })
+
+				err := shape.build(state, bat, 4, proc)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "invalid step")
+			})
+		}
+	}
+}
+
 func TestInitStartAndEndNumNoTypeCheck(t *testing.T) {
 	proc := testutil.NewProc(t)
 	tests := []struct {

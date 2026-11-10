@@ -848,6 +848,45 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 	}
 }
 
+// Second through Week scale the step into microseconds before adding it, and
+// that multiplication can wrap int64 back into the representable range.
+func TestAddIntervalScaledUnitOverflow(t *testing.T) {
+	start := DatetimeFromClock(2020, 1, 1, 0, 0, 0, 0)
+	for _, test := range []struct {
+		name string
+		unit IntervalType
+		// wrapped is a step under IntervalNumMAX whose scaled product still
+		// wraps to a sub-second residue, so JudgeIntervalNumOverflow passes it.
+		wrapped int64
+	}{
+		{name: "second", unit: Second},
+		{name: "minute", unit: Minute, wrapped: 7071251894922},
+		{name: "hour", unit: Hour, wrapped: 6061805066444},
+		{name: "day", unit: Day, wrapped: 7633407880409},
+		{name: "week", unit: Week, wrapped: 3054967482088},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// 1<<58 microseconds per unit is a whole multiple of 1<<64, so the
+			// wrapped product is exactly zero and the shift silently vanishes.
+			_, valid := start.AddInterval(1<<58, test.unit, DateTimeType)
+			require.False(t, valid)
+			_, valid = start.AddInterval(-(1 << 58), test.unit, DateTimeType)
+			require.False(t, valid)
+			_, valid = start.AddInterval(math.MaxInt64, test.unit, DateTimeType)
+			require.False(t, valid)
+			if test.wrapped != 0 {
+				require.NoError(t, JudgeIntervalNumOverflow(test.wrapped, test.unit))
+				_, valid = start.AddInterval(test.wrapped, test.unit, DateTimeType)
+				require.False(t, valid)
+			}
+
+			got, valid := start.AddInterval(1, test.unit, DateTimeType)
+			require.True(t, valid)
+			require.NotEqual(t, start, got)
+		})
+	}
+}
+
 func TestDatetimeDSTGapUsesFirstRepresentableWallTime(t *testing.T) {
 	for _, tc := range []struct {
 		zone, input, want string
