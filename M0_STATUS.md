@@ -2,6 +2,28 @@
 
 
 
+
+## Approved linter dependency, 2026-11-10
+
+The fixed molint dependency now points to
+`v0.0.0-20261110103926-fffeed40d292`, the official merge of
+matrixorigin/linter#56. The accepted rule recognizes the three specific M0
+recovery owners while retaining unrelated/direct-worker rejection. No recovery
+or cleanup code, checker flag, coverage threshold or database dependency changed.
+
+The official module was installed with Go 1.27.1 and its module/binary identity
+was verified. All six linter test roots and six static-runner tests passed.
+The affected disttae and TN logtail packages passed the enabled molint checks
+in both default and M0 modes. The changed installation recipe invalidates the
+SCA tool-cache key. Product/native inputs are unchanged; prior runtime evidence
+is reused rather than mechanically rerun for a tool pin.
+
+Published parent `cee1bc55` completed UT, shared build and both BVT jobs. Its
+actual remote changed-code coverage is 1239/1634 (75.83%), PASS; the only failing
+analysis was the four recovery-policy findings plus the dependent CI Required
+gate. The new publication head still requires its own remote SCA/CI result.
+Review acceptance, Linux qualification and QA are not changed by linter approval.
+
 ## CI coverage repair, 2026-11-10
 
 This repair is based on published head `0695e8c1`. The default coverage producer
