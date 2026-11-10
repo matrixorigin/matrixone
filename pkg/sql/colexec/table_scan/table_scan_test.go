@@ -499,19 +499,21 @@ func TestInlineFilter(t *testing.T) {
 // length 0", killing the query. Every populated vector must still be shrunk.
 func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	bat := batch.NewWithSize(3)
+	defer bat.Clean(mp)
 
 	pk := vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = pk
 	require.NoError(t, vector.AppendFixedList(pk, []int64{10, 11, 12, 13, 14}, nil, mp))
 	// The ORDER BY vector column: values already consumed to compute distances, then
 	// cleared by the reader — deliberately 0 rows while its siblings hold 5.
 	emptied := vector.NewVec(types.T_int64.ToType())
 	dist := vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[1], bat.Vecs[2] = emptied, dist
 	require.NoError(t, vector.AppendFixedList(dist, []float64{0.5, 0.4, 0.3, 0.2, 0.1}, nil, mp))
 
-	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = pk, emptied, dist
 	bat.SetRowCount(5)
-	defer bat.Clean(mp)
 
 	require.NotPanics(t, func() {
 		shrinkPopulatedVecs(bat, []int64{1, 3})
@@ -527,13 +529,14 @@ func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 // has the same short-circuit), and a batch with no rows must not be walked at all.
 func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 
 	bat := batch.NewWithSize(1)
-	v := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
-	bat.Vecs[0] = v
-	bat.SetRowCount(3)
 	defer bat.Clean(mp)
+	v := vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = v
+	require.NoError(t, vector.AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
+	bat.SetRowCount(3)
 
 	shrinkPopulatedVecs(bat, []int64{0, 1, 2})
 	require.Equal(t, 3, bat.RowCount())
