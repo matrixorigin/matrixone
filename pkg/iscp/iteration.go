@@ -311,7 +311,7 @@ func ExecuteIterationWithRuntime(
 		return
 	}
 
-	runISCPTaskIterationConsumers(
+	needsRecovery := runISCPTaskIterationConsumers(
 		ctx,
 		runtime,
 		iterCtx,
@@ -331,7 +331,7 @@ func ExecuteIterationWithRuntime(
 		if consumer, ok := consumers[i].(*IndexConsumer); ok {
 			consumer.invalidateOutputCaches()
 		}
-		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
+		if needsRecovery[i] || (runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i]))) {
 			publicationErr = errors.Join(publicationErr, errIterationNeedsRecovery)
 			continue
 		}
@@ -383,7 +383,8 @@ func runISCPTaskIterationConsumers(
 	insCompositedPkColIdx int,
 	delTSColIdx int,
 	delCompositedPkColIdx int,
-) {
+) []bool {
+	needsRecovery := make([]bool, len(consumers))
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -528,8 +529,8 @@ func runISCPTaskIterationConsumers(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			consumerCtx, consumerCancel := context.WithCancel(ctx)
-			defer consumerCancel()
+			consumerCtx, consumerCancel := context.WithCancelCause(ctx)
+			defer consumerCancel(nil)
 			consumerCtx = context.WithValue(consumerCtx, defines.TenantIDKey{}, catalog.System_Account)
 			var handle *RunningJobConsumer
 			key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])
@@ -539,10 +540,11 @@ func runISCPTaskIterationConsumers(
 					key,
 					iterCtx.jobIDs[i],
 					iterCtx.lsn[i],
-					consumerCancel,
+					func() { consumerCancel(errIterationNeedsRecovery) },
 					dataRetrievers[i].Cancel,
 				)
 				if !ok {
+					needsRecovery[i] = true
 					dataRetrievers[i].Cancel(moerr.NewInternalErrorNoCtx("iscp job consumer canceled"))
 					return
 				}
@@ -552,13 +554,19 @@ func runISCPTaskIterationConsumers(
 				if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-register-consumer:"+iterCtx.jobNames[i] {
 					logutil.Infof("ISCP-Task injected hook %s", msg)
 				}
-				defer runtime.UnregisterRunningConsumer(handle)
+				// Unregister under the runtime lock before reading the cause,
+				// so no fence callback can arrive after the observation.
+				// Rollback may already have removed the live fence map entry.
+				defer func() {
+					runtime.UnregisterRunningConsumer(handle)
+					needsRecovery[i] = errors.Is(context.Cause(consumerCtx), errIterationNeedsRecovery)
+				}()
 			}
 			err := consumerEntry.Consume(consumerCtx, dataRetrievers[i])
+			if errors.Is(context.Cause(consumerCtx), errIterationNeedsRecovery) {
+				return
+			}
 			if err != nil {
-				if runtime != nil && runtime.IsJobFenced(key) {
-					return
-				}
 				logutil.Error(
 					"ISCP-Task sink consume failed",
 					zap.Uint32("tenantID", iterCtx.accountID),
@@ -579,6 +587,7 @@ func runISCPTaskIterationConsumers(
 
 	cancel()
 	changeHandelWg.Wait()
+	return needsRecovery
 }
 
 func flushFinalJobStatusOnIterationState(
