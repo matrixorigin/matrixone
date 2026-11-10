@@ -294,10 +294,6 @@ func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
 	pre.IsOldUpdate = false
 	pre.IsNewUpdate = true
 	require.False(t, shouldConvertZeroToNull(pre, proc))
-
-	pre.IsNewUpdate = false
-	pre.PreserveAutoValues = true
-	require.False(t, shouldConvertZeroToNull(pre, proc))
 }
 
 func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {

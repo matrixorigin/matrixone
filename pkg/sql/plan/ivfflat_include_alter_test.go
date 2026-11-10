@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -250,42 +249,4 @@ func TestCollectAffectedIndexNamesForAlterUsesLegacyIncludeParams(t *testing.T) 
 	names, err := collectAffectedIndexNamesForAlter(indexes, []string{"category"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"idx_gpu"}, names)
-}
-
-func TestAlterCompositePrimaryKeyRebuildsRenamedVectorIndex(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	base := mock.ctxt.tables["partsupp"]
-	base.Pkey.Names = base.Pkey.Names[2:]
-	base.Pkey.Cols = base.Pkey.Cols[2:]
-	base.Pkey.PkeyColName = catalog.CPrimaryKeyColName
-	base.Pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-	base.Cols = append(base.Cols, base.Pkey.CompPkeyCol)
-	idx := makeIvfIncludeAlterIndexDef("idx_ivf", nil)
-	idx.Parts = []string{"ps_availqty"}
-	base.Indexes = []*planpb.IndexDef{idx}
-
-	p, err := buildSingleStmt(mock, t, "alter table tpch.partsupp modify column ps_partkey bigint, rename column ps_availqty to qty")
-	require.NoError(t, err)
-	alter := p.GetDdl().GetAlterTable()
-	require.Len(t, alter.CopyTableDef.Indexes, 1)
-	require.Equal(t, []string{"qty"}, alter.CopyTableDef.Indexes[0].Parts)
-	require.False(t, alter.Options.SkipIndexesCopy[idx.IndexName])
-	require.Contains(t, alter.AffectedCols, idx.IndexName, "the compiler must rebuild the renamed index")
-}
-
-func TestAlterCopyIndexNameDoesNotAffectUnrelatedVectorColumn(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	base := mock.ctxt.tables["single_idx_t"]
-	base.Cols = append(base.Cols, &ColDef{Name: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}, Default: &planpb.Default{NullAbility: true}})
-	base.Indexes[0].IndexName = "val"
-	base.Indexes[0].Parts = []string{"payload"}
-	base.Indexes = append(base.Indexes, &planpb.IndexDef{
-		IndexName: "idx_vec", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"val"},
-	})
-	p, err := buildSingleStmt(mock, t, "alter table constraint_test.single_idx_t modify column payload bigint")
-	require.NoError(t, err)
-	alter := p.GetDdl().GetAlterTable()
-	require.Contains(t, alter.AffectedCols, "val")
-	require.NotContains(t, alter.AffectedCols, "idx_vec")
-	require.True(t, alter.Options.SkipIndexesCopy["idx_vec"])
 }

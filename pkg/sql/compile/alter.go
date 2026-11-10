@@ -729,13 +729,39 @@ func shouldEnableAlterCopyPipelineFlush(opt *plan.AlterCopyOpt) bool {
 	return opt != nil && opt.SkipPkDedup
 }
 
+func isAlterAffectedPluginIndex(indexDef *plan.IndexDef, affected []string) bool {
+	if indexDef == nil || len(affected) == 0 {
+		return false
+	}
+	if slices.Contains(affected, indexDef.IndexName) {
+		return true
+	}
+	for _, part := range indexDef.Parts {
+		if isAlterAffectedColumnName(affected, part) {
+			return true
+		}
+	}
+	for _, col := range indexDef.IncludedColumns {
+		if isAlterAffectedColumnName(affected, col) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlterAffectedColumnName(affected []string, name string) bool {
+	if slices.Contains(affected, name) {
+		return true
+	}
+	resolved := catalog.ResolveAlias(name)
+	return resolved != name && slices.Contains(affected, resolved)
+}
+
 func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
 	opt := executor.StatementOption{}
-	if alterOpt != nil {
-		opt = opt.WithAlterTableCopyTarget(alterOpt.TargetTableName)
-		if alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0 || len(alterOpt.SkipIndexesCopy) > 0 {
-			opt = opt.WithAlterCopyOpt(alterOpt)
-		}
+	if alterOpt != nil &&
+		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0) {
+		opt = opt.WithAlterCopyOpt(alterOpt)
 	}
 	return opt
 }
@@ -785,16 +811,7 @@ func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull
 	for _, colName := range pkCols {
 		oldCol := plan2.FindColumn(qry.GetTableDef().GetCols(), colName)
 		newCol := plan2.FindColumn(qry.CopyTableDef.GetCols(), colName)
-		if oldCol == nil || newCol == nil || oldCol.Hidden || newCol.Hidden ||
-			oldCol.GeneratedCol != nil || newCol.GeneratedCol != nil ||
-			oldCol.ColId == plan2.UnKnownColId || oldCol.ColId != newCol.ColId || oldCol.Seqnum != newCol.Seqnum {
-			return nil, false
-		}
-		// The key is the original column ID; the value records its final name.
-		// Matching names and types alone do not prove that COPY reads this column.
-		mapped, ok := qry.ChangeTblColIdMap[oldCol.ColId]
-		if !ok || mapped == nil || !strings.EqualFold(mapped.Name, newCol.Name) ||
-			!alterCopyPkColumnValueUnchanged(oldCol, newCol) {
+		if !alterCopyPkColumnValueUnchanged(oldCol, newCol) {
 			return nil, false
 		}
 		if !oldCol.GetNotNull() && !oldCol.GetTyp().NotNullable {
@@ -999,14 +1016,7 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	cleanup := newAlterCopyAutoIncrementCleanup(c)
-	defer func() {
-		cleanup.finish(&err)
-		// COPY derives its replacement schema and FK dependencies from the
-		// original plan. A retry after advancing the snapshot must rebuild it.
-		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
-			err = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
-	}()
+	defer cleanup.finish(&err)
 
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
@@ -1181,16 +1191,9 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 		if originRel.GetTableID(c.proc.Ctx) != oldId {
 			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
-		currentDef := originRel.GetTableDef(c.proc.Ctx)
-		if currentDef == nil {
-			return moerr.NewInternalError(c.proc.Ctx, "failed to read source table definition for ALTER COPY")
-		}
-		if currentDef.TblId != qry.TableDef.TblId || currentDef.Version != qry.TableDef.Version {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
 	}
 
-	// 3. Create the temporary replica; child references are transferred later.
+	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
 	oldLogicalId := qry.GetTableDef().GetLogicalId()
 	createTmpOpts := executor.StatementOption{}
@@ -1288,7 +1291,7 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 
 	//6. copy on writing unaffected index table
 	if err = cloneUnaffectedIndexes(
-		c, dbName, qry.Options.SkipIndexesCopy, newRel, qry.TableDef, nil,
+		c, dbName, qry.Options.SkipIndexesCopy, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
 		return err
 	}
@@ -1388,13 +1391,15 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
-			// The planner carries affected index names for all index algorithms.
-			// Unaffected plugin indexes were cloned; affected ones need rebuilding.
+			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
+			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
+			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
+			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
 
 			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
-				if !slices.Contains(qry.AffectedCols, indexDef.IndexName) {
+				if !isAlterAffectedPluginIndex(indexDef, qry.AffectedCols) {
 					// column not affected means index already cloned in cloneUnaffectedIndexes()
 
 					if unaffectedIndexProcessed[indexDef.IndexName] {
@@ -2004,6 +2009,7 @@ func cloneUnaffectedIndexes(
 	c *Compile,
 	dbName string,
 	skipIndexesCopy map[string]bool,
+	affectedCols []string,
 	newRel engine.Relation,
 	oriTblDef *plan.TableDef,
 	cloneSnapshot *plan.Snapshot,
@@ -2033,6 +2039,7 @@ func cloneUnaffectedIndexes(
 		newIdxColNameToTblName = make(map[string]*IndexTableInfo)
 	)
 
+	logutil.Infof("cloneUnaffectedIndex: affected cols %v\n", affectedCols)
 	logutil.Infof("cloneUnaffectedIndex: skipIndexesCopy %v\n", skipIndexesCopy)
 
 	releaseClone := func() {
@@ -2049,13 +2056,36 @@ func cloneUnaffectedIndexes(
 
 	for _, idxTbl := range oriTblDef.Indexes {
 
-		// The planner identifies unaffected indexes by name, including plugin
-		// indexes whose keys or included columns may have changed.
+		// NOTE: The index name of regular, maste, unqiue index is same as affected column name.
+		// SkipIndexesCopy means UnaffectedIndexes[string][bool].
+		// Affected indexes are processed in bind_insert when SkipIndexesCopy = false (UnaffectedIndexes = false)
+		// Unaffected indexes is cloned here.
+		//
+		// 1. If affectedPk == true, SkipIndexesCopy[indexname] always false (empty) and nothing being cloned. All indexes are affected.
+		// 2. If affectedPK == false, SkipIndexesCopy[indexname] will set to true when index is affected with affected column.
+		// The condition is (indexname NOT IN affected_columns) wil set SkipIndexesCopy to true (UnAffectedIndexes == true)
+		//
+		// NOTE for Fulltext/HNSW/Ivfflat Index:
+		// However, fulltext/hnsw/ivfflat index name is user-defined which is not related to column name so
+		// SkipIndexesCopy will always be true in these cases (UnAffectedIndex==true).
+		// Even SkipIndexesCopy is true, it does not mean it is really unaffected Index for fulltext/hnsw/ivfflat index.
+		// check the plan-carried affected index name, Parts, and included columns to determine affected or not.
+		// If unaffected index, try clone.  Otherwise, re-build the index
 		if !skipIndexesCopy[idxTbl.IndexName] {
+			// This index is affected index, skip it
 			continue
 		}
 
 		if !idxTbl.TableExist || len(idxTbl.IndexTableName) == 0 {
+			continue
+		}
+
+		affected := false
+		if !idxTbl.Unique && indexplugin.IsPluginAlgo(idxTbl.IndexAlgo) {
+			affected = isAlterAffectedPluginIndex(idxTbl, affectedCols)
+		}
+
+		if affected {
 			continue
 		}
 

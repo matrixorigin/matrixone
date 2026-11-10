@@ -301,7 +301,7 @@ func shouldTreatZeroAsAutoIncr(proc *proc) bool {
 }
 
 func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
-	if preInsert.IsOldUpdate || preInsert.IsNewUpdate || preInsert.PreserveAutoValues {
+	if preInsert.IsOldUpdate || preInsert.IsNewUpdate {
 		return false
 	}
 	return shouldTreatZeroAsAutoIncr(proc)

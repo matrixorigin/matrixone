@@ -212,7 +212,6 @@ message PreInsert {
   bool is_old_update = 10;
   bool is_new_update = 11;
   bool reject_zero_temporal = 12;
-  bool preserve_auto_values = 13;
 }
 
 message PostDml {

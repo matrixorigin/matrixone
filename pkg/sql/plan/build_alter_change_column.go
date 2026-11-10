@@ -98,7 +98,11 @@ func ChangeColumn(
 
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
 
-	alterCtx.renameColumnSource(oldColName, newColName)
+	delete(alterCtx.alterColMap, oldColName)
+	alterCtx.alterColMap[newColName] = selectExpr{
+		sexprType: exprColumnName,
+		sexprStr:  oldColName,
+	}
 
 	if tmpCol, ok := alterCtx.changColDefMap[oCol.ColId]; ok {
 		tmpCol.Name = newColName
