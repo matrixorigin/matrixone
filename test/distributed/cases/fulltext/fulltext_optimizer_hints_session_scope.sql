@@ -27,4 +27,11 @@ select count(*) from docs where match(body) against('hello');
 create procedure ft_local_hint() 'begin declare optimizer_hints varchar(64) default ''applyIndices=1''; select count(*) from docs where match(body) against(''hello''); end';
 call ft_local_hint();
 drop procedure ft_local_hint;
+
+-- A nonempty caller hint must reach statements planned inside a procedure.
+create procedure ft_caller_hint() 'begin select count(*) from docs where match(body) against(''hello''); end';
+set session optimizer_hints = 'applyIndices=1';
+call ft_caller_hint();
+set session optimizer_hints = '';
+drop procedure ft_caller_hint;
 drop database fulltext_optimizer_hints_scope;

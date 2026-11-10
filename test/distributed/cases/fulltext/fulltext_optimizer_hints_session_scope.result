@@ -28,4 +28,10 @@ call ft_local_hint();
 count(*)
 2
 drop procedure ft_local_hint;
+create procedure ft_caller_hint() 'begin select count(*) from docs where match(body) against(''hello''); end';
+set session optimizer_hints = 'applyIndices=1';
+call ft_caller_hint();
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+set session optimizer_hints = '';
+drop procedure ft_caller_hint;
 drop database fulltext_optimizer_hints_scope;
