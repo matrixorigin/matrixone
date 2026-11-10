@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1292,22 +1291,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
-	// A parent tracks child tables, not individual foreign keys. Retain the
-	// child while any remaining key still refers to that parent.
-	removedParents := make(map[uint64]bool)
+	// remove refChildTbls for drop foreign key clause
+	//remove the child table id -- tblId from the parent table -- fkTblId
 	for _, fkTblId := range removeRefChildTbls {
-		if removedParents[fkTblId] || slices.ContainsFunc(newFkeys, func(fk *plan.ForeignKeyDef) bool {
-			return fk.ForeignTbl == fkTblId
-		}) {
-			continue
-		}
-		removedParents[fkTblId] = true
 		var fkRelation engine.Relation
-		childID := tblId
 		if fkTblId == 0 {
 			//fk self refer
 			fkRelation = rel
-			childID = 0
 		} else {
 			_, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
@@ -1315,7 +1305,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		}
 
-		err = s.removeChildTblIdFromParentTable(c, fkRelation, childID)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}

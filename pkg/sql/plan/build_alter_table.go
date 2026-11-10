@@ -35,7 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr, preservedGenerated map[string]bool) bool {
+func skipPkDedup(old, new *TableDef) bool {
 	oldPk := old.Pkey
 	newPk := new.Pkey
 
@@ -49,20 +49,11 @@ func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr, preser
 		return false
 	}
 
-	// The copy INSERT can skip PK dedup only when every target key value is
-	// guaranteed to be identical to its source value. Matching column names are
-	// not enough: a type conversion can collapse distinct values during copy.
-	if !slices.Equal(oldPk.Names, newPk.Names) {
-		return false
-	}
-	parts := newPk.Names
-	if len(parts) == 0 {
-		parts = []string{newPk.PkeyColName}
-	}
-	return alterCopyKeyPartsValueUnchanged(old, new, parts, sourceColumns, preservedGenerated)
+	// oldPk and newPk are not nil, check if the primary key is the same
+	return slices.Equal(oldPk.Names, newPk.Names)
 }
 
-func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr, preservedGenerated map[string]bool) map[string]bool {
+func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	var skip map[string]bool
 	// In spite of the O(n^2) complexity,
 	// it's rare for a table to have enough indexes to cause
@@ -76,10 +67,7 @@ func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr,
 				continue
 			}
 			if oldidx.IndexName == idx.IndexName &&
-				slices.Equal(idx.Parts, oldidx.Parts) &&
-				oldidx.IndexAlgo == idx.IndexAlgo &&
-				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
-				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts, sourceColumns, preservedGenerated) {
+				slices.Equal(idx.Parts, oldidx.Parts) {
 				if skip == nil {
 					skip = make(map[string]bool)
 				}
@@ -89,54 +77,6 @@ func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr,
 		}
 	}
 	return skip
-}
-
-func alterCopyKeyPartsValueUnchanged(
-	old, new *TableDef,
-	parts []string,
-	sourceColumns map[string]selectExpr,
-	preservedGenerated map[string]bool,
-) bool {
-	for _, part := range parts {
-		name := catalog.ResolveAlias(part)
-		source, ok := sourceColumns[name]
-		// A same-name DROP/ADD creates a new target column, even when its type is
-		// identical to the removed column. The copy INSERT then supplies a default
-		// (or generated) value instead of reading the old column. Dedup can only be
-		// skipped when the planner's source mapping proves this exact target key is
-		// copied from the corresponding old key column.
-		if !ok || source.sexprType != exprColumnName || !strings.EqualFold(source.sexprStr, name) {
-			return false
-		}
-		oldCol := FindColumn(old.Cols, name)
-		newCol := FindColumn(new.Cols, name)
-		if oldCol != nil && newCol != nil && oldCol.GeneratedCol != nil && preservedGenerated[newCol.Name] {
-			continue
-		}
-		if !alterCopyKeyColumnValueUnchanged(oldCol, newCol) {
-			return false
-		}
-	}
-	return true
-}
-
-func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
-	if oldCol == nil || newCol == nil {
-		return false
-	}
-	// Unless the caller proved a generated value is preserved, recomputation may
-	// change it even when the expression is unchanged. Keep dedup enabled.
-	if oldCol.GeneratedCol != nil || newCol.GeneratedCol != nil {
-		return false
-	}
-	oldTyp, newTyp := oldCol.Typ, newCol.Typ
-	return oldTyp.Id == newTyp.Id &&
-		oldTyp.NotNullable == newTyp.NotNullable &&
-		oldTyp.AutoIncr == newTyp.AutoIncr &&
-		oldTyp.Width == newTyp.Width &&
-		oldTyp.Scale == newTyp.Scale &&
-		oldTyp.Table == newTyp.Table &&
-		oldTyp.Enumvalues == newTyp.Enumvalues
 }
 
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
@@ -194,27 +134,34 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	var (
-		pkAffected         bool
-		allIndexesAffected bool
+		pkAffected bool
 
 		affectedCols        = make([]string, 0, len(tableDef.Cols))
+		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
 		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
 		copyFakePKCol       = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
 
-	affectAllIndexes := func() {
+	affectedAllIdxCols := func() {
 		copyFakePKCol = false
-		allIndexesAffected = true
+		affectedCols = affectedCols[:0]
+		for _, colDef := range tableDef.Cols {
+			affectedCols = append(affectedCols, colDef.Name)
+		}
+
+		affectedIndexes = affectedIndexes[:0]
+		for _, idxDef := range tableDef.Indexes {
+			affectedIndexes = append(affectedIndexes, idxDef.IndexName)
+		}
 	}
 
 	for _, spec := range validAlterSpecs {
-		clausePkAffected := false
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
-				affectAllIndexes()
+				affectedAllIdxCols()
 			default:
 				// column adding is handled in *tree.AlterAddCol
 				// various indexes\fks adding are handled in inplace mode.
@@ -224,24 +171,24 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				clausePkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
 				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
-				affectAllIndexes()
+				affectedAllIdxCols()
 			default:
 				// various indexes\fks dropping are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
 		case *tree.AlterAddCol:
-			clausePkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
-			clausePkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
-			clausePkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = appendAffectedAlterColumnNames(
 				affectedCols,
 				option.OldColumnName.ColName(),
@@ -251,8 +198,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.OldColumnName.ColName())
 		case *tree.AlterTableAlterColumnClause:
-			// Changing a default does not change values already stored in the table.
-			err = alterColumn(cctx, alterTablePlan, option)
+			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 			for _, order := range option.AlterOrderByList {
@@ -270,40 +217,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
-		pkAffected = pkAffected || clausePkAffected
 	}
 
-	preservedGenerated := alterCopyPreservedGeneratedColumns(tableDef, copyTableDef, alterTableCtx)
-	if err = checkAlterCopyGeneratedForeignKeys(cctx, tableDef, copyTableDef, alterTableCtx, preservedGenerated); err != nil {
-		return nil, err
-	}
 	if pkAffected {
-		affectAllIndexes()
-	}
-	// Recomputed generated values can change even when their SQL expression is
-	// unchanged, so indexes referencing them must be rebuilt.
-	for _, col := range tableDef.Cols {
-		if col.GeneratedCol == nil {
-			continue
-		}
-		if mapped := alterTableCtx.changColDefMap[col.ColId]; mapped != nil && preservedGenerated[mapped.Name] {
-			continue
-		}
-		if alterColumnIsPrimary(tableDef, col) {
-			affectAllIndexes()
-			break
-		}
-		affectedCols = append(affectedCols, col.Name)
-	}
-	if allIndexesAffected {
-		// AffectedCols carries index names to both index cloning and plugin
-		// rebuilds. Final column names may differ after a rename.
-		affectedCols = affectedCols[:0]
-		for _, idx := range tableDef.Indexes {
-			if !slices.Contains(affectedCols, idx.IndexName) {
-				affectedCols = append(affectedCols, idx.IndexName)
-			}
-		}
+		affectedAllIdxCols()
 	} else {
 		affectedCols, err = collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedCols)
 		if err != nil {
@@ -320,15 +237,24 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{
-		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap, preservedGenerated),
+		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
 		TargetTableName:    copyTableDef.Name,
-		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap, preservedGenerated),
+		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)
 	for _, idxCol := range tableDef.Indexes {
-		if !slices.Contains(affectedCols, idxCol.IndexName) {
-			opt.SkipIndexesCopy[idxCol.IndexName] = true
+		if len(affectedIndexes) > 0 {
+			// the only way to has non-empty affectedIndexes is by calling affectedAllIdxCols()
+			// AffectedCols has all Columns and AffectedIndexes has all indexes
+			if slices.Index(affectedIndexes, idxCol.IndexName) == -1 {
+				opt.SkipIndexesCopy[idxCol.IndexName] = true
+			}
+		} else {
+			// affectedIndexes is empty
+			if slices.Index(affectedCols, idxCol.IndexName) == -1 {
+				opt.SkipIndexesCopy[idxCol.IndexName] = true
+			}
 		}
 	}
 
@@ -339,7 +265,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		zap.Strings("affectedCols", affectedCols),
 		zap.Any("option", opt))
 
-	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, copyTableDef, copyFakePKCol, preservedGenerated)
+	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, copyTableDef, copyFakePKCol)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +300,6 @@ func buildAlterInsertDataSQL(
 	alterCtx *AlterTableContext,
 	copyTableDef *TableDef,
 	copyFakePKCol bool,
-	preservedGenerated map[string]bool,
 ) (string, error) {
 
 	schemaName := alterCtx.schemaName
@@ -387,13 +312,8 @@ func buildAlterInsertDataSQL(
 	isFirst := true
 	for key, value := range alterCtx.alterColMap {
 		copyCol := FindColumn(copyTableDef.Cols, key)
-		if copyCol != nil && copyCol.GeneratedCol != nil && !preservedGenerated[copyCol.Name] {
+		if copyCol != nil && copyCol.GeneratedCol != nil {
 			continue
-		}
-		// A newly added auto column needs allocation, while zeros copied from an
-		// existing column must remain zeros regardless of the current sql_mode.
-		if copyCol != nil && copyCol.Typ.AutoIncr && value.sexprType == exprConstValue {
-			value.sexprStr = "NULL"
 		}
 		if isFirst {
 			insertBuffer.WriteString("`" + key + "`")
@@ -453,14 +373,6 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
-}
-
-func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {
-	source, hasSource := ctx.alterColMap[oldName]
-	delete(ctx.alterColMap, oldName)
-	if hasSource {
-		ctx.alterColMap[newName] = source
-	}
 }
 
 type exprType int

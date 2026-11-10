@@ -176,15 +176,6 @@ func (opts StatementOption) WithAlterCopyOpt(opt *plan.AlterCopyOpt) StatementOp
 	return opts
 }
 
-func (opts StatementOption) WithAlterTableCopyTarget(target string) StatementOption {
-	opts.alterTableCopyTarget = target
-	return opts
-}
-
-func (opts StatementOption) AlterTableCopyTarget() string {
-	return opts.alterTableCopyTarget
-}
-
 func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }

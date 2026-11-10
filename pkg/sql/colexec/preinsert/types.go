@@ -53,7 +53,6 @@ type PreInsert struct {
 	ClusterByExpr      *plan.Expr
 	ColOffset          int32
 	RejectZeroTemporal bool
-	PreserveAutoValues bool
 
 	vm.OperatorBase
 }
