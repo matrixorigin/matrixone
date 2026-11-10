@@ -221,4 +221,19 @@ func TestDictionaryBetweenPreservesNaNNullAndRepeatedRows(t *testing.T) {
 	}
 	require.True(t, result.IsNull(4))
 	require.Empty(t, executor.(*FunctionExpressionExecutor).dictionaryScratch)
+	t.Run("primitive-selected-comparisons", func(t *testing.T) {
+		for _, op := range []string{"=", ">="} {
+			compare, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, op, col, lit(2)))
+			require.NoError(t, err)
+			t.Cleanup(compare.Free)
+			values, err := compare.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			for row, want := range []bool{false, true, false, true} {
+				require.False(t, values.IsNull(uint64(row)))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](values, row))
+			}
+			require.True(t, values.IsNull(4))
+			require.Empty(t, compare.(*FunctionExpressionExecutor).dictionaryScratch)
+		}
+	})
 }
