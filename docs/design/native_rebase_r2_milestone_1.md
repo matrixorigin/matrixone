@@ -2,8 +2,9 @@
 
 Status: restricted integration candidate. Production publication remains off.
 R1 is independently reviewable at `5ebbf0f9de`; it does not require the adapter
-publication protocol. The integration includes the write-dependency fix from
-PR #32174 and its fixture follow-up, not all changes from subsequent main.
+publication protocol. Qualification artifacts identify the R1, kernel,
+inventory, adapter and upstream revisions separately. Integrating later main
+does not relabel an earlier build's evidence as current-head acceptance.
 
 ## Scope And Admission
 

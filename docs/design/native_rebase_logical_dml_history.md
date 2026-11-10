@@ -1,11 +1,11 @@
 # Native Rebase Logical-DML History
 
-Revision4, 2026-11-10. WAL component qualified in071253; runtime and optional
-checkpoint14 passed11 roots including real SIGKILL WAL/checkpoint recovery in
-080304. GC checkpoint composition and actual backup checkpoint rewrite passed4
-targeted roots in081830, including legacy-only/mixed metadata. These are metadata
-preservation tests, not a full restored-database proof. Production R2 stays off;
-full R2 is not qualified.
+Status: opt-in persistence contract for the restricted integration candidate.
+Qualification covers codec, runtime, actual SIGKILL WAL/checkpoint recovery,
+backup rewriting and GC-checkpoint composition, including legacy/mixed metadata.
+Exact build identities and raw outcomes belong in external evidence. Metadata
+preservation tests are not a full restored-database proof. Production R2 stays
+off; current-head integration acceptance remains separate.
 
 ## Observed Failure And Invariant
 
