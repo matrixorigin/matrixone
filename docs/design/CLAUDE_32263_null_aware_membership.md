@@ -1,14 +1,15 @@
 # 4.1.6-hotfix：有界 NULL-aware membership 索引
 
-关联 issue：#32263。版本：v6 草案，2026-11-07。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
+关联 issue：#32263。版本：v7 草案，2026-11-10。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
 
-**状态：DRAFT / 待技术评审与批准。** MARK 成本准入/索引/统计生产实现仍为 `264f8842007f570c641f0122d77a2c33f635db85` 中的 v4 行为；已 merge 最新目标 `ef9256eca2c6436619272927e97f629af41ebd55`（#32085）。本文渐进成本准入、类型范围收缩和统计补齐尚未实现。本轮仅修正现有测试的同步点，增加 SQL/真实 evaluator 控制并补齐验证设计，不声称已证明中途切换。不得把旧实现/测试或工作授权当作本版本技术批准。
+**状态：DRAFT / 待技术评审与批准。** MARK 成本准入/类型范围/统计仍为 v4 行为；已 merge 最新目标 `a5a8ed45fc`（包含#32085和#32431）。此前已修取消同步并补SQL/真实evaluator控制；本轮仅删除现有索引的重复清零并补所有者合同/测试，不实施渐进准入或统计状态机。v6已被独立review明确暂不批准；v7仍需确切版本技术结论，不把局部修复、旧测试或工作授权当作架构批准或中途切换证明。
 
 v2 明确独立 pipeline 的取消隔离：builder 取消只禁用共享优化，不取消仍有效的兄弟消费者。
 v3 闭合原生物理分配失败：MPool 在 calloc 返回错误时回滚已准入的 pool/global 配额并返回原错，确保可选索引仍发布终态。
 v4 将索引实现及测试放到实际所有者 `pkg/vm/message`，不再给底层 `common/hashmap` 添加 batch 依赖；CI 必须验证完整测试依赖图及 batch 自包测试。
 v5 根据 [成本准入意见](https://github.com/matrixorigin/matrixone/pull/32315#discussion_r4490654617) 和 [统计意见](https://github.com/matrixorigin/matrixone/pull/32315#discussion_r4490654627)，提出先 evaluator、按真实工作量触发共享索引，并把实际发布的 native 容量统计一次。
 v6 根据 [公共路径覆盖意见](https://github.com/matrixorigin/matrixone/pull/32315#discussion_r4497601029) 和 [取消同步意见](https://github.com/matrixorigin/matrixone/pull/32315#discussion_r4497601038)，补齐跨32B的 SQL/真实算子验收；不再把结果 IsConst 当作实际 NULL 求值成本的证明，NULL probe 的建表信用保守为0。
+v7 根据 [重复清零意见](https://github.com/matrixorigin/matrixone/pull/32315#discussion_r4523016191)，撤销v6的消费者清零要求：零初始化属于已有MPool/allocator合同，索引不得再次写遍槽数组。
 
 ## 评审门禁与版本记录
 
@@ -16,8 +17,9 @@ v6 根据 [公共路径覆盖意见](https://github.com/matrixorigin/matrixone/p
 - 首个提交 `936c5ce664` 同时引入设计与实现。当前没有可引用的、针对确切版本的独立技术批准记录。早先对工作计划的聊天授权不应被重新描述成完整设计技术批准。
 - 批准前不实施本方案的成本状态机、类型收缩或统计改动；修复已有 v4 测试本身不代表本方案已实施。原性能/统计两条线程仍未解决。
 - 批准记录必须包含：被评审的 commit permalink、reviewer、技术结论/已接受取舍及可引用记录。当前均为待补，不补造历史。
-- 技术评审应覆盖本文完整方案，而不仅是两个局部修复；批准后实现必须对照该确切版本，实质偏离需再评审。
-- 现有正常、race、BVT 和性能证据只证明对应旧实现/控制；新增 SQL 在 v4 通过也不能作为 v6 成本门禁、中途切换或统计的通过证明。
+- 技术评审应覆盖本文完整方案，而不仅是局部修复；批准后实现必须对照该确切版本，实质偏离需再评审。
+- 2026-11-10，XuPeng-SH针对v6确切commit `096a24944259c2d150e9e2399b86785a46a2550c` 给出REQUEST_CHANGES，明确暂不批准：认可共享信用/先evaluator/整数Boolean/唯一builder计费方向，接受按RHS行数预留及32B需实现后实测的取舍，但反对重复归零。v7修订该职责并单独交付局部删除；这不是v7已获批准。
+- 现有正常、race、BVT 和性能证据只证明对应旧实现/控制；新增 SQL 在 v4 通过也不能作为 v7 成本门禁、中途切换或统计的通过证明。
 
 ## 设计范围与评审结论
 
@@ -60,7 +62,7 @@ reviewer 在 v4 上报告：2M 条相同 RHS、1 个早命中 probe 的 NOT IN �
 - 原始字节仅用于已证明等价的同型整数/Boolean 域；整数的字节顺序只影响 hash，不影响同型相等。
 - 空 probe 不建立索引。空 build 保留既有 emptyProbe 行为。
 
-## 渐进成本准入与中途切换（v6 待实现）
+## 渐进成本准入与中途切换（v7 待实现）
 
 ### 成本定义与边界
 
@@ -87,7 +89,7 @@ reviewer 在 v4 上报告：2M 条相同 RHS、1 个早命中 probe 的 NOT IN �
 
 - reviewer 的1/256早命中 + 2M RHS，在正常 bounded RHS batches 下只访问前面少量批，E不足32B，因此不建32 MiB表；即使内部 fixture 只有一条巨大 RHS batch，单 probe 也不会在其最后一行结束后再建表。
 - 大 probe/miss 在真实比较达到阈值后复用共享索引，保留最终期望 O(P+B) 的收益；承认先期会支付最多约 T 的行工作，并用原3k/6k以及多批 probe 对照量化。
-- 同机交替运行 exact base / v4 / v6，保持相同目标 planner/function metadata（当前目标ef9256，v4组合实现80b23ced42）；不得以不同非空推导选择出的另一种join充当公平成本对照。固定资源、预热和测量次数，报告中位数、离散程度、建表次数、native bytes 与 Go allocations。低收益场景的确定性 oracle 是“没有建表/没有整表预扫描”，不是 UT/BVT 的毫秒阈值。
+- 同机交替运行 exact base / v4 / 待批准版本，保持相同目标 planner/function metadata（当前目标a5a8ed45fc，未修清零的v4组合实现f25fb60cd8）；不得以不同非空推导选择出的另一种join充当公平成本对照。固定资源、预热和测量次数，报告中位数、离散程度、建表次数、native bytes 与 Go allocations。低收益场景的确定性 oracle 是“没有建表/没有整表预扫描”，不是 UT/BVT 的毫秒阈值。
 - 本轮尚未实施或测量本方案。若32B使高 probe 收益丢失或仍出现明显退化，应更新设计/取舍并重新评审，不能把阈值调参藏在实现或弱化测试里。
 
 ## 数据布局与容量
@@ -97,7 +99,7 @@ reviewer 在 v4 上报告：2M 条相同 RHS、1 个早命中 probe 的 NOT IN �
 - 一个 `[]uint64` 槽数组，每槽编码 `(batchIndex << 32) | (rowIndex + 1)`，0 表示空槽；无 Go 指针存入原生内存。
 - 单个 `maphash.Seed`，直接对受支持固定宽度值的借用字节求 hash；碰撞时取 RHS 原值做完整 bytes.Equal，不以 hash 值当相等证明。
 - 槽数为大于等于 `2 × RHS row count` 的最小 2 的幂，load factor 不超过 1/2。重复键共享槽；NULL 只记录布尔事实。
-- 原生槽数组由 `MPool` 的 `offHeap=true` 分配；成功前已有原子 pool/global cap 检查。明确清零，不依赖原生分配器返回零内存。
+- 原生槽数组通过 `mpool.MakeSlice[uint64](..., mp, true)` 分配：MPool.alloc的native分支固定调用SimpleCAllocator.Allocate，后者使用calloc并保证返回字节全零；成功前仍有原子pool/global cap检查。归零由已有allocator/MPool所有者负责，索引直接依赖该合同，不再clear整个槽数组，不重复触碰未使用的native页。该保证不扩展至明确不归零的Malloc或保留旧内容的realloc前缀；将来替换backend也必须在原所有者处保持合同。
 - 单索引额外容量上限为 `min(64 MiB, MPool.Cap()/8)`；大小/行号溢出检查在分配前。超限返回“不适用”，不分配。
 - **build/probe 没有随键长或行数增长的编码 scratch**：键是 RHS/probe 向量中的借用切片；不使用现有 StrHashMap iterator 的 Go key buffer，不预留 per-worker 完整表。变长输入不进入本方案 index。
 - 索引的主体容量恰为 `8 × slots`；构建无第二张表和增长峰值。固定大小索引头/同步对象为每个现有 JoinMap 的 O(1) 开销，不伪称整个查询的 Go heap 已由 MPool 控制。
@@ -129,7 +131,7 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 
 当前分支 `Compile.Reset/clear` 先清理 scopes，后重置 message board；multi-CN 的 board Reset 返回新 board，不立即销毁其它 fragment 仍可访问的旧 board。遵循此已有生命周期，不支持在活跃消费者持有引用时强行调用 FreeMemory。
 
-## 算子内存统计（v6 待实现）
+## 算子内存统计（v7 待实现）
 
 - MPool 准入和算子观测是两件事。保持现有 cap/AllocatedBytes/物理 Free 契约；补齐 analyzer 不通过二次物理预留来“统计”。
 - 唯一成功 builder 在发布不可变 index 后，从内部 API 得到 `newlyPublishedBytes = index.Size()`；等待者、已有 index 重用、成本不足、预算拒绝、OOM、取消或其它失败均得到0。没有独立的全局统计表或每消费者计费位。
@@ -160,6 +162,7 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 ## 验证与验收
 
 - pure helper：空/全 NULL/命中+NULL/NULL probe/重复、常量向量、跨 batch、固定宽度边界、反例类型及 GROUPING。变长字符串/内嵌 NUL 保留公共 SQL/evaluator 控制，不以未使用的字符串 index 能力扩大实现。
+- 归零所有者：MPool原生MakeSlice用2/32/512个uint64，逐元素确认零；整段污染后free，再同大小allocate并重复验证，每轮恢复AllocatedBytes/CurrNB基线，不依赖物理地址相同。索引用同大小的重复键→全NULL→另一键，逐代检查空槽/占用数和hit/miss/NULL，污染全部槽再释放；保留既有碰撞/跨batch/空build控制。这里只需少量行，不把32MiB成本验证放入UT。
 - 容量：实际并发构建共用小 cap，barrier 保持 live 索引；验证容量限制与部分成功/降级、无编码缓冲；检查清理后恢复基线。
 - shared owner：同 JoinMap 多消费者只构建一次，等待者取消、builder 取消、不同 descriptor 回退、Reset/Free。取消测试保持 builder barrier 关闭，等 waiter 的 Done/waiting 信号（在 ready/context select 求值时）后再取消；断言 waiter 在 builder 放行前返回 context.Canceled，并断言 builder 尚未结束，然后再放行/等待两条 goroutine 并清理。入口 Err 信号、sleep 或仅重复运行不算等待路径证据。
 - allocator failure：在 cap 足够时注入 calloc NULL；反复失败后 pool/global 计费与原有 live buffer 不变、可重新使用全部剩余额度。用 barrier 确认等待者到达 ready/context select，再使 builder 分配失败，验证 OOM 回退和非 OOM 错误发布；真实 HashBuild→LoopJoin 消费链验证 evaluator 结果及错误传播。
@@ -177,4 +180,4 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 - 静态/包级：Go 1.26.4、匹配 native artifacts；变更包测试及消费者、vet/lint；共享状态定向/所属包 race；变更覆盖率 ≥75%。
 - 依赖方向：`go list -deps -test ./...` 必须成功，batch 自包测试及 aggexec 消费者必须通过；不能只测新增 helper 所在包，以免漏掉反向测试依赖。
 
-未完成证据不得标为通过。v6 确切版本获得独立技术批准后才实施本方案；本草案不抹掉旧实现两条未解决 review。既有 native allocator 错误返回/配额补偿纳入本次整体设计评审，但不继续扩展 allocator 框架；若需 wire、其它类型范围或新的全局资源机制，先更新范围并重新评审。
+未完成证据不得标为通过。v7 确切版本获得独立技术批准后才实施渐进准入、类型收缩与统计方案；本草案不抹掉旧实现两条未解决 review。既有 native allocator 错误返回/配额补偿纳入本次整体设计评审，但不继续扩展 allocator 框架；若需 wire、其它类型范围或新的全局资源机制，先更新范围并重新评审。
