@@ -28,7 +28,7 @@ func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	fs.diskCache.prefetched = prefetchedObjects{}
 	stats := &statCountingStorage{ObjectStorage: fs.storage}
 	fs.storage = stats
-	fs.prefetchObject(ObjectPrefetch{FilePath: "object", Size: int64(len(data))})
+	fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data))})
 	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
 	require.Equal(t, int64(2), storage.reads.Load(), "the whole object in two parts")
 	require.Zero(t, stats.stats.Load())
@@ -47,6 +47,33 @@ func TestS3FSReadOfQueuedObjectReadsRange(t *testing.T) {
 	require.Equal(t, int64(10), storage.bytes.Load(), "a range read of the entry")
 	require.False(t, fs.prefetcher.isQueued("object"))
 	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+}
+
+// A prefetch of a cached object marks it used: the disk cache evicts first the objects no
+// prefetch asked for.
+func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
+	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 1)
+	d := fs.diskCache
+	ctx := context.Background()
+	a, b := d.pathForFile("a"), d.pathForFile("b")
+	d.cache.Set(ctx, a, struct{}{}, 1)
+	d.cache.Set(ctx, b, struct{}{}, 1)
+	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "a", Size: 1}))
+	require.False(t, fs.prefetcher.isQueued("a"), "a cached object is not queued")
+	d.cache.ForceEvict(ctx, 1)
+	require.True(t, d.cache.Contains(a))
+	require.False(t, d.cache.Contains(b))
+}
+
+// A download at a size other than the object's caches nothing.
+func TestS3FSPrefetchObjectOfWrongSizeCachesNothing(t *testing.T) {
+	for _, delta := range []int{-1000, 1000} {
+		fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
+		fs.diskCache.prefetched = prefetchedObjects{}
+		fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data) + delta)})
+		require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")), "size off by %d", delta)
+	}
 }
 
 func TestPrefetchedObjectsBound(t *testing.T) {

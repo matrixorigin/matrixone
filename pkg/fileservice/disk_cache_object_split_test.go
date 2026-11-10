@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"sync/atomic"
@@ -95,8 +96,13 @@ func TestS3FSObjectSplitSkipsSmallObjects(t *testing.T) {
 // range.
 func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	fs.diskCache.downloadConns.Store(objectSplitMaxDownloads)
-	t.Cleanup(func() { fs.diskCache.downloadConns.Store(0) })
+	d := fs.diskCache
+	d.downloads.mu.Lock()
+	d.downloads.m = make(map[string]*objectDownload)
+	for i := 0; i < objectSplitMaxDownloads; i++ {
+		d.downloads.m[fmt.Sprintf("other-%d", i)] = newObjectDownload("", false, nil)
+	}
+	d.downloads.mu.Unlock()
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)

@@ -33,7 +33,7 @@ func newPrefetchRecorder() *prefetchRecorder {
 	return &prefetchRecorder{release: make(chan struct{}), started: make(chan string, 64)}
 }
 
-func (r *prefetchRecorder) run(req ObjectPrefetch) {
+func (r *prefetchRecorder) run(_ context.Context, req ObjectPrefetch) {
 	r.started <- req.FilePath
 	<-r.release
 	r.mu.Lock()
@@ -207,5 +207,45 @@ func TestPrefetcherFullQueueDropsFarthest(t *testing.T) {
 	require.True(t, p.isQueued("c"))
 	p.add(ObjectPrefetch{FilePath: "d", Size: 100, Due: 500})
 	require.False(t, p.isQueued("d"), "the farthest request itself is dropped")
+	p.close(context.Background())
+}
+
+// Close cancels the running downloads instead of waiting for them to end.
+func TestPrefetcherCloseCancelsRunning(t *testing.T) {
+	started := make(chan struct{})
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string) bool { return false }, func(ctx context.Context, _ ObjectPrefetch) {
+		close(started)
+		<-ctx.Done()
+	})
+	p.add(ObjectPrefetch{FilePath: "a", Size: 100})
+	<-started
+	p.close(context.Background())
+}
+
+// A full queue drops a download whose reads all ended before it drops a live one.
+func TestPrefetcherFullQueueDropsEndedFirst(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(0, func() int64 { return 200 }, func(string) bool { return false }, r.run)
+	ended := new(PrefetchScan)
+	p.add(ObjectPrefetch{FilePath: "ended", Size: 100, Due: 1, Scan: ended})
+	p.add(ObjectPrefetch{FilePath: "live", Size: 100, Due: 2})
+	ended.End()
+	p.add(ObjectPrefetch{FilePath: "late", Size: 100, Due: 3})
+	require.False(t, p.isQueued("ended"))
+	require.True(t, p.isQueued("live"))
+	require.True(t, p.isQueued("late"))
+	p.close(context.Background())
+}
+
+// A request larger than the queue holds drops nothing queued.
+func TestPrefetcherOversizedRequestDropsNothing(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(0, func() int64 { return 200 }, func(string) bool { return false }, r.run)
+	p.add(ObjectPrefetch{FilePath: "a", Size: 100, Due: 100})
+	p.add(ObjectPrefetch{FilePath: "b", Size: 100, Due: 200})
+	p.add(ObjectPrefetch{FilePath: "big", Size: 300, Due: 1})
+	require.False(t, p.isQueued("big"))
+	require.True(t, p.isQueued("a"))
+	require.True(t, p.isQueued("b"))
 	p.close(context.Background())
 }

@@ -40,6 +40,8 @@ func (c *countingStorage) Read(ctx context.Context, key string, min, max *int64)
 	c.reads.Add(1)
 	if min != nil && max != nil {
 		c.bytes.Add(*max - *min)
+	}
+	if min != nil && (max != nil || *min > 0) {
 		c.mu.Lock()
 		c.starts = append(c.starts, *min)
 		c.mu.Unlock()

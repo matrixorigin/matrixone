@@ -990,7 +990,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	var bounds []int64
 	var conns int64
 	if fill == storageFill {
-		if objectSize != nil && d.objectSplit.parts > 1 && d.downloadConns.Load() < objectSplitMaxDownloads {
+		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < objectSplitMaxDownloads {
 			if size, splitAt, err := objectSize(ctx); err == nil {
 				bounds = d.objectSplit.bounds(size, splitAt)
 			}

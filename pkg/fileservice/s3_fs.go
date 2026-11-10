@@ -1499,6 +1499,8 @@ func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
 func (s *S3FS) readMergeKey(vector *IOVector) IOMergeKey {
 	key := vector.ioMergeKey()
 	if key.FullObject {
+		// A full-object read and a prefetch of the object download the same bytes.
+		key.Policy = 0
 		key.CacheFill = s.willCacheFullObject(vector)
 	}
 	return key

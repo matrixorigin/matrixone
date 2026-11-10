@@ -410,7 +410,11 @@ func (l *lazyObjectReader) Close() error {
 	return l.r.Close()
 }
 
+// openRange opens [start, end), or the bytes from start on when end is negative.
 func (l *lazyObjectReader) openRange(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+	if end < 0 {
+		return l.read(ctx, &start, nil)
+	}
 	return l.read(ctx, &start, &end)
 }
 
@@ -447,7 +451,12 @@ func copyParts(ctx context.Context, f *os.File, download *objectDownload, open o
 
 func copyPart(ctx context.Context, f *os.File, download *objectDownload, open objectRangeOpener, part int, start, end int64) error {
 	download.begin(part)
-	r, err := open.openRange(ctx, start, end)
+	// The last part reads to the object's end, so an object of another size fails the copy.
+	openEnd := end
+	if part == len(download.bounds())-2 {
+		openEnd = -1
+	}
+	r, err := open.openRange(ctx, start, openEnd)
 	if err != nil {
 		return &diskCacheSourceError{err: err}
 	}
@@ -495,6 +504,13 @@ func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
 	}
 	d.downloads.mu.Unlock()
 	o.retire()
+}
+
+// downloading returns the number of whole-object downloads in flight.
+func (d *DiskCache) downloading() int {
+	d.downloads.mu.Lock()
+	defer d.downloads.mu.Unlock()
+	return len(d.downloads.m)
 }
 
 // downloadConnLimit is the most object-storage connections whole-object downloads hold.

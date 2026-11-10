@@ -149,7 +149,9 @@ func (q *prefetchQueue) Pop() any {
 // reads reach soonest first, whatever order they are asked for in. An object is queued
 // once, and never while it is being downloaded or cached.
 type prefetcher struct {
-	run    func(ObjectPrefetch)
+	run    func(context.Context, ObjectPrefetch)
+	ctx    context.Context
+	cancel context.CancelFunc
 	have   func(filePath string) bool // the object is cached or being downloaded
 	limit  func() int64               // the most bytes queued
 	max    int
@@ -165,8 +167,9 @@ type prefetcher struct {
 	wg          sync.WaitGroup
 }
 
-func newPrefetcher(max int, limit func() int64, have func(string) bool, run func(ObjectPrefetch)) *prefetcher {
-	return &prefetcher{run: run, have: have, limit: limit, max: max, entries: make(map[string]*prefetchEntry)}
+func newPrefetcher(max int, limit func() int64, have func(string) bool, run func(context.Context, ObjectPrefetch)) *prefetcher {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &prefetcher{run: run, ctx: ctx, cancel: cancel, have: have, limit: limit, max: max, entries: make(map[string]*prefetchEntry)}
 }
 
 // add queues req, or moves the queued object nearer the front when req needs it sooner.
@@ -195,14 +198,22 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	p.seq++
 	e := &prefetchEntry{req: req, scans: []*PrefetchScan{req.Scan}, seq: p.seq}
 	limit := p.limit()
+	if req.Size > limit {
+		metric.FSPrefetchDroppedCounter.Inc()
+		return
+	}
 	for p.queuedBytes+req.Size > limit {
 		last := -1
 		for i := range p.queue {
+			if !p.queue[i].live() {
+				last = i
+				break
+			}
 			if last < 0 || p.queue[last].before(p.queue[i]) {
 				last = i
 			}
 		}
-		if last < 0 || !e.before(p.queue[last]) {
+		if last < 0 || p.queue[last].live() && !e.before(p.queue[last]) {
 			metric.FSPrefetchDroppedCounter.Inc()
 			return
 		}
@@ -222,7 +233,11 @@ func (p *prefetcher) dropLocked(i int) {
 	delete(p.entries, e.req.FilePath)
 	p.queuedBytes -= e.req.Size
 	p.queued.Add(-1)
-	metric.FSPrefetchDroppedCounter.Inc()
+	if e.live() {
+		metric.FSPrefetchDroppedCounter.Inc()
+	} else {
+		metric.FSPrefetchEndedCounter.Inc()
+	}
 }
 
 func (p *prefetcher) startLocked() {
@@ -246,7 +261,7 @@ func (p *prefetcher) startLocked() {
 				p.mu.Unlock()
 				p.wg.Done()
 			}()
-			p.run(e.req)
+			p.run(p.ctx, e.req)
 		}()
 	}
 }
@@ -289,10 +304,11 @@ func (p *prefetcher) remove(filePath string) bool {
 	return true
 }
 
-// close drops the queued downloads and waits for the running ones, or ctx.
+// close drops the queued downloads, cancels the running ones and waits for them, or ctx.
 func (p *prefetcher) close(ctx context.Context) {
 	p.mu.Lock()
 	p.closed = true
+	p.cancel()
 	for _, e := range p.queue {
 		delete(p.entries, e.req.FilePath)
 	}
@@ -327,21 +343,28 @@ func (s *S3FS) prefetchQueueLimit(workers int) func() int64 {
 	}
 }
 
-// haveObject reports whether the whole object of filePath is cached or being downloaded.
+// haveObject reports whether the whole object of filePath is cached, which it marks used,
+// or being downloaded.
 func (s *S3FS) haveObject(filePath string) bool {
 	path, err := parseFilePathAtService(filePath, s.name)
 	if err != nil {
 		return true
 	}
 	diskPath := s.diskCache.pathForFile(path.File)
-	return s.diskCache.download(diskPath) != nil || s.diskCache.cache.Contains(diskPath)
+	if s.diskCache.download(diskPath) != nil {
+		return true
+	}
+	_, ok := s.diskCache.cache.Get(context.Background(), diskPath)
+	return ok
 }
 
 // prefetchObject downloads the whole object of req at its known size.
-func (s *S3FS) prefetchObject(req ObjectPrefetch) {
-	ctx := s.diskCache.async.ctx
-	if ctx == nil {
-		ctx = context.Background()
+func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
+	if closing := s.diskCache.async.ctx; closing != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(closing, cancel)()
 	}
 	path, err := parseFilePathAtService(req.FilePath, s.name)
 	if err != nil {
