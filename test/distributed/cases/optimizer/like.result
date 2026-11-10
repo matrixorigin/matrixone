@@ -14,8 +14,7 @@ explain select * from t1 where c2 like '1%';
 TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2)
-        Block Filter Cond: prefix_eq(t1.c2)
+        Filter Cond: (t1.c2 like '1%')
 select count(*) from t1 where c2 like '1%';
 count(*)
 11112
@@ -23,8 +22,7 @@ explain select * from t1 where c2 like '1_';
 TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2), (t1.c2 like '1_')
-        Block Filter Cond: prefix_eq(t1.c2)
+        Filter Cond: (t1.c2 like '1_')
 select * from t1 where c2 like '1_';
 c1    c2    c3
 10    10    10
@@ -41,8 +39,7 @@ explain select * from t1 where c2 like '1_2';
 TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2), (t1.c2 like '1_2')
-        Block Filter Cond: prefix_eq(t1.c2)
+        Filter Cond: (t1.c2 like '1_2')
 select * from t1 where c2 like '1_2';
 c1    c2    c3
 102    102    102
@@ -67,25 +64,15 @@ explain select * from t1 where c2 like '1_2%3';
 TP QUERY PLAN
 Project
   ->  Table Scan on d1.t1
-        Filter Cond: prefix_eq(t1.c2), (t1.c2 like '1_2%3')
-        Block Filter Cond: prefix_eq(t1.c2)
+        Filter Cond: (t1.c2 like '1_2%3')
 select count(*) from t1 where c2 like '1_2%3';
 count(*)
 110
 explain select * from t1 where c2 like '123';
 TP QUERY PLAN
 Project
-  ->  Join
-        Join Type: INDEX
-        Join Cond: (t1.c1 = __mo_index_pri_col)
-        Runtime Filter Build: #[-1,0]
-        ->  Table Scan on d1.t1 [ForceOneCN]
-              Filter Cond: (t1.c2 = '123')
-              Block Filter Cond: (t1.c2 = '123')
-              Runtime Filter Probe: t1.c1
-        ->  Index Table Scan on t1.c2 [ForceOneCN]
-              Filter Cond: prefix_eq(__mo_index_idx_col)
-              Block Filter Cond: prefix_eq(__mo_index_idx_col)
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 like '123')
 select * from t1 where c2 like '123';
 c1    c2    c3
 123    123    123

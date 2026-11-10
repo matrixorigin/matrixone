@@ -10424,7 +10424,9 @@ func strToStr(
 				v = bytes.TrimRight(v, " ")
 			}
 			s := convertByteSliceToString(v)
-			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
+			// A negative width follows the T_binary width:-1 convention and
+			// means no length limit; it must never truncate or reject.
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 0 && utf8.RuneCountInString(s) > destLen {
 				// CHAR/VARCHAR over-length handling:
 				//   - trailing-space exemption: when the excess runes are all
 				//     trailing spaces, accept by truncating even in strict mode
@@ -10475,7 +10477,7 @@ func strToStr(
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
-			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && utf8.RuneCountInString(s) > destLen {
+			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && destLen >= 0 && utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}

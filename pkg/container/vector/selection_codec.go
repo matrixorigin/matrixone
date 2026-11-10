@@ -71,6 +71,10 @@ type selectedFixedRowsWriter interface {
 	WriteSelectedFixedRows(data []byte, width int, rows []int32) (int, error)
 }
 
+type selectedVarlenaRowsWriter interface {
+	WriteSelectedVarlenaRows(values []types.Varlena, area []byte, rows []int32) (int, error)
+}
+
 // MarshalSelectedRowsTo writes a bounded, private execution codec for the
 // selected rows. Unlike MarshalBinaryTo it does not first materialize a
 // selection Vector, which lets spill make progress when retained state has
@@ -128,6 +132,9 @@ func (v *Vector) marshalSelectedRowsTo(
 	rows []int32,
 	rowAt func(int) int,
 ) error {
+	if v.IsDictionary() {
+		return errDictionaryPhysicalAccess
+	}
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector rows")
 	}
@@ -265,6 +272,32 @@ func (v *Vector) marshalSelectedRowsTo(
 
 	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
+	if !v.IsConst() && isVarlen && !withRowFlags && rows != nil {
+		if fastWriter, ok := w.(selectedVarlenaRowsWriter); ok {
+			values := MustFixedColNoTypeCheck[types.Varlena](v)
+			expected := 0
+			for _, row := range rows {
+				value := &values[row]
+				length := int(value[0])
+				if !value.IsSmall() {
+					_, size := value.OffsetLen()
+					length = int(size)
+				}
+				if length > math.MaxInt32 || expected > math.MaxInt-4-length {
+					return moerr.NewInvalidInputNoCtx("selected vector value exceeds wire format")
+				}
+				expected += 4 + length
+			}
+			written, err := fastWriter.WriteSelectedVarlenaRows(values, v.area, rows)
+			if err != nil {
+				return err
+			}
+			if written != expected {
+				return io.ErrShortWrite
+			}
+			goto metadataTrailers
+		}
+	}
 	if !v.IsConst() && !isVarlen && !withRowFlags && rows != nil {
 		fixedWidth := v.typ.TypeSize()
 		if fixedWidth != 0 && count > math.MaxInt/fixedWidth {
