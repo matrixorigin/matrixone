@@ -923,6 +923,76 @@ func TestUnionSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestUnionUntypedNullOutputType(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		query    string
+		typ      types.T
+		nullable bool
+	}{
+		{"numeric control", "select 2 as c union all select 10", types.T_int64, false},
+		{"null right", "select 2 as c union all select null", types.T_int64, true},
+		{"null left", "select null as c union all select 2", types.T_int64, true},
+		{"multiple branches", "select 2 as c union all select null union all select 10 union all select null", types.T_int64, true},
+		{"count", "select count(*) as c from nation union all select null", types.T_int64, true},
+		{"count reversed", "select null as c union all select count(*) from nation", types.T_int64, true},
+		{"distinct", "select 2 as c union select null", types.T_int64, true},
+		{"parenthesized null", "select 2 as c union all select (null)", types.T_int64, true},
+		{"nested numeric", "select null as c union all (select 2 union all select 10)", types.T_int64, true},
+		{"nested nulls", "select 2 as c union all (select null union all select null)", types.T_int64, true},
+		{"nested nulls left", "(select null as c union all select null) union all select 2", types.T_int64, true},
+		{"nested distinct nulls", "select 2 as c union all (select null union select null)", types.T_int64, true},
+		{"branch order limit", "select 2 as c union all (select null as c order by c limit 1)", types.T_int64, true},
+		{"parenthesized branch order limit", "select 2 as c union all (select (null) as c order by c limit 1)", types.T_int64, true},
+		{"nested parenthesized nulls", "select 2 as c union all (select (null) union select (null))", types.T_int64, true},
+		{"computed order", "select null as c union all select 2 order by c+1 limit 2", types.T_int64, true},
+		{"derived", "select c from (select 2 as c union all select null) u", types.T_int64, true},
+		{"cte", "with u as (select null as c union all select 2) select c from u", types.T_int64, true},
+		{"reused cte", "with u as (select null as c union all select 2) select c from u union all select c from u", types.T_int64, true},
+		{"typed derived null", "select c from (select null as c) u union all select 2", types.T_varchar, true},
+		{"typed derived nulls", "select c from (select null as c union all select null) u union all select 2", types.T_varchar, true},
+		{"independent columns", "select c from (select null as c,2 as d union all select 10,cast(null as char)) u", types.T_int64, true},
+		{"independent string column", "select d from (select null as c,2 as d union all select 10,cast(null as char)) u", types.T_varchar, true},
+		{"typed char null", "select 2 as c union all select cast(null as char)", types.T_varchar, true},
+		{"typed char null left", "select cast(null as char) as c union all select 2", types.T_varchar, true},
+		{"real string", "select 2 as c union all select '10' union all select null", types.T_varchar, true},
+		{"typed numeric null", "select cast(null as signed) as c union all select null", types.T_int64, true},
+		{"unsigned", "select cast(2 as unsigned) as c union all select null", types.T_uint64, true},
+		{"decimal", "select cast(2 as decimal(10,2)) as c union all select null", types.T_decimal64, true},
+		{"all null", "select null as c union all select null", types.T_text, true},
+		{"standalone null", "select null as c", types.T_text, true},
+		{"standalone parenthesized null", "select (null) as c", types.T_text, true},
+		{"intersect", "select 2 as c intersect select null", types.T_int64, false},
+		{"minus", "select 2 as c minus select null", types.T_int64, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Run("select", func(t *testing.T) {
+				p, err := buildSingleStmt(NewMockOptimizer(false), t, test.query)
+				require.NoError(t, err)
+				query := p.GetQuery()
+				require.NotNil(t, query)
+				require.Len(t, query.Steps, 1)
+				output := query.Nodes[query.Steps[0]].ProjectList
+				require.Len(t, output, 1)
+				require.Equal(t, int32(test.typ), output[0].Typ.Id)
+				require.Equal(t, !test.nullable, output[0].Typ.NotNullable)
+				if test.name == "decimal" {
+					require.Equal(t, int32(10), output[0].Typ.Width)
+					require.Equal(t, int32(2), output[0].Typ.Scale)
+				}
+			})
+			t.Run("ctas", func(t *testing.T) {
+				p, err := buildSingleStmt(NewMockOptimizer(false), t, "create table union_null_type as "+test.query)
+				require.NoError(t, err)
+				col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+				require.Equal(t, int32(test.typ), col.Typ.Id)
+				require.Equal(t, !test.nullable, col.Typ.NotNullable)
+				require.Equal(t, test.nullable, col.Default.NullAbility)
+			})
+		})
+	}
+}
+
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)

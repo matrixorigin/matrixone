@@ -1,0 +1,165 @@
+drop database if exists union_null_type;
+create database union_null_type;
+use union_null_type;
+select 2 as c union all select 10 union all select null order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2  𝄀
+10
+select null as c union all select 10 union all select 2 order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2  𝄀
+10
+select c, c+1 as next_value from (select 2 as c union all select null union all select 10) u order by c;
+➤ c[-5,64,0]  ¦  next_value[-5,64,0]  𝄀
+null  ¦  null  𝄀
+2  ¦  3  𝄀
+10  ¦  11
+select 2 as c union select null union select 2 order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+select null as c union all select 10 union all select 2 order by c limit 2;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+select 2 as c union all (select null union all select null) order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+2
+select 2 as c union all (select null union select null) order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+(select null as c union all select null) union all select 2 order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+2
+select 2 as c union all (select null as c order by c limit 1) order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+select 2 as c union all (select (null) as c order by c limit 1) order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+select 2 as c union all (select (null) union select (null)) order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+select 2 as c union all select (null) order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2
+with u as (select null as c union all select 10 union all select 2) select c from u order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2  𝄀
+10
+with u as (select null as c union all select 2) select c from u union all select c from u order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+2  𝄀
+2
+select c,d from (select null as c,2 as d union all select 10,cast(null as char)) u order by c;
+➤ c[-5,64,0]  ¦  d[12,-1,0]  𝄀
+null  ¦  2  𝄀
+10  ¦  null
+create table numeric_result as select 2 as c union all select 10 union all select null;
+create table reverse_result as select null as c union all select 10 union all select 2;
+create table count_result as select count(*) as c from numeric_result union all select null;
+create table reverse_count as select null as c union all select count(*) from numeric_result;
+create table nested_result as select 2 as c union all (select null union all select null);
+select table_name, data_type, is_nullable from information_schema.columns
+where table_schema='union_null_type' and column_name='c' order by table_name;
+➤ table_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+count_result  ¦  BIGINT  ¦  YES  𝄀
+nested_result  ¦  BIGINT  ¦  YES  𝄀
+numeric_result  ¦  BIGINT  ¦  YES  𝄀
+reverse_count  ¦  BIGINT  ¦  YES  𝄀
+reverse_result  ¦  BIGINT  ¦  YES
+select c, c+1 as next_value from numeric_result order by c;
+➤ c[-5,64,0]  ¦  next_value[-5,64,0]  𝄀
+null  ¦  null  𝄀
+2  ¦  3  𝄀
+10  ¦  11
+select c from reverse_result order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+2  𝄀
+10
+select count(*) as c from numeric_result union all select null order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+3
+select c from count_result order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+3
+select c from reverse_count order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+3
+select c from nested_result order by c;
+➤ c[-5,64,0]  𝄀
+null  𝄀
+null  𝄀
+2
+insert into numeric_result values(null);
+select count(*) as all_rows, count(c) as nonnull_rows from numeric_result;
+➤ all_rows[-5,64,0]  ¦  nonnull_rows[-5,64,0]  𝄀
+4  ¦  2
+create table char_result as select 2 as c union all select 10 union all select cast(null as char);
+create table reverse_char as select cast(null as char) as c union all select 2 union all select 10;
+create table string_result as select 2 as c union all select '10' union all select null;
+create table unsigned_result as select cast(2 as unsigned) as c union all select null;
+create table decimal_result as select cast(2 as decimal(10,2)) as c union all select null;
+select table_name, data_type, is_nullable from information_schema.columns
+where table_schema='union_null_type' and column_name='c'
+and table_name in ('char_result','reverse_char','string_result','unsigned_result','decimal_result') order by table_name;
+➤ table_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+char_result  ¦  VARCHAR  ¦  YES  𝄀
+decimal_result  ¦  DECIMAL  ¦  YES  𝄀
+reverse_char  ¦  VARCHAR  ¦  YES  𝄀
+string_result  ¦  VARCHAR  ¦  YES  𝄀
+unsigned_result  ¦  BIGINT UNSIGNED  ¦  YES
+select c from char_result order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+10  𝄀
+2
+select c from reverse_char order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+10  𝄀
+2
+select c from string_result order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+10  𝄀
+2
+select c, c+1 as next_value from unsigned_result order by c;
+➤ c[-5,64,0]  ¦  next_value[3,39,0]  𝄀
+null  ¦  null  𝄀
+2  ¦  3
+select c, c+1 as next_value from decimal_result order by c;
+➤ c[3,10,2]  ¦  next_value[3,38,2]  𝄀
+null  ¦  null  𝄀
+2.00  ¦  3.00
+select null as c;
+➤ c[12,4,0]  𝄀
+null
+select null as c union all select null;
+➤ c[12,4,0]  𝄀
+null  𝄀
+null
+select 2 as c intersect select null;
+➤ c[-5,64,0]
+select 2 as c except select null;
+➤ c[-5,64,0]  𝄀
+2
+drop database union_null_type;
