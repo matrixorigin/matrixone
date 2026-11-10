@@ -335,7 +335,7 @@ func (builder *QueryBuilder) exactRuntimeFilterPairContractValid(
 // A tuple encoder is safe only when every component is raw-compatible. Float
 // signed-zero closure cannot be expressed by adding one final tuple value
 // without a combinatorial expansion, so float components remain unsupported.
-func runtimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
+func integerTypeWidth(oid types.T) (int, bool, bool) {
 	switch oid {
 	case types.T_int8:
 		return 8, true, true
@@ -359,8 +359,8 @@ func runtimeFilterIntegerWidth(oid types.T) (int, bool, bool) {
 }
 
 func safeRuntimeFilterIntegerCast(source, target types.T, narrowing bool) bool {
-	sourceWidth, sourceSigned, sourceOK := runtimeFilterIntegerWidth(source)
-	targetWidth, targetSigned, targetOK := runtimeFilterIntegerWidth(target)
+	sourceWidth, sourceSigned, sourceOK := integerTypeWidth(source)
+	targetWidth, targetSigned, targetOK := integerTypeWidth(target)
 	if !sourceOK || !targetOK || sourceSigned != targetSigned {
 		return false
 	}

@@ -1771,7 +1771,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 		// The base scan retains the original predicate. Only duplicate a stable
 		// predicate when every reference can be rewritten into the index scan.
-		if !exprUsesOnlyMappedCols(filter, colMap) || scalarAggregateDomainContainsVolatile(filter) {
+		if !exprUsesOnlyMappedCols(filter, colMap) || exprMayChangeWhenRepeated(filter) {
 			continue
 		}
 		idxTableNode.FilterList = append(idxTableNode.FilterList, replaceColumnsForExpr(DeepCopyExpr(filter), colMap))
