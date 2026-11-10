@@ -654,3 +654,20 @@ and is not copied by the executor itself.
 Review decision: charging only the reader misses this additional executor for
 literal-only JSON_VALUE expressions. Test initial admission, reset and reuse,
 final release, and an allocation-account rejection before publication.
+
+### Demand-only executor and operator state (candidate revision 36)
+
+The matched base/candidate layout probe showed that adding JSON fields directly
+to every scan, projection and function executor increases memory even for SQL
+with no JSON_VALUE. That violates the no-demand contract. Keep the active
+reader as an evaluation-local parameter; attach constructor state only to a
+JSON_VALUE constructor input; attach projection bindings to an accounted
+wrapper installed only when the projection actually has such bindings. A scan
+has at most one lazy JSON state pointer, placed by grouping existing boolean
+fields so its total structure size does not grow. Its state and all wrappers
+are reserved against the statement before construction and dropped at reset.
+
+Review decision: require a matched base/candidate structure-size probe and
+zero-allocation demand discovery, in addition to lifecycle, selection, folding
+and real SQL tests. A nil pointer or an uncharged larger common executor is not
+evidence that an unrelated query has no additional memory cost.
