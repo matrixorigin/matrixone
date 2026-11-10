@@ -77,7 +77,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
+		expr, err = b.bindNumVal(exprImpl, b.numValDefaultBindType(exprImpl))
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
@@ -228,7 +228,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			// width validation and preserves the engine's admitted charset aliases.
 			charsetName := castType.InternalType.CastCharsetName
 			charsetLiteral := tree.NewNumVal(charsetName, charsetName, false, tree.P_char)
+			// A charset-explicit CAST into non-binary text is the same
+			// semantic boundary as the non-charset explicit cast below: bind
+			// the CONVERT source subtree under the same leaf-level protection
+			// so INSERT/REPLACE destination pre-coercion cannot erase the
+			// binary domain before conversion (NULL + Warning 1300).
+			suppressBinarySourceGuard := b.binaryLiteralUnderExplicitTextCast
+			b.binaryLiteralUnderExplicitTextCast = binarySourceGuardForCastSource(suppressBinarySourceGuard, typ)
 			expr, err = b.bindFuncExprImplByAstExpr("convert", []tree.Expr{exprImpl.Expr, charsetLiteral}, depth)
+			b.binaryLiteralUnderExplicitTextCast = suppressBinarySourceGuard
 			if err != nil {
 				return
 			}
@@ -264,7 +272,30 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
+			// A user-written explicit CAST into non-binary-charset text is a
+			// semantic boundary for binary-domain literals: without
+			// protection, an INSERT/REPLACE value binder pre-coerces a binary
+			// source literal (x'FF', b'...', _binary X'FF', _binary '...') to
+			// the destination column type, erasing the binary domain before
+			// the explicit cast can apply its own conversion contract
+			// (invalid UTF-8 -> NULL + Warning 1300) — including literals
+			// nested inside source expressions such as IFNULL/COALESCE/CONCAT.
+			// Protection is a leaf-level gate (numValDefaultBindType): only
+			// binary-domain NumVal leaves (hex, bit and the _binary
+			// introducer forms) skip pre-coercion, so string literals, plain
+			// numeric literals, columns and non-literal expressions bind
+			// identically either way and keep the historical pre-coercion
+			// (CAST(X'3132' AS SIGNED) in VALUES stays 12, plain numeric text
+			// defaults keep folding). The innermost explicit cast owns its
+			// source subtree, except that a byte-preserving nested cast whose
+			// target stays in the binary domain (CAST(... AS BINARY), binary-
+			// charset CHAR) is transparent: it does not change the bytes an
+			// enclosing text cast converts, so an inherited guard passes
+			// through it unchanged (review5810535982).
+			suppress := b.binaryLiteralUnderExplicitTextCast
+			b.binaryLiteralUnderExplicitTextCast = binarySourceGuardForCastSource(suppress, typ)
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+			b.binaryLiteralUnderExplicitTextCast = suppress
 		}
 		b.numericParamType = parentParamType
 		if err != nil {
@@ -466,6 +497,69 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 		}
 		astExpr = paren.Expr
 	}
+}
+
+// explicitCastTargetsNonBinaryText reports whether an explicit CAST target is
+// non-binary-charset char/varchar/text — the conversion domain guarded by
+// func_cast.go binarySourceToText and mirrored by function.go
+// explicitBinaryToTextCastMaySynthesizeNull.
+func explicitCastTargetsNonBinaryText(typ Type) bool {
+	t := types.T(typ.Id)
+	if t != types.T_char && t != types.T_varchar && t != types.T_text {
+		return false
+	}
+	return typ.Charset != uint32(types.CharsetBinary)
+}
+
+// explicitCastKeepsBinaryDomain reports whether an explicit CAST target stays
+// in the binary domain (binary-charset char/varchar/text/binary/varbinary):
+// the cast keeps the raw source bytes, at most truncating or zero-padding
+// them to the target width, so an enclosing non-binary text cast's
+// conversion contract still applies to the same bytes.
+func explicitCastKeepsBinaryDomain(typ Type) bool {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text, types.T_varbinary, types.T_binary:
+	default:
+		return false
+	}
+	return typ.Charset == uint32(types.CharsetBinary)
+}
+
+// binarySourceGuardForCastSource derives the leaf-level binary-source guard
+// for the source subtree of an explicit CAST with target typ, given the
+// guard inherited from any enclosing explicit text cast. A non-binary-charset
+// text target opens the guard for its own source subtree. A binary-domain
+// target is byte-preserving, so an inherited guard passes through it
+// unchanged; any other target (numeric, temporal, ...) is a substantive
+// conversion boundary and closes the guard.
+func binarySourceGuardForCastSource(inherited bool, typ Type) bool {
+	if explicitCastTargetsNonBinaryText(typ) {
+		return true
+	}
+	return inherited && explicitCastKeepsBinaryDomain(typ)
+}
+
+// numValDefaultBindType applies the INSERT/REPLACE destination-column
+// pre-coercion to numeric literals, except that a binary-domain literal
+// (hex, bit, or a _binary introducer form) bound in the source subtree of an
+// explicit CAST into non-binary-charset text keeps its raw binary bytes:
+// defaultValueBindType would rewrite those leaves to the destination column
+// type and erase the binary domain before the explicit cast's conversion
+// contract (invalid UTF-8 -> NULL + Warning 1300) could apply. Plain numeric
+// literals, string literals and non-literal expressions are unaffected, so
+// folded text defaults and numeric-target casts keep the historical coercion.
+func (b *baseBinder) numValDefaultBindType(astExpr *tree.NumVal) Type {
+	if b.binaryLiteralUnderExplicitTextCast &&
+		(astExpr.ValType == tree.P_hexnum || astExpr.ValType == tree.P_bit ||
+			astExpr.ValType == tree.P_ScoreBinary || astExpr.ValType == tree.P_ScoreBinaryHexnum) {
+		// The _binary introducer forms share the hex/bit raw-bytes contract:
+		// pre-coercing them to the destination column type (including a
+		// nullable NUMERIC destination) is irreversible and would erase the
+		// binary domain before the explicit cast's NULL + Warning 1300
+		// conversion contract could apply.
+		return Type{}
+	}
+	return b.defaultValueBindType()
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -851,16 +945,33 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			}
 			args[idx] = expr
 		}
-		args[len(args)-1] = &Expr{
+		// Keep correlation depth on the wrapped reference so an outer
+		// ENUM/SET column resolves through the outer scope instead of
+		// leaking a plain column reference into the subquery scope (#31568).
+		refRelPos, refColPos := relPos, colPos
+		if aggRelPos, aggColPos, ok := b.correlatedFullGroupByAggregateRef(relPos, colPos, col, typ); ok {
+			refRelPos, refColPos = aggRelPos, aggColPos
+		}
+		ref := &Expr{
 			Typ: *typ,
-			Expr: &plan.Expr_Col{
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: refRelPos,
+					ColPos: refColPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if depth == 0 {
+			ref.Expr = &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: relPos,
 					ColPos: colPos,
 					Name:   col,
 				},
-			},
+			}
 		}
+		args[len(args)-1] = ref
 		if virtualRead != nil {
 			args[len(args)-1] = virtualRead
 		}
@@ -4828,6 +4939,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if name == "between" && len(args) == 3 && b.builder != nil &&
+		containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+		if _, expandRange := dateStringBetweenNormalization(args); expandRange {
+			// The DATE/string range expansion (normalizeDateStringComparisonArgs)
+			// rebinds its left operand in each of the two comparisons. Memoize it
+			// so a volatile source such as nextval still runs once, the same
+			// contract the IN expansion above uses.
+			if err := b.markVolatileInLeft(args[0]); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if state := preparedBindingState(b.GetContext()); state != nil &&
 		len(args) == 2 && isPreparedNumericComparisonContext(name) {
 		for i, source := range args {
@@ -7808,6 +7931,13 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
+	}
+	dateRangeExpr, err := normalizeDateStringComparisonArgs(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
+	if dateRangeExpr != nil {
+		return dateRangeExpr, nil
 	}
 	if strings.EqualFold(name, "inet_ntoa") {
 		normalizeInetNtoaBinaryPlanLiteral(args)
@@ -11658,6 +11788,151 @@ func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr)
 	return nil
 }
 
+// MySQL compares DATE values with strings in the DATETIME domain, so the
+// string keeps any time-of-day it carries instead of being truncated to a
+// pure date. Binary comparisons and BETWEEN share one literal-eligibility
+// rule (isDateComparisonStringLiteral): character string literals and
+// binary-introducer (_binary'...') literals qualify, because MySQL coerces
+// both to DATETIME in temporal comparisons. A string keeps the DATE domain
+// (and its column/index fast path) only when both domains are proven
+// equivalent for it: the canonical
+// datetime parser accepts it with a zero time-of-day AND the DATE cast
+// parser accepts it with the same calendar date, because the DATE domain
+// then only drops that zero time portion and DATE promotes to midnight. Any
+// other datetime-parseable string literal promotes the comparison to
+// DATETIME(6); strings the datetime parser rejects keep the existing
+// DATE-domain behavior, including its error reporting.
+//
+// BETWEEN applies the same per-bound rule. When both bounds are datetime
+// parseable string literals and at least one promotes, both bounds cast to
+// DATETIME(6) and the fused range evaluates in one uniform domain. A fused
+// range cannot honor a promoting bound otherwise: its shared cast domain
+// would truncate that bound's time portion, while NOT BETWEEN — which
+// rewrites to two independent comparisons before function binding — would
+// preserve it, so a row could satisfy both expr BETWEEN a AND b and expr
+// NOT BETWEEN a AND b. The positive range therefore expands to the same
+// independent comparisons NOT BETWEEN uses, and each bound converts exactly
+// as it would in a standalone comparison. That expansion rebinds the left
+// operand in each comparison, so a volatile left operand (for example
+// nextval) must carry a binder-issued evaluation memo (markVolatileInLeft)
+// that shares one evaluation between both copies; without a memo the range
+// keeps its fused single-evaluation form. The returned expression replaces
+// the fused range; it is nil when the range keeps its original form.
+func normalizeDateStringComparisonArgs(ctx context.Context, name string, args []*Expr) (*Expr, error) {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil, nil
+		}
+		for _, pos := range []int{0, 1} {
+			if args[pos].Typ.Id != int32(types.T_date) || !isDateComparisonStringLiteral(args[1-pos]) {
+				continue
+			}
+			promote, _ := dateStringLiteralPromotion(args[1-pos])
+			if !promote {
+				return nil, nil
+			}
+			castExpr, err := appendCastBeforeExpr(ctx, args[1-pos], makePlan2Type(datetimeMaxScaleType()))
+			if err != nil {
+				return nil, err
+			}
+			args[1-pos] = castExpr
+			return nil, nil
+		}
+	case "between":
+		castBothBounds, expandRange := dateStringBetweenNormalization(args)
+		if castBothBounds {
+			for _, pos := range []int{1, 2} {
+				castExpr, err := appendCastBeforeExpr(ctx, args[pos], makePlan2Type(datetimeMaxScaleType()))
+				if err != nil {
+					return nil, err
+				}
+				args[pos] = castExpr
+			}
+			return nil, nil
+		}
+		if !expandRange {
+			return nil, nil
+		}
+		// The expanded range rebinds its left operand once per comparison. A
+		// volatile left operand must arrive with an evaluation memo assigned by
+		// the binder (markVolatileInLeft); without one the expansion would
+		// evaluate it twice, so the range keeps its fused single-evaluation
+		// form instead.
+		if containsVolatileFunction(args[0]) && args[0].AuxId >= 0 {
+			return nil, nil
+		}
+		return bindBetweenAsComparisons(ctx, args)
+	}
+	return nil, nil
+}
+
+// dateStringBetweenNormalization decides how a BETWEEN range with a
+// DATE-typed left operand and string-literal bounds normalizes (see
+// normalizeDateStringComparisonArgs). castBothBounds keeps the fused range
+// and casts both bounds to DATETIME(6), which is possible only when both
+// bounds are datetime parseable. expandRange rewrites the range to the same
+// independent comparisons NOT BETWEEN uses. The binder consults the same
+// decision so a volatile left operand receives an evaluation memo exactly
+// when the range will expand.
+func dateStringBetweenNormalization(args []*Expr) (castBothBounds bool, expandRange bool) {
+	if len(args) != 3 || args[0].Typ.Id != int32(types.T_date) {
+		return false, false
+	}
+	promote1, parseable1 := dateStringLiteralPromotion(args[1])
+	promote2, parseable2 := dateStringLiteralPromotion(args[2])
+	if !promote1 && !promote2 {
+		return false, false
+	}
+	if parseable1 && parseable2 {
+		return true, false
+	}
+	return false, true
+}
+
+// dateStringLiteralPromotion inspects an eligible string literal compared
+// with a DATE operand (character string or binary-introducer literal; see
+// isDateComparisonStringLiteral). promote is true when the string parses as a datetime
+// and the DATE domain would change the outcome: either the string carries a
+// non-zero time-of-day (which the DATE cast silently drops), or the DATE
+// cast parser rejects the string or parses it to a different calendar day
+// (for example the compact 'YYYYMMDDHHMMSS' form, which ParseDateCast
+// refuses). datetimeParseable reports whether the canonical datetime parser
+// accepts the string at all; BETWEEN consults it to decide whether both
+// bounds can share one DATETIME domain or the range must expand to
+// independent comparisons. Strings that fail the datetime parse keep the
+// existing DATE-domain behavior, including its error reporting.
+func dateStringLiteralPromotion(expr *Expr) (promote bool, datetimeParseable bool) {
+	if !isDateComparisonStringLiteral(expr) {
+		return false, false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return false, false
+	}
+	text, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false, false
+	}
+	dt, err := types.ParseDatetime(text.Sval, 6)
+	if err != nil {
+		return false, false
+	}
+	if dt.Hour() != 0 || dt.Minute() != 0 || dt.Sec() != 0 || dt.MicroSec() != 0 {
+		return true, true
+	}
+	date, err := types.ParseDateCast(text.Sval)
+	if err != nil || date != dt.ToDate() {
+		return true, true
+	}
+	return false, true
+}
+
+func datetimeMaxScaleType() *types.Type {
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	return &datetimeType
+}
+
 // MySQL compares scalar TIME expressions to strings as text, but converts a
 // constant string or direct prepared parameter to TIME(scale) when the TIME
 // side is a column.
@@ -11726,6 +12001,31 @@ func allTimeOrCharacterString(args []*Expr) bool {
 
 func isCharacterStringLiteral(expr *Expr) bool {
 	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
+}
+
+// isDateComparisonStringLiteral reports whether expr is a string literal
+// eligible for DATE comparison normalization. Character string literals
+// qualify; so do binary-introducer (_binary'...') literals, because MySQL
+// coerces their string content to DATETIME in temporal comparisons exactly
+// like character strings. Binary comparisons and BETWEEN share this one
+// rule so NOT BETWEEN stays the exact negation of BETWEEN.
+func isDateComparisonStringLiteral(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) || isBinaryIntroducerStringLiteral(expr)
+}
+
+// isBinaryIntroducerStringLiteral reports whether expr is a _binary'...'
+// literal: a VARBINARY constant carrying string content. Hex and bit
+// literals (IsBin) are excluded.
+func isBinaryIntroducerStringLiteral(expr *Expr) bool {
+	if expr.Typ.Id != int32(types.T_varbinary) {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull || lit.IsBin {
+		return false
+	}
+	_, ok := lit.Value.(*plan.Literal_Sval)
+	return ok
 }
 
 func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {
@@ -12436,6 +12736,15 @@ func appendCastBeforeExprWithOverload(
 	// for 0xXXXX, if the value is over 1<<53-1, when covert it into float64,it will lost, so just change it into uint64
 	typ := toType
 	typ.PadSpace = false
+	if !typ.CollationCoercibilitySet && types.T(typ.Id).IsMySQLString() &&
+		types.StaticStringDomain(makeTypeByPlan2Type(typ)) == types.StringDomainBinary {
+		// A CAST result carries MySQL's IMPLICIT coercibility (2). Constant
+		// folding replaces this cast with a literal that keeps only this Typ,
+		// so without the stamp a folded CAST(x AS BINARY) drops to a coercible
+		// literal (4) and loses to a column's collation instead of tying with
+		// it byte-wise (issue #31175).
+		typ.CollationCoercibility, typ.CollationCoercibilitySet = 2, true
+	}
 	if overloadID <= 1 && fromPadSpace &&
 		(types.T(typ.Id) == types.T_varchar || types.T(typ.Id) == types.T_text) {
 		typ.PadSpace = true

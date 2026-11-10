@@ -2972,10 +2972,17 @@ func TestGetColDataIntegerRoundingScope(t *testing.T) {
 		wantErr           bool
 	}{
 		{"load csv", tree.CSV, int32(plan.ExternType_LOAD), "", "1.9", 1, false},
-		{"external jsonline", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1.9", 1, false},
+		{"external jsonline", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1.9", 2, false},
+		{"external jsonline string", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "2.5", 3, false},
+		{"load jsonline", tree.JSONLINE, int32(plan.ExternType_LOAD), "", "1.9", 2, false},
+		{"load jsonline string", tree.JSONLINE, int32(plan.ExternType_LOAD), "", "2.5", 3, false},
 		{"external set", tree.CSV, int32(plan.ExternType_EXTERNAL_TB), "1.9,two", "1.9", 1, false},
+		{"jsonline set", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "1.9,two", "1.9", 1, false},
+		{"kafka jsonline keeps truncation", tree.JSONLINE, int32(plan.ExternType_KAFKA_TB), "", "1.9", 1, false},
+		{"external jsonline unsigned negative fraction", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "-1.6", 0, true},
 		{"load csv overflow mantissa", tree.CSV, int32(plan.ExternType_LOAD), "", "1000000000000000000000e-21", 0, true},
-		{"external jsonline overflow mantissa", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1000000000000000000000e-21", 0, true},
+		{"external jsonline overflow mantissa", tree.JSONLINE, int32(plan.ExternType_EXTERNAL_TB), "", "1000000000000000000000e-21", 1, false},
+		{"load jsonline overflow mantissa", tree.JSONLINE, int32(plan.ExternType_LOAD), "", "1000000000000000000000e-21", 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bat := batch.NewWithSize(1)

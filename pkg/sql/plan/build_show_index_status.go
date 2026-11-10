@@ -56,7 +56,7 @@ func buildShowIndexStatus(stmt *tree.ShowIndexStatus, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	tblName := stmt.TableName.GetTableName()
-	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}

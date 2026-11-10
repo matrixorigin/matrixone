@@ -149,7 +149,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +219,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, err
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +498,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +566,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -657,7 +657,7 @@ func descColumnLikeInstaller(stmt *tree.ShowColumns, pattern string) func() {
 	}
 }
 
-func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
+func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
@@ -673,7 +673,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -856,7 +856,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 	var result *Plan
 	if stmt.Where != nil {
-		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		result, err = returnByWhereAndBaseSQLWithPrepare(ctx, sql, stmt.Where, ddlType, isPrepareStmt)
 	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
@@ -1078,7 +1078,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	tblName := stmt.TableName.GetTableName()
-	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1367,16 +1367,21 @@ func showSnapshotSpec(atTsExpr *tree.AtTimeStamp, snapshot *Snapshot) string {
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+	return returnByWhereAndBaseSQLWithPrepare(ctx, baseSQL, where, ddlType, false)
+}
+
+func returnByWhereAndBaseSQLWithPrepare(ctx CompilerContext, baseSQL string,
+	where *tree.Where, ddlType plan.DataDefinition_DdlType, isPrepareStmt bool) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
-	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
-	// set show statement's where clause to new statement
+	defer newStmt.Free()
+	// The predicate belongs to the authored SHOW. Preserve its prepare mode
+	// when binding it as part of the rewritten SELECT.
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = where
-	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
+	return BuildPlan(ctx, newStmt, isPrepareStmt, nil)
 }
 
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
@@ -1425,7 +1430,7 @@ func getRewriteSQLStmtWithSQLMode(ctx CompilerContext, sql, sqlMode string) (tre
 
 func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	queryPlan, err := BuildPlan(ctx, stmt, false)
+	queryPlan, err := BuildPlan(ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}

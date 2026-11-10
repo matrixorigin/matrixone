@@ -8706,23 +8706,119 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 		return opTernaryStrFixedStrToFixed[uint64, Tr](ivecs, result, proc, length, findSetMember, selectList)
 	}
 
-	findInStrList := func(str, strlist string) Tr {
-		if strlist == "" {
-			return toResult(0)
+	// FIND_IN_SET honors the resolved collation of its string-list (container)
+	// operand: utf8mb4_general_ci compares per-character weights and the
+	// unicode_ci family compares the same collation keys as =/IN, so
+	// membership agrees with LIKE and with equality (issue #31175). A binary
+	// needle or list row keeps the byte-wise membership test, matching
+	// INSTR's domain routing and MySQL's both-argument comparison resolution.
+	fold := likeFoldModeFor(ivecs[1].GetType().Charset)
+	listType := *ivecs[1].GetType()
+	needleBinary, needlePerRow := stringDomainMode(ivecs[0])
+	listBinary, listPerRow := stringDomainMode(ivecs[1])
+	needles := vector.GenerateFunctionStrParameter(ivecs[0])
+	lists := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err = rs.Append(toResult(0), true); err != nil {
+				return err
+			}
+			continue
 		}
-		for position := uint64(1); ; position++ {
-			member, rest, more := strings.Cut(strlist, ",")
-			if member == str {
-				return toResult(position)
+		strBytes, null1 := needles.GetStrValue(row)
+		listBytes, null2 := lists.GetStrValue(row)
+		if null1 || null2 {
+			if err = rs.Append(toResult(0), true); err != nil {
+				return err
 			}
-			if !more {
-				return toResult(0)
+			continue
+		}
+		rowFold := fold != likeFoldNone &&
+			!binaryStringAt(ivecs[0], int(row), needleBinary, needlePerRow) &&
+			!binaryStringAt(ivecs[1], int(row), listBinary, listPerRow)
+		// The needle's comparison representation is row-invariant: prepare
+		// it once and reuse it across every list member instead of folding
+		// or keying the needle again per member (issue #31175 review).
+		var needleKey, foldedNeedle []byte
+		if rowFold {
+			if fold == likeFoldUnicodeCI {
+				needleKey = types.CollationKeyOrOriginal(listType.Charset,
+					appendFindInSetSentinel(strBytes))
+			} else {
+				foldedNeedle = generalCILikeFold(strBytes)
 			}
-			strlist = rest
+		}
+		position := uint64(0)
+		if len(listBytes) != 0 {
+			// Walk members with Cut so the scan never materializes a member
+			// slice per row, matching the upstream no-allocation iteration.
+			j := 0
+			for rest := listBytes; ; {
+				member, r, more := bytes.Cut(rest, commaSeparator)
+				if j&findInSetMemberScanCancelMask == findInSetMemberScanCancelMask {
+					// A long member scan must stay cancellable, exactly
+					// like the other extended scans in this package.
+					if err = proc.Ctx.Err(); err != nil {
+						return err
+					}
+				}
+				if bytes.Equal(member, strBytes) ||
+					(rowFold && findInSetMemberEqual(fold, listType, member, needleKey, foldedNeedle)) {
+					position = uint64(j + 1)
+					break
+				}
+				if !more {
+					break
+				}
+				rest = r
+				j++
+			}
+		}
+		if err = rs.Append(toResult(position), false); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)
+var commaSeparator = []byte{','}
+
+// findInSetMemberScanCancelMask paces the cancellation checks inside one
+// row's member scan: the context is probed every 1024 members, so a
+// pathologically long list stays interruptible without taxing short lists.
+const findInSetMemberScanCancelMask = 1023
+
+// findInSetMemberEqual compares one list member with the needle under the
+// list operand's resolved collation: the unicode_ci family compares the same
+// collation keys as =/IN, while utf8mb4_general_ci compares per-character
+// weight runes (issue #31175). The needle side arrives already prepared for
+// the row (its sentinel-appended collation key or its fold), so the member
+// loop pays the needle transformation once per row instead of once per
+// member (issue #31175 review).
+func findInSetMemberEqual(fold likeFoldMode, listType types.Type, member, needleKey, foldedNeedle []byte) bool {
+	if fold == likeFoldUnicodeCI {
+		// MySQL tests list membership with the unpadded my_strnncoll, so
+		// trailing spaces stay significant even under a PAD SPACE
+		// collation. Appending one weighted non-space character makes
+		// every trailing space non-trailing, keeping the whole-key
+		// comparison (and its expansion semantics) intact while the key
+		// builder's PAD SPACE trimming can no longer equate 'a ' with 'a'
+		// (issue #31175 review).
+		return bytes.Equal(types.CollationKeyOrOriginal(listType.Charset,
+			appendFindInSetSentinel(member)), needleKey)
+	}
+	return bytes.Equal(generalCILikeFold(member), foldedNeedle)
+}
+
+// appendFindInSetSentinel appends the weighted non-space character that
+// keeps trailing spaces significant in FIND_IN_SET membership. '0' has a
+// real UCA 4.0.0 weight distinct from SPACE, and the pinned table has no
+// contractions, so key(x+'0') is exactly key(x) followed by key('0').
+func appendFindInSetSentinel(value []byte) []byte {
+	out := make([]byte, 0, len(value)+1)
+	out = append(out, value...)
+	return append(out, '0')
 }
 
 func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {

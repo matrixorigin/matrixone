@@ -30,6 +30,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -41,15 +43,16 @@ type decimalZoneMapCompilerContext struct {
 func (c *decimalZoneMapCompilerContext) Resolve(
 	dbName string,
 	tableName string,
-	_ *plan2.Snapshot,
+	_ *plan2.Snapshot, borrowOutput *plan2.TableResolution,
 ) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	borrowOutput.Reset()
 	typ := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 4}
 	switch tableName {
 	case "decimal_scan64":
 		typ = plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
 	case "decimal_scan128":
 	default:
-		return c.MockCompilerContext.Resolve(dbName, tableName, nil)
+		return c.MockCompilerContext.Resolve(dbName, tableName, nil, nil)
 	}
 	return &plan.ObjectRef{SchemaName: dbName, ObjName: tableName}, &plan.TableDef{
 		Name:          tableName,
@@ -109,7 +112,7 @@ func TestCompileFilterExprDecimalScaleMatchesPublicPlan(t *testing.T) {
 			ctx.SetContext(context.Background())
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "select count(*) from "+test.table+" where amount < 2000", 1)
 			require.NoError(t, err)
-			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var scan *plan.Node
@@ -337,18 +340,18 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			fourValue, four := decimalBoundZoneMap(t, decimalType.typ, decimalBound{"4.00", 2})
 
 			columnType := types.T(decimalType.typ.Id)
-			require.True(t, anyLTByBound(zm, oneValue, one, columnType).mayMatch())
-			require.True(t, anyLTByBound(zm, minusTwoValue, minusTwo, columnType).excludes())
-			require.True(t, anyLEByBound(zm, minusTwoValue, minusTwo, columnType).mayMatch())
-			require.True(t, anyGTByBound(zm, oneValue, one, columnType).mayMatch())
-			require.True(t, anyGTByBound(zm, twoValue, two, columnType).excludes())
-			require.True(t, anyGEByBound(zm, twoValue, two, columnType).mayMatch())
-			require.True(t, intersectsBound(zm, oneValue, one, columnType).mayMatch())
-			require.True(t, intersectsBound(zm, threeValue, three, columnType).excludes())
-			require.True(t, anyBetweenBounds(
+			require.True(t, index.AnyLTByBound(zm, oneValue, one, columnType).MayMatch())
+			require.True(t, index.AnyLTByBound(zm, minusTwoValue, minusTwo, columnType).Excludes())
+			require.True(t, index.AnyLEByBound(zm, minusTwoValue, minusTwo, columnType).MayMatch())
+			require.True(t, index.AnyGTByBound(zm, oneValue, one, columnType).MayMatch())
+			require.True(t, index.AnyGTByBound(zm, twoValue, two, columnType).Excludes())
+			require.True(t, index.AnyGEByBound(zm, twoValue, two, columnType).MayMatch())
+			require.True(t, index.IntersectsBound(zm, oneValue, one, columnType).MayMatch())
+			require.True(t, index.IntersectsBound(zm, threeValue, three, columnType).Excludes())
+			require.True(t, index.AnyBetweenBounds(
 				zm, minusOneValue, oneScale1Value, minusOne, oneScale1, columnType,
-			).mayMatch())
-			require.True(t, anyBetweenBounds(zm, threeValue, fourValue, three, four, columnType).excludes())
+			).MayMatch())
+			require.True(t, index.AnyBetweenBounds(zm, threeValue, fourValue, three, four, columnType).Excludes())
 
 			mismatchType := plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0}
 			if types.T(decimalType.typ.Id) == types.T_decimal128 {
@@ -357,14 +360,14 @@ func TestDecimalZoneMapScaleAwareComparisons(t *testing.T) {
 			mismatch := decimalZoneMap(t, mismatchType, "1")
 			// A persisted type mismatch makes index.ZM comparison return ok=false.
 			// Every decimal pruning helper must fail open in that case.
-			require.True(t, anyLTByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyLEByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyGTByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyGEByBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, intersectsBound(zm, nil, mismatch, columnType).mayMatch())
-			require.True(t, anyBetweenBounds(zm, nil, nil, mismatch, mismatch, columnType).mayMatch())
+			require.True(t, index.AnyLTByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyLEByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyGTByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyGEByBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.IntersectsBound(zm, nil, mismatch, columnType).MayMatch())
+			require.True(t, index.AnyBetweenBounds(zm, nil, nil, mismatch, mismatch, columnType).MayMatch())
 			for hint := uint8(0); hint < 4; hint++ {
-				require.True(t, inRangeBounds(zm, nil, nil, mismatch, mismatch, hint, columnType).mayMatch())
+				require.True(t, index.InRangeBounds(zm, nil, nil, mismatch, mismatch, hint, columnType).MayMatch())
 			}
 		})
 	}
@@ -378,33 +381,33 @@ func TestJSONZoneMapValueComparisonsFailOpen(t *testing.T) {
 	index.UpdateZM(zm, low)
 	index.UpdateZM(zm, high)
 
-	for name, match := range map[string]zoneMapMatch{
-		"lt":      anyLTByBound(zm, low, nil, columnType),
-		"le":      anyLEByBound(zm, low, nil, columnType),
-		"gt":      anyGTByBound(zm, high, nil, columnType),
-		"ge":      anyGEByBound(zm, high, nil, columnType),
-		"equal":   intersectsBound(zm, low, nil, columnType),
-		"between": anyBetweenBounds(zm, low, high, nil, nil, columnType),
+	for name, match := range map[string]index.ZoneMapMatch{
+		"lt":      index.AnyLTByBound(zm, low, nil, columnType),
+		"le":      index.AnyLEByBound(zm, low, nil, columnType),
+		"gt":      index.AnyGTByBound(zm, high, nil, columnType),
+		"ge":      index.AnyGEByBound(zm, high, nil, columnType),
+		"equal":   index.IntersectsBound(zm, low, nil, columnType),
+		"between": index.AnyBetweenBounds(zm, low, high, nil, nil, columnType),
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.False(t, match.comparable)
-			require.True(t, match.mayMatch())
-			require.False(t, match.excludes())
+			require.False(t, match.Known)
+			require.True(t, match.MayMatch())
+			require.False(t, match.Excludes())
 		})
 	}
 
 	for hint := uint8(0); hint < 4; hint++ {
-		match := inRangeBounds(zm, low, high, nil, nil, hint, columnType)
-		require.Falsef(t, match.comparable, "range hint %d", hint)
-		require.Truef(t, match.mayMatch(), "range hint %d", hint)
+		match := index.InRangeBounds(zm, low, high, nil, nil, hint, columnType)
+		require.Falsef(t, match.Known, "range hint %d", hint)
+		require.Truef(t, match.MayMatch(), "range hint %d", hint)
 	}
 
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())
 	require.NoError(t, vector.AppendBytes(vec, low, false, mp))
-	match := anyInVector(zm, vec, columnType)
-	require.False(t, match.comparable)
-	require.True(t, match.mayMatch())
+	match := index.AnyInVector(zm, vec, columnType)
+	require.False(t, match.Known)
+	require.True(t, match.MayMatch())
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -504,7 +507,7 @@ func encodeReadutilJSON(t *testing.T, input string) []byte {
 	return encoded
 }
 
-var zoneMapMatchSink zoneMapMatch
+var zoneMapMatchSink index.ZoneMapMatch
 var zoneMapSeekSink int
 
 func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
@@ -530,54 +533,54 @@ func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
 
 	tests := []struct {
 		name string
-		fn   func() zoneMapMatch
+		fn   func() index.ZoneMapMatch
 	}{
 		{
 			name: "raw initialized",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(intZM, intBound, nil, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(intZM, intBound, nil, types.T_int64)
 			},
 		},
 		{
 			name: "raw unknown",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(unknownIntZM, intBound, nil, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(unknownIntZM, intBound, nil, types.T_int64)
 			},
 		},
 		{
 			name: "decimal initialized",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(decimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(decimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
 			},
 		},
 		{
 			name: "decimal unknown",
-			fn: func() zoneMapMatch {
-				return anyLTByBound(unknownDecimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyLTByBound(unknownDecimalZM, decimalValue, decimalBoundZM, types.T_decimal128)
 			},
 		},
 		{
 			name: "in initialized",
-			fn: func() zoneMapMatch {
-				return anyInVector(intZM, intInVec, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyInVector(intZM, intInVec, types.T_int64)
 			},
 		},
 		{
 			name: "in unknown",
-			fn: func() zoneMapMatch {
-				return anyInVector(unknownIntZM, intInVec, types.T_int64)
+			fn: func() index.ZoneMapMatch {
+				return index.AnyInVector(unknownIntZM, intInVec, types.T_int64)
 			},
 		},
 		{
 			name: "prefix initialized",
-			fn: func() zoneMapMatch {
-				return prefixEqByValue(prefixZM, prefixValue, types.T_varchar)
+			fn: func() index.ZoneMapMatch {
+				return index.PrefixEqByValue(prefixZM, prefixValue, types.T_varchar)
 			},
 		},
 		{
 			name: "prefix unknown",
-			fn: func() zoneMapMatch {
-				return prefixInVector(unknownPrefixZM, prefixInVec, types.T_varchar)
+			fn: func() index.ZoneMapMatch {
+				return index.PrefixInVector(unknownPrefixZM, prefixInVec, types.T_varchar)
 			},
 		},
 	}
@@ -624,9 +627,9 @@ func BenchmarkSeekFirstBlockByZoneMap(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				zoneMapSeekSink = seekFirstBlockByZoneMap(
-					dataMeta, 0, nil, types.T_int64,
-					func(zm objectio.ZoneMap) zoneMapMatch {
-						return anyGEByBound(zm, boundBytes, nil, types.T_int64)
+					dataMeta, 0, nil, types.T_int64, false,
+					func(zm objectio.ZoneMap) index.ZoneMapMatch {
+						return index.AnyGEByBound(zm, boundBytes, nil, types.T_int64)
 					},
 				)
 			}
@@ -666,6 +669,127 @@ func TestCompileFilterExprDecimalComparisonFailureSkipsBloom(t *testing.T) {
 			require.False(t, quickBreak)
 			require.True(t, selected)
 		})
+	}
+}
+
+func TestCompileFilterExprORPrunesOnlyWhenAllArmsExclude(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
+	table := decimalTableDef(typ, false)
+	table.Cols[0].ClusterBy = true
+	less := decimalFoldedFilter(t, typ, "<", decimalBound{"1", 0})
+	greater := decimalFoldedFilter(t, typ, ">", decimalBound{"3", 0})
+	expr := foldedFunction("or", []*plan.Expr{less, greater})
+	oldFast, _, _, _, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+	require.True(t, compiled)
+	selected, err := oldFast(decimalObjectStats(t, typ, "2.0000"))
+	require.NoError(t, err)
+	require.True(t, selected, "unmarked OR retains the existing may-match behavior")
+	expr.CandidateFilter = true
+	fast, _, _, block, _, compiled, _ := CompileFilterExpr(expr, table, nil)
+	require.True(t, compiled)
+	require.NotNil(t, fast)
+	require.NotNil(t, block)
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"neither arm", "2.0000", false},
+		{"first arm", "0.0000", true},
+		{"second arm", "4.0000", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected, err := fast(decimalObjectStats(t, typ, tc.value))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, selected)
+			_, selected, err = block(0, makeDecimalBlockMeta(t, typ, tc.value), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, selected)
+		})
+	}
+
+	// IS NULL has no fast object filter. Its absence means unknown, even if
+	// the comparison arm proves that the object's sort key cannot match.
+	isNull := foldedFunction("isnull", []*plan.Expr{less.GetF().Args[0]})
+	unknown := foldedFunction("or", []*plan.Expr{less, isNull})
+	unknown.CandidateFilter = true
+	fast, _, _, _, _, compiled, _ = CompileFilterExpr(unknown, table, nil)
+	require.True(t, compiled)
+	selected, err = fast(decimalObjectStats(t, typ, "2.0000"))
+	require.NoError(t, err)
+	require.True(t, selected)
+}
+
+func TestCompileFilterExprORSeekSkipsAbsentRange(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
+	table := decimalTableDef(typ, false)
+	table.Cols[0].ClusterBy = true
+	absent := decimalFoldedFilter(t, typ, "between", decimalBound{"-10", 0}, decimalBound{"-5", 0})
+	present := decimalFoldedFilter(t, typ, "between", decimalBound{"2", 0}, decimalBound{"3", 0})
+	filter := foldedFunction("or", []*plan.Expr{absent, present})
+	filter.CandidateFilter = true
+	_, _, _, _, seek, compiled, _ := CompileFilterExpr(filter, table, nil)
+	require.True(t, compiled)
+	require.NotNil(t, seek)
+	meta := decimalObjectDataMeta(t, typ, "0.0000", "1.0000", "2.0000", "3.0000")
+	require.Equal(t, 2, seek(meta))
+
+	// An unknown block prevents a seek past it, even if the first known block
+	// lies above the absent arm's upper bound.
+	meta.GetBlockMeta(1).MustGetColumn(0).SetZoneMap(index.NewZM(types.T_decimal64, 4))
+	require.Equal(t, 0, seek(meta))
+}
+
+// A generic folded boolean has no proof that skipping rows preserves other
+// predicates' diagnostics, so an unsupported folded boolean must fail open.
+func TestUnmarkedFoldedBooleanDoesNotPrune(t *testing.T) {
+	value := false
+	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+		IsConst: true, Data: types.EncodeBool(&value),
+	}}}
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 4}
+	comparison := decimalFoldedFilter(t, typ, "between", decimalBound{"2", 0}, decimalBound{"3", 0})
+	_, _, _, _, _, compiled, _ := CompileFilterExpr(foldedFunction("or", []*plan.Expr{guard, comparison}), decimalTableDef(typ, false), nil)
+	require.False(t, compiled)
+
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"amount": 0},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}},
+		Cols:          []*plan.ColDef{{Name: "amount", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	base, err := ConstructBasePKFilter(foldedFunction("or", []*plan.Expr{guard, int64FoldedFilter("=", 2)}), table, proc.Mp())
+	require.NoError(t, err)
+	defer base.Cleanup()
+	require.False(t, base.Valid)
+}
+
+func TestFoldedFalseCandidateDoesNotForceEmptyPKFilter(t *testing.T) {
+	guard := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{0}}}}
+	table := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"amount": 0},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}},
+		Cols:          []*plan.ColDef{{Name: "amount", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	filter := foldedFunction("and", []*plan.Expr{guard, int64FoldedFilter("=", 2)})
+	for _, marked := range []bool{false, true} {
+		filter.CandidateFilter = marked
+		base, err := ConstructBasePKFilter(filter, table, proc.Mp())
+		require.NoError(t, err)
+		block, err := ConstructBlockPKFilter(false, base, nil)
+		require.NoError(t, err)
+		require.True(t, block.Valid)
+		pk := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3}, nil, proc.Mp()))
+		require.Equal(t, []int64{1}, block.SortedSearchFunc(containers.Vectors{*pk}))
+		pk.Free(proc.Mp())
+		if block.Cleanup != nil {
+			block.Cleanup()
+		}
 	}
 }
 
@@ -1446,4 +1570,54 @@ func makeDecimalBlockMeta(t *testing.T, typ plan.Type, values ...string) objecti
 	}
 	meta.MustGetColumn(0).SetZoneMap(zm)
 	return meta
+}
+
+func TestTemporalObjectFastFilterUsesSortedColumnProof(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 4}
+	for _, primary := range []bool{false, true} {
+		table := decimalTableDef(typ, primary)
+		// A Pkey descriptor alone is not the reader's sorted-key proof.
+		table.Pkey = &plan.PrimaryKeyDef{PkeyColName: "amount", Names: []string{"amount"}}
+		expr := decimalFoldedFilter(t, typ, "between", decimalBound{"10", 0}, decimalBound{"20", 0})
+		expr.CandidateFilter = true
+		fast, _, _, block, _, compiled, _ := CompileFilterExprs([]*plan.Expr{expr}, table, nil)
+		require.True(t, compiled)
+		_, blockMatches, err := block(0, makeDecimalBlockMeta(t, typ, "15"), nil)
+		require.NoError(t, err)
+		require.True(t, blockMatches)
+		if !primary {
+			require.Nil(t, fast, "a Pkey descriptor without ColDef.Primary cannot authorize object-stats exclusion")
+			continue
+		}
+		stats := decimalObjectStats(t, typ, "30")
+		matches, err := fast(stats)
+		require.NoError(t, err)
+		require.False(t, matches, "the fast path uses stats, even when separate metadata would match")
+		var blocks objectio.BlockInfoSlice
+		_, loads, _, _, _, _, fastTotal, fastHits, err := FilterObjects(t.Context(), engine.RangesParam{}, fast, nil, nil, nil, nil, nil, []objectio.ObjectStats{*stats}, nil, &blocks, false, nil, nil)
+		require.NoError(t, err)
+		require.Zero(t, loads)
+		require.Equal(t, 1, fastTotal)
+		require.Equal(t, 1, fastHits)
+		require.Zero(t, blocks.Len())
+	}
+}
+
+func TestTemporalCandidateCannotBypassWholeFilterUnicodeCheck(t *testing.T) {
+	for _, charset := range []uint32{uint32(types.CharsetUTF8MB4Bin), uint32(types.CharsetUTF8MB4UnicodeCI)} {
+		typ := plan.Type{Id: int32(types.T_varchar), Width: 64, Charset: charset}
+		table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "key", Typ: typ, Primary: true}}, Name2ColIndex: map[string]int32{"key": 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: "key", Names: []string{"key"}}}
+		column := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "key"}}}
+		bound := &plan.Expr{Typ: typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("x")}}}
+		filter := foldedFunction("prefix_eq", []*plan.Expr{column, bound})
+		filter.CandidateFilter = true
+		fast, _, _, _, _, compiled, _ := CompileFilterExprs([]*plan.Expr{filter}, table, nil)
+		if charset == uint32(types.CharsetUTF8MB4UnicodeCI) {
+			require.False(t, compiled)
+			require.Nil(t, fast)
+		} else {
+			require.True(t, compiled)
+			require.NotNil(t, fast)
+		}
+	}
 }

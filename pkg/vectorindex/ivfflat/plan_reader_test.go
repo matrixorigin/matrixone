@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -1630,7 +1631,39 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
-	require.Same(t, clone, proc.GetCloneTxnOperator())
+	require.Nil(t, proc.GetCloneTxnOperator(), "历史读取点不能发布到共享 Process")
+	require.Same(t, original, proc.GetTxnOperator())
+}
+
+func TestRelationScannerDoesNotBorrowAnotherSnapshotsTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 30}}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	openErr := errors.New("历史关系打开失败")
+	times := []timestamp.Timestamp{{PhysicalTime: 10, LogicalTime: 1}, {PhysicalTime: 10, LogicalTime: 2}}
+	scanners := make([]*relationScanner, len(times))
+	clones := make([]*mock_frontend.MockTxnOperator, len(times))
+	for i := range times {
+		clones[i] = mock_frontend.NewMockTxnOperator(ctrl)
+		clones[i].EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: times[i]}).AnyTimes()
+		original.EXPECT().CloneSnapshotOp(times[i]).Return(clones[i]).Times(1)
+		scanners[i] = &relationScanner{proc: proc, snapshot: &plan.Snapshot{TS: &times[i]}}
+	}
+	for _, i := range []int{0, 1, 0} {
+		eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).DoAndReturn(
+			func(_ context.Context, _ string, op client.TxnOperator) (engine.Database, error) {
+				require.Equal(t, times[i], op.Txn().SnapshotTS)
+				return nil, openErr
+			})
+		res, err := scanners[i].ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+		res.Close()
+		require.ErrorIs(t, err, openErr)
+	}
+	require.Same(t, original, proc.GetTxnOperator())
 }
 
 func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {

@@ -163,45 +163,47 @@ func TestDescColNameReplanRefiltersAfterStoredSpellingChange(t *testing.T) {
 	require.Equal(t, "n_name", nationCol.Name)
 
 	nationCol.OriginName = "N_Name"
-	first, err := BuildPlan(ctx, stmt, false)
+	first, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"N_Name"},
-		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_NAME"}),
+		descKeptByFilterPattern(t, proc, first, "N_Name", []string{"N_Name", "n_PAME"}),
 		"the first build filters the then-current stored spelling")
 	require.True(t, queryContainsStringLiteral(first.GetQuery(), "N_Name"))
 
-	nationCol.OriginName = "n_NAME"
-	reused, err := BuildPlan(ctx, stmt, false)
+	nationCol.OriginName = "n_PAME"
+	reused, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, []string{"n_NAME"},
-		descKeptByFilterPattern(t, proc, reused, "n_NAME", []string{"N_Name", "n_NAME"}),
+	require.Equal(t, []string{"n_PAME"},
+		descKeptByFilterPattern(t, proc, reused, "n_PAME", []string{"N_Name", "n_PAME"}),
 		"a reused prepared DESC must filter by the current stored spelling")
 
 	fresh, err := runOneStmt(mock, t, "desc nation n_name")
 	require.NoError(t, err)
-	require.Equal(t, []string{"n_NAME"},
-		descKeptByFilterPattern(t, proc, fresh, "n_NAME", []string{"N_Name", "n_NAME"}),
+	require.Equal(t, []string{"n_PAME"},
+		descKeptByFilterPattern(t, proc, fresh, "n_PAME", []string{"N_Name", "n_PAME"}),
 		"a fresh DESC filters by the current stored spelling")
-	require.True(t, queryContainsStringLiteral(reused.GetQuery(), "n_NAME"))
+	require.True(t, queryContainsStringLiteral(reused.GetQuery(), "n_PAME"))
 	require.False(t, queryContainsStringLiteral(reused.GetQuery(), "N_Name"))
 
 	// Authored LIKE and the wildcard/unknown shortcuts execute their real
 	// predicate over the current stored fields.
 	likeStmt, err := runOneStmt(mock, t, "show columns from nation like 'n_na%'")
 	require.NoError(t, err)
-	// The repository LIKE is case-sensitive: the flipped-store spelling n_NAME
-	// matches an exact-name filter, not the authored lowercase prefix.
+	// The repository LIKE honors the effective (case-insensitive) collation
+	// (#31175), so the flipped-store spelling differs beyond letter case:
+	// n_PAME matches an exact-name filter, not the authored lowercase prefix.
 	require.Equal(t, []string{"n_nationkey"},
-		descKeptByFilterPattern(t, proc, likeStmt, "n_na%", []string{"n_nationkey", "n_NAME", "n_regionkey", "n_comment"}))
+		descKeptByFilterPattern(t, proc, likeStmt, "n_na%", []string{"n_nationkey", "n_PAME", "n_regionkey", "n_comment"}))
 	wild, err := runOneStmt(mock, t, "desc nation `n_na%`")
 	require.NoError(t, err)
-	// The repository LIKE is case-sensitive: the flipped-store spelling n_NAME
-	// matches an exact-name filter, not the authored lowercase prefix.
+	// The repository LIKE honors the effective (case-insensitive) collation
+	// (#31175), so the flipped-store spelling differs beyond letter case:
+	// n_PAME matches an exact-name filter, not the authored lowercase prefix.
 	require.Equal(t, []string{"n_nationkey"},
-		descKeptByFilterPattern(t, proc, wild, "n_na%", []string{"n_nationkey", "n_NAME", "n_regionkey", "n_comment"}))
+		descKeptByFilterPattern(t, proc, wild, "n_na%", []string{"n_nationkey", "n_PAME", "n_regionkey", "n_comment"}))
 	miss, err := runOneStmt(mock, t, "desc nation nosuch")
 	require.NoError(t, err)
-	require.Empty(t, descKeptByFilterPattern(t, proc, miss, "nosuch", []string{"n_NAME", "n_regionkey"}))
+	require.Empty(t, descKeptByFilterPattern(t, proc, miss, "nosuch", []string{"n_PAME", "n_regionkey"}))
 
 	// Pristine saved AST AFTER the evaluated witnesses.
 	require.Nil(t, sc.Like, "the derived predicate must not persist into the saved AST")
@@ -228,7 +230,7 @@ func TestDescColNameUserViewFiltersByLiveDescriptionSpelling(t *testing.T) {
 			stmt := descParseOne(t, mock.CurrentContext(), "desc v_hit LIVENAME")
 			defer stmt.Free()
 			sc := descShowColumns(t, stmt)
-			got, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			got, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, []string{"livename"},
 				descKeptByFilterPattern(t, proc, got, "livename", []string{"livename", "n_regionkey"}),
@@ -335,12 +337,13 @@ type descPostDescriptionBindFailContext struct {
 }
 
 func (c *descPostDescriptionBindFailContext) Resolve(
-	dbName string, tableName string, snapshot *Snapshot,
+	dbName string, tableName string, snapshot *Snapshot, borrowOutput *TableResolution,
 ) (*ObjectRef, *TableDef, error) {
+	borrowOutput.Reset()
 	if c.closeCount >= 1 && strings.EqualFold(dbName, MO_CATALOG_DB_NAME) {
 		return nil, nil, errors.New("rewritten sql binding unavailable")
 	}
-	return c.descViewProviderRecorder.Resolve(dbName, tableName, snapshot)
+	return c.descViewProviderRecorder.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func (c *descPostDescriptionBindFailContext) GetAccountId() (uint32, error) {
@@ -370,7 +373,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, rec, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		got, err := BuildPlan(rec, stmt, false)
+		got, err := BuildPlan(rec, stmt, false, nil)
 		require.NoError(t, err)
 		require.Equal(t, []string{"livename"},
 			descKeptByFilterPattern(t, proc, got, "livename", []string{"livename", "n_regionkey"}),
@@ -393,7 +396,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, rec, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		_, err := BuildPlan(rec, stmt, false)
+		_, err := BuildPlan(rec, stmt, false, nil)
 		require.Error(t, err)
 		require.Equal(t, 1, rec.openCount)
 		require.Equal(t, 1, rec.closeCount, "the created child closes exactly once when the description fails")
@@ -412,7 +415,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, failCtx, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		got, err := BuildPlan(failCtx, stmt, false)
+		got, err := BuildPlan(failCtx, stmt, false, nil)
 		require.Error(t, err, "the rewritten sql must fail to bind after the successful child description")
 		require.Nil(t, got)
 		require.Equal(t, 1, rec.openCount)
@@ -432,7 +435,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		stmt := descParseOne(t, rec, "desc v_sub LIVENAME")
 		defer stmt.Free()
 		sc := descShowColumns(t, stmt)
-		_, err := BuildPlan(rec, stmt, false)
+		_, err := BuildPlan(rec, stmt, false, nil)
 		require.Error(t, err)
 		require.Equal(t, 1, rec.openCount)
 		require.Equal(t, 0, rec.closeCount, "failed creation must not invoke cleanup")
@@ -453,7 +456,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		}
 		stmt := descParseOne(t, wrapper, "desc v_nop LIVENAME")
 		defer stmt.Free()
-		_, err := BuildPlan(wrapper, stmt, false)
+		_, err := BuildPlan(wrapper, stmt, false, nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "isolated binding context")
 	})

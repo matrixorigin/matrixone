@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -395,57 +397,107 @@ func TestFileServiceCachesUseMemoryCacheAllocator(t *testing.T) {
 }
 
 func TestRemoteCacheReadUsesMemoryCacheReservation(t *testing.T) {
-	ctx := context.Background()
-	const request = 2
-	queryClient := &remoteCacheTestQueryClient{
-		responses: map[string]*query.Response{
-			"target": {
-				GetCacheDataResponse: &query.GetCacheDataResponse{
-					ResponseCacheData: []*query.ResponseCacheData{{
-						Index: 0,
-						Hit:   true,
-						Data:  []byte{1, 2},
-					}},
+	for _, tc := range []struct {
+		name      string
+		policy    Policy
+		full      bool
+		invalid   bool
+		published bool
+	}{
+		{name: "ordinary-full", full: true, published: true},
+		{name: "late-full", policy: MemoryCacheNoEvict, full: true},
+		{name: "late-room", policy: MemoryCacheNoEvict, published: true},
+		{name: "late-skip-reads", policy: MemoryCacheNoEvict | SkipMemoryCacheReads, full: true},
+		{name: "skip-writes-full", policy: SkipMemoryCacheWrites, full: true},
+		{name: "skip-writes-overrides-late", policy: MemoryCacheNoEvict | SkipMemoryCacheWrites},
+		{name: "invalid-late-room", policy: MemoryCacheNoEvict, invalid: true, published: true},
+		{name: "invalid-late-full", policy: MemoryCacheNoEvict, full: true, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			const request = 2
+			payload := []byte{1, 2}
+			queryClient := &remoteCacheTestQueryClient{
+				responses: map[string]*query.Response{
+					"target": {
+						GetCacheDataResponse: &query.GetCacheDataResponse{
+							ResponseCacheData: []*query.ResponseCacheData{{Index: 0, Hit: true, Data: payload}},
+						},
+					},
 				},
-			},
-		},
+			}
+			capacity := DefaultCacheDataAllocator().BackingSize(request)
+			fs, err := NewLocalFS(ctx, "test", t.TempDir(), CacheConfig{
+				MemoryCapacity:     ptrTo(toml.ByteSize(capacity)),
+				RemoteCacheEnabled: true,
+				QueryClient:        queryClient,
+				KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
+					return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+				},
+			}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(ctx) })
+			fs.SetAsyncUpdate(false)
+			cache := fs.memCache
+			require.NoError(t, fs.Write(ctx, IOVector{
+				FilePath: "foo", Entries: []IOEntry{{Size: request, Data: []byte{1, 2}}},
+			}))
+			seedKey := fscache.CacheKey{Path: "seed", Sz: request}
+			if tc.full {
+				func() {
+					seed := cache.AllocateCacheDataWithHint(ctx, request, malloc.DoNotReuse)
+					defer seed.Release()
+					require.NoError(t, cache.Update(ctx, &IOVector{
+						FilePath: "seed", Entries: []IOEntry{{Size: request, CachedData: seed}},
+					}, false))
+				}()
+				require.Equal(t, int64(capacity), cache.cache.Used())
+			}
+			vector := &IOVector{
+				FilePath: "foo", Policy: tc.policy,
+				Entries: []IOEntry{{
+					Size: request, ToCacheData: CacheOriginalData,
+					ValidateCacheData: func(data fscache.Data) (fscache.Data, error) {
+						if tc.invalid {
+							return nil, moerr.NewInternalErrorNoCtx("invalid remote cache data")
+						}
+						return data, nil
+					},
+				}},
+			}
+			defer vector.Release()
+			t.Cleanup(func() {
+				cache.Flush(ctx)
+				require.Zero(t, cache.reservedBytes.Load())
+				require.Zero(t, cache.backingBytes.Load())
+			})
+			require.NoError(t, fs.Read(ctx, vector))
+			require.Equal(t, !tc.invalid, vector.Entries[0].done, "only a valid cache hit marks the entry done")
+			require.Equal(t, []byte{1, 2}, vector.Entries[0].CachedData.Bytes())
+			if tc.invalid {
+				require.Nil(t, vector.Entries[0].fromCache, "invalid remote data falls back to the local file")
+			} else {
+				require.Same(t, fs.remoteCache, vector.Entries[0].fromCache)
+			}
+			payload[0] = 9
+			require.Equal(t, []byte{1, 2}, vector.Entries[0].CachedData.Bytes(), "result storage is independent of the RPC response")
+			require.Equal(t, tc.published, cache.cacheAdmissionAllowed(vector.Entries[0].CachedData))
+			if tc.published {
+				require.Same(t, cache.allocator.owner, vector.Entries[0].CachedData.(fscache.DataOwnership).CacheDataOwner())
+			}
+			seed, resident := cache.cache.Get(ctx, seedKey)
+			if resident {
+				seed.Release()
+			}
+			require.Equal(t, tc.full && !tc.published, resident, "late and explicitly suppressed reads must preserve the resident")
+			cached, published := cache.cache.Get(ctx, fscache.CacheKey{Path: "foo", Sz: request})
+			if published {
+				cached.Release()
+			}
+			require.Equal(t, tc.published, published)
+			require.Equal(t, 1, queryClient.releaseCount)
+		})
 	}
-	caches, err := newFileServiceCaches(ctx, CacheConfig{
-		MemoryCapacity:     ptrTo[toml.ByteSize](1 << 20),
-		RemoteCacheEnabled: true,
-		QueryClient:        queryClient,
-		KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
-			return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
-		},
-	}, nil, "test", false)
-	require.NoError(t, err)
-	t.Cleanup(func() { caches.close(ctx) })
-
-	seed := NewBytes(make([]byte, 1, 1<<20))
-	_, err = caches.memory.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: 1}, seed)
-	require.NoError(t, err)
-	seed.Release()
-	require.Equal(t, int64(1<<20), caches.memory.cache.Used())
-
-	vector := &IOVector{
-		FilePath: "foo",
-		Entries: []IOEntry{{
-			Size: request,
-			ValidateCacheData: func(data fscache.Data) (fscache.Data, error) {
-				return data, nil
-			},
-		}},
-	}
-	require.NoError(t, caches.remote.Read(ctx, vector))
-	require.True(t, vector.Entries[0].done)
-	data := vector.Entries[0].CachedData.(*Bytes)
-	require.Same(t, caches.memory.allocator.owner, data.CacheDataOwner())
-	require.Zero(t, caches.memory.cache.Used())
-	require.Equal(t, int64(caches.memory.BackingSize(request)), caches.memory.reservedBytes.Load())
-	vector.Release()
-	caches.memory.Flush(ctx)
-	require.Zero(t, caches.memory.reservedBytes.Load())
-	require.Equal(t, 1, queryClient.releaseCount)
 }
 
 type cacheFs struct {

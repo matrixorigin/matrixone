@@ -157,7 +157,7 @@ func TestPreparedBlockFilterDisabledHintPersistsInPlan(t *testing.T) {
 				"select a from select_test.bind_select where a=?", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			built, err := BuildPlan(mock, stmt, true)
+			built, err := BuildPlan(mock, stmt, true, nil)
 			require.NoError(t, err)
 			// A later session hint change cannot change this prepared plan's decision.
 			setPlanTestGlobalVariable(t, svc, "optimizer_hints", "blockFilter=1")
