@@ -5209,7 +5209,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				// last allocation of the fallible prefix. The staged copy
 				// transfers to the workspace entry in the publication loop
 				// below, whose steps cannot fail anymore.
-				entryBat, err := bat.Dup(txn.proc.Mp())
+				entryBat, err := txn.copyWorkspaceBatch(bat)
 				bat.Clean(txn.proc.Mp())
 				if err != nil {
 					cleanStagedRepubs()
