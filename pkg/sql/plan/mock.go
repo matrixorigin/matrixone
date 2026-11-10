@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,7 +60,15 @@ type MockCompilerContext struct {
 	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
 	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
 	GetProcessFunc        func() *process.Process
+	processHolder         *mockProcessHolder
 }
+
+type mockProcessHolder struct {
+	once sync.Once
+	proc *process.Process
+}
+
+var mockProcessHolderMu sync.RWMutex
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
 	return 1
@@ -165,9 +174,10 @@ type index struct {
 // NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
-		objects: make(map[string]*ObjectRef),
-		tables:  make(map[string]*TableDef),
-		ctx:     context.Background(),
+		objects:       make(map[string]*ObjectRef),
+		tables:        make(map[string]*TableDef),
+		ctx:           context.Background(),
+		processHolder: &mockProcessHolder{},
 	}
 }
 
@@ -1784,13 +1794,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
-		dbs:     dbs,
-		isDml:   isDml,
-		objects: objects,
-		tables:  tables,
-		id2name: id2name,
-		pks:     pks,
-		ctx:     context.TODO(),
+		dbs:           dbs,
+		isDml:         isDml,
+		objects:       objects,
+		tables:        tables,
+		id2name:       id2name,
+		pks:           pks,
+		ctx:           context.TODO(),
+		processHolder: &mockProcessHolder{},
 	}
 }
 
@@ -1896,14 +1907,30 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	if m.GetProcessFunc != nil {
 		return m.GetProcessFunc()
 	}
-	proc := testutil.NewProc(nil)
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
-		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			return executor.Result{}, nil
-		}),
-	)
-	return proc
+	// A compiler context represents one session. The pointer holder lets
+	// copies share its process without copying synchronization state.
+	mockProcessHolderMu.RLock()
+	holder := m.processHolder
+	mockProcessHolderMu.RUnlock()
+	if holder == nil {
+		mockProcessHolderMu.Lock()
+		holder = m.processHolder
+		if holder == nil {
+			holder = &mockProcessHolder{}
+			m.processHolder = holder
+		}
+		mockProcessHolderMu.Unlock()
+	}
+	holder.once.Do(func() {
+		holder.proc = testutil.NewProc(nil)
+		moruntime.ServiceRuntime(holder.proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			}),
+		)
+	})
+	return holder.proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

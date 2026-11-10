@@ -98,7 +98,7 @@ func TestExecBackupPreservesHistoryAcrossInheritedGCWindow(t *testing.T) {
 					names = append(names, fmt.Sprintf("%s:%d", e.GetLocation(), e.GetVersion()))
 				}
 				names = append(names, fmt.Sprintf("%s:%d", loc, logtail.CheckpointCurrentVersion))
-				require.NoError(t, execBackup(ctx, "", from, to, names, 1, types.TS{}, "full", nil, nil, nil))
+				require.NoError(t, execBackup(ctx, "", from, to, names, 1, types.TS{}, "full", nil, nil, nil, backupFileCopier{}))
 				for _, completion := range []string{taeList, taeSum} {
 					_, err = to.StatFile(ctx, completion)
 					require.NoError(t, err, "successful backup published its completion files")

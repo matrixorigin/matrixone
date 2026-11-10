@@ -68,7 +68,8 @@ func TestNulls(t *testing.T) {
 	np.AddMany([]uint64{1, 2, 3})
 	require.Equal(t, 3, np.Count())
 	np.RemoveRange(1, 3)
-	require.Equal(t, 0, np.Count())
+	require.Equal(t, 1, np.Count())
+	require.True(t, np.Contains(3), "RemoveRange is half-open")
 
 	np.AddMany([]uint64{1, 2, 3})
 	np.Filter([]int64{0})
@@ -88,6 +89,20 @@ func TestNulls(t *testing.T) {
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
 	np.Reset()
+}
+
+func TestRemoveRangeWordBoundary(t *testing.T) {
+	for _, end := range []uint64{63, 64, 65, 8192} {
+		t.Run(fmt.Sprint(end), func(t *testing.T) {
+			bm := newBm(int(end + 1))
+			bm.Add(end - 1)
+			bm.Add(end)
+			bm.RemoveRange(end-1, end)
+			require.False(t, bm.Contains(end-1))
+			require.True(t, bm.Contains(end))
+			require.Equal(t, 1, bm.Count())
+		})
+	}
 }
 
 func BenchmarkAdd(b *testing.B) {
@@ -318,6 +333,29 @@ func TestBitmapRemapMaskOrdered(t *testing.T) {
 	value.InitWithSize(130)
 	value.AddMany([]uint64{1, 63, 64, 127, 129})
 	value.RemapMaskOrdered(selection, true)
+	require.Equal(t, int64(130), value.Len())
+	require.Equal(t, 2, value.Count())
+	require.True(t, value.Contains(62))
+	require.True(t, value.Contains(125))
+}
+
+func TestBitmapRemapMaskOrderedWithOffset(t *testing.T) {
+	selection := newBm(129)
+	selection.AddMany([]uint64{0, 62, 128})
+
+	var value Bitmap
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrderedWithOffset(selection, false, 1)
+	require.Equal(t, int64(3), value.Len())
+	require.Equal(t, 3, value.Count())
+	require.True(t, value.Contains(0))
+	require.True(t, value.Contains(1))
+	require.True(t, value.Contains(2))
+
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrderedWithOffset(selection, true, 1)
 	require.Equal(t, int64(130), value.Len())
 	require.Equal(t, 2, value.Count())
 	require.True(t, value.Contains(62))

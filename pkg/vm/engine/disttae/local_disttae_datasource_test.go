@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -726,6 +728,78 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	require.NotPanics(t, func() {
 		ls.getBlockZMs()
 	}, "getBlockZMs should use Name2ColIndex for O(1) lookup")
+
+	t.Run("owned_zonemaps", func(t *testing.T) {
+		writer := ioutil.ConstructWriter(0, []uint16{9}, -1, false, false, fs)
+		// Three single-row blocks cover both sort directions and unknown metadata.
+		for i, value := range []types.Datetime{1, 9, 0} {
+			bat := batch.NewWithSize(1)
+			t.Cleanup(func() { bat.Clean(proc.Mp()) })
+			bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
+			bat.SetRowCount(1)
+			block, err := writer.WriteBatch(bat)
+			require.NoError(t, err)
+			if i == 2 {
+				block.MustGetColumn(9).SetZoneMap(objectio.NewZM(types.T_datetime, 0))
+			}
+		}
+		_, _, err := writer.Sync(ctx)
+		require.NoError(t, err)
+		stats := writer.GetObjectStats()
+		require.EqualValues(t, 3, stats.BlkCnt())
+		data := readutil.NewBlockListRelationData(0)
+		for i := uint16(0); i < 3; i++ {
+			block := stats.ConstructBlockInfo(i)
+			data.AppendBlockInfo(&block)
+		}
+		location := stats.ObjectLocation()
+		meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		require.NoError(t, err)
+		// Require the same cached allocation; a reload must not hide aliasing.
+		cachedFS := upsertReadFS{FileService: fs, read: func(context.Context, *fileservice.IOVector) error {
+			return errors.New("unexpected metadata reload")
+		}}
+		for _, tc := range []struct {
+			name string
+			flag plan.OrderBySpec_OrderByFlag
+			want []uint16
+		}{
+			{name: "ascending", flag: plan.OrderBySpec_ASC, want: []uint16{2, 0, 1}},
+			{name: "descending", flag: plan.OrderBySpec_DESC, want: []uint16{2, 1, 0}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ds := &LocalDisttaeDataSource{
+					ctx: ctx, fs: cachedFS, table: &txnTbl, rangeSlice: data.GetBlockInfoSlice(),
+				}
+				defer ds.Close()
+				ds.SetOrderBy([]*plan.OrderBySpec{{Expr: ls.OrderBy[0].Expr, Flag: tc.flag}})
+				ds.handleOrderBy()
+				require.True(t, ds.sorted)
+				require.Len(t, ds.blockZMS, 3)
+				for i, wantID := range tc.want {
+					require.Equal(t, wantID, ds.rangeSlice.Get(i).MetaLocation().ID())
+					source := meta.MustDataMeta().GetBlockMeta(uint32(wantID)).ColumnMeta(9).ZoneMap()
+					zm := ds.blockZMS[i]
+					require.Equal(t, source, zm, "preserve initialized and unknown zonemaps")
+					require.Len(t, zm, objectio.ZoneMapSize)
+					require.NotSame(t, &source[0], &zm[0], "local reader must not pin object metadata")
+					require.Equal(t, objectio.ZoneMapSize, cap(zm))
+				}
+				ds.SetFilterZM(ds.blockZMS[1])
+				require.True(t, ds.needReadBlkByZM(0), "retain unknown metadata")
+				require.True(t, ds.needReadBlkByZM(1), "retain equal boundaries")
+				require.False(t, ds.needReadBlkByZM(2), "prune the worse block")
+				ds.rangesCursor = 2
+				ds.handleOrderBy()
+				require.Equal(t, 3, ds.rangesCursor)
+				for i := 0; i < 3; i++ {
+					block := data.GetBlockInfo(i)
+					require.Equal(t, uint16(i), block.MetaLocation().ID())
+				}
+			})
+		}
+	})
 }
 
 // TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction tests column name extraction

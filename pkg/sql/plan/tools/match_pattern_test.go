@@ -19,9 +19,35 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+func TestAssertPlanPreservesRuntimeAndIncrementService(t *testing.T) {
+	testutil.SetupAutoIncrService("")
+	rt := runtime.ServiceRuntime("")
+	service := incrservice.GetAutoIncrementService("")
+	previous, exists := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(runtime.InternalSQLExecutor, previous)
+		} else if current, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.InternalSQLExecutor, current)
+		}
+	})
+	pattern := TNode(plan2.Node_PROJECT,
+		TNode(plan2.Node_TABLE_SCAN).WithAlias("L_ORDERKEY", TColumnRef("lineitem", "l_orderkey")),
+	).WithOutputs("L_ORDERKEY")
+	for i := 0; i < 2; i++ {
+		require.NoError(t, AssertPlan(context.Background(), "SELECT l_orderkey FROM lineitem", pattern))
+		require.Same(t, rt, runtime.ServiceRuntime(""))
+		require.Same(t, service, incrservice.GetAutoIncrementService(""))
+	}
+}
 
 func Test_output(t *testing.T) {
 	p :=

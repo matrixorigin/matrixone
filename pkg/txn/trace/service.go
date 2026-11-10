@@ -133,7 +133,7 @@ type service struct {
 
 	options struct {
 		fs            fileservice.FileService
-		writeFunc     func(loadAction) error
+		writeFunc     func(context.Context, loadAction) error
 		flushDuration time.Duration
 		flushBytes    int
 		bufferSize    int
@@ -289,6 +289,13 @@ func (s *service) handleEvent(
 
 	var w *csv.Writer
 	var f *os.File
+	defer func() {
+		if f != nil {
+			if err := f.Close(); err != nil {
+				s.logger.Error("failed to close csv file", zap.String("table", tableName), zap.Error(err))
+			}
+		}
+	}()
 	records := make([]string, columns)
 	current := ""
 	sum := 0
@@ -317,11 +324,11 @@ func (s *service) handleEvent(
 		return n
 	}
 
-	flush := func() {
+	flush := func() bool {
 		defer buf.reset()
 
 		if sum == 0 {
-			return
+			return true
 		}
 
 		w.Flush()
@@ -336,16 +343,27 @@ func (s *service) handleEvent(
 				zap.String("table", tableName),
 				zap.Error(err))
 		}
+		f = nil
 
-		s.loadC <- loadAction{
+		action := loadAction{
 			sql: fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','",
 				current,
 				tableName),
 			file:  current,
 			table: tableName,
 		}
+		select {
+		case <-ctx.Done():
+			// Shutdown may leave a spool file; NewService does not replay it.
+			return false
+		case s.loadC <- action:
+		}
+		if ctx.Err() != nil {
+			return false
+		}
 		sum = 0
 		open()
+		return true
 	}
 
 	open()
@@ -355,7 +373,9 @@ func (s *service) handleEvent(
 			return
 		case <-ticker.C:
 			if s.atomic.flushEnabled.Load() {
-				flush()
+				if !flush() {
+					return
+				}
 			}
 		case e := <-eventC:
 			if e.buffer != nil {
@@ -370,7 +390,9 @@ func (s *service) handleEvent(
 				sum += bytes()
 				if sum > s.options.flushBytes &&
 					s.atomic.flushEnabled.Load() {
-					flush()
+					if !flush() {
+						return
+					}
 				}
 			}
 		}
@@ -390,11 +412,20 @@ func (s *service) handleLoad(ctx context.Context) {
 				default:
 				}
 
-				if err := s.options.writeFunc(e); err != nil {
+				if err := s.options.writeFunc(ctx, e); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					s.logger.Error("load trace data to table failed, retry later",
 						zap.String("file", e.file),
 						zap.Error(err))
-					time.Sleep(time.Second * 5)
+					timer := time.NewTimer(time.Second * 5)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
 					continue
 				}
 
@@ -409,38 +440,38 @@ func (s *service) handleLoad(ctx context.Context) {
 	}
 }
 
+func (s *service) fetchFeatures(ctx context.Context) ([]string, []string, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseWatch)
+	defer cancel()
+	var features []string
+	var states []string
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			sql := fmt.Sprintf("select name, state from %s.%s", DebugDB, FeaturesTables)
+			res, err := txn.Exec(sql, executor.StatementOption{}.WithDisableLog())
+			if err != nil {
+				return err
+			}
+			defer res.Close()
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					features = append(features, cols[0].GetStringAt(i))
+					states = append(states, cols[1].GetStringAt(i))
+				}
+				return true
+			})
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(DebugDB).
+			WithDisableTrace())
+	return features, states, moerr.AttachCause(ctx, err)
+}
+
 func (s *service) watch(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
-
-	fetch := func() ([]string, []string, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWatch)
-		defer cancel()
-		var features []string
-		var states []string
-		err := s.executor.ExecTxn(
-			ctx,
-			func(txn executor.TxnExecutor) error {
-				sql := fmt.Sprintf("select name, state from %s.%s", DebugDB, FeaturesTables)
-				res, err := txn.Exec(sql, executor.StatementOption{}.WithDisableLog())
-				if err != nil {
-					return err
-				}
-				defer res.Close()
-				res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-					for i := 0; i < rows; i++ {
-						features = append(features, cols[0].GetStringAt(i))
-						states = append(states, cols[1].GetStringAt(i))
-					}
-					return true
-				})
-				return nil
-			},
-			executor.Options{}.
-				WithDatabase(DebugDB).
-				WithDisableTrace())
-		return features, states, moerr.AttachCause(ctx, err)
-	}
 
 	for {
 		select {
@@ -451,7 +482,7 @@ func (s *service) watch(ctx context.Context) {
 				continue
 			}
 
-			features, states, err := fetch()
+			features, states, err := s.fetchFeatures(ctx)
 			if err != nil {
 				s.logger.Error("failed to fetch trace state",
 					zap.Error(err))
@@ -479,17 +510,17 @@ func (s *service) watch(ctx context.Context) {
 			}
 
 			if needRefresh {
-				if err := s.RefreshTableFilters(); err != nil {
+				if err := s.refreshTableFilters(ctx); err != nil {
 					s.logger.Error("failed to refresh table filters",
 						zap.Error(err))
 				}
 
-				if err := s.RefreshTxnFilters(); err != nil {
+				if err := s.refreshTxnFilters(ctx); err != nil {
 					s.logger.Error("failed to refresh txn filters",
 						zap.Error(err))
 				}
 
-				if err := s.RefreshStatementFilters(); err != nil {
+				if err := s.refreshStatementFilters(ctx); err != nil {
 					s.logger.Error("failed to refresh statement filters",
 						zap.Error(err))
 				}

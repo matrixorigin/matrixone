@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,6 +91,50 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	require.False(t, vec.GetGrouping().Contains(1))
 	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
+}
+
+func TestUnionBatchFailureRollbackAllowsReuse(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, sourceMP.CurrNB()) })
+	grouped := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { grouped.Free(sourceMP) })
+	require.NoError(t, AppendBytes(grouped, bytes.Repeat([]byte("x"), 65536), false, sourceMP))
+	grouped.GetGrouping().Add(0)
+	plain := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { plain.Free(sourceMP) })
+	require.NoError(t, AppendBytes(plain, []byte("ok"), false, sourceMP))
+
+	const limit = int64(1 << 20)
+	mp, err := mpool.NewMPool("vector-append-rollback", limit, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+	dst := NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() { dst.Free(mp) })
+	require.NoError(t, AppendBytes(dst, []byte("kept"), false, mp))
+	dst.GetGrouping().Add(0)
+	checkpoint := dst.MakeAppendCheckpoint()
+	var ballast [][]byte
+	t.Cleanup(func() {
+		for _, b := range ballast {
+			mp.Free(b)
+		}
+	})
+	for i := 0; i < 300 && limit-mp.CurrNB() >= 65536; i++ {
+		b, allocErr := mp.Alloc(4096, true)
+		require.NoError(t, allocErr)
+		ballast = append(ballast, b)
+	}
+	err = dst.UnionBatch(grouped, 0, 1, nil, mp)
+	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
+	dst.RollbackAppend(checkpoint, 1)
+	for _, b := range ballast {
+		mp.Free(b)
+	}
+	ballast = nil
+	require.NoError(t, dst.UnionBatch(plain, 0, 1, nil, mp))
+	require.Equal(t, []string{"kept", "ok"}, InefficientMustStrCol(dst))
+	require.True(t, dst.GetGrouping().Contains(0))
+	require.False(t, dst.GetGrouping().Contains(1))
 }
 
 func TestCapacityForUntypedNull(t *testing.T) {
@@ -1252,6 +1297,47 @@ func TestShrinkByMask(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+}
+
+func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(3)
+	mask.AddMany([]uint64{0, 2})
+
+	t.Run("negate", func(t *testing.T) {
+		vec := NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, AppendFixedList(
+			vec,
+			[]int32{10, 11, 12, 13, 14, 15, 16, 17},
+			[]bool{false, false, false, true, false, true, false, false},
+			mp,
+		))
+		vec.GetGrouping().Add(3, 4)
+
+		vec.ShrinkByMask(&mask, true, 2)
+		require.Equal(t, []int32{10, 11, 0, 0, 16, 17}, MustFixedColWithTypeCheck[int32](vec))
+		require.Equal(t, []uint64{2, 3}, vec.GetNulls().ToArray())
+		require.Equal(t, []uint64{2}, vec.GetGrouping().ToArray())
+	})
+
+	t.Run("select", func(t *testing.T) {
+		vec := NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, AppendFixedList(
+			vec,
+			[]int32{10, 11, 12, 13, 14, 15, 16, 17},
+			[]bool{false, false, true, false, false, false, false, false},
+			mp,
+		))
+		vec.GetGrouping().Add(2, 4)
+
+		vec.ShrinkByMask(&mask, false, 2)
+		require.Equal(t, []int32{0, 14}, MustFixedColWithTypeCheck[int32](vec))
+		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
+		require.Equal(t, []uint64{0, 1}, vec.GetGrouping().ToArray())
+	})
 }
 
 func TestShuffle(t *testing.T) {
@@ -3398,21 +3484,10 @@ func TestRowToString(t *testing.T) {
 	}
 	{ // timestamp
 		v := NewVec(types.T_timestamp.ToType())
-		// Use FromClockZone with UTC to create timestamp that will display correctly
-		// RowToString uses time.Local, so we need to create timestamp that accounts for local timezone
-		// If we want to display "1970-01-01 00:00:00" in local time, we need to create timestamp
-		// that represents that time in local timezone
-		utc := time.UTC
-		ts := types.FromClockZone(utc, 1970, 1, 1, 0, 0, 0, 0)
+		ts := types.FromClockZone(time.UTC, 1970, 1, 1, 0, 0, 0, 0)
 		err := AppendFixedList(v, []types.Timestamp{1, ts, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		// RowToString uses time.Local, so the displayed time will be in local timezone
-		// If local timezone is UTC+8, UTC time 1970-01-01 00:00:00 will display as 1970-01-01 08:00:00
-		// So we need to adjust the expected value based on local timezone offset
-		_, offset := time.Now().In(time.Local).Zone()
-		expectedHour := offset / 3600
-		expectedStr := fmt.Sprintf("1970-01-01 %02d:00:00", expectedHour)
-		require.Equal(t, expectedStr, v.RowToString(1))
+		require.Equal(t, time.Unix(0, 0).In(time.Local).Format(time.DateTime), v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

@@ -15,13 +15,87 @@
 package cdc
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCDCRetryErrorTransportEquivalence(t *testing.T) {
+	type retryErrorCase struct {
+		name  string
+		err   error
+		retry bool
+	}
+	tests := []retryErrorCase{
+		{"native deadlock", moerr.NewDeadLockDetectedNoCtx(), true},
+		{"production MO deadlock", &mysql.MySQLError{Number: 20701, Message: "opaque"}, true},
+		{"upstream MO deadlock", &gomysql.MySQLError{Number: 20701, Message: "opaque"}, true},
+		{"production MySQL deadlock", &mysql.MySQLError{Number: 1213, Message: "opaque"}, true},
+		{"upstream MySQL deadlock", &gomysql.MySQLError{Number: 1213, Message: "opaque"}, true},
+		{"production lock timeout", &mysql.MySQLError{Number: 1205}, true},
+		{"native bind changed", moerr.NewLockTableBindChangedNoCtx(), true},
+		{"wire bind changed", &mysql.MySQLError{Number: 20702}, true},
+		{"permission", &mysql.MySQLError{Number: 1045, Message: "network unavailable"}, false},
+		{"syntax", &mysql.MySQLError{Number: 1064}, false},
+		{"canceled", errors.Join(context.Canceled, &mysql.MySQLError{Number: 1213}), false},
+		{"canceled RPC timeout", errors.Join(context.Canceled, moerr.NewRPCTimeout(t.Context())), false},
+		{"opaque", errors.New("deadlock detected"), false},
+	}
+	for _, tc := range []struct {
+		name  string
+		err   *moerr.Error
+		retry bool
+	}{
+		{"RPC timeout", moerr.NewRPCTimeout(t.Context()), true},
+		{"service unavailable", moerr.NewServiceUnavailable(t.Context(), "opaque"), true},
+		{"connection reset", moerr.NewConnectionReset(t.Context()), true},
+		{"backend closed", moerr.NewBackendClosed(t.Context()), true},
+		{"no available backend", moerr.NewNoAvailableBackend(t.Context()), true},
+		{"backend cannot connect", moerr.NewBackendCannotConnect(t.Context()), true},
+		{"TN shard not found", moerr.NewTNShardNotFound(t.Context(), "shard", 1), true},
+		{"RPC error", moerr.NewRpcError(t.Context(), "opaque"), true},
+		{"client closed", moerr.NewClientClosed(t.Context()), false},
+		{"stream closed", moerr.NewStreamClosed(t.Context()), false},
+	} {
+		tests = append(tests,
+			retryErrorCase{"native " + tc.name, tc.err, tc.retry},
+			retryErrorCase{"production " + tc.name, &mysql.MySQLError{Number: tc.err.ErrorCode(), Message: "opaque"}, tc.retry},
+			retryErrorCase{"upstream " + tc.name, &gomysql.MySQLError{Number: tc.err.ErrorCode(), Message: "opaque"}, tc.retry},
+		)
+	}
+	for _, tc := range tests {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/wrapped=%t", tc.name, wrapped), func(t *testing.T) {
+				cause := tc.err
+				if wrapped {
+					cause = fmt.Errorf("target operation: %w", cause)
+				}
+				retryable, classified := ClassifyRetryableError(cause)
+				require.Equal(t, tc.retry, retryable)
+				if tc.retry {
+					require.True(t, classified, "typed transient errors must not rely on runtime fallbacks")
+				}
+				s := &mysqlSinker2{}
+				s.SetError(cause)
+				require.Equal(t, tc.retry, (&TableChangeStream{}).determineRetryable(cause))
+				require.Equal(t, tc.retry, (&TableChangeStream{}).determineRetryable(s.Error()))
+				if tc.retry || errors.Is(cause, context.Canceled) {
+					require.ErrorIs(t, s.Error(), cause)
+				}
+			})
+		}
+	}
+	require.False(t, (&TableChangeStream{}).determineRetryable(nil))
+}
 
 func TestIsPauseOrCancelError(t *testing.T) {
 	tests := []struct {

@@ -287,6 +287,18 @@ func (exec *txnExecutor) Use(db string) {
 	exec.database = db
 }
 
+func normalizeInternalPreparePlan(ctx plan.CompilerContext, pn *plan.Plan) error {
+	if pn.GetQuery() != nil {
+		// The caller supplied values for the original SQL. Preserve ordinal
+		// gaps left by optimization instead of compacting surviving parameters.
+		return plan.NormalizePrepareParamRefs(ctx.GetContext(), pn)
+	}
+	// Keep the existing DDL/DCL handling; NormalizePrepareParamRefs only
+	// traverses query plans.
+	_, _, err := plan.ResetPreparePlan(ctx, pn)
+	return err
+}
+
 func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
@@ -469,7 +481,7 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if prepared {
-		_, _, err := plan.ResetPreparePlan(compileContext, pn)
+		err := normalizeInternalPreparePlan(compileContext, pn)
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -509,7 +521,7 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			_, _, err = plan.ResetPreparePlan(compileContext, pn)
+			err = normalizeInternalPreparePlan(compileContext, pn)
 			if err != nil {
 				return pn, err
 			}

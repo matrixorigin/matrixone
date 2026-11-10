@@ -165,13 +165,10 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		}
 	}
 	s.Indexes = indexes
-	// From here the GPU sub-indexes are owned by s. If a later step fails, the
-	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
-	// and there is no finalizer, so release them here to avoid orphaning GPU
-	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	loaded := false
 	defer func() {
-		if err != nil {
-			s.Destroy()
+		if !loaded {
+			s.destroy()
 		}
 	}()
 	if err = s.loadCdcTail(sqlproc); err != nil {
@@ -193,6 +190,7 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
 		}
 	}
+	loaded = true
 	return nil
 }
 
@@ -363,8 +361,13 @@ func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
 	if err != nil {
 		return nil, err
 	}
+	loaded := false
+	defer func() {
+		if !loaded {
+			vectorindex.DestroyIndexResources("IVF-PQ overflow", []*cuvs.GpuBruteForce[B, OB]{bf})
+		}
+	}()
 	if err = bf.Start(); err != nil {
-		bf.Destroy()
 		return nil, err
 	}
 
@@ -390,7 +393,6 @@ func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
 	}
 	if colMetaJSON != "" && includeBytesPerRow > 0 {
 		if err = bf.SetFilterColumns(colMetaJSON, total); err != nil {
-			bf.Destroy()
 			return nil, err
 		}
 	}
@@ -403,20 +405,18 @@ func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
 		// Base-typed (B) overflow vectors; AddChunkQuantize converts B -> Q storage
 		// on the C++ side (native store when B==Q, f32->f16 cast otherwise).
 		if err = bf.AddChunkQuantize(m.OverflowVecs, count, m.OverflowPkids); err != nil {
-			bf.Destroy()
 			return nil, err
 		}
 		if colMetaJSON != "" && includeBytesPerRow > 0 {
 			if err = addOverflowFilterChunks(bf, colMetaJSON, m.OverflowIncludeBytes, count, includeBytesPerRow); err != nil {
-				bf.Destroy()
 				return nil, err
 			}
 		}
 	}
 	if err = bf.Build(); err != nil {
-		bf.Destroy()
 		return nil, err
 	}
+	loaded = true
 	return bf, nil
 }
 
@@ -449,31 +449,42 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 	return cuvs.NewMultiGpuIvfPq(gpuIndices, s.Overflow, dim, cuvsMetric), nil
 }
 
-// loadIndexes loads each model's index data from the database.
+// loadIndexes owns the models until all of them have loaded.
 func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
+	loaded := false
+	defer func() {
+		if !loaded {
+			vectorindex.DestroyIndexResources("IVF-PQ model", indexes)
+		}
+	}()
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
-			for _, idx2 := range indexes {
-				idx2.Destroy()
-			}
 			return nil, err
 		}
 	}
+	loaded = true
 	return indexes, nil
 }
 
 // Destroy implements cache.VectorIndexSearchIf.
 func (s *IvfpqSearch[B, Q]) Destroy() {
-	s.MultiIndex = nil
-	if s.Overflow != nil {
-		s.Overflow.Destroy()
-		s.Overflow = nil
+	if p := s.destroy(); p != nil {
+		panic(p)
 	}
-	for _, idx := range s.Indexes {
-		idx.Destroy()
+}
+
+func (s *IvfpqSearch[B, Q]) destroy() any {
+	indexes, overflow := s.Indexes, s.Overflow
+	s.MultiIndex, s.Indexes, s.Overflow = nil, nil, nil
+	var firstPanic any
+	if overflow != nil {
+		firstPanic = vectorindex.DestroyIndexResources("IVF-PQ overflow", []cuvs.BruteForceOverflow[B]{overflow})
 	}
-	s.Indexes = nil
+	if p := vectorindex.DestroyIndexResources("IVF-PQ model", indexes); firstPanic == nil {
+		firstPanic = p
+	}
+	return firstPanic
 }
 
 // SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate

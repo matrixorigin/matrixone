@@ -335,6 +335,9 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
+			if def.OriginString == "" || strings.EqualFold(def.OriginString, "null") {
+				return nil, nil
+			}
 			return functionUtil.QuickStrToBytes(def.OriginString), nil
 		}
 	case typNormal:

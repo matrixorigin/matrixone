@@ -16,6 +16,7 @@ package cache
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,6 +51,18 @@ func (m *MockSearch) Load(*sqlexec.SqlProcess) error {
 
 func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return nil
+}
+
+type blockingCacheSearch struct {
+	MockSearch
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingCacheSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+	close(m.entered)
+	<-m.release
+	return m.MockSearch.Search(sqlproc, query, rt)
 }
 
 type MockAnySearch struct {
@@ -364,60 +377,91 @@ func TestCacheConcurrent(t *testing.T) {
 }
 
 func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	sqlproc := sqlexec.NewSqlProcess(proc)
+	const key = "__secondary_index"
+	c := NewVectorIndexCache()
+	reader := &blockingCacheSearch{entered: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(reader.release) })
+	t.Cleanup(func() { release(); c.Destroy() })
+	validate := func(keys any, distances []float64) error {
+		ids, ok := keys.([]int64)
+		if !ok || len(ids) != 1 || ids[0] != 1 || len(distances) != 1 || distances[0] != 2 {
+			return fmt.Errorf("unexpected search result: keys=%v distances=%v", keys, distances)
+		}
+		return nil
+	}
 
-	VectorIndexCacheTTL = 2 * time.Second
-	VectorIndexCacheTTL = 2 * time.Second
-	Cache = NewVectorIndexCache()
-	Cache.TickerInterval = 1 * time.Second
+	readerDone := make(chan error, 1)
+	go func() {
+		keys, distances, err := c.Search(nil, key, reader, nil, vectorindex.RuntimeConfig{})
+		if err == nil {
+			err = validate(keys, distances)
+		}
+		readerDone <- err
+	}()
+	waitCacheSignal(t, reader.entered, "active search")
+	value, ok := c.IndexMap.Load(key)
+	require.True(t, ok)
+	entry := value.(*VectorIndexSearch)
+	removed := make(chan struct{})
+	go func() { c.Remove(key); close(removed) }()
+	waitCacheSignal(t, entry.evictionResultReady, "eviction claim")
+	select {
+	case <-removed:
+		t.Fatal("removal returned while the search was still active")
+	default:
+	}
+	release()
+	select {
+	case err := <-readerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("active search did not finish")
+	}
+	waitCacheSignal(t, removed, "removal to finish")
 
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-
-	time.Sleep(1999 * time.Millisecond)
+	_, _, err := c.Search(nil, key, &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	start := make(chan struct{})
+	errs := make(chan error, 8)
 	var wg sync.WaitGroup
-	nthread := 8
-	for i := 0; i < nthread; i++ {
+	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 2000; j++ {
-				idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
-				idxcfg.Usearch.Metric = usearch.L2sq
-				tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
-				//os.Stderr.WriteString("cache getindex\n")
-				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
-				//os.Stderr.WriteString("cache search\n")
-				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
-				require.Nil(t, err)
-				if keys, ok := anykeys.([]int64); ok {
-					require.Equal(t, len(keys), 1)
-					require.Equal(t, keys[0], int64(1))
+			<-start
+			for j := 0; j < 512; j++ {
+				keys, distances, err := c.Search(nil, key, &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrInvalidState) && strings.Contains(err.Error(), "index changed while loading; retry the query") {
+						continue
+					}
+					errs <- fmt.Errorf("unexpected search error: %w", err)
+					return
 				}
-				require.Equal(t, distances[0], float64(2.0))
+				if err := validate(keys, distances); err != nil {
+					errs <- err
+					return
+				}
 			}
 		}()
 	}
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for j := 0; j < 4000; j++ {
-			Cache.Remove("__secondary_index")
+		<-start
+		for j := 0; j < 1024; j++ {
+			c.Remove(key)
 		}
 	}()
-
+	close(start)
 	wg.Wait()
-
-	os.Stderr.WriteString("cache.Destroy\n")
-	Cache.Destroy()
-	os.Stderr.WriteString("cache.Destroy end\n")
-	Cache = nil
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	keys, distances, err := c.Search(nil, key, &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.NoError(t, validate(keys, distances))
 }
 
 func TestCacheLoadError(t *testing.T) {

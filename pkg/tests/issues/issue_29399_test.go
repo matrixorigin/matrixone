@@ -485,6 +485,8 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count))
 		execSQLRequire(t, ctx, admin, "revoke reader from u")
+		// Denial on CN1 must observe the revocation committed through CN0.
+		syncAuthenticatedClusterCommit(t, ctx, c)
 		t.Run("revoked primary role", func(t *testing.T) {
 			err := conn.QueryRowContext(ctx, "select count(*) from allowed.t").Scan(&count)
 			require.ErrorContains(t, err, "do not have privilege")
@@ -508,6 +510,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		require.NoError(t, err, "a revoked primary role must not block role recovery")
 		require.ErrorContains(t, prepared.QueryRowContext(ctx, 1).Scan(&count), "do not have privilege")
 		execSQLRequire(t, ctx, admin, "grant reader to u")
+		syncAuthenticatedClusterCommit(t, ctx, c)
 		_, err = conn.ExecContext(ctx, "set role reader")
 		require.NoError(t, err)
 		require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
@@ -515,13 +518,17 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		t.Run("account restore removes current membership", func(t *testing.T) {
 			const snapshot = "issue_29399_scope_membership"
 			execSQLRequire(t, ctx, admin, "revoke reader from u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			execSQLRequire(t, ctx, sys, "create snapshot "+snapshot+" for account "+account)
 			defer func() { _, err := sys.ExecContext(ctx, "drop snapshot if exists "+snapshot); require.NoError(t, err) }()
 			execSQLRequire(t, ctx, admin, "grant reader to u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
 			execSQLRequire(t, ctx, sys, "restore account "+account+" {snapshot='"+snapshot+"'}")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.ErrorContains(t, prepared.QueryRowContext(ctx, 1).Scan(&count), "do not have privilege")
 			execSQLRequire(t, ctx, admin, "grant reader to u")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			require.NoError(t, prepared.QueryRowContext(ctx, 1).Scan(&count))
 		})
 		t.Run("dropped user cannot retain public privileges", func(t *testing.T) {
@@ -532,6 +539,14 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			defer public.Close()
 			require.NoError(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count))
 			execSQLRequire(t, ctx, admin, "drop user public_u")
+			// The DROP commits on CN0. Authorization on CN1 uses its own applied
+			// snapshot, so test the retained session after that commit is visible.
+			syncAuthenticatedClusterCommit(t, ctx, c)
+			observer := open(account+"#admin", cn1.GetServiceConfig().CN.Frontend.Port)
+			var users int
+			require.NoError(t, observer.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_user where user_name = 'public_u'").Scan(&users))
+			require.Zero(t, users, "CN1 must observe the committed user deletion")
 			require.ErrorContains(t, public.QueryRowContext(ctx, "select id from allowed.t").Scan(&count), "do not have privilege")
 		})
 		t.Run("cross account restore cannot reuse authenticated numeric identities", func(t *testing.T) {
@@ -649,6 +664,8 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 		t.Run("recreated creator is not historical owner", func(t *testing.T) {
 			var err error
 			execSQLRequire(t, ctx, admin, "grant create database on account * to reader")
+			// The retained session is on CN1; observe CN0's grant before DDL.
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			_, err = conn.ExecContext(ctx, "create database historical_parent")
 			require.NoError(t, err)
 			execSQLRequire(t, ctx, admin, "create table historical_parent.t(id int)")
@@ -658,6 +675,7 @@ func TestIssue29399AuthorizationScopeAndRevokedRole(t *testing.T) {
 			// reject reconstruction of the eligible admin-owned objects.
 			execSQLRequire(t, ctx, admin, "create database external_parent")
 			execSQLRequire(t, ctx, admin, "grant create table on database external_parent to reader")
+			syncAuthenticatedClusterCommit(t, ctx, c)
 			csv := filepath.Join(t.TempDir(), "external.csv")
 			require.NoError(t, os.WriteFile(csv, []byte("1\n"), 0600))
 			_, err = conn.ExecContext(ctx, "create external table external_parent.ext(id int) infile{'filepath'='"+csv+"'} fields terminated by ','")

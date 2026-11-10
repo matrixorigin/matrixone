@@ -331,6 +331,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+			// The pipeline owns and closes the execution reader. A prepared
+			// scope is retained for reuse, so do not keep its closed reader
+			// (and the reader's snapshot) reachable until the next EXECUTE.
+			if s.DataSource != nil && !s.DataSource.isConst {
+				s.DataSource.R = nil
+			}
 		}
 	}()
 
@@ -680,6 +686,72 @@ func validateRemoteRunAddress(scopeAddr, localAddr string) error {
 	return nil
 }
 
+const (
+	parallelScopeBuildInternalCancel     = "parallel_scope_build_internal_cancel"
+	parallelScopeBuildQueryCancel        = "parallel_scope_build_query_cancel"
+	parallelScopeBuildCancelWithCause    = "parallel_scope_build_cancel_with_cause"
+	parallelScopeBuildUnattributedCancel = "parallel_scope_build_unattributed_cancel"
+)
+
+func scopeCancellationContextState(ctx context.Context) (error, error) {
+	if ctx == nil {
+		return nil, nil
+	}
+	return ctx.Err(), context.Cause(ctx)
+}
+
+func reportParallelScopeBuildCancellation(
+	s *Scope,
+	rawErr error,
+	normalizedErr error,
+	normalized bool,
+	queryCtx context.Context,
+) {
+	pipelineErr, pipelineCause := scopeCancellationContextState(s.Proc.Ctx)
+	queryErr, queryCause := scopeCancellationContextState(queryCtx)
+
+	key := parallelScopeBuildUnattributedCancel
+	switch {
+	case queryErr != nil:
+		key = parallelScopeBuildQueryCancel
+	case normalized && normalizedErr == nil:
+		key = parallelScopeBuildInternalCancel
+	case normalized:
+		key = parallelScopeBuildCancelWithCause
+	}
+
+	terminalEvent := process.EventError.String()
+	if normalizedErr == nil {
+		terminalEvent = process.EventEnd.String()
+	}
+	queryID := ""
+	if s.Proc.Base != nil {
+		queryID = s.Proc.QueryId()
+	}
+	rootOp := ""
+	if s.RootOp != nil {
+		rootOp = s.RootOp.OpType().String()
+	}
+	process.WarnPipelineCleanupf(
+		s.Proc,
+		key,
+		"parallel scope build cleanup classified cancellation: classification=%s phase=build_parallel_scope query_id=%s node_id=%s node_addr=%s mcpu=%d root_op=%s normalized=%t terminal=%s raw_err=%v normalized_err=%v pipeline_err=%v pipeline_cause=%v query_err=%v query_cause=%v",
+		key,
+		queryID,
+		s.NodeInfo.Id,
+		s.NodeInfo.Addr,
+		s.NodeInfo.Mcpu,
+		rootOp,
+		normalized,
+		terminalEvent,
+		rawErr,
+		normalizedErr,
+		pipelineErr,
+		pipelineCause,
+		queryErr,
+		queryCause)
+}
+
 // ParallelRun run a pipeline in parallel.
 func (s *Scope) ParallelRun(c *Compile) (err error) {
 	var parallelScope *Scope
@@ -698,7 +770,22 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
-			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
+			// ParallelRun owns the source operator until construction publishes a
+			// parallel scope. StopSending can cancel the pipeline while reader
+			// construction is still in flight, so classify that cancellation at
+			// this boundary before cleanup chooses EventEnd versus EventError.
+			rawErr := err
+			queryCtx := scopeRunQueryContext(s.Proc)
+			var normalized bool
+			err, normalized = normalizeScopeRunError(
+				err,
+				s.Proc.Ctx,
+				queryCtx,
+			)
+			if isScopeCancellationError(rawErr) {
+				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
+			}
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}
 	}()
 
@@ -765,11 +852,8 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 // this function will create a pipeline which will get data from n scan-pipeline and output it as a while to the outside.
 // return true if this was just one scan but not mergeScan.
 func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
-	// unexpected case.
-	if s.IsRemote && len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan cannot run in remote.")
-	}
-
+	// Each local or remote reader orders only its own blocks. Its paired Top
+	// publishes a local threshold; MergeTop still decides the global result.
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	buildStart := time.Now()
 	defer func() {
@@ -1589,6 +1673,22 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	return findMergeGroup(base.GetChildren(0))
 }
 
+func (s *Scope) readerContext(c *Compile) context.Context {
+	// Reader construction belongs to the source scope's pipeline. Using the
+	// compile/root context here leaves ParallelRun's child context unaware of a
+	// StopSending cancellation until after BuildReaders returns, which races the
+	// build-failure cleanup classification. The source context is derived from
+	// the same query context and still carries the account/snapshot values that
+	// callers add below.
+	if s != nil && s.Proc != nil && s.Proc.Ctx != nil {
+		return s.Proc.Ctx
+	}
+	if c != nil && c.proc != nil {
+		return c.proc.Ctx
+	}
+	return nil
+}
+
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
@@ -1629,7 +1729,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// If this was a remote-run pipeline. Reader should be generated from Engine.
 	case s.IsRemote:
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
-		ctx := c.proc.Ctx
+		ctx := s.readerContext(c)
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -1668,7 +1768,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	// Reader can be generated from local relation.
 	case s.DataSource.Rel != nil:
-		ctx := c.proc.Ctx
+		ctx := s.readerContext(c)
 		stats := statistic.StatsInfoFromContext(ctx)
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
@@ -1726,7 +1826,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// This cannot modify the c.proc.Ctx here, but I don't know why.
 		// Maybe there are some account related things stores in the context (using the context.WithValue),
 		// and modify action will change the account.
-		ctx := c.proc.Ctx
+		ctx := s.readerContext(c)
 
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)

@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -246,11 +247,11 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 // RollbackAppend restores the logical state captured before an attempted
 // append. attemptedRows is needed because grouping bits can be published
 // before a varlen copy fails and advances length.
-func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
-	if checkpoint.length < 0 || checkpoint.length > v.length ||
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) error {
+	if v == nil || checkpoint.length < 0 || checkpoint.length > v.length ||
 		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
-		attemptedRows < 0 {
-		panic("invalid vector append checkpoint")
+		attemptedRows < 0 || attemptedRows > math.MaxInt-checkpoint.length {
+		return errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtx("invalid vector append checkpoint"))
 	}
 	end := max(v.length, checkpoint.length+attemptedRows)
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
@@ -258,6 +259,15 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
 	v.sorted = checkpoint.sorted
+	return nil
+}
+
+// JoinAppendRollbackError preserves the original error after successful rollback.
+func JoinAppendRollbackError(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, rollbackErr)
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -3483,6 +3493,9 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 	if mp == nil || totalBytes <= 0 {
 		return nil
 	}
+	if totalBytes > math.MaxInt-len(vec.area) {
+		return moerr.NewInternalErrorNoCtx("varlena area size exceeds supported range")
+	}
 	need := len(vec.area) + totalBytes
 	if need <= cap(vec.area) {
 		return nil
@@ -3815,7 +3828,25 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	return nil
 }
 
+// UnionBatch appends selected rows. If it fails, the destination may be
+// partially modified; before reuse, roll back an append checkpoint or reset
+// the vector.
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	return v.unionBatch(w, offset, cnt, flags, -1, mp)
+}
+
+// UnionWholeWithPayloadSize appends cnt rows from w. When the source is a
+// non-constant vector of exactly cnt rows, a nonnegative payloadSize must equal
+// its non-null, non-inline payload bytes and is used only for preallocation.
+// Other sources or a negative size use the normal UnionBatch path.
+func (v *Vector) UnionWholeWithPayloadSize(w *Vector, cnt, payloadSize int, mp *mpool.MPool) error {
+	if payloadSize < 0 || w.IsConst() || w.Length() != cnt || payloadSize > math.MaxInt-len(v.area) {
+		return v.UnionBatch(w, 0, cnt, nil, mp)
+	}
+	return v.unionBatch(w, 0, cnt, nil, payloadSize, mp)
+}
+
+func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, payloadSize int, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -3914,29 +3945,32 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		// would reserve area for dead payload (large needless mp.Grow / alloc
 		// failure), so exclude them to match what's actually appended.
 		{
-			total := 0
-			hasNull := !w.nsp.EmptyByFlag()
-			if flags == nil {
-				for i := 0; i < cnt; i++ {
-					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
-						continue
+			total := payloadSize
+			if total < 0 {
+				total = 0
+				hasNull := !w.nsp.EmptyByFlag()
+				if flags == nil {
+					for i := 0; i < cnt; i++ {
+						if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+							continue
+						}
+						if s := &wCol[int(offset)+i]; !s.IsSmall() {
+							_, l := s.OffsetLen()
+							total += int(l)
+						}
 					}
-					if s := &wCol[int(offset)+i]; !s.IsSmall() {
-						_, l := s.OffsetLen()
-						total += int(l)
-					}
-				}
-			} else {
-				for i := range flags {
-					if flags[i] == 0 {
-						continue
-					}
-					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
-						continue
-					}
-					if s := &wCol[int(offset)+i]; !s.IsSmall() {
-						_, l := s.OffsetLen()
-						total += int(l)
+				} else {
+					for i := range flags {
+						if flags[i] == 0 {
+							continue
+						}
+						if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+							continue
+						}
+						if s := &wCol[int(offset)+i]; !s.IsSmall() {
+							_, l := s.OffsetLen()
+							total += int(l)
+						}
 					}
 				}
 			}
@@ -5129,8 +5163,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
-		nulls.FilterByMaskInPlace(&v.gsp, sels, false)
-		nulls.FilterByMaskInPlace(&v.nsp, sels, false)
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, false, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, false, offset)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next() + offset
@@ -5149,8 +5183,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 				sel = itr.Next() + offset
 			}
 		}
-		nulls.FilterByMaskInPlace(&v.gsp, sels, true)
-		nulls.FilterByMaskInPlace(&v.nsp, sels, true)
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, true, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, true, offset)
 		v.length -= length
 	}
 }

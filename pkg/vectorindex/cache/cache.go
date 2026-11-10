@@ -15,7 +15,9 @@
 package cache
 
 import (
+	"context"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,6 +36,16 @@ import (
 // The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
 // cadence — the bound on how long a remote CN can serve a stale index before it ages out.
 const stalenessCheckEveryNTicks = 4
+
+const (
+	evictionTTL        = "ttl_expired"
+	evictionGeneration = "generation_changed"
+	evictionShutdown   = "process_shutdown"
+
+	// Recovery is only needed after an invalidation callback panics. Bound the
+	// work it can retain if several independent entries fail at once.
+	maxConcurrentInvalidationRecoveries = 8
+)
 
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
@@ -60,6 +72,8 @@ const (
 var (
 	VectorIndexCacheTTL time.Duration     = 5 * time.Minute
 	Cache               *VectorIndexCache = NewVectorIndexCache()
+	errIndexDestroyed                     = moerr.NewInvalidStateNoCtx("Index destroyed")
+	errCacheClosed                        = moerr.NewInvalidStateNoCtx("Index cache is shut down")
 )
 
 type retryableLoadError struct {
@@ -89,6 +103,17 @@ func IsRetryableLoadError(err error) bool {
 	return errors.As(err, &marker)
 }
 
+func exhaustedLoadError(err error) error {
+	var marker retryableLoadError
+	if errors.As(err, &marker) {
+		return marker.cause
+	}
+	if errors.Is(err, errIndexDestroyed) {
+		return moerr.NewInvalidStateNoCtx("index changed while loading; retry the query")
+	}
+	return err
+}
+
 var lifecycleHooks struct {
 	sync.RWMutex
 	hooks []func(shutdown bool)
@@ -96,7 +121,8 @@ var lifecycleHooks struct {
 
 // RegisterLifecycleHook lets an algorithm-owned pool attach cleanup to the
 // cache's housekeeping and process-shutdown lifecycle. Hooks are invoked
-// outside the cache map operations, including when the map is empty.
+// outside the cache map operations, including when the map is empty. A hook
+// must not synchronously shut down the cache from which it is invoked.
 func RegisterLifecycleHook(hook func(shutdown bool)) {
 	if hook == nil {
 		return
@@ -122,7 +148,8 @@ func runLifecycleHooks(shutdown bool) {
 	}
 }
 
-// Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
+// VectorIndexSearchIf is implemented by algorithms shared through the cache.
+// Its methods must not synchronously shut down the containing cache.
 type VectorIndexSearchIf interface {
 	Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error)
 	// SearchFloat32 writes results into caller-provided slices to avoid heap allocation.
@@ -148,7 +175,15 @@ type VectorIndexSearchIf interface {
 // not part of VectorIndexSearchIf so existing vector algorithms keep their
 // contract unchanged; FULLTEXT2 uses it to classify the next load miss.
 type cacheInvalidationAware interface {
+	// OnCacheInvalidated must not synchronously shut down the invoking cache.
 	OnCacheInvalidated(reason string)
+}
+
+// A recoverer can repair only the named entry after its failed callback, with
+// no effects on resources belonging to other entries. It runs behind the old
+// entry's write lock, before a replacement can be admitted.
+type cacheInvalidationRecoverer interface {
+	RecoverCacheInvalidation(reason string) error
 }
 
 type loadWaiterAware interface {
@@ -188,30 +223,249 @@ type VectorIndexSearch struct {
 	Mutex       sync.RWMutex
 	ExpireAt    atomic.Int64
 	LastUpdate  atomic.Int64
-	Status      atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
+	Status      atomic.Int32 // one of the STATUS_* constants
 	Algo        VectorIndexSearchIf
-	Cond        *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
 	loadWaiters atomic.Int64
 	ttlMu       sync.Mutex  // serializes sliding TTL renewal with eviction claims
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting         atomic.Bool
 	invalidationOnce sync.Once
+	destroyed        chan struct{}
+	destroyOnce      sync.Once
+	ready            chan struct{}
+	readyOnce        sync.Once
+	// Closed after removal or after an invalidation failure is published.
+	evictionResultReady chan struct{}
+	evictionResultOnce  sync.Once
+	done                <-chan struct{} // owned and closed by the containing cache
+	loadResult          atomic.Pointer[entryLoadResult]
+	destroyResult       atomic.Pointer[entryLoadResult]
+	invalidationResult  atomic.Pointer[entryLoadResult]
 }
 
+type entryLoadResult struct{ err error }
+
+func newVectorIndexSearch(algo VectorIndexSearchIf) *VectorIndexSearch {
+	s := &VectorIndexSearch{Algo: algo, destroyed: make(chan struct{}), ready: make(chan struct{}), evictionResultReady: make(chan struct{})}
+	return s
+}
+
+func (s *VectorIndexSearch) markReady() {
+	s.readyOnce.Do(func() { close(s.ready) })
+}
+
+func (s *VectorIndexSearch) markEvictionResultReady() {
+	s.evictionResultOnce.Do(func() { close(s.evictionResultReady) })
+}
+
+func (s *VectorIndexSearch) terminalLoadError() error {
+	if result := s.loadResult.Load(); result != nil && result.err != nil && !IsRetryableLoadError(result.err) && !errors.Is(result.err, errIndexDestroyed) {
+		return result.err
+	}
+	return nil
+}
+
+func (s *VectorIndexSearch) invalidationError(ctx context.Context) error {
+	if result := s.invalidationResult.Load(); result != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return result.err
+	}
+	return nil
+}
+
+func (s *VectorIndexSearch) observedLoadError(ctx context.Context) error {
+	if err := s.terminalLoadError(); err != nil {
+		if invalidationErr := s.invalidationError(ctx); invalidationErr != nil {
+			return invalidationErr
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *VectorIndexSearch) awaitReady(ctx context.Context) error {
+	select {
+	case <-s.ready:
+		if err := s.terminalLoadError(); err != nil {
+			if invalidationErr := s.invalidationError(ctx); invalidationErr != nil {
+				return invalidationErr
+			}
+			return err
+		}
+		// An invalidation result is published only after evicting becomes true.
+		if s.evicting.Load() {
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			return errIndexDestroyed
+		}
+		return nil
+	default:
+	}
+	if s.evicting.Load() {
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
+			return err
+		}
+		return errIndexDestroyed
+	}
+	if err := s.observedLoadError(ctx); err != nil {
+		return err
+	}
+	s.loadWaiters.Add(1)
+	defer s.loadWaiters.Add(-1)
+	select {
+	case <-s.ready:
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-s.done:
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			return errCacheClosed
+		default:
+			return nil
+		}
+	case <-s.evictionResultReady:
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errIndexDestroyed
+	case <-s.done:
+		if err := s.invalidationError(ctx); err != nil {
+			return err
+		}
+		if err := s.observedLoadError(ctx); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errCacheClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *VectorIndexSearch) markDestroyed() {
+	if s.destroyed != nil {
+		s.destroyOnce.Do(func() { close(s.destroyed) })
+	}
+}
+
+func searchContext(proc *sqlexec.SqlProcess) context.Context {
+	if proc != nil && (proc.Proc != nil || proc.SqlCtx != nil) {
+		if ctx := proc.GetContext(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+// Only the creator of the wrapper may wait: other callers have their own
+// algorithm instances and do not need to wait for this one's destruction.
+func (s *VectorIndexSearch) awaitDestroyed(ctx context.Context) error {
+	if s.destroyed == nil {
+		return nil
+	}
+	evictionResult := s.evictionResultReady
+	for {
+		select {
+		case <-s.destroyed:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			select {
+			case <-s.done:
+				return errCacheClosed
+			default:
+			}
+			if result := s.destroyResult.Load(); result != nil {
+				return result.err
+			}
+			return nil
+		case <-evictionResult:
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			// Normal eviction removes the map entry before destruction finishes.
+			evictionResult = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.done:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.invalidationError(ctx); err != nil {
+				return err
+			}
+			return errCacheClosed
+		}
+	}
+}
+
+// Destroy releases a detached entry. Mapped entries must be removed through
+// their VectorIndexCache so that map removal and waiter notification agree.
 func (s *VectorIndexSearch) Destroy() {
 	s.DestroyWithReason("")
 }
 
-func (s *VectorIndexSearch) notifyCacheInvalidated(reason string) {
+func (s *VectorIndexSearch) notifyCacheInvalidated(reason string) (err error) {
 	if reason == "" {
-		return
+		return nil
 	}
+	defer func() {
+		if p := recover(); p != nil {
+			err = moerr.ConvertPanicError(context.Background(), p)
+		}
+	}()
 	s.invalidationOnce.Do(func() {
 		if aware, ok := s.Algo.(cacheInvalidationAware); ok {
 			aware.OnCacheInvalidated(reason)
 		}
 	})
+	return nil
+}
+
+// recoverInvalidation fences the old load and readers before asking the
+// algorithm owner to repair its own state. The entry still occupies its key.
+func (s *VectorIndexSearch) recoverInvalidation(reason string) (supported bool, err error) {
+	recoverer, ok := s.Algo.(cacheInvalidationRecoverer)
+	if !ok {
+		return false, nil
+	}
+	supported = true
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	defer func() {
+		if p := recover(); p != nil {
+			err = moerr.ConvertPanicError(context.Background(), p)
+		}
+	}()
+	err = recoverer.RecoverCacheInvalidation(reason)
+	return
 }
 
 func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
@@ -228,15 +482,7 @@ func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
 }
 
 func (s *VectorIndexSearch) DestroyWithReason(reason string) {
-	s.Mutex.Lock()
-	defer func() {
-		s.Mutex.Unlock()
-		s.Cond.Broadcast()
-	}()
-	s.notifyCacheInvalidated(reason)
-	s.Algo.Destroy()
-	// destroyed
-	s.Status.Store(STATUS_DESTROYED)
+	s.destroy(reason)
 }
 
 // destroyFailedLoad releases an entry whose load failed after the caller has
@@ -245,26 +491,57 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 // invoking a key-wide hook after a replacement load starts could clear the new
 // generation. The lock still serializes destruction with waiters/searchers.
 func (s *VectorIndexSearch) destroyFailedLoad() {
-	s.Mutex.Lock()
-	defer func() {
-		s.Mutex.Unlock()
-		s.Cond.Broadcast()
-	}()
-	s.Algo.Destroy()
-	s.Status.Store(STATUS_DESTROYED)
+	s.destroy("")
 }
 
-func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
+func (s *VectorIndexSearch) destroy(reason string) {
+	// Standalone destruction must use the same admission gate as cache eviction.
+	s.beginEviction(false)
 	s.Mutex.Lock()
 	defer func() {
+		if p := recover(); p != nil {
+			err := moerr.ConvertPanicError(context.Background(), p)
+			s.destroyResult.CompareAndSwap(nil, &entryLoadResult{err: err})
+			logutil.Errorf("[veccache] index destruction failed: %v", err)
+		}
+		s.Status.Store(STATUS_DESTROYED)
 		s.Mutex.Unlock()
-		s.Cond.Broadcast()
+		s.markDestroyed()
+		s.markReady()
+	}()
+	if err := s.notifyCacheInvalidated(reason); err != nil {
+		s.destroyResult.CompareAndSwap(nil, &entryLoadResult{err: err})
+		logutil.Errorf("[veccache] index invalidation failed: %v", err)
+	}
+	s.Algo.Destroy()
+}
+
+func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	s.Mutex.Lock()
+	if status := s.Status.Load(); status != STATUS_NOT_INIT {
+		s.Mutex.Unlock()
+		if status == STATUS_DESTROYED || s.evicting.Load() {
+			return errIndexDestroyed
+		}
+		if err := s.terminalLoadError(); err != nil {
+			return err
+		}
+		return moerr.NewInvalidStateNoCtx("index entry already initialized")
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			err = moerr.ConvertPanicError(searchContext(sqlproc), p)
+			s.Status.Store(STATUS_ERROR)
+		}
+		s.loadResult.Store(&entryLoadResult{err: err})
+		s.Mutex.Unlock()
+		s.markReady()
 	}()
 	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
+		return errIndexDestroyed
 	}
 
-	err := s.Algo.Load(sqlproc)
+	err = s.Algo.Load(sqlproc)
 	if aware, ok := s.Algo.(loadWaiterAware); ok {
 		aware.SetLoadWaiters(s.loadWaiters.Load())
 	}
@@ -318,121 +595,159 @@ func (s *VectorIndexSearch) extendLocked(update bool) {
 	if update {
 		s.LastUpdate.Store(now.UnixMicro())
 	}
-	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
+	ts := now.Add(VectorIndexCacheTTL).UnixMicro()
 	s.ExpireAt.Store(ts)
 }
 
-func (s *VectorIndexSearch) extendForSearch() bool {
+// lockForSearch renews the TTL and returns with the entry read lock held.
+// An evictor must claim ttlMu before it can wait for the entry write lock.
+func (s *VectorIndexSearch) lockForSearch() error {
 	s.ttlMu.Lock()
 	defer s.ttlMu.Unlock()
 	if s.evicting.Load() {
-		return false
+		return errIndexDestroyed
+	}
+	s.Mutex.RLock()
+	if status := s.Status.Load(); status >= STATUS_DESTROYED {
+		s.Mutex.RUnlock()
+		if status == STATUS_DESTROYED {
+			return errIndexDestroyed
+		}
+		return s.loadResult.Load().err
 	}
 	s.extendLocked(false)
-	return true
+	return nil
 }
 
 func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-
-	preloadWaiter := s.Status.Load() == STATUS_NOT_INIT
-	if preloadWaiter {
-		s.loadWaiters.Add(1)
+	if err := s.awaitReady(searchContext(sqlproc)); err != nil {
+		return nil, nil, err
 	}
-	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
-	if preloadWaiter {
-		s.loadWaiters.Add(-1)
+	if err := s.lockForSearch(); err != nil {
+		return nil, nil, err
 	}
-	if s.evicting.Load() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
-	}
-	for s.Status.Load() == 0 {
-		s.loadWaiters.Add(1)
-		s.Cond.Wait()
-		s.loadWaiters.Add(-1)
-	}
-
-	// entry may be removed already
-	status := s.Status.Load()
-	if status >= STATUS_DESTROYED {
-		if status == STATUS_DESTROYED {
-			return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
-		} else {
-			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
-		}
-	}
+	defer s.Mutex.RUnlock()
 
 	// The cached index's configuration is immutable for its lifetime (a config change
 	// evicts the entry via Cache.Remove), so there is nothing to refresh from newalgo
 	// here. Search is therefore pure-read under the shared read lock — no mutation of the
 	// cached algo, so concurrent searches on one entry cannot race on its config.
-	if !s.extendForSearch() {
-		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
-	}
 	return s.Algo.Search(sqlproc, query, rt)
 }
 
 // SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
 // SearchResult). Same shared-read-lock / status discipline.
 func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
-	preloadWaiter := s.Status.Load() == STATUS_NOT_INIT
-	if preloadWaiter {
-		s.loadWaiters.Add(1)
+	if err := s.awaitReady(searchContext(sqlproc)); err != nil {
+		return err
 	}
-	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
-	if preloadWaiter {
-		s.loadWaiters.Add(-1)
+	if err := s.lockForSearch(); err != nil {
+		return err
 	}
-	if s.evicting.Load() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
-	}
-	for s.Status.Load() == 0 {
-		s.loadWaiters.Add(1)
-		s.Cond.Wait()
-		s.loadWaiters.Add(-1)
-	}
-	status := s.Status.Load()
-	if status >= STATUS_DESTROYED {
-		if status == STATUS_DESTROYED {
-			return moerr.NewInvalidStateNoCtx("Index destroyed")
-		}
-		return moerr.NewInternalErrorNoCtx("Load index error")
-	}
-	if !s.extendForSearch() {
-		return moerr.NewInvalidStateNoCtx("Index destroyed")
-	}
+	defer s.Mutex.RUnlock()
 	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
 
 // implementation of VectorIndexCache
 type VectorIndexCache struct {
+	// IndexMap is exposed for inspection. The cache owns its entries; use
+	// Search and Remove rather than changing the map or destroying entries.
 	IndexMap       sync.Map
 	TickerInterval time.Duration
 	ticker         *time.Ticker
-	done           chan bool
+	done           chan struct{}
 	sigc           chan os.Signal
 	started        atomic.Bool
 	exited         atomic.Bool
 	once           sync.Once
-	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
-	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
+	shutdownOnce   sync.Once
+	lifecycleMu    sync.Mutex
+	shutdownErr    error          // protected by lifecycleMu
+	cleanups       sync.WaitGroup // admission is protected by lifecycleMu
+	recoveries     int            // active recovery cleanups, protected by lifecycleMu
+	hkTicks        int            // HouseKeeping tick counter, gates the IsStale sweep cadence
+	staleChecking  atomic.Bool    // single-flight guard for the async freshness sweep
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
-	c := &VectorIndexCache{}
+	c := &VectorIndexCache{done: make(chan struct{})}
 	c.TickerInterval = VectorIndexCacheTTL / 2
 	return c
 }
 
+// beginCleanup registers an operation before shutdown seals cleanup admission.
+func (c *VectorIndexCache) beginCleanup() bool {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.exited.Load() {
+		return false
+	}
+	c.cleanups.Add(1)
+	return true
+}
+
+func (c *VectorIndexCache) beginRecovery() bool {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.exited.Load() || c.recoveries >= maxConcurrentInvalidationRecoveries {
+		return false
+	}
+	c.recoveries++
+	c.cleanups.Add(1)
+	return true
+}
+
+func (c *VectorIndexCache) endRecovery() {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	c.recoveries--
+	c.cleanups.Done()
+}
+
+// beginShutdown publishes the first failure before closing the cache signal.
+func (c *VectorIndexCache) beginShutdown(err error) bool {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if err != nil && c.shutdownErr == nil {
+		c.shutdownErr = err
+	}
+	if c.exited.Load() {
+		return false
+	}
+	c.exited.Store(true)
+	if c.done != nil {
+		close(c.done)
+	}
+	return true
+}
+
+func (c *VectorIndexCache) resolveShutdown(err error) error {
+	if err != errCacheClosed {
+		return err
+	}
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.shutdownErr != nil {
+		return c.shutdownErr
+	}
+	return errCacheClosed
+}
+
 func (c *VectorIndexCache) serve() {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.exited.Load() {
+		return
+	}
 	if c.started.Load() {
 		return
+	}
+	if c.done == nil {
+		c.done = make(chan struct{})
 	}
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
 	c.ticker = time.NewTicker(c.TickerInterval)
-	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
 
@@ -441,14 +756,13 @@ func (c *VectorIndexCache) serve() {
 
 	go func() {
 		defer c.ticker.Stop()
+		defer signal.Stop(c.sigc)
 		for {
 			select {
 			case <-c.done:
-				c.exited.Store(true)
 				return
 			case <-c.sigc:
 				// sig can be syscall.SIGTERM or syscall.SIGINT
-				c.exited.Store(true)
 				c.Destroy()
 				return
 			case <-c.ticker.C:
@@ -473,12 +787,21 @@ func (c *VectorIndexCache) Once() {
 }
 
 func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, reason string) bool {
+	if !c.beginCleanup() {
+		return false
+	}
+	defer c.cleanups.Done()
+	return c.evictEntryOwned(key, expected, reason)
+}
+
+// evictEntryOwned runs under a registered cleanup or the shutdown sweep.
+func (c *VectorIndexCache) evictEntryOwned(key string, expected *VectorIndexSearch, reason string) bool {
 	value, loaded := c.IndexMap.Load(key)
 	if !loaded {
 		return false
 	}
 	algo, ok := value.(*VectorIndexSearch)
-	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == evictionTTL) {
 		return false
 	}
 	value, loaded = c.IndexMap.Load(key)
@@ -488,22 +811,113 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 	// Publish the invalidation while the old entry still occupies the key. A
 	// replacement can only be inserted after CompareAndDelete, so it cannot
 	// observe a later generation bump from the old entry's blocked destroy.
-	algo.notifyCacheInvalidated(reason)
+	invalidationErr := algo.notifyCacheInvalidated(reason)
+	if invalidationErr != nil {
+		// Waiters can fail immediately while recovery fences the old entry.
+		algo.invalidationResult.Store(&entryLoadResult{err: invalidationErr})
+		algo.markEvictionResultReady()
+		if reason == evictionTTL || reason == evictionGeneration {
+			if _, ok := algo.Algo.(cacheInvalidationRecoverer); ok {
+				if !c.beginRecovery() {
+					if !c.exited.Load() {
+						logutil.Errorf("[veccache] invalidation recovery limit %d reached", maxConcurrentInvalidationRecoveries)
+					}
+					// Shutdown takes this claimed entry after registered owners finish.
+					c.failInvalidation(invalidationErr)
+					return false
+				}
+				// A slow reader/load must not stall housekeeping for other keys.
+				// The registered cleanup retains this key until repair completes.
+				go func() {
+					defer c.endRecovery()
+					defer func() {
+						if p := recover(); p != nil {
+							logutil.Errorf("[veccache] index invalidation cleanup panicked: %v", p)
+							c.failInvalidation(invalidationErr)
+							if value, ok := c.IndexMap.Load(key); ok && value == algo {
+								c.finishEviction(key, algo, invalidationErr)
+							}
+						}
+					}()
+					c.recoverEviction(key, algo, reason, invalidationErr)
+				}()
+				return false
+			}
+		}
+		c.failInvalidation(invalidationErr)
+	}
+	return c.finishEviction(key, algo, invalidationErr)
+}
+
+// recoverEviction retains the cleanup registration and key reservation while
+// waiting for old users to leave. Shutdown joins it before lifecycle hooks.
+func (c *VectorIndexCache) recoverEviction(key string, algo *VectorIndexSearch, reason string, invalidationErr error) {
+	if c.exited.Load() {
+		c.beginShutdown(invalidationErr)
+		c.finishEviction(key, algo, invalidationErr)
+		return
+	}
+	supported, err := algo.recoverInvalidation(reason)
+	if err != nil {
+		logutil.Errorf("[veccache] index invalidation recovery failed: %v", err)
+	}
+	if supported && err == nil {
+		logutil.Errorf("[veccache] index invalidation failed; recovered entry: %v", invalidationErr)
+	} else {
+		c.failInvalidation(invalidationErr)
+	}
+	c.finishEviction(key, algo, invalidationErr)
+}
+
+func (c *VectorIndexCache) failInvalidation(err error) {
+	logutil.Errorf("[veccache] index invalidation failed; shutting down cache: %v", err)
+	if c.beginShutdown(err) {
+		go c.Destroy()
+	}
+}
+
+func (c *VectorIndexCache) finishEviction(key string, algo *VectorIndexSearch, invalidationErr error) bool {
 	if !c.IndexMap.CompareAndDelete(key, algo) {
+		if invalidationErr != nil {
+			c.failInvalidation(invalidationErr)
+		}
 		return false
 	}
-	algo.Destroy()
+	// Once detached, this owner must attempt destruction even if signaling fails.
+	defer algo.Destroy()
+	algo.markEvictionResultReady()
 	return true
 }
 
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
+	if !c.beginCleanup() {
+		return
+	}
+	defer c.cleanups.Done()
+	if !algo.beginEviction(false) {
+		return
+	}
 	if c.IndexMap.CompareAndDelete(key, algo) {
+		algo.markEvictionResultReady()
 		algo.destroyFailedLoad()
 	}
 }
 
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
+	if !c.beginCleanup() {
+		return
+	}
+	defer c.cleanups.Done()
+
+	// Sweep algorithm-owned idle resources before an entry's synchronous
+	// destruction can block this housekeeping pass.
+	if !c.exited.Load() {
+		runLifecycleHooks(false)
+	}
+	if c.exited.Load() {
+		return
+	}
 
 	type expiredEntry struct {
 		key  string
@@ -520,18 +934,20 @@ func (c *VectorIndexCache) HouseKeeping() {
 	})
 
 	for _, entry := range expiredkeys {
+		if c.exited.Load() {
+			return
+		}
 		if !entry.algo.Expired() && !entry.algo.stale.Load() {
 			continue
 		}
-		reason := "ttl_expired"
+		reason := evictionTTL
 		if entry.algo.stale.Load() {
-			reason = "generation_changed"
+			reason = evictionGeneration
 		}
-		if c.evictEntry(entry.key, entry.algo, reason) {
+		if c.evictEntryOwned(entry.key, entry.algo, reason) {
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
 		}
 	}
-	runLifecycleHooks(false)
 }
 
 // checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
@@ -578,95 +994,196 @@ func (c *VectorIndexCache) checkStale() {
 
 // destroy the cache
 func (c *VectorIndexCache) Destroy() {
-	if c.started.Load() {
-		//c.ticker.Stop()
-		if !c.exited.Load() {
-			c.done <- true
-		}
-	}
-	// remove all keys
-	c.IndexMap.Range(func(key, value any) bool {
-		if k, ok := key.(string); ok {
-			c.evictEntry(k, value.(*VectorIndexSearch), "process_shutdown")
-		}
-		return true
+	c.shutdownOnce.Do(func() {
+		c.beginShutdown(nil)
+		// remove all keys
+		c.IndexMap.Range(func(key, value any) bool {
+			if k, ok := key.(string); ok {
+				c.evictEntryOwned(k, value.(*VectorIndexSearch), evictionShutdown)
+			}
+			return true
+		})
+		c.cleanups.Wait()
+		// An invalidation that could not start recovery left its claimed entry
+		// in the map. No registered owner can still be using a claim after Wait.
+		c.IndexMap.Range(func(key, value any) bool {
+			if k, ok := key.(string); ok {
+				entry := value.(*VectorIndexSearch)
+				if entry.evicting.Load() {
+					c.finishEviction(k, entry, nil)
+				} else {
+					c.evictEntryOwned(k, entry, evictionShutdown)
+				}
+			}
+			return true
+		})
+		runLifecycleHooks(true)
 	})
-	runLifecycleHooks(true)
 }
 
-// Get index from cache and return VectorIndexSearchIf interface
+// Search returns the result using the shared entry for this index.
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
-	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
-		value, loaded := c.IndexMap.LoadOrStore(key, s)
-		algo := value.(*VectorIndexSearch)
-		if !loaded {
-			// Remove only this exact failed entry, then destroy it without a
-			// key-wide invalidation hook; the loader owns reusable-state rollback.
-			err := algo.Load(sqlproc)
-			if err != nil {
-				if algo.evicting.Load() {
-					continue
-				}
-				if IsRetryableLoadError(err) {
-					c.discardFailedLoad(key, algo)
-					continue
-				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
-				return nil, nil, err
-			}
-		}
-		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				// index destroyed by Remove() or HouseKeeping.  Retry!
-				continue
-			}
-			return nil, nil, err
-		}
-
-		return keys, distances, nil
-	}
+	query any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+	return c.search(sqlproc, key, newalgo, query, rt, nil, false)
 }
 
-// SearchInto is the box-free twin of Search: it fills the caller-owned out SearchResult
-// (pk/scores/includes as reusable ColumnBuffers) instead of returning boxed []any keys.
-// Same LoadOrStore / retryable-load discipline as Search.
+// SearchInto fills a caller-owned output using the same entry lifecycle as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
-	for {
-		s := &VectorIndexSearch{Algo: newalgo}
-		s.Cond = sync.NewCond(s.Mutex.RLocker())
-		value, loaded := c.IndexMap.LoadOrStore(key, s)
-		algo := value.(*VectorIndexSearch)
+	_, _, err := c.search(sqlproc, key, newalgo, query, rt, out, true)
+	return err
+}
+
+// search limits each request to one retry. The map remains the single-flight
+// owner; followers wait for an eviction result, while the creator waits for its
+// algorithm's destruction before reusing it.
+func (c *VectorIndexCache) search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
+	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput, into bool) (any, []float64, error) {
+	ctx := searchContext(sqlproc)
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if c.exited.Load() {
+			return nil, nil, c.resolveShutdown(errCacheClosed)
+		}
+		value, loaded := c.IndexMap.Load(key)
 		if !loaded {
-			if err := algo.Load(sqlproc); err != nil {
-				if algo.evicting.Load() {
-					continue
+			c.lifecycleMu.Lock()
+			if c.exited.Load() {
+				c.lifecycleMu.Unlock()
+				return nil, nil, c.resolveShutdown(errCacheClosed)
+			}
+			if c.done == nil {
+				c.done = make(chan struct{})
+			}
+			newEntry := newVectorIndexSearch(newalgo)
+			newEntry.done = c.done
+			value, loaded = c.IndexMap.LoadOrStore(key, newEntry)
+			c.lifecycleMu.Unlock()
+		}
+		entry := value.(*VectorIndexSearch)
+		var err error
+		if !loaded {
+			err = entry.Load(sqlproc)
+			if e := entry.invalidationError(ctx); e != nil {
+				return nil, nil, e
+			}
+			if err != nil {
+				retry := errors.Is(err, errIndexDestroyed) || IsRetryableLoadError(err)
+				if entry.evicting.Load() {
+					if !retry {
+						return nil, nil, err
+					}
+				} else {
+					c.discardFailedLoad(key, entry)
+					if !retry {
+						return nil, nil, err
+					}
 				}
-				if IsRetryableLoadError(err) {
-					c.discardFailedLoad(key, algo)
-					continue
+				if attempt >= 1 {
+					if e := ctx.Err(); e != nil {
+						return nil, nil, e
+					}
+					if c.exited.Load() {
+						if e := entry.invalidationError(ctx); e != nil {
+							return nil, nil, e
+						}
+						return nil, nil, c.resolveShutdown(errCacheClosed)
+					}
+					return nil, nil, exhaustedLoadError(err)
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
+				if e := entry.awaitDestroyed(ctx); e != nil {
+					return nil, nil, c.resolveShutdown(e)
 				}
-				return err
+			}
+			if err == nil {
+				if e := ctx.Err(); e != nil {
+					return nil, nil, e
+				}
+				if c.exited.Load() {
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
+					return nil, nil, c.resolveShutdown(errCacheClosed)
+				}
 			}
 		}
-		err := algo.SearchInto(sqlproc, query, rt, out)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
-				continue // index destroyed by Remove()/HouseKeeping — retry
+		if err == nil {
+			var keys any
+			var distances []float64
+			if !into {
+				keys, distances, err = entry.Search(sqlproc, newalgo, query, rt)
+			} else {
+				err = entry.SearchInto(sqlproc, query, rt, out)
 			}
-			return err
+			if err == nil {
+				return keys, distances, nil
+			}
+			if !errors.Is(err, errIndexDestroyed) {
+				return nil, nil, c.resolveShutdown(err)
+			}
+			if e := entry.invalidationError(ctx); e != nil {
+				return nil, nil, e
+			}
+			if attempt >= 1 {
+				if e := ctx.Err(); e != nil {
+					return nil, nil, e
+				}
+				if c.exited.Load() {
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
+					return nil, nil, c.resolveShutdown(errCacheClosed)
+				}
+				if result := entry.loadResult.Load(); result != nil && IsRetryableLoadError(result.err) {
+					err = result.err
+				}
+				return nil, nil, exhaustedLoadError(err)
+			}
+			if !loaded {
+				if e := entry.awaitDestroyed(ctx); e != nil {
+					return nil, nil, c.resolveShutdown(e)
+				}
+			} else {
+				select {
+				case <-entry.evictionResultReady:
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
+					if e := ctx.Err(); e != nil {
+						return nil, nil, e
+					}
+				case <-entry.done:
+					if e := ctx.Err(); e != nil {
+						return nil, nil, e
+					}
+					if e := entry.invalidationError(ctx); e != nil {
+						return nil, nil, e
+					}
+					return nil, nil, c.resolveShutdown(errCacheClosed)
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				}
+			}
 		}
-		return nil
+		// A short jitter spreads retrying queries without affecting warm hits.
+		timer := time.NewTimer(time.Duration(10+rand.IntN(11)) * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, ctx.Err()
+		case <-entry.done:
+			timer.Stop()
+			if e := ctx.Err(); e != nil {
+				return nil, nil, e
+			}
+			if e := entry.invalidationError(ctx); e != nil {
+				return nil, nil, e
+			}
+			return nil, nil, c.resolveShutdown(errCacheClosed)
+		}
 	}
 }
 
@@ -682,6 +1199,8 @@ func (c *VectorIndexCache) Remove(key string) {
 
 // RemoveWithReason is the internal reason-aware variant used by FULLTEXT2.
 // The empty reason preserves the historical behavior for all other algorithms.
+// If a recoverable invalidation callback panics, the old key remains reserved
+// while recovery runs. If recovery cannot be admitted, shutdown owns the claim.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
 }

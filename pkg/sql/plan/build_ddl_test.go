@@ -1266,6 +1266,88 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectOutputNullability(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		nullable []bool
+	}{
+		{"count control", "select count(*) as c from nation", []bool{false}},
+		{"empty capable aggregates", "select min(n_nationkey) as lo,max(n_nationkey) as hi,count(*) as c from nation where n_nationkey<0", []bool{true, true, false}},
+		{"union null right", "select count(*) as c from nation union all select null", []bool{true}},
+		{"union null left", "select null as c union all select count(*) from nation", []bool{true}},
+		{"union nonnull control", "select count(*) as c from nation union all select 1", []bool{false}},
+		{"union distinct", "select count(*) as c from nation union select null", []bool{true}},
+		{"union three branches", "select count(*) as c from nation union all select null union all select 1", []bool{true}},
+		{"union cte", "with u as (select count(*) as c from nation union all select null) select c from u", []bool{true}},
+		{"left join", "select n.n_nationkey as l, r.r_regionkey as r from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false, true}},
+		{"right join", "select n.n_nationkey as l, r.r_regionkey as r from nation n right join region r on n.n_regionkey=r.r_regionkey", []bool{true, false}},
+		{"full join", "select n.n_nationkey as l, r.r_regionkey as r from nation n full join region r on n.n_regionkey=r.r_regionkey", []bool{true, true}},
+		{"inner join control", "select n.n_nationkey as l, r.r_regionkey as r from nation n join region r on n.n_regionkey=r.r_regionkey", []bool{false, false}},
+		{"null extending expression", "select r.r_regionkey+1 as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce literal control", "select coalesce(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"ifnull literal control", "select ifnull(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
+		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
+		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce division fallback", "select coalesce(n_comment,1/n_nationkey) as v from nation", []bool{true}},
+		{"ifnull division fallback", "select ifnull(n_comment,1/n_nationkey) as v from nation", []bool{true}},
+		{"coalesce derived fallback", "select coalesce(x,d) as v from (select n_comment as x,1/n_nationkey as d from nation) t", []bool{true}},
+		{"ifnull derived fallback", "select ifnull(x,d) as v from (select n_comment as x,1/n_nationkey as d from nation) t", []bool{true}},
+		{"coalesce join fallback", "select coalesce(r.r_regionkey,1/n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull join fallback", "select ifnull(r.r_regionkey,1/n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"integer division fallback", "select coalesce(n_comment,1 div n_nationkey) as v from nation", []bool{true}},
+		{"modulo fallback", "select ifnull(n_comment,1 % n_nationkey) as v from nation", []bool{true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+			p, err := buildSingleStmt(mock, t, "create table ctas_nullability as "+test.query)
+			require.NoError(t, err)
+			var cols []*plan.ColDef
+			for _, col := range p.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+				if !col.Hidden {
+					cols = append(cols, col)
+				}
+			}
+			require.Len(t, cols, len(test.nullable))
+			for i, nullable := range test.nullable {
+				require.Equal(t, nullable, cols[i].GetDefault().GetNullAbility(), "column %d default", i)
+				require.Equal(t, !nullable, cols[i].Typ.NotNullable, "column %d type", i)
+			}
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesSourceMetadata(t *testing.T) {
+	for name, outerJoin := range map[string]bool{"direct": false, "null extended": true} {
+		t.Run(name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			source := mock.ctxt.tables["nation"].Cols[1]
+			source.Typ.Id = int32(types.T_enum)
+			source.Typ.Enumvalues = "low,high"
+			mock.ctxt.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "7", NullAbility: false}
+			query := "select n.n_name as priority, n.n_nationkey as source_key from nation n"
+			if outerJoin {
+				query += " right join region r on n.n_regionkey=r.r_regionkey"
+			}
+			p, err := buildSingleStmt(mock, t, "create table ctas_metadata as "+query)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().Cols
+			require.Equal(t, int32(types.T_enum), cols[0].Typ.Id)
+			require.Equal(t, "low,high", cols[0].Typ.Enumvalues)
+			require.Equal(t, "7", cols[1].Default.OriginString)
+			for _, col := range cols[:2] {
+				require.Equal(t, outerJoin, col.Default.NullAbility)
+				require.Equal(t, !outerJoin, col.Typ.NotNullable)
+			}
+			require.True(t, source.Typ.NotNullable, "join must not mutate source metadata")
+		})
+	}
+}
+
 func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1361,8 +1443,54 @@ func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	require.Len(t, prepare.GetParamTypes(), 1)
 	require.NotEmpty(t, prepare.GetSchemas())
 
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_join from 'create table ctas_join as select n.n_nationkey as left_key, r.r_regionkey as right_key from nation n left join region r on n.n_regionkey=r.r_regionkey where n.n_nationkey>?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 1)
+	ddl := prepare.GetPlan().GetDdl()
+	require.NotNil(t, ddl.GetQuery())
+	require.False(t, ddl.GetCreateTable().TableDef.Cols[0].Default.NullAbility)
+	require.True(t, ddl.GetCreateTable().TableDef.Cols[1].Default.NullAbility)
+
 	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+}
+
+func TestPrepareCreateTableAsSelectPreservesPrunedParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		count int
+	}{
+		{"all pruned", "select a from (select 1 as a,cast(? as int) as b) s", 1},
+		{"multiple pruned", "select a from (select 1 as a,cast(? as int) as b,cast(? as varchar(10)) as c) s", 2},
+		{"leading pruned", "select a from (select cast(? as int) as b,cast(? as int) as a) s", 2},
+		{"middle pruned", "select a,c from (select cast(? as int) as a,cast(? as int) as b,cast(? as int) as c) s", 3},
+		{"trailing pruned", "select a from (select cast(? as int) as a,cast(? as int) as b) s", 2},
+		{"cte projection", "with s as (select 1 as a,cast(? as int) as b) select a from s", 1},
+		{"count prunes input", "select count(*) as c from (select cast(? as int) as b) s", 1},
+		{"null extension with live filter", "select n.n_nationkey as l,r.r_regionkey as r from nation n left join (select r_regionkey,cast(? as int) as unused from region) r on n.n_regionkey=r.r_regionkey where n.n_nationkey>?", 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			p, err := runOneStmt(mock, t, "prepare ctas_params from 'create table ctas_param_result as "+test.query+"'")
+			require.NoError(t, err)
+			prepare := p.GetDcl().GetPrepare()
+			require.Len(t, prepare.ParamTypes, test.count)
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: prepare.Plan.GetDdl().GetQuery()}}
+			params := collectUniquePlanParamTypes(t, queryPlan)
+			require.Len(t, params, test.count)
+			for i := range test.count {
+				require.Contains(t, params, int32(i), "preserve original placeholder order")
+			}
+			if test.name == "null extension with live filter" {
+				cols := prepare.Plan.GetDdl().GetCreateTable().TableDef.Cols
+				require.False(t, cols[0].Default.NullAbility)
+				require.True(t, cols[1].Default.NullAbility)
+			}
+		})
+	}
 }
 
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {

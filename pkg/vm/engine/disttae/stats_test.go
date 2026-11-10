@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
@@ -1899,6 +1900,190 @@ func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
 			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
 		}
 	})
+}
+
+// Notify after Cond.Wait has registered and released the underlying mutex.
+type statsWaitLocker struct {
+	sync.Locker
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (l *statsWaitLocker) Unlock() {
+	l.Locker.Unlock()
+	l.once.Do(func() { close(l.waiting) })
+}
+
+func TestGlobalStatsGetReturnsWhenContextCanceledWhileWaiting(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		partition := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, commit := partition.MutateState()
+		objectID := objectio.NewObjectid()
+		objectStats := objectio.NewObjectStatsWithObjectID(
+			&objectID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsSize(objectStats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *objectStats,
+			CreateTime:  types.BuildTS(1, 0),
+		}, false))
+		commit()
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+		e.pClient.subscribed.rw.Lock()
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = &subEntry{
+			dbID:  dbID,
+			state: Subscribed,
+		}
+		e.pClient.subscribed.rw.Unlock()
+
+		// This isolated GlobalStats has no update worker. Receiving its forced
+		// request below proves Get reached the synchronous update path, after
+		// which no data-path goroutine can broadcast the condition variable.
+		gs := &GlobalStats{
+			ctx:          ctx,
+			engine:       e,
+			updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+			queueWatcher: newQueueWatcher(),
+		}
+		gs.mu.statsInfoMap = make(map[statsinfo.StatsInfoKey]*statsinfo.StatsInfo)
+		waiting := make(chan struct{})
+		gs.mu.cond = sync.NewCond(&statsWaitLocker{Locker: &gs.mu, waiting: waiting})
+
+		getCtx, cancel := context.WithCancel(ctx)
+		result := make(chan *statsinfo.StatsInfo, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			result <- gs.Get(getCtx, key, true)
+		}()
+		// runTest closes the engine before t.Cleanup runs. Join the waiter
+		// here, including on assertion failure, before its fixture is closed.
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+			case <-waiting:
+				gs.mu.Lock()
+				gs.mu.cond.Broadcast()
+				gs.mu.Unlock()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Error("GlobalStats.Get did not exit during cleanup")
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("GlobalStats.Get did not reach a terminal state during cleanup")
+			}
+			gs.queueWatcher.del(tblID)
+		}()
+
+		select {
+		case <-gs.updateC:
+		case <-time.After(10 * time.Second):
+			t.Fatal("GlobalStats.Get did not enqueue the synchronous update")
+		}
+		select {
+		case <-waiting:
+		case <-time.After(10 * time.Second):
+			t.Fatal("GlobalStats.Get did not enter the condition wait")
+		}
+		cancel()
+
+		select {
+		case info := <-result:
+			require.Nil(t, info)
+		case <-time.After(10 * time.Second):
+			t.Fatal("GlobalStats.Get did not return after context cancellation")
+		}
+	})
+}
+
+func TestEnqueueStatsUpdateForceReturnsWhenContextCanceled(t *testing.T) {
+	for _, cancelWhileBlocked := range []bool{true, false} {
+		name := "queue released"
+		if cancelWhileBlocked {
+			name = "context canceled"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				gs := &GlobalStats{
+					updateC:      make(chan statsinfo.StatsInfoKeyWithContext, 1),
+					queueWatcher: newQueueWatcher(),
+				}
+				queued := statsinfo.StatsInfoKeyWithContext{
+					Ctx: context.Background(),
+					Key: statsinfo.StatsInfoKey{TableID: 1},
+				}
+				gs.updateC <- queued
+				ctx, cancel := context.WithCancel(context.Background())
+				next := statsinfo.StatsInfoKeyWithContext{Ctx: ctx, Key: statsinfo.StatsInfoKey{TableID: 2}}
+				result := make(chan bool, 1)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					result <- gs.enqueueStatsUpdate(next, true)
+				}()
+				defer func() {
+					cancel()
+					select {
+					case <-done:
+					default:
+						// Release a broken enqueue before returning from the test.
+						select {
+						case <-gs.updateC:
+						default:
+						}
+						synctest.Wait()
+						select {
+						case <-done:
+						default:
+							t.Error("forced enqueue did not exit during cleanup")
+						}
+					}
+					gs.queueWatcher.del(2)
+				}()
+
+				// The first item fills the queue, so the new send must be blocked.
+				synctest.Wait()
+				select {
+				case <-done:
+					t.Fatal("forced enqueue returned before cancellation or queue release")
+				default:
+				}
+				if cancelWhileBlocked {
+					cancel()
+				} else {
+					require.Equal(t, queued, <-gs.updateC)
+				}
+				synctest.Wait()
+				select {
+				case accepted := <-result:
+					require.Equal(t, !cancelWhileBlocked, accepted)
+				default:
+					t.Fatal("forced enqueue did not react to cancellation or queue release")
+				}
+				if cancelWhileBlocked {
+					require.Equal(t, queued, <-gs.updateC)
+				} else {
+					require.Equal(t, next, <-gs.updateC)
+				}
+			})
+		})
+	}
 }
 
 func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {

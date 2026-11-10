@@ -1,0 +1,290 @@
+drop database if exists non_primary_zonemap;
+create database non_primary_zonemap;
+use non_primary_zonemap;
+set @saved_zonemap_hints=@@optimizer_hints;
+create table clustered (id int primary key, k int);
+create table interleaved (id int primary key, k int);
+insert into clustered values (1,200),(2,201);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.clustered');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.clustered)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into clustered values (3,0),(4,1);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.clustered');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.clustered)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into clustered values (5,100),(6,150);
+select k from clustered where k between 100 and 150 order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.clustered');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.clustered)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select k from clustered where k between 100 and 150 order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+select rows_cnt, bit_cast(`min` as int) as lo, bit_cast(`max` as int) as hi from metadata_scan('non_primary_zonemap.clustered', 'k') g order by lo;
+➤ rows_cnt[-5,64,0]  ¦  lo[4,32,0]  ¦  hi[4,32,0]  𝄀
+2  ¦  0  ¦  1  𝄀
+2  ¦  100  ¦  150  𝄀
+2  ¦  200  ¦  201
+explain analyze select count(*) from clustered where k between 100 and 150;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=2\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=2 (min=2, max=2) InputSize=8 bytes OutputSize=8 bytes ReadSize=48 bytes|0 bytes|0 bytes MemorySize=18 bytes (min=18 bytes, max=18 bytes)  𝄀
+              Filter Cond: clustered.k BETWEEN 100 AND 150  𝄀
+              Block Filter Cond: clustered.k BETWEEN 100 AND 150
+select k from clustered where 100 = k order by k;
+➤ k[4,32,0]  𝄀
+100
+explain analyze select count(*) from clustered where 100 = k;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=2\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=4 bytes ReadSize=48 bytes|0 bytes|0 bytes MemorySize=14 bytes (min=14 bytes, max=14 bytes)  𝄀
+              Filter Cond: (clustered.k = 100)  𝄀
+              Block Filter Cond: (clustered.k = 100)
+select k from clustered where 100 < k order by k;
+➤ k[4,32,0]  𝄀
+150  𝄀
+200  𝄀
+201
+explain analyze select count(*) from clustered where 100 < k;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=4\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=1 (min=1, max=1) InputSize=12 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=4 outputRows=3 (min=3, max=3) InputSize=16 bytes OutputSize=12 bytes ReadSize=96 bytes|0 bytes|0 bytes MemorySize=20 bytes (min=20 bytes, max=20 bytes)  𝄀
+              Filter Cond: (100 < clustered.k)  𝄀
+              Block Filter Cond: (100 < clustered.k)
+select k from clustered where 100 <= k order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150  𝄀
+200  𝄀
+201
+select k from clustered where 100 > k order by k;
+➤ k[4,32,0]  𝄀
+0  𝄀
+1
+select k from clustered where 100 >= k order by k;
+➤ k[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+100
+select id from clustered where 3 < id order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5  𝄀
+6
+insert into interleaved values (1,0),(2,100);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.interleaved');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.interleaved)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into interleaved values (3,1),(4,200);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.interleaved');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.interleaved)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into interleaved values (5,150),(6,201);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.interleaved');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.interleaved)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select k from interleaved where k between 100 and 150 order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from interleaved where k between 100 and 150;
+-- @regex("Table Scan on non_primary_zonemap[.]interleaved[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.interleaved  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=8 bytes ReadSize=144 bytes|0 bytes|0 bytes MemorySize=18 bytes (min=18 bytes, max=18 bytes)  𝄀
+              Filter Cond: interleaved.k BETWEEN 100 AND 150  𝄀
+              Block Filter Cond: interleaved.k BETWEEN 100 AND 150
+select id from clustered where id between 5 and 6 order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+select id from interleaved where id between 5 and 6 order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+select count(*) from clustered where k between 300 and 400;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from interleaved where k between 300 and 400;
+➤ count(*)[-5,64,0]  𝄀
+0
+explain analyze select count(*) from clustered where k between 300 and 400;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=0\s+inputRows=0\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
+              Filter Cond: clustered.k BETWEEN 300 AND 400  𝄀
+              Block Filter Cond: clustered.k BETWEEN 300 AND 400
+prepare zm_range from 'select k from clustered where k between ? and ? order by k';
+set @zm_lower=100;
+set @zm_upper=150;
+execute zm_range using @zm_lower,@zm_upper;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+set @zm_lower=null;
+execute zm_range using @zm_lower,@zm_upper;
+➤ k[4,32,0]
+set @zm_lower=100;
+execute zm_range using @zm_lower,@zm_upper;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+deallocate prepare zm_range;
+prepare zm_commuted from 'select k from clustered where ? < k order by k';
+execute zm_commuted using @zm_lower;
+➤ k[4,32,0]  𝄀
+150  𝄀
+200  𝄀
+201
+set @zm_lower=null;
+execute zm_commuted using @zm_lower;
+➤ k[4,32,0]
+set @zm_lower=100;
+execute zm_commuted using @zm_lower;
+➤ k[4,32,0]  𝄀
+150  𝄀
+200  𝄀
+201
+deallocate prepare zm_commuted;
+create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
+insert into range_bound values (1),(11),(21);
+prepare zm_partition from 'select a from range_bound where a = ?';
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+set @zm_partition_value=null;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+deallocate prepare zm_partition;
+set optimizer_hints='blockFilter=2';
+prepare zm_partition from 'select a from range_bound where a = ?';
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+set @zm_partition_value=null;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+deallocate prepare zm_partition;
+select k from clustered where 100 < k order by k;
+➤ k[4,32,0]  𝄀
+150  𝄀
+200  𝄀
+201
+select id from clustered where 3 < id order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5  𝄀
+6
+select k from clustered where k between 100 and 150 order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from clustered where k between 100 and 150;
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=72.00 KiB (min=72.00 KiB, max=72.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=8 bytes ReadSize=144 bytes|0 bytes|0 bytes MemorySize=22 bytes (min=22 bytes, max=22 bytes)  𝄀
+              Filter Cond: clustered.k BETWEEN 100 AND 150
+set optimizer_hints=@saved_zonemap_hints;
+drop database non_primary_zonemap;

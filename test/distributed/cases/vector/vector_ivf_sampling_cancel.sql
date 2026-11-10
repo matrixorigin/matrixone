@@ -1,0 +1,28 @@
+-- 100% sampling crosses the internal LIMIT 10000; timing races are covered by UT.
+drop database if exists vector_ivf_sampling_cancel;
+create database vector_ivf_sampling_cancel;
+use vector_ivf_sampling_cancel;
+set @sampling_cancel_probe_limit=@@probe_limit;
+set probe_limit=2;
+create table t(id int primary key, embedding vecf32(3));
+insert into t select result, case when result % 2 = 0 then '[1,0,0]' else '[0,0,1]' end from generate_series(1,10000) g;
+insert into t values (10001,'[0,1,0]');
+select count(*) as source_rows from t;
+create index idx_l2 using ivfflat on t(embedding) lists=2 op_type 'vector_l2_ops' kmeans_train_percent=100;
+select count(*) as index_count from mo_catalog.mo_indexes where database_id=(select dat_id from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel') and name='idx_l2';
+select id from t order by l2_distance(embedding,'[0,1,0]') limit 1;
+alter table t drop index idx_l2;
+select count(*) as index_count from mo_catalog.mo_indexes where database_id=(select dat_id from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel') and name='idx_l2';
+create index idx_cosine using ivfflat on t(embedding) lists=2 op_type 'vector_cosine_ops' kmeans_train_percent=100;
+select count(*) as index_count from mo_catalog.mo_indexes where database_id=(select dat_id from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel') and name='idx_cosine';
+select id from t order by cosine_distance(embedding,'[0,1,0]') limit 1;
+alter table t drop index idx_cosine;
+select count(*) as index_count from mo_catalog.mo_indexes where database_id=(select dat_id from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel') and name='idx_cosine';
+create index idx_ip using ivfflat on t(embedding) lists=2 op_type 'vector_ip_ops' kmeans_train_percent=100;
+select count(*) as index_count from mo_catalog.mo_indexes where database_id=(select dat_id from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel') and name='idx_ip';
+select id from t order by inner_product(embedding,'[0,1,0]') limit 1;
+alter table t drop index idx_ip;
+select count(*) as index_count from mo_catalog.mo_indexes where database_id=(select dat_id from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel') and name='idx_ip';
+set probe_limit=@sampling_cancel_probe_limit;
+drop database vector_ivf_sampling_cancel;
+select count(*) as database_count from mo_catalog.mo_database where datname='vector_ivf_sampling_cancel';

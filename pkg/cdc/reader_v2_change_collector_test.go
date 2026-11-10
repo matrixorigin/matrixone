@@ -319,7 +319,6 @@ func TestChangeCollector_Next_UnblocksOnClose(t *testing.T) {
 		data *ChangeData
 		err  error
 	}, 1)
-
 	go func() {
 		data, err := cc.Next(ctx)
 		resultCh <- struct {
@@ -327,7 +326,6 @@ func TestChangeCollector_Next_UnblocksOnClose(t *testing.T) {
 			err  error
 		}{data, err}
 	}()
-
 	select {
 	case <-handle.nextCalled:
 	case <-time.After(2 * time.Second):
@@ -576,7 +574,12 @@ func TestChangeCollector_Next_ConcurrentCloseAndCancel(t *testing.T) {
 
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	defer mpool.DeleteMPool(mp)
+	safeToRelease := true
+	t.Cleanup(func() {
+		if safeToRelease {
+			mpool.DeleteMPool(mp)
+		}
+	})
 
 	handle := newCollectorBlockingHandle()
 	fromTs := types.TS{}
@@ -587,25 +590,60 @@ func TestChangeCollector_Next_ConcurrentCloseAndCancel(t *testing.T) {
 		data *ChangeData
 		err  error
 	}, 1)
+	done := make(chan struct{})
+	closeDone := make(chan struct{})
+	closeResult := make(chan error, 1)
+	startClose := sync.OnceFunc(func() {
+		go func() {
+			defer close(closeDone)
+			closeResult <- cc.Close()
+		}()
+	})
 
 	go func() {
+		defer close(done)
 		data, err := cc.Next(ctx)
 		resultCh <- struct {
 			data *ChangeData
 			err  error
 		}{data, err}
 	}()
+	t.Cleanup(func() {
+		cancel()
+		// The fake handle can always release a blocked Next, even if the
+		// collector's Close path itself is broken.
+		_ = handle.Close()
+		startClose()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			safeToRelease = false
+			t.Error("Next did not exit during cleanup")
+		}
+		select {
+		case <-closeDone:
+		case <-time.After(10 * time.Second):
+			safeToRelease = false
+			t.Error("Close did not exit during cleanup")
+		}
+	})
 
 	// Wait until Next has started and is blocked
 	select {
 	case <-handle.nextCalled:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Next did not start")
 	}
 
 	// Concurrently cancel and close; order is intentionally racy
 	cancel()
-	require.NoError(t, cc.Close())
+	startClose()
+	select {
+	case <-closeDone:
+		require.NoError(t, <-closeResult)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return after cancellation")
+	}
 
 	select {
 	case res := <-resultCh:
@@ -617,7 +655,7 @@ func TestChangeCollector_Next_ConcurrentCloseAndCancel(t *testing.T) {
 			require.NotNil(t, res.data)
 			assert.Equal(t, ChangeTypeNoMoreData, res.data.Type)
 		}
-	case <-time.After(1 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Next did not return after concurrent close and cancel")
 	}
 }

@@ -102,18 +102,19 @@ select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 in (1,10,100,100
 count(*)
 4
 explain select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 between 10 and 1000;
-AP QUERY PLAN ON MULTICN(4 core)
-Project
-  ->  Aggregate
-        Aggregate Functions: starcount(1)
-        ->  Join
-              Join Type: INNER   hashOnPK
-              Join Cond: (t1.c1 = t2.c1)
-              Runtime Filter Build: #[-1,0]
-              ->  Table Scan on d1.t1
-                    Runtime Filter Probe: t1.c1
-              ->  Table Scan on d1.t2
-                    Filter Cond: t2.c2 BETWEEN 10 AND 1000
+➤ AP QUERY PLAN ON ONE CN(4 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Join Type: INNER   hashOnPK  𝄀
+              Join Cond: (t1.c1 = t2.c1)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on d1.t1  𝄀
+                    Runtime Filter Probe: t1.c1  𝄀
+              ->  Table Scan on d1.t2  𝄀
+                    Filter Cond: t2.c2 BETWEEN 10 AND 1000  𝄀
+                    Block Filter Cond: t2.c2 BETWEEN 10 AND 1000
 select count(*) from t1 left join t2 on t1.c1=t2.c1 where t2.c2 between 10 and 1000;
 count(*)
 900

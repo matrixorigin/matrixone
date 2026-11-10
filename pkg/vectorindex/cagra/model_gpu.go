@@ -17,11 +17,8 @@
 package cagra
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"os"
-	"sync"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -204,18 +200,24 @@ func (idx *CagraModel[B, Q]) Build() error {
 }
 
 // Destroy frees GPU memory and removes the local tar file if present.
-func (idx *CagraModel[B, Q]) Destroy() error {
+func (idx *CagraModel[B, Q]) Destroy() (err error) {
+	defer func() {
+		if idx.Path == "" {
+			return
+		}
+		if removeErr := os.Remove(idx.Path); removeErr != nil && !os.IsNotExist(removeErr) {
+			logutil.Errorf("CAGRA temp file cleanup failed for %s: %v", idx.Path, removeErr)
+			if err == nil {
+				err = removeErr
+			}
+		} else {
+			idx.Path = ""
+		}
+	}()
 	if idx.Index != nil {
-		if err := idx.Index.Destroy(); err != nil {
-			return err
-		}
+		index := idx.Index
 		idx.Index = nil
-	}
-	if len(idx.Path) > 0 {
-		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
-			os.Remove(idx.Path)
-		}
-		idx.Path = ""
+		return index.Destroy()
 	}
 	return nil
 }
@@ -352,47 +354,6 @@ func (idx *CagraModel[B, Q]) Search(query []Q, limit uint32) (keys []int64, dist
 	return res.Neighbors, res.Distances, nil
 }
 
-// loadChunk reads one streaming result batch and writes each chunk at the correct file offset.
-func (idx *CagraModel[B, Q]) loadChunk(ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	stream_chan chan executor.Result,
-	error_chan chan error,
-	fp *os.File) (stream_closed bool, err error) {
-
-	var res executor.Result
-	var ok bool
-
-	procCtx := sqlproc.GetContext()
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
-	case <-ctx.Done():
-		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-	for i, chunkId := range chunkIds {
-		data := bat.Vecs[1].GetRawBytesAt(i)
-		offset := chunkId * vectorindex.MaxChunkSize
-		if _, err = fp.Seek(offset, io.SeekStart); err != nil {
-			return false, err
-		}
-		if _, err = fp.Write(data); err != nil {
-			return false, err
-		}
-	}
-	return false, nil
-}
-
 // LoadIndex downloads the tar from the database, unpacks it, and loads the CAGRA index into GPU memory.
 // Mirrors HnswModel.LoadIndex.
 // idx.Devices must be set before calling LoadIndex.
@@ -408,13 +369,9 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	nthread int64,
 	view bool) (err error) {
 
-	var (
-		fp         *os.File
-		streamChan = make(chan executor.Result, 2)
-		errorChan  = make(chan error, 2)
-		fname      string
-		wg         sync.WaitGroup
-	)
+	var fp *os.File
+	var fname string
+	loaded := false
 
 	if idx.Index != nil {
 		return nil
@@ -428,9 +385,8 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 		return moerr.NewInternalErrorNoCtx("CagraModel: checksum is empty; cannot load from database")
 	}
 
-	// Fire the tag=1 event-log fetch in parallel with the model tar streaming.
-	// Replay (which needs includeBytesPerRow from the loaded cuvs index) is
-	// deferred until after Unpack — we only fetch the raw chunks here.
+	// Replay needs the loaded index's includeBytesPerRow, so fetch the raw
+	// event chunks before streaming and replay them after Unpack.
 	var (
 		dim         = int(idxcfg.CuvsCagra.Dimensions)
 		eventChunks []cuvscdc.EventChunk
@@ -456,11 +412,15 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 		defer func() {
 			if fp != nil {
 				fp.Close()
-				fp = nil
 			}
-			if view {
-				if len(fname) > 0 {
-					os.Remove(fname)
+			if !loaded || view {
+				if removeErr := os.Remove(fname); removeErr != nil && !os.IsNotExist(removeErr) {
+					logutil.Errorf("GPU index temp file cleanup failed for %s: %v", fname, removeErr)
+					if idx.Path == "" {
+						idx.Path = fname
+					}
+				} else if idx.Path == fname {
+					idx.Path = ""
 				}
 			}
 		}()
@@ -472,46 +432,8 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 		sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
 			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
 
-		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-		defer cancel(nil)
-
-		wg.Add(1)
-		go func() {
-			defer func() {
-				close(streamChan)
-				wg.Done()
-			}()
-			_, err2 := runSql_streaming(ctx, sqlproc, sql, streamChan, errorChan)
-			if err2 != nil {
-				errorChan <- err2
-			}
-		}()
-
-		sql_closed := false
-		for !sql_closed {
-			sql_closed, err = idx.loadChunk(ctx, sqlproc, streamChan, errorChan, fp)
-			if err != nil {
-				cancel(err)
-				break
-			}
-		}
-
-		// Drain the channel so the producer goroutine can finish.
-		if !sql_closed {
-			for res := range streamChan {
-				res.Close()
-			}
-		}
-		wg.Wait()
-
-		if err == nil {
-			select {
-			case err = <-errorChan:
-			default:
-			}
-		}
-		if err != nil {
-			return
+		if err = sqlexec.StreamChunksToFile(sqlproc, sql, fp, runSql_streaming); err != nil {
+			return err
 		}
 
 		idx.Path = fp.Name()
@@ -549,14 +471,20 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if !loaded {
+			if idx.Index == gi {
+				idx.Index = nil
+			}
+			vectorindex.DestroyIndexResources("Cagra index", []*cuvs.GpuCagra[B, Q]{gi})
+		}
+	}()
 
 	if err = gi.Start(); err != nil {
-		gi.Destroy()
 		return err
 	}
 
 	if err = gi.Unpack(idx.Path, mode); err != nil {
-		gi.Destroy()
 		return err
 	}
 
@@ -569,14 +497,12 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	if colMetaJSON != "" {
 		ibpr, e := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
 		if e != nil {
-			gi.Destroy()
 			return e
 		}
 		includeBytesPerRow = ibpr
 	}
 	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](eventChunks, dim, includeBytesPerRow)
 	if err != nil {
-		gi.Destroy()
 		return err
 	}
 	idx.DeletedPkids = delPkids
@@ -590,7 +516,6 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	// (e.g. a row that was inserted post-build and now lives only in
 	// OverflowPkids — that case is handled at search time).
 	if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
-		gi.Destroy()
 		return err
 	}
 
@@ -604,12 +529,14 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 
 	if view {
 		// Remove the local tar; the index is fully in GPU memory.
-		if len(idx.Path) > 0 {
-			os.Remove(idx.Path)
+		if removeErr := os.Remove(idx.Path); removeErr != nil && !os.IsNotExist(removeErr) {
+			logutil.Errorf("CAGRA temp file cleanup failed for %s: %v", idx.Path, removeErr)
+		} else {
+			idx.Path = ""
 		}
-		idx.Path = ""
 	}
 
+	loaded = true
 	return nil
 }
 

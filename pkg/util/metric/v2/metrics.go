@@ -72,6 +72,7 @@ func init() {
 
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemObjectIOPooledSerialBytesGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(MemMPoolOnHeapOutstandingBytesGauge)
@@ -106,6 +107,7 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(sharedDecodeCounter, SharedDecodeActive, SharedDecodeReserved)
 	registry.MustRegister(fsCacheBytes)
 	registry.MustRegister(fsCachePressureCounter)
 	registry.MustRegister(fsCachePressureEvictDuration)
