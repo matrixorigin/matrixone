@@ -111,6 +111,7 @@ func TestAlterCopyDefaultUsesInternalParserMode(t *testing.T) {
 			source, err := buildTestCreateTableStmt(mock, `create table mode_copy(id int primary key, v varchar(32) default 'old')`)
 			require.NoError(t, err)
 			mock.ctxt.tables["mode_copy"] = source
+			mock.ctxt.objects["mode_copy"] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
 			before := proto.Clone(source)
 			mock.ctxt.SetSqlModeOverride(mode)
 			literal := `'a\\b'`
