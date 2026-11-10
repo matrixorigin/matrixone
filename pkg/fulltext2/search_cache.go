@@ -89,7 +89,7 @@ type Fulltext2Search struct {
 }
 
 var errLoadGenerationSuperseded = veccache.NewRetryableLoadError(
-	moerr.NewInvalidStateNoCtx("fulltext2 load superseded by a newer generation"),
+	moerr.NewInvalidStateNoCtx("fulltext2 load superseded by a newer generation; retry the query"),
 )
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -120,9 +120,16 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	trace := newLoadTrace(s.cfg.IndexTable, reason)
 	canceled := false
 	defer func() {
+		panicValue := recover()
+		if panicValue != nil {
+			ctx := context.Background()
+			if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) && sqlproc.GetContext() != nil {
+				ctx = sqlproc.GetContext()
+			}
+			err = moerr.ConvertPanicError(ctx, panicValue)
+		}
 		if err != nil {
 			canceled = isLoadCancellationError(err)
-			loadedBasePool.rollback(generation.owner)
 		}
 		// VectorIndexCache finishes the event after it samples the shared
 		// entry's waiter count, so waiters that arrived during this load are
@@ -130,6 +137,9 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		s.pendingTrace = trace
 		s.pendingLoadErr = err
 		s.pendingCancel = canceled
+		if panicValue != nil {
+			panic(panicValue)
+		}
 	}()
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
@@ -165,11 +175,18 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err != nil {
 		return err
 	}
+	var tails []*Segment
+	transferred := false
+	defer func() {
+		if !transferred {
+			freeSegs(bases)
+			freeSegs(tails)
+			loadedBasePool.rollback(generation.owner)
+		}
+	}()
 	if !loadGenerationCurrent(generation) {
-		freeSegs(bases)
 		return errLoadGenerationSuperseded
 	}
-	var tails []*Segment
 	var deletes map[any]int64
 	var appliedTail int64
 	if generationReady {
@@ -178,11 +195,11 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		tails, deletes, appliedTail, err = loadTailSegmentsAfter(sqlproc, s.cfg, -1, trace)
 	}
 	if err != nil {
-		freeSegs(bases) // munmap the base segments on a tail-load error (don't leak the mappings)
 		return err
 	}
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
+	transferred = true
 	s.loaded = true
 	if loadGenerationCurrent(generation) {
 		consumeLoadReasonIfCurrent(index, reasonGeneration, generation)
@@ -236,6 +253,19 @@ func (s *Fulltext2Search) OnCacheInvalidated(reason string) {
 		return
 	}
 	invalidateLoadGeneration(s.cfg, LoadMissReason(reason))
+}
+
+// RecoverCacheInvalidation repairs only the local registry updates performed
+// for TTL and generation-change notifications. Pool eviction runs separately
+// from the cache lifecycle hook, so a failed notification has not touched it.
+func (s *Fulltext2Search) RecoverCacheInvalidation(reason string) error {
+	if reason != string(LoadMissTTLExpired) && reason != string(LoadMissGenerationChange) {
+		return moerr.NewInvalidStateNoCtx("fulltext2 invalidation reason is not locally recoverable")
+	}
+	if !fenceLoadGeneration(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)) {
+		return moerr.NewInvalidStateNoCtx("fulltext2 invalidation registry is unavailable")
+	}
+	return nil
 }
 
 // SetLoadWaiters is an internal cache hook used only to complete load

@@ -68,7 +68,8 @@ func TestNulls(t *testing.T) {
 	np.AddMany([]uint64{1, 2, 3})
 	require.Equal(t, 3, np.Count())
 	np.RemoveRange(1, 3)
-	require.Equal(t, 0, np.Count())
+	require.Equal(t, 1, np.Count())
+	require.True(t, np.Contains(3), "RemoveRange is half-open")
 
 	np.AddMany([]uint64{1, 2, 3})
 	np.Filter([]int64{0})
@@ -88,6 +89,20 @@ func TestNulls(t *testing.T) {
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
 	np.Reset()
+}
+
+func TestRemoveRangeWordBoundary(t *testing.T) {
+	for _, end := range []uint64{63, 64, 65, 8192} {
+		t.Run(fmt.Sprint(end), func(t *testing.T) {
+			bm := newBm(int(end + 1))
+			bm.Add(end - 1)
+			bm.Add(end)
+			bm.RemoveRange(end-1, end)
+			require.False(t, bm.Contains(end-1))
+			require.True(t, bm.Contains(end))
+			require.Equal(t, 1, bm.Count())
+		})
+	}
 }
 
 func BenchmarkAdd(b *testing.B) {

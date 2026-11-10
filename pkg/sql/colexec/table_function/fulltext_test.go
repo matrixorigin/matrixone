@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +45,41 @@ import (
 type fulltextTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
+}
+
+func TestWaitFulltextMembershipFilterChunked(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	var chunks [][]byte
+	for _, key := range []int64{1, 1000000000000} {
+		func() {
+			v := testutil.MakeInt64Vector([]int64{key}, nil, proc.Mp())
+			defer v.Free(proc.Mp())
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			chunks = append(chunks, data)
+		}()
+	}
+	released := 0
+	keys, err := keycodec.NewKeyPayload(proc.Ctx, chunks, 0, func() { released++ })
+	require.NoError(t, err)
+	msg := message.RuntimeFilterMessage{Tag: 81, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Keys: keys}
+	msg.SetMemoryRelease(keys.Release)
+	message.SendMessage(msg, board)
+	result, err := waitFulltextMembershipFilter(proc, []*plan.RuntimeFilterSpec{{Tag: 81, UseMembershipFilter: true}})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	board.Reset()
+	require.Equal(t, 1, released, "fulltext must release its borrowed key payload")
+	filter, err := docfilter.New(result.membershipFilterBytes)
+	require.NoError(t, err)
+	defer filter.Free()
+	require.True(t, filter.Test(types.EncodeFixed(int64(1))))
+	require.True(t, filter.Test(types.EncodeFixed(int64(1000000000000))))
+	require.False(t, filter.Test(types.EncodeFixed(int64(2))))
 }
 
 func TestFulltextTopKLimitBounds(t *testing.T) {

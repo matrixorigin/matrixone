@@ -164,8 +164,7 @@ func TestVectorIndexSearchWaitersRetrySupersededLoad(t *testing.T) {
 				started: make(chan struct{}),
 				release: make(chan struct{}),
 			}
-			s := &VectorIndexSearch{Algo: algo}
-			s.Cond = sync.NewCond(s.Mutex.RLocker())
+			s := newVectorIndexSearch(algo)
 			var releaseOnce sync.Once
 			release := func() {
 				releaseOnce.Do(func() { close(algo.release) })

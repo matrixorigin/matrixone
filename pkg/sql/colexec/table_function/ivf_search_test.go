@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,17 +49,16 @@ func TestWaitRuntimeFilterDataForTableFunctionRequiredMembership(t *testing.T) {
 		name      string
 		mustApply bool
 		message   message.RuntimeFilterMessage
-		wantData  []byte
+		wantData  bool
 		wantErr   bool
 	}{
 		{
 			name:      "required exact payload",
 			mustApply: true,
 			message: message.RuntimeFilterMessage{
-				Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-				Data: []byte{1, 2, 3},
+				Typ: message.RuntimeFilter_UNIQUEJOINKEYS,
 			},
-			wantData: []byte{1, 2, 3},
+			wantData: true,
 		},
 		{
 			name:      "required pass",
@@ -95,6 +95,13 @@ func TestWaitRuntimeFilterDataForTableFunctionRequiredMembership(t *testing.T) {
 				UseMembershipFilter: true,
 				MustApply:           test.mustApply,
 			}
+			if test.wantData {
+				vec := testutil.MakeInt64Vector([]int64{11, 22}, nil, proc.Mp())
+				defer vec.Free(proc.Mp())
+				encoded, err := vec.MarshalBinary()
+				require.NoError(t, err)
+				test.message.Keys = testutil.RuntimeKeyPayload(t, encoded)
+			}
 			test.message.Tag = spec.Tag
 			message.SendMessage(test.message, board)
 
@@ -104,8 +111,51 @@ func TestWaitRuntimeFilterDataForTableFunctionRequiredMembership(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, test.wantData, data)
+				if test.wantData {
+					require.Same(t, test.message.Keys, data)
+					data.Release()
+				} else {
+					require.Nil(t, data)
+				}
 			}
+		})
+	}
+}
+
+func TestIvfRuntimeFilterLeaseReleasedOnResetAndFree(t *testing.T) {
+	for _, reset := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reset=%v", reset), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			vec := testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
+			defer vec.Free(proc.Mp())
+			data, err := vec.MarshalBinary()
+			require.NoError(t, err)
+			released := 0
+			keys, err := keycodec.NewKeyPayload(proc.Ctx, [][]byte{data, data}, 0, func() { released++ })
+			require.NoError(t, err)
+			msg := message.RuntimeFilterMessage{Tag: 77, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Keys: keys}
+			msg.SetMemoryRelease(keys.Release)
+			message.SendMessage(msg, board)
+			tf := &TableFunction{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{{Tag: 77, UseMembershipFilter: true, MustApply: true}}}
+			retained, err := waitRuntimeFilterDataForTableFunction(tf, proc)
+			require.NoError(t, err)
+			st := &ivfSearchState{inited: true, runtimeFilterData: retained}
+			defer st.free(tf, proc, false, nil)
+			board.Reset()
+			require.Zero(t, released, "TVF must survive board cleanup")
+			require.EqualValues(t, 2, retained.Rows())
+			if reset {
+				st.reset(tf, proc)
+				require.False(t, st.inited, "the next query must receive its own keys")
+			}
+			st.free(tf, proc, false, nil)
+			require.Nil(t, st.runtimeFilterData)
+			require.Equal(t, 1, released)
+			require.False(t, keys.Retain())
 		})
 	}
 }
