@@ -821,6 +821,46 @@ func TestCacheGC(t *testing.T) {
 
 }
 
+func TestPrivateAlterCopyRealInventoryFence(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	op := p.StartCNTxn()
+	p.CreateDB(op, "private_inventory_db")
+	require.NoError(t, op.Commit(p.Ctx))
+
+	defs, err := catalog2.SchemaToDefs(catalog2.MockSchemaAll(2, -1))
+	require.NoError(t, err)
+	op = p.StartCNTxn()
+	db, err := p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
+	require.NoError(t, err)
+	handled, err := disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "unfenced", defs)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Error(t, op.Commit(p.Ctx), "a private CREATE cannot commit without the shared inventory fence")
+	_ = op.Rollback(p.Ctx)
+
+	op = p.StartCNTxn()
+	db, err = p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
+	require.NoError(t, err)
+	_, err = db.Relation(p.Ctx, "unfenced", nil)
+	require.Error(t, err, "the rejected private relation must not become visible")
+	handled, err = disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "fenced", defs)
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(p.Ctx, "public_fence", defs), "public CREATE advances the epoch in the same transaction")
+	require.NoError(t, op.Commit(p.Ctx))
+
+	op = p.StartCNTxn()
+	db, err = p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
+	require.NoError(t, err)
+	for _, name := range []string{"fenced", "public_fence"} {
+		_, err = db.Relation(p.Ctx, name, nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, op.Commit(p.Ctx))
+}
+
 func TestEngineInventoryFixture(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()

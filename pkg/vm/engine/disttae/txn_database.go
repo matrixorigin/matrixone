@@ -383,22 +383,28 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	return db.create(ctx, name, defs, false)
 }
 
-// TryCreatePrivateScalarAlterCopy is only for the compiler's validated,
-// transaction-private scalar ALTER COPY replica. Commit is rejected unless a
+// TryCreatePrivateAlterCopy is only for the compiler's validated,
+// transaction-private ALTER COPY replica. Commit is rejected unless a
 // subsequent real inventory update fences this database in the same owner.
 // Other engine implementations retain their ordinary Create path.
-func TryCreatePrivateScalarAlterCopy(ctx context.Context, database engine.Database, owner client.TxnOperator, databaseName, name string, defs []engine.TableDef) (bool, error) {
+func TryCreatePrivateAlterCopy(ctx context.Context, database engine.Database, owner client.TxnOperator, databaseName, name string, defs []engine.TableDef) (bool, error) {
 	db, ok := database.(*txnDatabase)
 	if !ok {
 		return false, nil
+	}
+	if db == nil {
+		return true, moerr.NewInternalError(ctx, "nil private ALTER COPY database")
 	}
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return true, err
 	}
 	if owner == nil || db.op != owner || owner.IsSnapOp() || db.databaseId == 0 ||
-		db.databaseName != databaseName || db.accountId != accountID || name == "" || inventorySystemDatabase(databaseName) {
+		db.databaseName != databaseName || db.accountId != accountID || name == "" {
 		return true, moerr.NewInternalError(ctx, "invalid private ALTER COPY database owner")
+	}
+	if inventorySystemDatabase(databaseName) {
+		return false, nil
 	}
 	if _, err = txnIsValid(owner); err != nil {
 		return true, err

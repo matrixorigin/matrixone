@@ -480,6 +480,10 @@ func (exec *txnExecutor) exec(
 			exec.ctx = originCtx
 		}()
 	}
+	exec.ctx, retErr = authorizePrivateAlterCopyCreate(exec.ctx, ownerTxn, sql)
+	if retErr != nil {
+		return executor.Result{}, retErr
+	}
 	//------------------------------------------------------------------------------------------------------------------
 	if statementOption.IgnoreForeignKey() {
 		exec.ctx = context.WithValue(exec.ctx,
@@ -541,6 +545,9 @@ func (exec *txnExecutor) exec(
 	}()
 	if err != nil {
 		return executor.Result{}, err
+	}
+	if r, _ := exec.ctx.Value(authorizedPrivateAlterCopyCreateKey{}).(*privateAlterCopyCreate); r != nil && len(stmts) != 1 {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("private ALTER COPY CREATE must contain one statement")
 	}
 	if (bindIndexView || exec.opts.IndexMaintenanceSpec() != nil || exec.opts.IndexRelationPolicy() != nil) && len(stmts) != 1 {
 		return executor.Result{}, moerr.NewInvalidInputNoCtx("index maintenance SQL must contain one statement")

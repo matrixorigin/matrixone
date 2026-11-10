@@ -2145,11 +2145,16 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
 	defs := append(exeCols, exeDefs...)
 	handled := false
-	if _, private := c.proc.Ctx.Value(scalarAlterCopyCreateKey{}).(*scalarAlterCopyCreate); private {
+	private, err := c.validatePrivateAlterCopyCreate(qry)
+	if err != nil {
+		return err
+	}
+	if private {
+		// Scalar preparations retain their stricter independent shape check.
 		if err = c.validateScalarAlterCopyCreate(qry); err != nil {
 			return err
 		}
-		handled, err = disttae.TryCreatePrivateScalarAlterCopy(createCtx, dbSource, c.proc.GetTxnOperator(), dbName, tblName, defs)
+		handled, err = disttae.TryCreatePrivateAlterCopy(createCtx, dbSource, c.proc.GetTxnOperator(), dbName, tblName, defs)
 	}
 	if err == nil && !handled {
 		err = dbSource.Create(createCtx, tblName, defs)

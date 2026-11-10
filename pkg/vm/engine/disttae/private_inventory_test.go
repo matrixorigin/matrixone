@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPrivateScalarAlterCopyRejectsWrongOwner(t *testing.T) {
+func TestPrivateAlterCopyRejectsWrongOwner(t *testing.T) {
 	_, db, txn, ctx := newResultOwnershipFixture(t, &inventoryOwnerExecutor{}, false)
 	for _, tc := range []struct {
 		name     string
@@ -41,15 +41,19 @@ func TestPrivateScalarAlterCopyRejectsWrongOwner(t *testing.T) {
 			if tc.ownerNil {
 				owner = nil
 			}
-			handled, err := TryCreatePrivateScalarAlterCopy(tc.ctx, db, owner, tc.database, tc.table, nil)
+			handled, err := TryCreatePrivateAlterCopy(tc.ctx, db, owner, tc.database, tc.table, nil)
 			require.True(t, handled)
 			require.Error(t, err)
 			require.Empty(t, txn.tableOps.privateInventories)
 		})
 	}
-	handled, err := TryCreatePrivateScalarAlterCopy(ctx, nil, txn.op, "db", "copy", nil)
+	handled, err := TryCreatePrivateAlterCopy(ctx, nil, txn.op, "db", "copy", nil)
 	require.False(t, handled, "other engines retain their ordinary Create path")
 	require.NoError(t, err)
+	var nilDB *txnDatabase
+	handled, err = TryCreatePrivateAlterCopy(ctx, nilDB, txn.op, "db", "copy", nil)
+	require.True(t, handled)
+	require.Error(t, err)
 }
 
 func TestPrivateInventoryFenceCommitAndRollback(t *testing.T) {
