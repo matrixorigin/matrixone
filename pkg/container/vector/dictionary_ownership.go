@@ -325,3 +325,28 @@ func (v *Vector) retireDictionaryWorkspaceOrigin() {
 		lease.origin.CompareAndSwap(v, nil)
 	}
 }
+
+// FreezeBorrowedBuffer snapshots scoped decoder metadata while retaining its
+// immutable external byte owner. Source bytes must be covered by lease; no
+// writable legacy alias or temporary decoder header escapes this operation.
+func FreezeBorrowedBuffer(source *Vector, lease BufferLease, mp *mpool.MPool, account *AllocationAccountSelection) (*DictionaryBase, bool, error) {
+	if source == nil || source.IsDictionary() || lease == nil || source.HasBorrowedBacking() || (source.DataBackingKind() != LegacyAlias && cap(source.data) > 0) || (source.AreaBackingKind() != LegacyAlias && cap(source.area) > 0) {
+		return nil, false, nil
+	}
+	temporary := *source
+	temporary.dataLease = nil
+	temporary.areaLease = nil
+	if !lease.Retain() {
+		return nil, false, moerr.NewInvalidInputNoCtx("immutable decoder lease is closed")
+	}
+	temporary.dataLease = lease
+	temporary.cantFreeData = true
+	defer temporary.releaseBorrowedData()
+	if !lease.Retain() {
+		return nil, false, moerr.NewInvalidInputNoCtx("immutable decoder lease is closed")
+	}
+	temporary.areaLease = lease
+	temporary.cantFreeArea = true
+	defer temporary.releaseBorrowedArea()
+	return TryFreezeVector(&temporary, mp, account)
+}

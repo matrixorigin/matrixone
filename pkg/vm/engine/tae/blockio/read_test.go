@@ -860,6 +860,42 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 
 	}
 
+	t.Run("immutable-cache-input-before-selection", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 20)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.Zero(t, account.Snapshot().Used)
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+		allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+		require.NoError(t, err)
+		out := batch.NewOffHeapWithSize(2)
+		require.NoError(t, out.SetAllocationAccount(allocation))
+		t.Cleanup(func() { out.Clean(queryMP); cacheVectors.Free(queryMP) })
+		for i := range colTypes {
+			out.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(colTypes[i], allocation)
+			require.NoError(t, err)
+		}
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			t.Fatal("selected reader must not rerun Apply")
+			return engine.ReaderFilterResult{}, nil
+		}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, 8, b.RowCount())
+			require.True(t, b.Vecs[1].IsDictionary(), "sealed cached varlen input must reach the predicate without an owned payload copy")
+			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
+		}}
+		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "retained-cache-read", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
+		require.NoError(t, err)
+		require.Equal(t, 3, out.RowCount())
+		for i, want := range []int32{1, 3, 5} {
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](out.Vecs[0], i))
+			require.Equal(t, []byte("payload-"+string(rune('0'+want))), out.Vecs[1].GetBytesAt(i))
+		}
+	})
+
 	t.Run("exact selection observes tombstones and owns output", func(t *testing.T) {
 		intType := colTypes[0]
 		target := batch.NewWithSize(1)

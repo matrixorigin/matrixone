@@ -157,7 +157,7 @@ func LoadColumnsDataInto(
 	policy fileservice.Policy,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	return loadColumnsDataInto(ctx, columns, typs, fs, location, destinations,
-		sels, visibilityTS, m, policy, false)
+		sels, visibilityTS, m, policy, false, false)
 }
 
 // LoadColumnsDataIntoReadonly materializes complete, non-appendable columns
@@ -175,8 +175,15 @@ func LoadColumnsDataIntoReadonly(
 	policy fileservice.Policy,
 ) (fromCache bool, err error) {
 	_, fromCache, err = loadColumnsDataInto(ctx, columns, typs, fs, location,
-		destinations, nil, nil, m, policy, true)
+		destinations, nil, nil, m, policy, true, false)
 	return
+}
+
+// LoadColumnsDataIntoDictionary borrows only entries with ObjectIO's immutable
+// validation capability; every other shape uses ordinary owned materialization.
+func LoadColumnsDataIntoDictionary(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy) (bool, error) {
+	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, true)
+	return hit, err
 }
 
 func loadColumnsDataInto(
@@ -191,6 +198,7 @@ func loadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	readonlyArea bool,
+	dictionaryColumns bool,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
 		err = moerr.NewInvalidInputNoCtxf(
@@ -295,8 +303,24 @@ func loadColumnsDataInto(
 		}
 	}
 
+	var identity *vector.RowSelection
+	defer func() {
+		if identity != nil {
+			identity.Release()
+		}
+	}()
 	for i := range columns {
-		if readonlyArea {
+		if dictionaryColumns {
+			var borrowed bool
+			borrowed, err = objectio.TryBorrowCachedDictionary(destinations[i], ioVectors.Entries[i].CachedData, &identity, m)
+			if err != nil {
+				return
+			}
+			if borrowed {
+				continue
+			}
+			err = objectio.CopyCachedVectorAll(destinations[i], ioVectors.Entries[i].CachedData, m)
+		} else if readonlyArea {
 			err = objectio.CopyCachedVectorAllReadonly(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,

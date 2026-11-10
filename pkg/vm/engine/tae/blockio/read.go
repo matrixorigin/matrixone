@@ -1089,20 +1089,33 @@ func blockDataReadWithFilter(
 		if info.IsAppendable() {
 			visibilityTS = &ts
 		}
-		if deleteMask, err = materializeBlockColumnsAtPositions(
-			ctx,
-			info,
-			columns,
-			colTypes,
-			phyAddrColumnPos,
-			earlyColumns,
-			nil,
-			visibilityTS,
-			policy,
-			outputBat,
-			mp,
-			fs,
-		); err != nil {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil {
+			idxes := make([]uint16, len(earlyColumns))
+			typs := make([]types.Type, len(earlyColumns))
+			dest := make([]*vector.Vector, len(earlyColumns))
+			for i, pos := range earlyColumns {
+				idxes[i] = columns[pos]
+				typs[i] = colTypes[pos]
+				dest[i] = outputBat.Vecs[pos]
+			}
+			_, err = ioutil.LoadColumnsDataIntoDictionary(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy)
+		} else {
+			deleteMask, err = materializeBlockColumnsAtPositions(
+				ctx,
+				info,
+				columns,
+				colTypes,
+				phyAddrColumnPos,
+				earlyColumns,
+				nil,
+				visibilityTS,
+				policy,
+				outputBat,
+				mp,
+				fs,
+			)
+		}
+		if err != nil {
 			tombstones.Release()
 			return err
 		}

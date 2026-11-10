@@ -293,3 +293,27 @@ logical payload lengths so allocator padding never becomes an extra value.
 Varlen and unrecognized widths keep the previous path. No arithmetic, SQL type,
 cache, queue or ownership changes are introduced. Validate all supported widths,
 NULL/flags/offset cases, endpoint bypass and cancellation before the all22 gate.
+
+## Approved retained cache-source boundary
+
+The requester approved continuing with immutable cache-backed column views and
+owned workspace fallback. Only ObjectIO's private validated immutable marker may
+enter the initial borrow path; fixed/unmarked/version-ineligible entries keep
+owned materialization. Keep reusable owned destination capacity instead of
+replacing it to borrow. Borrow only full non-appendable columns before selection,
+with no tombstones, row-id request, visibility filtering or Top-K. Other cases
+preserve the existing reader path. No cache policy/tier or serialization change.
+
+ObjectIO keeps the decoder header scoped, retains the cache data owner and
+creates an immutable DictionaryBase with full physical pin admission. Only a
+dictionary header escapes. The source's logical metadata is private; one
+identity mapping is shared across borrowed columns in that load. Cache-owner and
+pin references survive IOVector release and end at the final view. Unconverted
+consumers use existing owned normalization/COW. Optional pin/map refusal declines
+to owned copy while the same IOVector is still pinned, without another read.
+
+Deterministic proof covers cache-payload address identity, no public Bytes clone,
+last-view lifetime, COW cache isolation, pin-pressure refusal and an actual
+no-tombstone reader callback receiving a dictionary before predicate evaluation.
+Existing tombstone/late/visibility/Top-K cases remain fallback controls. Requalify
+all22 locally and present any new regression before changing product code again.

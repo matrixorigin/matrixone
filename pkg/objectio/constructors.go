@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/bits"
@@ -137,7 +138,9 @@ func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {
 
 // validatedVectorBackingForScope may only be consumed synchronously by an
 // ObjectIO operation that returns owned data or scalar/row-offset results. The
-// returned slice, and any Vector bound to it, must never escape to a caller.
+// returned slice, and any plain Vector bound to it, must never escape. The
+// retained dictionary API below may publish immutable logical reads only after
+// acquiring the cache owner and admitting its full physical pin.
 func (d *validatedVectorCacheData) validatedVectorBackingForScope() []byte {
 	return d.data.Bytes()
 }
@@ -1019,4 +1022,71 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
 	return ObjectMeta(buffer)
+}
+
+// TryBorrowCachedDictionary is opt-in for privately validated immutable cache
+// entries and empty destinations. Ordinary/unmarked or already-owned columns
+// retain the existing copy path. Only a dictionary header crosses this boundary.
+func TryBorrowCachedDictionary(dst *vector.Vector, data fscache.Data, identity **vector.RowSelection, mp *mpool.MPool) (bool, error) {
+	marked, ok := data.(validatedVectorCacheDataMarker)
+	if !ok || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 {
+		return false, nil
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return false, err
+	}
+	defer source.Free(nil)
+	if source.GetType().Oid != dst.GetType().Oid {
+		return false, moerr.NewInvalidInputNoCtx("cached dictionary column type mismatch")
+	}
+	source.SetType(*dst.GetType())
+	data.Retain()
+	lease, err := vector.NewRefCountedBufferLease(marked.validatedVectorBackingForScope(), data.Capacity(), data.Release)
+	if err != nil {
+		data.Release()
+		return false, err
+	}
+	defer lease.Release()
+	base, admitted, err := vector.FreezeBorrowedBuffer(&source, lease, mp, dst.AllocationAccountSelection())
+	if err != nil || !admitted {
+		return false, err
+	}
+	defer base.Release()
+	rows := *identity
+	fresh := rows == nil
+	if fresh {
+		indices := vector.GetSels()[:0]
+		defer func() { vector.PutSels(indices) }()
+		for row := 0; row < source.Length(); row++ {
+			indices = append(indices, int64(row))
+		}
+		rows, err = vector.NewRowSelection(indices, source.Length(), mp, dst.AllocationAccountSelection())
+		if err != nil {
+			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+				return false, nil
+			}
+			return false, err
+		}
+		defer func() {
+			if fresh {
+				rows.Release()
+			}
+		}()
+	} else if rows.Length() != source.Length() {
+		return false, moerr.NewInvalidInputNoCtx("cached dictionary row count mismatch")
+	}
+	result, err := vector.NewDictionaryVector(base, rows, mp, dst.AllocationAccountSelection())
+	if err != nil {
+		if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			return false, nil
+		}
+		return false, err
+	}
+	if fresh {
+		*identity = rows
+		fresh = false
+	}
+	*dst = *result
+	return true, nil
 }

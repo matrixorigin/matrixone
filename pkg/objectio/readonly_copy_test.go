@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -146,4 +147,90 @@ func TestCopyCachedVectorAllReadonlySmallControls(t *testing.T) {
 			}
 		})
 	}
+}
+
+type retainedDictionaryCacheProbe struct {
+	*validatedVectorBytesProbe
+	refs     atomic.Int32
+	released atomic.Int32
+}
+
+func (d *retainedDictionaryCacheProbe) Retain() { d.refs.Add(1) }
+func (d *retainedDictionaryCacheProbe) Release() {
+	if d.refs.Add(-1) == 0 {
+		d.released.Add(1)
+	}
+}
+
+func TestRetainedCachedDictionaryLifetimeAndCow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	long := bytes.Repeat([]byte{'x'}, 64)
+	require.NoError(t, vector.AppendBytes(source, long, false, mp))
+	require.NoError(t, vector.AppendBytes(source, []byte("small"), false, mp))
+	encoded := marshalLegacyTestColumn(t, source)
+	data, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+	t.Cleanup(data.Release)
+	probe := &retainedDictionaryCacheProbe{validatedVectorBytesProbe: &validatedVectorBytesProbe{backing: data.(validatedVectorCacheDataMarker).validatedVectorBackingForScope()}}
+	probe.refs.Store(1)
+	destination := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() { destination.Free(mp) })
+	var identity *vector.RowSelection
+	t.Cleanup(func() {
+		if identity != nil {
+			identity.Release()
+		}
+	})
+	admitted, err := TryBorrowCachedDictionary(destination, probe, &identity, mp)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.True(t, destination.IsDictionary())
+	require.Zero(t, probe.bytesCalls.Load())
+	visible := destination.GetBytesAt(0)
+	position := bytes.Index(probe.backing, long)
+	require.GreaterOrEqual(t, position, 0)
+	require.Same(t, &probe.backing[position], &visible[0], "payload must remain cache-backed")
+	probe.Release()
+	require.Zero(t, probe.released.Load())
+	require.Equal(t, long, destination.GetBytesAt(0))
+	before := bytes.Clone(probe.backing)
+	require.NoError(t, destination.EnsureWritable(mp))
+	require.NoError(t, vector.SetBytesAt(destination, 0, []byte("changed"), mp))
+	require.Equal(t, before, probe.backing)
+	require.Equal(t, int32(1), probe.released.Load())
+}
+
+func TestRetainedCachedDictionaryPinRefusal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, vector.AppendBytes(source, bytes.Repeat([]byte{'p'}, 128), false, mp))
+	data, err := validateVectorCacheData(fileservice.NewBytes(marshalLegacyTestColumn(t, source)))
+	require.NoError(t, err)
+	t.Cleanup(data.Release)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(16)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2, 3, 4)
+	require.NoError(t, err)
+	destination, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), allocation)
+	require.NoError(t, err)
+	t.Cleanup(func() { destination.Free(mp) })
+	var identity *vector.RowSelection
+	admitted, err := TryBorrowCachedDictionary(destination, data, &identity, mp)
+	require.NoError(t, err)
+	require.False(t, admitted)
+	require.Nil(t, identity)
+	require.Zero(t, destination.Length())
+	require.False(t, destination.IsDictionary())
 }
