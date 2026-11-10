@@ -17,6 +17,7 @@ package colexec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -271,6 +272,15 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 	}
 
 	return w.blockInfoBat, nil
+}
+
+// Discard removes untransferred outputs before closing an aborted writer.
+func (w *CNS3Writer) Discard(ctx context.Context) error {
+	var err error
+	if w.sinker != nil {
+		err = w.sinker.CleanupPersisted(ctx)
+	}
+	return errors.Join(err, w.Close())
 }
 
 func (w *CNS3Writer) Close() (err error) {

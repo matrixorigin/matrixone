@@ -15,7 +15,10 @@
 package publication
 
 import (
+	"bytes"
 	"context"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +44,12 @@ func (w *rejectingChunkSubmission) SubmitGetChunk(j Job) error {
 }
 
 func TestFetchRetiresAcceptedJobsBeforeRefund(t *testing.T) {
-	for _, mode := range []string{"chunk_failure", "caller_cancel", "worker_stop", "submit_rejection"} {
+	original := GetObjectFromUpstreamWithWorker
+	t.Cleanup(func() { GetObjectFromUpstreamWithWorker = original })
+	GetObjectFromUpstreamWithWorker = func(ctx context.Context, e SQLExecutor, name string, w GetChunkWorker, acc, pub string) ([]byte, error) {
+		return fetchObjectChunks(ctx, e, name, w, acc, pub, 1<<20)
+	}
+	for _, mode := range []string{"chunk_failure", "caller_cancel", "worker_stop", "submit_rejection", "refill_rejection"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			entered, canceled, retire := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -53,38 +61,31 @@ func TestFetchRetiresAcceptedJobsBeforeRefund(t *testing.T) {
 			const total = int64(8 << 30)
 			owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total), rscthrottler.WithMemorySampleForTesting(total, 0)).(rscthrottler.WorkingSetThrottler)
 			ctx = context.WithValue(ctx, publicationMemoryKey{}, owner)
-			executor := &mockSQLExecutorForJob{execFn: func(ctx context.Context, _ *ActiveRoutine, _ uint32, query string, _, _ bool, _ time.Duration) (*Result, context.CancelFunc, error) {
-				if query == PublicationSQLBuilder.GetObjectSQL("acc", "pub", "obj", 0) {
-					return newMockResult(&mockScanner{
-						nextFn: func() bool { return true },
-						scanFn: func(dest ...interface{}) error {
-							*dest[0].(*[]byte) = nil
-							*dest[1].(*int64) = 2 << 20
-							*dest[2].(*int64) = 0
-							*dest[3].(*int64) = 2
-							*dest[4].(*bool) = false
-							return nil
-						},
-						closeFn: func() error { return nil }, errFn: func() error { return nil },
-					}), noopCancel, nil
+			count := int64(2)
+			if mode == "refill_rejection" {
+				count = int64(min(GetGetChunkWorkerThread(), cap(getOrCreateChunkSemaphore())) + 1)
+			}
+			executor := fetchTestExecutor(count<<20, count, func(ctx context.Context, index int64) ([]byte, error) {
+				first := index == 1
+				if mode == "refill_rejection" && !first {
+					return bytes.Repeat([]byte{'x'}, 1<<20), nil
 				}
-				first := query == PublicationSQLBuilder.GetObjectSQL("acc", "pub", "obj", 1)
-				if mode == "submit_rejection" || !first {
+				if mode == "submit_rejection" || mode == "refill_rejection" || !first {
 					close(entered)
 					<-ctx.Done()
 					close(canceled)
 					<-retire // An executor's cleanup can finish after cancellation arrives.
-					return nil, nil, ctx.Err()
+					return nil, ctx.Err()
 				}
 				<-entered
 				if mode != "chunk_failure" {
 					<-ctx.Done()
-					return nil, nil, ctx.Err()
+					return nil, ctx.Err()
 				}
-				return nil, nil, moerr.NewInternalErrorNoCtx("permission denied")
-			}}
+				return nil, moerr.NewInternalErrorNoCtx("permission denied")
+			})
 			submitted := &rejectingChunkSubmission{GetChunkWorker: worker, before: func(j Job) error {
-				if chunk, ok := j.(*GetChunkJob); ok && chunk.chunkIndex == 2 && mode == "submit_rejection" {
+				if chunk, ok := j.(*GetChunkJob); ok && (chunk.chunkIndex == 2 && mode == "submit_rejection" || chunk.chunkIndex == count && mode == "refill_rejection") {
 					<-entered
 					return moerr.NewInternalErrorNoCtx("submission rejected")
 				}
@@ -92,13 +93,7 @@ func TestFetchRetiresAcceptedJobsBeforeRefund(t *testing.T) {
 			}}
 			id := objectio.NewObjectid()
 			stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
-			// Match the executor's query name while retaining an actual fetch admission.
-			name := stats.ObjectName().String()
-			original := executor.execFn
-			executor.execFn = func(ctx context.Context, ar *ActiveRoutine, account uint32, query string, txn, retry bool, limit time.Duration) (*Result, context.CancelFunc, error) {
-				return original(ctx, ar, account, strings.ReplaceAll(query, name, "obj"), txn, retry, limit)
-			}
-			require.NoError(t, objectio.SetObjectStatsSize(stats, 2<<20))
+			require.NoError(t, objectio.SetObjectStatsSize(stats, uint32(count<<20)))
 			var result *FilterObjectJobResult
 			go func() {
 				defer close(finished)
@@ -222,7 +217,7 @@ func TestChunkWorkerStopDrainsQueueAndBlockedSubmission(t *testing.T) {
 }
 
 func TestObjectReplyClosesAllQueryResources(t *testing.T) {
-	for _, phase := range []string{"execute_error", "scan_error", "success"} {
+	for _, phase := range []string{"execute_error", "scan_error", "close_error", "success"} {
 		t.Run(phase, func(t *testing.T) {
 			canceled := false
 			closed := 0
@@ -237,8 +232,11 @@ func TestObjectReplyClosesAllQueryResources(t *testing.T) {
 				*dest[4].(*bool) = true
 				return nil
 			}, closeFn: func() error {
-				require.True(t, canceled, "cancel network work before closing its reader")
+				require.Equal(t, phase != "success" && phase != "close_error", canceled)
 				closed++
+				if phase == "close_error" {
+					return moerr.NewInternalErrorNoCtx("close failed")
+				}
 				return nil
 			}, errFn: func() error { return nil }}
 			executor := &mockSQLExecutorForJob{execFn: func(context.Context, *ActiveRoutine, uint32, string, bool, bool, time.Duration) (*Result, context.CancelFunc, error) {
@@ -263,34 +261,130 @@ func TestObjectReplyClosesAllQueryResources(t *testing.T) {
 	}
 }
 
-func TestGetObjectChunkWindowsPreserveOrder(t *testing.T) {
-	worker := NewGetChunkWorker()
-	defer worker.Stop()
-	count := int64(GetGetChunkWorkerThread() + 1)
-	executor := &mockSQLExecutorForJob{execFn: func(_ context.Context, _ *ActiveRoutine, _ uint32, query string, _, _ bool, _ time.Duration) (*Result, context.CancelFunc, error) {
-		var index int64
-		for ; index <= count; index++ {
-			if query == PublicationSQLBuilder.GetObjectSQL("acc", "pub", "obj", index) {
-				break
+// The real jobs, query cleanup and worker run with small protocol geometry.
+func fetchTestExecutor(size, count int64, data func(context.Context, int64) ([]byte, error)) *mockSQLExecutorForJob {
+	return &mockSQLExecutorForJob{execFn: func(ctx context.Context, _ *ActiveRoutine, _ uint32, query string, _, _ bool, _ time.Duration) (*Result, context.CancelFunc, error) {
+		index, err := strconv.ParseInt(query[strings.LastIndexByte(query, ' ')+1:], 10, 64)
+		if err != nil {
+			return nil, nil, err
+		}
+		var payload []byte
+		if index != 0 {
+			payload, err = data(ctx, index)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
-		require.LessOrEqual(t, index, count)
 		return newMockResult(&mockScanner{nextFn: func() bool { return true }, scanFn: func(dest ...interface{}) error {
-			if index != 0 {
-				*dest[0].(*[]byte) = []byte{byte(index)}
-			}
-			*dest[1].(*int64) = count
+			*dest[0].(*[]byte) = payload
+			*dest[1].(*int64) = size
 			*dest[2].(*int64) = index
 			*dest[3].(*int64) = count
 			*dest[4].(*bool) = index == count
 			return nil
 		}, closeFn: func() error { return nil }, errFn: func() error { return nil }}), noopCancel, nil
 	}}
-	data, err := GetObjectFromUpstreamWithWorker(context.Background(), executor, "obj", worker, "acc", "pub")
+}
+
+func TestFetchChunkOrderAndProgress(t *testing.T) {
+	worker := NewGetChunkWorker()
+	t.Cleanup(worker.Stop)
+	limit := min(GetGetChunkWorkerThread(), cap(getOrCreateChunkSemaphore()))
+	count, width := int64(limit+1), int64(3)
+	size := count*width - 1
+	first, next := make(chan struct{}), make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	ctx, cancel := context.WithCancel(fetchTestContext(t, size))
+	t.Cleanup(func() { cancel(); unblock() })
+	executor := fetchTestExecutor(size, count, func(ctx context.Context, index int64) ([]byte, error) {
+		if index == 1 {
+			close(first)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		if index == count {
+			close(next)
+		}
+		n := min(width, size-(index-1)*width)
+		return bytes.Repeat([]byte{byte(index)}, int(n)), nil
+	})
+	var data []byte
+	var err error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		data, err = fetchObjectChunks(ctx, executor, "obj", worker, "acc", "pub", width)
+	}()
+	t.Cleanup(func() { cancel(); unblock(); <-finished })
+	for _, phase := range []<-chan struct{}{first, next} {
+		select {
+		case <-phase:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a slow first chunk prevented later work from starting")
+		}
+	}
+	unblock()
+	<-finished
 	require.NoError(t, err)
-	require.Len(t, data, int(count))
+	require.Len(t, data, int(size))
+	require.Equal(t, len(data), cap(data), "one final buffer")
 	for i, value := range data {
-		require.Equal(t, byte(i+1), value)
+		require.Equal(t, byte(int64(i)/width+1), value)
+	}
+}
+
+func TestFetchChunkGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		size, width, count int64
+		valid              bool
+	}{{0, 3, 1, true}, {1, 3, 1, true}, {3, 3, 1, true}, {4, 3, 2, true},
+		{math.MaxUint32, math.MaxUint32, 1, true}, {math.MaxUint32, math.MaxInt64, 1, true},
+		{-1, 3, 0, false}, {math.MaxUint32 + 1, 3, 0, false}, {math.MaxInt64, 3, 0, false}, {1, 0, 0, false}} {
+		count, err := objectChunkCount(tc.size, tc.width)
+		if tc.valid {
+			require.NoError(t, err)
+			require.Equal(t, tc.count, count)
+		} else {
+			require.Error(t, err)
+		}
+	}
+	for _, mode := range []string{"empty", "short", "long", "bad_count", "bad_size", "sync"} {
+		t.Run(mode, func(t *testing.T) {
+			size, count := int64(5), int64(2)
+			switch mode {
+			case "empty":
+				size, count = 0, 1
+			case "bad_count":
+				count = 3
+			case "bad_size":
+				size = math.MaxUint32 + 1
+			}
+			executor := fetchTestExecutor(size, count, func(_ context.Context, index int64) ([]byte, error) {
+				require.NotEqual(t, "bad_count", mode, "reject metadata before submitting data")
+				require.NotEqual(t, "bad_size", mode, "reject metadata before allocating")
+				n := min(int64(3), size-(index-1)*3)
+				if mode == "short" {
+					n--
+				}
+				if mode == "long" {
+					n++
+				}
+				return bytes.Repeat([]byte{byte(index)}, int(n)), nil
+			})
+			data, err := fetchObjectChunks(fetchTestContext(t, 5), executor, "obj", nil, "acc", "pub", 3)
+			if mode == "empty" || mode == "sync" {
+				require.NoError(t, err)
+				require.Len(t, data, int(size))
+			} else {
+				require.Error(t, err)
+				require.Nil(t, data)
+			}
+		})
 	}
 }
 
@@ -304,4 +398,57 @@ func TestNonAppendableWriteSubmissionFailureTerminates(t *testing.T) {
 	writer.closed.Store(true)
 	_, err := filterNonAppendableObject(context.Background(), new(objectio.ObjectStats), types.TS{}, nil, nil, false, nil, nil, writer, "acc", "pub", nil, nil, nil, nil)
 	require.ErrorContains(t, err, "closed")
+}
+
+func TestFetchSizeUsesExistingAdmission(t *testing.T) {
+	const total = int64(64 << 20)
+	ctx := context.Background()
+	owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total), rscthrottler.WithMemorySampleForTesting(total, 0)).(rscthrottler.WorkingSetThrottler)
+	ws, err := owner.ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: 2 << 20}}}})
+	require.NoError(t, err)
+	t.Cleanup(ws.Close)
+	lease, err := ws.AcquireInput(ctx, 0)
+	require.NoError(t, err)
+	t.Cleanup(lease.Release)
+	other, ok, err := owner.TryReserveWorkingSet(ctx, rscthrottler.WorkingSetSpec{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: owner.WorkingSetHeadroom().Available - 1024}}})
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(other.Close)
+	ctx = context.WithValue(ctx, publicationFetchMemoryKey{}, lease)
+	fetches := 0
+	executor := fetchTestExecutor(1<<20, 1, func(context.Context, int64) ([]byte, error) {
+		fetches++
+		return bytes.Repeat([]byte{'x'}, 1<<20), nil
+	})
+	data, err := fetchObjectChunks(ctx, executor, "obj", nil, "acc", "pub", 1<<20)
+	var growth *objectMemoryGrowth
+	require.ErrorAs(t, err, &growth)
+	require.Nil(t, data)
+	require.Zero(t, fetches, "grow before allocating/fetching the source")
+	require.Equal(t, int64(2<<20), lease.Capacity())
+	other.Close()
+	data, err = fetchObjectChunks(ctx, executor, "obj", nil, "acc", "pub", 1<<20)
+	require.NoError(t, err)
+	require.Len(t, data, 1<<20)
+	require.Greater(t, lease.Capacity(), int64(2<<20))
+	require.Equal(t, 1, fetches)
+	lease.Release()
+	ws.Close()
+	require.Equal(t, total, owner.WorkingSetHeadroom().Available)
+}
+
+func BenchmarkFetchObjectChunks(b *testing.B) {
+	const width, count = int64(1 << 20), int64(10)
+	payload := bytes.Repeat([]byte{'x'}, int(width))
+	executor := fetchTestExecutor(width*count, count, func(context.Context, int64) ([]byte, error) { return payload, nil })
+	ctx := fetchTestContext(b, width*count)
+	b.ReportAllocs()
+	b.SetBytes(width * count)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		data, err := fetchObjectChunks(ctx, executor, "obj", nil, "acc", "pub", width)
+		if err != nil || len(data) != int(width*count) {
+			b.Fatalf("fetch: bytes=%d err=%v", len(data), err)
+		}
+	}
 }

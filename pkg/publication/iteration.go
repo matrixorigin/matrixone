@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,12 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -1130,11 +1131,6 @@ func ExecuteIteration(
 	syncProtectionRetryOpt *SyncProtectionRetryOption,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
-	if rt := runtime.ServiceRuntime(cnUUID); rt != nil {
-		if memory, ok := rt.GetGlobalVariables(runtime.CNMemoryThrottler); ok {
-			ctx = context.WithValue(ctx, publicationMemoryKey{}, memory)
-		}
-	}
 	startTime := time.Now()
 	v2.CCPRIterationStartedCounter.Inc()
 	v2.CCPRRunningIterationsGauge.Inc()
@@ -1517,8 +1513,10 @@ func ExecuteIteration(
 		}
 	}
 
+	applyCtx, stopProtection := withSyncProtection(ctx, syncProtectionWorker, syncProtectionJobID)
+	defer stopProtection()
 	err = ApplyObjects(
-		ctx,
+		applyCtx,
 		iterationCtx.TaskID,
 		iterationCtx.SrcInfo.AccountID,
 		iterationCtx.IndexTableMappings,
@@ -1539,8 +1537,11 @@ func ExecuteIteration(
 		iterationCtx.AObjectMap,
 		ttlChecker,
 	)
+	if cause := context.Cause(applyCtx); cause != nil {
+		err = errors.Join(err, cause)
+	}
 	if err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)
+		err = errutil.Wrap(err, "failed to apply object list")
 		return
 	}
 

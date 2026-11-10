@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -501,7 +500,7 @@ func TestControlledInsertMetadataSpoolsUnderPressure(t *testing.T) {
 			t.Cleanup(ws.Close)
 			lease, err := ws.AcquireInput(proc.Ctx, 0)
 			require.NoError(t, err)
-			s := &controlledS3{unit: 4 << 20, outputSlot: lease, outputMP: mpool.MustNewZero()}
+			s := &controlledS3{proc: proc, unit: 4 << 20, outputSlot: lease, outputMP: mpool.MustNewZero()}
 			t.Cleanup(func() { require.NoError(t, s.close()) })
 			other, ok, err := owner.TryReserveWorkingSet(proc.Ctx, rscthrottler.WorkingSetSpec{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: owner.WorkingSetHeadroom().Available - 1024}}})
 			require.NoError(t, err)
@@ -519,8 +518,11 @@ func TestControlledInsertMetadataSpoolsUnderPressure(t *testing.T) {
 				require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], 8))
 				require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[i], 8*objectio.BlockMaxRows))
 			}
+			if mode == "eof" {
+				t.Setenv("TMPDIR", t.TempDir()+"/missing") // Spooling must use configured LOCAL storage.
+			}
 			if mode == "create_error" {
-				t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+				proc.Base.FileService = nil
 				require.Error(t, s.collectStats(proc.Ctx, stats))
 				require.Nil(t, s.statsSpool)
 				pool := s.outputMP

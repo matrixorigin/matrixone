@@ -16,7 +16,6 @@ package publication
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 // Job types
@@ -96,18 +96,26 @@ func NewGetMetaJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName
 
 // readObjectReply owns both query resources through every scan/error/retry
 // exit. No job completion can expose a still-live result or timeout owner.
-func readObjectReply(ctx context.Context, executor SQLExecutor, query, objectName string, index int64, timeout time.Duration, metadata bool) (*GetMetaJobResult, error) {
+func readObjectReply(ctx context.Context, executor SQLExecutor, query, objectName string, index int64, timeout time.Duration, metadata bool) (reply *GetMetaJobResult, err error) {
 	result, cancel, err := executor.ExecSQL(ctx, nil, InvalidAccountID, query, false, true, timeout)
 	defer func() {
+		// Interrupt failed work before closing. A successful reader must finish
+		// normally first, so the MySQL driver can return its connection to the pool.
+		if err != nil && cancel != nil {
+			cancel()
+			cancel = nil
+		}
+		if result != nil {
+			if closeErr := result.Close(); err == nil {
+				err = closeErr
+			}
+		}
 		if cancel != nil {
 			cancel()
 		}
-		if result != nil {
-			result.Close()
-		}
 	}()
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute GETOBJECT query for offset %d: %w", index, err)
+		return nil, errutil.Wrapf(err, "failed to execute GETOBJECT query for offset %d", index)
 	}
 	if result == nil {
 		return nil, moerr.NewInternalErrorNoCtx("GETOBJECT returned no result")
@@ -115,9 +123,9 @@ func readObjectReply(ctx context.Context, executor SQLExecutor, query, objectNam
 	if !result.Next() {
 		if err := result.Err(); err != nil {
 			if metadata {
-				return nil, fmt.Errorf("failed to read metadata for %s: %w", objectName, err)
+				return nil, errutil.Wrapf(err, "failed to read metadata for %s", objectName)
 			}
-			return nil, fmt.Errorf("failed to read chunk %d of %s: %w", index, objectName, err)
+			return nil, errutil.Wrapf(err, "failed to read chunk %d of %s", index, objectName)
 		}
 		if metadata {
 			return nil, moerr.NewInternalErrorf(ctx, "no object content returned for %s", objectName)
@@ -126,7 +134,7 @@ func readObjectReply(ctx context.Context, executor SQLExecutor, query, objectNam
 	}
 	res := new(GetMetaJobResult)
 	if err := result.Scan(&res.MetadataData, &res.TotalSize, &res.ChunkIndex, &res.TotalChunks, &res.IsComplete); err != nil {
-		return nil, fmt.Errorf("failed to scan offset %d: %w", index, err)
+		return nil, errutil.Wrapf(err, "failed to scan offset %d", index)
 	}
 	if metadata && res.TotalChunks <= 0 {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid total_chunks: %d", res.TotalChunks)
@@ -163,7 +171,7 @@ func (j *GetMetaJob) Execute() {
 			return
 		}
 	}
-	res.Err = fmt.Errorf("failed to get metadata for %s after %d retries: %w", j.objectName, maxRetries, lastErr)
+	res.Err = errutil.Wrapf(lastErr, "failed to get metadata for %s after %d retries", j.objectName, maxRetries)
 }
 
 // WaitDone waits for the job to complete and returns the result
@@ -244,7 +252,7 @@ func (j *GetChunkJob) Execute() {
 			return
 		}
 	}
-	res.Err = fmt.Errorf("failed to get chunk %d of %s after %d retries: %w", j.chunkIndex, j.objectName, maxRetries, lastErr)
+	res.Err = errutil.Wrapf(lastErr, "failed to get chunk %d of %s after %d retries", j.chunkIndex, j.objectName, maxRetries)
 }
 
 // WaitDone waits for the job to complete and returns the result
@@ -333,7 +341,7 @@ func (j *WriteObjectJob) Execute() {
 				},
 			})
 			if err != nil {
-				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
+				res.Err = errutil.Wrap(err, "failed to write object to fileservice")
 				j.result <- res
 				return
 			}
@@ -362,7 +370,7 @@ func (j *WriteObjectJob) Execute() {
 			if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 				// File already exists, this is ok
 			} else {
-				res.Err = moerr.NewInternalErrorf(j.ctx, "failed to write object to fileservice: %v", err)
+				res.Err = errutil.Wrap(err, "failed to write object to fileservice")
 				j.result <- res
 				return
 			}

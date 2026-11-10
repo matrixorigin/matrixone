@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -375,6 +374,8 @@ func TestLegacyDeleteMetadataStreamsAcrossWindows(t *testing.T) {
 	for i := range 128 {
 		require.NoError(t, w.readMetadataFrame(proc))
 		require.NotNil(t, w.outputBat)
+		require.Positive(t, w.frameGranted)
+		require.LessOrEqual(t, w.metadataPool().AllocatedBytes(), w.frameGranted)
 		func() {
 			decoded := batch.NewOffHeapEmpty()
 			defer decoded.Clean(proc.Mp())
@@ -471,8 +472,11 @@ func TestInsertMetadataSpoolsUnderIndependentPressure(t *testing.T) {
 				require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats[i], 8))
 				require.NoError(t, objectio.SetObjectStatsRowCnt(&stats[i], 8*objectio.BlockMaxRows))
 			}
+			if mode == "eof" {
+				t.Setenv("TMPDIR", t.TempDir()+"/missing") // Spooling must use configured LOCAL storage.
+			}
 			if mode == "create_error" {
-				t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+				proc.Base.FileService = nil
 				require.Error(t, w.collectInsertStats(proc, 0, stats))
 				require.Nil(t, w.metadataSpool)
 				pool := w.metadataPool()
@@ -545,6 +549,69 @@ func TestInsertMetadataSpoolsUnderIndependentPressure(t *testing.T) {
 			ws.Close()
 			other.Close()
 			require.Equal(t, total, owner.WorkingSetHeadroom().Available)
+		})
+	}
+}
+
+func TestLegacyFrameWaitsForIndependentRelease(t *testing.T) {
+	for _, mode := range []string{"release", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			proc, w := metadataProtocolWriter(t, []*MultiUpdateCtx{{TableDef: &plan.TableDef{TblId: 99}, DeleteCols: []int{0, 1}}}, false)
+			ctx, cancel := context.WithTimeout(proc.Ctx, 10*time.Second)
+			t.Cleanup(cancel)
+			proc.Ctx = ctx
+			const total = int64(1 << 20)
+			owner := rscthrottler.NewMemThrottler(t.Name(), 1, rscthrottler.WithConstLimit(total), rscthrottler.WithMemorySampleForTesting(16<<20, 0))
+			observed := &observedWaitThrottler{RSCThrottler: owner, ContextThrottler: owner.(rscthrottler.ContextThrottler), entered: make(chan struct{})}
+			w.memController.throttler = observed
+			source := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_int64.ToType()})
+			t.Cleanup(func() { source.Clean(proc.Mp()) })
+			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(7), false, proc.Mp()))
+			source.SetRowCount(1)
+			require.NoError(t, w.appendMetadata(proc, actionDelete, 0, 1, "", source))
+			held := total
+			_, ok := owner.Acquire(held)
+			require.True(t, ok)
+			t.Cleanup(func() { owner.Release(held) })
+			done := make(chan struct{})
+			var result error
+			go func() { defer close(done); result = w.readMetadataFrame(proc) }()
+			t.Cleanup(func() { cancel(); <-done })
+			select {
+			case <-observed.entered:
+			case <-done:
+				t.Fatalf("frame admission did not wait: %v", result)
+			case <-ctx.Done():
+				t.Fatal(context.Cause(ctx))
+			}
+			if mode == "release" {
+				owner.Release(held)
+				held = 0
+			} else {
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				if mode != "cancel" {
+					t.Fatal(context.Cause(ctx))
+				}
+				<-done
+			}
+			if mode == "cancel" {
+				require.ErrorIs(t, result, context.Canceled)
+			} else {
+				require.NoError(t, result)
+				require.NotNil(t, w.outputBat)
+				require.Positive(t, w.frameGranted)
+				require.LessOrEqual(t, w.metadataPool().AllocatedBytes(), w.frameGranted)
+				require.NoError(t, w.readMetadataFrame(proc))
+				require.Nil(t, w.outputBat)
+			}
+			require.NoError(t, w.free(proc))
+			owner.Release(held)
+			held = 0
+			require.Equal(t, total, owner.Available())
 		})
 	}
 }

@@ -1482,6 +1482,32 @@ func (sinker *Sinker) StagedSize() int {
 	return sinker.staged.inMemorySize
 }
 
+// CleanupPersisted retires uploads and removes results of an aborted owner.
+// Use only before result handoff, and still Close to release the buffers.
+func (sinker *Sinker) CleanupPersisted(ctx context.Context) error {
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.cancel()
+		_ = sinker.drainPipeline()
+	}
+	var first error
+	remove := func(stats []objectio.ObjectStats) {
+		for _, stat := range stats {
+			if err := sinker.fs.Delete(ctx, stat.ObjectName().String()); first == nil {
+				first = err
+			}
+		}
+	}
+	remove(sinker.result.persisted)
+	remove(sinker.staged.persisted)
+	if sinker.pipe.result != nil {
+		remove(sinker.pipe.result.persisted)
+		sinker.pipe.result.persisted = nil
+	}
+	sinker.result.persisted = nil
+	sinker.staged.persisted = nil
+	return first
+}
+
 func (sinker *Sinker) Close() error {
 	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {

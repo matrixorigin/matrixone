@@ -203,6 +203,7 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				if !waiting {
 					require.NotNil(t, w.metadataSpool, "first flush stays available for replay while Build continues")
 				}
+				m.capacity = 1 << 30 // Replay owns one decoded frame after source D retires.
 				rows := map[uint64]uint64{}
 				for {
 					require.NoError(t, w.flushTailAndWriteToOutput(proc, tc.op.OpAnalyzer))

@@ -189,9 +189,28 @@ A single frame must still fit its admitted envelope.
 Legacy and delete-capable MultiUpdate preserve the existing per-frame temporary
 storage and delete-before-insert replay. Retire each encoded frame before the
 next window, so raw-key output need not fit in D for the whole statement.
-Temporary-volume capacity retains its existing deployment requirements. These
+Eval acquires only the current decoded frame from D after retiring the previous
+frame. It holds that claim until the consumer advances or cleanup destroys it.
+At partition Build EOF, finalize all legacy writers to their existing frame
+storage and retire their source/future D before replaying any partition. A later
+partition cannot be expected to release D while the current partition waits.
+Independent owners retain their cancellable release/wait behavior.
+EOF preflush keeps unhanded objects under the existing writer/metadata owner.
+Object-stat frames carry compact cleanup names in their private temporary-file
+trailer; raw-delete frames do not. Frame creation transfers ownership from
+block-info to the file, and complete replay transfers it to the existing
+transaction consumer. Failed replay cannot advance that watermark. Free/Reset
+remove unread objects without materializing raw-key payloads, using a bounded
+cleanup context independent of query cancellation, with one deadline shared by
+all partition writers. Partially successful uploads remain in their existing
+sinker until discarded or handed off. A fully drained
+writer skips the cleanup scan. This closes the added EOF preflush window; it
+does not introduce a second transaction-object registry or change persistence.
+Metadata files use the configured LOCAL spill service rather than OS TMPDIR.
+4.1 has no statement/CN spill-disk admission API; temporary-volume capacity
+retains its existing deployment requirements. These
 writers keep their existing cancellable D acquisition and release notifications;
-there is no new cumulative metadata claim or blanket rejection while output is
+there is no new cumulative D-memory claim or blanket rejection while output is
 pending. Reset/Free close the unlinked frame file, including partial writes and
 cancelled replay. Admitted imports open temporary storage only after capacity
 denial; the same temporary-volume requirements and IO-error behavior apply.
@@ -199,6 +218,41 @@ denial; the same temporary-volume requirements and IO-error behavior apply.
 Eval retires each metadata batch after it is fully consumed. Error, cancellation,
 Reset and Free destroy remaining vectors before releasing the output lease. Verify multiple objects,
 delete-before-insert order, growth denial, unchanged prior output and reuse.
+
+## Publication object buffers
+
+ApplyObjects resolves the existing CN coordinator from Engine.GetService at
+its common entry, so direct callers and ExecuteIteration share the same owner.
+Explicitly supplied owners remain effective; a missing owner still fails before
+source allocation. Service test fixtures install the same real coordinator.
+
+Every FilterObject attempt reserves its source-buffer peak through the CN memory
+coordinator before fetching data, for ordinary data, appendable and tombstone
+objects alike. The promise covers class-rounded final storage, returned chunks
+and driver decoding backing. Fixed-name tombstone rewriting keeps its stronger
+existing IO envelope. The object-format size ceiling is unchanged. Empty or
+initially unknown sizes start with a nonzero input slot and grow from GETOBJECT
+metadata before allocating the source buffer.
+
+The root attempt retains that owner through decoding/copying and the final
+fileservice write; returning from fetch does not return the credit. If the
+reported size needs more memory and nonblocking growth fails, retire every
+resource of that attempt before waiting for a larger reservation and refetching.
+Capacity denial alone takes this path; cancellation and closed owners propagate.
+Failed submission and cancellation join accepted jobs before root retirement.
+No workload threshold, extra queue or configuration is introduced.
+
+The protected Apply phase owns one expiration timer and cancellation context.
+The worker returns the authoritative TTL and its change notification under one
+lock. Registration updates, renewal replies and removal wake the observer, so
+earlier and later deadlines both rearm the timer without a lost notification.
+A reply from a removed registration cannot change a replacement generation.
+Expiry cancels queued admission and IO.
+This uses no polling or per-object timer. Parent cancellation and phase exit
+stop and join the observer, while existing job retirement retains live buffers
+until consumers exit. Preserve both the primary failure and protection cause.
+
+## Fixed-name tombstone rewrite
 
 Ordinary sorted writers retain their existing merge-buffer byte target. A
 byte-limited partial block ends its object, keeping every non-final object block
@@ -217,11 +271,15 @@ sinker before releasing its slot. A transient growth denial first destroys the
 attempt's vectors and releases its ticket, then re-enters cancellable admission
 with a strictly larger complete-job floor. No input is held while waiting, and
 statically impossible floors fail before another fetch. Source downloads own a
-child context and one window of chunk jobs bounded by existing worker/semaphore
-concurrency. Failure, submission rejection and worker stop cancel and retire
-all accepted jobs before refunding the fetch slot. Query cancellation/reader
-close and semaphore release precede completion publication. No persisted storage
-format or new tuning parameter is introduced.
+child context and a completion queue bounded by existing worker/semaphore
+concurrency. Validated GETOBJECT geometry sizes one final buffer, and each completed
+chunk is copied into its final range before another job fills that vacancy. Slow
+earlier chunks do not stop later work. The source lease grows from GETOBJECT metadata before the buffer is allocated. Failure,
+submission rejection and worker stop cancel and retire all accepted jobs before
+refunding the fetch slot. Query cleanup and semaphore release precede completion
+publication. Successful queries close rows before cancelling their timer so the
+MySQL connection remains reusable; failed queries cancel before closing. No
+persisted storage format or new tuning parameter is introduced.
 
 ## Build, spill and ordinary execution
 

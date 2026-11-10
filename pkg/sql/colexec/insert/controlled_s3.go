@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -41,6 +42,7 @@ import (
 // admitted domains. Build retains compact object stats in the output slot;
 // Eval expands the original MergeBlock protocol one object per Call.
 type controlledS3 struct {
+	proc        *process.Process
 	owner       *Insert
 	fs          fileservice.FileService
 	memory      *process.ImportMemory
@@ -125,7 +127,7 @@ func newControlledS3(proc *process.Process, owner *Insert, fs fileservice.FileSe
 	}
 	_, schema, _, _, _ := colexec.GetSequmsAttrsSortKeyIdxFromTableDef(owner.InsertCtx.TableDef)
 	bufferBytes := ioutil.WriterBufferBytes(memory.WorkingSet, rscthrottler.BatchBytes(throttler), [][]types.Type{schema})
-	return &controlledS3{owner: owner, fs: fs, memory: memory, throttler: throttler,
+	return &controlledS3{proc: proc, owner: owner, fs: fs, memory: memory, throttler: throttler,
 		unit: unit, bufferBytes: bufferBytes, outputSlot: lease, dataMP: mpool.MustNew("insert-data"), outputMP: mpool.MustNew("insert-output")}, nil
 }
 
@@ -415,12 +417,12 @@ func (s *controlledS3) writeStat(stats *objectio.ObjectStats) error {
 }
 
 func (s *controlledS3) spoolStats(ctx context.Context) error {
-	f, err := os.CreateTemp("", "mo-insert-*.spool")
+	fs, err := s.proc.GetSpillFileService()
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(f.Name()); err != nil {
-		f.Close()
+	f, err := fs.CreateAndRemoveFile(ctx, "import_metadata_"+uuid.NewString())
+	if err != nil {
 		return err
 	}
 	s.statsSpool = f
