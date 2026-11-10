@@ -37,8 +37,6 @@ type PrefetchParams struct {
 	fs  fileservice.FileService
 	key objectio.Location
 	typ PrefetchType
-	// object is the prefetch of the whole object, its Size 0 when unknown.
-	object fileservice.ObjectPrefetch
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
@@ -73,11 +71,7 @@ func buildPrefetchParams(service fileservice.FileService, key objectio.Location)
 func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 	pc := make(map[string]PrefetchParams)
 	for _, p := range processes {
-		name := p.key.Name().String()
-		if prev, ok := pc[name]; ok {
-			p.object = prev.object.Merge(p.object)
-		}
-		pc[name] = p
+		pc[p.key.Name().String()] = p
 	}
 	return pc
 }
@@ -102,22 +96,6 @@ func PrefetchSkipped(ctx context.Context, service fileservice.FileService, polic
 		return false
 	}
 	return fileservice.FullFilePreloadSkipped(ctx, service, policy, blk.MetaLocation().Name().String())
-}
-
-// PrefetchObject prefetches the whole object of key as req asks.
-func PrefetchObject(
-	sid string,
-	service fileservice.FileService,
-	key objectio.Location,
-	req fileservice.ObjectPrefetch,
-) error {
-	params, err := BuildPrefetchParams(service, key)
-	if err != nil {
-		return err
-	}
-	params.typ = PrefetchFileType
-	params.object = req
-	return MustGetPipeline(sid).Prefetch(params)
 }
 
 func PrefetchMeta(

@@ -1748,15 +1748,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		return
 	}
 
-	begin := ls.rc.batchPrefetchCursor
-	if begin <= ls.rangesCursor {
-		// The scan's own read fetches the object it reads now.
-		begin = ls.rangesCursor
-		current := *ls.rangeSlice.Get(begin).BlockID.Object()
-		for begin < n && ls.rangeSlice.Get(begin).BlockID.Object().EQ(&current) {
-			begin++
-		}
-	}
+	begin := max(ls.rc.batchPrefetchCursor, ls.rangesCursor)
 	end := min(ls.rangesCursor+readutil.BatchPrefetchSize, n)
 	now := time.Now()
 	pace := ls.scanPace(now)
@@ -1786,13 +1778,18 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 				size, blocks = int64(entry.ObjectStats.Size()), int(entry.ObjectStats.BlkCnt())
 			}
 		}
-		if ls.rc.prefetchScan == nil {
-			ls.rc.prefetchScan = new(fileservice.PrefetchScan)
-		}
-		err := ioutil.PrefetchObject(
-			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation(), fileservice.ObjectPrefetch{
-				Size: size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
+		var err error
+		if prefetcher, ok := ls.fs.(fileservice.ObjectPrefetcher); ok && size > 0 {
+			if ls.rc.prefetchScan == nil {
+				ls.rc.prefetchScan = new(fileservice.PrefetchScan)
+			}
+			err = prefetcher.PrefetchObject(ctx, fileservice.ObjectPrefetch{
+				FilePath: blk.MetaLocation().Name().String(),
+				Size:     size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
 			})
+		} else {
+			err = ioutil.Prefetch(ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+		}
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",
 				err.Error(),

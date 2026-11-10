@@ -55,18 +55,12 @@ func (s *PrefetchScan) live() bool {
 	return s == nil || !s.ended.Load()
 }
 
-// Merge returns the prefetch of the object for both r and o: the sooner Due, the larger
-// share, and a Scan that ends when both do.
-func (r ObjectPrefetch) Merge(o ObjectPrefetch) ObjectPrefetch {
-	if r.Size == 0 {
-		r.Size = o.Size
-	}
+// merge returns the prefetch of the object for both r and o: the sooner Due and the
+// larger share.
+func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	r.Due = min(r.Due, o.Due)
 	if o.share() > r.share() {
 		r.Reads, r.Blocks = o.Reads, o.Blocks
-	}
-	if r.Scan != o.Scan {
-		r.Scan = nil
 	}
 	return r
 }
@@ -189,7 +183,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		e.addScan(req.Scan)
 		metric.FSPrefetchMergedCounter.Inc()
 		if e.index >= 0 {
-			e.req = e.req.Merge(req)
+			e.req = e.req.merge(req)
 			heap.Fix(&p.queue, e.index)
 		}
 		return
@@ -317,11 +311,10 @@ func (p *prefetcher) close(ctx context.Context) {
 	}
 }
 
-func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
-	if s.prefetcher == nil || req.Size <= 0 {
-		return s.PrefetchFile(ctx, req.FilePath)
+func (s *S3FS) PrefetchObject(_ context.Context, req ObjectPrefetch) error {
+	if s.prefetcher != nil && req.Size > 0 {
+		s.prefetcher.add(req)
 	}
-	s.prefetcher.add(req)
 	return nil
 }
 

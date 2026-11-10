@@ -190,10 +190,8 @@ func TestPrefetcherDropsEndedScans(t *testing.T) {
 }
 
 func TestObjectPrefetchMerge(t *testing.T) {
-	a, b := new(PrefetchScan), new(PrefetchScan)
-	got := ObjectPrefetch{Due: 20, Reads: 1, Blocks: 10, Scan: a}.Merge(ObjectPrefetch{Size: 7, Due: 30, Reads: 9, Blocks: 10, Scan: a})
-	require.Equal(t, ObjectPrefetch{Size: 7, Due: 20, Reads: 9, Blocks: 10, Scan: a}, got)
-	require.Nil(t, ObjectPrefetch{Scan: a}.Merge(ObjectPrefetch{Scan: b}).Scan, "merged for two reads, it never ends")
+	got := ObjectPrefetch{Size: 7, Due: 20, Reads: 1, Blocks: 10}.merge(ObjectPrefetch{Size: 7, Due: 30, Reads: 9, Blocks: 10})
+	require.Equal(t, ObjectPrefetch{Size: 7, Due: 20, Reads: 9, Blocks: 10}, got)
 }
 
 // A queue at its most bytes makes room for an object needed sooner by dropping the one
