@@ -32,6 +32,8 @@ import (
 // lifetime for all retained windows and query results.
 type JSONReader interface {
 	OpenCursor() (JSONCursor, error)
+	QueryText(int, []byte, bool) (JSONTextSelection, error)
+	QueryTextAtPath(int, bytejson.Path, bool) (JSONTextSelection, error)
 	Length() int
 	Window(int, int) (JSONReader, error)
 	Repeat(int, int) (JSONReader, error)
@@ -64,11 +66,13 @@ type JSONQueryResult interface {
 // It never exposes document bytes or extends a cursor's result lifetime.
 type JSONTextSelection struct {
 	Text        string
+	Type        byte
 	Exists      bool
 	InputNull   bool
 	ValueNull   bool
 	Multiple    bool
 	InvalidPath bool
+	TextError   bool
 }
 
 // JSONCursor retains one immutable version and reuses its result storage for
@@ -674,9 +678,48 @@ func (r *jsonQueryResult) selectText(simple, legacyFloat bool) (JSONTextSelectio
 		text, err = value.Unquote()
 	}
 	if err != nil {
+		return JSONTextSelection{TextError: true}, err
+	}
+	return JSONTextSelection{Exists: true, Text: text, Type: byte(value.Type)}, nil
+}
+
+// QueryText borrows the live reader only for this call and returns owned text.
+// Like the retained cursor, it checks a NULL document before parsing the path.
+func (r *jsonReader) QueryText(row int, pathBytes []byte, legacyFloat bool) (JSONTextSelection, error) {
+	if r == nil || r.lease == nil {
+		return JSONTextSelection{}, io.ErrClosedPipe
+	}
+	result := jsonQueryResult{lease: r.lease}
+	value, err := r.loadQueryRow(row, &result)
+	if err != nil {
 		return JSONTextSelection{}, err
 	}
-	return JSONTextSelection{Exists: true, Text: text}, nil
+	if result.sqlNull {
+		return JSONTextSelection{InputNull: true}, nil
+	}
+	path, err := bytejson.ParseJsonPath(string(pathBytes))
+	if err != nil {
+		return JSONTextSelection{InvalidPath: true}, err
+	}
+	return queryTextFromValue(value, path, &result, legacyFloat)
+}
+
+// QueryTextAtPath accepts an already parsed path and borrows the reader only
+// until its owned result is returned. It does not create or retain a cursor.
+func (r *jsonReader) QueryTextAtPath(row int, path bytejson.Path, legacyFloat bool) (JSONTextSelection, error) {
+	if r == nil || r.lease == nil {
+		return JSONTextSelection{}, io.ErrClosedPipe
+	}
+	result := jsonQueryResult{lease: r.lease}
+	if err := r.fillQuery(row, &path, &result); err != nil {
+		return JSONTextSelection{}, err
+	}
+	return result.selectText(path.IsSimple(), legacyFloat)
+}
+
+func queryTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *jsonQueryResult, legacyFloat bool) (JSONTextSelection, error) {
+	result.value, result.exists = value.QueryWithExists([]*bytejson.Path{&path})
+	return result.selectText(path.IsSimple(), legacyFloat)
 }
 
 // QueryText loads a frozen row and uses the existing path parser and query.
@@ -697,6 +740,5 @@ func (cursor *jsonCursor) QueryText(row int, pathBytes []byte, legacyFloat bool)
 	if err != nil {
 		return JSONTextSelection{InvalidPath: true}, err
 	}
-	cursor.value, cursor.exists = value.QueryWithExists([]*bytejson.Path{&path})
-	return cursor.jsonQueryResult.selectText(path.IsSimple(), legacyFloat)
+	return queryTextFromValue(value, path, &cursor.jsonQueryResult, legacyFloat)
 }

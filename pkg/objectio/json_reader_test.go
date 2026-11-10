@@ -269,6 +269,13 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 				}
 				cursor.Close()
 			}
+			if err == nil {
+				var value vector.JSONTextSelection
+				value, err = view.QueryText(0, []byte("$.keep"), false)
+				if err == nil && value.Text != "ORIGINAL" {
+					err = io.ErrUnexpectedEOF
+				}
+			}
 			results <- err
 		}()
 	}
@@ -278,6 +285,58 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 	for range 2 {
 		require.NoError(t, <-results)
 	}
+}
+
+func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":"owned text","items":[1,2],"null":null}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	require.NoError(t, vector.AppendBytes(source, nil, true, mp))
+	data := privateJSONColumnForTest(t, source)
+	defer data.Release()
+	base := testJSONCachePinAdmission(t)
+	calls := 0
+	admission := func(capacity uint64) (func(), error) {
+		calls++
+		return base(capacity)
+	}
+	reader, err := OpenJSONReader(data, mp, nil, admission)
+	require.NoError(t, err)
+	cursor, err := reader.OpenCursor()
+	require.NoError(t, err)
+	before := calls
+	for _, pathText := range []string{"$.keep", "$.missing", "$.null", "$.items[*]"} {
+		path, e := types.ParseStringToPath(pathText)
+		require.NoError(t, e)
+		want, e := cursor.QueryText(0, []byte(pathText), false)
+		require.NoError(t, e)
+		got, e := reader.QueryText(0, []byte(pathText), false)
+		require.NoError(t, e)
+		require.Equal(t, want, got)
+		got, e = reader.QueryTextAtPath(0, path, false)
+		require.NoError(t, e)
+		require.Equal(t, want, got)
+	}
+	owned, err := reader.QueryText(0, []byte("$.keep"), false)
+	require.NoError(t, err)
+	require.Equal(t, byte(bytejson.TpCodeString), owned.Type)
+	null, err := reader.QueryText(1, []byte("invalid path"), false)
+	require.NoError(t, err)
+	require.True(t, null.InputNull)
+	bad, err := reader.QueryText(0, []byte("invalid path"), false)
+	require.Error(t, err)
+	require.True(t, bad.InvalidPath)
+	require.Equal(t, before, calls)
+	cursor.Close()
+	reader.Close()
+	clear(doc.Data)
+	require.Equal(t, "owned text", owned.Text)
+	_, err = reader.QueryText(0, []byte("$.keep"), false)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
 }
 
 func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {

@@ -532,9 +532,48 @@ func (r *cacheJSONQueryResult) selectText(simple, legacyFloat bool) (vector.JSON
 		text, err = value.Unquote()
 	}
 	if err != nil {
+		return vector.JSONTextSelection{TextError: true}, err
+	}
+	return vector.JSONTextSelection{Exists: true, Text: text, Type: byte(value.Type)}, nil
+}
+
+// QueryText borrows the live reader only for this call and returns owned text.
+// Like the retained cursor, it checks a NULL document before parsing the path.
+func (r *cacheJSONReader) QueryText(row int, pathBytes []byte, legacyFloat bool) (vector.JSONTextSelection, error) {
+	if r == nil || r.lease == nil {
+		return vector.JSONTextSelection{}, io.ErrClosedPipe
+	}
+	result := cacheJSONQueryResult{lease: r.lease}
+	value, err := r.loadQueryRow(row, &result)
+	if err != nil {
 		return vector.JSONTextSelection{}, err
 	}
-	return vector.JSONTextSelection{Exists: true, Text: text}, nil
+	if result.sqlNull {
+		return vector.JSONTextSelection{InputNull: true}, nil
+	}
+	path, err := bytejson.ParseJsonPath(string(pathBytes))
+	if err != nil {
+		return vector.JSONTextSelection{InvalidPath: true}, err
+	}
+	return queryCacheTextFromValue(value, path, &result, legacyFloat)
+}
+
+// QueryTextAtPath accepts an already parsed path and borrows the reader only
+// until its owned result is returned. It does not create or retain a cursor.
+func (r *cacheJSONReader) QueryTextAtPath(row int, path bytejson.Path, legacyFloat bool) (vector.JSONTextSelection, error) {
+	if r == nil || r.lease == nil {
+		return vector.JSONTextSelection{}, io.ErrClosedPipe
+	}
+	result := cacheJSONQueryResult{lease: r.lease}
+	if err := r.fillQuery(row, &path, &result); err != nil {
+		return vector.JSONTextSelection{}, err
+	}
+	return result.selectText(path.IsSimple(), legacyFloat)
+}
+
+func queryCacheTextFromValue(value bytejson.ByteJson, path bytejson.Path, result *cacheJSONQueryResult, legacyFloat bool) (vector.JSONTextSelection, error) {
+	result.value, result.exists = value.QueryWithExists([]*bytejson.Path{&path})
+	return result.selectText(path.IsSimple(), legacyFloat)
 }
 
 // QueryText loads a frozen row and uses the existing path parser and query.
@@ -555,6 +594,5 @@ func (cursor *cacheJSONCursor) QueryText(row int, pathBytes []byte, legacyFloat 
 	if err != nil {
 		return vector.JSONTextSelection{InvalidPath: true}, err
 	}
-	cursor.value, cursor.exists = value.QueryWithExists([]*bytejson.Path{&path})
-	return cursor.cacheJSONQueryResult.selectText(path.IsSimple(), legacyFloat)
+	return queryCacheTextFromValue(value, path, &cursor.cacheJSONQueryResult, legacyFloat)
 }

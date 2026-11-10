@@ -201,6 +201,13 @@ func TestJSONReaderIndependentConcurrentReaders(t *testing.T) {
 				}
 				result.Close()
 			}
+			if err == nil {
+				var selected JSONTextSelection
+				selected, err = view.QueryTextAtPath(0, *path, false)
+				if err == nil && selected.Text != "1" {
+					err = io.ErrUnexpectedEOF
+				}
+			}
 			results <- err
 		}()
 	}
