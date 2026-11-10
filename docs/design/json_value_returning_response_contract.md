@@ -640,3 +640,17 @@ failed reservations. Tests must demonstrate account growth for retained
 views, cursors and results, independent lifetimes, zero final charge, admission
 failure atomicity, real SQL budget usage, and no new work for unrelated queries.
 All performance gates must be remeasured with these reservations enabled.
+
+### Literal executor lifecycle (candidate revision 35)
+
+An admitted JSON literal also has a dedicated expression executor, distinct
+from its reader and private payload. Reserve its fixed-size metadata before
+constructing the executor. Reset releases that reservation together with the
+current reader; a later evaluation obtains a reservation in the new execution
+generation before it rebuilds the reader. Free and a failed initial build
+release both reservations. The immutable plan string is a reconstruction seed
+and is not copied by the executor itself.
+
+Review decision: charging only the reader misses this additional executor for
+literal-only JSON_VALUE expressions. Test initial admission, reset and reuse,
+final release, and an allocation-account rejection before publication.
