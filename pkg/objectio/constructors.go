@@ -1020,3 +1020,23 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 	}
 	return ObjectMeta(buffer)
 }
+
+// OpenJSONReader retains a sealed cache column without copying or rescanning
+// its documents. Unmarked inputs use checked decoding and a private accounted
+// snapshot. No mutable cache-backed Vector escapes either path.
+func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.AllocationAccountSelection) (vector.JSONReader, error) {
+	if data == nil || mp == nil {
+		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires data and a pool")
+	}
+	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+		return newCacheJSONReader(data, marked, selection)
+	}
+	data.Retain()
+	defer data.Release()
+	var source vector.Vector
+	defer source.Free(nil)
+	if err := mustVectorTo(&source, data.Bytes(), false); err != nil {
+		return nil, err
+	}
+	return vector.NewJSONReaderSnapshotWithAllocation(&source, mp, selection)
+}

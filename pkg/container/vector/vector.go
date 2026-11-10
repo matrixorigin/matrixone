@@ -3838,6 +3838,32 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	return bs[i].GetByteSlice(v.area)
 }
 
+// GetBytesAtChecked reads mutable varlen input without trusting descriptor
+// offsets. The returned bytes still belong to v; this grants no read-only
+// qualification and does not validate a JSON document's contents.
+func (v *Vector) GetBytesAtChecked(i int) ([]byte, error) {
+	if v == nil || !v.typ.IsVarlen() || i < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if v.IsConst() {
+		i = 0
+	} else if i >= v.length {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen row")
+	}
+	if i >= len(v.data)/types.VarlenaSize {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector data size")
+	}
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](v, i+1)
+	descriptor := &values[i]
+	if !descriptor.IsSmall() {
+		offset, size := descriptor.OffsetLen()
+		if uint64(offset) > uint64(len(v.area)) || uint64(size) > uint64(len(v.area))-uint64(offset) {
+			return nil, moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+		}
+	}
+	return descriptor.GetByteSlice(v.area), nil
+}
+
 func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
 	if v.IsConst() {
 		i = 0
