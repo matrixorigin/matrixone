@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -732,7 +731,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	// ADD INDEX reads the base relation just like CREATE INDEX. Once the
 	// existing ALTER locks are held, advance an RC snapshot before any index
-	// backfill so it includes writers that committed after planning.
+	// backfill when the TN supports the ordered barrier.
 	if !isTemp {
 		for _, action := range qry.Actions {
 			if action.GetAddIndex() != nil {
@@ -2604,8 +2603,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	// CREATE INDEX reads the complete base relation and then publishes a new
 	// write target. For pessimistic RC transactions that participate in these
-	// locks, the barrier includes prior commits and the definition-change fence
-	// makes later stale DML plans rebuild with the new index target.
+	// locks, the definition-change fence makes later stale DML plans rebuild
+	// with the new index target. A supported barrier also includes prior commits.
 	if err = lockTable(c.proc.Ctx, c.e, c.proc, r, dbName, true); err != nil {
 		return err
 	}
@@ -2651,39 +2650,36 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 // advanceIndexDDLSnapshot closes the gap between index DDL planning and its
-// base-table scan for pessimistic RC transactions. The caller holds the
-// catalog-owner and base-table definition locks before advancing the snapshot.
+// base-table scan for pessimistic RC transactions when the TN advertises the
+// ordered barrier. Old peers retain the previous snapshot behavior during a
+// rolling upgrade. The caller holds the catalog-owner and definition locks.
 func (c *Compile) advanceIndexDDLSnapshot() error {
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
 		return nil
 	}
-
-	var (
-		frontier timestamp.Timestamp
-		err      error
-	)
-	if supportsLogtailReadBarrier(c.proc.GetService()) {
-		barrier, ok := getLogtailReadBarrier(c.e)
-		if !ok {
-			return moerr.NewInternalError(c.proc.Ctx,
-				"index DDL logtail read barrier is unavailable")
-		}
-		peerBarrier, ok := barrier.(engine.PeerLogtailReadBarrier)
-		if !ok {
-			return moerr.NewInternalError(c.proc.Ctx,
-				"index DDL peer logtail read barrier is unavailable")
-		}
-		var supported bool
-		frontier, supported, err = peerBarrier.AcquirePeerLogtailReadBarrier(c.proc.Ctx)
-		if err == nil && !supported {
-			frontier, err = c.indexDDLLegacyLogtailFrontier()
-		}
-	} else {
-		frontier, err = c.indexDDLLegacyLogtailFrontier()
+	if err := c.proc.Ctx.Err(); err != nil {
+		return context.Cause(c.proc.Ctx)
 	}
+	if !supportsLogtailReadBarrier(c.proc.GetService()) {
+		return nil
+	}
+	barrier, ok := getLogtailReadBarrier(c.e)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"index DDL logtail read barrier is unavailable")
+	}
+	peerBarrier, ok := barrier.(engine.PeerLogtailReadBarrier)
+	if !ok {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"index DDL peer logtail read barrier is unavailable")
+	}
+	frontier, supported, err := peerBarrier.AcquirePeerLogtailReadBarrier(c.proc.Ctx)
 	if err != nil {
 		return err
+	}
+	if !supported {
+		return nil
 	}
 
 	workspace := txnOp.GetWorkspace()
@@ -2699,44 +2695,6 @@ func (c *Compile) advanceIndexDDLSnapshot() error {
 			"index DDL transaction snapshot did not advance past the logtail frontier")
 	}
 	return nil
-}
-
-// indexDDLLegacyLogtailFrontier is the rolling-upgrade fallback for TNs
-// that predate the ordered logtail read barrier. Waiting beyond the local HLC
-// uncertainty bound makes every earlier remote commit visible on this CN.
-func (c *Compile) indexDDLLegacyLogtailFrontier() (timestamp.Timestamp, error) {
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	if rt == nil || rt.Clock() == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction clock for index DDL snapshot refresh")
-	}
-	if rt.Clock().MaxOffset() < 0 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"negative transaction clock offset for index DDL snapshot refresh")
-	}
-	_, upperBound := rt.Clock().Now()
-	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"index DDL snapshot refresh timestamp overflow")
-	}
-	minimum := timestamp.Timestamp{PhysicalTime: upperBound.PhysicalTime + 1}
-	if c.proc.Base.TxnClient == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"missing transaction client for index DDL snapshot refresh")
-	}
-	applied, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, minimum)
-	if err != nil {
-		return timestamp.Timestamp{}, err
-	}
-	if applied.Less(minimum) {
-		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
-			"index DDL snapshot refresh did not reach the required timestamp")
-	}
-	// The waiter returns the next snapshot timestamp, not the applied logtail
-	// timestamp. Passing it back to AdvanceSnapshot would wait for another
-	// logtail update while holding the DDL locks. The required minimum has
-	// already been applied and is the correct lower bound for that wait.
-	return minimum, nil
 }
 
 func (s *Scope) doCreateIndex(
