@@ -15,15 +15,19 @@
 package colexec
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func jsonProjectionResidentBenchmarkEvaluator(b *testing.B, proc *process.Process, projection *Projection, input *batch.Batch) func() (*batch.Batch, error) {
-	reader, err := vector.NewJSONReaderSnapshot(input.Vecs[0], proc.Mp())
+	admission, err := function.JSONReaderMemoryAdmission(proc)
+	require.NoError(b, err)
+	reader, err := vector.NewJSONReaderSnapshotWithAllocation(input.Vecs[0], proc.Mp(), nil, admission)
 	require.NoError(b, err)
 	b.Cleanup(reader.Close)
 	readers := map[int]vector.JSONReader{0: reader}

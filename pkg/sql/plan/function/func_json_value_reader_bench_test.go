@@ -54,7 +54,9 @@ func BenchmarkJSONValueReaderSmallPath(b *testing.B) {
 							v.Free(proc.Mp())
 						}
 					})
-					reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+					admission, err := JSONReaderMemoryAdmissionForEvaluation(proc)
+					require.NoError(b, err)
+					reader, err := vector.NewJSONReaderSnapshotWithAllocation(fc.parameters[0], proc.Mp(), nil, admission)
 					require.NoError(b, err)
 					b.Cleanup(reader.Close)
 					step := func() error {
