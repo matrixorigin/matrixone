@@ -529,6 +529,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.PreserveAutoValues = t.PreserveAutoValues
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -819,6 +820,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	if proc.Ctx != nil {
+		target, ok := proc.Ctx.Value(defines.AlterTableCopy{}).(string)
+		op.PreserveAutoValues = ok && target != "" && target == preCtx.TableDef.Name
+	}
 	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return nil, err

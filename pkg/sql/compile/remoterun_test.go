@@ -958,20 +958,23 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	})
 
 	t.Run("PreInsert_RejectZeroTemporal", func(t *testing.T) {
-		op := &preinsert.PreInsert{RejectZeroTemporal: true}
+		op := &preinsert.PreInsert{RejectZeroTemporal: true, PreserveAutoValues: true}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
+		require.True(t, pipeInstr.PreInsert.PreserveAutoValues)
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
 		wireInstr := new(pipeline.Instruction)
 		require.NoError(t, wireInstr.Unmarshal(wireBytes))
 		require.True(t, wireInstr.PreInsert.RejectZeroTemporal)
+		require.True(t, wireInstr.PreInsert.PreserveAutoValues)
 
 		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
 		require.True(t, restored.(*preinsert.PreInsert).RejectZeroTemporal)
+		require.True(t, restored.(*preinsert.PreInsert).PreserveAutoValues)
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {

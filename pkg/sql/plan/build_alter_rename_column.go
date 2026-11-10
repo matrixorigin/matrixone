@@ -192,12 +192,8 @@ func addRenameContextToAlterCtx(
 		return nil
 	}
 
-	// map the new column name to the old column as its data source
-	delete(alterCtx.alterColMap, oldColName)
-	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oldColName,
-	}
+	// Preserve the column's existing data source under its new name.
+	alterCtx.renameColumnSource(oldColName, newColName)
 
 	if tmpCol, ok := alterCtx.changColDefMap[oldCol.ColId]; ok {
 		tmpCol.Name = newColName
@@ -214,14 +210,13 @@ func addRenameContextToAlterCtx(
 	return nil
 }
 
-// AlterColumn ALTER ... SET DEFAULT or ALTER ... DROP DEFAULT specify a new default value for a column or remove the old default value, respectively.
+// alterColumn ALTER ... SET DEFAULT or ALTER ... DROP DEFAULT specify a new default value for a column or remove the old default value, respectively.
 // If the old default is removed and the column can be NULL, the new default is NULL. If the column cannot be NULL, MySQL assigns a default value
-func AlterColumn(
+func alterColumn(
 	ctx CompilerContext,
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableAlterColumnClause,
-	alterCtx *AlterTableContext,
-) (bool, error) {
+) error {
 
 	tableDef := alterPlan.CopyTableDef
 
@@ -231,7 +226,7 @@ func AlterColumn(
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return false, moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	for i, col := range tableDef.Cols {
@@ -244,7 +239,7 @@ func AlterColumn(
 				}()
 				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
 				if err != nil {
-					return false, err
+					return err
 				}
 				defaultValue.NullAbility = colDef.Default.NullAbility
 				colDef.Default = defaultValue
@@ -256,7 +251,7 @@ func AlterColumn(
 			break
 		}
 	}
-	return originalCol.Primary, nil
+	return nil
 }
 
 // OrderByColumn Currently, Mo only performs semantic checks on alter table order by

@@ -341,6 +341,9 @@ func (exec *txnExecutor) Exec(
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyOpt{}, v)
 	}
+	if target := statementOption.AlterTableCopyTarget(); target != "" {
+		exec.ctx = context.WithValue(exec.ctx, defines.AlterTableCopy{}, target)
+	}
 
 	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
 		exec.ctx = context.WithValue(exec.ctx,

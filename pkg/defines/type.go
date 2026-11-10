@@ -261,6 +261,9 @@ type IgnoreForeignKey struct{}
 
 type AlterCopyOpt struct{}
 
+// AlterTableCopy identifies the internal row copy for ALTER TABLE.
+type AlterTableCopy struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
 

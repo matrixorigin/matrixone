@@ -2991,6 +2991,19 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 // based on the given INSERT statement and table definition.
 // If the INSERT statement does not specify the columns, all columns except the fake primary key column
 // will be included in the list.
+func (builder *QueryBuilder) isAlterTableCopyTarget(tableDef *TableDef) bool {
+	ctx := builder.compCtx.GetContext()
+	if ctx == nil {
+		return false
+	}
+	target, ok := ctx.Value(defines.AlterTableCopy{}).(string)
+	return ok && target != "" && target == tableDef.Name
+}
+
+func (builder *QueryBuilder) canCopyGeneratedColumn(tableDef *TableDef, col *ColDef) bool {
+	return col.GeneratedCol != nil && builder.isAlterTableCopyTarget(tableDef)
+}
+
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
@@ -3013,7 +3026,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 			if !ok {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
-			if tableDef.Cols[idx].GeneratedCol != nil {
+			if tableDef.Cols[idx].GeneratedCol != nil && !builder.canCopyGeneratedColumn(tableDef, tableDef.Cols[idx]) {
 				return nil, moerr.NewInvalidInputf(builder.GetContext(), "the value specified for generated column '%s' in table '%s' is not allowed", colName, tableDef.Name)
 			}
 			insertColNames = append(insertColNames, tableDef.Cols[idx].Name)
@@ -3032,7 +3045,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
-			if tableDef.Cols[idx].GeneratedCol != nil {
+			if tableDef.Cols[idx].GeneratedCol != nil && !builder.canCopyGeneratedColumn(tableDef, tableDef.Cols[idx]) {
 				genPositions[i] = true
 			}
 		}
@@ -3184,13 +3197,32 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
-	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
-		return 0, nil, nil, err
-	}
-
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
 		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+	}
+	if builder.isAlterTableCopyTarget(tableDef) {
+		for i, column := range insertColumns {
+			target := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
+			if !isEnumOrSetPlanType(&target) {
+				continue
+			}
+			project := lastNode.ProjectList[i]
+			raw, ok := storedMySQLSpecialTypeExpr(project)
+			if !ok || raw.GetCol() == nil {
+				continue
+			}
+			sourceType := project.GetF().Args[1].Typ
+			if sourceType.Id == target.Id && sourceType.Enumvalues == target.Enumvalues {
+				// Preserve the typed ENUM ordinal or SET bitmap; converting through
+				// its display string is not reversible for every stored value.
+				raw.Typ = sourceType
+				lastNode.ProjectList[i] = raw
+			}
+		}
+	}
+	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
+		return 0, nil, nil, err
 	}
 
 	selectTag := lastNode.BindingTags[0]
