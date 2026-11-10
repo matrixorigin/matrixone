@@ -71,6 +71,10 @@ unselected descendants. Views do not copy complete documents per path.
 Canonical admission checks scalar encodings, finite floats, shortest varints,
 UTF-8 keys/strings, sorted unique keys, bounds, nonoverlapping ranges, depth and
 bounded traversal work. It retains no width-dependent child/frame list.
+Within an object the existing remaining-byte budget is checked against a
+running total of key lengths and debited once before value callbacks or child
+traversal. The running check retains the amplification bound, including for
+ordinary validation that permits overlapping key ranges.
 GetBytesAtChecked provides bounds-checked access to mutable descriptors but does
 not validate JSON or establish read ownership.
 
