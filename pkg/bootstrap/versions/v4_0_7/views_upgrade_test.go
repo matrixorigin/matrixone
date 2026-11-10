@@ -93,7 +93,7 @@ func TestViewsRepairUsesCurrentV407Identity(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
 	require.Equal(t, int64(defines.MORPCVersion126), Handler.Metadata().RequiredProtocolVersion)
-	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), Handler.Metadata().VersionOffset)
+	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)+versions.DatabaseInventoryUpgradeStages), Handler.Metadata().VersionOffset)
 	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeCluster)
 	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeTenant)
 

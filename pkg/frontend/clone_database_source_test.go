@@ -138,18 +138,6 @@ func (bt *accountRecordingBackgroundExec) Exec(ctx context.Context, sql string) 
 	return bt.backgroundExecTest.Exec(ctx, sql)
 }
 
-type erroringBackgroundExec struct {
-	*backgroundExecTest
-	err error
-}
-
-func (bt *erroringBackgroundExec) Exec(ctx context.Context, sql string) error {
-	if err := bt.backgroundExecTest.Exec(ctx, sql); err != nil {
-		return err
-	}
-	return bt.err
-}
-
 func newStoredProcedureMetadataResultSet(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	for _, name := range []string{"name", "args", "lang", "body", "sql_mode"} {
@@ -420,7 +408,7 @@ func TestResolveCloneDatabaseRoutineTenantUsesTargetAdministrator(t *testing.T) 
 }
 
 func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(t.Context(), 0)
 	tenant := &TenantInfo{User: "root1", DefaultRoleID: accountAdminRoleID}
 	function := userDefinedFunctionDefinition{
 		name:    "f_answer",
@@ -431,29 +419,27 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 		sqlMode: "PIPES_AS_CONCAT",
 	}
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	bh := newInventoryBackgroundExec(0, "target_db", 42, 3)
 	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(ctx, bh, tenant, []userDefinedFunctionDefinition{function}, "target_db"))
-	require.Len(t, bh.executedSQLs, 1)
-	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
-	require.Contains(t, bh.executedSQLs[0], "\"f_answer\",2")
-	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
-	require.Contains(t, bh.executedSQLs[0], "\"root1\"")
+	require.Len(t, bh.executedSQLs, 3)
+	require.Contains(t, bh.executedSQLs[2], "insert into mo_catalog.mo_user_defined_function")
+	require.Contains(t, bh.executedSQLs[2], "\"f_answer\",2")
+	require.Contains(t, bh.executedSQLs[2], "\"target_db\"")
+	require.Contains(t, bh.executedSQLs[2], "\"root1\"")
 	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
 	// the behavior under test rather than coupling this regression to its style.
-	require.Contains(t, bh.executedSQLs[0], "PIPES_AS_CONCAT")
+	require.Contains(t, bh.executedSQLs[2], "PIPES_AS_CONCAT")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
-	failingBase := &backgroundExecTest{}
-	failingBase.init()
+	failing := newInventoryBackgroundExec(0, "target_db", 42, 3)
 	wantErr := errors.New("function persistence failed")
-	failing := &erroringBackgroundExec{backgroundExecTest: failingBase, err: wantErr}
+	failing.sqlPrefixErr["insert into mo_catalog.mo_user_defined_function"] = wantErr
 	require.ErrorIs(t, restoreCloneDatabaseUserDefinedFunctions(ctx, failing, tenant, []userDefinedFunctionDefinition{function}, "target_db"), wantErr)
-	require.Len(t, failing.executedSQLs, 1)
+	require.Len(t, failing.executedSQLs, 3)
 }
 
 func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(t.Context(), 0)
 	tenant := &TenantInfo{User: "root1", DefaultRoleID: accountAdminRoleID}
 	procedure := storedProcedureDefinition{
 		name:    "p_double",
@@ -464,25 +450,23 @@ func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 	}
 	checkSQL := getSqlForCheckProcedureExistence(procedure.name, "target_db")
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	bh := newInventoryBackgroundExec(0, "target_db", 42, 3)
 	bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
 	require.NoError(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"))
-	require.Len(t, bh.executedSQLs, 2)
-	require.Equal(t, checkSQL, bh.executedSQLs[0])
-	require.Contains(t, bh.executedSQLs[1], procedure.args)
-	require.Contains(t, bh.executedSQLs[1], "'PIPES_AS_CONCAT'")
-	require.Contains(t, bh.executedSQLs[1], "'target_db'")
-	require.Contains(t, bh.executedSQLs[1], "'root1'")
-	require.NotContains(t, bh.executedSQLs[1], "create procedure")
+	require.Len(t, bh.executedSQLs, 4)
+	require.Equal(t, checkSQL, bh.executedSQLs[1])
+	require.Contains(t, bh.executedSQLs[3], procedure.args)
+	require.Contains(t, bh.executedSQLs[3], "'PIPES_AS_CONCAT'")
+	require.Contains(t, bh.executedSQLs[3], "'target_db'")
+	require.Contains(t, bh.executedSQLs[3], "'root1'")
+	require.NotContains(t, bh.executedSQLs[3], "create procedure")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
-	bh = &backgroundExecTest{}
-	bh.init()
+	bh = newInventoryBackgroundExec(0, "target_db", 42, 3)
 	wantErr := errors.New("lookup failed")
 	bh.sql2err[checkSQL] = wantErr
 	require.ErrorIs(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"), wantErr)
-	require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	require.Equal(t, []string{databaseInventoryReadSQL(0, "target_db"), checkSQL}, bh.executedSQLs)
 }
 
 func TestRewriteCloneStoredProcedureBodies(t *testing.T) {

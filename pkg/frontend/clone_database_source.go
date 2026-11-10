@@ -789,8 +789,12 @@ func restoreCloneDatabaseUserDefinedFunctions(
 ) error {
 	for _, function := range functions {
 		function.dbName = dbName
+		inventory, err := readDatabaseInventory(ctx, bh, dbName)
+		if err != nil {
+			return err
+		}
 		if err := persistUserDefinedFunction(
-			ctx, bh, tenant, tenant.GetDefaultRoleID(), function, nil,
+			ctx, bh, tenant, tenant.GetDefaultRoleID(), function, nil, inventory,
 		); err != nil {
 			return err
 		}

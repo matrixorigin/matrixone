@@ -6600,6 +6600,25 @@ func TestCDCSystemTablesAreNotClassifiedAsClusterTables(t *testing.T) {
 	}
 }
 
+func TestDatabaseInventoryCatalogOwnership(t *testing.T) {
+	for _, query := range getSqlForDropAccount() {
+		require.NotContains(t, query, catalog.MODatabaseInventory, "inventory must outlive user database retirement")
+		require.NotContains(t, query, "mo_stored_procedure", "procedure catalog must outlive same-owner database retirement")
+		require.NotContains(t, query, "mo_user_defined_function", "function catalog must outlive same-owner database retirement")
+	}
+	require.Contains(t, predefinedTables, catalog.MODatabaseInventory)
+	require.False(t, isClusterTable(moCatalog, catalog.MODatabaseInventory))
+	require.True(t, isClusterTable(moCatalog, "mo_future_catalog_table"), "ordinary cluster-table classification must remain intact")
+	require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[catalog.MODatabaseInventory])
+	for _, account := range []uint32{sysAccountID, 7} {
+		require.True(t, needSkipTable(account, moCatalog, catalog.MODatabaseInventory))
+		require.True(t, needSkipSystemTable(account, &tableInfo{
+			dbName: moCatalog, tblName: catalog.MODatabaseInventory, typ: "BASE TABLE",
+		}))
+		require.False(t, needSkipTable(account, "user_database", catalog.MODatabaseInventory))
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
@@ -9977,35 +9996,6 @@ func Test_doRevokePrivilege(t *testing.T) {
 	})
 }
 
-func Test_doDropFunctionWithDB(t *testing.T) {
-	convey.Convey("drop function with db", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := &backgroundExecTest{}
-		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.DropDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		ses := &Session{}
-		sql := getSqlForCheckUdfWithDb(string(stmt.Name))
-
-		bh.sql2result[sql] = nil
-		err := doDropFunctionWithDB(ctx, ses, stmt, nil)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func Test_doDropFunction(t *testing.T) {
 	convey.Convey("drop function", t, func() {
 		ctrl := gomock.NewController(t)
@@ -10050,8 +10040,7 @@ func Test_doDropFunctionIfExists(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	bh := newInventoryBackgroundExec(0, "db", 42, 3)
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
@@ -10103,8 +10092,7 @@ func Test_doDropFunctionIfExistsWithDifferentOverload(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
-			bh := &backgroundExecTest{}
-			bh.init()
+			bh := newInventoryBackgroundExec(0, "db", 42, 3)
 			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
 
@@ -10747,8 +10735,7 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	bh := newInventoryBackgroundExec(0, "test_procedure", 42, 3)
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
@@ -10776,12 +10763,70 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
 }
 
+func TestInitProcedurePreparationUsesWriteTransaction(t *testing.T) {
+	for _, scenario := range []string{"commit", "prepare error", "begin error", "inventory conflict", "persist error"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := newInventoryBackgroundExec(0, "inventory_proc_db", 42, 3)
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			cp := &tree.CreateProcedure{
+				Name: tree.NewProcedureName("inventory_proc", tree.ObjectNamePrefix{}),
+				Lang: "sql", Body: "begin select 1; end",
+			}
+			ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+			defer ses.Close()
+			ses.SetDatabaseName("inventory_proc_db")
+			check := getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())
+			bh.sql2result[check] = newMrsForPasswordOfUser([][]interface{}{})
+			failure := errors.New("procedure transaction boundary")
+			const advance = "update mo_catalog.mo_database_inventory set epoch=epoch+1 where account_id=0 and database_id=42 and epoch>0 and epoch<18446744073709551615 and epoch=3"
+			switch scenario {
+			case "prepare error":
+				bh.sql2err[check] = failure
+			case "begin error":
+				bh.sql2err["begin;"] = failure
+			case "inventory conflict":
+				bh.affectedBySQL[advance] = 0
+			case "persist error":
+				bh.sqlPrefixErr["insert into mo_catalog.mo_stored_procedure"] = failure
+			}
+			err := InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp)
+			if scenario == "commit" {
+				require.NoError(t, err)
+				require.Len(t, bh.executedSQLs, 6)
+				require.Equal(t, []string{"begin;", databaseInventoryReadSQL(0, "inventory_proc_db"), check}, bh.executedSQLs[:3])
+				require.True(t, strings.HasPrefix(bh.executedSQLs[3], "update mo_catalog.mo_database_inventory "))
+				require.True(t, strings.HasPrefix(bh.executedSQLs[4], "insert into mo_catalog.mo_stored_procedure"))
+				require.Equal(t, "commit;", bh.executedSQLs[5])
+			} else {
+				if scenario == "inventory conflict" {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+				} else {
+					require.ErrorIs(t, err, failure)
+				}
+				switch scenario {
+				case "begin error":
+					require.Equal(t, []string{"begin;"}, bh.executedSQLs)
+				case "prepare error":
+					require.Equal(t, []string{"begin;", databaseInventoryReadSQL(0, "inventory_proc_db"), check, "rollback;"}, bh.executedSQLs)
+				case "inventory conflict":
+					require.Equal(t, []string{"begin;", databaseInventoryReadSQL(0, "inventory_proc_db"), check, advance, "rollback;"}, bh.executedSQLs)
+				case "persist error":
+					require.Len(t, bh.executedSQLs, 6)
+					require.Equal(t, "rollback;", bh.executedSQLs[5])
+					require.True(t, strings.HasPrefix(bh.executedSQLs[4], "insert into mo_catalog.mo_stored_procedure"))
+				}
+			}
+		})
+	}
+}
+
 func TestInitProcedurePersistsDefaultBoolSumAvgSQLMode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	bh := newInventoryBackgroundExec(0, "test_procedure", 42, 3)
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
@@ -10812,8 +10857,7 @@ func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	bh := &backgroundExecTest{}
-	bh.init()
+	bh := newInventoryBackgroundExec(0, "test_procedure", 42, 3)
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
@@ -10850,7 +10894,7 @@ func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 }
 
 func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(t.Context(), 0)
 	tenant := &TenantInfo{User: "root"}
 	definition := storedProcedureDefinition{
 		name:    "p_replace",
@@ -10863,33 +10907,31 @@ func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
 	checkSQL := getSqlForCheckProcedureExistence(definition.name, definition.dbName)
 
 	t.Run("replace updates the existing catalog row", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newInventoryBackgroundExec(0, definition.dbName, 42, 3)
 		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
 
 		require.NoError(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, checkSQL, bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "update mo_catalog.mo_stored_procedure")
-		require.Contains(t, bh.executedSQLs[1], "where proc_id = 99")
+		require.Len(t, bh.executedSQLs, 4)
+		require.Equal(t, checkSQL, bh.executedSQLs[1])
+		require.Contains(t, bh.executedSQLs[2], "update mo_catalog.mo_database_inventory ")
+		require.Contains(t, bh.executedSQLs[3], "update mo_catalog.mo_stored_procedure")
+		require.Contains(t, bh.executedSQLs[3], "where proc_id = 99")
 	})
 
 	t.Run("non replace rejects an existing catalog row before persistence", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newInventoryBackgroundExec(0, definition.dbName, 42, 3)
 		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
 
 		require.ErrorContains(t, upsertStoredProcedure(ctx, bh, tenant, definition, false), "procedure p_replace already exists")
-		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+		require.Equal(t, []string{databaseInventoryReadSQL(0, definition.dbName), checkSQL}, bh.executedSQLs)
 	})
 
 	t.Run("replace rejects an invalid existing catalog id", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newInventoryBackgroundExec(0, definition.dbName, 42, 3)
 		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{"not-an-id"}})
 
 		require.Error(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
-		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+		require.Equal(t, []string{databaseInventoryReadSQL(0, definition.dbName), checkSQL}, bh.executedSQLs)
 	})
 }
 
@@ -10925,8 +10967,7 @@ func Test_initProcedure(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newInventoryBackgroundExec(0, "test_procedure", 42, 3)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15944,8 +15985,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		defer ses.Close()
 
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newInventoryBackgroundExec(0, "db1", 42, 3)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15982,7 +16022,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 
 		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName, int64(ses.GetTenantInfo().GetTenantID()))
 		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
+			{uint64(42), int64(0)},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -15990,7 +16030,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		mrs = newMrsForPasswordOfUser([][]interface{}{{}})
 		bh.sql2result[sql] = mrs
 
-		err := doAlterDatabaseConfig(ses.GetTxnHandler().GetTxnCtx(), ses, ad)
+		err := doAlterDatabaseConfig(defines.AttachAccountId(ses.GetTxnHandler().GetTxnCtx(), 0), ses, ad)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -16106,110 +16146,6 @@ func TestDoAlterAccountConfig(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		err := doAlterAccountConfig(ctx, ses, ad)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
-func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
-	convey.Convey("insertRecordToMoMysqlCompatibilityMode success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		stmt := &tree.CreateDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := fmt.Sprintf(initMoMysqlCompatibilityModeFormat, tenant.TenantID, tenant.GetTenant(), "abc", "", "", false)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := insertRecordToMoMysqlCompatibilityMode(ctx, ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
-func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
-	convey.Convey("insertRecordToMoMysqlCompatibilityMode success", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newTestSession(t, ctrl)
-		defer ses.Close()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		pu.SV.KillRountinesInterval = 0
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		rm, _ := NewRoutineManager(ctx, "")
-		ses.rm = rm
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
-		ses.SetTenantInfo(tenant)
-
-		stmt := &tree.DropDatabase{
-			Name: tree.Identifier("abc"),
-		}
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForDeleteMysqlCompatbilityMode("abc")
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{0, 0},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := deleteRecordToMoMysqlCompatbilityMode(ctx, ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

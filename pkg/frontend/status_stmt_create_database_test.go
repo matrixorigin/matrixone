@@ -16,12 +16,15 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,7 +65,12 @@ func TestExecuteStatusCreateDatabaseUsesPhysicalCreationResult(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := &Session{}
-			ses.SetTenantInfo(&TenantInfo{DefaultRoleID: moAdminRoleID})
+			ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, DefaultRoleID: moAdminRoleID})
+			ses.txnHandler = &TxnHandler{txnOp: mock_frontend.NewMockTxnOperator(gomock.NewController(t))}
+			bh := &backgroundExecTest{}
+			bh.init()
+			stub := gostub.StubFunc(&NewShareTxnBackgroundExec, bh)
+			defer stub.Reset()
 			execCtx := &ExecCtx{
 				reqCtx: context.Background(),
 				stmt:   &tree.CreateDatabase{Name: tree.Identifier("ownership_db")},
@@ -71,6 +79,11 @@ func TestExecuteStatusCreateDatabaseUsesPhysicalCreationResult(t *testing.T) {
 
 			require.NoError(t, executeStatusStmt(ses, execCtx))
 			require.Equal(t, tc.runResult, execCtx.runResult)
+			if databaseWasCreated(tc.runResult) {
+				require.Len(t, bh.executedSQLs, 1, "the creation owner initializes settings without BEGIN or COMMIT")
+			} else {
+				require.Empty(t, bh.executedSQLs)
+			}
 		})
 	}
 }
@@ -97,14 +110,13 @@ func TestGrantDatabaseOwnershipAfterCreate(t *testing.T) {
 	})
 }
 
-func TestRespStatusCreateDatabaseWritesCompatibilityOnlyAfterCreation(t *testing.T) {
+func TestRespStatusCreateDatabaseDoesNotWriteCatalog(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		runResult    *util.RunResult
 		wantAffected uint64
-		wantInsert   bool
 	}{
-		{name: "physical creation", runResult: &util.RunResult{AffectRows: 1}, wantAffected: 1, wantInsert: true},
+		{name: "physical creation", runResult: &util.RunResult{AffectRows: 1}, wantAffected: 1},
 		{name: "if not exists no-op", runResult: &util.RunResult{}},
 		{name: "missing run result", runResult: nil},
 	} {
@@ -126,6 +138,8 @@ func TestRespStatusCreateDatabaseWritesCompatibilityOnlyAfterCreation(t *testing
 			bh.init()
 			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
+			sharedStub := gostub.StubFunc(&NewShareTxnBackgroundExec, bh)
+			defer sharedStub.Reset()
 
 			writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
 			proc := &process.Process{Base: &process.BaseProcess{}}
@@ -140,15 +154,68 @@ func TestRespStatusCreateDatabaseWritesCompatibilityOnlyAfterCreation(t *testing
 			require.NoError(t, NewMysqlResp(writer).respStatus(ses, execCtx))
 			require.Len(t, writer.responses, 1)
 			require.Equal(t, tc.wantAffected, writer.responses[0].affectedRows)
-			if tc.wantInsert {
-				require.Len(t, bh.executedSQLs, 3)
-				require.Equal(t, "begin", bh.executedSQLs[0])
-				require.True(t, strings.HasPrefix(
-					bh.executedSQLs[1],
-					"insert into mo_catalog.mo_mysql_compatibility_mode(",
-				))
-				require.Equal(t, "commit;", bh.executedSQLs[2])
+			require.Empty(t, bh.executedSQLs)
+		})
+	}
+}
+
+func TestCreatedDatabaseCompatibilityUsesStatementOwner(t *testing.T) {
+	for _, scenario := range []string{"success", "insert failure", "no-op", "missing owner", "missing tenant", "invalid version", "system"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			ses := &Session{}
+			ses.SetTenantInfo(&TenantInfo{Tenant: "account'\\name", TenantID: 7})
+			ses.txnHandler = &TxnHandler{txnOp: op}
+			ses.sesSysVars = &SystemVariables{mp: map[string]interface{}{"version": "configured'\\version"}}
+			stmt := &tree.CreateDatabase{Name: tree.Identifier("db'\\name")}
+			result := &util.RunResult{AffectRows: 1}
+			switch scenario {
+			case "no-op":
+				result.AffectRows = 0
+			case "missing owner":
+				ses.txnHandler.txnOp = nil
+			case "missing tenant":
+				ses.SetTenantInfo(nil)
+			case "invalid version":
+				ses.sesSysVars.Set("version", int64(7))
+			case "system":
+				stmt.Name = "MO_CATALOG"
+			}
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.parserSQLMode = "NO_BACKSLASH_ESCAPES"
+			injected := errors.New("compatibility INSERT failed")
+			if scenario == "insert failure" {
+				bh.sqlPrefixErr["insert into mo_catalog.mo_mysql_compatibility_mode"] = injected
+			}
+			calls := 0
+			stub := gostub.Stub(&NewShareTxnBackgroundExec, func(got context.Context, owner FeSession, raw bool) BackgroundExec {
+				calls++
+				require.Same(t, ctx, got)
+				require.Same(t, ses, owner)
+				require.Same(t, op, owner.GetTxnHandler().GetTxn())
+				require.False(t, raw)
+				return bh
+			})
+			defer stub.Reset()
+			err := initializeCreatedDatabaseCompatibility(ctx, ses, stmt, result)
+			switch scenario {
+			case "insert failure":
+				require.ErrorIs(t, err, injected)
+			case "missing owner", "missing tenant", "invalid version":
+				require.Error(t, err)
+			default:
+				require.NoError(t, err)
+			}
+			if scenario == "success" || scenario == "insert failure" {
+				require.Equal(t, 1, calls)
+				require.Len(t, bh.executedSQLs, 1)
+				require.True(t, strings.HasPrefix(bh.executedSQLs[0], "insert into mo_catalog.mo_mysql_compatibility_mode"))
+				require.Contains(t, bh.executedSQLs[0], "values(7,'account''\\\\name','db''\\\\name','version_compatibility','configured''\\\\version',false)")
+				require.Empty(t, bh.parserSQLMode)
 			} else {
+				require.Zero(t, calls)
 				require.Empty(t, bh.executedSQLs)
 			}
 		})

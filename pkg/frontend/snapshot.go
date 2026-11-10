@@ -106,13 +106,16 @@ var (
 	systemCatalogRestorePolicies = map[string]systemCatalogRestorePolicy{
 		// Database DDL recreates defaults with the target database ID.
 		catalog.MODatabaseDefaults: systemCatalogRestoreSkip,
-		"mo_database":              systemCatalogRestoreSkip,
-		"mo_tables":                systemCatalogRestoreSkip,
-		"mo_columns":               systemCatalogRestoreSkip,
-		"mo_table_partitions":      systemCatalogRestoreSkip,
-		"mo_foreign_keys":          systemCatalogRestoreSkip,
-		"mo_indexes":               systemCatalogRestoreSkip,
-		"mo_account":               systemCatalogRestoreSkip,
+		// The current database lifecycle owns epochs. Never restore historical
+		// IDs/counters over the target's live inventory conflict points.
+		catalog.MODatabaseInventory: systemCatalogRestoreSkip,
+		"mo_database":               systemCatalogRestoreSkip,
+		"mo_tables":                 systemCatalogRestoreSkip,
+		"mo_columns":                systemCatalogRestoreSkip,
+		"mo_table_partitions":       systemCatalogRestoreSkip,
+		"mo_foreign_keys":           systemCatalogRestoreSkip,
+		"mo_indexes":                systemCatalogRestoreSkip,
+		"mo_account":                systemCatalogRestoreSkip,
 
 		catalog.MOVersionTable:       systemCatalogRestoreSkip,
 		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,

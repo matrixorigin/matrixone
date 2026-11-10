@@ -126,7 +126,7 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 					calls++
 					return tt.exec(t, calls, firstMP, secondMP)
 				})
-				_, db, txn, ctx := newResultOwnershipFixture(t, exec, true)
+				_, db, txn, ctx := newResultOwnershipFixture(t, catalogReadOwnershipExecutor{exec}, true)
 				if tt.cancelWrite {
 					writeCtx, cancel := context.WithCancel(txn.proc.Ctx)
 					cancel()
@@ -166,7 +166,7 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 			}
 			return newRowIDResult(t, resultMP, types.RandomRowid(), types.RandomRowid()), nil
 		})
-		eng, db, txn, ctx := newResultOwnershipFixture(t, exec, false)
+		eng, db, txn, ctx := newResultOwnershipFixture(t, catalogReadOwnershipExecutor{exec}, false)
 		txn.databaseOps.addCreateDatabase(genDatabaseKey(1, "db"), 0, db)
 
 		require.PanicsWithValue(t, "delete table failed: query failed", func() {
@@ -191,7 +191,7 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 			t.Cleanup(res.Close)
 			return res, nil
 		})
-		_, _, txn, ctx := newResultOwnershipFixture(t, exec, false)
+		_, _, txn, ctx := newResultOwnershipFixture(t, catalogReadOwnershipExecutor{exec}, false)
 
 		dbName, tableName, err := loadNameByIdFromStorage(ctx, txn.op, 1, 42)
 		require.NoError(t, err)
@@ -199,6 +199,25 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 		require.Equal(t, "tbl", tableName)
 		require.Equal(t, baseline, resultOwnershipBytes(resultMP), "name lookup result must be released")
 	})
+}
+
+// These tests inject failures into catalog reads, not inventory writes. Keep
+// those reads and their acquired batches unchanged. The inventory-owner tests
+// deliberately use the unwrapped fixture and check real write options/results.
+type catalogReadOwnershipExecutor struct{ executor.SQLExecutor }
+
+func (e catalogReadOwnershipExecutor) Exec(ctx context.Context, query string, opts executor.Options) (executor.Result, error) {
+	switch query {
+	case catalog.DatabaseInventoryIncrementSQL(1, 7),
+		"delete from mo_catalog.mo_database_inventory where account_id=1 and database_id=7":
+		return executor.Result{AffectedRows: 1}, nil
+	case "delete from mo_catalog.mo_stored_procedure where db='db'",
+		"delete from mo_catalog.mo_user_defined_function where db='db'",
+		"delete from mo_catalog.mo_mysql_compatibility_mode where account_id=1 and dat_name='db'":
+		return executor.Result{}, nil
+	default:
+		return e.SQLExecutor.Exec(ctx, query, opts)
+	}
 }
 
 func newResultOwnershipFixture(
@@ -341,7 +360,7 @@ func TestCatalogStorageQueriesPreserveLegacyNames(t *testing.T) {
 				}
 				return executor.Result{}, readErr
 			})
-			eng, db, _, ctx := newResultOwnershipFixture(t, exec, false)
+			eng, db, _, ctx := newResultOwnershipFixture(t, catalogReadOwnershipExecutor{exec}, false)
 			db.databaseName = name
 			var err error
 			switch operation {

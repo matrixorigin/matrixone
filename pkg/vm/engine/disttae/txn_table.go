@@ -1979,6 +1979,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
 		return err
 	}
+	if err := advanceDatabaseInventory(ctx, tbl.db.op, tbl.db.databaseName, tbl.db.databaseId); err != nil {
+		return err
+	}
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName

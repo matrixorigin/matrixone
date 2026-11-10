@@ -36,21 +36,21 @@ type tenantUpgradeSelection struct {
 	tenants []int32
 }
 
-func (s *service) upgradeV407TenantRange(ctx context.Context, selected tenantUpgradeSelection) error {
+func (s *service) upgradePagedTenantRange(ctx context.Context, selected tenantUpgradeSelection) error {
 	for _, accountID := range selected.tenants {
-		if err := s.upgradeV407Tenant(ctx, selected.upgrade, accountID); err != nil {
+		if err := s.upgradePagedTenant(ctx, selected.upgrade, accountID); err != nil {
 			return err
 		}
 	}
-	return s.finishV407TenantTask(ctx, selected)
+	return s.finishPagedTenantTask(ctx, selected)
 }
 
-func (s *service) upgradeV407Tenant(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32) error {
-	active, err := s.runV407Tenant(ctx, upgrade, accountID)
+func (s *service) upgradePagedTenant(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32) error {
+	active, err := s.runPagedTenant(ctx, upgrade, accountID)
 	if err != nil || !active {
 		return err
 	}
-	_, err = s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
+	_, err = s.withPagedTenantAccount(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
 		current, err := versions.GetUpgradeVersionForUpdateByID(upgrade.ID, tx)
 		if err != nil {
 			return err
@@ -70,12 +70,39 @@ func (s *service) upgradeV407Tenant(ctx context.Context, upgrade versions.Versio
 	return err
 }
 
-// runV407Tenant is shared by scheduled and on-demand upgrades; their existing
+func pagedTenantHandle(h VersionHandle) bool {
+	return h == v4_0_7.Handler
+}
+
+func runPagedTenantHandle(ctx context.Context, h VersionHandle, accountID int32, objectLimit uint64,
+	run func(string, uint64, bool, func(executor.TxnExecutor) error) (bool, error)) (bool, error) {
+	switch h {
+	case v4_0_7.Handler:
+		return v4_0_7.Handler.UpgradeTenant(ctx, accountID, objectLimit, run)
+	default:
+		return false, moerr.NewInvalidInput(ctx, "tenant upgrade target has no paged owner")
+	}
+}
+
+func (s *service) registeredPagedTenantHandle(target string) (VersionHandle, error) {
+	for _, h := range s.handles {
+		if h.Metadata().Version == target && pagedTenantHandle(h) {
+			return h, nil
+		}
+	}
+	return nil, moerr.NewInvalidInputNoCtx("tenant upgrade paged target is not registered")
+}
+
+// Scheduled and on-demand upgrades share the paged account owner; their
 // completion owners decide whether the account belongs to a counted task.
-func (s *service) runV407Tenant(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32) (bool, error) {
-	return v4_0_7.Handler.UpgradeTenant(ctx, accountID, s.upgrade.catalogObjectLimit,
+func (s *service) runPagedTenant(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32) (bool, error) {
+	h, err := s.registeredPagedTenantHandle(upgrade.ToVersion)
+	if err != nil {
+		return false, err
+	}
+	return runPagedTenantHandle(ctx, h, accountID, s.upgrade.catalogObjectLimit,
 		func(operation string, limit uint64, adjustable bool, work func(executor.TxnExecutor) error) (bool, error) {
-			active, err := s.withV407Account(ctx, upgrade, accountID, work)
+			active, err := s.withPagedTenantAccount(ctx, upgrade, accountID, work)
 			if err != nil {
 				err = catalogOperationError(err, fmt.Sprintf("tenant %d", accountID), operation, limit, adjustable)
 			}
@@ -85,13 +112,17 @@ func (s *service) runV407Tenant(ctx context.Context, upgrade versions.VersionUpg
 
 // On-demand completion does not count an account against a possibly unrelated
 // task. The existing task reconciliation counts committed account versions.
-func (s *service) upgradeV407TenantOnDemand(ctx context.Context, accountID int32) (bool, error) {
-	upgrade := versions.VersionUpgrade{FromVersion: "4.0.6", ToVersion: v4_0_7.Handler.Metadata().Version}
-	active, err := s.runV407Tenant(ctx, upgrade, accountID)
+func (s *service) upgradePagedTenantOnDemand(ctx context.Context, accountID int32, target string) (bool, error) {
+	h, err := s.registeredPagedTenantHandle(target)
+	if err != nil {
+		return false, err
+	}
+	upgrade := versions.VersionUpgrade{FromVersion: h.Metadata().MinUpgradeVersion, ToVersion: h.Metadata().Version}
+	active, err := s.runPagedTenant(ctx, upgrade, accountID)
 	if err != nil || !active {
 		return false, err
 	}
-	return s.withV407Account(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
+	return s.withPagedTenantAccount(ctx, upgrade, accountID, func(tx executor.TxnExecutor) error {
 		return versions.UpgradeTenantVersion(accountID, upgrade.ToVersion, tx)
 	})
 }
@@ -99,7 +130,7 @@ func (s *service) upgradeV407TenantOnDemand(ctx context.Context, accountID int32
 // Each operation reacquires the account lock and checks the authoritative
 // create_version. A concurrent worker that finished this account makes later
 // pages no-ops, including after an uncertain commit result.
-func (s *service) withV407Account(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32, work func(executor.TxnExecutor) error) (bool, error) {
+func (s *service) withPagedTenantAccount(ctx context.Context, upgrade versions.VersionUpgrade, accountID int32, work func(executor.TxnExecutor) error) (bool, error) {
 	opCtx, cancel := context.WithTimeoutCause(ctx, upgradeTransactionTimeout, moerr.CauseAsyncUpgradeTenantTask)
 	defer cancel()
 	active := false
@@ -118,7 +149,7 @@ func (s *service) withV407Account(ctx context.Context, upgrade versions.VersionU
 	return active, err
 }
 
-func (s *service) finishV407TenantTask(ctx context.Context, selected tenantUpgradeSelection) error {
+func (s *service) finishPagedTenantTask(ctx context.Context, selected tenantUpgradeSelection) error {
 	opCtx, cancel := context.WithTimeoutCause(ctx, upgradeTransactionTimeout, moerr.CauseAsyncUpgradeTenantTask)
 	defer cancel()
 	return s.exec.ExecTxn(opCtx, func(tx executor.TxnExecutor) error {

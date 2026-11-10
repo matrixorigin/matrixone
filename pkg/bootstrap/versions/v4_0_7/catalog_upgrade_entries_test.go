@@ -34,7 +34,7 @@ import (
 
 func TestConsolidatedTenantEntriesKeepWriterProtocolGates(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
-	require.Equal(t, uint32(41), Handler.Metadata().VersionOffset)
+	require.Equal(t, uint32(43), Handler.Metadata().VersionOffset)
 	require.Len(t, tenantUpgEntries, 27)
 	require.Len(t, clusterUpgEntries, 14)
 	require.Contains(t, upgradeInformationSchemaStatistics().UpgSql, "sub_part")

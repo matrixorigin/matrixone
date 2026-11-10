@@ -118,6 +118,19 @@ func (s *Scope) AlterDatabase(c *Compile) error {
 	if current.Version == math.MaxUint64 {
 		return moerr.NewInternalError(c.proc.Ctx, "database defaults version exhausted")
 	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	result, err := c.runSqlWithResult(catalog.DatabaseInventoryIncrementSQL(accountID, current.DatabaseId), int32(accountID))
+	if err != nil {
+		return err
+	}
+	affected := result.AffectedRows
+	result.Close()
+	if affected != 1 {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
 	if current.Version != 0 {
 		if err := c.deleteDatabaseDefaults(current.DatabaseId); err != nil {
 			return err

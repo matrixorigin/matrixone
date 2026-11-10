@@ -147,3 +147,27 @@ func TestTenantWalkerStopsAtTransactionBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestInventoryPreludeBeforeTenantEntries(t *testing.T) {
+	stop := errors.New("stop at the first ordinary catalog entry")
+	var operations, queries []string
+	tx := executor.NewMemTxnExecutor(func(query string) (executor.Result, error) {
+		queries = append(queries, query)
+		return executor.Result{}, nil // Empty identity page completes initialization.
+	}, nil)
+	active, err := Handler.UpgradeTenant(t.Context(), 7, 8192,
+		func(operation string, _ uint64, _ bool, work func(executor.TxnExecutor) error) (bool, error) {
+			operations = append(operations, operation)
+			if strings.HasPrefix(operation, "entry ") {
+				return false, stop
+			}
+			return true, work(tx)
+		})
+	require.ErrorIs(t, err, stop)
+	require.False(t, active)
+	require.Equal(t, []string{"create database inventory", "backfill database inventory", "entry 0"}, operations)
+	require.Len(t, queries, 2)
+	require.Contains(t, queries[0], "create table if not exists mo_catalog.mo_database_inventory")
+	require.Contains(t, queries[1], "account_id=7 and dat_id>0")
+	require.Error(t, Handler.HandleTenantUpgrade(t.Context(), 7, nil))
+}

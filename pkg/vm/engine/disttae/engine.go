@@ -403,7 +403,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		databaseId:   databaseId,
 		databaseName: name,
 	})
-	return nil
+	return initializeDatabaseInventory(ctx, op, name, databaseId)
 }
 
 func (e *Engine) loadDatabaseFromStorage(
@@ -794,6 +794,15 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	txnDB := toDelDB.(*txnDatabase)
+	if err := advanceDatabaseInventory(ctx, op, name, txnDB.databaseId); err != nil {
+		return err
+	}
+	if err := retireDatabaseRoutines(ctx, op, name); err != nil {
+		return err
+	}
+	if err := retireDatabaseCompatibility(ctx, op, name); err != nil {
+		return err
+	}
 	rels = filterDeleteDatabaseRelations(txnDB, rels, name, op)
 	for _, relName := range rels {
 		if err := toDelDB.Delete(ctx, relName); err != nil {
@@ -856,7 +865,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	// adjust the state of txn cache
 	key := genDatabaseKey(accountId, name)
 	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
-	return nil
+	return retireDatabaseInventory(ctx, op, name, databaseId)
 }
 
 func filterDeleteDatabaseRelations(db *txnDatabase, rels []string, databaseName string, op client.TxnOperator) []string {

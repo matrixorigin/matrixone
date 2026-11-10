@@ -198,6 +198,9 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 // to insert into or delete from mo_tables and mo_columns,
 // rather than trigger an actual create or delete operation for table.
 func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bool, useAlterNote bool) ([]engine.TableDef, error) {
+	if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
+		return nil, err
+	}
 	var id uint64
 	var rowid types.Rowid
 	var rowids []types.Rowid
@@ -428,6 +431,9 @@ func (db *txnDatabase) createWithID(
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
+	}
+	if err := advanceDatabaseInventory(ctx, db.op, db.databaseName, db.databaseId); err != nil {
+		return err
 	}
 	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {

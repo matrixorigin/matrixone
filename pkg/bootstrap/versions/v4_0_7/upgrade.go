@@ -39,7 +39,7 @@ func init() {
 			MinUpgradeVersion: "4.0.6",
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
-			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
+			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries) + versions.DatabaseInventoryUpgradeStages),
 			// The final view definitions and writers require the current protocol.
 			RequiredProtocolVersion: defines.MORPCVersion126,
 		},
@@ -60,6 +60,9 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+	if txn == nil {
+		return moerr.NewInvalidInput(ctx, "missing tenant upgrade transaction")
+	}
 	_, err := v.UpgradeTenant(ctx, tenantID, versions.DefaultCatalogUpgradeObjectBytes,
 		func(_ string, _ uint64, _ bool, work func(executor.TxnExecutor) error) (bool, error) {
 			return true, work(txn)

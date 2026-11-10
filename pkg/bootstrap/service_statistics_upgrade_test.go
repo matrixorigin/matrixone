@@ -150,6 +150,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
 				reads := 0
+				migrationFailures := 0
 				txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 				txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
@@ -166,8 +167,11 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 							latest.Version = test.clusterVersion
 						}
 						return statisticsLatestVersionResult(t, latest, versions.StateReady), nil
-					case strings.HasPrefix(sql, "SELECT tbl.rel_createsql") && test.failUpgrade:
-						return executor.Result{}, moerr.NewInternalErrorNoCtx("view migration unavailable")
+					case strings.HasPrefix(sql, "create table if not exists mo_catalog.mo_database_inventory") && test.failUpgrade:
+						return executor.Result{}, nil
+					case strings.HasPrefix(sql, "select cast(dat_id as bigint unsigned) from mo_catalog.mo_database") && test.failUpgrade:
+						migrationFailures++
+						return executor.Result{}, moerr.NewInternalErrorNoCtx("inventory backfill unavailable")
 					default:
 						return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
 					}
@@ -175,7 +179,10 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
 					nil, exec, func(s *service) { s.initUpgrade() })
 				defer b.stopper.Stop()
-				for range 2 {
+				b.adjustUpgrade()
+				firstAttemptReads := 0
+				for attempt := range 2 {
+					before := reads
 					var txnOp client.TxnOperator
 					if test.ownTxn {
 						txnOp = &testTxnOperator{}
@@ -187,11 +194,20 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					} else {
 						require.Error(t, err)
 					}
+					if test.failUpgrade {
+						require.ErrorContains(t, err, "inventory backfill unavailable")
+						require.Greater(t, reads-before, 1, "failed migrations recheck the account in their operation owners")
+						if attempt == 0 {
+							firstAttemptReads = reads - before
+						} else {
+							require.Equal(t, firstAttemptReads, reads-before, "a failed check must not populate the ready cache")
+						}
+					}
 					require.False(t, upgraded)
 					require.Empty(t, b.mu.tenants)
 				}
 				if test.failUpgrade {
-					require.Equal(t, 6, reads, "each retry rechecks the version in its independently owned operation transaction")
+					require.Equal(t, 2, migrationFailures, "both attempts reach the intended failed page after the acknowledged create stage")
 				} else {
 					require.Equal(t, 2, reads)
 				}
