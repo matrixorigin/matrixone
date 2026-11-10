@@ -70,6 +70,10 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
+	dictionaryBoundary        vm.DictionaryOutputState
+	viewOutput                *batch.Batch
+	selectedRows              []int64
+	outputAllocation          *vector.AllocationAccountSelection
 	buf                       *batch.Batch
 	executors                 []colexec.ExpressionExecutor
 	bs                        vector.FunctionParameterWrapper[bool]
@@ -87,14 +91,23 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.RuntimeFilterExprs = nil
+	if filter.ctr.outputAllocation != nil {
+		filter.Free(proc, pipelineFailed, err)
+	}
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if filter.ctr.viewOutput != nil {
+		filter.ctr.viewOutput.Clean(proc.Mp())
+		filter.ctr.viewOutput = nil
+	}
+	filter.ctr.selectedRows = nil
 	filter.ctr.cleanExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
+		filter.ctr.buf = nil
 	}
 	filter.RuntimeFilterExprs = nil
 }

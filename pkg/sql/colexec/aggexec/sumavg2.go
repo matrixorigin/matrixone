@@ -221,7 +221,7 @@ func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Ve
 	// A scalar fill already knows its group; do not build BatchFill's local
 	// aggregation table for a single row (notably in cumulative windows).
 	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
-	value := T(vector.MustFixedColNoTypeCheck[A](vec)[row])
+	value := T(vector.GetFixedAtNoTypeCheck[A](vec, row))
 	sums := chunkArr[T](exec.state[x].vecs[0])
 	// Keep NaN payload selection on the original arithmetic path. Compilers
 	// may commute a floating addition, selecting a different operand's NaN.
@@ -330,8 +330,7 @@ func (exec *sumAvgExec[T, A]) bulkFillSumRange(groupIndex, offset, n int, vector
 		return nil
 	}
 
-	vals := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	vals, selection, isConst := fixedAggregateInput[A](vec)
 	hasNull := vec.HasNull()
 
 	g := uint64(groupIndex)
@@ -344,14 +343,21 @@ func (exec *sumAvgExec[T, A]) bulkFillSumRange(groupIndex, offset, n int, vector
 	filled := false
 	for i := 0; i < n; i++ {
 		row := offset + i
-		if isConst {
-			row = 0
-		}
 		if hasNull && vec.IsNull(uint64(row)) {
 			continue
 		}
 
-		val := T(vals[row])
+		var raw A
+		if isConst {
+			index := 0
+			if selection != nil {
+				index = int(selection[row])
+			}
+			raw = vals[index]
+		} else {
+			raw = vals[row]
+		}
+		val := T(raw)
 		if !filled {
 			localSum = val
 			filled = true
@@ -389,8 +395,7 @@ func (exec *sumAvgExec[T, A]) bulkFillAvgRange(groupIndex, offset, n int, vector
 		return nil
 	}
 
-	vals := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	vals, selection, isConst := fixedAggregateInput[A](vec)
 	hasNull := vec.HasNull()
 
 	g := uint64(groupIndex)
@@ -403,14 +408,21 @@ func (exec *sumAvgExec[T, A]) bulkFillAvgRange(groupIndex, offset, n int, vector
 	var localCnt int64
 	for i := 0; i < n; i++ {
 		row := offset + i
-		if isConst {
-			row = 0
-		}
 		if hasNull && vec.IsNull(uint64(row)) {
 			continue
 		}
 
-		val := T(vals[row])
+		var raw A
+		if isConst {
+			index := 0
+			if selection != nil {
+				index = int(selection[row])
+			}
+			raw = vals[index]
+		} else {
+			raw = vals[row]
+		}
+		val := T(raw)
 		if localCnt == 0 {
 			localSum = val
 			localCnt = 1
@@ -453,8 +465,7 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 	if n == 0 {
 		return nil
 	}
-	vals := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	vals, selection, isConst := fixedAggregateInput[A](vec)
 
 	const slotEmpty = 0xFF
 	const maxSlots = 255
@@ -480,7 +491,11 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 		g := grp - 1
 		var val T
 		if isConst {
-			val = T(vals[0])
+			index := 0
+			if selection != nil {
+				index = int(selection[i+offset])
+			}
+			val = T(vals[index])
 		} else {
 			val = T(vals[i+offset])
 		}
@@ -558,8 +573,7 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 	if n == 0 {
 		return nil
 	}
-	vals := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	vals, selection, isConst := fixedAggregateInput[A](vec)
 
 	const slotEmpty = 0xFF
 	const maxSlots = 255
@@ -586,7 +600,11 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 		g := grp - 1
 		var val T
 		if isConst {
-			val = T(vals[0])
+			index := 0
+			if selection != nil {
+				index = int(selection[i+offset])
+			}
+			val = T(vals[index])
 		} else {
 			val = T(vals[i+offset])
 		}
@@ -1195,7 +1213,7 @@ func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector
 	}
 	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
 	value := decimalStateFromArg[A, S](
-		vector.MustFixedColNoTypeCheck[A](vec)[row], exec.aggInfo.argTypes[0].Scale)
+		vector.GetFixedAtNoTypeCheck[A](vec, row), exec.aggInfo.argTypes[0].Scale)
 	sumVec := exec.state[x].vecs[0]
 	sums := chunkArr[S](sumVec)
 	if exec.isSum && sumVec.IsNull(y) {
@@ -1295,8 +1313,7 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumRange(groupIndex, offset, n int, vec
 	}
 
 	argScale := exec.aggInfo.argTypes[0].Scale
-	args := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	args, selection, isConst := fixedAggregateInput[A](vec)
 	hasNull := vec.HasNull()
 
 	g := uint64(groupIndex)
@@ -1309,14 +1326,21 @@ func (exec *sumAvgDecExec[A, S]) bulkFillSumRange(groupIndex, offset, n int, vec
 	filled := false
 	for i := 0; i < n; i++ {
 		row := offset + i
-		if isConst {
-			row = 0
-		}
 		if hasNull && vec.IsNull(uint64(row)) {
 			continue
 		}
 
-		val := decimalStateFromArg[A, S](args[row], argScale)
+		var raw A
+		if isConst {
+			index := 0
+			if selection != nil {
+				index = int(selection[row])
+			}
+			raw = args[index]
+		} else {
+			raw = args[row]
+		}
+		val := decimalStateFromArg[A, S](raw, argScale)
 		if !filled {
 			localSum = val
 			filled = true
@@ -1358,8 +1382,7 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgRange(groupIndex, offset, n int, vec
 	}
 
 	argScale := exec.aggInfo.argTypes[0].Scale
-	args := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	args, selection, isConst := fixedAggregateInput[A](vec)
 	hasNull := vec.HasNull()
 
 	g := uint64(groupIndex)
@@ -1372,14 +1395,21 @@ func (exec *sumAvgDecExec[A, S]) bulkFillAvgRange(groupIndex, offset, n int, vec
 	var localCnt int64
 	for i := 0; i < n; i++ {
 		row := offset + i
-		if isConst {
-			row = 0
-		}
 		if hasNull && vec.IsNull(uint64(row)) {
 			continue
 		}
 
-		val := decimalStateFromArg[A, S](args[row], argScale)
+		var raw A
+		if isConst {
+			index := 0
+			if selection != nil {
+				index = int(selection[row])
+			}
+			raw = args[index]
+		} else {
+			raw = args[row]
+		}
+		val := decimalStateFromArg[A, S](raw, argScale)
 		if localCnt == 0 {
 			localSum = val
 			localCnt = 1
@@ -1417,6 +1447,9 @@ func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors 
 	// With at most 256 rows, the 256th group can have only one input row.
 	if len(exec.state) == 1 && exec.state[0].length <= 256 &&
 		(exec.localAddSafe || len(groups) <= 256) {
+		if vectors[0].IsDictionary() {
+			return exec.batchFillDenseDictionary(offset, groups, vectors[0])
+		}
 		return exec.batchFillDense(offset, groups, vectors[0])
 	}
 	if exec.isSum {
@@ -1432,8 +1465,7 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 		return nil
 	}
 	argScale := exec.aggInfo.argTypes[0].Scale
-	args := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	args, selection, isConst := fixedAggregateInput[A](vec)
 
 	const slotEmpty = 0xFF
 	const maxSlots = 255
@@ -1459,7 +1491,11 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 		g := grp - 1
 		var raw A
 		if isConst {
-			raw = args[0]
+			index := 0
+			if selection != nil {
+				index = int(selection[i+offset])
+			}
+			raw = args[index]
 		} else {
 			raw = args[i+offset]
 		}
@@ -1538,8 +1574,7 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 		return nil
 	}
 	argScale := exec.aggInfo.argTypes[0].Scale
-	args := vector.MustFixedColNoTypeCheck[A](vec)
-	isConst := vec.IsConst()
+	args, selection, isConst := fixedAggregateInput[A](vec)
 
 	const slotEmpty = 0xFF
 	const maxSlots = 255
@@ -1566,7 +1601,11 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 		g := grp - 1
 		var raw A
 		if isConst {
-			raw = args[0]
+			index := 0
+			if selection != nil {
+				index = int(selection[i+offset])
+			}
+			raw = args[index]
 		} else {
 			raw = args[i+offset]
 		}

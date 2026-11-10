@@ -33,6 +33,18 @@ func ExpressionsAcceptDictionary(executors []ExpressionExecutor) bool {
 			if !ExpressionsAcceptDictionary(e.parameterExecutor) {
 				return false
 			}
+		case *decimalTypedExecutor:
+			if !ExpressionsAcceptDictionary([]ExpressionExecutor{e.root}) {
+				return false
+			}
+		case *decimalMulSubExecutor:
+			if !ExpressionsAcceptDictionary([]ExpressionExecutor{e.root}) {
+				return false
+			}
+		case *decimalChainExecutor:
+			if !ExpressionsAcceptDictionary([]ExpressionExecutor{e.root}) {
+				return false
+			}
 		case *memoExpressionExecutor:
 			if !ExpressionsAcceptDictionary([]ExpressionExecutor{e.state.executor}) {
 				return false
@@ -52,7 +64,7 @@ func ExpressionsAcceptDictionary(executors []ExpressionExecutor) bool {
 // remain nil, matching early-reader column positions. Declined retention gathers
 // the same rows once without reevaluating predicates or copying the full source.
 func SelectBatchColumns(input *batch.Batch, positions []int, rows []int64, mp *mpool.MPool, account *vector.AllocationAccountSelection, retain bool) (_ *batch.Batch, retained bool, retErr error) {
-	if len(rows) == 0 {
+	if len(rows) == 0 || len(input.Vecs) == 0 {
 		retain = false
 	}
 	output := batch.NewOffHeapWithSize(len(input.Vecs))

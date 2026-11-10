@@ -256,3 +256,27 @@ func TestDictionaryProducerCopyFailureAndReuse(t *testing.T) {
 	require.Equal(t, []int64{30, 10, 30}, vector.MustFixedColNoTypeCheck[int64](output.Batch.Vecs[0]))
 	require.True(t, input.HasDictionary())
 }
+
+// This forwarder can only use selected input when its destination accepts its
+// unchanged output. Updating the parent edge must reconfigure the source edge.
+type dictionaryTestForwarder struct{ *dictionaryTestProducer }
+
+func (p *dictionaryTestForwarder) AcceptsDictionary(child int) bool {
+	return child == 0 && p.boundary.AllowsDictionaryOutput()
+}
+
+func TestDictionaryForwarderPropagatesDestinationPermission(t *testing.T) {
+	source := newDictionaryTestProducer(nil)
+	forwarder := &dictionaryTestForwarder{newDictionaryTestProducer(nil)}
+	forwarder.AppendChild(source)
+	parent := &dictionaryTestConsumer{accepts: true}
+	parent.AppendChild(forwarder)
+	ConfigureDictionaryBoundaries(parent)
+	require.True(t, forwarder.boundary.AllowsDictionaryOutput())
+	require.True(t, source.boundary.AllowsDictionaryOutput())
+	parent.accepts = false
+	ConfigureDictionaryBoundaries(parent)
+	require.False(t, forwarder.boundary.AllowsDictionaryOutput())
+	require.False(t, source.boundary.AllowsDictionaryOutput())
+	require.True(t, source.boundary.required)
+}

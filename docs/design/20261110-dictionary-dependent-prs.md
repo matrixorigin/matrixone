@@ -145,7 +145,8 @@ activation/benefit at both scales and all-query/Total behavior.
 Submit one templated draft for combined A/B after real code and cheapest functional
 proof exist; C and D remain separate PRs. Do not submit empty placeholders. Draft development may stack;
 production enablement and final isolated qualification wait for prerequisites
-to merge. #32405 is ready for review; combined A/B development may stack before its merge.
+to merge. #32405 merged as main `00da05219f` on 2026-11-10. Combined A/B was rebased
+onto that main without inherited prerequisite commits.
 
 The requester replaced the repeated-process protocol for future PRs:
 

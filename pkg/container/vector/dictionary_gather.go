@@ -15,9 +15,11 @@
 package vector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 )
 
 // unionDictionaryBatch runs after ordinary destination preflight/admission.
@@ -82,4 +84,159 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 		v.areaDisjoint = areaWasDisjoint
 	}
 	return nil
+}
+
+// gatherDictionarySelection uses the existing bulk append preflight once. It
+// never reruns UnionOne admission/metadata transitions for every selected row.
+func gatherDictionarySelection[S int32 | int64](v, w *Vector, sels []S, offset int, areaWasDisjoint bool, mp *mpool.MPool) error {
+	base := w.dictionaryState().base.vec
+	if base.IsConstNull() {
+		nulls.AddRange(&v.nsp, uint64(offset), uint64(v.length))
+		clear(v.data[offset*v.typ.TypeSize() : v.length*v.typ.TypeSize()])
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = areaWasDisjoint
+		}
+		return nil
+	}
+	if !v.typ.IsVarlen() {
+		switch v.typ.TypeSize() {
+		case 1:
+			gatherDictionaryFixed[uint8](v, w, sels, offset)
+		case 2:
+			gatherDictionaryFixed[uint16](v, w, sels, offset)
+		case 4:
+			gatherDictionaryFixed[uint32](v, w, sels, offset)
+		case 8:
+			gatherDictionaryFixed[uint64](v, w, sels, offset)
+		case 12:
+			gatherDictionaryFixed[[12]byte](v, w, sels, offset)
+		case 16:
+			gatherDictionaryFixed[[16]byte](v, w, sels, offset)
+		case 20:
+			gatherDictionaryFixed[[20]byte](v, w, sels, offset)
+		case 24:
+			gatherDictionaryFixed[[24]byte](v, w, sels, offset)
+		case 32:
+			gatherDictionaryFixed[[32]byte](v, w, sels, offset)
+		default:
+			view := ResolveFixedBytesReadView(w)
+			for i, row := range sels {
+				target := v.data[(offset+i)*view.Width : (offset+i+1)*view.Width]
+				if w.nsp.Contains(uint64(row)) {
+					clear(target)
+					nulls.Add(&v.nsp, uint64(offset+i))
+					continue
+				}
+				physical := int(view.Selection[row])
+				if view.Constant {
+					physical = 0
+				}
+				copy(target, view.Values[physical*view.Width:(physical+1)*view.Width])
+			}
+		}
+		return nil
+	}
+	view := ResolveVarlenaReadView(w)
+	total := 0
+	for _, row := range sels {
+		if view.Nulls.Contains(uint64(row)) {
+			continue
+		}
+		physical := int(view.Selection[row])
+		if view.Constant {
+			physical = 0
+		}
+		value := view.Values[physical]
+		if !value.IsSmall() {
+			_, length := value.OffsetLen()
+			if int(length) > math.MaxInt-total {
+				return moerr.NewInvalidInputNoCtx("selected dictionary payload overflows")
+			}
+			total += int(length)
+		}
+	}
+	if err := pregrowVarlenaArea(v, total, mp); err != nil {
+		return err
+	}
+	target := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length)
+	for i, row := range sels {
+		if view.Nulls.Contains(uint64(row)) {
+			target[offset+i] = types.Varlena{}
+			nulls.Add(&v.nsp, uint64(offset+i))
+			continue
+		}
+		physical := int(view.Selection[row])
+		if view.Constant {
+			physical = 0
+		}
+		if err := BuildVarlenaFromVarlena(v, &target[offset+i], &view.Values[physical], &view.Area, mp); err != nil {
+			return err
+		}
+	}
+	v.areaDisjoint = areaWasDisjoint
+	return nil
+}
+
+func gatherDictionaryFixed[T any, S int32 | int64](v, w *Vector, sels []S, offset int) {
+	backing := w.dictionaryState()
+	base := backing.base.vec
+	count := base.length
+	if base.IsConst() {
+		count = 1
+	}
+	source := toSliceOfLengthNoTypeCheck[T](base, count)
+	target := toSliceOfLengthNoTypeCheck[T](v, v.length)
+	mapping := backing.rows.storageFixed()
+	constant := base.IsConst()
+	if w.nsp.Any() {
+		var zero T
+		for i, row := range sels {
+			if w.nsp.Contains(uint64(row)) {
+				target[offset+i] = zero
+				nulls.Add(&v.nsp, uint64(offset+i))
+				continue
+			}
+			physical := int(mapping[row])
+			if constant {
+				physical = 0
+			}
+			target[offset+i] = source[physical]
+		}
+		return
+	}
+	for i, row := range sels {
+		physical := int(mapping[row])
+		if constant {
+			physical = 0
+		}
+		target[offset+i] = source[physical]
+	}
+}
+
+func dictionarySelectedAreaBytes(source *Vector, offset int, flags []uint8) (int, error) {
+	view := ResolveVarlenaReadView(source)
+	if view.AllNull {
+		return 0, nil
+	}
+	total := 0
+	for i, flag := range flags {
+		row := offset + i
+		if flag == 0 || view.Nulls.Contains(uint64(row)) {
+			continue
+		}
+		physical := int(view.Selection[row])
+		if view.Constant {
+			physical = 0
+		}
+		value := view.Values[physical]
+		if value.IsSmall() {
+			continue
+		}
+		_, length := value.OffsetLen()
+		if int(length) > math.MaxInt-total {
+			return 0, mpool.ErrAllocationAllocatorLimit
+		}
+		total += int(length)
+	}
+	return total, nil
 }

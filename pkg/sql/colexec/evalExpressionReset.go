@@ -44,7 +44,7 @@ func (fF *functionFolding) reset(_ *mpool.MPool) {
 
 type functionInformationForEval struct {
 	// basic information for the function.
-	dictionaryInput bool
+	dictionaryInput func([]*vector.Vector) bool
 	fid             int32
 	overloadID      int64
 
@@ -313,7 +313,7 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		evalProc.Ctx = proc.Ctx
 		evalProc.WarningSink = probe
 	}
-	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults)
+	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults, true)
 	if normalizeErr != nil {
 		return normalizeErr
 	}

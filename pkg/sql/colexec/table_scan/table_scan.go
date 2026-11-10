@@ -197,9 +197,12 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 					return vm.CancelResult, selectErr
 				}
 				if !selection.All {
-					next, _, selectErr := colexec.SelectBatchColumns(tableScan.ctr.buf, nil, selection.Sels, proc.Mp(), tableScan.OutputAllocation, true)
+					next, retained, selectErr := colexec.SelectBatchColumns(tableScan.ctr.buf, nil, selection.Sels, proc.Mp(), tableScan.OutputAllocation, true)
 					if selectErr != nil {
 						return vm.CancelResult, selectErr
+					}
+					if retained {
+						tableScan.OpAnalyzer.GetOpStats().AddExtraStat("DictionaryScanSelectedRows", int64(next.RowCount()))
 					}
 					tableScan.ctr.buf.Clean(proc.Mp())
 					tableScan.ctr.buf = next

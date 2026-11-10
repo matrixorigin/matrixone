@@ -250,6 +250,7 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
+	hashJoin.ctr.dictionaryBoundary.BeginCall()
 	if hashJoin.AsofBuildLeft {
 		return hashJoin.callAsofBuildLeft(proc)
 	}

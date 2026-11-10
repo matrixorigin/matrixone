@@ -509,7 +509,7 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
-			executor.dictionaryInput = overload.AcceptsDictionaryInput()
+			executor.dictionaryInput = overload.DictionaryInputCapability()
 			// Dynamic casts retain row-level diagnostics. Only the designated
 			// coordinator filter may fold a literal cast once per execution.
 			executor.stringToNumericCast = !overload.CannotFold() &&
@@ -1836,7 +1836,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
 		return nil, err
 	}
-	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.selectedParameterResults)
+	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.selectedParameterResults, true)
 	if normalizeErr != nil {
 		return nil, normalizeErr
 	}
@@ -2004,7 +2004,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults)
+	parameters, normalizeErr := expr.normalizeDictionaryParameters(expr.parameterResults, true)
 	if normalizeErr != nil {
 		return nil, normalizeErr
 	}

@@ -23,8 +23,18 @@ import (
 // normalizeDictionaryParameters owns the compatibility storage for functions
 // whose physical reads have not been converted. Never mutate borrowed arguments.
 // The all-flat path returns its original slice and allocates no scratch.
-func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters []*vector.Vector) ([]*vector.Vector, error) {
-	direct := expr.dictionaryInput
+func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters []*vector.Vector, allowDirect bool) ([]*vector.Vector, error) {
+	first := -1
+	for i, p := range parameters {
+		if p != nil && p.IsDictionary() {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return parameters, nil
+	}
+	direct := allowDirect && expr.dictionaryInput != nil && expr.dictionaryInput(parameters)
 	if direct && len(expr.parameterTypes) == len(parameters) {
 		for i, p := range parameters {
 			if p != nil && p.IsDictionary() && types.IsUnicodeCollation(expr.parameterTypes[i].Charset) &&
@@ -37,16 +47,7 @@ func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters
 	if direct {
 		return parameters, nil
 	}
-	first := -1
-	for i, p := range parameters {
-		if p != nil && p.IsDictionary() {
-			first = i
-			break
-		}
-	}
-	if first < 0 {
-		return parameters, nil
-	}
+
 	if len(expr.dictionaryParameters) != len(parameters) {
 		expr.freeDictionaryParameters()
 		expr.dictionaryParameters = make([]*vector.Vector, len(parameters))

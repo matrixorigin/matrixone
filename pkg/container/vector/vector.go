@@ -5651,7 +5651,7 @@ func (v *Vector) preExtendSelectedBatch(
 	// The preflight proof cannot retain an aliased source for publication.
 	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
 	// after the caller has committed its surrounding state transition.
-	if v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
+	if v == w && w.IsDictionary() || v.dataAliases(w) || v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area) {
 		return mpool.ErrAllocationAccountInvalid
 	}
 
@@ -5665,6 +5665,16 @@ func (v *Vector) preExtendSelectedBatch(
 	selectedAreaBytes := 0
 	var values []types.Varlena
 	varlen := w.GetType().IsVarlen() && !w.IsConstNull()
+	if varlen && w.IsDictionary() {
+		var err error
+		selectedAreaBytes, err = dictionarySelectedAreaBytes(w, offset, flags)
+		if err != nil {
+			return err
+		}
+		// The generic flag proof/count remains below; payload sizing has used
+		// the immutable selected view instead of a physical descriptor slice.
+		varlen = false
+	}
 	if varlen {
 		ToSliceNoTypeCheck(w, &values)
 	}
@@ -8832,15 +8842,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
-	if w.IsDictionary() {
-		for _, row := range sels {
-			if err := v.UnionOne(w, int64(row), mp); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if v.dataAliases(w) {
+	if v == w && w.IsDictionary() || v.dataAliases(w) {
 		// Keep source row indices unchanged, including reordered selections.
 		return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
 			return unionT(v, source, sels, mp)
@@ -8889,6 +8891,17 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + len(sels))
+	if w.IsDictionary() {
+		appendSelectedGrouping(v, w, oldLen, sels)
+		if err := gatherDictionarySelection(v, w, sels, oldLen, preserveDisjointArea, mp); err != nil {
+			return err
+		}
+		if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
+			return err
+		}
+		return propagateBinaryStringSelection(v, w, oldLen, sels, mp)
+	}
+
 	if w.IsConst() {
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
