@@ -275,3 +275,21 @@ never reused or mutated. Namespace/schema changes and terminal Free release slot
 Owned flat fallbacks are not retained as an extra header-cache payload bank.
 No global pool/cache or new tier is introduced. Selected body inputs still share
 one immutable backing; final publication remains transactional.
+
+## Approved selected routing and bulk gather correction
+
+After reviewing the completed ownership/header screen, the requester approved
+restoring sorted-range endpoint checks and typed selected fixed-width gathers.
+A dictionary key may use the original endpoint proof only when its existing
+logical sorted flag is true, its length is positive and it has no NULLs. Endpoint
+values resolve through the immutable mapping/constant base; partition functions
+and range boundaries are unchanged. NULL or unproven ordering keeps enumeration.
+
+Fixed-width selected appends retain the established preflight, logical length,
+grouping and metadata publication. Dispatch on physical width once, then copy
+typed selected values with constant and NULL decisions outside the non-null loop.
+Respect offsets, flags and existing destination rows; restrict byte views to
+logical payload lengths so allocator padding never becomes an extra value.
+Varlen and unrecognized widths keep the previous path. No arithmetic, SQL type,
+cache, queue or ownership changes are introduced. Validate all supported widths,
+NULL/flags/offset cases, endpoint bypass and cancellation before the all22 gate.

@@ -142,3 +142,61 @@ func TestDictionaryWorkspaceReuseAndHeldView(t *testing.T) {
 		})
 	}
 }
+
+func TestDictionaryBulkFixedWidthsOffsetsAndFlags(t *testing.T) {
+	for _, typ := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_TS, types.T_decimal128, types.T_Blockid, types.T_Rowid, types.T_decimal256} {
+		for _, nullable := range []bool{false, true} {
+			t.Run(typ.String()+map[bool]string{false: "/plain", true: "/nullable"}[nullable], func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				source := NewVec(typ.ToType())
+				t.Cleanup(func() { source.Free(mp) })
+				require.NoError(t, source.PreExtend(3, mp))
+				source.SetLength(3)
+				width := source.GetType().TypeSize()
+				raw := source.GetData()
+				for row := 0; row < 3; row++ {
+					for col := 0; col < width; col++ {
+						raw[row*width+col] = byte(1 + row*37 + col)
+					}
+				}
+				if nullable {
+					source.SetNull(1)
+				}
+				base, err := FreezeVector(source, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(base.Release)
+				mapping := []int64{2, 1, 0, 2}
+				rows, err := NewRowSelection(mapping, 3, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(rows.Release)
+				selected, err := NewDictionaryVector(base, rows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { selected.Free(mp) })
+				for _, tc := range []struct {
+					start, count int
+					flags        []uint8
+					logical      []int
+				}{
+					{0, 4, nil, []int{0, 1, 2, 3}}, {1, 2, nil, []int{1, 2}}, {0, 3, []uint8{1, 0, 1, 1}, []int{0, 2, 3}},
+				} {
+					output := NewVec(typ.ToType())
+					func() {
+						defer output.Free(mp)
+						require.NoError(t, output.UnionOne(source, 0, mp))
+						require.NoError(t, output.UnionBatch(selected, int64(tc.start), tc.count, tc.flags, mp))
+						require.Equal(t, 1+len(tc.logical), output.Length())
+						for row, logical := range tc.logical {
+							original := int(mapping[logical])
+							isNull := nullable && original == 1
+							require.Equal(t, isNull, output.IsNull(uint64(row+1)))
+							if !isNull {
+								require.Equal(t, raw[original*width:(original+1)*width], output.GetData()[(row+1)*width:(row+2)*width])
+							}
+						}
+					}()
+				}
+			})
+		}
+	}
+}

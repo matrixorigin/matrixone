@@ -149,3 +149,49 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 		})
 	}
 }
+
+func TestDictionarySortedRangeUsesEndpointsWithoutEnumerating(t *testing.T) {
+	for _, nullable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "endpoint-fast-path", true: "null-control"}[nullable], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			source := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { source.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendFixedList(source, []int64{1, 2, 3}, []bool{false, nullable, false}, proc.Mp()))
+			source.SetSorted(true)
+			base, err := vector.FreezeVector(source, proc.Mp(), nil)
+			require.NoError(t, err)
+			t.Cleanup(base.Release)
+			rows, err := vector.NewRowSelection([]int64{0, 1, 1, 2}, 3, proc.Mp(), nil)
+			require.NoError(t, err)
+			t.Cleanup(rows.Release)
+			selected, err := vector.NewDictionaryVector(base, rows, proc.Mp(), nil)
+			require.NoError(t, err)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = selected
+			input.SetRowCount(4)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			arg := NewArgument()
+			t.Cleanup(arg.Release)
+			arg.BucketNum = 4
+			arg.ShuffleType = int32(plan.ShuffleType_Range)
+			arg.ShuffleColMin = 0
+			arg.ShuffleColMax = 100
+			arg.DrainAllBuckets = true
+			arg.ctr.sels = make([][]int32, 4)
+			result, err := rangeShuffle(arg, input, proc)
+			require.NoError(t, err)
+			require.Same(t, input, result)
+			require.Zero(t, result.ShuffleIDX)
+			total := 0
+			for _, sel := range arg.ctr.sels {
+				total += len(sel)
+			}
+			if nullable {
+				require.Equal(t, 4, total)
+			} else {
+				require.Zero(t, total, "sorted same-bucket input must not build per-row routing selections")
+			}
+		})
+	}
+}

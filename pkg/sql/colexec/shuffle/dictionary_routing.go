@@ -142,3 +142,15 @@ func (shuffle *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Pro
 	// Existing pool buffers own the flat gather before the child can be reused.
 	return nil, shuffle.enqueueBySels(bat, proc)
 }
+
+// The caller has proved logical ordering and absence of NULLs. Dictionary
+// constant backing and composed selections still use the logical endpoints.
+func dictionaryRangeEndpoints[T any](v *vector.Vector) (T, T) {
+	view := vector.ResolveFixedReadView[T](v)
+	first, last := 0, 0
+	if !view.Constant {
+		first = int(view.Selection[0])
+		last = int(view.Selection[v.Length()-1])
+	}
+	return view.Values[first], view.Values[last]
+}

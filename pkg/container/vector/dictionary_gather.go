@@ -32,47 +32,51 @@ func (v *Vector) unionDictionaryBatch(w *Vector, offset int64, count int, flags 
 	oldLength := v.length
 	v.setLengthAfterExtend(oldLength + added)
 	appendBatchGrouping(v, w, oldLength, offset, count, flags)
-	width := v.typ.TypeSize()
-	var dstValues, srcValues []types.Varlena
-	if v.typ.IsVarlen() {
-		dstValues = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length)
-		if !base.IsConstNull() {
-			physicalLength := base.length
-			if base.IsConst() {
-				physicalLength = 1
+	if !v.typ.IsVarlen() && copyDictionaryFixedBatch(v, w, int(offset), count, flags, oldLength, added) {
+		// Capacity and grouping were admitted by the existing append preflight.
+	} else {
+		width := v.typ.TypeSize()
+		var dstValues, srcValues []types.Varlena
+		if v.typ.IsVarlen() {
+			dstValues = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length)
+			if !base.IsConstNull() {
+				physicalLength := base.length
+				if base.IsConst() {
+					physicalLength = 1
+				}
+				srcValues = toSliceOfLengthNoTypeCheck[types.Varlena](base, physicalLength)
 			}
-			srcValues = toSliceOfLengthNoTypeCheck[types.Varlena](base, physicalLength)
 		}
-	}
-	sourceCount := count
-	if flags != nil {
-		sourceCount = len(flags)
-	}
-	next := oldLength
-	for row := 0; row < sourceCount; row++ {
-		if flags != nil && flags[row] == 0 {
-			continue
+		sourceCount := count
+		if flags != nil {
+			sourceCount = len(flags)
 		}
-		logical := int(offset) + row
-		if w.IsNull(uint64(logical)) {
-			nulls.Add(&v.nsp, uint64(next))
-			if v.typ.IsVarlen() {
-				dstValues[next] = types.Varlena{}
+		next := oldLength
+		for row := 0; row < sourceCount; row++ {
+			if flags != nil && flags[row] == 0 {
+				continue
 			}
-		} else {
-			physical := int(rows[logical])
-			if base.IsConst() {
-				physical = 0
-			}
-			if v.typ.IsVarlen() {
-				if err := BuildVarlenaFromVarlena(v, &dstValues[next], &srcValues[physical], &base.area, mp); err != nil {
-					return err
+			logical := int(offset) + row
+			if w.IsNull(uint64(logical)) {
+				nulls.Add(&v.nsp, uint64(next))
+				if v.typ.IsVarlen() {
+					dstValues[next] = types.Varlena{}
 				}
 			} else {
-				copy(v.data[next*width:(next+1)*width], base.data[physical*width:(physical+1)*width])
+				physical := int(rows[logical])
+				if base.IsConst() {
+					physical = 0
+				}
+				if v.typ.IsVarlen() {
+					if err := BuildVarlenaFromVarlena(v, &dstValues[next], &srcValues[physical], &base.area, mp); err != nil {
+						return err
+					}
+				} else {
+					copy(v.data[next*width:(next+1)*width], base.data[physical*width:(physical+1)*width])
+				}
 			}
+			next++
 		}
-		next++
 	}
 	if err := v.propagatePrepareParamKindsBatch(w, oldLength, offset, count, flags, overrides, mp); err != nil {
 		return err
@@ -239,4 +243,94 @@ func dictionarySelectedAreaBytes(source *Vector, offset int, flags []uint8) (int
 		total += int(length)
 	}
 	return total, nil
+}
+
+// Return false only for an unrecognized physical width, leaving the established
+// generic path intact. Type-width, validity and constant decisions are per batch.
+func copyDictionaryFixedBatch(dst, src *Vector, start, count int, flags []uint8, offset, added int) bool {
+	switch src.typ.TypeSize() {
+	case 1:
+		copyDictionaryFixedRows[uint8](dst, src, start, count, flags, offset, added)
+	case 2:
+		copyDictionaryFixedRows[uint16](dst, src, start, count, flags, offset, added)
+	case 4:
+		copyDictionaryFixedRows[uint32](dst, src, start, count, flags, offset, added)
+	case 8:
+		copyDictionaryFixedRows[uint64](dst, src, start, count, flags, offset, added)
+	case 12:
+		copyDictionaryFixedRows[[12]byte](dst, src, start, count, flags, offset, added)
+	case 16:
+		copyDictionaryFixedRows[[16]byte](dst, src, start, count, flags, offset, added)
+	case 20:
+		copyDictionaryFixedRows[[20]byte](dst, src, start, count, flags, offset, added)
+	case 24:
+		copyDictionaryFixedRows[[24]byte](dst, src, start, count, flags, offset, added)
+	case 32:
+		copyDictionaryFixedRows[[32]byte](dst, src, start, count, flags, offset, added)
+	default:
+		return false
+	}
+	return true
+}
+
+func copyDictionaryFixedRows[T any](dst, src *Vector, start, count int, flags []uint8, offset, added int) {
+	backing := src.dictionaryState()
+	base := backing.base.vec
+	target := types.DecodeSlice[T](dst.data[:dst.length*dst.typ.TypeSize()])[offset : offset+added]
+	if base.IsConstNull() {
+		clear(target)
+		nulls.AddRange(&dst.nsp, uint64(offset), uint64(offset+added))
+		return
+	}
+	physicalRows := base.length
+	if base.IsConst() {
+		physicalRows = 1
+	}
+	values := types.DecodeSlice[T](base.data[:physicalRows*base.typ.TypeSize()])
+	mapping := backing.rows.storageFixed()
+	if !src.HasNull() {
+		if base.IsConst() {
+			for i := range target {
+				target[i] = values[0]
+			}
+			return
+		}
+		if flags == nil {
+			for i, row := range mapping[start : start+count] {
+				target[i] = values[row]
+			}
+			return
+		}
+		next := 0
+		for i, flag := range flags {
+			if flag != 0 {
+				target[next] = values[mapping[start+i]]
+				next++
+			}
+		}
+		return
+	}
+	var zero T
+	next := 0
+	limit := count
+	if flags != nil {
+		limit = len(flags)
+	}
+	for i := 0; i < limit; i++ {
+		if flags != nil && flags[i] == 0 {
+			continue
+		}
+		logical := start + i
+		if src.nsp.Contains(uint64(logical)) {
+			target[next] = zero
+			nulls.Add(&dst.nsp, uint64(offset+next))
+		} else {
+			physical := int(mapping[logical])
+			if base.IsConst() {
+				physical = 0
+			}
+			target[next] = values[physical]
+		}
+		next++
+	}
 }
