@@ -33,6 +33,17 @@ import (
 // construction/admission is outside timing and stays visible in peak backing.
 // The original mutable-vector function benchmark is retained independently.
 func BenchmarkJSONValueResidentProjection64(b *testing.B) {
+	benchmarkJSONValueResidentProjection64(b, false)
+}
+
+// The seven-argument contract is compared against the same legacy baseline
+// only for the shared short-text output domain. Its 512-character limit and
+// response semantics have independent correctness coverage.
+func BenchmarkJSONValueContractResidentProjection64(b *testing.B) {
+	benchmarkJSONValueResidentProjection64(b, true)
+}
+
+func benchmarkJSONValueResidentProjection64(b *testing.B, contract bool) {
 	for _, content := range []string{"integer", "string", "mixed", "wide", "deep"} {
 		for _, count := range []int{16, 4096} {
 			for _, paths := range []int{1, 2, 8} {
@@ -55,7 +66,12 @@ func BenchmarkJSONValueResidentProjection64(b *testing.B) {
 					input.SetRowCount(64)
 					projection := &Projection{}
 					b.Cleanup(func() { projection.FreeProjection(proc) })
-					overload, err := function.GetFunctionByName(proc.Ctx, "json_value", []types.Type{types.T_json.ToType(), types.T_varchar.ToType()})
+					target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+					argumentTypes := []types.Type{types.T_json.ToType(), types.T_varchar.ToType()}
+					if contract {
+						argumentTypes = append(argumentTypes, target, types.T_int64.ToType(), target, types.T_int64.ToType(), target)
+					}
+					overload, err := function.GetFunctionByName(proc.Ctx, "json_value", argumentTypes)
 					require.NoError(b, err)
 					for i := 0; i < paths; i++ {
 						key := "keep"
@@ -64,7 +80,18 @@ func BenchmarkJSONValueResidentProjection64(b *testing.B) {
 						}
 						column := &plan.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
 						path := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: prefix + "." + key}}}}
-						projection.ProjectList = append(projection.ProjectList, &plan.Expr{Typ: overload.GetReturnType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: overload.GetEncodedOverloadID(), ObjName: "json_value"}, Args: []*plan.Expr{column, path}}}})
+						args := []*plan.Expr{column, path}
+						if contract {
+							mode := func() *plan.Expr {
+								return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}
+							}
+							nullDefault := func() *plan.Expr {
+								return &plan.Expr{Typ: target.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+							}
+							targetExpr := &plan.Expr{Typ: target.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+							args = append(args, targetExpr, mode(), nullDefault(), mode(), nullDefault())
+						}
+						projection.ProjectList = append(projection.ProjectList, &plan.Expr{Typ: overload.GetReturnType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: overload.GetEncodedOverloadID(), ObjName: "json_value"}, Args: args}}})
 					}
 					require.NoError(b, projection.PrepareProjection(proc))
 					evaluate := jsonProjectionResidentBenchmarkEvaluator(b, proc, projection, input)
