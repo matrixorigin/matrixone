@@ -79,6 +79,10 @@ checks each descriptor, shortest length prefix, range and UTF-8 payload while
 enforcing running byte and node budgets. It commits those charges before any
 other scalar callback or child descent. Generic validators keep their existing
 callbacks; the optimization never accepts an unvalidated document.
+For canonical object keys, a single UTF-8 scan may cover contiguous ranges
+after each key's range, ordering and first-byte boundary are checked. Gaps end
+the scan and are excluded. This cannot join an incomplete rune from one key
+with a continuation byte from the next; the scan completes before values.
 GetBytesAtChecked provides bounds-checked access to mutable descriptors but does
 not validate JSON or establish read ownership.
 
