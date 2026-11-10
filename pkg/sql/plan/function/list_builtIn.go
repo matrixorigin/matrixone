@@ -8063,6 +8063,24 @@ var supportedMathBuiltIns = []FuncNew{
 					return HexArray
 				},
 			},
+			{
+				// TEXT must bind directly: now that T_text's implicit-cast
+				// rule prefers INT64 like its CHAR/VARCHAR peers (for the
+				// omitted-length CAST/CONVERT-to-CHAR target, #32336,
+				// #32374), a by-cast resolution for HEX would otherwise
+				// pick the cheaper BIGINT overload and encode the input
+				// as an integer instead of keeping the string encoding of
+				// the pre-widening VARCHAR composition. The same string
+				// executor as the VARCHAR overload preserves both domains.
+				overloadId: 8,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexString
+				},
+			},
 		},
 	},
 
@@ -9073,6 +9091,23 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_date.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDate
+				},
+			},
+			{
+				// TEXT must bind directly: DATE's DATE overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, whose ParseDateCast rejects
+				// the compact yyyymmddhhmmss datetime spelling and NULLs it.
+				// The string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both spellings.
+				overloadId: 5,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_date.ToType()
 				},

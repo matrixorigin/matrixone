@@ -223,3 +223,47 @@ select month(cast('2024-06-05' as char)) as month_valid_cast,
 month(convert('2024-06-05', char)) as month_valid_convert;
 ➤ month_valid_cast[-6,8,0]  ¦  month_valid_convert[-6,8,0]  𝄀
 6  ¦  6
+select bin(cast('256' as char)) as bin_text,
+bin(convert('256', char)) as bin_convert,
+bin(cast('256' as varchar(10))) as bin_varchar_control;
+➤ bin_text[12,-1,0]  ¦  bin_convert[12,-1,0]  ¦  bin_varchar_control[12,-1,0]  𝄀
+100000000  ¦  100000000  ¦  100000000
+select round(cast('-1' as char)) as round_text,
+round(cast('-1' as char), 0) as round2_text,
+round(cast('-1' as varchar(10))) as round_varchar_control;
+➤ round_text[-5,64,0]  ¦  round2_text[-5,64,0]  ¦  round_varchar_control[-5,64,0]  𝄀
+-1  ¦  -1  ¦  -1
+select truncate(cast('-1' as char), 0) as truncate_text;
+➤ truncate_text[-5,64,0]  𝄀
+-1
+select space(cast('-1' as char)) as space_text,
+length(space(cast('2' as char))) as space_len_text;
+➤ space_text[12,-1,0]  ¦  space_len_text[-5,64,0]  𝄀
+  ¦  2
+select ceil(cast('-1' as char), 0) as ceil2_text,
+floor(cast('-1' as char), 0) as floor2_text,
+ceil(cast('-1.2' as char)) as ceil_onearg_text;
+➤ ceil2_text[-5,64,0]  ¦  floor2_text[-5,64,0]  ¦  ceil_onearg_text[8,54,0]  𝄀
+-1  ¦  -1  ¦  -1.0
+select -cast('300' as char) as neg_text,
+cast('300' as char) << 1 as shiftl_text;
+➤ neg_text[-5,64,0]  ¦  shiftl_text[-5,64,0]  𝄀
+-300  ¦  600
+select date(cast('20240102123456' as char)) as date_compact_cast,
+date(convert('20240102123456', char)) as date_compact_convert;
+➤ date_compact_cast[91,64,0]  ¦  date_compact_convert[91,64,0]  𝄀
+2024-01-02  ¦  2024-01-02
+select date(cast('20240102' as char)) as date_ymd_cast,
+date(cast('2024-01-02 12:34:56' as char)) as date_full_cast,
+date(cast('2024-01-02 12:34:56' as varchar(32))) as date_varchar_control;
+➤ date_ymd_cast[91,64,0]  ¦  date_full_cast[91,64,0]  ¦  date_varchar_control[91,64,0]  𝄀
+2024-01-02  ¦  2024-01-02  ¦  2024-01-02
+select hex(cast('256' as char)) as hex_text,
+hex(convert('256', char)) as hex_convert,
+hex(cast('256' as varchar(10))) as hex_varchar_control,
+hex(4660) as hex_int_control;
+➤ hex_text[12,-1,0]  ¦  hex_convert[12,-1,0]  ¦  hex_varchar_control[12,-1,0]  ¦  hex_int_control[12,-1,0]  𝄀
+323536  ¦  323536  ¦  323536  ¦  1234
+select length(hex(cast(concat(repeat('a',50000), repeat('b',50000)) as char))) as hex_len_text;
+➤ hex_len_text[-5,64,0]  𝄀
+200000

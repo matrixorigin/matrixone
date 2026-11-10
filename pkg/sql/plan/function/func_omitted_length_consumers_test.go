@@ -378,3 +378,149 @@ func TestDateStringExtractorsBindTextDirectly(t *testing.T) {
 		})
 	}
 }
+
+// TestNumericTextCompositionsKeepSignedInt64Peer covers the regression
+// raised by PR review: the omitted-length CAST/CONVERT-to-CHAR result widens
+// to TEXT (#32336, #32374), and every TEXT-to-integer conversion then costs
+// the same, so fixedTypeMatch's tie kept the FIRST listed overload of BIN,
+// ROUND, TRUNCATE, SPACE and the two-argument CEIL/FLOOR, plus unary -/+. The
+// inserted TEXT-to-UINT8/UINT64 casts rejected '256', '-1' and '-300' that
+// the pre-widening VARCHAR-to-INT64 coercion accepted (SELECT BIN(CAST('256'
+// AS CHAR)) failed with a uint8 range error; SQL evidence from the review
+// and from the issue-32336 validation service). TEXT shares the CHAR/VARCHAR
+// string-number domain again, so every composition resolves to exactly its
+// VARCHAR peer's INT64 overload.
+func TestNumericTextCompositionsKeepSignedInt64Peer(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name string
+		args []types.T
+	}{
+		{"bin", []types.T{types.T_text}},
+		{"round", []types.T{types.T_text}},
+		{"round", []types.T{types.T_text, types.T_int64}},
+		{"truncate", []types.T{types.T_text}},
+		{"truncate", []types.T{types.T_text, types.T_int64}},
+		{"space", []types.T{types.T_text}},
+		{"ceil", []types.T{types.T_text, types.T_int64}},
+		{"floor", []types.T{types.T_text, types.T_int64}},
+		{"unary_minus", []types.T{types.T_text}},
+		{"unary_plus", []types.T{types.T_text}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			textArgs := make([]types.Type, len(tc.args))
+			peerArgs := make([]types.Type, len(tc.args))
+			hasText := false
+			for i, a := range tc.args {
+				textArgs[i] = a.ToType()
+				if a == types.T_text {
+					hasText = true
+					peerArgs[i] = types.T_varchar.ToType()
+				} else {
+					peerArgs[i] = a.ToType()
+				}
+			}
+			require.True(t, hasText, "probe must feed a widened TEXT operand")
+
+			textSel, err := GetFunctionByName(proc.Ctx, tc.name, textArgs)
+			require.NoError(t, err)
+			peerSel, err := GetFunctionByName(proc.Ctx, tc.name, peerArgs)
+			require.NoError(t, err)
+			require.Equal(t, peerSel.GetEncodedOverloadID(), textSel.GetEncodedOverloadID(),
+				"%s: the widened TEXT operand must resolve its peer's signed INT64 overload, not the first listed unsigned one",
+				tc.name)
+
+			castTypes, shouldCast := textSel.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast,
+				"%s: the numeric compositions consume TEXT through the pre-widening implicit string-to-INT64 cast", tc.name)
+			for i := range textArgs {
+				if textArgs[i].Oid != types.T_text {
+					continue
+				}
+				require.Equal(t, types.T_int64, castTypes[i].Oid,
+					"%s: the widened TEXT operand must insert the peer's INT64 cast target", tc.name)
+			}
+		})
+	}
+
+	// Executor-level sanity of the restored domain: the selected INT64
+	// overload accepts the review's rejected values through the same
+	// implicit cast the VARCHAR peer used (BIN renders two's complement,
+	// so -1 is 64 ones).
+	inputs := []int64{256, -1, -300}
+	expects := make([]string, len(inputs))
+	for i, v := range inputs {
+		expects[i] = fmt.Sprintf("%b", uint64(v))
+	}
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), inputs, nil)},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, expects, nil),
+		Bin[int64])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'bin keeps the signed values through INT64', err info is '%s'", info))
+}
+
+// TestDateTextKeepsStringParser covers the regression raised by PR review:
+// DATE(T#32336-widened TEXT) tied into DATE's first DATE overload, and the
+// inserted strToDate cast rejected the compact yyyymmddhhmmss spelling
+// ('20240102123456'), NULLing what the pre-widening VARCHAR composition
+// parsed as 2024-01-02 (SQL evidence: SELECT DATE(CONVERT('20240102123456',
+// CHAR)) returned NULL against the review's claim of 2024-01-02). The direct
+// TEXT overload binds the string parser again, for both spellings.
+func TestDateTextKeepsStringParser(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	get, err := GetFunctionByName(proc.Ctx, "date", []types.Type{types.T_text.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_date, get.GetReturnType().Oid,
+		"the TEXT overload must keep its VARCHAR peer's return type")
+	_, shouldCast := get.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast,
+		"date(text) must bind the string overload directly, not tie into the DATE overload through an equal-cost cast")
+
+	for _, input := range []string{"20240102123456", "20240102", "2024-01-02 12:34:56"} {
+		expect, err := types.ParseDatetime(input, 6)
+		require.NoError(t, err)
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{input}, nil)},
+			NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{expect.ToDate()}, nil),
+			DateStringToDate)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is 'date keeps the string parser for %s', err info is '%s'", input, info))
+	}
+}
+
+// TestHexTextKeepsStringEncoding covers the interaction of the restored
+// TEXT-to-INT64 preference with a function that carries both string and
+// integer overloads: without the direct TEXT overload the cheaper INT64
+// route captures the widened TEXT operand and encodes it as a number,
+// turning HEX(CAST('256' AS CHAR)) from the string encoding '323536' into
+// the numeric '100'. The TEXT overload keeps the VARCHAR peer's string
+// executor while integer inputs keep their own overloads.
+func TestHexTextKeepsStringEncoding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		arg   types.T
+		casts bool
+	}{
+		{types.T_text, false},
+		{types.T_varchar, false},
+	} {
+		get, err := GetFunctionByName(proc.Ctx, "hex", []types.Type{tc.arg.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid,
+			"hex(%s) must keep the VARCHAR peer's return type", tc.arg)
+		_, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.Equal(t, tc.casts, shouldCast,
+			"hex(%s) must bind the string overload directly, not the cheaper INT64 overload", tc.arg)
+	}
+
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"256"}, nil)},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"323536"}, nil),
+		HexString)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is 'hex keeps the string encoding for TEXT', err info is '%s'", info))
+}

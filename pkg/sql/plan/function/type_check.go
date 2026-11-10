@@ -2434,7 +2434,17 @@ func initFixed3() {
 				{toType: types.T_int8, preferLevel: 2},
 				{toType: types.T_int16, preferLevel: 2},
 				{toType: types.T_int32, preferLevel: 2},
-				{toType: types.T_int64, preferLevel: 2},
+				// TEXT shares the CHAR/VARCHAR string-number coercion domain:
+				// the omitted-length CAST/CONVERT-to-CHAR target is TEXT
+				// (#32336, #32374), and without the preference every integer
+				// overload resolves at the same cost, keeping the first listed
+				// one. BIN('256'), ROUND('-1'), TRUNCATE, SPACE, two-argument
+				// CEIL/FLOOR and unary +/- would then coerce through
+				// UINT8/UINT64 and reject inputs the signed INT64 path accepts.
+				// Functions with both string and integer overloads (HEX) keep
+				// their string domain through a direct TEXT overload in
+				// list_builtIn.go instead of through this cheaper integer route.
+				{toType: types.T_int64, preferLevel: 1},
 				{toType: types.T_uint8, preferLevel: 2},
 				{toType: types.T_uint16, preferLevel: 2},
 				{toType: types.T_uint32, preferLevel: 2},

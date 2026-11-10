@@ -231,3 +231,45 @@ select year(cast('2024-06-05' as char)) as year_valid_cast,
        year(convert('2024-06-05', char)) as year_valid_convert;
 select month(cast('2024-06-05' as char)) as month_valid_cast,
        month(convert('2024-06-05', char)) as month_valid_convert;
+
+-- [review round] Preserve the signed INT64 coercion domain for the widened
+-- CHAR results: after the omitted-length CAST/CONVERT-to-CHAR target became
+-- TEXT, every TEXT-to-integer conversion had equal cost, so BIN, ROUND,
+-- TRUNCATE, SPACE and the two-argument CEIL/FLOOR kept their first listed
+-- (unsigned) overloads and rejected values like '256' and '-1' that the
+-- pre-widening VARCHAR-to-INT64 path accepted. TEXT prefers the INT64 cast
+-- like its CHAR/VARCHAR peers again, for both spellings.
+select bin(cast('256' as char)) as bin_text,
+       bin(convert('256', char)) as bin_convert,
+       bin(cast('256' as varchar(10))) as bin_varchar_control;
+select round(cast('-1' as char)) as round_text,
+       round(cast('-1' as char), 0) as round2_text,
+       round(cast('-1' as varchar(10))) as round_varchar_control;
+select truncate(cast('-1' as char), 0) as truncate_text;
+select space(cast('-1' as char)) as space_text,
+       length(space(cast('2' as char))) as space_len_text;
+select ceil(cast('-1' as char), 0) as ceil2_text,
+       floor(cast('-1' as char), 0) as floor2_text,
+       ceil(cast('-1.2' as char)) as ceil_onearg_text;
+select -cast('300' as char) as neg_text,
+       cast('300' as char) << 1 as shiftl_text;
+
+-- DATE keeps its string parsing overload for the widened CHAR results: the
+-- compact yyyymmddhhmmss spelling still parses the way the pre-widening
+-- VARCHAR composition did, for both spellings, instead of NULLing through a
+-- DATE cast whose parser rejects 14-digit datetimes.
+select date(cast('20240102123456' as char)) as date_compact_cast,
+       date(convert('20240102123456', char)) as date_compact_convert;
+select date(cast('20240102' as char)) as date_ymd_cast,
+       date(cast('2024-01-02 12:34:56' as char)) as date_full_cast,
+       date(cast('2024-01-02 12:34:56' as varchar(32))) as date_varchar_control;
+
+-- HEX carries both string and integer overloads: with the restored TEXT
+-- preference the widened CHAR result keeps the string encoding domain of
+-- its VARCHAR peer ('323536', not the numeric '100'), and the complete
+-- untruncated TEXT reaches the string encoder.
+select hex(cast('256' as char)) as hex_text,
+       hex(convert('256', char)) as hex_convert,
+       hex(cast('256' as varchar(10))) as hex_varchar_control,
+       hex(4660) as hex_int_control;
+select length(hex(cast(concat(repeat('a',50000), repeat('b',50000)) as char))) as hex_len_text;
