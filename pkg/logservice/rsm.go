@@ -366,7 +366,10 @@ func (s *stateMachine) handleSetRequiredLsn(cmd []byte) sm.Result {
 	lsn := parseRequiredLsn(cmd)
 	if lsn >= s.state.RequiredLsn {
 		s.state.RequiredLsn = lsn
-		s.state.RequiredLsnRevision++
+		// Legacy snapshots do not contain a revision. Derive it from the
+		// retained LSN so replicas restoring at different snapshot indices
+		// agree after replaying the same legacy entries.
+		s.state.RequiredLsnRevision = lsn
 		return sm.Result{}
 	}
 	return sm.Result{Value: s.state.RequiredLsn}
@@ -521,5 +524,13 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	return s.state.Unmarshal(data)
+	recovered := pb.RSMState{Tso: 1, LeaseHistory: make(map[uint64]uint64)}
+	if err := recovered.Unmarshal(data); err != nil {
+		return err
+	}
+	if !recovered.RequiredLsnConditional {
+		recovered.RequiredLsnRevision = recovered.RequiredLsn
+	}
+	s.state = recovered
+	return nil
 }

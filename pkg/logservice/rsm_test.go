@@ -393,18 +393,18 @@ func TestRequiredLsnOwnerFencesResetAndDelayedAdvance(t *testing.T) {
 	}
 
 	assert.Zero(t, apply(getSetRequiredLsnCmd(100)).Value)
-	assert.Zero(t, apply(getClaimRequiredLsnCmd(100, 1, 11, 1, 2)).Value)
-	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(120, 100, 2, 11)).Value)
-	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 100, 2, 11)).Value)
+	assert.Zero(t, apply(getClaimRequiredLsnCmd(100, 100, 11, 1, 2)).Value)
+	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(120, 100, 101, 11)).Value)
+	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 100, 101, 11)).Value)
 	assert.Equal(t, uint64(120), s.state.RequiredLsn)
-	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 120, 3, 11)).Value)
+	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(0, 120, 102, 11)).Value)
 	assert.Equal(t, uint64(0), s.state.RequiredLsn)
 	term = 2
-	assert.Zero(t, apply(getClaimRequiredLsnCmd(0, 4, 22, 2, 3)).Value)
-	assert.NotZero(t, apply(getClaimRequiredLsnCmd(0, 5, 11, 1, 2)).Value)
-	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(500, 0, 4, 11)).Value)
-	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(500, 0, 5, 11)).Value)
-	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(1, 0, 5, 22)).Value)
+	assert.Zero(t, apply(getClaimRequiredLsnCmd(0, 103, 22, 2, 3)).Value)
+	assert.NotZero(t, apply(getClaimRequiredLsnCmd(0, 104, 11, 1, 2)).Value)
+	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(500, 0, 103, 11)).Value)
+	assert.NotZero(t, apply(getSetRequiredLsnIfCurrentCmd(500, 0, 104, 11)).Value)
+	assert.Zero(t, apply(getSetRequiredLsnIfCurrentCmd(1, 0, 104, 22)).Value)
 	assert.NotEmpty(t, apply(getSetRequiredLsnCmd(500)).Data)
 	assert.Equal(t, uint64(1), s.state.RequiredLsn)
 
@@ -416,6 +416,46 @@ func TestRequiredLsnOwnerFencesResetAndDelayedAdvance(t *testing.T) {
 	assert.Equal(t, s.state.RequiredLsnRevision, restored.state.RequiredLsnRevision)
 	assert.Equal(t, s.state.RequiredLsnOwner, restored.state.RequiredLsnOwner)
 	assert.Equal(t, s.state.RequiredLsnLeaderTerm, restored.state.RequiredLsnLeaderTerm)
+}
+
+func TestRequiredLsnLegacySnapshotsAgreeAfterDifferentReplay(t *testing.T) {
+	restoreLegacy := func(index, lsn uint64) *stateMachine {
+		legacy := newStateMachine(1, 2).(*stateMachine)
+		legacy.state.Index = index
+		legacy.state.RequiredLsn = lsn
+		var snapshot bytes.Buffer
+		require.NoError(t, legacy.SaveSnapshot(&snapshot, nil, nil))
+		restored := newStateMachine(1, 3).(*stateMachine)
+		restored.state.RequiredLsnConditional = true
+		restored.state.RequiredLsnRevision = 999
+		restored.state.RequiredLsnOwner = 99
+		require.NoError(t, restored.RecoverFromSnapshot(&snapshot, nil, nil))
+		require.False(t, restored.state.RequiredLsnConditional)
+		require.Zero(t, restored.state.RequiredLsnOwner)
+		restored.entryTerm = func(uint64) (uint64, error) { return 1, nil }
+		return restored
+	}
+
+	early := restoreLegacy(10, 100)
+	late := restoreLegacy(15, 200)
+	result, err := early.Update(sm.Entry{Index: 12, Cmd: getSetRequiredLsnCmd(200)})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	for index := uint64(13); index <= 15; index++ {
+		_, err = early.Update(sm.Entry{Index: index, Cmd: getTsoUpdateCmd(0)})
+		require.NoError(t, err)
+	}
+	require.Equal(t, late.state.RequiredLsnRevision, early.state.RequiredLsnRevision)
+	require.Equal(t, uint64(200), early.state.RequiredLsnRevision)
+
+	claim := getClaimRequiredLsnCmd(200, 200, 11, 1, 2)
+	for _, replica := range []*stateMachine{early, late} {
+		result, err = replica.Update(sm.Entry{Index: 16, Cmd: claim})
+		require.NoError(t, err)
+		require.Zero(t, result.Value)
+	}
+	require.Equal(t, early.state.RequiredLsnRevision, late.state.RequiredLsnRevision)
+	require.Equal(t, early.state.RequiredLsnOwner, late.state.RequiredLsnOwner)
 }
 
 func TestRequiredLsnRejectsStaleOwnerAtCommittedTerm(t *testing.T) {

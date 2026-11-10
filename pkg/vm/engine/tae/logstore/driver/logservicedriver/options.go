@@ -72,6 +72,12 @@ func WithConfigOptClientFactory(f LogServiceClientFactory) ConfigOption {
 	}
 }
 
+func WithConfigOptContextClientFactory(f func(context.Context) (logservice.Client, error)) ConfigOption {
+	return func(cfg *Config) {
+		cfg.contextClientFactory = f
+	}
+}
+
 func WithConfigOptClientConfig(sid string, clientCfg *logservice.ClientConfig) ConfigOption {
 	return func(cfg *Config) {
 		cfg.IsMockBackend = false

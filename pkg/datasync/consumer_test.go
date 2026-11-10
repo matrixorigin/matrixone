@@ -1550,6 +1550,121 @@ func TestConsumerStart(t *testing.T) {
 	})
 }
 
+type termFencedLogClient struct {
+	LogClient
+	term, ownerTerm uint64
+	claims          int
+	elected         bool
+	conflicted      chan struct{}
+	updated         chan struct{}
+}
+
+func (c *termFencedLogClient) claimRequiredLsn(ctx context.Context) error {
+	if err := c.LogClient.claimRequiredLsn(ctx); err != nil {
+		return err
+	}
+	c.ownerTerm = c.term
+	c.claims++
+	return nil
+}
+
+func (c *termFencedLogClient) setRequiredLsn(ctx context.Context, lsn uint64) error {
+	if !c.elected {
+		// The same replica wins a new term after the role check but before
+		// the required-LSN proposal commits.
+		c.term++
+		c.elected = true
+		close(c.conflicted)
+	}
+	if c.ownerTerm != c.term {
+		return errRequiredLsnConflict
+	}
+	if err := c.LogClient.setRequiredLsn(ctx, lsn); err != nil {
+		return err
+	}
+	select {
+	case c.updated <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (c *termFencedLogClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) error {
+	return c.setRequiredLsn(ctx, lsn)
+}
+
+func (c *termFencedLogClient) resetRequiredLsn(ctx context.Context) error {
+	return c.setRequiredLsn(ctx, 0)
+}
+
+func TestConsumerReclaimsAfterSameLeaderReelection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := createTestConsumer(nil, nil)
+	require.NotNil(t, c)
+	c.common.setShardReplicaID(logShardID, 10)
+	base := c.logClient.(*mockLogClient)
+	base.setLeaderID(10)
+	require.NoError(t, base.setRequiredLsn(ctx, 1))
+	rec, fileName, err := genRecordWithLocation(0, 10)
+	require.NoError(t, err)
+	require.NoError(t, c.srcFS.Write(ctx, fileservice.IOVector{
+		FilePath: fileName,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 4, Data: []byte("test")}},
+	}))
+	_, err = base.write(ctx, rec.Data)
+	require.NoError(t, err)
+	c.writeLsn.Store(1)
+	c.loopWorkInterval = time.Millisecond
+	fenced := &termFencedLogClient{
+		LogClient: base, term: 1,
+		conflicted: make(chan struct{}), updated: make(chan struct{}, 1),
+	}
+	c.logClient = fenced
+	done := make(chan struct{})
+	go func() {
+		c.Start(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+			c.Close()
+		case <-time.After(5 * time.Second):
+			t.Error("consumer did not stop")
+		}
+	}()
+	select {
+	case <-fenced.conflicted:
+	case <-done:
+		t.Fatal("consumer exited before ownership conflict")
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not reach the ownership conflict")
+	}
+	select {
+	case <-fenced.updated:
+	case <-done:
+		t.Fatal("consumer exited before reclaiming ownership")
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not reclaim ownership")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not stop after cancellation")
+	}
+	require.Equal(t, uint64(2), fenced.ownerTerm)
+	require.Equal(t, 2, fenced.claims)
+	leaderID, err := base.getLeaderID(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), leaderID)
+	required, err := base.getRequiredLsn(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), required)
+}
+
 func TestCreateConsumer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	fs := newTestFS()

@@ -182,10 +182,14 @@ func (c *consumer) Start(ctx context.Context) {
 			c.log.Error("failed to claim required LSN", zap.Error(err))
 			continue
 		}
+		c.lastRequiredLsn = 0
 
 		// Initialize the consumer.
 		if err := c.init(ctx); err != nil {
 			c.log.Error("consumer failed to init", zap.Error(err))
+			if errors.Is(err, errRequiredLsnConflict) {
+				continue
+			}
 
 			// init failed, fall back to the original state and try again.
 			c.cleanState(ctx, c.cleanStateInterval)
@@ -195,6 +199,10 @@ func (c *consumer) Start(ctx context.Context) {
 		// Consume the log entries in datasync shard continuously.
 		if err := c.loop(ctx, c.loopWorkInterval); err == nil {
 			// role has changed, cannot do the data sync stuff.
+			continue
+		} else if errors.Is(err, errRequiredLsnConflict) {
+			// A higher term can have the same leader ID. Reclaim in the next
+			// run without clearing another term's required-LSN ownership.
 			continue
 		}
 
@@ -417,6 +425,9 @@ func (c *consumer) loop(ctx context.Context, interval time.Duration) error {
 			}
 			if err := c.consumeEntries(ctx, entries, false); err != nil {
 				c.log.Error("failed to consume entries", zap.Error(err))
+				if errors.Is(err, errRequiredLsnConflict) {
+					return err
+				}
 
 				// If the error is ErrFileNotFound, probably means that the file in
 				// source file service has been GCed.

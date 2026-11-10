@@ -339,18 +339,18 @@ func TestGetOnFlyContextCancelsClientCreationRetry(t *testing.T) {
 
 func TestGetOnFlyContextCancelsInFlightFactory(t *testing.T) {
 	backend := NewMockBackend()
+	started := make(chan struct{})
 	cfg := NewConfig("", WithConfigOptMaxClient(1),
 		WithConfigOptClientFactory(func() (logservice.Client, error) {
 			return newMockBackendClient(backend), nil
+		}),
+		WithConfigOptContextClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
 		}))
 	pool := newClientPool(&cfg)
 	defer pool.Close()
-	started := make(chan struct{})
-	cfg.contextClientFactory = func(ctx context.Context) (logservice.Client, error) {
-		close(started)
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)

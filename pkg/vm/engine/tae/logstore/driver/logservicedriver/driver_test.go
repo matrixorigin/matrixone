@@ -149,6 +149,37 @@ func TestCloseCancelsCheckpointTruncate(t *testing.T) {
 	require.EqualValues(t, 1, calls.Load())
 }
 
+func TestCloseCancelsCheckpointTruncateClientCreation(t *testing.T) {
+	backend := NewMockBackend()
+	started := make(chan struct{})
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			return newMockBackendClient(backend), nil
+		}),
+		WithConfigOptContextClientFactory(func(ctx context.Context) (logservice.Client, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}))
+	d := NewLogServiceDriver(&cfg)
+	d.replayState.Store(newReplayState(true, nil, driver.ReplayMode_ReplayForWrite, nil))
+	d.recordSequenceNumbers(1, common.ClosedInterval{Start: 1, End: 1})
+	require.NoError(t, d.Truncate(1))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint Truncate did not start client creation")
+	}
+	result := make(chan error, 1)
+	go func() { result <- d.Close() }()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for in-flight client creation")
+	}
+}
+
 type blockingBackendClient struct {
 	*mockBackendClient
 	appendStarted chan struct{}
