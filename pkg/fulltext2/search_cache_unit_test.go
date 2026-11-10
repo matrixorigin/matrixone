@@ -83,7 +83,7 @@ func TestFulltext2SearchLoadFailurePreservesOtherGeneration(t *testing.T) {
 	}, 0)
 	require.NoError(t, err)
 	view.Free()
-	tailViews, _ := loadedTailPool.installAndAcquire("db.__store", newTailState(1, 1, []*Segment{NewSegment("tail-1", 0)}, nil))
+	tailViews, _ := loadedTailPool.installAndAcquire("db.__store", newTailState(1, 1, 1, []*Segment{NewSegment("tail-1", 0)}, nil))
 	freeSegs(tailViews)
 
 	sp, mp := mockSqlProc(t)
@@ -137,7 +137,7 @@ func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T)
 				case strings.Contains(sql, "MAX(timestamp)"):
 					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
 				case strings.Contains(sql, "MAX(chunk_id)"):
-					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{tailBoundsBatch(mp, 22, 22)}}, nil
 				case strings.Contains(sql, "LENGTH("):
 					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
 				default:
@@ -702,19 +702,17 @@ func TestLoadGenerationHappy(t *testing.T) {
 	n := 0
 	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		n++
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		v := int64(11)
+		bat := int64Batch(mp, 11)
 		if n == 2 {
-			v = 22
+			bat.Clean(mp)
+			bat = tailBoundsBatch(mp, 13, 22)
 		}
-		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], v, false, mp))
-		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
-	ts, tail, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
+	ts, first, tail, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
 	require.NoError(t, err)
-	require.Equal(t, int64(11), ts)   // MAX(timestamp)
+	require.Equal(t, int64(11), ts) // MAX(timestamp)
+	require.Equal(t, int64(13), first)
 	require.Equal(t, int64(22), tail) // MAX(chunk_id) tag=1
 }
 
@@ -728,7 +726,7 @@ func TestLoadGenerationRecover(t *testing.T) {
 	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		panic("simulated executor teardown")
 	}
-	_, _, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
+	_, _, _, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "LoadGeneration recovered")
 }

@@ -75,10 +75,10 @@ func alterCopyPrimaryKeyUnchanged(old, target *TableDef, ctx *AlterTableContext,
 // alterCopyCloneIndexes has one decision per logical index, shared by INSERT
 // maintenance, hidden-table cloning and post-copy plugin rebuilding. All physical
 // definitions must survive unchanged; a matching name alone is insufficient.
-func alterCopyCloneIndexes(old, target *TableDef, ctx *AlterTableContext, preserved map[string]bool, locatorUnchanged bool) map[string]bool {
+func alterCopyCloneIndexes(old, target *TableDef, ctx *AlterTableContext, preserved map[string]bool, locatorUnchanged bool) (map[string]bool, error) {
 	clone := make(map[string]bool)
 	if !locatorUnchanged {
-		return clone
+		return clone, nil
 	}
 	byName := make(map[string][]*plan.IndexDef)
 	for _, idx := range target.Indexes {
@@ -102,11 +102,23 @@ func alterCopyCloneIndexes(old, target *TableDef, ctx *AlterTableContext, preser
 					break
 				}
 			}
-			if dst == nil || dst.Unique != oldIdx.Unique || dst.IndexAlgo != oldIdx.IndexAlgo || dst.IndexAlgoParams != oldIdx.IndexAlgoParams || !slices.Equal(dst.IncludedColumns, oldIdx.IncludedColumns) {
+			if dst == nil || dst.Unique != oldIdx.Unique || dst.IndexAlgo != oldIdx.IndexAlgo || dst.IndexAlgoParams != oldIdx.IndexAlgoParams {
 				valid = false
 				break
 			}
-			for _, part := range append(slices.Clone(dst.Parts), dst.IncludedColumns...) {
+			oldInclude, err := indexDefIncludedColumns(oldIdx)
+			if err != nil {
+				return nil, err
+			}
+			newInclude, err := indexDefIncludedColumns(dst)
+			if err != nil {
+				return nil, err
+			}
+			if !slices.Equal(oldInclude, newInclude) {
+				valid = false
+				break
+			}
+			for _, part := range append(slices.Clone(dst.Parts), newInclude...) {
 				name := catalog.ResolveAlias(part)
 				// The complete locator was proved above, including hidden composite
 				// and fake keys that are absent from the user-column projection.
@@ -127,5 +139,5 @@ func alterCopyCloneIndexes(old, target *TableDef, ctx *AlterTableContext, preser
 			clone[name] = true
 		}
 	}
-	return clone
+	return clone, nil
 }

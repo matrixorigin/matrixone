@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -181,4 +182,28 @@ func TestDataRetrieverCancelAfterClose(t *testing.T) {
 	r.Cancel(cause)
 	require.True(t, r.IsCanceled())
 	require.ErrorIs(t, r.terminalError(), cause)
+}
+
+func TestWorkerDoesNotCompleteUnownedRunningGeneration(t *testing.T) {
+	// This durable row can result either from another runner admitting queued
+	// work during lease handoff, or from this runner losing its admission ACK.
+	for _, why := range []string{"queued runner handoff", "admission acknowledgement lost"} {
+		t.Run(why, func(t *testing.T) {
+			res, mp := newISCPLogResult(t, []iscpLogBatch{{jobNames: []string{"index_idx"}, jobIDs: []uint64{3}, jobSpecs: []string{mustMarshalJobSpec(t, "idx")}, jobStatuss: []string{mustMarshalJobStatus(t, 7, JobStage_Init)}}})
+			vector.MustFixedColWithTypeCheck[int8](res.Batches[0].Vecs[4])[0] = ISCPJobState_Running
+			old := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = old; require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			reads := 0
+			ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+				require.Contains(t, sql, "SELECT job_name, job_id, job_spec", "unknown admission never authorizes a status write")
+				reads++
+				return res, nil
+			}
+			txn := &statusTestTxn{}
+			w := &worker{ctx: t.Context(), cnEngine: statusTestEngine{}, cnTxnClient: &statusTestClient{ops: []*statusTestTxn{txn}}}
+			w.onItem(NewIterationContext(0, 10, []string{"index_idx"}, []uint64{3}, []uint64{7}, types.TS{}, types.TS{}))
+			require.Equal(t, 1, reads, "uncertain ownership stops before retry or failure publication")
+			require.Equal(t, 1, txn.rollbacks)
+		})
+	}
 }

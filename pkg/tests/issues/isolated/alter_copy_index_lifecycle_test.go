@@ -24,16 +24,21 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	cagracompile "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/compile"
+	ivfpqcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/compile"
 	"github.com/stretchr/testify/require"
 )
 
 // This private CN is required for fault injection and executor handoff. The
 // ordinary COPY SQL cases use BVT; no second cluster is needed for these phases.
-func TestAlterCopyHnswSnapshot(t *testing.T) {
+func TestAlterCopyIndexLifecycle(t *testing.T) {
 	path, err := os.MkdirTemp("", "copy-ann-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(path)) })
@@ -47,7 +52,7 @@ func TestAlterCopyHnswSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	db.SetMaxOpenConns(3)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
 	var runtime *iscp.ISCPTaskExecutor
 	require.Eventually(t, func() bool {
@@ -150,6 +155,7 @@ func TestAlterCopyHnswSnapshot(t *testing.T) {
 		nearest(t, 6)
 		rows, err := conn.QueryContext(ctx, "select id from h order by l2_distance(v,'[0,0,0]') limit 10")
 		require.NoError(t, err)
+		defer func() { require.NoError(t, rows.Close()) }()
 		var ids []int64
 		for rows.Next() {
 			var id int64
@@ -157,7 +163,6 @@ func TestAlterCopyHnswSnapshot(t *testing.T) {
 			ids = append(ids, id)
 		}
 		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
 		require.Equal(t, []int64{6, 2}, ids)
 		exec(t, "drop table h")
 	})
@@ -218,4 +223,109 @@ func TestAlterCopyHnswSnapshot(t *testing.T) {
 		nearest(t, 6)
 		exec(t, "drop table h")
 	})
+	t.Run("cuVS generated clear preserves physical table identities", func(t *testing.T) {
+		// Exercise the actual providers' SQL through the CPU SQL planner. The native
+		// model build remains a GPU CI requirement; this test checks its table fence.
+		exec(t, "create table clear_meta(id int primary key)")
+		exec(t, "create table clear_storage(id int primary key)")
+		defer exec(t, "drop table clear_meta,clear_storage")
+		var optimization int
+		require.NoError(t, conn.QueryRowContext(ctx, "select @@delete_opt_to_truncate").Scan(&optimization))
+		require.Equal(t, 1, optimization)
+		relationID := func(name string) uint64 {
+			var id uint64
+			require.NoError(t, conn.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='copy_hnsw_lifecycle' and relname=?", name).Scan(&id))
+			return id
+		}
+		meta, storage := relationID("clear_meta"), relationID("clear_storage")
+		providers := []struct {
+			hook          compileplugin.SourceSnapshotInitializer
+			meta, storage string
+		}{{cagracompile.Hooks{}, catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage}, {ivfpqcompile.Hooks{}, catalog.Ivfpq_TblType_Metadata, catalog.Ivfpq_TblType_Storage}}
+		providerCtx := sourceSnapshotCompileContext{database: "copy_hnsw_lifecycle", table: &plan.TableDef{Name: "source", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}}
+		for _, provider := range providers {
+			exec(t, "insert into clear_meta values(1)")
+			exec(t, "insert into clear_storage values(1)")
+			stmts, err := provider.hook.SourceSnapshotInitSQL(providerCtx, map[string]*plan.IndexDef{
+				provider.meta:    {IndexTableName: "clear_meta", Parts: []string{"v"}},
+				provider.storage: {IndexTableName: "clear_storage", Parts: []string{"v"}, IndexAlgoParams: `{"op_type":"vector_l2_ops"}`},
+			})
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, len(stmts), 3)
+			exec(t, "begin")
+			exec(t, stmts[0])
+			exec(t, stmts[1])
+			require.Equal(t, meta, relationID("clear_meta"))
+			require.Equal(t, storage, relationID("clear_storage"))
+			exec(t, "commit")
+			require.Equal(t, meta, relationID("clear_meta"))
+			require.Equal(t, storage, relationID("clear_storage"))
+			var rows int
+			require.NoError(t, conn.QueryRowContext(ctx, "select (select count(*) from clear_meta)+(select count(*) from clear_storage)").Scan(&rows))
+			require.Zero(t, rows)
+		}
+	})
+	t.Run("failed CPU initializer retains Init stage and retries model build", func(t *testing.T) {
+		exec(t, "create table init_ivf(id bigint primary key,v vecf32(3))")
+		defer exec(t, "drop table init_ivf")
+		exec(t, "insert into init_ivf values(1,'[1,2,3]'),(2,'[7,8,9]')")
+		fault.Enable()
+		defer fault.Disable()
+		require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_ISCPIndexWatermarkErr, ":::", "return", 0, "", false))
+		defer fault.RemoveFaultPoint(ctx, objectio.FJ_ISCPIndexWatermarkErr)
+		exec(t, "create index iv using ivfflat on init_ivf(v) lists=1 op_type 'vector_l2_ops' async")
+		query := "select job_state,watermark,job_status from mo_catalog.mo_iscp_log where drop_at is null and job_name='index_iv' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='copy_hnsw_lifecycle' and relname='init_ivf')"
+		var failedLSN uint64
+		require.Eventually(t, func() bool {
+			var state int8
+			var wm, text string
+			var status iscp.JobStatus
+			if db.QueryRowContext(ctx, query).Scan(&state, &wm, &text) != nil || json.Unmarshal([]byte(text), &status) != nil {
+				return false
+			}
+			if state != iscp.ISCPJobState_Completed || status.ErrorCode == 0 {
+				return false
+			}
+			require.Equal(t, "0-0", wm)
+			require.Equal(t, iscp.JobStage_Init, status.Stage, "rolled-back completion must retry its initializer")
+			failedLSN = status.LSN
+			return true
+		}, 60*time.Second, 100*time.Millisecond)
+		var entries string
+		require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='iv' and algo_table_type='entries' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='copy_hnsw_lifecycle' and relname='init_ivf')").Scan(&entries))
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from `"+entries+"`").Scan(&count))
+		require.Zero(t, count, "failed initializer output must roll back with its progress")
+		_, err = fault.RemoveFaultPoint(ctx, objectio.FJ_ISCPIndexWatermarkErr)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			var state int8
+			var wm, text string
+			var status iscp.JobStatus
+			return db.QueryRowContext(ctx, query).Scan(&state, &wm, &text) == nil && json.Unmarshal([]byte(text), &status) == nil && state == iscp.ISCPJobState_Completed && status.ErrorCode == 0 && status.Stage == iscp.JobStage_Running && status.LSN > failedLSN && wm != "0-0"
+		}, 60*time.Second, 100*time.Millisecond)
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from `"+entries+"`").Scan(&count))
+		require.Equal(t, 2, count)
+		exec(t, "insert into init_ivf values(3,'[0,0,0]')")
+		require.Eventually(t, func() bool {
+			var id int64
+			return conn.QueryRowContext(ctx, "select id from init_ivf order by l2_distance(v,'[0,0,0]') limit 1").Scan(&id) == nil && id == 3
+		}, 45*time.Second, 100*time.Millisecond)
+	})
+
+}
+
+// Only these compilation inputs are used by the two existing source providers.
+// Unexpected calls fail through the embedded interface rather than silently
+// supplying a second fake compiler implementation.
+type sourceSnapshotCompileContext struct {
+	compileplugin.CompileContext
+	database string
+	table    *plan.TableDef
+}
+
+func (c sourceSnapshotCompileContext) QryDatabase() string              { return c.database }
+func (c sourceSnapshotCompileContext) OriginalTableDef() *plan.TableDef { return c.table }
+func (c sourceSnapshotCompileContext) ResolveVariable(string, bool, bool) (any, error) {
+	return int64(1), nil
 }

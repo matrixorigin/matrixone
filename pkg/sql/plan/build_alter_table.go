@@ -267,7 +267,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	// after every clause.
 	locatorUnchanged := alterCopyPrimaryKeyUnchanged(tableDef, copyTableDef, alterTableCtx, preservedGenerated)
 	copyFakePKCol := catalog.IsFakePkName(tableDef.Pkey.PkeyColName) && locatorUnchanged
-	cloneIndexes := alterCopyCloneIndexes(tableDef, copyTableDef, alterTableCtx, preservedGenerated, locatorUnchanged)
+	cloneIndexes, err := alterCopyCloneIndexes(tableDef, copyTableDef, alterTableCtx, preservedGenerated, locatorUnchanged)
+	if err != nil {
+		return nil, err
+	}
 
 	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
 	if err != nil {
