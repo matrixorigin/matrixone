@@ -70,6 +70,16 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, _ []string, _ *pb.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
 		publication := objectio.JSONReadSetFromContext(ctx)
 		require.NotNil(t, publication)
+		admit := publication.CachePinAdmission()
+		require.NotNil(t, admit)
+		budget, err := proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		beforePin := budget.Snapshot().Used
+		releasePin, err := admit(128)
+		require.NoError(t, err)
+		require.Equal(t, beforePin+128, budget.Snapshot().Used)
+		releasePin()
+		require.Equal(t, beforePin, budget.Snapshot().Used)
 		publication.BindColumns([]uint16{0, 1})
 		builder, err := vector.NewJSONReaderBuilder(mp, out.Vecs[0].AllocationAccountSelection())
 		require.NoError(t, err)

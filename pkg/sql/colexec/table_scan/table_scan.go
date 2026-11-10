@@ -162,6 +162,24 @@ func (tableScan *TableScan) Call(proc *process.Process) (callResult vm.CallResul
 		}
 		if len(tableScan.ctr.jsonColumns) != 0 {
 			tableScan.ctr.jsonPublication = objectio.NewJSONReadSet(tableScan.ctr.jsonColumns, tableScan.OutputAllocation)
+			tableScan.ctr.jsonPublication.SetCachePinAdmission(func(capacity uint64) (func(), error) {
+				if err := proc.Ctx.Err(); err != nil {
+					return nil, err
+				}
+				budget, err := proc.GetExecutionResourceBudget()
+				if err != nil {
+					return nil, err
+				}
+				reservation, err := budget.ReserveTransientMemory(capacity)
+				if err != nil {
+					return nil, err
+				}
+				if err = proc.Ctx.Err(); err != nil {
+					reservation.Release()
+					return nil, err
+				}
+				return func() { reservation.Release() }, nil
+			})
 			newCtx = objectio.WithJSONReadSet(newCtx, tableScan.ctr.jsonPublication)
 		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)

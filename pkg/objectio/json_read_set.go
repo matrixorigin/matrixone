@@ -31,10 +31,26 @@ type jsonReadSetKey struct{}
 // Published handles are owned here until Close; consumers must retain them.
 type JSONReadSet struct {
 	selection *vector.AllocationAccountSelection
+	cachePin  JSONCachePinAdmission
 	requested []int
 	sequences map[uint16]int
 	readers   map[int]vector.JSONReader
 	disabled  bool
+}
+
+// SetCachePinAdmission binds retained cache backing to this read's statement
+// budget. The callback is invoked only if a private cache version is opened.
+func (set *JSONReadSet) SetCachePinAdmission(admission JSONCachePinAdmission) {
+	if set != nil && !set.disabled {
+		set.cachePin = admission
+	}
+}
+
+func (set *JSONReadSet) CachePinAdmission() JSONCachePinAdmission {
+	if set == nil || set.disabled {
+		return nil
+	}
+	return set.cachePin
 }
 
 func NewJSONReadSet(columns []int, selections ...*vector.AllocationAccountSelection) *JSONReadSet {
@@ -117,6 +133,7 @@ func (set *JSONReadSet) Disable() {
 		reader.Close()
 	}
 	clear(set.readers)
+	set.cachePin = nil
 	set.disabled = true
 }
 func (set *JSONReadSet) Close() { set.Disable() }

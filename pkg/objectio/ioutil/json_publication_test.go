@@ -39,6 +39,27 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	defer fs.Close(ctx)
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Seal().Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	})
+	admit := func(capacity uint64) (func(), error) {
+		reservation, err := account.ReserveCapacity(capacity, 1, 1)
+		if err != nil {
+			return nil, err
+		}
+		lease, err := reservation.Commit(capacity)
+		if err != nil {
+			reservation.Abort()
+			return nil, err
+		}
+		return lease.Release, nil
+	}
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = vector.NewVec(types.T_json.ToType())
 	defer input.Clean(mp)
@@ -69,6 +90,7 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	backing := mp.CurrNB() - before
 	baseline.Free(mp)
 	publication := objectio.NewJSONReadSet([]int{0})
+	publication.SetCachePinAdmission(admit)
 	defer publication.Close()
 	publication.BindColumns([]uint16{0})
 	publishedCtx := objectio.WithJSONReadSet(ctx, publication)
@@ -97,6 +119,7 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	// document copy, even though the first reader and its batch have closed.
 	fs.FlushCache(ctx)
 	prime := objectio.NewJSONReadSet([]int{0})
+	prime.SetCachePinAdmission(admit)
 	prime.BindColumns([]uint16{0})
 	primeDestination := vector.NewOffHeapVecWithType(typ)
 	_, err = LoadColumnsDataIntoReadonly(objectio.WithJSONReadSet(ctx, prime), []uint16{0}, []types.Type{typ}, fs, location, []*vector.Vector{primeDestination}, mp, 0)
@@ -106,6 +129,7 @@ func TestLoadReadonlyPublishesJSONCacheVersion(t *testing.T) {
 	prime.Close()
 	primeDestination.Free(mp)
 	warmPrivate := objectio.NewJSONReadSet([]int{0})
+	warmPrivate.SetCachePinAdmission(admit)
 	defer warmPrivate.Close()
 	warmPrivate.BindColumns([]uint16{0})
 	privateDestination := vector.NewOffHeapVecWithType(typ)

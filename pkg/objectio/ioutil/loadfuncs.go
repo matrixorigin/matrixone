@@ -301,7 +301,7 @@ func loadColumnsDataInto(
 			publication.Disable()
 		}
 		if publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, destinations[i].AllocationAccountSelection())
+			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, destinations[i].AllocationAccountSelection(), publication.CachePinAdmission())
 			if openErr != nil {
 				publication.Disable()
 				err = openErr
