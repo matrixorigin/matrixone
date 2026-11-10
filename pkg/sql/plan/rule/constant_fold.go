@@ -64,7 +64,12 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	}
 
 	for i := range node.BlockFilterList {
-		node.BlockFilterList[i] = r.constantFold(node.BlockFilterList[i], proc)
+		original := node.BlockFilterList[i]
+		folded := r.constantFold(original, proc)
+		if folded != nil && original.GetCandidateFilter() {
+			folded.CandidateFilter = true
+		}
+		node.BlockFilterList[i] = folded
 	}
 
 	for i := range node.ProjectList {
@@ -137,6 +142,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked, jsonFeatureChecked bool) *plan.Expr {
 	if expr == nil {
+		return expr
+	}
+	if function.RequiresRuntimeEvaluation(expr) {
 		return expr
 	}
 
@@ -501,6 +509,15 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	}
 	targetDomain := types.StaticStringDomain(types.MustTypeFromPlan(
 		expr.Typ))
+	if sourceDomain == types.StringDomainBinary &&
+		targetDomain == types.StringDomainText &&
+		foldedBinaryDomainFollowsSelectedCollation(expr.Typ, source) {
+		// A case-insensitive collation selected by strictly stronger
+		// coercibility already converted this operand's comparison domain at
+		// plan time (issue #31175); the folded value belongs to the selected
+		// text domain and must not reclaim the source's binary provenance.
+		sourceDomain = targetDomain
+	}
 	if sourceDomain == targetDomain {
 		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
 	} else if sourceDomain == types.StringDomainBinary {
@@ -508,6 +525,33 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	} else {
 		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
 	}
+}
+
+// foldedBinaryDomainFollowsSelectedCollation reports whether the text domain a
+// binder-inserted conversion cast delivers was selected by a case-insensitive
+// collation with strictly stronger coercibility than the constant binary
+// source's own. normalizeExpressionCollations stamps the winning collation
+// (including its coercibility rank) on the conversion target, so an explicit
+// COLLATE (rank 0) or a winning implicit collation (rank 2) beats a coercible
+// binary string (rank 4, for example a folded CAST(x AS BINARY)); an
+// equal-coercibility tie keeps the binary domain byte-wise (MySQL parity,
+// issue #31175). Unstamped sources that are not literals or parameters cannot
+// be constant-folded through this path and keep the legacy provenance rule.
+func foldedBinaryDomainFollowsSelectedCollation(target plan.Type, source *plan.Expr) bool {
+	if !target.CollationCoercibilitySet ||
+		!types.IsCaseInsensitiveCollation(uint8(target.Charset)) {
+		return false
+	}
+	var sourceRank uint32
+	switch {
+	case source.Typ.CollationCoercibilitySet:
+		sourceRank = source.Typ.CollationCoercibility
+	case source.GetLit() != nil || source.GetP() != nil:
+		sourceRank = 4
+	default:
+		return false
+	}
+	return target.CollationCoercibility < sourceRank
 }
 
 // PreserveFoldedDecimalLiteralSemantics carries the planner provenance bit

@@ -71,7 +71,7 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +227,7 @@ func TestViewDefinitionProtocolSurvivesConstantFolding(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		built, err := BuildPlan(ctx, stmt, false)
+		built, err := BuildPlan(ctx, stmt, false, nil)
 		if err != nil {
 			return nil, err
 		}

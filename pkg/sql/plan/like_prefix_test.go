@@ -704,12 +704,14 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 				unsafeCtx := builder.newEncodedRegularIndexCostContext(node, refs)
 				require.NotEmpty(t, unsafeCtx.matchRangeBackfills(index)[1], scenario+": both candidates reach the safety gate")
 				require.False(t, regularIndexFiltersHaveStableEvaluation(node), scenario)
-				selected := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				selected, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				require.NoError(t, err)
 				require.Equal(t, scanID, selected, scenario+": unsafe prefix must not displace the rejected ordinary baseline")
 				distributions := stats.ByteRangeMap
 				stats.ByteRangeMap = nil
-				withoutStats := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				withoutStats, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
 				stats.ByteRangeMap = distributions
+				require.NoError(t, err)
 				require.Equal(t, scanID, withoutStats, scenario+": absent samples retain the same ordinary baseline")
 			}
 			checkHistorical("throwing residual")
@@ -766,7 +768,8 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 				require.True(t, valid)
 				require.Equal(t, !ctx.filterFacts[positions[0]].logicalPrefix, reject)
 			}
-			result := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+			result, err := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
 			require.NotEqual(t, scanID, result, "rejected broad IN must not hide useful prefix backfill")
 			indexScan := builder.qry.Nodes[builder.qry.Nodes[result].Children[1]]
 			require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName)
@@ -889,6 +892,7 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 	for _, tc := range []struct {
 		name, pattern, function string
 		joined, unsafe, folded  bool
+		ci                      bool
 		selectivity             float64
 	}{
 		{name: "literal", pattern: "abc1", function: "=", selectivity: 0.00001},
@@ -897,6 +901,10 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 		{name: "joined scan", pattern: "abc1", function: "=", joined: true, selectivity: 0.2},
 		{name: "throwing residual", pattern: "abc1", function: "=", unsafe: true, selectivity: 0.2},
 		{name: "folded provenance", pattern: "abc1", function: "like", folded: true, selectivity: 0.2},
+		// A case-insensitive collation folds LIKE; the byte-ordered =/prefix_eq
+		// rewrite cannot, so the folding LIKE predicate stays (issue #31175).
+		{name: "ci literal keeps like", pattern: "abc1", function: "like", ci: true, selectivity: 0.2},
+		{name: "ci prefix keeps like", pattern: "abc%", function: "like", ci: true, selectivity: 0.2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, scanID, _, _ := newEncodedIndexCostTestCase(t, []string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, nil,
@@ -908,6 +916,9 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 			stats.TableCnt = 100_000
 			stats.NdvMap["category"] = 100_000
 			col := &planpb.Expr{Typ: node.TableDef.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: node.BindingTags[0], ColPos: 2, Name: "category"}}}
+			if tc.ci {
+				col.Typ.Charset = uint32(types.CharsetUTF8)
+			}
 			right := makePlan2StringConstExprWithType(tc.pattern)
 			if tc.folded {
 				right.GetLit().Src = makePlan2StringConstExprWithType(tc.pattern)
@@ -999,7 +1010,8 @@ func TestLikePrefixSmallInputAdmission(t *testing.T) {
 			require.True(t, valid)
 			require.False(t, reject, "the small-input admission policy is tested independently of numeric cost rejection")
 		}
-		result := builder.applyIndicesForFiltersRegularIndex(id, node, refs, map[[2]int32]*planpb.Expr{})
+		result, err := builder.applyIndicesForFiltersRegularIndex(id, node, refs, map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
 		wantIndex := force || ordinary || covering && input > objectio.BlockMaxRows
 		if wantIndex {
 			require.NotEqual(t, id, result)

@@ -24,10 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -86,6 +90,15 @@ type IvfflatSqlWriter struct {
 	meta_tbl      string
 	ivfparam      vectorindex.IvfParam
 	includeCols   []string
+	// ignored_tbl is the ignored table, "" when the index has none. product_l2 records the rows
+	// the index cannot store; the writer removes the rows it deletes from the entries, so a
+	// deleted row, or one updated to a value the index stores, leaves the table.
+	ignored_tbl   string
+	maxBadRecords int64
+	// following is the statement to run after the one the last ToSql returned.
+	following []byte
+	// rows counts the upserted rows with a vector since the last check of the ignored table.
+	rows int64
 }
 
 // Hnsw Sql Writer.  Use the vectorindex.VectorIndeXCdc JSON format
@@ -611,7 +624,18 @@ func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[
 	// tmpfs it is charged to RAM. A CDC sync runs on a SqlContext with no process.Process, so
 	// the FileService has to come from the ISCP executor, which publishes the CN root FS.
 	// spillDir=="" (no LOCAL attached / executor not found) falls back to $TMPDIR, unchanged.
-	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension, resolveHostSpillDir(sqlproc))
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension,
+		resolveHostSpillDir(sqlproc), resolveIndexFiles(sqlproc))
+}
+
+// resolveIndexFiles is the storage engine and index-file cache a sync reads and writes its
+// model files through, from the ISCP executor; nil when there is none.
+func resolveIndexFiles(sqlproc *sqlexec.SqlProcess) *indexfile.Files {
+	exec, ok := GetExecutorRuntime(sqlproc.GetService())
+	if !ok {
+		return nil
+	}
+	return &indexfile.Files{Engine: exec.txnEngine, Cache: fileservice.GetIndexFileCache(exec.rootFS)}
 }
 
 // resolveHostSpillDir answers where this sync's model files go. Split out of NewSync so the
@@ -629,8 +653,8 @@ func resolveHostSpillDir(sqlproc *sqlexec.SqlProcess) string {
 func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, vbuf: make([]byte, 0, 1024), enumTuples: true}}
 
-	if len(indexdef) != 3 {
-		return nil, moerr.NewInternalErrorNoCtx("ivf index table must have 3 secondary tables")
+	if len(indexdef) != 3 && len(indexdef) != 4 {
+		return nil, moerr.NewInternalErrorNoCtx("ivf index table must have 3 or 4 secondary tables")
 	}
 
 	idxdef := indexdef[0]
@@ -649,6 +673,13 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 		}
 		if idx.IndexAlgoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
 			entries_tbl = idx.IndexTableName
+		}
+		if idx.IndexAlgoTableType == catalog.IndexIgnored_TblType {
+			limit, err := catalog.IndexParamMaxBadRecords(idx.IndexAlgoParams)
+			if err != nil {
+				return nil, err
+			}
+			w.ignored_tbl, w.maxBadRecords = idx.IndexTableName, limit
 		}
 	}
 
@@ -714,6 +745,73 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	w.meta_tbl = meta_tbl
 
 	return w, nil
+}
+
+// Insert appends an inserted row.
+func (w *IvfflatSqlWriter) Insert(ctx context.Context, row []any) error {
+	w.count(row)
+	return w.BaseIndexSqlWriter.Insert(ctx, row)
+}
+
+// Upsert appends an upserted row.
+func (w *IvfflatSqlWriter) Upsert(ctx context.Context, row []any) error {
+	w.count(row)
+	return w.BaseIndexSqlWriter.Upsert(ctx, row)
+}
+
+func (w *IvfflatSqlWriter) count(row []any) {
+	if w.ignored_tbl != "" && row[w.partsPos[0]] != nil {
+		w.rows++
+	}
+}
+
+// hasIgnored reports whether the index has an ignored table.
+func (w *IvfflatSqlWriter) hasIgnored() bool {
+	return w.ignored_tbl != ""
+}
+
+// followingSql returns, once, the statement to run after the one the last ToSql returned.
+func (w *IvfflatSqlWriter) followingSql() []byte {
+	s := w.following
+	w.following = nil
+	return s
+}
+
+// checkIgnored stops the job when the ignored table holds more rows than the index's limit, or,
+// after an iteration that rebuilds the index, every row it upserted.
+func (w *IvfflatSqlWriter) checkIgnored(ctx context.Context, service string, txn client.TxnOperator, rebuild bool) error {
+	rows := w.rows
+	w.rows = 0
+	if w.ignored_tbl == "" || !rebuild && rows == 0 {
+		// an iteration that stores no row cannot add one
+		return nil
+	}
+	table := sqlquote.QualifiedIdent(w.info.DBName, w.ignored_tbl)
+	res, err := ExecWithResult(ctx, fmt.Sprintf("SELECT (SELECT COUNT(*) FROM %s), CAST(`%s` AS VARCHAR), `%s` FROM %s LIMIT 1",
+		table, catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Code, table), service, txn)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	var n int64
+	var pk, detail string
+	for _, b := range res.Batches {
+		if b != nil && b.RowCount() > 0 {
+			n = vector.GetFixedAtNoTypeCheck[int64](b.Vecs[0], 0)
+			pk = b.Vecs[1].GetStringAt(0)
+			if w.tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+				pk = vectorindex.SerialPkString(b.Vecs[1].GetBytesAt(0))
+			}
+			detail = moerr.MessageOf(uint16(vector.GetFixedAtNoTypeCheck[int32](b.Vecs[2], 0)))
+		}
+	}
+	if n > w.maxBadRecords {
+		return NewPermanentError(moerr.NewIndexTooManyBadRecordsNoCtx(w.maxBadRecords, pk, detail))
+	}
+	if rebuild && n > 0 && n >= rows {
+		return NewPermanentError(moerr.NewIndexAllRowsBadNoCtx(n, pk, detail))
+	}
+	return nil
 }
 
 func ivfflatIncludeColumnsFromIndexDefs(indexdefs []*plan.IndexDef) ([]string, error) {
@@ -783,6 +881,11 @@ func (w *IvfflatSqlWriter) toIvfflatDelete() ([]byte, error) {
 	sql := fmt.Sprintf("DELETE FROM %s WHERE `%s` IN (%s)", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl),
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		string(w.vbuf))
+	if w.ignored_tbl != "" {
+		w.following = fmt.Appendf(nil, "DELETE FROM %s WHERE `%s` IN (%s)", sqlquote.QualifiedIdent(w.info.DBName, w.ignored_tbl),
+			catalog.IndexIgnored_TblCol_Pk,
+			string(w.vbuf))
+	}
 	return []byte(sql), nil
 
 }
@@ -796,7 +899,12 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	projCols := make([]string, 0, len(w.srcPos))
 	for i := range w.srcPos {
 		typstr := sqlCastTypeName(w.srcType[i])
-		cnames = append(cnames, fmt.Sprintf("src%d", i))
+		if i == 0 {
+			// product_l2 records an ignored row by this column
+			cnames = append(cnames, catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
+		} else {
+			cnames = append(cnames, fmt.Sprintf("src%d", i))
+		}
 		if w.srcType[i].Oid == types.T_enum {
 			// Runtime types omit ENUM members; reconstruct the domain from the
 			// catalog-loaded source column, including SQL escaping of labels.
@@ -818,7 +926,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 
 	cols := strings.Join(coldefs, ", ")
 
-	// Entry projection. src0 is the primary key and src1 is the first indexed
+	// Entry projection. The first column is the primary key and src1 is the first indexed
 	// vector part; INCLUDE columns follow the vector and must remain unchanged.
 	// For int8 QUANTIZATION the entry must be scaled by the trained quantizer
 	// (q(x)=x*mul+add, mul=255/(max-min), add=-min*mul-128) just like the
@@ -878,11 +986,24 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 
 	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM %s WHERE `%s` = (%s) ), ", sqlquote.QualifiedIdent(w.info.DBName, w.centroids_tbl), catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
 	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
-	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
+	centroidx, err := vectorindex.CentroidxArgs(w.ivfparam.OpType, w.indexdef[0].IndexAlgoParams, vectorindex.IndexTableConfig{
+		DbName:        w.info.DBName,
+		MetadataTable: w.meta_tbl,
+		IgnoredTable:  w.ignored_tbl,
+		MaxBadRecords: w.maxBadRecords,
+		PKey:          w.tabledef.Pkey.PkeyColName,
+		PKeyType:      int32(w.pkType.Oid),
+		PKeyEnum:      w.tabledef.Cols[w.tabledef.Name2ColIndex[w.tabledef.Pkey.PkeyColName]].Typ.Enumvalues,
+		KeyPartType:   int32(w.partsType[0].Oid),
+	})
+	if err != nil {
+		return nil, err
+	}
+	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX(%s) JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		cnames_str,
-		w.ivfparam.OpType,
+		centroidx,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		cnames[1])
 

@@ -34,7 +34,7 @@ func buildTestCreateTableStmtForMode(t testing.TB, opt Optimizer, sql, sqlMode s
 		return nil, err
 	}
 	t.Cleanup(stmt.Free)
-	ddlPlan, err := BuildPlan(opt.CurrentContext(), stmt, false)
+	ddlPlan, err := BuildPlan(opt.CurrentContext(), stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}

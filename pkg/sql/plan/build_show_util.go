@@ -551,7 +551,7 @@ func constructCreateTableSQLWithCommentFormat(
 		)
 
 		update := func(snap *Snapshot) error {
-			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
+			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap, nil); err != nil {
 				return err
 			}
 			if tempTableDef == nil {

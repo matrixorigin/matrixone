@@ -55,6 +55,9 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		if err != nil {
 			return moerr.NewInvalidInputf(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
 		}
+		if err = process.CheckIndexRelationDefinitionAccess(proc, relation.GetTableName(), relation.GetTableDef(proc.Ctx)); err != nil {
+			return err
+		}
 		tableId := relation.GetTableID(proc.Ctx)
 		engineDefs, err := relation.TableDefs(proc.Ctx)
 		if err != nil {

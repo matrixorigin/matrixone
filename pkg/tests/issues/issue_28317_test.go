@@ -47,12 +47,15 @@ func TestIssue28317DisjointDDLAndTenantRestore(t *testing.T) {
 		defer db1.Close()
 		const dbA, dbB = "issue_28317_a", "issue_28317_b"
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cleanupCancel()
 			for _, q := range []string{"drop database if exists `" + dbA + "`", "drop database if exists `" + dbB + "`"} {
-				if _, err := db0.ExecContext(cleanupCtx, q); err != nil {
-					t.Errorf("cleanup %s: %v", q, err)
-				}
+				func() {
+					// Independent database drops must not share a cleanup budget.
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					if _, err := db0.ExecContext(cleanupCtx, q); err != nil {
+						t.Errorf("cleanup %s: %v", q, err)
+					}
+				}()
 			}
 		}()
 		for _, q := range []string{

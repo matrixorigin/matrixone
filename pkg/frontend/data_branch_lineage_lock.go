@@ -268,7 +268,7 @@ func resolveBranchCloneSource(ctx context.Context, ses *Session, bh BackgroundEx
 	tcc := InitTxnCompilerContext(ses.GetTxnCompileCtx().DefaultDatabase())
 	tcc.SetExecCtx(&ExecCtx{reqCtx: defines.AttachAccountId(ctx, source.account), ses: back.backSes, proc: proc})
 	defer tcc.Close()
-	ref, def, err := tcc.Resolve(source.database, source.table, source.snapshot)
+	ref, def, err := tcc.Resolve(source.database, source.table, source.snapshot, nil)
 	if err != nil {
 		return branchResolvedSource{}, err
 	}

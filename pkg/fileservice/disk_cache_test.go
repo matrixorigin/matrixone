@@ -1165,3 +1165,20 @@ func TestDiskCacheQuotaExceeded(t *testing.T) {
 	)
 
 }
+
+// Files found on disk at startup are older than a file indexed while the cache loads.
+func TestDiskCacheLoadIndexesFilesAsOldest(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(12<<10), nil, false, nil, "")
+	require.NoError(t, err)
+	defer cache.Close(ctx)
+	old := cache.pathForFile("old")
+	require.NoError(t, os.MkdirAll(filepath.Dir(old), 0755))
+	require.NoError(t, os.WriteFile(old, make([]byte, 8<<10), 0644))
+
+	live := cache.pathForFile("live")
+	cache.cache.Set(ctx, live, struct{}{}, 8<<10)
+	cache.loadCache(ctx)
+	require.True(t, cache.cache.Contains(live))
+	require.False(t, cache.cache.Contains(old))
+}

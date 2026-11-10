@@ -609,6 +609,11 @@ func dataBranchCreateTable(
 	if cloneStmt.SrcTable.SchemaName == "" || cloneStmt.CreateTable.Table.SchemaName == "" {
 		return moerr.NewNoDB(execCtx.reqCtx)
 	}
+	if stmt.ToAccountOpt != nil {
+		if err = checkCloneDestinationAtAccount(execCtx, ses, &cloneStmt.CreateTable.Table, opAccountID, targetAccountID); err != nil {
+			return err
+		}
+	}
 	fromAccount := opAccountID
 	if snapshot != nil && snapshot.Tenant != nil {
 		fromAccount = snapshot.Tenant.TenantID

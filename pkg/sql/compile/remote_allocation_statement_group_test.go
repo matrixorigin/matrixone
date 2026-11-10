@@ -358,7 +358,9 @@ func TestRemoteAllocationStatementGroupRejectsTopologyMismatch(t *testing.T) {
 
 func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	previousTimeout := remoteAllocationStatementRegistrationTimeout
-	remoteAllocationStatementRegistrationTimeout = 10 * time.Millisecond
+	// Park the timer until the participant has finished. The separate
+	// registration-timer test verifies that a real timer invokes expiration.
+	remoteAllocationStatementRegistrationTimeout = time.Duration(1<<63 - 1)
 	t.Cleanup(func() {
 		remoteAllocationStatementRegistrationTimeout = previousTimeout
 	})
@@ -366,6 +368,7 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
 	board := message.NewMessageBoard()
+	t.Cleanup(func() { board.CloseAndDrain() })
 	producer := newTestAllocationLifecycleCompile(t, registry, func(
 		mpool.AllocationAccountTerminalSnapshot,
 	) {
@@ -374,6 +377,10 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	producer.MessageBoard = board
 	attempt, err := producer.beginAllocationAccountAttempt()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		attempt.exporter = nil
+		_, _ = attempt.finish()
+	})
 	buffer, err := producer.proc.Mp().AllocAccounted(
 		64,
 		attempt.account,
@@ -382,26 +389,42 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	)
 	require.NoError(t, err)
 	var destroyed atomic.Int32
-	message.SendMessage(&remoteAllocationAccountedMessage{
+	msg := &remoteAllocationAccountedMessage{
 		mp:        producer.proc.Mp(),
 		buffer:    buffer,
 		destroyed: &destroyed,
-	}, board)
+	}
+	t.Cleanup(msg.Destroy)
+	message.SendMessage(msg, board)
 
 	participant, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		stopRemoteAllocationStatementTestTimer(participant)
+		participant.stage(attempt, producer.proc.Mp())
+		_, _ = participant.finish(errors.New("test cleanup"))
+		expireRemoteAllocationStatementGroup(participant.group)
+	})
 	participant.stage(attempt, producer.proc.Mp())
 	terminal, err := participant.finish(nil)
 	require.NoError(t, err)
 	require.Empty(t, terminal.allocation)
 	require.False(t, terminal.complete)
-	require.Eventually(t, func() bool {
-		return destroyed.Load() == 1 &&
-			registry.LiveAllocationMetadata() == 0 &&
-			!remoteAllocationStatementGroupRegistered(board)
-	}, time.Second, time.Millisecond)
+	require.True(t, stopRemoteAllocationStatementTestTimer(participant), "registration timer must still be pending after finish")
+	expireRemoteAllocationStatementGroup(participant.group)
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Zero(t, registry.LiveAllocationMetadata())
+	require.False(t, remoteAllocationStatementGroupRegistered(board))
 	require.Contains(t, board.DebugString(), "closed")
 	require.False(t, registry.AdmissionSuspended())
+}
+
+// Stop the parked registration timer without clearing its pointer: a nil
+// timer would cause an incomplete group to arm another timer on finish.
+func stopRemoteAllocationStatementTestTimer(participant *remoteAllocationStatementParticipant) bool {
+	remoteAllocationStatementGroups.Lock()
+	defer remoteAllocationStatementGroups.Unlock()
+	return participant.group.timer != nil && participant.group.timer.Stop()
 }
 
 func TestRemoteAllocationStatementRegistrationTimerStartsBeforeFinish(t *testing.T) {
@@ -690,7 +713,7 @@ func TestRemoteAllocationStatementGroupFailureCancelsActiveSibling(t *testing.T)
 
 func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testing.T) {
 	previousTimeout := remoteAllocationStatementRegistrationTimeout
-	remoteAllocationStatementRegistrationTimeout = 10 * time.Millisecond
+	remoteAllocationStatementRegistrationTimeout = time.Duration(1<<63 - 1)
 	t.Cleanup(func() {
 		remoteAllocationStatementRegistrationTimeout = previousTimeout
 	})
@@ -698,7 +721,8 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 	registry, err := mpool.NewAllocationAccountRegistry(2, 2)
 	require.NoError(t, err)
 	board := message.NewMessageBoard()
-	newAttempt := func() (*Compile, *statementAllocationAttempt, []byte) {
+	t.Cleanup(func() { board.CloseAndDrain() })
+	newAttempt := func() (*Compile, *statementAllocationAttempt, []byte, func()) {
 		c := newTestAllocationLifecycleCompile(t, registry, func(
 			mpool.AllocationAccountTerminalSnapshot,
 		) {
@@ -707,6 +731,10 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 		c.MessageBoard = board
 		attempt, openErr := c.beginAllocationAccountAttempt()
 		require.NoError(t, openErr)
+		t.Cleanup(func() {
+			attempt.exporter = nil
+			_, _ = attempt.finish()
+		})
 		buffer, allocErr := c.proc.Mp().AllocAccounted(
 			64,
 			attempt.account,
@@ -714,36 +742,64 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 			mpool.AllocationSite(1),
 		)
 		require.NoError(t, allocErr)
-		return c, attempt, buffer
+		free := func() {
+			if buffer != nil {
+				c.proc.Mp().Free(buffer)
+				buffer = nil
+			}
+		}
+		t.Cleanup(free)
+		return c, attempt, buffer, free
 	}
 
-	firstCompile, firstAttempt, firstBuffer := newAttempt()
-	secondCompile, secondAttempt, secondBuffer := newAttempt()
-	canceled := make(chan error, 2)
+	firstCompile, firstAttempt, _, freeFirst := newAttempt()
+	secondCompile, secondAttempt, secondBuffer, freeSecond := newAttempt()
+	var firstCanceled, secondCanceled atomic.Int32
+	secondCause := make(chan error, 1)
 	first, err := acquireRemoteAllocationStatementTestParticipant(
 		t,
-		board, 3, func(cause error) { canceled <- cause },
+		board, 3, func(error) { firstCanceled.Add(1) },
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		stopRemoteAllocationStatementTestTimer(first)
+		freeFirst()
+		first.stage(firstAttempt, firstCompile.proc.Mp())
+		_, _ = first.finish(errors.New("test cleanup"))
+		expireRemoteAllocationStatementGroup(first.group)
+	})
+	require.True(t, stopRemoteAllocationStatementTestTimer(first), "registration timer must still be pending")
 	second, err := acquireRemoteAllocationStatementTestParticipant(
 		t,
-		board, 3, func(cause error) { canceled <- cause },
+		board, 3, func(cause error) {
+			secondCanceled.Add(1)
+			select {
+			case secondCause <- cause:
+			default:
+			}
+		},
 	)
 	require.NoError(t, err)
-	firstCompile.proc.Mp().Free(firstBuffer)
+	t.Cleanup(func() {
+		freeSecond()
+		second.stage(secondAttempt, secondCompile.proc.Mp())
+		_, _ = second.finish(errors.New("test cleanup"))
+	})
+	freeFirst()
 	first.stage(firstAttempt, firstCompile.proc.Mp())
 	terminal, err := first.finish(nil)
 	require.NoError(t, err)
 	require.Empty(t, terminal.allocation)
-
-	require.Eventually(t, func() bool {
-		return strings.Contains(board.DebugString(), "closed")
-	}, time.Second, time.Millisecond)
-	require.Error(t, <-canceled)
+	require.False(t, terminal.complete)
+	expireRemoteAllocationStatementGroup(first.group)
+	require.True(t, board.IsClosed())
+	require.Zero(t, firstCanceled.Load(), "finished participant must not be canceled")
+	require.Equal(t, int32(1), secondCanceled.Load(), "active participant must be canceled once")
 	select {
-	case unexpected := <-canceled:
-		t.Fatalf("finished participant was canceled: %v", unexpected)
+	case cause := <-secondCause:
+		require.ErrorContains(t, cause, "registration timed out")
 	default:
+		t.Fatal("active participant was not canceled")
 	}
 	// Expiration closes the shared transport but cannot terminally inspect a
 	// registered fragment that is still executing.
@@ -752,7 +808,7 @@ func TestRemoteAllocationStatementGroupExpirationWaitsForActiveFragment(t *testi
 	require.Equal(t, uint64(cap(secondBuffer)), secondAttempt.account.Snapshot().Used)
 	require.False(t, secondAttempt.account.Snapshot().Sealed)
 
-	secondCompile.proc.Mp().Free(secondBuffer)
+	freeSecond()
 	second.stage(secondAttempt, secondCompile.proc.Mp())
 	terminal, err = second.finish(errors.New("active fragment observed cancellation"))
 	require.Error(t, err)

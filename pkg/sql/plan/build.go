@@ -33,6 +33,25 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+// BindIndexMaintenanceView resolves a consumed view and all nested view/UDF
+// definitions without optimizing or executing any resulting query plan.
+func BindIndexMaintenanceView(ctx CompilerContext, stmt *tree.Select) error {
+	if ctx == nil || stmt == nil || !defines.IsIndexMaintenanceViewBinding(ctx.GetContext()) {
+		return moerr.NewInvalidInputNoCtx("invalid index maintenance view probe")
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
+	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+	builder.parseOptimizeHints()
+	if _, err := builder.bindSelect(stmt, bindCtx, true); err != nil {
+		return err
+	}
+	ctx.SetViews(bindCtx.views)
+	return nil
+}
+
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
 }
@@ -62,7 +81,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	validate func(*Query) error,
 ) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
-		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "",
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "", nil,
 	)
 }
 
@@ -76,6 +95,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	capture func(*BindContext),
 	restoreViewMySQLSpecialTypes bool,
 	persistedViewTarget string,
+	planningInput *PlanningInput,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -83,6 +103,10 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	defer builder.finishPlanningInput()
+	if planningInput.claim(stmt) && ProcessAllowsIndexObservation(ctx.GetProcess()) && samePlanningCompiler(planningInput.owner, ctx) {
+		builder.planningInput = planningInput
+	}
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
@@ -105,6 +129,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if err != nil {
 		return nil, err
 	}
+	builder.collectOriginalIndexOwner(rootId)
 	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
@@ -597,14 +622,14 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}, err
 }
 
-func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, planningInput *PlanningInput) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	//get query optimizer and execute Optimize
-	plan, err := BuildPlan(ctx, stmt, isPrepareStmt)
+	plan, err := BuildPlan(ctx, stmt, isPrepareStmt, planningInput)
 	if err != nil {
 		return nil, err
 	}
@@ -628,18 +653,18 @@ func buildExplainPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bo
 	return plan, nil
 }
 
-func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
+func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool, planningInput *PlanningInput) (*Plan, error) {
 	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "ANALYZE"); err != nil {
 		return nil, err
 	}
-	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, planningInput)
 }
 
-func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool) (*Plan, error) {
+func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepareStmt bool, planningInput *PlanningInput) (*Plan, error) {
 	if err := validateExplainOptions(ctx.GetContext(), stmt.Options, "PHYPLAN"); err != nil {
 		return nil, err
 	}
-	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, planningInput)
 }
 
 func validateExplainOptions(ctx context.Context, options []tree.OptionElem, mode string) error {
@@ -723,7 +748,9 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
+// BuildPlan forwards a single-attempt planning input only
+// through the root SELECT and its transparent statement wrappers.
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, planningInput *PlanningInput) (result *Plan, err error) {
 	defer func() {
 		if err == nil {
 			err = plan.RequireLegacyCollations(result)
@@ -743,14 +770,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
-		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", planningInput)
 		if err != nil {
 			return nil, err
 		}
 		applySQLSelectLimit(stmt, queryPlan)
 		return queryPlan, nil
 	case *tree.ParenSelect:
-		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", planningInput)
 		if err != nil {
 			return nil, err
 		}
@@ -760,7 +787,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		if err := validateExplainOptions(ctx.GetContext(), stmt.Options, ""); err != nil {
 			return nil, err
 		}
-		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt, planningInput)
 		if err != nil {
 			return nil, err
 		}
@@ -769,9 +796,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		}
 		return queryPlan, nil
 	case *tree.ExplainAnalyze:
-		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
+		return buildExplainAnalyze(ctx, stmt, isPrepareStmt, planningInput)
 	case *tree.ExplainPhyPlan:
-		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt)
+		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt, planningInput)
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.MultiInsert:
@@ -849,7 +876,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 	case *tree.ShowSequences:
 		return buildShowSequences(stmt, ctx)
 	case *tree.ShowColumns:
-		return buildShowColumns(stmt, ctx)
+		return buildShowColumns(stmt, ctx, isPrepareStmt)
 	case *tree.ShowTableStatus:
 		return buildShowTableStatus(stmt, ctx)
 	case *tree.ShowTarget:
@@ -890,8 +917,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return buildDeallocate(stmt, ctx)
 	case *tree.Load:
 		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
-	case *tree.PrepareStmt, *tree.PrepareString:
-		return buildPrepare(stmt, ctx)
+	case *tree.PrepareStmt:
+		return buildPrepare(stmt, ctx, planningInput)
+	case *tree.PrepareString:
+		return buildPrepare(stmt, ctx, nil)
 	case *tree.CallStmt:
 		if sqliceberg.IsBuiltinProcedure(stmt) {
 			return buildIcebergBuiltinCall(stmt, ctx)
