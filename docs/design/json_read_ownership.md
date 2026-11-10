@@ -176,3 +176,19 @@ is charged; no cache flag or lease alone grants immutability.
 Review decision: the earlier size-only cache lease does not meet statement
 accounting and is rejected. Accounted/unaccounted-call paths, bounded failure,
 retained result lifetime, and real SQL performance must be revalidated.
+
+### Constant row views (candidate revision 31)
+
+A one-row immutable owner may serve an arbitrary logical constant batch without
+constructing a batch-sized temporary row-index array. A repeat view retains the
+same owner and stores only the selected physical row and logical length.
+Windows, selections, cursors and materialization compose with that mapping;
+the owner's final release remains responsible for its existing accounting.
+The operation rejects an invalid row or negative length and publishes no view on
+failure. Repetition does not admit new bytes or repeat document validation.
+
+Review decision: an unaccounted O(batch rows) temporary index array is not an
+acceptable way to build a constant view. The compact mapping removes that array
+and its second, accounted copy. Tests must cover nulls, nested selection/window,
+reader closure, independent cursor lifetime and final account release for both
+private and cache-backed owners.
