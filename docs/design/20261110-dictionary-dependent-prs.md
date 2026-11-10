@@ -230,3 +230,34 @@ Q1 partial-aggregation admission is a separately identified gap and is not chang
 by this three-part correction. No SQL precision, cache algorithm or join plan is
 changed. Requalify all22 locally; a new regression requires read-only diagnosis
 and requester approval before any further product correction.
+
+## Approved ownership correction after retrospective
+
+The requester approved ownership-first correction. Selected reader publication
+must retain its original caller-owned decode vectors instead of freeing them.
+The scan retires its published selection before restoring this fixed workspace.
+Promoted MPool backing may return to its ORIGINAL vector without copying only
+through a successful last-reference transition. Retain/disown race via CAS;
+retained views force existing COW/replacement. Foreign immutable backing is never
+reclaimed. Original-owner permission is revoked on release/COW, including header
+reuse, and allocation provenance stays unchanged until physical free.
+
+The new reader request workspace is local to one prepared scan and has at most
+one original vector per schema column. Error/reset/free clean both workspace and
+published output before account terminal. Already leased immutable inputs keep
+their existing retained-owner path; this does not expose sealed ObjectIO cache
+bytes through a new writable alias or add a cache tier.
+
+Whole-bucket routing keeps forwarding through the existing producer boundary.
+When the destination requires flat input, Shuffle opts into one reusable owned
+normalization bank. BeginReusableCall ends the prior borrow and clears data;
+ordinary BeginCall and terminal vm.Reset/vm.Free retain their releasing behavior.
+Incompatible schemas, constants and auxiliary buffers use the existing owned
+copy. A separately retained snapshot prevents reuse and remains immutable.
+
+Proof: same native reader allocation across repeated publications; held-view COW;
+no foreign/dead-owner reclamation; retain/disown race with exactly one effective
+release authority; reusable flat-boundary pointer stability and terminal account
+closure. Qualify TOTAL cost (wall/CPU/instructions, allocation/zeroing, bytes,
+retained memory), not just eliminated compaction copies. All-query local protocol
+and approval-before-correction on a new regression remain mandatory.

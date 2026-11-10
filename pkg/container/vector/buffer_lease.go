@@ -268,6 +268,9 @@ func (v *Vector) releaseBorrowedData() {
 		return
 	}
 	lease := v.dataLease
+	if owned, ok := lease.(*dictionaryPayloadLease); ok {
+		owned.origin.CompareAndSwap(v, nil)
+	}
 	v.dataLease = nil
 	v.data = nil
 	v.cantFreeData = false
@@ -279,6 +282,9 @@ func (v *Vector) releaseBorrowedArea() {
 		return
 	}
 	lease := v.areaLease
+	if owned, ok := lease.(*dictionaryPayloadLease); ok {
+		owned.origin.CompareAndSwap(v, nil)
+	}
 	v.areaLease = nil
 	v.area = nil
 	v.cantFreeArea = false
@@ -343,6 +349,7 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 // MaterializeOwned performs copy-on-write transactionally. Allocation failure
 // leaves the borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
+	v.ReclaimDictionaryWorkspace()
 	if v.IsDictionary() {
 		return v.EnsureFlat(mp)
 	}
@@ -357,6 +364,7 @@ func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
 		return err
 	}
 	v.CopyExpressionMetadataTo(owned)
+	v.retireDictionaryWorkspaceOrigin()
 	old := *v
 	*v = *owned
 	old.Free(mp)

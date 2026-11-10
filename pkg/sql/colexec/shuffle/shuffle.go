@@ -150,7 +150,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
-	shuffle.ctr.dictionaryBoundary.BeginCall()
+	shuffle.ctr.dictionaryBoundary.BeginReusableCall()
 	if !shuffle.DrainAllBuckets {
 		return shuffle.callLocal(proc)
 	}
@@ -625,7 +625,7 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 
 func (shuffle *Shuffle) routeSingleBucket(bat *batch.Batch, shuffleIdx int32, proc *process.Process) (*batch.Batch, error) {
 	bat.ShuffleIDX = shuffleIdx
-	if (!bat.HasDictionary() || shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput()) && (shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx) {
+	if shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx {
 		return bat, nil
 	}
 	sels := shuffle.clearSels()

@@ -774,8 +774,14 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.NoError(t, err)
 			output.Clean(queryMP)
 			output = batch.NewOffHeapWithSize(len(colTypes))
+			workspace := make([]*vector.Vector, len(colTypes))
 			t.Cleanup(func() {
 				output.Clean(queryMP)
+				for _, v := range workspace {
+					if v != nil {
+						v.Free(queryMP)
+					}
+				}
 				cacheVectors.Free(queryMP)
 				require.Zero(t, account.Snapshot().Used)
 				_, _, err := registry.CompleteTerminal(account)
@@ -797,6 +803,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			calls := 0
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: selection,
+				Workspace:        workspace,
 				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 					t.Fatal("selected read must not rerun Apply")
 					return engine.ReaderFilterResult{}, nil
@@ -817,6 +824,23 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.Equal(t, 1, calls)
 			require.Equal(t, 3, output.RowCount())
 			require.True(t, output.Vecs[0].IsDictionary())
+			require.NotNil(t, workspace[0])
+			original := workspace[0].GetData()
+			for col, v := range workspace {
+				if v != nil {
+					output.Vecs[col].Free(queryMP)
+					output.Vecs[col] = v
+					workspace[col] = nil
+				}
+			}
+			output.CleanOnlyData()
+			require.Equal(t, vector.OwnedMPoolUnique, output.Vecs[0].DataBackingKind())
+			require.Same(t, &original[0], &output.Vecs[0].GetData()[0], "reader must retain native buffer capacity")
+			_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read-reuse", output, cacheVectors, queryMP, fs, early, request)
+			require.NoError(t, err)
+			require.Equal(t, 2, calls)
+			require.True(t, output.Vecs[0].IsDictionary())
+
 			require.Equal(t, complete, output.Vecs[1].IsDictionary())
 			for i, want := range []int32{1, 4, 6} {
 				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], i))

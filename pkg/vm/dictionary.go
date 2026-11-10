@@ -68,12 +68,60 @@ func (b *DictionaryOutputState) Normalize(input *batch.Batch, mp *mpool.MPool) (
 	if input.HasAllocationAccount() && b.allocation == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
+	if b.output != nil && reusableDictionaryOutput(b.output, input, b.allocation) {
+		for i, src := range input.Vecs {
+			if src == nil {
+				continue
+			}
+			if err := b.output.Vecs[i].UnionBatch(src, 0, src.Length(), nil, mp); err != nil {
+				b.BeginCall()
+				return nil, err
+			}
+			src.CopyExpressionMetadataTo(b.output.Vecs[i])
+			b.output.Vecs[i].SetSorted(src.GetSorted())
+		}
+		b.output.Attrs = append(b.output.Attrs[:0], input.Attrs...)
+		b.output.Recursive, b.output.ShuffleIDX = input.Recursive, input.ShuffleIDX
+		b.output.SetRowCount(input.RowCount())
+		return b.output, nil
+	}
+	b.BeginCall()
 	output, err := input.FlatCopy(mp, b.allocation)
 	if err != nil {
 		return nil, err
 	}
 	b.output, b.pool = output, mp
 	return output, nil
+}
+
+// BeginReusableCall has the same borrowed-output boundary as BeginCall but
+// retains owned flat capacity. Owners must still use vm.Reset/vm.Free at terminal
+// cleanup; ordinary/native producers keep BeginCall's existing release behavior.
+func (b *DictionaryOutputState) BeginReusableCall() {
+	if b.output != nil && len(b.output.ExtraBuf) == 0 {
+		b.output.CleanOnlyData()
+		return
+	}
+	b.BeginCall()
+}
+
+func reusableDictionaryOutput(dst, src *batch.Batch, allocation *vector.AllocationAccountSelection) bool {
+	if len(dst.Vecs) != len(src.Vecs) || dst.RowCount() != 0 || len(src.ExtraBuf) > 0 || !vector.AllocationAccountSelectionsEqual(dst.AllocationAccountSelection(), allocation) {
+		return false
+	}
+	for i, v := range src.Vecs {
+		out := dst.Vecs[i]
+		if v == nil {
+			if out != nil {
+				return false
+			}
+			continue
+		}
+		if out == nil || v.IsConst() || out.IsConst() || out.IsDictionary() || *v.GetType() != *out.GetType() {
+			return false
+		}
+	}
+	return true
 }
 
 // ConfigureDictionaryBoundaries runs after local/remote operator construction

@@ -88,3 +88,46 @@ func TestDictionaryRetentionDeclinesCopyOnlySource(t *testing.T) {
 		require.Equal(t, []int64{10, 20, 30}, MustFixedColNoTypeCheck[int64](first))
 	})
 }
+
+func TestDictionaryWorkspaceReuseAndHeldView(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reuse", true: "held-view"}[held], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			state := newTestVectorAllocationAccount(t, 1<<20, 128)
+			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state); require.Zero(t, mp.CurrNB()) })
+			source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			t.Cleanup(func() { source.Free(mp) })
+			require.NoError(t, AppendFixedList(source, []int64{10, 20, 30}, nil, mp))
+			original := &source.data[0]
+			selected := make([]*Vector, 1)
+			admitted, err := TrySelectDictionaryVectors([]*Vector{source}, selected, []int64{2, 0}, 3, mp, state.selection)
+			require.NoError(t, err)
+			require.True(t, admitted)
+			if !held {
+				selected[0].Free(mp)
+				selected[0] = nil
+			}
+			t.Cleanup(func() {
+				if selected[0] != nil {
+					selected[0].Free(mp)
+				}
+			})
+			source.CleanOnlyData()
+			if !held {
+				require.Equal(t, OwnedMPoolUnique, source.DataBackingKind())
+				require.Same(t, original, &source.data[0])
+			}
+			require.NoError(t, AppendFixedList(source, []int64{40, 50, 60}, nil, mp))
+			if held {
+				borrowed := selected[0].dictionaryState().base.vec
+				borrowed.ReclaimDictionaryWorkspace()
+				require.Equal(t, BorrowedLease, borrowed.DataBackingKind(), "a surviving snapshot cannot take the original workspace's release authority")
+				require.NotSame(t, original, &source.data[0])
+				require.Equal(t, int64(30), GetFixedAtNoTypeCheck[int64](selected[0], 0))
+				require.Equal(t, int64(10), GetFixedAtNoTypeCheck[int64](selected[0], 1))
+			} else {
+				require.Same(t, original, &source.data[0])
+			}
+		})
+	}
+}

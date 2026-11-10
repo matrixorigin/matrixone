@@ -69,7 +69,11 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 			logical += int64(selected[i].Size())
 		}
 		output.Vecs[pos] = selected[i]
-		sources[i].Free(mp)
+		if pos < len(request.Workspace) {
+			request.Workspace[pos] = sources[i]
+		} else {
+			sources[i].Free(mp)
+		}
 	}
 	output.SetRowCount(len(rows))
 	if request.ObserveSelection != nil {

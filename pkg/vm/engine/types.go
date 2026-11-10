@@ -1302,6 +1302,10 @@ type ReaderFilterRequest struct {
 	// input. Sels uses the original live-row domain and is borrowed until the
 	// next callback. A supporting reader retains views or gathers that mapping
 	// once; unsupported readers continue calling Apply.
+	// Workspace contains caller-owned original read vectors displaced by selected
+	// publication. The caller retires published views, restores these slots, then
+	// reclaims unique backing before its next read; terminal cleanup frees both.
+	Workspace        []*vector.Vector
 	Select           ReaderSelection
 	OutputAllocation *vector.AllocationAccountSelection
 	ObserveSelection func(rows, columns int, logicalBytes int64)

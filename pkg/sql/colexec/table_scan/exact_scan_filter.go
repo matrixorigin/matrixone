@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -218,7 +219,11 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 		tableScan.ctr.readerFilter = nil
 		return
 	}
+	if tableScan.ctr.readerWorkspace == nil {
+		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
+	}
 	tableScan.ctr.readerFilter = &engine.ReaderFilterRequest{
+		Workspace: tableScan.ctr.readerWorkspace,
 		Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			return tableScan.applyReaderFilter(proc, bat, loaded)
 		},

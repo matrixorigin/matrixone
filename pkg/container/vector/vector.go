@@ -3905,6 +3905,9 @@ func (v *Vector) GetRawBytesAt(i int) []byte {
 }
 
 func (v *Vector) CleanOnlyData() {
+	if v.dataLease != nil || v.areaLease != nil {
+		v.ReclaimDictionaryWorkspace()
+	}
 	v.releaseBorrowedBacking()
 	// Constant NULLs have logical rows without a payload allocation.
 	v.length = 0

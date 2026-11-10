@@ -85,6 +85,9 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
+	if tableScan.OutputAllocation != nil && len(tableScan.ctr.allFilterExecutors) > 0 && tableScan.ctr.readerWorkspace == nil {
+		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
+	}
 	tableScan.configureLateMaterialization()
 	tableScan.prepareReaderFilter(proc)
 
@@ -145,6 +148,13 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		// read data from storage engine
+		for col, workspace := range tableScan.ctr.readerWorkspace {
+			if workspace != nil {
+				tableScan.ctr.buf.Vecs[col].Free(proc.Mp())
+				tableScan.ctr.buf.Vecs[col] = workspace
+				tableScan.ctr.readerWorkspace[col] = nil
+			}
+		}
 		tableScan.ctr.buf.CleanOnlyData()
 		tableScan.ctr.filterReadMetrics = false
 		tableScan.ctr.filterLateMaterialized = false
@@ -203,6 +213,10 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					if retained {
 						tableScan.OpAnalyzer.GetOpStats().AddExtraStat("DictionaryScanSelectedRows", int64(next.RowCount()))
+					}
+					for col, source := range tableScan.ctr.buf.Vecs {
+						tableScan.ctr.readerWorkspace[col] = source
+						tableScan.ctr.buf.Vecs[col] = nil
 					}
 					tableScan.ctr.buf.Clean(proc.Mp())
 					tableScan.ctr.buf = next

@@ -71,3 +71,46 @@ func TestRefCountedRejectsNegativeAccounting(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, lease)
 }
+
+func TestRefCountedDisownRequiresLastReference(t *testing.T) {
+	var cleanup atomic.Int32
+	lease, err := NewRefCounted([]byte("data"), 4, func() { cleanup.Add(1) })
+	require.NoError(t, err)
+	require.True(t, lease.Retain())
+	require.False(t, lease.TryDisown())
+	require.Equal(t, []byte("data"), lease.Bytes())
+	lease.Release()
+	require.True(t, lease.TryDisown())
+	require.Zero(t, cleanup.Load())
+	require.Nil(t, lease.Bytes())
+	require.False(t, lease.Retain())
+	require.False(t, lease.TryDisown())
+}
+
+func TestRefCountedDisownAndRetainRace(t *testing.T) {
+	for range 64 {
+		var cleanup atomic.Int32
+		lease, err := NewRefCounted([]byte("data"), 4, func() { cleanup.Add(1) })
+		require.NoError(t, err)
+		start := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			<-start
+			if lease.Retain() {
+				_ = lease.Bytes()
+				lease.Release()
+			}
+		}()
+		close(start)
+		disowned := lease.TryDisown()
+		<-done
+		if disowned {
+			require.Zero(t, cleanup.Load())
+		} else {
+			lease.Release()
+			require.Equal(t, int32(1), cleanup.Load())
+		}
+		require.False(t, lease.Retain())
+	}
+}

@@ -52,6 +52,7 @@ type container struct {
 	filterActiveDuration      time.Duration
 	readerFilter              *engine.ReaderFilterRequest
 	dictionaryOnlyReader      bool
+	readerWorkspace           []*vector.Vector
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -221,6 +222,14 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	for i, vec := range tableScan.ctr.readerWorkspace {
+		if vec != nil {
+			vec.Free(proc.Mp())
+			tableScan.ctr.readerWorkspace[i] = nil
+		}
+	}
+	tableScan.ctr.readerWorkspace = nil
+
 	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()
 	if tableScan.ctr.buf != nil {

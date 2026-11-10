@@ -17,6 +17,7 @@ package vector
 import (
 	"errors"
 	"math"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -85,6 +86,8 @@ type DictionaryBase struct {
 // statement charge until the physical allocation's final release. A foreign
 // decoder/cache lease needs a separate bounded pin admission instead.
 type dictionaryPayloadLease struct {
+	origin    atomic.Pointer[Vector]
+	selection *AllocationAccountSelection
 	BufferLease
 	account *mpool.AllocationAccount
 }
@@ -276,7 +279,8 @@ func promoteDictionaryBacking(source, snapshot *Vector, mp *mpool.MPool, part Ba
 	// New leases have one guaranteed live reference. Move it into source;
 	// retain a second for the unpublished snapshot before either can escape.
 	lease.Retain()
-	shared := &dictionaryPayloadLease{BufferLease: lease}
+	shared := &dictionaryPayloadLease{BufferLease: lease, selection: source.allocationAccount}
+	shared.origin.Store(source)
 	if source.allocationAccount != nil {
 		shared.account = source.allocationAccount.account
 	}
@@ -288,4 +292,36 @@ func promoteDictionaryBacking(source, snapshot *Vector, mp *mpool.MPool, part Ba
 		snapshot.areaLease, snapshot.cantFreeArea = shared, true
 	}
 	return nil
+}
+
+// ReclaimDictionaryWorkspace restores only this vector's original MPool backing
+// after its immutable borrowers have released it. Foreign leases remain borrowed
+// and normal CleanOnlyData/COW releases or replaces them without mutation.
+func (v *Vector) ReclaimDictionaryWorkspace() {
+	if v == nil || v.IsDictionary() {
+		return
+	}
+	if lease, ok := v.dataLease.(*dictionaryPayloadLease); ok && lease.origin.Load() == v && AllocationAccountSelectionsEqual(lease.selection, v.allocationAccount) {
+		if ref, ok := lease.BufferLease.(*RefCountedBufferLease); ok && ref.TryDisown() {
+			v.dataLease = nil
+			lease.origin.Store(nil)
+			v.cantFreeData = false
+		}
+	}
+	if lease, ok := v.areaLease.(*dictionaryPayloadLease); ok && lease.origin.Load() == v && AllocationAccountSelectionsEqual(lease.selection, v.allocationAccount) {
+		if ref, ok := lease.BufferLease.(*RefCountedBufferLease); ok && ref.TryDisown() {
+			v.areaLease = nil
+			lease.origin.Store(nil)
+			v.cantFreeArea = false
+		}
+	}
+}
+
+func (v *Vector) retireDictionaryWorkspaceOrigin() {
+	if lease, ok := v.dataLease.(*dictionaryPayloadLease); ok {
+		lease.origin.CompareAndSwap(v, nil)
+	}
+	if lease, ok := v.areaLease.(*dictionaryPayloadLease); ok {
+		lease.origin.CompareAndSwap(v, nil)
+	}
 }
