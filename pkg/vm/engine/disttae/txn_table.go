@@ -1964,7 +1964,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				case *engine.PrimaryKeyDef:
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
-					properties = append(properties, k.Configs...)
+					properties = catalog.AppendStreamConfigProperties(properties, k.Configs)
 				}
 			}
 		}

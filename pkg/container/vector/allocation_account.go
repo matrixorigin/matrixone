@@ -132,6 +132,16 @@ func (v *Vector) UnionBatchWithAllocationAccount(
 	return v.UnionBatch(source, offset, count, flags, mp)
 }
 
+// NewAccountedBuffer creates owned auxiliary bytes under this destination's
+// immutable provenance and capacity class. The caller must Free the buffer or
+// transfer it to an owner that releases it through its MPool.
+func (s *AllocationAccountSelection) NewAccountedBuffer(mp *mpool.MPool) (*mpool.AccountedBuffer, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	return mpool.NewAccountedBufferWithCapacityClass(mp, s.account, s.owner, s.dataSite, s.capacityClass)
+}
+
 func NewAllocationAccountSelection(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,

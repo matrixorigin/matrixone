@@ -117,6 +117,20 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		return leastGreatestResolution{resultType: types.T_varchar.ToType(), overloadID: leastGreatestNormalOverload}, true
 	}
 
+	if target, hasVector, ok := commonVectorType(nonNull); hasVector {
+		if !ok || !leastGreatestExecutorSupportsOid(target.Oid) {
+			return leastGreatestResolution{}, false
+		}
+		resolution := leastGreatestResolution{resultType: target, overloadID: leastGreatestNormalOverload}
+		for _, input := range nonNull {
+			if input != target {
+				resolution.castTypes = leastGreatestCastTypes(inputs, target)
+				break
+			}
+		}
+		return resolution, true
+	}
+
 	if allLeastGreatestJSON(nonNull) {
 		target := types.T_varchar.ToType()
 		return leastGreatestResolution{
@@ -159,13 +173,6 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}
 	}
 	if sameOid {
-		if baseOid.IsArrayRelate() {
-			for _, input := range nonNull[1:] {
-				if input.Width != nonNull[0].Width {
-					return leastGreatestResolution{}, false
-				}
-			}
-		}
 		if !leastGreatestExecutorSupportsOid(baseOid) {
 			return leastGreatestResolution{}, false
 		}
@@ -458,7 +465,6 @@ func hasUnsupportedLeastGreatestMixedType(inputs []types.Type) bool {
 	for i := range inputs {
 		switch inputs[i].Oid {
 		case types.T_interval, types.T_uuid, types.T_Rowid,
-			types.T_array_float32, types.T_array_float64,
 			types.T_geometry, types.T_geometry32, types.T_datalink:
 			return true
 		}

@@ -1040,8 +1040,8 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
 				for _, property := range k.Configs {
-					if property.Key != catalog.PropSchemaExtra {
-						properties = append(properties, property)
+					if property.GetKey() != catalog.PropSchemaExtra {
+						properties = catalog.AppendStreamConfigProperties(properties, []*plan.Property{property})
 					}
 				}
 			}

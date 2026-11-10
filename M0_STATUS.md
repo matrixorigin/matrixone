@@ -1,5 +1,25 @@
 # M0 restricted metadata-only ADD prototype
 
+## Main integration, 2026-11-11
+
+This revision merges main `1a12e18e68714c5a583525de62b6b78c9dee63b9`
+into published candidate `cecee20c44601638e1276fada054c7c76a378b0d`.
+The catalog conflict preserves both main's filtering of stale table properties
+and the M0 relation's transaction-visible schema-extra authority. The ordinary
+ObjectIO missing-column behavior and strict Engine-owned M0 layout are unchanged.
+
+Focused default and `mo_m0` tests, with vet enabled, covered both table-definition
+paths, ordinary missing-column compatibility, strict contract rejection and
+scope cleanup. The member-scope test exercises the codec, not a real scheduler.
+The PR-relative whitespace check passed. Incremental lint was interrupted to
+protect disk capacity; its result and `mo_m0` incremental lint are not available.
+
+The parent candidate's CI run 42804362147 attempt 2 passed, including Coverage
+and both BVT jobs. Its earlier metrics duplication remains a historical failure,
+not a confirmed product fix. This merge needs its own CI result. Maintainer
+review, supported historical upgrade/restore qualification, Linux and QA remain
+separate pending gates.
+
 
 
 
