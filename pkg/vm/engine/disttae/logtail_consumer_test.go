@@ -86,6 +86,19 @@ func TestCheckPeerReadBarrierReady(t *testing.T) {
 	require.Error(t, c.checkPeerReadBarrierReady(t.Context(), peer))
 }
 
+// waitReadyClient checks Err under the subscriber lock, allowing a test to
+// replace the peer immediately after its lookup has captured the old client.
+type indexPeerLookupContext struct {
+	context.Context
+	once    sync.Once
+	entered chan struct{}
+}
+
+func (c *indexPeerLookupContext) Err() error {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Err()
+}
+
 func TestAcquirePeerLogtailReadBarrierUsesCapturedPeer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	stream := mock_morpc.NewMockStream(ctrl)
@@ -137,6 +150,48 @@ func TestAcquirePeerLogtailReadBarrierUsesCapturedPeer(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Equal(t, frontier, got)
+
+	// An unadvertised response must not survive replacement by a new peer.
+	oldStream := mock_morpc.NewMockStream(ctrl)
+	oldResponses := make(chan morpc.Message, 1)
+	oldStream.EXPECT().Receive().Return(oldResponses, nil)
+	oldStream.EXPECT().Close(true).AnyTimes().Return(nil)
+	oldPeer, err := service.NewLogtailClient(t.Context(), oldStream)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, oldPeer.Close()) })
+	c.subscriber.swapClient(oldPeer)
+	lookupCtx := &indexPeerLookupContext{Context: t.Context(), entered: make(chan struct{})}
+	type result struct {
+		supported bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() { _, ok, e := c.AcquirePeerLogtailReadBarrier(lookupCtx); done <- result{ok, e} }()
+	select {
+	case <-lookupCtx.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old peer was not captured")
+	}
+	c.subscriber.swapClient(peer)
+	oldSubscription, err := encode(&service.LogtailResponse{LogtailResponse: logtail.LogtailResponse{
+		Response: &logtail.LogtailResponse_SubscribeResponse{SubscribeResponse: &logtail.SubscribeResponse{}},
+	}})
+	require.NoError(t, err)
+	oldResponses <- oldSubscription
+	_, err = oldPeer.Receive(t.Context())
+	require.NoError(t, err)
+	select {
+	case result := <-done:
+		require.False(t, result.supported)
+		require.Error(t, result.err, "a replaced peer cannot select legacy behavior")
+	case <-time.After(5 * time.Second):
+		t.Fatal("old peer negotiation did not finish")
+	}
+	got, supported, err = c.AcquirePeerLogtailReadBarrier(t.Context())
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, frontier, got)
+
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	c.timestampWaiter = &barrierTimestampWaiter{get: func(ctx context.Context, target timestamp.Timestamp) (timestamp.Timestamp, error) {
@@ -148,11 +203,7 @@ func TestAcquirePeerLogtailReadBarrierUsesCapturedPeer(t *testing.T) {
 			return timestamp.Timestamp{}, ctx.Err()
 		}
 	}}
-	type result struct {
-		supported bool
-		err       error
-	}
-	done := make(chan result, 1)
+	done = make(chan result, 1)
 	go func() { _, supported, e := c.AcquirePeerLogtailReadBarrier(t.Context()); done <- result{supported, e} }()
 	select {
 	case <-entered:
