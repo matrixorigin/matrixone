@@ -177,3 +177,14 @@ select str_to_date('2024-01-02', convert('%Y-%m-%d', char)) as str_to_date_conve
        str_to_date('2024-01-02', cast('%Y-%m-%d' as char)) as str_to_date_cast,
        to_date('2024-01-02', convert('%Y-%m-%d', char)) as to_date_convert,
        to_date('2024-01-02', cast('%Y-%m-%d' as char)) as to_date_cast;
+
+-- TIMESTAMPDIFF keeps the string temporal overloads for the TEXT cast
+-- results: compositions next to a DATE operand keep the string parsing
+-- executor, so the HOUR differences preserve the string's time-of-day
+-- (49 and 47 hours) instead of the DATE-truncated 48, for both spellings.
+select timestampdiff(hour, date('2024-01-01'), cast('2024-01-03 01:00:00' as char)) as tsdiff_date_cast,
+       timestampdiff(hour, date('2024-01-01'), convert('2024-01-03 01:00:00', char)) as tsdiff_date_convert;
+select timestampdiff(hour, cast('2024-01-03 01:00:00' as char), date('2024-01-05')) as tsdiff_cast_date,
+       timestampdiff(hour, convert('2024-01-03 01:00:00', char), date('2024-01-05')) as tsdiff_convert_date;
+select timestampdiff(hour, cast('2024-01-01 01:00:00' as char), cast('2024-01-03 00:30:00' as char)) as tsdiff_pair_cast,
+       timestampdiff(hour, convert('2024-01-01 01:00:00', char), convert('2024-01-03 00:30:00', char)) as tsdiff_pair_convert;

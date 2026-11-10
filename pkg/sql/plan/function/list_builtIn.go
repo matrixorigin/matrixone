@@ -10751,6 +10751,47 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampDiffDateTimestamp
 				},
 			},
+			{
+				// TEXT operands must bind directly: converting TEXT to
+				// DATE, DATETIME, TIMESTAMP or VARCHAR costs the same, so
+				// a by-cast tie from the omitted-length CAST/CONVERT-to-CHAR
+				// TEXT target (#32336, #32374) would keep the first DATE
+				// overload, whose strToDate cast discards the string's
+				// time-of-day. These mirrors keep the string parsing
+				// overloads the pre-widening VARCHAR compositions selected.
+				overloadId: 12,
+				args:       []types.T{types.T_varchar, types.T_text, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffString
+				},
+			},
+			{
+				// See overload 12: mixed DATE/TEXT compositions must keep
+				// the date-and-string executor, not fall back to the DATE
+				// pair overload through an equal-cost cast tie.
+				overloadId: 13,
+				args:       []types.T{types.T_varchar, types.T_date, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffDateString
+				},
+			},
+			{
+				// See overload 12: the reversed string-then-DATE mix.
+				overloadId: 14,
+				args:       []types.T{types.T_varchar, types.T_text, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffStringDate
+				},
+			},
 		},
 	},
 

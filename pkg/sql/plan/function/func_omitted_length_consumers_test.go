@@ -185,3 +185,114 @@ func TestTimestampTextKeepsTimeOfDay(t *testing.T) {
 	s, info := fcTC.Run()
 	require.True(t, s, fmt.Sprintf("case is 'timestamp text keeps time-of-day', err info is '%s'", info))
 }
+
+// TestTimestampDiffTextKeepsStringTemporalOverloads guards the mixed
+// DATE/TEXT TIMESTAMPDIFF compositions raised by PR review: converting the
+// omitted-length CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) to DATE,
+// DATETIME, TIMESTAMP or VARCHAR all costs the same, so fixedTypeMatch's
+// by-cast tie kept the first DATE/DATETIME overloads and the inserted
+// strToDate cast discarded the string operand's time-of-day - a 49-hour
+// DATE/string pair silently returned 48 hours. Mirror overloads bind these
+// T_text operands directly to the string parsing executors, keeping the
+// values the pre-widening VARCHAR compositions produced.
+func TestTimestampDiffTextKeepsStringTemporalOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// The three compositions carrying a widened TEXT operand must resolve to
+	// an exact TEXT overload; a by-cast resolution means a narrowing cast was
+	// inserted and the equal-cost tie regression is back.
+	for _, tc := range []struct {
+		name string
+		args []types.T
+	}{
+		{"text_pair", []types.T{types.T_varchar, types.T_text, types.T_text}},
+		{"date_then_text", []types.T{types.T_varchar, types.T_date, types.T_text}},
+		{"text_then_date", []types.T{types.T_varchar, types.T_text, types.T_date}},
+	} {
+		t.Run("binds/"+tc.name, func(t *testing.T) {
+			args := make([]types.Type, 0, len(tc.args))
+			for _, a := range tc.args {
+				args = append(args, a.ToType())
+			}
+			get, err := GetFunctionByName(proc.Ctx, "timestampdiff", args)
+			require.NoError(t, err)
+			require.Equal(t, types.T_int64, get.GetReturnType().Oid)
+			_, shouldCast := get.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast,
+				"timestampdiff %s must bind the string temporal overload directly, not tie into the DATE overload through an equal-cost cast", tc.name)
+		})
+	}
+
+	// TIMESTAMP-peered mixes have no direct overload on either spelling, so
+	// TEXT and VARCHAR must keep selecting the SAME overload through the
+	// implicit-cast costs. A divergent cost table would silently narrow one
+	// spelling away from the other.
+	for _, tc := range []struct {
+		name string
+		text [2]types.T
+		peer [2]types.T
+	}{
+		{"timestamp_then_text", [2]types.T{types.T_timestamp, types.T_text}, [2]types.T{types.T_timestamp, types.T_varchar}},
+		{"text_then_timestamp", [2]types.T{types.T_text, types.T_timestamp}, [2]types.T{types.T_varchar, types.T_timestamp}},
+	} {
+		t.Run("peer_selection/"+tc.name, func(t *testing.T) {
+			textSel, err := GetFunctionByName(proc.Ctx, "timestampdiff",
+				[]types.Type{types.T_varchar.ToType(), tc.text[0].ToType(), tc.text[1].ToType()})
+			require.NoError(t, err)
+			peerSel, err := GetFunctionByName(proc.Ctx, "timestampdiff",
+				[]types.Type{types.T_varchar.ToType(), tc.peer[0].ToType(), tc.peer[1].ToType()})
+			require.NoError(t, err)
+			require.Equal(t, peerSel.GetEncodedOverloadID(), textSel.GetEncodedOverloadID(),
+				"the widened TEXT operand must resolve timestampdiff exactly like its VARCHAR peer")
+		})
+	}
+
+	// Executor-level parity with T_text operands: the mirror executors keep
+	// the hour counts their pre-widening VARCHAR peers produced, including
+	// the ones that depend on the string's preserved time-of-day.
+	t.Run("values", func(t *testing.T) {
+		dateOdd, err := types.ParseDateCast("2024-01-01")
+		require.NoError(t, err)
+		dateEven, err := types.ParseDateCast("2024-01-02")
+		require.NoError(t, err)
+		dateFifth, err := types.ParseDateCast("2024-01-05")
+		require.NoError(t, err)
+
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"hour"}, nil),
+				NewFunctionTestInput(types.T_text.ToType(),
+					[]string{"2024-01-01 00:00:00", "2024-01-01"}, nil),
+				NewFunctionTestInput(types.T_text.ToType(),
+					[]string{"2024-01-03 01:00:00", "2024-01-03"}, nil),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{49, 48}, nil),
+			TimestampDiffString)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is 'timestampdiff text pair keeps time-of-day', err info is '%s'", info))
+
+		fcTC = NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"hour"}, nil),
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateOdd, dateEven}, nil),
+				NewFunctionTestInput(types.T_text.ToType(),
+					[]string{"2024-01-03 01:00:00", "2024-01-03 00:30:00"}, nil),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{49, 24}, nil),
+			TimestampDiffDateString)
+		s, info = fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is 'timestampdiff date/text keeps time-of-day', err info is '%s'", info))
+
+		fcTC = NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"hour"}, nil),
+				NewFunctionTestInput(types.T_text.ToType(),
+					[]string{"2024-01-03 01:00:00", "2024-01-03 00:00:00"}, nil),
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{dateFifth, dateFifth}, nil),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{47, 48}, nil),
+			TimestampDiffStringDate)
+		s, info = fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is 'timestampdiff text/date keeps time-of-day', err info is '%s'", info))
+	})
+}

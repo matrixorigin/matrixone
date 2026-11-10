@@ -205,6 +205,50 @@ func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
 				"the TEXT cast result must reach extract directly, not tied into the DATETIME overload")
 		}
 	})
+
+	t.Run("timestampdiff_keeps_string_temporal_path", func(t *testing.T) {
+		// DATE-peered mixes must keep the string operand on the string
+		// parsing overload; a narrowing cast to DATE would silently drop
+		// its time-of-day and change the HOUR difference by whole hours.
+		for _, sql := range []string{
+			"select timestampdiff(hour, date('2024-01-01'), cast('2024-01-03 01:00:00' as char))",
+			"select timestampdiff(hour, date('2024-01-01'), convert('2024-01-03 01:00:00', char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "timestampdiff", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_int64), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_date), fn.Args[1].Typ.Id, sql,
+				"the DATE peer must stay direct, without an inserted cast")
+			require.Equal(t, int32(types.T_text), fn.Args[2].Typ.Id, sql,
+				"the TEXT cast result must reach timestampdiff directly, not tied into the DATE overload")
+		}
+		for _, sql := range []string{
+			"select timestampdiff(hour, cast('2024-01-03 01:00:00' as char), date('2024-01-05'))",
+			"select timestampdiff(hour, convert('2024-01-03 01:00:00', char), date('2024-01-05'))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "timestampdiff", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_int64), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[1].Typ.Id, sql,
+				"the TEXT cast result must reach timestampdiff directly, not tied into the DATE overload")
+			require.Equal(t, int32(types.T_date), fn.Args[2].Typ.Id, sql,
+				"the DATE peer must stay direct, without an inserted cast")
+		}
+		// The pure string pair keeps the same treatment for both operands.
+		for _, sql := range []string{
+			"select timestampdiff(hour, cast('2024-01-01 01:00:00' as char), cast('2024-01-03 00:30:00' as char))",
+			"select timestampdiff(hour, convert('2024-01-01 01:00:00', char), convert('2024-01-03 00:30:00', char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "timestampdiff", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_int64), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[1].Typ.Id, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[2].Typ.Id, sql)
+		}
+	})
 }
 
 // TestOmittedLengthStrToDateAcceptsTextFormat verifies the STR_TO_DATE and
