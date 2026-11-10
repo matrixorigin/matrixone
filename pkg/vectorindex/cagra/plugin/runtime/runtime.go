@@ -41,6 +41,18 @@ var _ catalogplugin.Hooks = CatalogHooks{}
 // CatalogHooks implements plugin/catalog.Hooks for CAGRA.
 type CatalogHooks struct{}
 
+// MaintenanceOperands projects config fields onto the relations CAGRA consumes.
+func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.MaintenanceOperand {
+	operands := []vectorindex.MaintenanceOperand{
+		{Role: catalog.Cagra_TblType_Metadata, Name: cfg.MetadataTable},
+		{Role: catalog.Cagra_TblType_Storage, Name: cfg.IndexTable},
+	}
+	if cfg.IgnoredTable != "" {
+		operands = append(operands, vectorindex.MaintenanceOperand{Role: catalog.IndexIgnored_TblType, Name: cfg.IgnoredTable})
+	}
+	return operands
+}
+
 func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Cagra_TblType_Metadata,

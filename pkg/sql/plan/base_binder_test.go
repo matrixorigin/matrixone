@@ -164,7 +164,7 @@ func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 			if test.wantErr {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "function '")
@@ -458,7 +458,7 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	}()
 
 	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-	built, err := BuildPlan(ctx, stmts[0], false)
+	built, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 
 	query := built.GetQuery()
@@ -490,7 +490,7 @@ func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
 			}()
 
 			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
-			_, err = BuildPlan(ctx, stmts[0], false)
+			_, err = BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 		})
 	}
@@ -1230,6 +1230,11 @@ func TestMinMaxGeneratedTableFunctionStringsUseExplicitGeneralCICollation(t *tes
 			query:    "select min(file), max(file) from stage_list('stage://s/') s",
 			aggCount: 2,
 		},
+		{
+			name:     "desc file name",
+			query:    "select min(file), max(file) from desc_file('stage://s/') d where not is_dir and size > 0",
+			aggCount: 2,
+		},
 	}
 
 	for _, test := range tests {
@@ -1370,7 +1375,7 @@ func TestConvertUsingCharsetAdmissionMatchesEvaluator(t *testing.T) {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 				require.ErrorContains(t, err, "for CONVERT USING")
 				if charset == "latin1" {
 					require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
@@ -1388,7 +1393,7 @@ func TestConvertUsingCharsetAdmissionMatchesEvaluator(t *testing.T) {
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer stmt.Free()
-				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 				require.NoError(t, err)
 				require.NotNil(t, p)
 			})
@@ -1398,7 +1403,7 @@ func TestConvertUsingCharsetAdmissionMatchesEvaluator(t *testing.T) {
 		"create table c01_utf32_ddl(c varchar(1)) default charset=utf32", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint32(types.CharsetUTF8), p.GetDdl().GetCreateTable().GetTableDef().DefaultCharset)
 }
@@ -1598,7 +1603,7 @@ func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 		"select request_at from system.statement_info where request_at > date_sub(now(), interval 1 hour)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	queryPlan, err := BuildPlan(compilerCtx, stmt, false)
+	queryPlan, err := BuildPlan(compilerCtx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var scan *plan.Node
@@ -1923,7 +1928,7 @@ func bindNameConstSelect(t testing.TB, sql string) error {
 	if err != nil {
 		return err
 	}
-	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 	return err
 }
 

@@ -1915,6 +1915,9 @@ func constantFoldWithPreparedExactSource(
 	spatialChecked bool,
 	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
+	if function.RequiresRuntimeEvaluation(expr) {
+		return expr, nil
+	}
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
 		// constant-fold representation. Keep it unchanged so callers can fold an
@@ -3644,7 +3647,7 @@ func resetPreparePlan(
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -8651,9 +8654,13 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
 					continue
 				}
-				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				original := fn.Args[i]
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, original, proc, false, true)
 				if foldErr != nil {
 					return false, foldErr
+				}
+				if original.GetCandidateFilter() {
+					folded.CandidateFilter = true
 				}
 				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
@@ -8674,9 +8681,10 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 							Id: int32(newID),
 						},
 					},
-					AuxId:       fn.Args[i].AuxId,
-					Ndv:         fn.Args[i].Ndv,
-					Selectivity: fn.Args[i].Selectivity,
+					AuxId:           fn.Args[i].AuxId,
+					CandidateFilter: fn.Args[i].CandidateFilter,
+					Ndv:             fn.Args[i].Ndv,
+					Selectivity:     fn.Args[i].Selectivity,
 				}
 
 			}
@@ -8717,6 +8725,12 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			vec, err = exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 			if err != nil {
 				return err
+			}
+			// Timestamp functions can choose their result precision at execution
+			// time (for example NOW(?) uses the bound FSP). Storage comparisons
+			// must use the same precision as the row executor for this value.
+			if types.T(expr.Typ.Id) == types.T_timestamp && vec.GetType().Oid == types.T_timestamp {
+				expr.Typ.Scale = vec.GetType().Scale
 			}
 			data, _ = getConstantBytes(vec, false, 0)
 			ef.Fold.IsConst = true

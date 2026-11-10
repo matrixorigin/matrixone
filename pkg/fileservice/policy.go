@@ -30,6 +30,8 @@ const (
 	// whole-object preloads while the disk cache evicts the whole-object files of
 	// the reader's table before most of their bytes are read.
 	NarrowRead
+	// MemoryCacheNoEvict allows late reads to allocate only unused cache capacity.
+	MemoryCacheNoEvict
 )
 
 const (

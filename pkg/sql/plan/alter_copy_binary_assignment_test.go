@@ -114,7 +114,7 @@ func TestAlterCopyUnchangedBinaryProjection(t *testing.T) {
 	stmt, err := mysql.ParseOne(t.Context(), "insert into dst select v from src", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
+	built, err := BuildPlan(compiler, stmt, false, nil)
 	require.NoError(t, err)
 	casts := 0
 	var visit func(*pbplan.Expr)

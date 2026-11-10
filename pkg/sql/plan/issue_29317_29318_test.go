@@ -518,9 +518,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				require.NoError(t, parseErr)
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				source := types.T_varchar.ToType()
-				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-					[]PreparedSourceBinding{{Position: 0, Type: source}},
-					[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true}})
+				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: source}}, []any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true}})
 				require.NoError(t, bindErr)
 				require.False(t, bound.ValueDependent,
 					"an explicit numeric cast fixes the overload without inspecting text: %s", valueExpr)
@@ -552,9 +550,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 					require.NoError(t, vector.AppendBytes(params, []byte("1.46"), false, proc.Mp()))
 					proc.SetPrepareParams(params)
 					source := types.T_varchar.ToType()
-					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-						[]PreparedSourceBinding{{Position: 0, Type: source}},
-						[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: source}}, []any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
 					require.NoError(t, err)
 					require.NotNil(t, findPlanFunctionExpr(bound.Plan, name))
 					narrowSourceCast := false

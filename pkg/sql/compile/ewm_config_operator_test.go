@@ -368,6 +368,29 @@ func TestEwmConstantCaseConfigEvaluation(t *testing.T) {
 	require.Equal(t, aggexec.EwmModeRow, cfg.Mode)
 	require.Equal(t, 0.5, cfg.Alpha, "the constant CASE decay evaluates to its taken branch")
 
+	// issue #31952: the prepared IFNULL(?, 0.5) decay publishes a CASE
+	// whose carrier type is VARCHAR (the unresolved marker widens the
+	// branch domains), so the taken branch reaches the configuration
+	// boundary as the text form of a numeric alpha and must decode from
+	// it exactly like the numeric carrier above.
+	stringLit := func(v string) *plan.Expr {
+		return plan2.MakePlan2StringConstExprWithType(v)
+	}
+	varcharCaseDecay := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{boolLit(true), stringLit("0.5"), stringLit("0.25")},
+		boolType, varcharType, varcharType)
+	_, config, err = constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmMean},
+		Args: []*plan.Expr{ewmValueArg(), varcharCaseDecay, boolLit(false)},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err = aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.Equal(t, aggexec.EwmModeRow, cfg.Mode,
+		"a VARCHAR-carrier decay resolving to a numeric text is the row alpha mode")
+	require.Equal(t, 0.5, cfg.Alpha, "the text form 0.5 of the taken branch must parse as the alpha")
+	require.False(t, cfg.Adjust, "the boolean behind the conditional decay is the adjust policy")
+
 	// the event-time form resolves identically behind the tag spelled
 	// as a constant CASE: the tag form keeps its own ORDER BY verdict
 	// at the per-execution boundary (TestValidateEwmWindowConfigsAfterModeResolution)
@@ -386,6 +409,92 @@ func TestEwmConstantCaseConfigEvaluation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, aggexec.EwmModeTime, cfg.Mode)
 	require.Equal(t, 3600.0, cfg.HalfLife)
+}
+
+// TestEwmDeferredTagFencesBooleanHalfLife (pre-PR review P2, issue
+// #31952): a decay that resolves to the 'halflife' tag per execution -
+// the deferred conditional the marker-era admission lets through - makes
+// the slot behind it the half-life, and a boolean value there keeps the
+// section-7 numeric-domain rejection: TRUE must not ride the shared
+// constant evaluator's boolean-as-1 view into a silent HalfLife=1.
+// The numeric half-life behind the same conditional tag keeps resolving
+// to event-time mode, the boolean behind a NON-tag conditional decay
+// keeps its adjust-policy meaning, and a rejected configuration leaves
+// a clean slate: the next construction succeeds.
+func TestEwmDeferredTagFencesBooleanHalfLife(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	boolType := types.T_bool.ToType()
+	floatType := types.T_float64.ToType()
+	varcharType := types.T_varchar.ToType()
+	boolLit := func(v bool) *plan.Expr { return plan2.MakePlan2BoolConstExprWithType(v) }
+	floatLit := func(v float64) *plan.Expr {
+		return plan2.MakePlan2Float64ConstExprWithType(v)
+	}
+	stringLit := func(v string) *plan.Expr {
+		return plan2.MakePlan2StringConstExprWithType(v)
+	}
+
+	// the per-execution tag resolution shape: case when true then
+	// 'halflife' else 'x' end - the conditional transport a prepared
+	// marker leaves in the decay position
+	condTag := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{boolLit(true), stringLit("halflife"), stringLit("x")},
+		boolType, varcharType, varcharType)
+
+	// TRUE behind the resolved tag is the half-life slot: rejected with
+	// the pinned section-7 message, never silently read as HalfLife=1
+	_, _, err := constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmMean},
+		Args: []*plan.Expr{ewmValueArg(), condTag, ewmTrue},
+	}, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"ewm halflife decay requires a strictly positive half-life constant")
+
+	// a boolean-typed conditional half-life (the ifnull(?, true)
+	// lowering shape), resolving to true, rejects the same way
+	condBoolHalfLife := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{boolLit(true), boolLit(true), boolLit(false)},
+		boolType, boolType, boolType)
+	_, _, err = constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmCov},
+		Args: []*plan.Expr{ewmValueArg(), ewmValueArg(), condTag, condBoolHalfLife, ewmTrue},
+	}, proc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(),
+		"ewm halflife decay requires a strictly positive half-life constant")
+
+	// recovery: the identical statement shape with a numeric half-life
+	// constructs the event-time configuration cleanly
+	_, config, err := constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmCov},
+		Args: []*plan.Expr{ewmValueArg(), ewmValueArg(), condTag, floatLit(3600), ewmTrue},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err := aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.Equal(t, aggexec.EwmModeTime, cfg.Mode)
+	require.Equal(t, 3600.0, cfg.HalfLife)
+	require.True(t, cfg.Adjust)
+
+	// booleans behind a NON-tag conditional decay keep their policy
+	// meaning: the row-decay adjust slot still accepts TRUE
+	numericCondDecay := ewmConstFnTree(t, proc, "case",
+		[]*plan.Expr{boolLit(true), floatLit(0.5), floatLit(0.25)},
+		boolType, floatType, floatType)
+	_, config, err = constructEwmConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameEwmMean},
+		Args: []*plan.Expr{ewmValueArg(), numericCondDecay, ewmTrue},
+	}, proc)
+	require.NoError(t, err)
+	cfg, err = aggexec.DecodeEwmConfig(config)
+	require.NoError(t, err)
+	require.Equal(t, aggexec.EwmModeRow, cfg.Mode)
+	require.Equal(t, 0.5, cfg.Alpha)
+	require.True(t, cfg.Adjust,
+		"the boolean behind a non-tag conditional decay is the adjust policy")
 }
 
 // TestValidateEwmWindowConfigsAfterModeResolution: after the per-execution

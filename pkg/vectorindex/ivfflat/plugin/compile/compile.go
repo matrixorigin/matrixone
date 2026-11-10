@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -109,6 +110,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
 		catalog.Quantization,
+		catalog.IndexAlgoParamMaxBadRecords,
 	)
 	if err != nil {
 		return nil, err
@@ -186,7 +188,7 @@ func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	logutil.Infof("[plugin] ivfflat runCreateOrReindex: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
 	// 1. static check
-	if len(indexDefs) != 3 {
+	if len(indexDefs) != 3 && len(indexDefs) != 4 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
@@ -246,6 +248,15 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return err
 	}
 
+	// the build, or the CDC replay of an asynchronous build, records the ignored rows again
+	ignoredDef, hasIgnored := indexDefs[catalog.IndexIgnored_TblType]
+	if hasIgnored {
+		if err = ctx.RunSql(fmt.Sprintf("DELETE FROM %s WHERE TRUE",
+			sqlquote.QualifiedIdent(qryDatabase, ignoredDef.IndexTableName))); err != nil {
+			return err
+		}
+	}
+
 	// 4.b + 4.c: build the index. Both kmeans (4.b) and entry assignment (4.c)
 	// scan the whole source table, while queries read only the candidate rows of
 	// it, so run the build's reads with SkipMemoryCacheWrites — this one-shot
@@ -260,8 +271,11 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		}
 		if !async || forceSync {
 			if err := ivfIndexEntriesTable(ctx, entriesDef, qryDatabase, originalTableDef,
-				metaDef.IndexTableName, centroidsDef.IndexTableName); err != nil {
+				metaDef.IndexTableName, centroidsDef.IndexTableName, ignoredDef); err != nil {
 				return err
+			}
+			if hasIgnored {
+				return compileplugin.CheckIgnoredRows(ctx, ignoredDef, qryDatabase, totalCnt)
 			}
 		}
 		return nil
@@ -428,6 +442,12 @@ func ivfIndexCentroidsTable(
 
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 	indexName := indexDef.IndexName
+	runBuild := func() error {
+		if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+			return ctx.RunSql(sql)
+		}
+		return maintenance.RunSQL(ctx, sql, "ivf_create", indexName)
+	}
 
 	if async {
 		if forceSync {
@@ -437,7 +457,7 @@ func ivfIndexCentroidsTable(
 			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
 				return err
 			}
-			if err = ctx.RunSql(sql); err != nil {
+			if err = runBuild(); err != nil {
 				return err
 			}
 			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end"); err != nil {
@@ -464,7 +484,7 @@ func ivfIndexCentroidsTable(
 	if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
 		return err
 	}
-	if err = ctx.RunSql(sql); err != nil {
+	if err = runBuild(); err != nil {
 		return err
 	}
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end")
@@ -475,7 +495,7 @@ func ivfIndexCentroidsTable(
 func ivfIndexEntriesTable(
 	ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef,
-	metadataTableName, centroidsTableName string,
+	metadataTableName, centroidsTableName string, ignoredDef *plan.IndexDef,
 ) error {
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 	if err != nil {
@@ -544,20 +564,10 @@ func ivfIndexEntriesTable(
 		}
 	}
 
-	var originalTblPkColsCommaSeparated, originalTblPkColMaySerial string
 	srcTableRef := sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name)
-	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		for i, part := range originalTableDef.Pkey.Names {
-			if i > 0 {
-				originalTblPkColsCommaSeparated += ","
-			}
-			originalTblPkColsCommaSeparated += sqlquote.QualifiedIdent(srcAlias, part)
-		}
-		originalTblPkColMaySerial = fmt.Sprintf("serial(%s)", originalTblPkColsCommaSeparated)
-	} else {
-		originalTblPkColsCommaSeparated = sqlquote.QualifiedIdent(srcAlias, originalTableDef.Pkey.PkeyColName)
-		originalTblPkColMaySerial = originalTblPkColsCommaSeparated
-	}
+	// the hidden composite key column holds serial() of the key parts; product_l2 records an
+	// ignored row by the key column it projects
+	originalTblPkColMaySerial := sqlquote.QualifiedIdent(srcAlias, originalTableDef.Pkey.PkeyColName)
 
 	insertCols := []string{
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
@@ -593,6 +603,25 @@ func ivfIndexEntriesTable(
 	)
 
 	indexColumnName := indexDef.Parts[0]
+	cfg := vectorindex.IndexTableConfig{DbName: qryDatabase, MetadataTable: metadataTableName, PKey: originalTableDef.Pkey.PkeyColName}
+	if ignoredDef != nil {
+		cfg.IgnoredTable = ignoredDef.IndexTableName
+		if cfg.MaxBadRecords, err = catalog.IndexParamMaxBadRecords(ignoredDef.IndexAlgoParams); err != nil {
+			return err
+		}
+	}
+	for _, c := range originalTableDef.Cols {
+		switch c.Name {
+		case cfg.PKey:
+			cfg.PKeyType, cfg.PKeyEnum = c.Typ.Id, c.Typ.Enumvalues
+		case indexColumnName:
+			cfg.KeyPartType = c.Typ.Id
+		}
+	}
+	centroidx, err := vectorindex.CentroidxArgs(optype, indexDef.IndexAlgoParams, cfg)
+	if err != nil {
+		return err
+	}
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT %s"+
 		" FROM %s AS %s CENTROIDX (%s) join %s "+
@@ -601,7 +630,7 @@ func ivfIndexEntriesTable(
 		strings.Join(selectCols, ", "),
 		srcTableRef,
 		sqlquote.Ident(srcAlias),
-		sqlquote.String(optype),
+		centroidx,
 		centroidsTableForCurrentVersionSql,
 		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid),
 		sqlquote.Ident(indexColumnName),

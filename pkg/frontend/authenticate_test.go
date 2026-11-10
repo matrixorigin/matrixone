@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -596,84 +597,13 @@ func TestCreateTenantInformationSchemaRequiresCurrentProtocol(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesV118DDL,
+			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesCurrentDDL,
 				sysview.InformationSchemaSchemataDDL, sysview.InformationSchemaViewsDDL} {
 				require.Contains(t, executed, ddl)
 			}
 			require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
 		})
 	}
-}
-
-func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *testing.T) {
-	tests := []struct {
-		name                   string
-		protocol               int64
-		wantCheckFunction      bool
-		wantCurrentRoles       bool
-		wantCompatibilityRoles bool
-		wantCanonicalViews     bool
-	}{
-		{
-			name:                   "pre check-constraint protocol uses compatibility roles",
-			protocol:               defines.MORPCVersion15,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 16 uses check constraints and compatibility roles",
-			protocol:               defines.MORPCVersion16,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 32 does not install current-role table function views",
-			protocol:               defines.MORPCVersion32,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 34 does not alias the current-role capability",
-			protocol:               defines.MORPCVersion34,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:                   "protocol 35 does not alias the current-role capability",
-			protocol:               defines.MORPCVersion35,
-			wantCheckFunction:      true,
-			wantCompatibilityRoles: true,
-		},
-		{
-			name:               "protocol 41 installs canonical full role closure views",
-			protocol:           defines.MORPCVersion41,
-			wantCheckFunction:  true,
-			wantCurrentRoles:   true,
-			wantCanonicalViews: true,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			executed := sysview.InitInformationSchemaSysTablesForProtocol(test.protocol)
-
-			require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
-			require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
-			require.Equal(t, test.wantCompatibilityRoles,
-				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
-			require.Equal(t, test.wantCanonicalViews,
-				containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-		})
-	}
-
-	for _, protocol := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion124, defines.MORPCVersion123} {
-		catalog := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
-		joined := strings.Join(catalog, "\n")
-		require.Contains(t, catalog, sysview.InformationSchemaViewsLegacyDDL)
-		require.NotContains(t, joined, "mo_view_definition(")
-	}
-	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion126)
-	require.Contains(t, current, sysview.InformationSchemaViewsDDL)
-	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
 
 // TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally
@@ -710,24 +640,6 @@ func TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally(t
 	require.NotContains(t, executed, sysview.InformationSchemaColumnsV100DDL())
 	require.NotContains(t, executed, sysview.InformationSchemaColumnsV110DDL())
 	require.NotContains(t, executed, sysview.InformationSchemaStatisticsDDL)
-}
-
-func containsSQL(sqls []string, expected string) bool {
-	for _, sql := range sqls {
-		if sql == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func containsSQLFragment(sqls []string, fragment string) bool {
-	for _, sql := range sqls {
-		if strings.Contains(sql, fragment) {
-			return true
-		}
-	}
-	return false
 }
 
 func Test_initFunction(t *testing.T) {
@@ -7128,7 +7040,7 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
 	require.NoError(t, err)
-	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false, nil)
 	require.NoError(t, err)
 	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
 	require.Len(t, dependencies, 2)
@@ -7179,11 +7091,12 @@ func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, sn
 	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
 }
 
-func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+	borrowOutput.Reset()
 	if dbName == "mongo_window_auth" && tableName == "events" {
 		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
 	}
-	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot)
+	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 }
 
 func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
@@ -7263,7 +7176,7 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false)
+			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false, nil)
 			require.NoError(t, err)
 
 			ctrl := gomock.NewController(t)
@@ -9119,6 +9032,9 @@ func Test_doGrantPrivilege(t *testing.T) {
 					})
 					bh.sql2result[sql] = mrs
 					registerLockedSQL(bh, sql, mrs)
+					grantSQL, err := lockedGrantRelationSQL(ses.GetTxnHandler().GetTxnCtx(), dbName, tableName, 0)
+					require.NoError(t, err)
+					bh.sql2result[grantSQL] = newMrsForLockedGrantRelation(0, catalog.SystemOrdinaryRel, "")
 				}
 			}
 
@@ -9290,6 +9206,17 @@ func Test_doGrantPrivilege(t *testing.T) {
 	})
 }
 
+func newMrsForLockedGrantRelation(id int64, kind, extra string) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"rel_logical_id", "relkind", "extra_info"} {
+		col := &MysqlColumn{}
+		col.SetName(name)
+		mrs.AddColumn(col)
+	}
+	mrs.AddRow([]interface{}{id, kind, extra})
+	return mrs
+}
+
 func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newSes(nil, ctrl)
@@ -9306,6 +9233,8 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		return strings.TrimSuffix(sql, ";") + " for share;"
 	}
+	grantRelationSQL, err := lockedGrantRelationSQL(ctx, "d", "t", 42)
+	require.NoError(t, err)
 	lockedViewSQL := func(viewName string) string {
 		sql, err := getSqlForCheckDatabaseView(ctx, "d", viewName)
 		require.NoError(t, err)
@@ -9346,7 +9275,7 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 				Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t",
 			},
 			objectID:     42,
-			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t")},
+			expectedSQLs: []string{lockedDatabaseSQL("d"), lockedTableSQL("t"), grantRelationSQL},
 		},
 		{
 			name:       "exact view locks database before relation",
@@ -9364,6 +9293,10 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			bh := &backgroundExecTest{}
 			bh.init()
 			for _, sql := range testCase.expectedSQLs {
+				if sql == grantRelationSQL {
+					bh.sql2result[sql] = newMrsForLockedGrantRelation(testCase.objectID, catalog.SystemOrdinaryRel, "")
+					continue
+				}
 				objectID := testCase.objectID
 				if sql == lockedDatabaseSQL("d") && len(testCase.expectedSQLs) > 1 {
 					objectID = 11
@@ -9378,6 +9311,50 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			require.Equal(t, testCase.expectedSQLs, bh.executedSQLs)
 		})
 	}
+
+	t.Run("renamed physical relation cannot receive an exact grant", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, kind string
+			extra      string
+		}{
+			{"feature bit", catalog.SystemOrdinaryRel, string(api.MustMarshalTblExtra(&api.SchemaExtra{FeatureFlag: features.IndexTable}))},
+			{"legacy plugin kind", "unregistered_plugin_index", ""},
+			{"invalid metadata", catalog.SystemOrdinaryRel, "\xff"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bh := &backgroundExecTest{}
+				bh.init()
+				bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+				bh.sql2result[lockedTableSQL("t")] = newMrsForCheckDatabaseTable([][]interface{}{{int64(42)}})
+				bh.sql2result[grantRelationSQL] = newMrsForLockedGrantRelation(42, tc.kind, tc.extra)
+				roleSQL, roleErr := getSqlForRoleIdOfRole(ctx, "r1")
+				require.NoError(t, roleErr)
+				bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(7)}})
+				stmt := &tree.GrantPrivilege{
+					Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
+					ObjType:    tree.OBJECT_TYPE_TABLE,
+					Level:      &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: "t"},
+					Roles:      []*tree.Role{{UserName: "r1"}},
+				}
+				require.Error(t, doGrantPrivilege(ctx, ses, stmt, bh))
+				for _, sql := range bh.executedSQLs {
+					require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_privs")
+					require.NotContains(t, strings.ToLower(sql), "update mo_catalog.mo_role_privs")
+				}
+			})
+		}
+	})
+
+	t.Run("locked grant relation preserves catalog decoding errors", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		result := mock_frontend.NewMockExecResult(ctrl)
+		result.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		decodeErr := errors.New("catalog logical ID decode failed")
+		result.EXPECT().GetInt64(ctx, uint64(0), uint64(0)).Return(int64(0), decodeErr)
+		bh.sql2result[grantRelationSQL] = result
+		require.ErrorIs(t, checkLockedGrantRelation(ctx, bh, "d", "t", 42), decodeErr)
+	})
 
 	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
 		bh := &backgroundExecTest{}

@@ -52,7 +52,7 @@ func (o *cteViewTrackingOptimizer) CurrentContext() CompilerContext {
 }
 
 func (o *cteViewTrackingOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
-	logicPlan, err := BuildPlan(o.ctx, stmt, false)
+	logicPlan, err := BuildPlan(o.ctx, stmt, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +586,7 @@ func TestCTEReuseHonorsPostOptimizerSQLSelectLimit(t *testing.T) {
 			statements, err := mysql.Parse(ctx.GetContext(), sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(func() { statements[0].Free() })
-			logicPlan, err := BuildPlan(ctx, statements[0], test.prepare)
+			logicPlan, err := BuildPlan(ctx, statements[0], test.prepare, nil)
 			require.NoError(t, err)
 			require.Equal(t, test.wantScan,
 				countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN))
@@ -2173,7 +2173,7 @@ func BenchmarkInformationSchemaSchemataPlanSharesCurrentRoles(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		logicPlan, err := BuildPlan(ctx, statements[0], false)
+		logicPlan, err := BuildPlan(ctx, statements[0], false, nil)
 		statements[0].Free()
 		if err != nil {
 			b.Fatal(err)

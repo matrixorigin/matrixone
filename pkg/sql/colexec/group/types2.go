@@ -81,6 +81,7 @@ const (
 	GroupAllocationSiteSpillRows
 	GroupAllocationSiteDistinctRecord
 	GroupAllocationSiteDistinctCopy
+	GroupAllocationSiteCompactLookup
 )
 
 var _ vm.Operator = &Group{}
@@ -812,21 +813,28 @@ func (ctr *container) reset() {
 }
 
 func (ctr *container) resetForSpill() {
+	ctr.resetSpillState(false)
+}
+
+// resetSpillState releases resident aggregation state after a spill. A build
+// retry must keep the current input vectors until its unpublished chunk has
+// been consumed; other spill callers can release the expression state too.
+func (ctr *container) resetSpillState(retainInput bool) {
 	if ctr.distinctSpill != nil {
 		ctr.distinctGroupReset = true
 	}
 	// Reset also frees the hash related stuff.
 	ctr.hr.Free0()
 
-	ctr.groupByEvaluate.ResetForNextQuery()
-
-	for i := range ctr.aggArgEvaluate {
-		ctr.aggArgEvaluate[i].ResetForNextQuery()
+	if !retainInput {
+		ctr.groupByEvaluate.ResetForNextQuery()
+		for i := range ctr.aggArgEvaluate {
+			ctr.aggArgEvaluate[i].ResetForNextQuery()
+		}
+		// Grouping-set sentinel vectors are owned outside the expression
+		// executors. Release them before recovery reload borrows capacity.
+		ctr.freeGroupingRollups()
 	}
-	// Grouping-set sentinel vectors are owned outside the expression
-	// executors. Release the just-consumed input's sentinels before recovery
-	// reload borrows the same account capacity.
-	ctr.freeGroupingRollups()
 	// free group by batches, agg list and spill buckets, do not reuse for now.
 	ctr.freeGroupByBatches()
 	ctr.currBatchIdx = 0

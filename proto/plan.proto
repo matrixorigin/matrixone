@@ -226,6 +226,8 @@ message IndexScanInfo {
   repeated string parts = 4;
   bool is_unique = 5;
   string index_table_name = 6;
+  // This physical access requires the captured execution and local placement.
+  bool requires_captured_execution = 7;
 }
 
 enum AggregateConfigType {
@@ -326,6 +328,10 @@ message Expr {
   }
 
   int32 aux_id = 16;
+  // Keep these flags next to aux_id so they use its alignment padding.
+  // A proved necessary storage condition; early filtering preserves diagnostics.
+  // The complete SQL residual remains authoritative.
+  bool candidate_filter = 27;
   double ndv = 17;
   double selectivity = 18;
   // prepared_numeric is explicit planner metadata, not an executor memo
@@ -1912,6 +1918,11 @@ message Query {
   IntegerPrecisionGraph integer_precision = 20;
   // Logical targets of exclusive SELECT locks, retained across optimization.
   repeated SelectLockReference select_lock_references = 21;
+
+  // Access-path choice depends on execution-time values or context.
+  // Rebuild from the original owner instead of reusing a physical choice.
+  bool execution_dependent_access = 22;
+  repeated LocalRuntimeFilterDomain local_runtime_filter_domains = 23;
 }
 
 message TransationControl {
@@ -2629,4 +2640,20 @@ message SelectLockReference {
   ObjectRef object_ref = 1;
   repeated ViewStep view_path = 2;
   bool is_cluster_table = 3;
+}
+
+// Optional local optimization metadata. Older executors ignore these descriptors;
+// no ordinary runtime-filter wait is created from them.
+message LocalRuntimeFilterTarget {
+  int32 scan_node_id = 1;
+  string column_name = 2;
+  // Profitability hint only; never authorizes a membership rejection.
+  double probe_ndv = 3;
+}
+
+message LocalRuntimeFilterDomain {
+  int32 source_scan_node_id = 1;
+  string source_column_name = 2;
+  int32 key_type = 3;
+  repeated LocalRuntimeFilterTarget targets = 4;
 }

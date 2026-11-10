@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sync"
@@ -402,12 +403,11 @@ func getConnectionInfo(rs *Conn) string {
 	return fmt.Sprintf("connection from %s", rs.RemoteAddress())
 }
 
-func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
+func (rm *RoutineManager) Handler(rs *Conn, msg []byte) (err error) {
 	logutil.Debugf("get request from %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		logutil.Debugf("request from %d:%s has been processed", rs.ID(), rs.RemoteAddress())
 	}()
-	var err error
 	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
@@ -429,8 +429,10 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
 	}
 	defer routine.mc.endRequest()
-	routine.setInProcessRequest(true)
-	defer routine.setInProcessRequest(false)
+	if !routine.beginClientRequest() {
+		return io.EOF
+	}
+	defer func() { err = routine.endClientRequest(err) }()
 	ses := routine.getSession()
 
 	//handle request

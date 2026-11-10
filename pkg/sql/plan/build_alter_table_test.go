@@ -1757,7 +1757,7 @@ func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return single statement
 	context := opt.CurrentContext()
-	plan, err := BuildPlan(context, statements[0], false)
+	plan, err := BuildPlan(context, statements[0], false, nil)
 	if plan != nil {
 		testDeepCopy(plan)
 	}
