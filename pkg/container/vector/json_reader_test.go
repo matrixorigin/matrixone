@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -280,13 +281,32 @@ func TestJSONReaderSnapshotAllocationFailure(t *testing.T) {
 			selection.capacityClass = class
 			source.allocationAccount = &selection
 			before := mp.CurrNB()
-			reader, err := NewJSONReaderSnapshot(source, mp)
+			reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, source.Length(), mp, &selection)
 			require.Error(t, err)
 			require.Nil(t, reader)
+			require.False(t, invalid, "allocation failure cannot be deferred as bad input")
 			require.Equal(t, before, mp.CurrNB())
 			require.Zero(t, controller.used)
 		})
 	}
+}
+
+func TestJSONReaderSnapshotReportsInvalidWithoutPublishing(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
+	source.GetBytesAt(0)[0] = 0xfd
+	before := mp.CurrNB()
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, nil)
+	require.Nil(t, reader)
+	require.True(t, invalid)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Equal(t, before, mp.CurrNB())
+	reader, err = NewJSONReaderSnapshotForRows(source, 1, mp, nil)
+	require.Nil(t, reader)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestJSONReaderCursorRetainsAndReuses(t *testing.T) {

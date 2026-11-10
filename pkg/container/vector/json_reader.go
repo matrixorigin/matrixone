@@ -117,42 +117,52 @@ func NewJSONReaderSnapshotWithAllocation(source *Vector, mp *mpool.MPool, select
 // have one physical value and can span that domain without payload repetition.
 // The source is still copied and fully validated; its metadata is not changed.
 func NewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPool, selection *AllocationAccountSelection) (JSONReader, error) {
+	reader, _, err := TryNewJSONReaderSnapshotForRows(source, logicalRows, mp, selection)
+	return reader, err
+}
+
+// TryNewJSONReaderSnapshotForRows reports invalidInput only when descriptor
+// preflight or complete validation of the private copy failed. Such a failure never returns a
+// reader. Callers that preserve expression short-circuit order may defer this
+// particular error to the ordinary evaluator; allocation and other failures
+// remain terminal, and every document actually read must still be validated.
+func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPool, selection *AllocationAccountSelection) (reader JSONReader, invalidInput bool, err error) {
 	if source == nil || mp == nil || source.typ.Oid != types.T_json || source.length < 0 || uint64(source.length) > math.MaxUint32 || logicalRows < 0 || uint64(logicalRows) > math.MaxUint32 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader source")
+		return nil, false, moerr.NewInvalidInputNoCtx("invalid JSON reader source")
 	}
 	// Dup uses TypeSize for slicing; reject corrupt representation metadata
 	// before it can read beyond the source descriptor buffer.
 	if _, err := canonicalVectorTypeSize(source.typ); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !source.IsConst() && source.length != logicalRows {
-		return nil, moerr.NewInvalidInputNoCtx("JSON input row domain mismatch")
+		return nil, false, moerr.NewInvalidInputNoCtx("JSON input row domain mismatch")
 	}
 	rows := source.length
 	if source.IsConst() {
 		rows = 1
 	}
 	if !source.IsConstNull() && (rows > len(source.data)/types.VarlenaSize) {
-		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader descriptors")
+		return nil, true, moerr.NewInvalidInputNoCtx("invalid JSON reader descriptors")
 	}
 	private, err := source.dup(mp, true, true, selection)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	private.length = logicalRows
 	if !private.IsConstNull() {
 		data := private.data[:rows*types.VarlenaSize]
 		if err = validateVectorBinary(byte(private.class), private.typ, uint32(private.length), data, private.area, &private.nsp, true); err != nil {
 			private.Free(mp)
-			return nil, err
+			return nil, true, err
 		}
 	}
-	reader, err := publishJSONReader(private, mp)
+	reader, err = publishJSONReader(private, mp)
 	if err != nil {
 		private.Free(mp)
-		return nil, err
+		return nil, false, err
 	}
-	return reader, nil
+	return reader, false, nil
 }
 
 // JSONReaderBuilder owns an unpublished column. Append copies and validates
