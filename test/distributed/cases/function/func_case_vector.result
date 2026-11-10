@@ -130,9 +130,11 @@ execute vector_case_stmt using @condition;
 [1, 2]
 deallocate prepare vector_case_stmt;
 select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4]' as vecf64(2)) end;
-invalid argument operator case, bad value [BOOL VECF32 VECF64]
+➤ case when true then cast([1,2] as vecf32(2)) else cast([3,4] as vecf64(2)) end[12,2,0]  𝄀
+[1, 2]
 select case when true then cast('[1,2]' as vecf32(2)) else cast('[3,4,5]' as vecf32(3)) end;
 invalid argument operator case, bad value [BOOL VECF32 VECF32]
 select case when true then cast('[1,2]' as vecf32(2)) else '[3,4]' end;
-invalid argument operator case, bad value [BOOL VECF32 VARCHAR]
+➤ case when true then cast([1,2] as vecf32(2)) else [3,4] end[12,2,0]  𝄀
+[1, 2]
 drop database case_vector_test;

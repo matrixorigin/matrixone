@@ -178,6 +178,7 @@ type replayerDriver interface {
 		ctx context.Context, firstPSN uint64, maxSize int,
 	) (nextPSN uint64, records []logservice.LogRecord, err error)
 	getTruncatedPSNFromBackend(ctx context.Context) (uint64, error)
+	getWALTruncateFromBackend(ctx context.Context) (psn, checkpointedDSN uint64, err error)
 	getClientForWrite() (*wrappedClient, error)
 	GetMaxClient() int
 }
@@ -219,6 +220,9 @@ type replayer struct {
 		// safeDSN have been safely written to the backend. When replaying, we
 		// can make sure that all records with DSN <= safeDSN have been replayed
 		safeDSN uint64
+		// This boundary is committed atomically with physical PSN truncation.
+		// Only missing DSNs at or below it may be treated as checkpointed.
+		checkpointedDSN atomic.Uint64
 
 		firstAppliedDSN uint64
 		firstAppliedLSN uint64
@@ -384,12 +388,14 @@ func (r *replayer) findPendingOverlap(current pendingDSNRange) (pendingDSNRange,
 }
 
 func (r *replayer) initReadWatermarks(ctx context.Context) (err error) {
-	var psn uint64
-	if psn, err = r.driver.getTruncatedPSNFromBackend(ctx); err != nil {
+	var psn, checkpointedDSN uint64
+	if psn, checkpointedDSN, err = r.driver.getWALTruncateFromBackend(ctx); err != nil {
 		return
 	}
 	r.waterMarks.truncatedPSN = psn
 	r.waterMarks.psnToRead = psn + 1
+	r.replayedState.checkpointedDSN.Store(checkpointedDSN)
+	r.waterMarks.maxDSN = checkpointedDSN
 	return
 }
 
@@ -570,6 +576,27 @@ func (r *replayer) tryScheduleApply(
 	// dsn is not found in pendingRecords, which means the record
 	// with the dsn has not been read from the backend
 	if !ok {
+		checkpointedDSN := r.replayedState.checkpointedDSN.Load()
+		if dsn <= checkpointedDSN &&
+			(dsn <= r.replayedState.safeDSN || readState == ReadState_AllDone) {
+			// Physical PSN truncation can leave checkpointed DSN holes among
+			// surviving records because the two orders are independent.
+			if r.stats.schedulePSNCount == 0 {
+				r.waterMarks.minDSN = dsn + 1
+			}
+			r.waterMarks.dsnScheduled = dsn
+			if readState == ReadState_AllDone && r.replayedState.pendingRecords.Len() == 0 {
+				r.waterMarks.dsnScheduled = checkpointedDSN
+				if r.stats.schedulePSNCount == 0 {
+					r.waterMarks.minDSN = checkpointedDSN + 1
+				}
+				if checkpointedDSN > r.waterMarks.maxDSN {
+					r.waterMarks.maxDSN = checkpointedDSN
+				}
+				err = ErrAllRecordsRead
+			}
+			return
+		}
 		appliedLSNCount := r.stats.appliedLSNCount.Load()
 		if appliedLSNCount == 0 && lastScheduled != nil {
 			lastScheduled.WaitDone()
@@ -745,11 +772,18 @@ func (r *replayer) pollTruncateLoop(
 			err = context.Cause(ctx)
 			return
 		case <-ticker.C:
-			var psn uint64
-			if psn, err = r.driver.getTruncatedPSNFromBackend(ctx); err != nil {
+			var psn, checkpointedDSN uint64
+			if psn, checkpointedDSN, err = r.driver.getWALTruncateFromBackend(ctx); err != nil {
 				return
 			}
 			r.waterMarks.truncatedPSN = psn
+			for {
+				old := r.replayedState.checkpointedDSN.Load()
+				if checkpointedDSN <= old ||
+					r.replayedState.checkpointedDSN.CompareAndSwap(old, checkpointedDSN) {
+					break
+				}
+			}
 			if r.onTruncate != nil {
 				r.onTruncate(psn)
 			}

@@ -641,7 +641,8 @@ select cast(a8 as vecf32(3)) to_f32, cast(a8 as vecf4(3)) to_f4, cast(a4 as vecf
 ➤ to_f32[12,3,0]  ¦  to_f4[12,3,0]  ¦  to_f8[12,3,0]  ¦  from_f32[12,3,0]  𝄀
 [1, 2, 3]  ¦  [1, 2, 3]  ¦  [1, 2, 3]  ¦  [4, 5, 6]
 select cast(a8 as vecf64(3)) from vb;
-invalid argument operator cast, bad value [VECF8 VECF64]
+➤ cast(a8 as vecf64(3))[12,3,0]  𝄀
+[1, 2, 3]
 select cast(a4 as vecbf16(3)) from vb;
 invalid argument operator cast, bad value [VECF4 VECBF16]
 select cast(cast('[1,2,3]' as vecint8(3)) as vecf8(3));

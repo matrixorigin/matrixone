@@ -2226,3 +2226,11 @@ func (proc *Process) automaticSpillDiskAvailable() uint64 {
 	}
 	return available
 }
+
+// OpenIndependentGeneration opens an independently closed owner on the same CN ledger.
+func (g *ExecutionResourceGeneration) OpenIndependentGeneration() (*ExecutionResourceGeneration, error) {
+	if g == nil || g.budget == nil || g.Closed() {
+		return nil, ErrExecutionResourceClosed
+	}
+	return g.budget.openProcessGeneration(executionResourceGenerationSequence.Add(1), g.Cap(), g.SpillDiskCap())
+}
