@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -50,6 +51,11 @@ type container struct {
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
+	domainSources             []localDomainSourceState
+	domainProbes              []localDomainProbeState
+	domainRows                []int64
+	domainsReady              bool
+	domainEmpty               bool
 }
 
 type TableScan struct {
@@ -62,8 +68,10 @@ type TableScan struct {
 	Attrs              []string
 	Types              []plan.Type
 	TableID            uint64
-	FilterExprs        []*plan.Expr       // static inline filters (from plan.Node.FilterList, set at compile time)
-	RuntimeFilterExprs []*plan.Expr       // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
+	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	LocalDomainBuilds  []runtimefilter.LocalDomainBinding
+	LocalDomainProbes  []runtimefilter.LocalDomainBinding
 	ReadPolicy         fileservice.Policy // added to the read context's fileservice policy
 
 	vm.OperatorBase
@@ -107,6 +115,7 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.releaseLocalDomains()
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
 	if tableScan.ProjectList != nil {
@@ -145,6 +154,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.releaseLocalDomains()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil

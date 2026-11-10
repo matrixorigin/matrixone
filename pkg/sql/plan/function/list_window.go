@@ -711,13 +711,20 @@ func ewmTypeCheck(inputs []types.Type, valueArgs int) checkResult {
 			}
 		}
 	case types.T_varchar, types.T_char:
-		hAfter = 1
-		if len(inputs) <= valueArgs+1 {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		h := inputs[valueArgs+1].Oid
-		if h != types.T_any && h != types.T_text && !ewmNumericArgDomain(h) {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		// A string-typed decay is only the tag form when the slot behind
+		// it can be a half-life (the same marker/numeric domains the
+		// T_text branch admits). Any other shape — a row-independent
+		// conditional (IFNULL(?, 0.5) lowers to CASE) whose prepared
+		// transport publishes VARCHAR — defers the decay-kind verdict to
+		// the per-execution configuration boundary, which parses the
+		// resolved value as the tag or a numeric alpha; the §7 literal
+		// rows keep their bind-time rejections in the window binder.
+		hAfter = 0
+		if len(inputs) > valueArgs+1 {
+			h := inputs[valueArgs+1].Oid
+			if h == types.T_any || h == types.T_text || ewmNumericArgDomain(h) {
+				hAfter = 1
+			}
 		}
 	default:
 		// numeric alpha decay shares the same classification

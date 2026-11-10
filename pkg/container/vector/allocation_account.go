@@ -355,7 +355,7 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return cap(v.data) != 0 ||
+	return v.IsDictionary() || cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
@@ -376,7 +376,7 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
 // after replacement. Accounted bitmap storage is explicit external storage.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return v.dataLease != nil || v.areaLease != nil ||
+	return v.IsDictionary() || v.dataLease != nil || v.areaLease != nil ||
 		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||

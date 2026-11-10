@@ -129,9 +129,11 @@ does not imply permission to mutate their physical source.
 Persisted vectors, spill files and network batches remain existing flat logical
 vectors. Materialize before current serialization APIs; never emit DICTIONARY
 class bytes or raw dictionary pointers. Older peers/plans therefore continue on
-flat execution. Unknown class bytes remain invalid on input. No schema migration
-is needed. Reverting producer enablement restores ordinary execution while the
-neutral foundations can remain.
+flat execution. Existing row-buffer formats historically accepted class byte 2;
+their decoded values are materialized and normalize to FLAT, without creating an
+in-memory dictionary or rewriting encoded bytes. Unknown class bytes remain
+invalid on input. No schema migration is needed. Reverting producer enablement
+restores ordinary execution while the neutral foundations can remain.
 
 ## Producer rollout and critical path
 
