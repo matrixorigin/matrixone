@@ -24,8 +24,16 @@ import (
 const (
 	legacyTemporaryTableNameRegexp = `^__mo_tmp_[0-9a-f]{32}_`
 	legacyTemporaryTableFunction   = `mo_is_legacy_temporary_table`
-	userVisibleRelationKindsSQL    = "'" + SystemOrdinaryRel + "', '" + SystemViewRel + "', '" + SystemExternalRel + "', '" + SystemMaterializedRel + "', '" + SystemSourceRel + "', '" + SystemClusterRel + "', '" + SystemPartitionRel + "', '" + SystemSequenceRel + "'"
 )
+
+// Keep the SQL filter and explicit-relation admission on the same set of
+// catalog relation kinds. The order is part of the generated SQL's shape.
+var userVisibleRelationKinds = [...]string{
+	SystemOrdinaryRel, SystemViewRel, SystemExternalRel, SystemMaterializedRel,
+	SystemSourceRel, SystemClusterRel, SystemPartitionRel, SystemSequenceRel,
+}
+
+var userVisibleRelationKindsSQL = "'" + strings.Join(userVisibleRelationKinds[:], "', '") + "'"
 
 // NonTemporaryTableSQLPredicate returns the catalog predicate used to exclude
 // temporary objects from metadata and clone/restore queries.

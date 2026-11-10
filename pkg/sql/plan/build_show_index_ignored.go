@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -49,7 +48,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, err
 	}
 	tblName := stmt.TableName.GetTableName()
-	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -71,9 +70,9 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 				continue
 			}
 			selects = append(selects, fmt.Sprintf(
-				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, CAST(%s AS VARCHAR) AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
+				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, %s AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
 				sqlquote.String(idx.IndexName),
-				sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk),
+				ignoredPkSql(def),
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Code),
 				reason,
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Ts),
@@ -90,15 +89,17 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, err
 	}
 	defer newStmt.Free()
-	if stmt.Where != nil {
-		newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = stmt.Where
+	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef)
+}
+
+// ignoredPkSql returns the primary key of an ignored row of tableDef as text: a composite key,
+// recorded as the serial of its parts, as the hex literal X'...'.
+func ignoredPkSql(tableDef *TableDef) string {
+	pk := sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk)
+	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		return fmt.Sprintf("CAST(%s AS VARCHAR)", pk)
 	}
-	p, err := getReturnDdlBySelectStmt(ctx, newStmt, plan.DataDefinition_SHOW_INDEX)
-	if err != nil {
-		return nil, err
-	}
-	readOnBehalfOf(p, ignoredTables, objRef)
-	return p, nil
+	return fmt.Sprintf("CONCAT('X''', HEX(%s), '''')", pk)
 }
 
 // tableWithPartitions returns tableDef and the definitions of its partitions, with the names
@@ -117,7 +118,7 @@ func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef)
 		return nil, nil, err
 	}
 	for _, p := range meta.Partitions {
-		_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil)
+		_, def, err := ctx.Resolve(dbName, p.PartitionTableName, nil, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -126,19 +127,4 @@ func tableWithPartitions(ctx CompilerContext, dbName string, tableDef *TableDef)
 		}
 	}
 	return defs, names, nil
-}
-
-// readOnBehalfOf makes the scans of the hidden tables of p checked as reads of the table objRef.
-func readOnBehalfOf(p *Plan, hidden map[string]struct{}, objRef *ObjectRef) {
-	if objRef == nil {
-		return
-	}
-	for _, node := range p.GetQuery().GetNodes() {
-		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
-			continue
-		}
-		if _, ok := hidden[node.ObjRef.ObjName]; ok {
-			node.ParentObjRef = DeepCopyObjectRef(objRef)
-		}
-	}
 }

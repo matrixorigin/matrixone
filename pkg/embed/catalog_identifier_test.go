@@ -235,7 +235,7 @@ func TestIndexUpdateIdentifierIsolation(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_indexes where table_id=? and name=?", ids[i], indexName).Scan(&count))
 			require.Zero(t, count)
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_indexes where table_id=? and name='keeper'", ids[i]).Scan(&count))
-			require.Equal(t, 3, count)
+			require.Equal(t, 4, count)
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+sqlquote.QualifiedIdent(names[i], "t")).Scan(&count))
 			require.Equal(t, 3, count)
 		}

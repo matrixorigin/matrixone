@@ -19,7 +19,6 @@ package cagra
 import (
 	"context"
 	"math"
-	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -724,10 +723,7 @@ func (s *CagraSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []
 			return
 		}
 		for _, idx := range fetchedHere {
-			if len(idx.Path) > 0 {
-				os.Remove(idx.Path)
-				idx.Path = ""
-			}
+			idx.releaseArtifact()
 		}
 	}()
 

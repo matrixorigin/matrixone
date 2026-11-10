@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +41,12 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 	}
 	if err := ctx.GetContext().Err(); err != nil {
 		return err
+	}
+	// This repair may fold stored DEFAULT expressions. A bind-only view probe
+	// needs the relation's column types, not rewritten execution expressions;
+	// the later ordinary compilation performs the repair as usual.
+	if defines.IsIndexMaintenanceViewBinding(ctx.GetContext()) {
+		return nil
 	}
 	var budget *tableDumpBindingBudget
 	var proofProc *process.Process
@@ -218,7 +225,15 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 				proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = tz, lc
 				dependency = tableDumpDefaultSession{budget: budget, captureUnfolded: item.kind == "default"}
 				scope, declaration, bindingMode := tableDumpBindingScope(def, ddlScope, item, search.mode)
-				bound, bindErr := bindTableDumpExpression(ctx, scope, declaration, ast, search.increment, bindingMode, &dependency)
+				// Candidate binds must reproduce the nullability inference
+				// era that authored the stored tree, so the SQL-origin proof
+				// (sameLegacyFloatOrigin) and the widen verification compare
+				// one generation against itself. This wrapper is scoped to
+				// this candidate closure only; the installed expression still
+				// rebinds under the current era in
+				// finishLegacyFloatStringExpression.
+				candidateCtx := tableDumpBindContext{CompilerContext: ctx, ctx: function.WithLegacyExplicitCastNullability(ctx.GetContext()), proc: ctx.GetProcess()}
+				bound, bindErr := bindTableDumpExpression(candidateCtx, scope, declaration, ast, search.increment, bindingMode, &dependency)
 				var proofLimit *floatStringProofBudgetError
 				if errors.As(bindErr, &proofLimit) {
 					return nil, bindErr
@@ -470,7 +485,13 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 		proofCtx = tableDumpBindContext{CompilerContext: ctx, ctx: function.WithLegacyFloatStringFormatting(proofCtx.GetContext()), proc: ctx.GetProcess()}
 	}
 	expected := DeepCopyExpr(old)
-	rebindCtx := function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment))
+	// Verification rebinds inside widenVerifiedFloatStringExpr compare
+	// against the stored tree under the exact normalized projection, so they
+	// must bind under the nullability inference era that authored the
+	// catalog entry (#31921 explicit binary-to-text conservative NULL is
+	// authoring-era only). The installed candidate rebind below (proofCtx)
+	// deliberately stays on current-era inference.
+	rebindCtx := function.WithLegacyExplicitCastNullability(function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment)))
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		rebindCtx = function.WithLegacyDecimalIntermediatePrecision(rebindCtx)
 	}
@@ -527,6 +548,33 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 			return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 		}
 	}
+	// Proof bind: the same verified AST, declared scope, session, precision
+	// and mode, but under the nullability inference era that authored the
+	// stored tree, against the current catalog and width. The widened
+	// expected tree must equal it under the existing SQL-origin contract
+	// (missing syntax-marker recovery and the bounded historical
+	// coercibility projection only); width, charset, overload, payload and
+	// nullability all reject. It is charged to the same budget and remains
+	// cancellable like every candidate bind.
+	budget.visits += nodes
+	if budget.visits > tableDumpMaxCandidateVisits {
+		return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+	}
+	legacyProofCtx := tableDumpBindContext{CompilerContext: proofCtx, ctx: function.WithLegacyExplicitCastNullability(proofCtx.GetContext()), proc: proofCtx.GetProcess()}
+	legacyProof, err := bindTableDumpExpression(legacyProofCtx, def, item, ast, increment, mode, &tableDumpDefaultSession{budget: budget})
+	if err != nil {
+		var limit *floatStringProofBudgetError
+		if ctx.GetContext().Err() != nil {
+			return nil, ctx.GetContext().Err()
+		}
+		if errors.As(err, &limit) {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if !sameLegacyFloatOrigin(expected, legacyProof) {
+		return nil, nil
+	}
 	current, err := bindTableDumpExpression(proofCtx, def, item, ast, increment, mode, &tableDumpDefaultSession{budget: budget})
 	if err != nil {
 		var limit *floatStringProofBudgetError
@@ -538,9 +586,11 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 		}
 		return nil, nil
 	}
-	if !sameTableDumpBoundExpression(expected, current) {
-		return nil, nil
-	}
+	// The installed tree is the ordinary current-era bind of the same
+	// verified AST; current conservative nullability (#31921) is owned by
+	// that bind itself. No cross-era comparison applies here: the proof
+	// bind above already tied the widened expected tree to this exact AST,
+	// scope, session, precision and mode under the authoring era.
 	if err := ctx.GetContext().Err(); err != nil {
 		return nil, err
 	}
@@ -766,7 +816,11 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 	}
 	old, err := rebindFloatStringFunction(function.WithLegacyFloatStringBounds(ctx), expr, DeepCopyExprList(args))
 	inComparison := false
-	if err != nil || !sameTableDumpBoundExpression(expr, old) {
+	// The stored tree predates implicit coercibility annotations; the
+	// historical projection tolerates exactly that bounded metadata edge.
+	// Width, charset, overload, payload and nullability still compare
+	// exactly, so a forged or wrongly reconstructed sibling rejects here.
+	if err != nil || !sameHistoricalFloatBoundExpression(expr, old) {
 		if len(args) != 2 || (fn.Func.ObjName != "=" && fn.Func.ObjName != "!=") {
 			return false, errLegacyFloatStringRebind
 		}
@@ -774,7 +828,7 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 			return false, err
 		}
 		old, err = rebindFloatStringInComparison(function.WithLegacyFloatStringBounds(ctx), expr, DeepCopyExprList(args))
-		if err != nil || !sameTableDumpBoundExpression(expr, old) {
+		if err != nil || !sameHistoricalFloatBoundExpression(expr, old) {
 			return false, errLegacyFloatStringRebind
 		}
 		inComparison = true

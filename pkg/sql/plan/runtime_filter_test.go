@@ -1661,6 +1661,91 @@ func TestDisableRightSingleRuntimeFilterHint(t *testing.T) {
 	require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
 }
 
+func TestDedupPrimaryKeyRuntimeFilterWithStaleStats(t *testing.T) {
+	setPlanTestGlobalVariable(t, "", "runtime_filter_limit_in", int64(32))
+	for _, tc := range []struct {
+		name   string
+		single bool
+		ndv    float64
+		mutate func(*QueryBuilder)
+		want   bool
+	}{
+		{name: "serialized composite key", ndv: 64, want: true},
+		{name: "single primary key", single: true, ndv: 64, want: true},
+		{name: "unknown NDV", ndv: -1, want: true},
+		{name: "empty statistics", ndv: 0, want: true},
+		{name: "at exact IN budget", ndv: 64, want: true, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 32
+			b.qry.Nodes[1].Stats.Outcnt = 32
+		}},
+		{name: "above exact IN budget", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 33
+			b.qry.Nodes[1].Stats.Outcnt = 33
+		}},
+		{name: "ordinary join retains cost gate", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].JoinType = planpb.Node_INNER
+		}},
+		{name: "right dedup preserves probe", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].IsRightJoin = true
+		}},
+		{name: "partial composite key retains cost gate", ndv: 64, mutate: func(b *QueryBuilder) {
+			probe := b.qry.Nodes[0]
+			typ := probe.TableDef.Cols[0].Typ
+			b.qry.Nodes[1].TableDef.Cols[0].Typ = typ
+			b.qry.Nodes[2].OnList = []*planpb.Expr{makeRuntimeFilterTestEq(typ, 1, 2, 0, 0)}
+		}},
+		{name: "nonleading primary key retains cost gate", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].TableDef.ClusterBy = &planpb.ClusterByDef{Name: "a"}
+		}},
+		{name: "limited probe is not truncated", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].Limit = makePlan2Uint64ConstExprWithType(1)
+		}},
+		{name: "incompatible equality encoding", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].OnList[0].GetF().Args[1].Typ.Id = int32(types.T_int64)
+		}},
+		{name: "large build retains existing guard", ndv: 64, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[1].Stats.Outcnt = 320001
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newRuntimeFilterSingleTestBuilder(t, false)
+			probe, build, join := b.qry.Nodes[0], b.qry.Nodes[1], b.qry.Nodes[2]
+			keyPos := int32(0)
+			if !tc.single {
+				configureRuntimeFilterCompositePK(b)
+				keyPos = 2
+			}
+			keyType := probe.TableDef.Cols[keyPos].Typ
+			build.TableDef.Cols[0].Typ = keyType
+			join.JoinType = planpb.Node_DEDUP
+			join.OnList = []*planpb.Expr{makeRuntimeFilterTestEq(keyType, 1, 2, keyPos, 0)}
+			join.Stats.HashmapStats.HashmapSize = 16
+			build.Stats.Outcnt = 16
+			probe.TableDef.TblId = 41
+			probe.Stats.TableCnt, probe.Stats.Outcnt = 64, 64
+			ctx := &statsCacheCompilerContext{MockCompilerContext: b.compCtx.(*MockCompilerContext), statsCache: NewStatsCache()}
+			ctx.statsCache.Set(41, &statspb.StatsInfo{NdvMap: map[string]float64{probe.TableDef.Pkey.PkeyColName: tc.ndv}})
+			b.compCtx = ctx
+			b.tag2Table = map[int32]*TableDef{1: probe.TableDef}
+			if tc.mutate != nil {
+				tc.mutate(b)
+			}
+			b.generateRuntimeFilters(2)
+			require.Equal(t, tc.want, len(join.RuntimeFilterBuildList) == 1)
+			require.Equal(t, tc.want, len(probe.RuntimeFilterProbeList) == 1)
+			if tc.want {
+				buildSpec, probeSpec := join.RuntimeFilterBuildList[0], probe.RuntimeFilterProbeList[0]
+				require.Equal(t, buildSpec.Tag, probeSpec.Tag)
+				require.Equal(t, int32(32), buildSpec.UpperLimit)
+				require.Equal(t, keyPos, probeSpec.Expr.GetCol().ColPos)
+				require.False(t, probeSpec.NotOnPk)
+				require.False(t, probeSpec.MatchPrefix)
+				require.Empty(t, build.RuntimeFilterProbeList)
+			}
+		})
+	}
+}
+
 func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		ndv  float64

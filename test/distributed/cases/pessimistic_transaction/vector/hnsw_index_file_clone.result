@@ -1,0 +1,88 @@
+set experimental_hnsw_index = 1;
+drop database if exists hnsw_index_file_clone;
+create database hnsw_index_file_clone;
+use hnsw_index_file_clone;
+create table t (id bigint primary key, v vecf32(8));
+insert into t select result, concat('[', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ']')
+from generate_series(1, 2000) g;
+insert into t values (1000001, '[50,50,50,50,50,50,50,50]');
+create index ix using hnsw on t(v) op_type 'vector_l2_ops';
+select id from t order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000001
+set @freshness_override = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s');
+select @freshness_override not like '%failed=[%' as all_cn_updated;
+➤ all_cn_updated[-6,8,0]  𝄀
+1
+create table c clone t;
+set @c_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'ix' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'c') limit 1);
+set @c_store = (select index_table_name from mo_catalog.mo_indexes where name = 'ix' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'c') limit 1);
+set @c_covered_sql = concat(
+'select (select count(*) from `', database(), '`.`', @c_meta, '` where filesize > 0) >= 1 as has_model, ',
+'(select coalesce(sum((filesize + 65535) div 65536), 0) from `', database(), '`.`', @c_meta,
+'`) = (select count(*) from `', database(), '`.`', @c_store, '`) as covered');
+prepare c_covered from @c_covered_sql;
+execute c_covered;
+➤ has_model[-6,8,0]  ¦  covered[-6,8,0]  𝄀
+1  ¦  1
+set @c_ts_sql = concat('select max(`timestamp`) into @c_ts from `', database(), '`.`', @c_meta, '`');
+prepare c_ts from @c_ts_sql;
+execute c_ts;
+deallocate prepare c_ts;
+insert into c values (1000002, '[-50,-50,-50,-50,-50,-50,-50,-50]');
+set @c_synced_sql = concat('select max(`timestamp`) > cast(@c_ts as bigint) as synced from `', database(), '`.`', @c_meta, '`');
+prepare c_synced from @c_synced_sql;
+execute c_synced;
+➤ synced[-6,8,0]  𝄀
+1
+deallocate prepare c_synced;
+execute c_covered;
+➤ has_model[-6,8,0]  ¦  covered[-6,8,0]  𝄀
+1  ¦  1
+select id from c order by l2_distance(v, '[-50,-50,-50,-50,-50,-50,-50,-50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000002
+select id from c order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000001
+drop snapshot if exists hnsw_index_file_clone_sp;
+create snapshot hnsw_index_file_clone_sp for account;
+alter table t alter reindex ix hnsw force_sync;
+select id from t order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000001
+execute c_covered;
+➤ has_model[-6,8,0]  ¦  covered[-6,8,0]  𝄀
+1  ¦  1
+select id from c order by l2_distance(v, '[-50,-50,-50,-50,-50,-50,-50,-50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000002
+drop table t;
+select id from c order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000001
+deallocate prepare c_covered;
+restore database sys.hnsw_index_file_clone {snapshot = 'hnsw_index_file_clone_sp'};
+set @r_meta = (select index_table_name from mo_catalog.mo_indexes where name = 'ix' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @r_store = (select index_table_name from mo_catalog.mo_indexes where name = 'ix' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @r_covered_sql = concat(
+'select (select count(*) from `', database(), '`.`', @r_meta, '` where filesize > 0) >= 1 as has_model, ',
+'(select coalesce(sum((filesize + 65535) div 65536), 0) from `', database(), '`.`', @r_meta,
+'`) = (select count(*) from `', database(), '`.`', @r_store, '`) as covered');
+prepare r_covered from @r_covered_sql;
+execute r_covered;
+➤ has_model[-6,8,0]  ¦  covered[-6,8,0]  𝄀
+1  ¦  1
+deallocate prepare r_covered;
+select id from t order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000001
+select id from c order by l2_distance(v, '[-50,-50,-50,-50,-50,-50,-50,-50]') limit 1;
+➤ id[-5,64,0]  𝄀
+1000002
+drop snapshot hnsw_index_file_clone_sp;
+set @freshness_restore = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
+select @freshness_restore not like '%failed=[%' as all_cn_restored;
+➤ all_cn_restored[-6,8,0]  𝄀
+1
+drop database hnsw_index_file_clone;

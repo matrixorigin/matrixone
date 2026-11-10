@@ -17,16 +17,14 @@
 package cagra
 
 import (
-	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -34,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
@@ -43,16 +41,18 @@ import (
 )
 
 var runSql = sqlexec.RunSql
-var runSql_streaming = sqlexec.RunStreamingSql
 
 // CagraModel wraps a GpuCagra index and handles load/save to the secondary index tables.
 // The serialized form is a tar file produced by cuvs.Pack / cuvs.Unpack.
 // T must satisfy cuvs.VectorType (float32 | Float16 | int8 | uint8).
 type CagraModel[B, Q cuvs.VectorType] struct {
-	Id     string
-	Index  *cuvs.GpuCagra[B, Q]
-	Path   string
-	TmpDir string
+	Id    string
+	Index *cuvs.GpuCagra[B, Q]
+	Path  string
+	// artifact is the index file Path names when FetchArtifact opened it; nil when Path is
+	// a tar this model's build wrote.
+	artifact indexFile
+	TmpDir   string
 	// TmpDir scopes this model's packed tar to its builder's private directory so
 	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
 	// which keeps any non-builder caller behaving exactly as before. // local tar file path; empty when index is in GPU memory only
@@ -250,12 +250,7 @@ func (idx *CagraModel[B, Q]) Destroy() error {
 			idx.Index = nil
 		}
 	}
-	if len(idx.Path) > 0 {
-		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
-			os.Remove(idx.Path)
-		}
-		idx.Path = ""
-	}
+	idx.releaseArtifact()
 	return errs
 }
 
@@ -270,13 +265,8 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 		return nil
 	}
 
-	// Remove stale file if any.
-	if len(idx.Path) > 0 {
-		if _, statErr := os.Stat(idx.Path); statErr == nil || os.IsExist(statErr) {
-			os.Remove(idx.Path)
-		}
-		idx.Path = ""
-	}
+	// Release the stale tar if any.
+	idx.releaseArtifact()
 
 	if idx.Len == 0 {
 		// Empty index — just release GPU memory, nothing to persist.
@@ -378,8 +368,10 @@ func (idx *CagraModel[B, Q]) PreparePersistence() error {
 	return err
 }
 
-// PersistChunks opens only the artifact prepared by this model's native owner.
-func (idx *CagraModel[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+// PersistFiles writes the artifact prepared by this model's native owner as its index file
+// in txn, running each statement with run, and caches it under its MD5.
+func (idx *CagraModel[B, Q]) PersistFiles(sqlproc *sqlexec.SqlProcess, txn client.TxnOperator,
+	tblcfg vectorindex.IndexTableConfig, run func(sql string) error) error {
 	if idx.Path == "" || idx.FileSize == 0 {
 		return nil
 	}
@@ -388,10 +380,20 @@ func (idx *CagraModel[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error 
 		return err
 	}
 	defer fp.Close()
-	if _, err = writer.WriteRange(fp, 0, idx.FileSize, idx.Id, 0, int(vectorindex.Tag_ModelChunk)); err != nil {
+	// The written bytes are checked against the size and MD5 the metadata row records, as
+	// they stream.
+	ref := modelRef(tblcfg, idx.Id, idx.FileSize, idx.Checksum)
+	sum := md5.New()
+	src := io.TeeReader(io.NewSectionReader(fp, 0, idx.FileSize), sum)
+	size, err := writeIndexFile(sqlproc, txn, ref, src, idx.spillDir(sqlproc), run)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
+	if got := hex.EncodeToString(sum.Sum(nil)); size != idx.FileSize || got != idx.Checksum {
+		return moerr.NewInternalErrorNoCtxf("CagraModel %s: wrote %d bytes with checksum %s, want %d bytes with %s",
+			idx.Id, size, got, idx.FileSize, idx.Checksum)
+	}
+	return nil
 }
 
 func (idx *CagraModel[B, Q]) chargeIdMap(rows uint64) {
@@ -439,48 +441,8 @@ func (idx *CagraModel[B, Q]) Search(query []Q, limit uint32) (keys []int64, dist
 }
 
 // loadChunk reads one streaming result batch and writes each chunk at the correct file offset.
-func (idx *CagraModel[B, Q]) loadChunk(ctx context.Context,
-	sqlproc *sqlexec.SqlProcess,
-	stream_chan chan executor.Result,
-	error_chan chan error,
-	fp *os.File) (stream_closed bool, err error) {
-
-	var res executor.Result
-	var ok bool
-
-	procCtx := sqlproc.GetContext()
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-procCtx.Done():
-		return false, moerr.NewInternalError(procCtx, "context cancelled")
-	case <-ctx.Done():
-		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
-	for i, chunkId := range chunkIds {
-		data := bat.Vecs[1].GetRawBytesAt(i)
-		offset := chunkId * vectorindex.MaxChunkSize
-		if _, err = fp.Seek(offset, io.SeekStart); err != nil {
-			return false, err
-		}
-		if _, err = fp.Write(data); err != nil {
-			return false, err
-		}
-	}
-	return false, nil
-}
-
-// FetchArtifact streams this sub-index's packed tar to local disk and returns its
-// path, without touching the GPU.
+// FetchArtifact opens this sub-index's packed tar through the index-file layer and returns a
+// path to it, without touching the GPU. The model holds the open file until releaseArtifact.
 //
 // Split out of LoadIndex so the search path can fetch every sub-index, measure the
 // aggregate with cuvs.MeasureTar, and refuse before any device allocation. That is
@@ -488,107 +450,45 @@ func (idx *CagraModel[B, Q]) loadChunk(ctx context.Context,
 // device-resident components of the packed artifact, differing only in whether
 // they compare against total VRAM (permanent) or free VRAM (situational).
 //
-// The caller owns the returned file. On failure the partial file is removed and
-// the path is empty.
+// The tar is read from the CN's index-file cache, or rebuilt there from its chunk rows and
+// verified against the metadata row's size and MD5. Without a cache it is rebuilt into
+// spillDir.
 func (idx *CagraModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (path string, err error) {
-	var (
-		fp         *os.File
-		streamChan = make(chan executor.Result, 2)
-		errorChan  = make(chan error, 2)
-		fname      string
-		wg         sync.WaitGroup
-	)
-
-	// Download the tar file from the database via streaming SQL.
-	// Under the LOCAL fileservice, NOT $TMPDIR. This tar is the whole sub-index --
-	// ~17.6 GB at 88M rows -- and loadIndexes fetches EVERY sub-index before it
-	// admits the aggregate, so the peak here is the sum of them plus whatever
-	// Unpack extracts alongside the current one. /tmp is frequently a small or
-	// slow mount, so a load could fail for space on a node whose LOCAL volume was
-	// provisioned for exactly this. The build path has always spilled here; the
-	// load path claimed to (see the comment above Unpack in LoadIndex) but did
-	// not, because a model straight from LoadMetadata carries no TmpDir.
-	//
-	// HostSpillDir returns "" when there is no LOCAL fileservice, and CreateTemp
-	// reads "" as $TMPDIR, so unit tests and one-shot tools keep today's behaviour
-	// with no branch here.
-	spillDir := idx.TmpDir
-	if spillDir == "" && sqlproc != nil && sqlproc.Proc != nil {
-		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
+	if idx.artifact != nil {
+		idx.artifact.Close()
+		idx.artifact = nil
 	}
-	fp, err = os.CreateTemp(spillDir, "cagra")
+	f, err := openIndexFile(sqlproc, modelRef(tblcfg, idx.Id, idx.FileSize, idx.Checksum), idx.spillDir(sqlproc))
 	if err != nil {
 		return "", err
 	}
-	fname = fp.Name()
+	idx.artifact = f
+	return f.FDPath(), nil
+}
 
-	// On failure the partial file is this method's to remove; on success the
-	// caller owns it. LoadIndex removes it in view mode when LoadIndex fetched it;
-	// a pre-fetching caller removes it itself.
-	defer func() {
-		if fp != nil {
-			fp.Close()
-			fp = nil
-		}
-		if err != nil && len(fname) > 0 {
-			os.Remove(fname)
-			fname = ""
-		}
-	}()
-
-	if err = fallocate.Fallocate(fp, 0, idx.FileSize); err != nil {
-		return "", err
+// spillDir is where this model keeps host scratch files: its builder's TmpDir, else the
+// LOCAL fileservice's spill directory, else "" (the system temp directory).
+//
+// Under the LOCAL fileservice, NOT $TMPDIR. A tar is the whole sub-index and /tmp is
+// frequently a small or slow mount, so a load could fail for space on a node whose LOCAL
+// volume was provisioned for exactly this.
+func (idx *CagraModel[B, Q]) spillDir(sqlproc *sqlexec.SqlProcess) string {
+	if idx.TmpDir != "" || sqlproc == nil || sqlproc.Proc == nil {
+		return idx.TmpDir
 	}
+	return vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
+}
 
-	sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
-		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
-
-	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
-	defer cancel(nil)
-
-	wg.Add(1)
-	go func() {
-		defer func() {
-			close(streamChan)
-			wg.Done()
-		}()
-		_, err2 := runSql_streaming(ctx, sqlproc, sql, streamChan, errorChan)
-		if err2 != nil {
-			errorChan <- err2
-		}
-	}()
-
-	sql_closed := false
-	for !sql_closed {
-		sql_closed, err = idx.loadChunk(ctx, sqlproc, streamChan, errorChan, fp)
-		if err != nil {
-			cancel(err)
-			break
-		}
+// releaseArtifact drops the model's tar: the hold on the index file FetchArtifact opened, or
+// else the file at Path, which this model's build wrote.
+func (idx *CagraModel[B, Q]) releaseArtifact() {
+	if idx.artifact != nil {
+		idx.artifact.Close()
+		idx.artifact = nil
+	} else if len(idx.Path) > 0 {
+		os.Remove(idx.Path)
 	}
-
-	// Drain the channel so the producer goroutine can finish.
-	if !sql_closed {
-		for res := range streamChan {
-			res.Close()
-		}
-	}
-	wg.Wait()
-
-	if err == nil {
-		select {
-		case err = <-errorChan:
-		default:
-		}
-	}
-	if err != nil {
-		return "", err
-	}
-
-	path = fp.Name()
-	fp.Close()
-	fp = nil
-	return path, nil
+	idx.Path = ""
 }
 
 // LoadIndex downloads the tar from the database, unpacks it, and loads the CAGRA index into GPU memory.
@@ -641,23 +541,25 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 			return err
 		}
 		idx.Path = fetched
-		// This call fetched it, so this call owns it: in view mode the tar is
-		// scratch and goes once Unpack has read it. A Path supplied by a
-		// pre-fetching caller is left for that caller to clean up.
+		// This call fetched it, so this call releases it in view mode, also on failure. A
+		// Path supplied by a pre-fetching caller is released below once Unpack has read it.
 		defer func() {
-			if view && len(fetched) > 0 {
-				os.Remove(fetched)
+			if view {
+				idx.releaseArtifact()
 			}
 		}()
 	}
 
-	// Verify checksum.
-	chksum, err := vectorindex.CheckSum(idx.Path)
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(sqlproc.GetContext(), "CagraModel: checksum mismatch")
+	// The index-file layer verified a fetched tar; a tar this model's build wrote is checked
+	// here.
+	if idx.artifact == nil {
+		chksum, err := vectorindex.CheckSum(idx.Path)
+		if err != nil {
+			return err
+		}
+		if chksum != idx.Checksum {
+			return moerr.NewInternalError(sqlproc.GetContext(), "CagraModel: checksum mismatch")
+		}
 	}
 
 	// Reconstruct the GpuCagra instance from configuration.
@@ -711,14 +613,14 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	// idx.Path lives in HostSpillDir; extract into the same directory so the
-	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
+	// Extract into the model's spill directory so the intermediate (same-size scratch as
+	// the tar) does NOT land in /tmp.
 	// The host components Unpack materialises -- ids, quantizer, deleted bitset
 	// and the INCLUDE columns -- are claimed natively inside load_dir, where the
 	// deserialisation that allocates them happens (index_base.hpp,
 	// claim_host_components).
 
-	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
+	if err = gi.Unpack(idx.Path, idx.spillDir(sqlproc), mode); err != nil {
 		gi.Destroy()
 		return err
 	}
@@ -775,11 +677,8 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 		idx.Id, idx.Len, len(idx.DeletedPkids), len(idx.OverflowPkids))
 
 	if view {
-		// Remove the local tar; the index is fully in GPU memory.
-		if len(idx.Path) > 0 {
-			os.Remove(idx.Path)
-		}
-		idx.Path = ""
+		// Release the tar; the index is fully in GPU memory.
+		idx.releaseArtifact()
 	}
 
 	return nil

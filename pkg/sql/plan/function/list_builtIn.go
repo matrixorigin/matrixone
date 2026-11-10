@@ -1296,7 +1296,11 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: FINDINSET,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// Keep every MySQL string operand in its original domain instead of
+		// casting it through VARCHAR: the executor routes byte-wise when
+		// either operand is a binary string (issue #31175 review), and a
+		// conversion cast would erase that domain for non-constant operands.
+		checkFn: stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -15241,6 +15245,26 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// Classify catalog rows for metadata listings without resolving a relation.
+	{
+		functionId: MO_IS_PHYSICAL_INDEX,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsPhysicalIndex
+				},
+			},
+		},
+	},
+
 	// function `mo_view_definition`
 	// Used only by information_schema.VIEWS to provide a parser-aware read path
 	// for legacy ViewData rows that predate the frozen definition field.
@@ -15424,6 +15448,33 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 		},
+	},
+
+	{
+		functionId:  TEMPORAL_DATETIME_BOUND,
+		runtimeOnly: true,
+		class:       plan.Function_INTERNAL | plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
+		layout:      STANDARD_FUNCTION,
+		checkFn:     fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, args: []types.T{types.T_timestamp, types.T_int32, types.T_int32, types.T_int32},
+			executionStable: true, realTimeRelated: true,
+			retType: func([]types.Type) types.Type { return types.T_datetime.ToType() },
+			newOp:   func() executeLogicOfOverload { return temporalDatetimeBound },
+		}},
+	},
+	{
+		functionId:  TEMPORAL_TIMESTAMP_BOUND,
+		runtimeOnly: true,
+		class:       plan.Function_INTERNAL | plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
+		layout:      STANDARD_FUNCTION,
+		checkFn:     fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, args: []types.T{types.T_datetime, types.T_int32, types.T_int32, types.T_int32},
+			executionStable: true, realTimeRelated: true,
+			retType: func([]types.Type) types.Type { return types.T_timestamp.ToType() },
+			newOp:   func() executeLogicOfOverload { return temporalTimestampBound },
+		}},
 	},
 
 	// function `internal_datetime_scale`
@@ -15651,6 +15702,50 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LoadFileDatalink
+				},
+			},
+		},
+	},
+
+	// function `unzip_file`
+	{
+		functionId: UNZIP_FILE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFilePath)
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFilePath)
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return unzipFile(openUnzipFileDatalink)
 				},
 			},
 		},

@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,61 @@ func newAccountedTestVector(
 	vec := NewOffHeapVecWithType(typ)
 	require.NoError(t, vec.SetAllocationAccount(selection))
 	return vec
+}
+
+func TestUnionBatchFailedGroupedAppendRollbackAndReuse(t *testing.T) {
+	const limit = int64(1 << 20)
+	state := newTestVectorAllocationAccount(t, 2<<20, 16)
+	mp, err := mpool.NewMPool("grouped-append-rollback", limit, mpool.NoFixed)
+	require.NoError(t, err)
+	srcMP := mpool.MustNewZero()
+	dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	src := NewVec(types.T_varchar.ToType())
+	replacement := NewVec(types.T_varchar.ToType())
+	var ballast [][]byte
+	t.Cleanup(func() {
+		dst.Free(mp)
+		src.Free(srcMP)
+		replacement.Free(srcMP)
+		for _, b := range ballast {
+			mp.Free(b)
+		}
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, srcMP.CurrNB())
+		mpool.DeleteMPool(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+	})
+
+	require.NoError(t, AppendBytes(dst, []byte("kept"), false, mp))
+	require.NoError(t, dst.PreExtend(2, mp))
+	require.NoError(t, dst.PreExtendGrouping(2, mp))
+	dst.GetGrouping().Set(0)
+	require.NoError(t, AppendBytes(src, bytes.Repeat([]byte("x"), 32<<10), false, srcMP))
+	src.GetGrouping().Set(0)
+	require.NoError(t, AppendBytes(replacement, []byte("new"), false, srcMP))
+	checkpoint := dst.MakeAppendCheckpoint()
+
+	for limit-mp.CurrNB() >= 32<<10 {
+		b, allocErr := mp.Alloc(4096, true)
+		require.NoError(t, allocErr)
+		ballast = append(ballast, b)
+	}
+	err = dst.UnionBatch(src, 0, 1, nil, mp)
+	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
+	require.Equal(t, 1, dst.Length())
+	require.True(t, dst.GetGrouping().Contains(1), "failure must occur after grouping publication")
+	dst.RollbackAppend(checkpoint, 1)
+	for _, b := range ballast {
+		mp.Free(b)
+	}
+	ballast = nil
+
+	require.NoError(t, dst.UnionBatch(replacement, 0, 1, nil, mp))
+	require.Equal(t, []string{"kept", "new"}, InefficientMustStrCol(dst))
+	require.False(t, dst.IsNull(0))
+	require.False(t, dst.IsNull(1))
+	require.True(t, dst.GetGrouping().Contains(0))
+	require.False(t, dst.GetGrouping().Contains(1))
 }
 
 func TestVectorAllocationAccountConfiguration(t *testing.T) {

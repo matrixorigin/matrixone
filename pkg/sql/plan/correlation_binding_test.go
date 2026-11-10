@@ -16,12 +16,13 @@ package plan
 
 import (
 	"context"
+	"testing"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestDependentPreparedTypeEdges(t *testing.T) {
@@ -35,7 +36,7 @@ func TestDependentPreparedTypeEdges(t *testing.T) {
 			stmts, err := mysql.Parse(context.Background(), sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			prepared, err := BuildPlan(mock.CurrentContext(), stmts[0], true)
+			prepared, err := BuildPlan(mock.CurrentContext(), stmts[0], true, nil)
 			require.NoError(t, err)
 			require.NotNil(t, prepared.GetQuery().Correlation)
 			_, params, err := ResetPreparePlan(mock.CurrentContext(), prepared)

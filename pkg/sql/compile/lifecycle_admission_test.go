@@ -241,7 +241,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				require.NoError(t, err)
 				defer source.Free()
 				planner = plan2.NewMockCompilerContext(true, testutil.NewProcess(t))
-				original, err = plan2.BuildPlan(planner, source, mode == "unsupported_temporal")
+				original, err = plan2.BuildPlan(planner, source, mode == "unsupported_temporal", nil)
 				require.NoError(t, err)
 			}
 			builds := 0
@@ -253,7 +253,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				require.Equal(t, frontier, now, "rebuild follows workspace frontier")
 				if mode == "ctas_refresh" {
 					var err error
-					rebuilt, err = plan2.BuildPlan(planner, source, false)
+					rebuilt, err = plan2.BuildPlan(planner, source, false, nil)
 					return rebuilt, err
 				}
 				if mode == "changed_domain" {

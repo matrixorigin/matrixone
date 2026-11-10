@@ -223,6 +223,11 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	// Just take a snapshot and export it. This snapshot is invisible to system.
 	idx, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts)
 	if err != nil {
+		// These results can arrive after Dragonboat accepted the request;
+		// the export may still reach its final directory later.
+		if errors.Is(err, dragonboat.ErrTimeout) || errors.Is(err, dragonboat.ErrCanceled) {
+			l.snapshotMgr.MarkExportUncertain(shardID, replicaID)
+		}
 		l.runtime.Logger().Error("request export snapshot failed", zap.Error(err))
 		return err
 	}
@@ -233,6 +238,7 @@ func (l *store) exportSnapshot(ctx context.Context, shardID uint64, replicaID ui
 	)
 	// Add the exported snapshot to snapshot manager.
 	if err := l.snapshotMgr.Add(shardID, replicaID, idx); err != nil {
+		l.snapshotMgr.MarkExportUncertain(shardID, replicaID)
 		l.runtime.Logger().Error("add exported snapshot failed", zap.Error(err))
 		return err
 	}
@@ -440,6 +446,19 @@ func (l *store) processShardTruncateLogWithReplica(ctx context.Context, shardID 
 		l.runtime.Logger().Warn("no leader yet, skip truncate",
 			zap.Uint64("shard ID", shardID))
 		return nil
+	}
+	// A timed-out export can finish after its request has returned. Refresh
+	// the affected replica before import and quota decisions so completed
+	// final directories do not remain invisible to the in-memory manager.
+	newest, trimmed, err := l.snapshotMgr.ReconcileUncertainExports(
+		shardID, replicaID, l.cfg.MaxExportedSnapshot)
+	if err != nil {
+		return err
+	}
+	if trimmed {
+		l.shardSnapshotInfo.setSnapshotIndex(shardID, newest)
+	} else if newest > 0 {
+		l.shardSnapshotInfo.forwardSnapshot(shardID, newest)
 	}
 
 	ctx, cancel := context.WithTimeoutCause(ctx, 3*time.Second, moerr.CauseProcessShardTruncateLog)

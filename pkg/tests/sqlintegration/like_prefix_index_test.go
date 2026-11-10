@@ -46,7 +46,11 @@ func TestLikePrefixIndex(t *testing.T) {
 		}
 		exec("create database like_prefix_index")
 		exec("use like_prefix_index")
-		exec("create table t(id int primary key, name varchar(40), payload varchar(80), key ix(name),key ix_multi(name,payload))")
+		// Prefix-plan assertions pin every name column to utf8mb4_bin: the
+		// byte-ordered prefix rewrite applies only to a byte-ordered domain; a
+		// case-insensitive collation keeps the folding LIKE predicate (issue
+		// #31175, covered by TestLikePrefixCaseInsensitiveKeepsFoldedPredicate).
+		exec("create table t(id int primary key, name varchar(40) collate utf8mb4_bin, payload varchar(80), key ix(name),key ix_multi(name,payload))")
 		for i, value := range []any{"abc", "abcd", "abc_def", "abc%def", "abd", "ab", "", "中文", "中文尾", "ab\x00c", nil, "\x7f", "\x7fa", "\x80", "\xc2\x80"} {
 			_, err := conn.ExecContext(ctx, "insert into t values(?,?,?)", i, value, "payload")
 			require.NoError(t, err)
@@ -65,21 +69,21 @@ func TestLikePrefixIndex(t *testing.T) {
 			require.NoError(t, rows.Err())
 			return out.String()
 		}
-		exec("create table t_unique(id int primary key,name varchar(40),payload varchar(80),unique key ux(name))")
+		exec("create table t_unique(id int primary key,name varchar(40) collate utf8mb4_bin,payload varchar(80),unique key ux(name))")
 		exec("insert into t_unique select * from t")
 		exec("analyze table t_unique(name) fullscan")
-		exec("create table residual_rows(id int primary key,name varchar(40),amount int,other int,payload varchar(40),key ix(name,amount))")
+		exec("create table residual_rows(id int primary key,name varchar(40) collate utf8mb4_bin,amount int,other int,payload varchar(40),key ix(name,amount))")
 		exec("insert into residual_rows values(1,'rare',7,7,'p'),(2,'z2',1,2,'p'),(3,'z3',3,3,'p'),(4,'z4',4,5,'p'),(5,'z5',6,6,'p')")
 		exec("analyze table residual_rows(name,amount) fullscan")
 		for _, table := range []string{"candidate_errors", "residual_errors"} {
-			exec("create table " + table + "(id int primary key,name varchar(40),payload varchar(30),key ix(name))")
+			exec("create table " + table + "(id int primary key,name varchar(40) collate utf8mb4_bin,payload varchar(30),key ix(name))")
 			exec("insert into " + table + " values(1,'zzz','p'),(2,'xy','p')")
 			if table == "residual_errors" {
 				exec("insert into " + table + " values(3,'abc9','p')")
 			}
 			exec("analyze table " + table + "(name) fullscan")
 		}
-		exec("create table error_rows(name varchar(40),amount varchar(40),payload varchar(40),key ix(name,amount))")
+		exec("create table error_rows(name varchar(40) collate utf8mb4_bin,amount varchar(40),payload varchar(40),key ix(name,amount))")
 		for _, name := range []string{"abc\x00x", "\x80"} {
 			_, err := conn.ExecContext(ctx, "insert into error_rows values(?,'a','p')", name)
 			require.NoError(t, err)
@@ -97,7 +101,7 @@ func TestLikePrefixIndex(t *testing.T) {
 		require.NotContains(t, explain("select count(*) from t where name like 'a%'"), "Index Table Scan", "a measured broad prefix must keep the scan")
 		// Cross one storage block so automatic non-covering access can save reads.
 		// Keep this in the existing fixture; tiny tables cannot prove that choice.
-		exec("create table prefix_backfill(id int primary key,name varchar(40),amount int,payload int,key ix(name,amount))")
+		exec("create table prefix_backfill(id int primary key,name varchar(40) collate utf8mb4_bin,amount int,payload int,key ix(name,amount))")
 		exec("insert into prefix_backfill select result,concat(if(result%100=0,'abc','zzz'),result),result,result from generate_series(1,10000)g")
 		largeQuery := "select count(*) from prefix_backfill where name like 'abc%'"
 		require.NotContains(t, explain(largeQuery), "Index Table Scan", "unknown prefix frequency retains the scan")
@@ -111,7 +115,7 @@ func TestLikePrefixIndex(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, prefixQuery).Scan(&prefixSum))
 		require.Equal(t, int64(200), prefixSum)
 		// Original issue scale and inclusive 30% threshold, collected through SQL.
-		exec("create table issue_rows(id int primary key,name varchar(20),key ix(name))")
+		exec("create table issue_rows(id int primary key,name varchar(20) collate utf8mb4_bin,key ix(name))")
 		exec("insert into issue_rows select result,case result%10 when 0 then 'apple' when 1 then 'apply' when 2 then 'apricot' when 3 then 'banana' when 4 then 'band' when 5 then 'bank' when 6 then 'zebra' when 7 then 'zoo' when 8 then 'orange' else 'pear' end from generate_series(0,499) g")
 		exec("analyze table issue_rows(name) fullscan")
 		require.NotContains(t, explain("select count(*) from issue_rows where name like 'ap%'"), "Index Table Scan")
@@ -245,9 +249,10 @@ func TestLikePrefixIndex(t *testing.T) {
 					}
 					for _, hint := range []string{"", " force index(ix)", " ignore index(ix)"} {
 						check("select payload from candidate_errors"+hint+" where name like 'abc%' and name in (regexp_replace('x','[','y'),'abc1')", !strings.Contains(hint, "ignore"))
-						// Preserve the baseline error domain for each hint: an ordinary
-						// IN lookup can avoid a throwing residual on excluded rows.
-						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload=regexp_replace('x','[','y')", strings.Contains(hint, "ignore"))
+						// A matching row must evaluate the throwing residual for every
+						// access path, including when the table has persisted blocks.
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('abc9','xy') and payload=regexp_replace('x','[','y')", true)
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload='p'", false)
 					}
 					for _, scoped := range []struct{ hint, suffix string }{
 						{" force index for order by(ix)", " order by name"},
@@ -349,5 +354,71 @@ func TestLikePrefixIndex(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, largeQuery).Scan(&count))
 		require.EqualValues(t, 100, count)
 
+	})
+}
+
+// A case-insensitive collation folds LIKE, while the byte-ordered prefix
+// rewrite cannot represent that folding (issue #31175). Under a ci collation
+// the planner must keep the folding LIKE predicate even with analyzed
+// statistics: no prefix_in_range/prefix_eq, and the scan, forced-index and
+// computed-subject paths must agree on the folded result. This is the
+// counterexample to re-enabling byte-ordered prefix access on ci columns: a
+// byte prefix range would exclude the folded matches (e.g. 'ABC').
+func TestLikePrefixCaseInsensitiveKeepsFoldedPredicate(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists like_prefix_ci")
+		exec := func(q string) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		exec("create database like_prefix_ci")
+		exec("use like_prefix_ci")
+		exec("create table ci_names(id int primary key, name varchar(40) collate utf8mb4_general_ci, key ix(name))")
+		for i, value := range []any{"abc", "ABC", "Abc", "abd", "zabc", nil} {
+			_, err := conn.ExecContext(ctx, "insert into ci_names values(?,?)", i, value)
+			require.NoError(t, err)
+		}
+		exec("analyze table ci_names(name) fullscan")
+		explain := func(query string) string {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, "explain "+query)
+			require.NoError(t, err)
+			defer rows.Close()
+			var out strings.Builder
+			for rows.Next() {
+				var line string
+				require.NoError(t, rows.Scan(&line))
+				out.WriteString(line)
+			}
+			require.NoError(t, rows.Err())
+			return out.String()
+		}
+		ids := func(q string) []int64 {
+			t.Helper()
+			result, err := readPreparedContractIDs(conn.QueryContext(ctx, q))
+			require.NoError(t, err, q)
+			return result
+		}
+		want := []int64{0, 1, 2}
+		for _, pattern := range []string{"'abc%'", "'ABC%'"} {
+			plan := explain("select id from ci_names where name like " + pattern)
+			require.NotContains(t, plan, "prefix_in_range(", pattern)
+			require.NotContains(t, plan, "prefix_eq(", pattern)
+			require.Equal(t, want, ids("select id from ci_names where name like "+pattern+" order by id"), pattern)
+			require.Equal(t, want, ids("select id from ci_names force index(ix) where name like "+pattern+" order by id"), pattern)
+			require.Equal(t, want, ids("select id from ci_names ignore index(ix) where name like "+pattern+" order by id"), pattern)
+			require.Equal(t, want, ids("select id from ci_names ignore index(ix) where concat(name,'') like "+pattern+" order by id"), pattern)
+		}
 	})
 }

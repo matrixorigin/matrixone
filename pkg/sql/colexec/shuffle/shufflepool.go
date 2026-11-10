@@ -16,6 +16,7 @@ package shuffle
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -36,6 +37,9 @@ const (
 	shuffleFixedBucketReadyLimit       = 2
 	shuffleProducerTailBlocksPerBucket = shuffleFixedBucketReadyLimit * shuffleBatchPoolShardSize
 )
+
+// MaxOwnedBuckets bounds the metadata and buffers of a statement-owned shuffle.
+const MaxOwnedBuckets = 8
 
 type shuffleMemoryShard struct {
 	sync.Mutex
@@ -59,6 +63,12 @@ type ShufflePool struct {
 	bucketNum            int32
 	maxHolders           int32
 	drainAll             bool
+	ownedOutput          bool
+	ownedColumns         int
+	ownedInit            sync.Once
+	ownedInitErr         error
+	ownedReservation     *process.ExecutionTransientMemoryReservation
+	outputAllocation     *vector.AllocationAccountSelection
 	producerBatchMaxRows int
 	sharedLaneOnce       sync.Once
 	sharedBatchAccount   *vector.AllocationAccountSelection
@@ -110,7 +120,19 @@ type ShufflePool struct {
 }
 
 func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePool {
-	allBuckets := drainAll
+	sp := &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders, drainAll: drainAll}
+	sp.initBuckets(nil)
+	return sp
+}
+
+// NewOwnedShufflePool delays its bucket allocations until the execution's
+// account has been attached to a runtime clone.
+func NewOwnedShufflePool(bucketNum, maxHolders int32, columns int) *ShufflePool {
+	return &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders, drainAll: true, ownedOutput: true, ownedColumns: columns}
+}
+
+func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection) {
+	bucketNum, maxHolders, allBuckets := sp.bucketNum, sp.maxHolders, sp.drainAll
 	readyLimit := max(2, int(maxHolders)*2)
 	batchPoolShards := max(1, int(maxHolders))
 	producerLanes := max(1, int(maxHolders))
@@ -125,45 +147,171 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 			objectio.BlockMaxRows*shuffleProducerTailBlocksPerBucket/producerLanes,
 		)
 	}
-	sp := &ShufflePool{
-		bucketNum:            bucketNum,
-		maxHolders:           maxHolders,
-		drainAll:             allBuckets,
-		producerBatchMaxRows: producerBatchMaxRows,
-		batchSets:            make([][]*batch.BatchSet, bucketNum),
-		readyProducers:       make([][]int32, bucketNum),
-		batchLocks:           make([]sync.Mutex, bucketNum),
-		closed:               make([]bool, bucketNum),
-		batchWaiters:         make([]chan bool, bucketNum),
-		endingWaiters:        make([]chan bool, bucketNum),
-		batchPools:           make([]shuffleBatchPoolShard, batchPoolShards),
-		anyBatchWaiter:       make(chan struct{}, 1),
-		endingWaiter:         make(chan struct{}),
-		readyLimit:           readyLimit,
-		spaceWaiter:          make(chan struct{}),
-		bucketReadyCounts:    make([]int, bucketNum),
-		bucketSpaceWaiters:   make([]chan struct{}, bucketNum),
-		producers:            make(map[int32]context.CancelCauseFunc),
-	}
+	sp.producerBatchMaxRows = producerBatchMaxRows
+	sp.outputAllocation = selection
+	sp.batchSets = make([][]*batch.BatchSet, bucketNum)
+	sp.readyProducers = make([][]int32, bucketNum)
+	sp.batchLocks = make([]sync.Mutex, bucketNum)
+	sp.closed = make([]bool, bucketNum)
+	sp.batchWaiters = make([]chan bool, bucketNum)
+	sp.endingWaiters = make([]chan bool, bucketNum)
+	sp.batchPools = make([]shuffleBatchPoolShard, batchPoolShards)
+	sp.anyBatchWaiter = make(chan struct{}, 1)
+	sp.endingWaiter = make(chan struct{})
+	sp.readyLimit = readyLimit
+	sp.spaceWaiter = make(chan struct{})
+	sp.bucketReadyCounts = make([]int, bucketNum)
+	sp.bucketSpaceWaiters = make([]chan struct{}, bucketNum)
+	sp.producers = make(map[int32]context.CancelCauseFunc)
 	if allBuckets {
 		sp.readyBuckets = make(chan int32, readyLimit)
 	}
 	for i := range sp.batchSets {
 		sp.batchSets[i] = make([]*batch.BatchSet, producerLanes)
 		for producer := range sp.batchSets[i] {
-			sp.batchSets[i][producer] = batch.NewBatchSet(producerBatchMaxRows)
+			sp.batchSets[i][producer] = batch.NewBatchSetWithAllocation(producerBatchMaxRows, selection)
 		}
 		if producerBatchMaxRows < objectio.BlockMaxRows {
 			// Inputs with identical allocation provenance can share a full-sized
 			// tail. Other provenance continues to use bounded producer-local lanes.
 			// This adds at most one block per destination, not one per producer.
-			sp.batchSets[i] = append(sp.batchSets[i], batch.NewBatchSet(objectio.BlockMaxRows))
+			sp.batchSets[i] = append(sp.batchSets[i], batch.NewBatchSetWithAllocation(objectio.BlockMaxRows, selection))
 		}
 		sp.batchWaiters[i] = make(chan bool, 1)
 		sp.endingWaiters[i] = make(chan bool, 1)
 		sp.bucketSpaceWaiters[i] = make(chan struct{})
 	}
-	return sp
+}
+
+func (sp *ShufflePool) initOwned(proc *process.Process, selection *vector.AllocationAccountSelection) error {
+	sp.ownedInit.Do(func() {
+		if err := sp.ownedFailure(proc, nil); err != nil {
+			sp.ownedInitErr = err
+			return
+		}
+		if sp.bucketNum < 1 || sp.bucketNum > MaxOwnedBuckets || sp.maxHolders < 1 || sp.maxHolders > 8 || sp.ownedColumns < 1 || selection == nil {
+			sp.ownedInitErr = sp.ownedFailure(proc, mpool.ErrAllocationAccountInvalid)
+			return
+		}
+		if err := process.PipelineContextError(proc.Ctx); err != nil {
+			sp.ownedInitErr = sp.ownedFailure(proc, err)
+			return
+		}
+		// Cover bounded pool and dispatch-spool descriptors as well as vector
+		// headers for every lane, ready slot, recycle slot and spool slot. The
+		// reservation outlives the pool until transport borrowers are drained.
+		p, s := uint64(sp.bucketNum), uint64(sp.maxHolders)
+		slots := 2*p*s + 6*s + 3*p + 16
+		perColumn := uint64(unsafe.Sizeof(vector.Vector{})) + 256
+		fixed := uint64(64<<10) + p*s*(4<<10)
+		if uint64(sp.ownedColumns) > (math.MaxUint64-fixed)/slots/perColumn {
+			sp.ownedInitErr = sp.ownedFailure(proc, mpool.ErrAllocationAccountInvalid)
+			return
+		}
+		metadata := fixed + slots*uint64(sp.ownedColumns)*perColumn
+		reservation, err := sp.reserveOwnedMemory(proc, metadata)
+		if err != nil {
+			sp.ownedInitErr = err
+			return
+		}
+		sp.holderLock.Lock()
+		defer sp.holderLock.Unlock()
+		if sp.aborted || sp.cleaned || process.PipelineContextError(proc.Ctx) != nil {
+			reservation.Release()
+			sp.ownedInitErr = sp.abortErr
+			if sp.ownedInitErr == nil {
+				sp.ownedInitErr = process.PipelineContextError(proc.Ctx)
+			}
+			if sp.ownedInitErr == nil {
+				sp.ownedInitErr = context.Canceled
+			}
+			return
+		}
+		sp.ownedReservation = reservation
+		// Leave no reservation or partial bucket state behind if initialization
+		// panics. A normal allocation failure is returned above.
+		initialized := false
+		defer func() {
+			if !initialized {
+				sp.abortLocked(nil)
+				sp.cleanupLocked(proc.Mp())
+				sp.ownedReservation.Release()
+				sp.ownedReservation = nil
+			}
+		}()
+		sp.initBuckets(selection)
+		initialized = true
+	})
+	if sp.ownedInitErr != nil {
+		return sp.ownedInitErr
+	}
+	if !vector.AllocationAccountSelectionsEqual(sp.outputAllocation, selection) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	return nil
+}
+
+type ownedMemoryAdmission struct {
+	pool    *ShufflePool
+	stopped bool
+}
+
+func (a *ownedMemoryAdmission) Lock()   { a.pool.holderLock.Lock() }
+func (a *ownedMemoryAdmission) Unlock() { a.pool.holderLock.Unlock() }
+
+func (a *ownedMemoryAdmission) ResolveAdmissionFailure(err error, stopped bool) error {
+	if a.pool.abortErr != nil {
+		return a.pool.abortErr
+	}
+	if stopped {
+		a.stopped = true
+		return context.Canceled
+	}
+	if a.pool.aborted || a.pool.cleaned {
+		return context.Canceled
+	}
+	a.pool.abortLocked(err)
+	return err
+}
+
+func (sp *ShufflePool) reserveOwnedMemory(proc *process.Process, size uint64) (*process.ExecutionTransientMemoryReservation, error) {
+	budget, err := proc.GetExecutionResourceBudget()
+	if err != nil {
+		return nil, sp.ownedFailure(proc, err)
+	}
+	admission := &ownedMemoryAdmission{pool: sp}
+	reservation, err := budget.ReserveTransientMemoryGuarded(size, proc.Ctx.Done(), admission)
+	if admission.stopped {
+		if cause := process.PipelineContextError(proc.Ctx); cause != nil {
+			return nil, cause
+		}
+	}
+	return reservation, err
+}
+
+// Resolve an admission failure against a terminal event published while
+// admission was in progress. An earlier producer failure keeps its identity.
+func (sp *ShufflePool) ownedFailure(proc *process.Process, fallback error) error {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	if sp.abortErr != nil {
+		return sp.abortErr
+	}
+	if cause := process.PipelineContextError(proc.Ctx); cause != nil {
+		return cause
+	}
+	if sp.aborted || sp.cleaned {
+		return context.Canceled
+	}
+	return fallback
+}
+
+// Runtime account attachment may roll back before this lazy descriptor has
+// been initialized. In that case it owns no allocation or admitted holder.
+func (sp *ShufflePool) hasOwnedResources() bool {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	return sp.ownedReservation != nil || sp.holders != sp.finished
 }
 
 func (sp *ShufflePool) hold() bool {
@@ -269,7 +417,9 @@ func (sp *ShufflePool) abortLocked(err error) {
 }
 
 func (sp *ShufflePool) signalEndLocked() {
-	sp.endingOnce.Do(func() { close(sp.endingWaiter) })
+	if sp.endingWaiter != nil {
+		sp.endingOnce.Do(func() { close(sp.endingWaiter) })
+	}
 }
 
 func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
@@ -280,6 +430,9 @@ func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
 	for bucket := range sp.batchSets {
 		var rows int
 		for _, set := range sp.batchSets[bucket] {
+			if set == nil {
+				continue
+			}
 			rows += set.RowCount()
 			for i := 0; i < set.Length(); i++ {
 				sp.forgetBatch(set.Get(i))
@@ -291,6 +444,21 @@ func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
 		}
 	}
 	sp.cleanBatchPool(m)
+}
+
+// Called at statement-account retirement, after every transport borrower has
+// drained. All clones share this reservation and may call it independently.
+func (sp *ShufflePool) releaseOwnedReservation() error {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	if !sp.cleaned {
+		return mpool.ErrAllocationAccountLive
+	}
+	if sp.ownedReservation != nil {
+		sp.ownedReservation.Release()
+		sp.ownedReservation = nil
+	}
+	return nil
 }
 
 // closeConsumer permanently closes one fixed-bucket destination for this
@@ -793,6 +961,9 @@ func (sp *ShufflePool) tryWrite(
 // Equality includes capacity classes: a producer's private spill recovery
 // capacity must not be spent by another producer's writes.
 func (sp *ShufflePool) matchesSharedLane(bat *batch.Batch) bool {
+	if sp.outputAllocation != nil {
+		return true
+	}
 	sp.sharedLaneOnce.Do(func() {
 		sp.sharedBatchAccount = bat.AllocationAccountSelection()
 		sp.sharedVecAccounts = make([]*vector.AllocationAccountSelection, len(bat.Vecs))

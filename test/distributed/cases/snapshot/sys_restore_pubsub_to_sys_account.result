@@ -26,7 +26,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 republication01
@@ -122,7 +121,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 repub02
@@ -236,7 +234,6 @@ show databases;
 Database
 information_schema
 mo_catalog
-mo_debug
 mo_task
 mysql
 repub03
