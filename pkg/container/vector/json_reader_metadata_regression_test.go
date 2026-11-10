@@ -161,3 +161,15 @@ func TestJSONReaderMetadataPublicationFailureReleasesOwner(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONReaderContainerMetadataCapacityBounds(t *testing.T) {
+	capacity, err := JSONReaderContainerMetadataCapacity(0, 2)
+	require.NoError(t, err)
+	require.Equal(t, JSONReaderMetadataCapacity(0)+2048, capacity)
+	_, err = JSONReaderContainerMetadataCapacity(0, -1)
+	require.Error(t, err)
+	if ^uint(0)>>63 == 1 {
+		_, err = JSONReaderContainerMetadataCapacity(0, int(^uint(0)>>1))
+		require.Error(t, err)
+	}
+}

@@ -36,6 +36,18 @@ func JSONReaderMetadataCapacity(objectBytes uintptr) uint64 {
 	return 2*bytes + 256
 }
 
+// JSONReaderContainerMetadataCapacity covers bounded control maps and slices
+// associated with a number of input columns or expression nodes. The per-entry
+// allowance includes map growth, temporary replacement maps and slice capacity.
+func JSONReaderContainerMetadataCapacity(objectBytes uintptr, entries int) (uint64, error) {
+	base := JSONReaderMetadataCapacity(objectBytes)
+	const perEntry uint64 = 1024
+	if entries < 0 || uint64(entries) > (math.MaxUint64-base)/perEntry {
+		return 0, moerr.NewInvalidInputNoCtx("JSON metadata capacity overflow")
+	}
+	return base + uint64(entries)*perEntry, nil
+}
+
 // ReserveJSONReaderMetadata uses the selected statement allocation account if
 // present; otherwise it delegates to the statement's transient admission. A
 // standalone caller with neither has no statement account to charge.
