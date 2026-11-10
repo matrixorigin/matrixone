@@ -543,6 +543,7 @@ func GlobalCap() int64 {
 
 var CapLimit = math.MaxInt32 // 2GB - 1
 
+// Alloc returns zero-initialized storage, including native storage when offHeap is true.
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
 	return mp.allocWithDetailK(detailk, int64(sz), offHeap)
@@ -782,6 +783,7 @@ func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, o
 	return ret[:n:cap], nil
 }
 
+// MakeSlice inherits Alloc's zero-initialization guarantee.
 func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
 	detailk := mp.getDetailK()
 	return makeSliceWithCapWithDetailK[T](detailk, n, n, mp, offHeap)

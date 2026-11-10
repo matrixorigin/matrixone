@@ -71,6 +71,51 @@ func TestMembershipTruthTable(t *testing.T) {
 	}
 }
 
+func TestMembershipSlotsZeroedAfterFree(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })
+	cases := []struct {
+		name  string
+		build *batch.Batch
+		want  [3][2]bool // probe 1, 2, NULL; matched/unknown
+		used  int
+	}{
+		{"duplicates", membershipIntBatch(t, mp, []int32{1, 1}, nil), [3][2]bool{{true, false}, {false, false}, {false, true}}, 1},
+		{"all-null", membershipIntBatch(t, mp, []int32{0, 0}, []bool{true, true}), [3][2]bool{{false, true}, {false, true}, {false, true}}, 0},
+		{"new-key", membershipIntBatch(t, mp, []int32{2, 2}, nil), [3][2]bool{{false, false}, {true, false}, {false, true}}, 1},
+	}
+	probe := membershipIntBatch(t, mp, []int32{1, 2, 0}, []bool{false, false, true})
+	baseline := mp.AllocatedBytes()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			index, err := NewMembershipIndex(context.Background(), []*batch.Batch{tc.build}, 0, types.T_int32.ToType(), mp)
+			require.NoError(t, err)
+			require.NotNil(t, index)
+			defer index.Free()
+			require.Len(t, index.slots, 4)
+			used := 0
+			for _, ref := range index.slots {
+				if ref != 0 {
+					used++
+				}
+			}
+			require.Equal(t, tc.used, used, "only this build's distinct non-NULL key may occupy a slot")
+			for row, want := range tc.want {
+				match, unknown, err := index.Probe(context.Background(), probe.Vecs[0], row)
+				require.NoError(t, err)
+				require.Equal(t, want, [2]bool{match, unknown})
+			}
+			// Dirty every slot before freeing it, including previously empty slots.
+			// A later allocation must be zeroed without relying on address reuse.
+			for i := range index.slots {
+				index.slots[i] = ^uint64(0)
+			}
+		})
+		require.Equal(t, baseline, mp.AllocatedBytes())
+	}
+}
+
 func TestMembershipBorrowedStringsAndConstVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })

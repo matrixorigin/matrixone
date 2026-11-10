@@ -99,6 +99,7 @@ func NewMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, ty
 		return nil, nil
 	}
 	var err error
+	// MPool's native allocation already zero-initializes all empty slots via calloc.
 	index.slots, err = mpool.MakeSlice[uint64](int(slots), mp, true)
 	if err != nil {
 		if canceled := ctx.Err(); canceled != nil {
@@ -109,7 +110,6 @@ func NewMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, ty
 		}
 		return nil, err
 	}
-	clear(index.slots)
 	for b, bat := range batches {
 		vec := bat.Vecs[col]
 		for r := 0; r < bat.RowCount(); r++ {
