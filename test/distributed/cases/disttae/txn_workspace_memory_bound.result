@@ -36,6 +36,28 @@ insert into t values ('three',3);
 select count(*) as n, sum(v) as total from t;
 n	total
 2	13
+create table fits_tx(v tinyint);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',100000,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 100000, bvt_workspace_memory)
+1
+insert into fits_tx select cast(1 as tinyint) from generate_series(1,2048) g;
+select count(*) as n, sum(v) as total from fits_tx;
+n	total
+2048	2048
+insert into fits_tx select cast(9 as tinyint) from generate_series(1,4096) g;
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from fits_tx;
+n	total
+2048	2048
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
 create table copy_tx(v tinyint, payload mediumtext);
 create table rowid_tx(v tinyint);
 select enable_fault_injection();

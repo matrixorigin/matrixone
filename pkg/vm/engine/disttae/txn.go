@@ -629,30 +629,21 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			return nil, err
 		}
 
-		rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVec)
-
-		// Raw WriteBatch callers transfer their existing batch ownership. The
-		// ordinary table Write path already selected the workspace account.
-		if bat.AllocationAccountSelection() == nil {
-			genRowidVec = vector.NewVec(types.T_Rowid.ToType())
+		// A normal INSERT already owns both vectors through this workspace.
+		// Adopt the generated buffer instead of charging and copying it twice.
+		if vector.AllocationAccountSelectionsEqual(bat.AllocationAccountSelection(), rowIdVec.AllocationAccountSelection()) {
+			genRowidVec = rowIdVec
+			bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+			rowIdVec = nil // the batch is now the sole release owner
 		} else {
-			genRowidVec, err = txn.newWorkspaceVector(types.T_Rowid.ToType())
+			// Raw WriteBatch callers retain their destination provenance. Their
+			// rowids cross an ownership boundary, so an independent copy is needed.
+			genRowidVec, err = rowIdVec.CloneToFlatCompactWithAllocation(txn.proc.Mp(), bat.AllocationAccountSelection())
 			if err != nil {
 				return nil, err
 			}
+			bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
 		}
-		for i := 0; i < ll; i++ {
-			if err := vector.AppendFixed(
-				genRowidVec,
-				rowIds[i],
-				false,
-				txn.proc.Mp(),
-			); err != nil {
-				genRowidVec.Free(txn.proc.Mp())
-				return nil, err
-			}
-		}
-		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
 
 	}
 

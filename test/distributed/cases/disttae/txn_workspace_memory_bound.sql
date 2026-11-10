@@ -20,6 +20,17 @@ update t set v=10 where pk='two';
 delete from t where pk='one';
 insert into t values ('three',3);
 select count(*) as n, sum(v) as total from t;
+-- One rowid buffer fits this budget; a second simultaneous copy does not.
+create table fits_tx(v tinyint);
+select enable_fault_injection();
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',100000,'bvt_workspace_memory');
+insert into fits_tx select cast(1 as tinyint) from generate_series(1,2048) g;
+select count(*) as n, sum(v) as total from fits_tx;
+-- @regex('.*allocation account capacity exceeded.*', true)
+insert into fits_tx select cast(9 as tinyint) from generate_series(1,4096) g;
+select count(*) as n, sum(v) as total from fits_tx;
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+select disable_fault_injection();
 -- Earlier uncommitted rows and the account must survive statement rollback.
 create table copy_tx(v tinyint, payload mediumtext);
 create table rowid_tx(v tinyint);

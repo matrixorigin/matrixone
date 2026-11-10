@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -186,6 +187,103 @@ func TestWorkspaceAllocationStatementRollbackRetainsEarlierWrites(t *testing.T) 
 			require.Zero(t, account.Snapshot().Used)
 			require.Zero(t, budget.AggregateUsed())
 			require.True(t, generation.Closed())
+		})
+	}
+}
+
+func TestWorkspaceInsertAdoptsRowidsWithinCapacity(t *testing.T) {
+	colexec.NewServer("")
+	for _, limit := range []uint64{1500, 2500} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			txn := newTransactionWithActivePKTableForTest(t, "v")
+			budget := process.MustNewExecutionResourceBudget(limit, limit)
+			parent, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			require.NoError(t, txn.proc.SetExecutionResourceBudgetForTesting(parent))
+			defer parent.Close()
+			defer txn.delTransaction()
+			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+			src := batch.NewWithSize(1)
+			src.Attrs = []string{"v"}
+			src.Vecs[0] = vector.NewVec(types.T_int8.ToType())
+			defer src.Clean(txn.proc.Mp())
+			for range 64 {
+				require.NoError(t, vector.AppendFixed(src.Vecs[0], int8(1), false, txn.proc.Mp()))
+			}
+			src.SetRowCount(64)
+			b, err := txn.copyWorkspaceBatch(src)
+			require.NoError(t, err)
+			defer b.Clean(txn.proc.Mp())
+			before := txn.workspaceAccount.Snapshot().Used
+			rowids, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
+			if limit == 1500 {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Nil(t, rowids)
+				require.Empty(t, txn.writes)
+				require.Equal(t, before, txn.workspaceAccount.Snapshot().Used)
+				b.Clean(txn.proc.Mp()) // the caller still owns an unpublished batch
+			} else {
+				require.NoError(t, err)
+				require.Same(t, rowids, b.Vecs[0])
+				require.Len(t, txn.writes, 1)
+				require.Equal(t, 64, rowids.Length())
+				ids := vector.MustFixedColNoTypeCheck[types.Rowid](rowids)
+				for i, id := range ids {
+					require.Equal(t, uint32(i), id.GetRowOffset())
+				}
+				require.LessOrEqual(t, txn.workspaceAccount.Snapshot().Peak, limit)
+				require.Equal(t, txn.workspaceAccount.Snapshot().Used, txn.workspaceAccount.Snapshot().Peak,
+					"only the final payload and rowid buffers should have been charged")
+			}
+			txn.delTransaction()
+			require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+			require.Zero(t, budget.AggregateUsed())
+		})
+	}
+}
+
+func TestWorkspaceInsertPreservesRawBatchProvenance(t *testing.T) {
+	colexec.NewServer("")
+	for _, accounted := range []bool{false, true} {
+		t.Run(fmt.Sprint(accounted), func(t *testing.T) {
+			txn := newTransactionWithActivePKTableForTest(t, "v")
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+			parent, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			require.NoError(t, txn.proc.SetExecutionResourceBudgetForTesting(parent))
+			defer parent.Close()
+			defer txn.delTransaction()
+			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+			b := batch.NewWithSize(1)
+			var account *mpool.AllocationAccount
+			var selection *vector.AllocationAccountSelection
+			registry, err := parent.AllocationAccountRegistry()
+			require.NoError(t, err)
+			if accounted {
+				account, err = registry.OpenWithController(1<<20, parent)
+				require.NoError(t, err)
+				defer func() { _, _, err := registry.CompleteTerminal(account); require.NoError(t, err) }()
+				selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDML, 1, 2, 3, 4)
+				require.NoError(t, err)
+				b = batch.NewOffHeapWithSize(1)
+				require.NoError(t, b.SetAllocationAccount(selection))
+				b.SetVector(0, vector.NewOffHeapVecWithType(types.T_int8.ToType()))
+			} else {
+				b.SetVector(0, vector.NewVec(types.T_int8.ToType()))
+			}
+			defer b.Clean(txn.proc.Mp())
+			b.Attrs = []string{"v"}
+			require.NoError(t, vector.AppendFixed(b.Vecs[0], int8(1), false, txn.proc.Mp()))
+			b.SetRowCount(1)
+			rowids, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
+			require.NoError(t, err)
+			require.True(t, vector.AllocationAccountSelectionsEqual(selection, rowids.AllocationAccountSelection()))
+			require.Zero(t, txn.workspaceAccount.Snapshot().Used, "temporary workspace rowids were released")
+			txn.delTransaction()
+			require.Zero(t, budget.AggregateUsed())
+			if account != nil {
+				require.Zero(t, account.Snapshot().Used)
+			}
 		})
 	}
 }
