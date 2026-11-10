@@ -510,6 +510,12 @@ func (r *txnRecordedUnpublished) takeAll() (names []string, took bool) {
 
 // Transaction represents a transaction
 type Transaction struct {
+	workspaceAllocationMu     sync.Mutex
+	workspaceGeneration       *process.ExecutionResourceGeneration
+	workspaceAccount          *mpool.AllocationAccount
+	workspaceSelection        *vector.AllocationAccountSelection
+	workspaceAllocationClosed bool
+
 	catalogVisibilityRevision atomic.Uint64
 	catalogMutations          atomic.Int64
 	sync.Mutex
