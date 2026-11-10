@@ -16,11 +16,13 @@ package colexec
 
 import (
 	"io"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,6 +34,7 @@ type jsonLiteralExpressionExecutor struct {
 	raw        string
 	null       bool
 	allocation *vector.AllocationAccountSelection
+	release    func()
 }
 
 func newJSONLiteralExpressionExecutor(proc *process.Process, literal *plan.Literal, allocation *vector.AllocationAccountSelection) (*jsonLiteralExpressionExecutor, error) {
@@ -42,10 +45,19 @@ func newJSONLiteralExpressionExecutor(proc *process.Process, literal *plan.Liter
 	if _, err := DecodeLiteralStringSource(literal); err != nil {
 		return nil, err
 	}
+	admission, err := function.JSONReaderMemoryAdmissionForEvaluation(proc)
+	if err != nil {
+		return nil, err
+	}
+	release, err := vector.ReserveJSONReaderMetadata(allocation, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonLiteralExpressionExecutor{})))
+	if err != nil {
+		return nil, err
+	}
 	source := &jsonLiteralExpressionExecutor{
 		JSONReaderExpressionExecutor: JSONReaderExpressionExecutor{proc: proc},
 		null:                         literal.GetIsnull(),
 		allocation:                   allocation,
+		release:                      release,
 	}
 	if isString {
 		source.raw = value.Sval
@@ -57,12 +69,34 @@ func newJSONLiteralExpressionExecutor(proc *process.Process, literal *plan.Liter
 	return source, nil
 }
 
-func (source *jsonLiteralExpressionExecutor) constantJSONReader() (vector.JSONReader, error) {
+func (source *jsonLiteralExpressionExecutor) constantJSONReader() (_ vector.JSONReader, err error) {
+	acquired := false
+	defer func() {
+		if acquired && err != nil {
+			source.release()
+			source.release = nil
+		}
+	}()
 	if source.proc == nil {
 		return nil, io.ErrClosedPipe
 	}
+	if source.release == nil {
+		admission, err := function.JSONReaderMemoryAdmissionForEvaluation(source.proc)
+		if err != nil {
+			return nil, err
+		}
+		source.release, err = vector.ReserveJSONReaderMetadata(source.allocation, admission, vector.JSONReaderMetadataCapacity(unsafe.Sizeof(jsonLiteralExpressionExecutor{})))
+		if err != nil {
+			return nil, err
+		}
+		acquired = true
+	}
 	if source.reader == nil {
-		builder, err := vector.NewJSONReaderBuilder(source.proc.Mp(), source.allocation)
+		admission, err := function.JSONReaderMemoryAdmissionForEvaluation(source.proc)
+		if err != nil {
+			return nil, err
+		}
+		builder, err := vector.NewJSONReaderBuilder(source.proc.Mp(), source.allocation, admission)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +143,16 @@ func (source *jsonLiteralExpressionExecutor) EvalWithoutResultReusing(proc *proc
 	return reader.Materialize(source.proc.Mp())
 }
 
+func (source *jsonLiteralExpressionExecutor) ResetForNextQuery() {
+	source.JSONReaderExpressionExecutor.ResetForNextQuery()
+	if source.release != nil {
+		source.release()
+		source.release = nil
+	}
+}
+
 func (source *jsonLiteralExpressionExecutor) Free() {
+	source.ResetForNextQuery()
 	source.JSONReaderExpressionExecutor.Free()
 	source.raw = ""
 }

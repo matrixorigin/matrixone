@@ -87,6 +87,9 @@ type container struct {
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
+	projection.ctr.jsonInputs.Close()
+	projection.ctr.jsonInputs = nil
+	projection.ctr.jsonColumns = nil
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
 	projection.ctr.inputSeen = false
@@ -105,6 +108,7 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
 	projection.freeExpandOwned(proc)
+	projection.ctr.jsonInputs.Close()
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {
 			projection.ctr.projExecutors[i].Free()

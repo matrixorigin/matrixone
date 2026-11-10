@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -32,14 +33,39 @@ type jsonReadSetKey struct{}
 type JSONReadSet struct {
 	selection *vector.AllocationAccountSelection
 	cachePin  JSONCachePinAdmission
+	scopeMeta func()
 	requested []int
 	sequences map[uint16]int
 	readers   map[int]vector.JSONReader
 	disabled  bool
 }
 
-// SetCachePinAdmission binds retained cache backing to this read's statement
-// budget. The callback is invoked only if a private cache version is opened.
+// NewJSONReadSetWithAdmission reserves the read scope's control maps and slice
+// before publication. SQL callers must supply the statement selection or its
+// transient-memory admission; no scope is prepared for empty demand.
+func NewJSONReadSetWithAdmission(columns []int, selection *vector.AllocationAccountSelection, admission vector.JSONReaderMemoryAdmission) (*JSONReadSet, error) {
+	if len(columns) == 0 {
+		return nil, nil
+	}
+	if selection == nil && admission == nil {
+		return nil, moerr.NewInvalidInputNoCtx("JSON read scope requires statement accounting")
+	}
+	capacity, err := vector.JSONReaderContainerMetadataCapacity(unsafe.Sizeof(JSONReadSet{}), len(columns))
+	if err != nil {
+		return nil, err
+	}
+	release, err := vector.ReserveJSONReaderMetadata(selection, admission, capacity)
+	if err != nil {
+		return nil, err
+	}
+	set := NewJSONReadSet(columns, selection)
+	set.cachePin = admission
+	set.scopeMeta = release
+	return set, nil
+}
+
+// SetCachePinAdmission binds retained cache backing and reader metadata to the
+// read's statement budget. Accounted SQL scopes set this at construction.
 func (set *JSONReadSet) SetCachePinAdmission(admission JSONCachePinAdmission) {
 	if set != nil && !set.disabled {
 		set.cachePin = admission
@@ -132,8 +158,14 @@ func (set *JSONReadSet) Disable() {
 	for _, reader := range set.readers {
 		reader.Close()
 	}
-	clear(set.readers)
+	set.readers = nil
+	set.sequences = nil
+	set.requested = nil
 	set.cachePin = nil
+	if set.scopeMeta != nil {
+		set.scopeMeta()
+		set.scopeMeta = nil
+	}
 	set.disabled = true
 }
 func (set *JSONReadSet) Close() { set.Disable() }
@@ -263,7 +295,7 @@ func (set *JSONReadSet) publishMutableColumns(columns []*vector.Vector, mp *mpoo
 		if len(rowDomain) != 0 {
 			rows = rowDomain[0]
 		}
-		reader, invalid, snapshotErr := vector.TryNewJSONReaderSnapshotForRows(columns[ordinal], rows, mp, selection)
+		reader, invalid, snapshotErr := vector.TryNewJSONReaderSnapshotForRows(columns[ordinal], rows, mp, selection, set.cachePin)
 		if snapshotErr != nil {
 			if deferInvalid && invalid {
 				set.Disable()

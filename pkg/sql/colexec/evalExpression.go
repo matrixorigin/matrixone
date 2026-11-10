@@ -686,6 +686,7 @@ type FunctionExpressionExecutor struct {
 	// A JSON_VALUE document constructor may publish its constant result
 	// privately instead of first folding into an ordinary mutable Vector.
 	jsonConstructorInput    bool
+	jsonProjectionProbe     bool // preparation-local traversal mark; cleared before return
 	jsonConstructorConstant vector.JSONReader
 	m                       *mpool.MPool
 	allocation              *vector.AllocationAccountSelection

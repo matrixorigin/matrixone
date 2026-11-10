@@ -58,12 +58,17 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return err
 		}
-		projection.ctr.jsonInputs = colexec.PrepareJSONProjectionInputs(proc, projection.ctr.projExecutors)
-		projection.ctr.jsonColumns = projection.ctr.jsonInputs.Columns()
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
 			projection.ctr.expandBuf = batch.NewWithSize(len(projection.ProjectList))
 		}
+	}
+	if projection.ctr.jsonInputs == nil {
+		projection.ctr.jsonInputs, err = colexec.PrepareJSONProjectionInputs(proc, projection.ctr.projExecutors)
+		if err != nil {
+			return err
+		}
+		projection.ctr.jsonColumns = projection.ctr.jsonInputs.Columns()
 	}
 	if projection.GroupingSetCount > 0 {
 		if len(projection.ProjectList) < 3 || len(projection.GroupingFlags) == 0 ||
@@ -88,7 +93,9 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 
 	if len(projection.ctr.jsonColumns) != 0 {
 		if source, ok := projection.GetChildren(0).(colexec.JSONInputRequester); ok {
-			source.RequestJSONInputs(projection.ctr.jsonColumns)
+			if err := source.RequestJSONInputs(proc, projection.ctr.jsonColumns); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 	}
 	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, analyzer)
@@ -111,7 +118,7 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	bat := result.Batch
 	projection.ctr.inputSeen = true
 
-	var versions map[int]vector.JSONReader
+	var versions *colexec.JSONInputVersions
 	if len(projection.ctr.jsonColumns) != 0 {
 		if publisher, ok := projection.GetChildren(0).(colexec.JSONInputPublisher); ok {
 			versions, err = publisher.PublishJSONInputs(proc, bat, projection.ctr.jsonColumns)
@@ -120,7 +127,11 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 			}
 			defer colexec.CloseJSONInputVersions(versions)
 		}
-		if err := projection.ctr.jsonInputs.Bind(proc, bat, nil, versions); err != nil {
+		var readers map[int]vector.JSONReader
+		if versions != nil {
+			readers = versions.Readers
+		}
+		if err := projection.ctr.jsonInputs.Bind(proc, bat, nil, readers); err != nil {
 			return vm.CancelResult, err
 		}
 		defer projection.ctr.jsonInputs.Release()

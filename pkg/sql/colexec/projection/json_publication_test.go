@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -35,21 +36,26 @@ type observingJSONMerge struct {
 	calls     int
 }
 
-func (source *observingJSONMerge) PublishJSONInputs(proc *process.Process, input *batch.Batch, columns []int) (map[int]vector.JSONReader, error) {
+func (source *observingJSONMerge) PublishJSONInputs(proc *process.Process, input *batch.Batch, columns []int) (*colexec.JSONInputVersions, error) {
 	readers, err := source.Merge.PublishJSONInputs(proc, input, columns)
 	if err != nil {
 		return nil, err
 	}
 	source.calls++
-	source.published = readers // borrowed probes; the projection owns these handles
+	source.published = make(map[int]vector.JSONReader, len(readers.Readers))
+	for column, reader := range readers.Readers {
+		source.published[column] = reader // borrowed probes; the projection owns the handles
+	}
 	// The ordinary received batch may change after publication. Consumers must
 	// use the published version, not re-admit its mutable materialization.
 	changed, err := types.ParseStringToByteJson(`{"keep":9,"second":8}`)
 	if err != nil {
+		colexec.CloseJSONInputVersions(readers)
 		return nil, err
 	}
 	raw, err := changed.Marshal()
 	if err != nil {
+		colexec.CloseJSONInputVersions(readers)
 		return nil, err
 	}
 	copy(input.Vecs[0].GetBytesAt(0), raw)

@@ -37,22 +37,30 @@ func TestJSONInputPublicationReleasesPartialVersions(t *testing.T) {
 	input.SetRowCount(1)
 	input.Vecs[1].GetBytesAt(0)[0] = 0xfd
 	before := proc.Mp().CurrNB()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	beforeBudget := budget.Snapshot().Used
 	readers, err := PublishJSONInputSnapshots(proc, input, []int{0, 1})
 	require.Error(t, err)
 	require.Nil(t, readers)
 	require.Equal(t, before, proc.Mp().CurrNB())
+	require.Equal(t, beforeBudget, budget.Snapshot().Used)
 	readers, err = PublishJSONInputSnapshotsForEvaluation(proc, input, []int{0, 1, 1})
 	require.NoError(t, err)
-	require.NotNil(t, readers[0])
-	declined, exists := readers[1]
+	require.NotNil(t, readers.Readers[0])
+	declined, exists := readers.Readers[1]
 	require.True(t, exists)
 	require.Nil(t, declined, "malformed input must never publish a reader")
+	require.Greater(t, budget.Snapshot().Used, beforeBudget, "publication maps and readers must be charged")
 	CloseJSONInputVersions(readers)
+	require.Nil(t, readers.Readers)
 	require.Equal(t, before, proc.Mp().CurrNB())
+	require.Equal(t, beforeBudget, budget.Snapshot().Used)
 	require.NoError(t, vector.SetBytesAt(input.Vecs[1], 0, input.Vecs[0].GetBytesAt(0), proc.Mp()))
 	readers, err = PublishJSONInputSnapshots(proc, input, []int{0, 0, 1})
 	require.NoError(t, err)
-	require.Len(t, readers, 2)
+	require.Len(t, readers.Readers, 2)
 	CloseJSONInputVersions(readers)
 	require.Equal(t, before, proc.Mp().CurrNB())
+	require.Equal(t, beforeBudget, budget.Snapshot().Used)
 }

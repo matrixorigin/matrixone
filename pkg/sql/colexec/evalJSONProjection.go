@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,36 +30,127 @@ import (
 type JSONProjectionInputs []projectionJSONInput
 
 type projectionJSONInput struct {
-	column int
-	source *JSONReaderExpressionExecutor
+	column   int
+	source   *JSONReaderExpressionExecutor
+	executor *FunctionExpressionExecutor
+	scope    *JSONMetadataScope
+}
+
+func projectionJSONSource(expr *FunctionExpressionExecutor) *ColumnExpressionExecutor {
+	if expr.fid != function.JSON_VALUE || len(expr.parameterExecutor) == 0 {
+		return nil
+	}
+	column := projectionJSONColumn(expr.parameterExecutor[0])
+	if column == nil || column.relIndex != 0 || column.typ.Oid != types.T_json {
+		return nil
+	}
+	return column
+}
+
+// hasJSONProjectionSource uses only preparation-local marks in existing
+// executors. The second walk clears every mark, including shared memo nodes.
+// It does not allocate a discovery map for projections without JSON_VALUE.
+func hasJSONProjectionSource(roots []ExpressionExecutor) bool {
+	var visit func(ExpressionExecutor) bool
+	visit = func(executor ExpressionExecutor) bool {
+		switch expr := executor.(type) {
+		case *memoRootExpressionExecutor:
+			return visit(expr.executor)
+		case *memoExpressionExecutor:
+			return expr.state != nil && visit(expr.state.executor)
+		case *FunctionExpressionExecutor:
+			if expr.jsonProjectionProbe {
+				return false
+			}
+			expr.jsonProjectionProbe = true
+			if projectionJSONSource(expr) != nil {
+				return true
+			}
+			for _, parameter := range expr.parameterExecutor {
+				if visit(parameter) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var clearMarks func(ExpressionExecutor)
+	clearMarks = func(executor ExpressionExecutor) {
+		switch expr := executor.(type) {
+		case *memoRootExpressionExecutor:
+			clearMarks(expr.executor)
+		case *memoExpressionExecutor:
+			if expr.state != nil {
+				clearMarks(expr.state.executor)
+			}
+		case *FunctionExpressionExecutor:
+			if !expr.jsonProjectionProbe {
+				return
+			}
+			expr.jsonProjectionProbe = false
+			for _, parameter := range expr.parameterExecutor {
+				clearMarks(parameter)
+			}
+		}
+	}
+	defer func() {
+		for _, root := range roots {
+			clearMarks(root)
+		}
+	}()
+	for _, root := range roots {
+		if visit(root) {
+			return true
+		}
+	}
+	return false
 }
 
 // PrepareJSONProjectionInputs discovers bindings once, not per row or lookup.
 // Only a JSON_VALUE document column is replaced; other consumers retain their ordinary input.
-func PrepareJSONProjectionInputs(proc *process.Process, roots []ExpressionExecutor) JSONProjectionInputs {
+func PrepareJSONProjectionInputs(proc *process.Process, roots []ExpressionExecutor, selections ...*vector.AllocationAccountSelection) (JSONProjectionInputs, error) {
+	if !hasJSONProjectionSource(roots) {
+		return nil, nil
+	}
+	var selection *vector.AllocationAccountSelection
+	if len(selections) != 0 {
+		selection = selections[0]
+	}
+	admission, err := function.JSONReaderMemoryAdmissionForEvaluation(proc)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := newJSONMetadataScopeWithAdmission(selection, admission, 4)
+	if err != nil {
+		return nil, err
+	}
 	inputs := make(JSONProjectionInputs, 0)
 	seen := make(map[*FunctionExpressionExecutor]bool)
+	var walkErr error
 	var visit func(ExpressionExecutor)
 	visit = func(executor ExpressionExecutor) {
-		if executor == nil {
+		if executor == nil || walkErr != nil {
 			return
 		}
 		switch expr := executor.(type) {
 		case *memoRootExpressionExecutor:
 			visit(expr.executor)
 		case *memoExpressionExecutor:
-			visit(expr.state.executor)
+			if expr.state != nil {
+				visit(expr.state.executor)
+			}
 		case *FunctionExpressionExecutor:
 			if seen[expr] {
 				return
 			}
+			if walkErr = scope.Ensure(len(seen) + 1); walkErr != nil {
+				return
+			}
 			seen[expr] = true
-			if expr.fid == function.JSON_VALUE && len(expr.parameterExecutor) > 0 {
-				if column := projectionJSONColumn(expr.parameterExecutor[0]); column != nil && column.relIndex == 0 && column.typ.Oid == types.T_json {
-					source := &JSONReaderExpressionExecutor{original: expr.parameterExecutor[0], proc: proc}
-					expr.parameterExecutor[0] = source
-					inputs = append(inputs, projectionJSONInput{column: column.colIndex, source: source})
-				}
+			if column := projectionJSONSource(expr); column != nil {
+				source := &JSONReaderExpressionExecutor{original: expr.parameterExecutor[0], proc: proc}
+				expr.parameterExecutor[0] = source
+				inputs = append(inputs, projectionJSONInput{column: column.colIndex, source: source, executor: expr, scope: scope})
 			}
 			for _, parameter := range expr.parameterExecutor {
 				visit(parameter)
@@ -67,7 +160,19 @@ func PrepareJSONProjectionInputs(proc *process.Process, roots []ExpressionExecut
 	for _, root := range roots {
 		visit(root)
 	}
-	return inputs
+	if walkErr != nil {
+		if len(inputs) == 0 {
+			scope.Close()
+		} else {
+			inputs.Close()
+		}
+		return nil, walkErr
+	}
+	if len(inputs) == 0 {
+		scope.Close()
+		return nil, nil
+	}
+	return inputs, nil
 }
 
 // Bind creates one version per source column for this read-only
@@ -79,6 +184,19 @@ func (inputs JSONProjectionInputs) Bind(proc *process.Process, input *batch.Batc
 	if len(inputs) == 0 {
 		return nil
 	}
+	admission, err := function.JSONReaderMemoryAdmission(proc)
+	if err != nil {
+		return err
+	}
+	capacity, err := vector.JSONReaderContainerMetadataCapacity(unsafe.Sizeof(map[int]vector.JSONReader(nil)), len(inputs))
+	if err != nil {
+		return err
+	}
+	releaseMeta, err := vector.ReserveJSONReaderMetadata(nil, admission, capacity)
+	if err != nil {
+		return err
+	}
+	defer releaseMeta()
 	readers := make(map[int]vector.JSONReader)
 	var declined map[int]struct{}
 	defer func() {
@@ -123,7 +241,7 @@ func (inputs JSONProjectionInputs) Bind(proc *process.Process, input *batch.Batc
 				allocation = input.Vecs[binding.column].AllocationAccountSelection()
 			}
 			var invalid bool
-			reader, invalid, err = vector.TryNewJSONReaderSnapshotForRows(input.Vecs[binding.column], input.RowCount(), proc.Mp(), allocation)
+			reader, invalid, err = vector.TryNewJSONReaderSnapshotForRows(input.Vecs[binding.column], input.RowCount(), proc.Mp(), allocation, admission)
 			if err != nil {
 				if invalid {
 					err = nil
@@ -146,8 +264,34 @@ func (inputs JSONProjectionInputs) Bind(proc *process.Process, input *batch.Batc
 
 func (inputs JSONProjectionInputs) Release() {
 	for _, binding := range inputs {
-		binding.source.ResetForNextQuery()
+		if binding.source != nil {
+			binding.source.ResetForNextQuery()
+		}
 	}
+}
+
+// Close removes preparation-only wrappers and releases their statement budget.
+// It is used at Reset/Free so a later execution rebuilds its own bindings.
+func (inputs JSONProjectionInputs) Close() {
+	if len(inputs) == 0 {
+		return
+	}
+	scope := inputs[0].scope
+	for i := range inputs {
+		binding := &inputs[i]
+		if binding.source == nil || binding.executor == nil {
+			continue
+		}
+		if len(binding.executor.parameterExecutor) != 0 && binding.executor.parameterExecutor[0] == binding.source {
+			binding.executor.parameterExecutor[0] = binding.source.original
+		}
+		binding.source.original = nil
+		binding.source.Free()
+		binding.source = nil
+		binding.executor = nil
+		binding.scope = nil
+	}
+	scope.Close()
 }
 
 func projectionJSONColumn(source ExpressionExecutor) *ColumnExpressionExecutor {

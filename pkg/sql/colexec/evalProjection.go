@@ -54,7 +54,10 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 		}
 	}
 	if projection.jsonInputs == nil {
-		projection.jsonInputs = PrepareJSONProjectionInputs(proc, projection.ProjectExecutors)
+		projection.jsonInputs, err = PrepareJSONProjectionInputs(proc, projection.ProjectExecutors, selection)
+		if err != nil {
+			return err
+		}
 	}
 	if projection.projectBat == nil {
 		projection.projectBat = batch.NewOffHeapWithSize(len(projection.ProjectList))
@@ -109,6 +112,8 @@ func (projection *Projection) evalProjection(bat *batch.Batch, proc *process.Pro
 }
 
 func (projection *Projection) ResetProjection(proc *process.Process) {
+	projection.jsonInputs.Close()
+	projection.jsonInputs = nil
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].ResetForNextQuery()
@@ -118,6 +123,7 @@ func (projection *Projection) ResetProjection(proc *process.Process) {
 }
 
 func (projection *Projection) FreeProjection(proc *process.Process) {
+	projection.jsonInputs.Close()
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].Free()

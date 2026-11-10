@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -24,6 +25,56 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJSONReadSetMetadataAdmissionAndRelease(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	var live uint64
+	admission := func(capacity uint64) (func(), error) {
+		live += capacity
+		return func() { live -= capacity }, nil
+	}
+	empty, err := NewJSONReadSetWithAdmission(nil, nil, admission)
+	require.NoError(t, err)
+	require.Nil(t, empty)
+	require.Zero(t, live)
+	set, err := NewJSONReadSetWithAdmission([]int{0, 1}, nil, admission)
+	require.NoError(t, err)
+	require.NotNil(t, set)
+	defer set.Close()
+	initial := live
+	require.Positive(t, initial)
+	columns := []*vector.Vector{vector.NewVec(types.T_json.ToType()), vector.NewVec(types.T_json.ToType())}
+	defer func() {
+		for _, column := range columns {
+			column.Free(mp)
+		}
+	}()
+	for _, column := range columns {
+		doc, e := types.ParseStringToByteJson(`{"keep":1}`)
+		require.NoError(t, e)
+		require.NoError(t, vector.AppendByteJson(column, doc, false, mp))
+	}
+	require.NoError(t, set.PublishMutableColumns(columns, mp))
+	require.Greater(t, live, initial, "published reader metadata is separately charged")
+	set.Close()
+	set.Close()
+	require.Zero(t, live)
+	require.Nil(t, set.readers)
+	require.Nil(t, set.sequences)
+	require.Nil(t, set.requested)
+
+	want := errors.New("scope admission rejected")
+	partial := 0
+	set, err = NewJSONReadSetWithAdmission([]int{0}, nil, func(uint64) (func(), error) {
+		return func() { partial++ }, want
+	})
+	require.ErrorIs(t, err, want)
+	require.Nil(t, set)
+	require.Equal(t, 1, partial)
+	_, err = NewJSONReadSetWithAdmission([]int{0}, nil, nil)
+	require.Error(t, err)
+}
 
 func TestJSONReadSetOwnsPublishedVersions(t *testing.T) {
 	mp := mpool.MustNewZero()

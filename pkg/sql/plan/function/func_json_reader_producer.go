@@ -60,7 +60,7 @@ func EvalJSONConstructorReader(fid int32, params []*vector.Vector, proc *process
 			!params[0].GetType().Oid.IsMySQLString() && params[0].GetType().Oid != types.T_json && params[0].GetType().Oid != types.T_any {
 			return nil, moerr.NewInvalidInputNoCtx("unsupported JSON reader cast")
 		}
-		builder, err := vector.NewJSONReaderBuilder(proc.Mp(), allocation)
+		builder, err := newJSONReaderBuilderForEvaluation(proc, allocation)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +95,7 @@ func EvalJSONConstructorReader(fid int32, params []*vector.Vector, proc *process
 			}
 		}
 	}
-	builder, err := vector.NewJSONReaderBuilder(proc.Mp(), allocation)
+	builder, err := newJSONReaderBuilderForEvaluation(proc, allocation)
 	if err != nil {
 		return nil, err
 	}

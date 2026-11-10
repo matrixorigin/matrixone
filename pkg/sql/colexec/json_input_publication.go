@@ -25,20 +25,45 @@ import (
 // JSONInputRequester declares demand before a producer reads its next batch.
 // Column ordinals describe that producer's actual output schema.
 type JSONInputRequester interface {
-	RequestJSONInputs([]int)
+	RequestJSONInputs(*process.Process, []int) error
 }
 
 // JSONInputPublisher is optional at a producer's synchronous delivery boundary.
 // The batch must stay stable while publishing. The consuming caller owns and
 // closes all returned handles; the producer keeps no publication state.
 type JSONInputPublisher interface {
-	PublishJSONInputs(*process.Process, *batch.Batch, []int) (map[int]vector.JSONReader, error)
+	PublishJSONInputs(*process.Process, *batch.Batch, []int) (*JSONInputVersions, error)
+}
+
+// JSONInputVersions owns a publication map and its retained reader handles.
+// The map and its admission closure are charged to the execution generation.
+type JSONInputVersions struct {
+	Readers map[int]vector.JSONReader
+	scope   *JSONMetadataScope
+}
+
+func NewJSONInputVersions(proc *process.Process, columns int) (*JSONInputVersions, error) {
+	if columns <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("JSON input versions require columns")
+	}
+	scope, err := NewJSONMetadataScope(proc, nil, columns)
+	if err != nil {
+		return nil, err
+	}
+	return &JSONInputVersions{Readers: make(map[int]vector.JSONReader, columns), scope: scope}, nil
+}
+
+func (versions *JSONInputVersions) MemoryAdmission() vector.JSONReaderMemoryAdmission {
+	if versions == nil {
+		return nil
+	}
+	return versions.scope.Admission()
 }
 
 // PublishJSONInputSnapshots admits delivered mutable columns, including wire
 // receive buffers with unknown aliases. It neither seals those buffers nor
 // serializes qualification. A partial publication is released on error.
-func PublishJSONInputSnapshots(proc *process.Process, input *batch.Batch, columns []int) (readers map[int]vector.JSONReader, err error) {
+func PublishJSONInputSnapshots(proc *process.Process, input *batch.Batch, columns []int) (*JSONInputVersions, error) {
 	return publishJSONInputSnapshots(proc, input, columns, false)
 }
 
@@ -46,27 +71,30 @@ func PublishJSONInputSnapshots(proc *process.Process, input *batch.Batch, column
 // failures to JSON_VALUE's ordinary evaluator, preserving its row and path
 // short-circuits. A present nil value means no reader was published; it is not
 // an authority to query the original bytes without full validation.
-func PublishJSONInputSnapshotsForEvaluation(proc *process.Process, input *batch.Batch, columns []int) (map[int]vector.JSONReader, error) {
+func PublishJSONInputSnapshotsForEvaluation(proc *process.Process, input *batch.Batch, columns []int) (*JSONInputVersions, error) {
 	return publishJSONInputSnapshots(proc, input, columns, true)
 }
 
-func publishJSONInputSnapshots(proc *process.Process, input *batch.Batch, columns []int, deferInvalid bool) (readers map[int]vector.JSONReader, err error) {
+func publishJSONInputSnapshots(proc *process.Process, input *batch.Batch, columns []int, deferInvalid bool) (versions *JSONInputVersions, err error) {
 	if len(columns) == 0 || input == nil || input.IsEmpty() || input.Last() {
 		return nil, nil
 	}
-	readers = make(map[int]vector.JSONReader, len(columns))
-	published := readers
+	versions, err = NewJSONInputVersions(proc, len(columns))
+	if err != nil {
+		return nil, err
+	}
+	published := versions
 	defer func() {
 		if err != nil {
 			CloseJSONInputVersions(published)
-			readers = nil
+			versions = nil
 		}
 	}()
 	for _, column := range columns {
 		if err = proc.Ctx.Err(); err != nil {
 			return nil, err
 		}
-		if _, exists := readers[column]; exists {
+		if _, exists := versions.Readers[column]; exists {
 			continue
 		}
 		if column < 0 || column >= len(input.Vecs) || input.Vecs[column] == nil || input.Vecs[column].GetType().Oid != types.T_json {
@@ -74,7 +102,7 @@ func publishJSONInputSnapshots(proc *process.Process, input *batch.Batch, column
 		}
 		source := input.Vecs[column]
 		var invalid bool
-		readers[column], invalid, err = vector.TryNewJSONReaderSnapshotForRows(source, input.RowCount(), proc.Mp(), source.AllocationAccountSelection())
+		versions.Readers[column], invalid, err = vector.TryNewJSONReaderSnapshotForRows(source, input.RowCount(), proc.Mp(), source.AllocationAccountSelection(), versions.MemoryAdmission())
 		if err != nil {
 			if deferInvalid && invalid {
 				err = nil
@@ -83,13 +111,19 @@ func publishJSONInputSnapshots(proc *process.Process, input *batch.Batch, column
 			return nil, err
 		}
 	}
-	return readers, nil
+	return versions, nil
 }
 
-func CloseJSONInputVersions(readers map[int]vector.JSONReader) {
-	for _, reader := range readers {
+func CloseJSONInputVersions(versions *JSONInputVersions) {
+	if versions == nil {
+		return
+	}
+	for _, reader := range versions.Readers {
 		if reader != nil {
 			reader.Close()
 		}
 	}
+	versions.Readers = nil
+	versions.scope.Close()
+	versions.scope = nil
 }

@@ -37,6 +37,7 @@ type container struct {
 	jsonColumns               []int
 	jsonDeliveryColumns       map[int]int
 	jsonPublication           *objectio.JSONReadSet
+	jsonRequestMeta           *colexec.JSONMetadataScope
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
@@ -112,6 +113,10 @@ func (tableScan *TableScan) Release() {
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	clear(tableScan.ctr.jsonDeliveryColumns)
+	tableScan.ctr.jsonDeliveryColumns = nil
+	tableScan.ctr.jsonColumns = nil
+	tableScan.ctr.jsonRequestMeta.Close()
+	tableScan.ctr.jsonRequestMeta = nil
 	if tableScan.ctr.jsonPublication != nil {
 		tableScan.ctr.jsonPublication.Close()
 		tableScan.ctr.jsonPublication = nil
@@ -156,6 +161,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
 	tableScan.ctr.jsonDeliveryColumns = nil
+	tableScan.ctr.jsonColumns = nil
+	tableScan.ctr.jsonRequestMeta.Close()
+	tableScan.ctr.jsonRequestMeta = nil
 	if tableScan.ctr.jsonPublication != nil {
 		tableScan.ctr.jsonPublication.Close()
 		tableScan.ctr.jsonPublication = nil

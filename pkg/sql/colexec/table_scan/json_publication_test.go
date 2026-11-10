@@ -27,6 +27,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -81,7 +82,7 @@ func testTableScanPublishedJSONVersion(t *testing.T, filtered bool, accounted ..
 		releasePin()
 		require.Equal(t, beforePin, budget.Snapshot().Used)
 		publication.BindColumns([]uint16{0, 1})
-		builder, err := vector.NewJSONReaderBuilder(mp, out.Vecs[0].AllocationAccountSelection())
+		builder, err := vector.NewJSONReaderBuilder(mp, out.Vecs[0].AllocationAccountSelection(), publication.CachePinAdmission())
 		require.NoError(t, err)
 		defer builder.Close()
 		for _, text := range []string{`{"keep":1}`, `{"keep":2}`} {
@@ -174,6 +175,9 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 	for _, mode := range []string{"partial", "cancel", "row-domain"} {
 		t.Run(mode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			beforeBudget := budget.Snapshot().Used
 			input := batch.NewWithSize(2)
 			defer input.Clean(proc.Mp())
 			doc, err := types.ParseStringToByteJson(`{"keep":1}`)
@@ -185,7 +189,9 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 				require.NoError(t, vector.AppendBytes(input.Vecs[i], raw, false, proc.Mp()))
 			}
 			input.SetRowCount(1)
-			builder, err := vector.NewJSONReaderBuilder(proc.Mp(), nil)
+			admission, err := function.JSONReaderMemoryAdmission(proc)
+			require.NoError(t, err)
+			builder, err := vector.NewJSONReaderBuilder(proc.Mp(), nil, admission)
 			require.NoError(t, err)
 			defer builder.Close()
 			require.NoError(t, builder.Append(raw, false))
@@ -194,12 +200,13 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 			}
 			version, err := builder.Finish()
 			require.NoError(t, err)
-			set := objectio.NewJSONReadSet([]int{0, 1})
+			set, err := objectio.NewJSONReadSetWithAdmission([]int{0, 1}, nil, admission)
+			require.NoError(t, err)
 			set.BindColumns([]uint16{0, 1})
 			set.Publish(0, version)
 			scan := &TableScan{}
 			scan.ctr.jsonPublication = set
-			scan.RequestJSONInputs([]int{0, 1})
+			require.NoError(t, scan.RequestJSONInputs(proc, []int{0, 1}))
 			input.Vecs[1].GetBytesAt(0)[0] = 0xfd
 			if mode == "cancel" {
 				ctx, cancel := context.WithCancel(proc.Ctx)
@@ -209,11 +216,11 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 			versions, err := scan.PublishJSONInputs(proc, input, []int{0, 1})
 			if mode == "partial" {
 				require.NoError(t, err)
-				require.NotNil(t, versions[0])
-				declined, present := versions[1]
+				require.NotNil(t, versions.Readers[0])
+				declined, present := versions.Readers[1]
 				require.True(t, present)
 				require.Nil(t, declined, "malformed input must be left to evaluation")
-				versions[0].Close()
+				colexec.CloseJSONInputVersions(versions)
 			} else {
 				require.Error(t, err)
 				require.Nil(t, versions)
@@ -221,8 +228,29 @@ func TestTableScanDeliveryReleasesPartialAndCanceledVersions(t *testing.T) {
 			require.Nil(t, scan.ctr.jsonPublication)
 			_, err = version.Window(0, 1)
 			require.Error(t, err, "the Read scope must release its reference on every failure")
+			scan.Reset(proc, false, nil)
+			require.Equal(t, beforeBudget, budget.Snapshot().Used)
 			input.Clean(proc.Mp())
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}
+}
+
+func TestTableScanJSONRequestMetadataReleasedOnReset(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	before := budget.Snapshot().Used
+	scan := &TableScan{}
+	require.NoError(t, scan.RequestJSONInputs(proc, []int{0, 1}))
+	charged := budget.Snapshot().Used
+	require.Greater(t, charged, before)
+	require.NoError(t, scan.RequestJSONInputs(proc, []int{0, 1}))
+	require.Equal(t, charged, budget.Snapshot().Used, "the same demand reuses one request scope")
+	scan.Reset(proc, false, nil)
+	require.Equal(t, before, budget.Snapshot().Used)
+	require.Nil(t, scan.ctr.jsonRequestMeta)
+	require.NoError(t, scan.RequestJSONInputs(proc, []int{0}))
+	scan.Free(proc, false, nil)
+	require.Equal(t, before, budget.Snapshot().Used)
 }

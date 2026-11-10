@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -161,25 +162,14 @@ func (tableScan *TableScan) Call(proc *process.Process) (callResult vm.CallResul
 			tableScan.ctr.jsonPublication = nil
 		}
 		if len(tableScan.ctr.jsonColumns) != 0 {
-			tableScan.ctr.jsonPublication = objectio.NewJSONReadSet(tableScan.ctr.jsonColumns, tableScan.OutputAllocation)
-			tableScan.ctr.jsonPublication.SetCachePinAdmission(func(capacity uint64) (func(), error) {
-				if err := proc.Ctx.Err(); err != nil {
-					return nil, err
-				}
-				budget, err := proc.GetExecutionResourceBudget()
-				if err != nil {
-					return nil, err
-				}
-				reservation, err := budget.ReserveTransientMemory(capacity)
-				if err != nil {
-					return nil, err
-				}
-				if err = proc.Ctx.Err(); err != nil {
-					reservation.Release()
-					return nil, err
-				}
-				return func() { reservation.Release() }, nil
-			})
+			admission, err := function.JSONReaderMemoryAdmission(proc)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			tableScan.ctr.jsonPublication, err = objectio.NewJSONReadSetWithAdmission(tableScan.ctr.jsonColumns, tableScan.OutputAllocation, admission)
+			if err != nil {
+				return vm.CancelResult, err
+			}
 			newCtx = objectio.WithJSONReadSet(newCtx, tableScan.ctr.jsonPublication)
 		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
