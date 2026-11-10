@@ -4718,6 +4718,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.pushdownGroupingExpressions()
+	if len(builder.userWindowNodes) > 1 {
+		for _, rootID := range builder.qry.Steps {
+			builder.fuseWindowNodes(rootID, make(map[int32]bool))
+		}
+	}
 	builder.hintQueryType()
 	for _, scan := range builder.windowValidationScans {
 		if scan == nil {
