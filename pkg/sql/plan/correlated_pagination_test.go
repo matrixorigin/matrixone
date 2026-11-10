@@ -40,6 +40,36 @@ func TestPaginationExpressionSafeDecimalLiteralCast(t *testing.T) {
 	require.False(t, paginationExpressionSafe(cast(column, 38, 0)))
 }
 
+func TestPaginationOuterIntegerLiteralCasts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		input  *plan.Expr
+		target types.T
+		safe   bool
+	}{
+		{"signed minimum", makePlan2Int64ConstExprWithType(-128), types.T_int8, true},
+		{"signed maximum", makePlan2Int64ConstExprWithType(127), types.T_int8, true},
+		{"signed underflow", makePlan2Int64ConstExprWithType(-129), types.T_int8, false},
+		{"signed overflow", makePlan2Int64ConstExprWithType(128), types.T_int8, false},
+		{"unsigned maximum", makePlan2Uint64ConstExprWithType(255), types.T_uint8, true},
+		{"unsigned overflow", makePlan2Uint64ConstExprWithType(256), types.T_uint8, false},
+		{"negative to unsigned", makePlan2Int64ConstExprWithType(-1), types.T_uint64, false},
+		{"unsigned to signed overflow", makePlan2Uint64ConstExprWithType(^uint64(0)), types.T_int64, false},
+		{"parameter", &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}, types.T_int8, false},
+		{"string", makePlan2StringConstExprWithType("bad"), types.T_int8, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := plan.Type{Id: int32(tc.target)}
+			expr := &plan.Expr{Typ: target, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "cast", Obj: function.EncodeOverloadID(int32(function.CAST), 0)},
+				Args: []*plan.Expr{tc.input, {Typ: target, Expr: &plan.Expr_T{T: &plan.TargetType{}}}},
+			}}}
+			require.Equal(t, tc.safe, paginationExpressionSafeWithLiteralCasts(expr, true))
+			require.False(t, paginationExpressionSafe(expr), "inner pagination must keep its original cast policy")
+		})
+	}
+}
+
 func TestPaginationPreservableBoundsAndExpressions(t *testing.T) {
 	uint64Type := plan.Type{Id: int32(types.T_uint64)}
 	param := &plan.Expr{Typ: uint64Type, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
@@ -197,7 +227,7 @@ func TestCorrelatedPaginationPlacement(t *testing.T) {
 		name, sql     string
 		rankAfterJoin bool
 	}{
-		{"equality", `select n.n_nationkey, (select r.r_regionkey from tpch.region r where r.r_regionkey=n.n_regionkey order by r.r_regionkey desc limit 1) from tpch.nation n`, false},
+		{"equality with a different order key", `select n.n_nationkey, (select r.r_regionkey from tpch.region r where r.r_regionkey=n.n_regionkey order by r.r_name desc limit 1) from tpch.nation n`, false},
 		{"string equality", `select n.n_nationkey, (select r.r_regionkey from tpch.region r where r.r_name=n.n_name order by r.r_regionkey desc limit 1) from tpch.nation n`, true},
 		{"string equality without outer identity", `select n.n_nationkey, (select r.r_regionkey from tpch.region r where r.r_name=n.n_name order by r.r_regionkey desc limit 1) from (select n_nationkey,n_name from tpch.nation union all select n_nationkey,n_name from tpch.nation) n`, false},
 		{"widening cast", `select n.n_nationkey, (select cast(r.r_regionkey as bigint) from tpch.region r where r.r_regionkey=n.n_regionkey and r.r_regionkey<=n.n_nationkey order by r.r_regionkey desc limit 1) from tpch.nation n`, true},
@@ -249,6 +279,78 @@ func TestCorrelatedPaginationPlacement(t *testing.T) {
 			}
 			require.True(t, found, "rank must be on the correct side of the correlated join")
 		})
+	}
+}
+
+func TestCorrelatedPaginationExtremum(t *testing.T) {
+	for _, tc := range []struct {
+		name, scalar, aggregate string
+		narrowOuter, notNull    bool
+	}{
+		{"maximum", `select r.r_name from region r where r.r_regionkey=n.n_regionkey order by r.r_name desc limit 1`, "max", false, false},
+		{"null safe maximum", `select r.r_name from region r where r.r_regionkey<=>n.n_regionkey order by r.r_name desc limit 1`, "max", false, false},
+		{"minimum not null", `select r.r_name from region r where r.r_regionkey=n.n_regionkey order by r.r_name limit 1`, "min", false, true},
+		{"minimum nulls first", `select r.r_name from region r where r.r_regionkey=n.n_regionkey order by r.r_name limit 1`, "", false, false},
+		{"range maximum", `select r.r_name from region r where r.r_regionkey=n.n_regionkey and r.r_name<=n.n_nationkey order by r.r_name desc limit 1`, "max", true, false},
+		{"wide outer range keeps window", `select r.r_name from region r where r.r_regionkey=n.n_regionkey and r.r_name<=n.n_nationkey order by r.r_name desc limit 1`, "", false, false},
+		{"offset keeps window", `select r.r_name from region r where r.r_regionkey=n.n_regionkey order by r.r_name desc limit 1 offset 1`, "", false, false},
+		{"different value keeps window", `select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey order by r.r_name desc limit 1`, "", false, false},
+		{"tie breaker keeps window", `select r.r_name from region r where r.r_regionkey=n.n_regionkey order by r.r_name desc,r.r_regionkey limit 1`, "", false, false},
+		{"string value keeps window", `select r.r_comment from region r where r.r_regionkey=n.n_regionkey order by r.r_comment desc limit 1`, "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(true)
+			// Private catalog copies provide nullable integer values and a narrow
+			// outer row without adding another service or shared fixture.
+			opt.ctxt.tables["region"].Cols[1].Typ = plan.Type{Id: int32(types.T_int32), NotNullable: tc.notNull}
+			if tc.narrowOuter {
+				for _, col := range opt.ctxt.tables["nation"].Cols {
+					if types.T(col.Typ.Id) == types.T_varchar {
+						col.Typ = plan.Type{Id: int32(types.T_int32)}
+					}
+				}
+			}
+			result, err := runOneStmt(opt, t, "select n.n_nationkey,("+tc.scalar+") from nation n")
+			require.NoError(t, err)
+			q := result.GetQuery()
+			assertReachablePlanHasNoCorrelatedExpr(t, q)
+			window, extremum := false, false
+			var visit func(int32)
+			visit = func(id int32) {
+				node := q.Nodes[id]
+				window = window || node.NodeType == plan.Node_WINDOW
+				for _, agg := range node.AggList {
+					extremum = extremum || agg.GetF().GetFunc().GetObjName() == tc.aggregate
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range q.Steps {
+				visit(root)
+			}
+			require.Equal(t, tc.aggregate == "", window)
+			if tc.aggregate != "" {
+				require.True(t, extremum)
+			}
+		})
+	}
+}
+
+func TestCorrelatedPaginationExtremumPointLookup(t *testing.T) {
+	result, err := runOneStmt(NewMockOptimizer(true), t, `select n.n_nationkey,(select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey order by r.r_regionkey desc limit 1) from nation n where n.n_nationkey=0`)
+	require.NoError(t, err)
+	q := result.GetQuery()
+	var visit func(int32)
+	visit = func(id int32) {
+		node := q.Nodes[id]
+		require.NotEqual(t, plan.Node_WINDOW, node.NodeType, "a point lookup must not rank all inner keys")
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	for _, root := range q.Steps {
+		visit(root)
 	}
 }
 

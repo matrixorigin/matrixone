@@ -102,6 +102,12 @@ select p.seq, (select c.event_idx from child c where c.parent_id=p.id and c.even
 select p.seq, (select c.value from child c where c.parent_id=p.id and c.event_idx>0 and c.event_idx<=p.ceiling order by c.event_idx asc, c.seq asc limit 1) as first_value from parent p order by p.seq;
 select p.seq, (select c.value from child c where c.parent_id=p.id and c.event_idx>0 and c.event_idx<=p.ceiling order by c.event_idx desc, c.seq desc limit 1 offset 1) as second_value from parent p order by p.seq;
 
+-- Integer extrema share the existing aggregate owners; nullable ASC still sorts NULL first.
+select p.seq,(select c.seq from child c where c.parent_id=p.id order by c.seq limit 1) as first_id from parent p order by p.seq;
+select p.seq,(select c.event_idx from child c where c.parent_id=p.id order by c.event_idx limit 1) as first_value from parent p order by p.seq;
+select p.seq,case when (select c.seq from child c where c.parent_id=p.id order by c.seq desc limit 1) is null then 1 else 0 end as missing from parent p order by p.seq;
+select p.seq,(select c.event_idx from child c where c.parent_id=p.id and c.event_idx<=p.ceiling order by c.event_idx desc limit 1) as latest,(select c.seq from child c where c.parent_id=p.id order by c.seq desc limit 1) as last_id from parent p order by p.seq;
+
 -- Equal-key pagination, NULL order and the distinction between NULL and no row.
 select p.seq, (select c.seq from child c where c.parent_id=p.id order by c.event_idx asc,c.seq asc limit 1) as first_seq from parent p order by p.seq;
 select p.seq, (select coalesce(c.event_idx,99) from child c where c.parent_id=p.id order by c.seq desc limit 1) as value_or_99 from parent p order by p.seq;

@@ -220,6 +220,15 @@ func (builder *QueryBuilder) flattenSubquery(
 	if err != nil {
 		return 0, nil, err
 	}
+	if subquery.Typ == plan.SubqueryRef_SCALAR && byteKeyBoundary < 0 && preserveBoundary < 0 {
+		rewritten, err := builder.rewriteScalarPaginationExtremum(nodeID, subID, ctx, subCtx, pagination != nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		if rewritten {
+			pagination = nil
+		}
+	}
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, pagination, byteKeyBoundary, preserveBoundary)
 	if err != nil {
 		return 0, nil, err

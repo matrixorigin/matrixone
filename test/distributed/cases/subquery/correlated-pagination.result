@@ -305,6 +305,42 @@ select p.seq, (select c.value from child c where c.parent_id=p.id and c.event_id
 5  ¦  null  𝄀
 6  ¦  null  𝄀
 7  ¦  null
+select p.seq,(select c.seq from child c where c.parent_id=p.id order by c.seq limit 1) as first_id from parent p order by p.seq;
+➤ seq[4,32,0]  ¦  first_id[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  21  𝄀
+3  ¦  21  𝄀
+4  ¦  21  𝄀
+5  ¦  31  𝄀
+6  ¦  null  𝄀
+7  ¦  null
+select p.seq,(select c.event_idx from child c where c.parent_id=p.id order by c.event_idx limit 1) as first_value from parent p order by p.seq;
+➤ seq[4,32,0]  ¦  first_value[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  null  𝄀
+7  ¦  null
+select p.seq,case when (select c.seq from child c where c.parent_id=p.id order by c.seq desc limit 1) is null then 1 else 0 end as missing from parent p order by p.seq;
+➤ seq[4,32,0]  ¦  missing[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0  𝄀
+5  ¦  0  𝄀
+6  ¦  1  𝄀
+7  ¦  1
+select p.seq,(select c.event_idx from child c where c.parent_id=p.id and c.event_idx<=p.ceiling order by c.event_idx desc limit 1) as latest,(select c.seq from child c where c.parent_id=p.id order by c.seq desc limit 1) as last_id from parent p order by p.seq;
+➤ seq[4,32,0]  ¦  latest[-5,64,0]  ¦  last_id[4,32,0]  𝄀
+1  ¦  1  ¦  11  𝄀
+2  ¦  2  ¦  23  𝄀
+3  ¦  1  ¦  23  𝄀
+4  ¦  1  ¦  23  𝄀
+5  ¦  null  ¦  31  𝄀
+6  ¦  null  ¦  null  𝄀
+7  ¦  null  ¦  null
 select p.seq, (select c.seq from child c where c.parent_id=p.id order by c.event_idx asc,c.seq asc limit 1) as first_seq from parent p order by p.seq;
 ➤ seq[4,32,0]  ¦  first_seq[4,32,0]  𝄀
 1  ¦  11  𝄀

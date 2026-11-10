@@ -396,6 +396,13 @@ func (builder *QueryBuilder) prepareCorrelatedPagination(
 // Accept only expressions known to be total and repeatable; function metadata
 // alone does not describe either property for every built-in.
 func paginationExpressionSafe(expr *plan.Expr) bool {
+	return paginationExpressionSafeWithLiteralCasts(expr, false)
+}
+
+// Outer-domain filters contain binder-inserted casts of comparison constants.
+// Admit only integer literals whose conversion is proven by the binder's own
+// range check; inner pagination retains its existing conservative contract.
+func paginationExpressionSafeWithLiteralCasts(expr *plan.Expr, allowLiteralCasts bool) bool {
 	if expr == nil {
 		return false
 	}
@@ -407,7 +414,7 @@ func paginationExpressionSafe(expr *plan.Expr) bool {
 			return false
 		}
 		for _, arg := range item.List.List {
-			if !paginationExpressionSafe(arg) {
+			if !paginationExpressionSafeWithLiteralCasts(arg, allowLiteralCasts) {
 				return false
 			}
 		}
@@ -418,11 +425,11 @@ func paginationExpressionSafe(expr *plan.Expr) bool {
 		}
 		switch item.F.Func.ObjName {
 		case "cast":
-			return paginationCastConversionSafe(expr) && paginationExpressionSafe(item.F.Args[0])
+			return (paginationCastConversionSafe(expr) || allowLiteralCasts && paginationIntegerLiteralCastSafe(expr)) && paginationExpressionSafeWithLiteralCasts(item.F.Args[0], allowLiteralCasts)
 		case "coalesce", "ifnull", "case", "isnull", "istrue", "isfalse", "not",
 			"and", "or", "=", "<=>", "<>", "!=", "<", "<=", ">", ">=":
 			for _, arg := range item.F.Args {
-				if !paginationExpressionSafe(arg) {
+				if !paginationExpressionSafeWithLiteralCasts(arg, allowLiteralCasts) {
 					return false
 				}
 			}
@@ -430,6 +437,18 @@ func paginationExpressionSafe(expr *plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+func paginationIntegerLiteralCastSafe(expr *plan.Expr) bool {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) != 2 || f.Args[0] == nil || f.Args[1] == nil ||
+		f.Args[1].GetT() == nil || f.Args[0].GetLit() == nil || f.Args[0].GetLit().Isnull {
+		return false
+	}
+	fid, _ := function.DecodeOverloadID(f.Func.Obj)
+	source, target := makeTypeByPlan2Expr(f.Args[0]), makeTypeByPlan2Expr(expr)
+	return fid == function.CAST && source.Oid.IsInteger() && target.Oid.IsInteger() &&
+		target.Eq(makeTypeByPlan2Expr(f.Args[1])) && checkNoNeedCast(source, target, f.Args[0])
 }
 
 // Prove the conversion itself is total; callers separately prove the input.
@@ -973,6 +992,181 @@ func (builder *QueryBuilder) flattenPostJoinPagination(
 		FilterList: []*plan.Expr{first},
 	}, ctx)
 	return ranked, value, nil
+}
+
+// Sorting the returned integer itself to select its extremum needs no window.
+// Normalize only the proven simple shape, after pagination preflight, and let
+// the existing scalar aggregate owners handle correlation and empty input.
+func (builder *QueryBuilder) rewriteScalarPaginationExtremum(
+	outerID, subID int32, outerCtx, subCtx *BindContext, postJoin bool,
+) (bool, error) {
+	if len(subCtx.aggregates) != 0 || len(subCtx.groups) != 0 || len(subCtx.results) != 1 {
+		return false, nil
+	}
+	result := builder.qry.Nodes[subID]
+	if result.NodeType != plan.Node_PROJECT || len(result.Children) != 1 || len(result.BindingTags) != 1 ||
+		len(result.ProjectList) != 1 || result.Limit != nil || result.Offset != nil || result.RankOption != nil ||
+		len(result.FilterList) != 0 || len(result.OrderBy) != 0 {
+		return false, nil
+	}
+	sort := builder.qry.Nodes[result.Children[0]]
+	limit, literal := getLiteralUint64(sort.Limit)
+	if sort.NodeType != plan.Node_SORT || len(sort.Children) != 1 || !literal || limit != 1 ||
+		sort.RankOption != nil || len(sort.OrderBy) != 1 || sort.OrderBy[0] == nil ||
+		len(sort.FilterList) != 0 || len(sort.ProjectList) != 0 {
+		return false, nil
+	}
+	if sort.Offset != nil {
+		if offset, ok := getLiteralUint64(sort.Offset); !ok || offset != 0 {
+			return false, nil
+		}
+	}
+	project := builder.qry.Nodes[sort.Children[0]]
+	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 || len(project.BindingTags) != 1 ||
+		len(project.ProjectList) != 1 || project.Limit != nil || project.Offset != nil || project.RankOption != nil ||
+		len(project.FilterList) != 0 || len(project.OrderBy) != 0 {
+		return false, nil
+	}
+	value := project.ProjectList[0]
+	col, output, order := value.GetCol(), result.ProjectList[0].GetCol(), sort.OrderBy[0].Expr.GetCol()
+	if col == nil || output == nil || order == nil || output.RelPos != project.BindingTags[0] ||
+		order.RelPos != output.RelPos || output.ColPos != 0 || order.ColPos != 0 ||
+		!correlatedPaginationPartitionTypeSupported(types.T(value.Typ.Id)) {
+		return false, nil
+	}
+	var preds []*plan.Expr
+	scanID := project.Children[0]
+	for builder.qry.Nodes[scanID].NodeType == plan.Node_FILTER {
+		filter := builder.qry.Nodes[scanID]
+		if len(filter.Children) != 1 || filter.Limit != nil || filter.Offset != nil || filter.RankOption != nil {
+			return false, nil
+		}
+		for _, pred := range filter.FilterList {
+			if hasCorrCol(pred) {
+				preds = append(preds, pred)
+			}
+		}
+		scanID = filter.Children[0]
+	}
+	scan := builder.qry.Nodes[scanID]
+	if scan.NodeType != plan.Node_TABLE_SCAN || len(scan.Children) != 0 || len(scan.BindingTags) != 1 ||
+		scan.TableDef == nil || col.RelPos != scan.BindingTags[0] || col.ColPos < 0 ||
+		int(col.ColPos) >= len(scan.TableDef.Cols) || len(preds) == 0 {
+		return false, nil
+	}
+	if !makeTypeByPlan2Type(scan.TableDef.Cols[col.ColPos].Typ).Eq(makeTypeByPlan2Expr(value)) {
+		return false, nil
+	}
+	if postJoin {
+		nonEq := false
+		for _, pred := range preds {
+			nonEq = nonEq || containsCorrelatedNonEqComparison(pred)
+		}
+		if !nonEq {
+			return false, nil
+		}
+	} else {
+		keys, equality := correlatedPaginationPartitionKeys(preds)
+		if !equality || len(keys) == 0 {
+			return false, nil
+		}
+		for _, key := range keys {
+			if !correlatedPaginationPartitionTypeSupported(types.T(key.Typ.Id)) {
+				return false, nil
+			}
+		}
+	}
+	flag := sort.OrderBy[0].Flag
+	if flag & ^(plan.OrderBySpec_ASC|plan.OrderBySpec_DESC|plan.OrderBySpec_NULLS_FIRST|plan.OrderBySpec_NULLS_LAST) != 0 ||
+		flag&plan.OrderBySpec_ASC != 0 && flag&plan.OrderBySpec_DESC != 0 ||
+		flag&plan.OrderBySpec_NULLS_FIRST != 0 && flag&plan.OrderBySpec_NULLS_LAST != 0 {
+		return false, nil
+	}
+	desc := flag&plan.OrderBySpec_DESC != 0
+	nullsLast := flag&plan.OrderBySpec_NULLS_FIRST == 0 && (desc || flag&plan.OrderBySpec_NULLS_LAST != 0)
+	if !nullsLast && !scan.TableDef.Cols[col.ColPos].Typ.NotNullable {
+		return false, nil
+	}
+	if !builder.paginationExtremumOuterSafe(outerID, outerCtx, postJoin) {
+		return false, nil
+	}
+	name := "min"
+	if desc {
+		name = "max"
+	}
+	agg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{DeepCopyExpr(value)})
+	if err != nil {
+		return false, err
+	}
+	if !makeTypeByPlan2Expr(agg).Eq(makeTypeByPlan2Expr(value)) {
+		return false, nil
+	}
+	agg.Typ.NotNullable = false
+	ref := GetColExpr(agg.Typ, subCtx.aggregateTag, 0)
+	aggID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_AGG, Children: []int32{project.Children[0]},
+		AggList: []*plan.Expr{agg}, BindingTags: []int32{subCtx.groupTag, subCtx.aggregateTag},
+		SpillMem: builder.aggSpillMem,
+	}, subCtx)
+	result.Children = []int32{aggID}
+	result.ProjectList = []*plan.Expr{ref}
+	subCtx.aggregates = []*plan.Expr{agg}
+	subCtx.projects = []*plan.Expr{ref}
+	subCtx.results = []*plan.Expr{DeepCopyExpr(ref)}
+	subCtx.hasSingleRow = true
+	return true, nil
+}
+
+// The non-equality aggregate owner groups every original outer binding column.
+// Restrict it to one unchanged scan with a physical occurrence ID and cheap
+// integer columns. Also prove outer filters total before the equality owner can
+// copy a point-lookup domain into the inner aggregate input.
+func (builder *QueryBuilder) paginationExtremumOuterSafe(nodeID int32, ctx *BindContext, postJoin bool) bool {
+	if len(ctx.bindings) != 1 {
+		return false
+	}
+	for _, filter := range ctx.whereFilters {
+		if !paginationExpressionSafeWithLiteralCasts(filter, true) {
+			return false
+		}
+	}
+	for {
+		node := builder.qry.Nodes[nodeID]
+		for _, filter := range node.FilterList {
+			if !paginationExpressionSafeWithLiteralCasts(filter, true) {
+				return false
+			}
+		}
+		if node.NodeType != plan.Node_FILTER {
+			break
+		}
+		if len(node.Children) != 1 || node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+			return false
+		}
+		nodeID = node.Children[0]
+	}
+	scan, binding := builder.qry.Nodes[nodeID], ctx.bindings[0]
+	if scan.NodeType != plan.Node_TABLE_SCAN || len(scan.BindingTags) != 1 ||
+		scan.BindingTags[0] != binding.tag || nodeID != binding.nodeId {
+		return false
+	}
+	if !postJoin {
+		return true
+	}
+	if scan.TableDef == nil {
+		return false
+	}
+	pos, ok := scan.TableDef.Name2ColIndex[catalog.Row_ID]
+	if !ok || pos < 0 || int(pos) >= len(binding.cols) || binding.cols[pos] != catalog.Row_ID ||
+		types.T(binding.types[pos].Id) != types.T_Rowid {
+		return false
+	}
+	for _, typ := range binding.types {
+		if !correlatedPaginationPartitionTypeSupported(types.T(typ.Id)) && types.T(typ.Id) != types.T_Rowid {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) appendPaginationWindow(
