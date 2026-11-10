@@ -3646,7 +3646,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 
-		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
+		// Omitted-length CAST/CONVERT-to-CHAR results widen to TEXT (#32336,
+		// #32374); the format argument accepts them just like its VARCHAR/
+		// CHAR peers, with the same constant-format return type inference.
+		formatId := args[1].Typ.Id
+		isValidFormatType := formatId == int32(types.T_varchar) ||
+			formatId == int32(types.T_char) ||
+			formatId == int32(types.T_text)
+		if isValidFormatType {
 			var tp = types.T_date
 			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {

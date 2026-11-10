@@ -478,6 +478,23 @@ var supportedStringBuiltIns = []FuncNew{
 					return ExtractFromTimestamp
 				},
 			},
+			{
+				// TEXT must bind directly: EXTRACT's DATETIME overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATETIME, whose ParseDateCast
+				// reading of a short colon string like '10:11:12' discards
+				// the time. The string parsing path preserves the
+				// pre-widening VARCHAR behavior.
+				overloadId: 5,
+				args:       []types.T{types.T_varchar, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromVarchar
+				},
+			},
 		},
 	},
 
@@ -7692,6 +7709,23 @@ var supportedMathBuiltIns = []FuncNew{
 					return CeilStr
 				},
 			},
+			{
+				// TEXT must bind directly: CEIL's UINT64 overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to UINT64, whose strconv.ParseUint
+				// rejects decimals like '1.2' and negative strings. The
+				// string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both spellings.
+				overloadId: 13,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CeilStr
+				},
+			},
 		},
 	},
 
@@ -7915,6 +7949,22 @@ var supportedMathBuiltIns = []FuncNew{
 			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return FloorStr
+				},
+			},
+			{
+				// TEXT must bind directly: FLOOR's UINT64 overload is listed
+				// first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to UINT64, rejecting decimals like
+				// '-1.2'. The string parsing overload preserves the
+				// pre-widening VARCHAR behavior for both spellings.
+				overloadId: 13,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -9283,6 +9333,33 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampAddString
 				},
 			},
+			{
+				// TEXT third argument must bind directly: TIMESTAMPADD's DATE
+				// overload is listed first, so a by-cast tie from the
+				// omitted-length CAST/CONVERT-to-CHAR TEXT target (#32336,
+				// #32374) would otherwise cast TEXT to DATE, whose parse
+				// discards the time-of-day before the interval is applied.
+				// The string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both unit spellings.
+				overloadId: 8,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddString
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_char, types.T_int64, types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampAddString
+				},
+			},
 		},
 	},
 
@@ -10519,6 +10596,23 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 4,
 				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToTimestamp
+				},
+			},
+			{
+				// TEXT must bind directly: TIMESTAMP's DATE overload is
+				// listed first, so a by-cast tie from the omitted-length
+				// CAST/CONVERT-to-CHAR TEXT target (#32336, #32374) would
+				// otherwise cast TEXT to DATE, returning midnight instead
+				// of preserving the datetime string's time-of-day. The
+				// string parsing overload preserves the pre-widening
+				// VARCHAR behavior for both spellings.
+				overloadId: 5,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_timestamp.ToType()
 				},

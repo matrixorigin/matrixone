@@ -124,3 +124,106 @@ func TestCanonicalStringLiteralCastAcceptsTextTarget(t *testing.T) {
 	require.True(t, isCanonicalStringLiteralCast(makeCast(types.T_varchar)))
 	require.False(t, isCanonicalStringLiteralCast(makeCast(types.T_char)))
 }
+
+// boundExprFn returns the bound *plan.Function of a whole bound expression.
+func boundExprFn(t *testing.T, bound *Expr) *plan.Function {
+	t.Helper()
+	fn := bound.GetF()
+	require.NotNil(t, fn)
+	return fn
+}
+
+// TestOmittedLengthConsumersKeepStringOverloads verifies that the composed
+// SQL from the review of #32336/#32374 keeps its pre-widening STRING
+// behavior: each consumer function must bind directly on the TEXT cast
+// result instead of tying into its first non-string overload through an
+// implicit narrowing cast.
+func TestOmittedLengthConsumersKeepStringOverloads(t *testing.T) {
+	t.Run("ceil_floor_keep_numeric_string_parsing", func(t *testing.T) {
+		for _, sql := range []string{
+			"select ceil(cast('1.2' as char))",
+			"select ceil(convert('1.2', char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "ceil", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_float64), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql,
+				"the TEXT cast result must reach ceil directly, without a narrowing implicit cast")
+		}
+		for _, sql := range []string{
+			"select floor(cast('-1.2' as char))",
+			"select floor(convert('-1.2', char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "floor", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_float64), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql)
+		}
+	})
+
+	t.Run("timestampadd_keeps_string_temporal_path", func(t *testing.T) {
+		for _, sql := range []string{
+			"select timestampadd(hour, 1, convert('2024-01-01 12:34:56', char))",
+			"select timestampadd(hour, 1, cast('2024-01-01 12:34:56' as char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "timestampadd", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_varchar), bound.Typ.Id, sql,
+				"the string-input overload returns VARCHAR, matching its VARCHAR/CHAR peers")
+			require.Equal(t, int32(types.T_text), fn.Args[2].Typ.Id, sql,
+				"the TEXT cast result must reach timestampadd directly, not through a DATE-narrowing implicit cast")
+		}
+	})
+
+	t.Run("timestamp_keeps_string_temporal_path", func(t *testing.T) {
+		for _, sql := range []string{
+			"select timestamp(cast('2024-01-01 12:34:56' as char))",
+			"select timestamp(convert('2024-01-01 12:34:56', char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "timestamp", fn.Func.GetObjName(), sql)
+			require.Equal(t, int32(types.T_timestamp), bound.Typ.Id, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[0].Typ.Id, sql,
+				"the TEXT cast result must reach timestamp directly, not through a DATE-narrowing implicit cast")
+		}
+	})
+
+	t.Run("extract_keeps_string_parsing_path", func(t *testing.T) {
+		for _, sql := range []string{
+			"select extract(minute from cast('10:11:12' as char))",
+			"select extract(minute from convert('10:11:12', char))",
+		} {
+			bound := bindFirstSelectExpr(t, sql)
+			fn := boundExprFn(t, bound)
+			require.Equal(t, "extract", fn.Func.GetObjName(), sql)
+			require.Len(t, fn.Args, 2, sql)
+			require.Equal(t, int32(types.T_text), fn.Args[1].Typ.Id, sql,
+				"the TEXT cast result must reach extract directly, not tied into the DATETIME overload")
+		}
+	})
+}
+
+// TestOmittedLengthStrToDateAcceptsTextFormat verifies the STR_TO_DATE and
+// TO_DATE format argument keeps accepting the widened TEXT cast results:
+// previously the format-type gate matched only VARCHAR/CHAR and returned an
+// invalid-argument error during binding for these compositions.
+func TestOmittedLengthStrToDateAcceptsTextFormat(t *testing.T) {
+	for _, sql := range []string{
+		"select str_to_date('2024-01-02', convert('%Y-%m-%d', char))",
+		"select str_to_date('2024-01-02', cast('%Y-%m-%d' as char))",
+		"select to_date('2024-01-02', convert('%Y-%m-%d', char))",
+		"select to_date('2024-01-02', cast('%Y-%m-%d' as char))",
+	} {
+		bound := bindFirstSelectExpr(t, sql)
+		fn := boundExprFn(t, bound)
+		require.Contains(t, []string{"str_to_date", "to_date"}, fn.Func.GetObjName(), sql,
+			"both spellings bind the STR_TO_DATE operator family")
+		require.Equal(t, int32(types.T_date), bound.Typ.Id, sql,
+			"a constant %Y-%m-%d date format must keep inferring the DATE return type")
+		require.Len(t, fn.Args, 3, sql)
+	}
+}

@@ -138,3 +138,30 @@ select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"'
 is null as least_null_peer_is_null;
 ➤ least_null_peer_is_null[-7,1,0]  𝄀
 1
+select ceil(cast('1.2' as char)) as ceil_cast,
+floor(cast('1.2' as char)) as floor_cast,
+ceil(convert('-1.2', char)) as ceil_convert_neg,
+floor(convert('-1.2', char)) as floor_convert_neg;
+➤ ceil_cast[8,54,0]  ¦  floor_cast[8,54,0]  ¦  ceil_convert_neg[8,54,0]  ¦  floor_convert_neg[8,54,0]  𝄀
+2.0  ¦  1.0  ¦  -1.0  ¦  -2.0
+select timestampadd(hour, 1, convert('2024-01-01 12:34:56', char)) as tsadd_convert,
+timestampadd(hour, 1, cast('2024-01-01 12:34:56' as char)) as tsadd_cast;
+➤ tsadd_convert[12,-1,0]  ¦  tsadd_cast[12,-1,0]  𝄀
+2024-01-01 13:34:56  ¦  2024-01-01 13:34:56
+select timestamp(cast('2024-01-01 12:34:56' as char)) as ts_cast,
+timestamp(convert('2024-01-01 12:34:56', char)) as ts_convert;
+➤ ts_cast[93,64,0]  ¦  ts_convert[93,64,0]  𝄀
+2024-01-01 12:34:56  ¦  2024-01-01 12:34:56
+select extract(minute from cast('10:11:12' as char)) as extract_cast_minute,
+extract(minute from convert('10:11:12', char)) as extract_convert_minute;
+➤ extract_cast_minute[12,-1,0]  ¦  extract_convert_minute[12,-1,0]  𝄀
+11  ¦  11
+select extract(year from cast('10:11:12' as char)) as extract_cast_year;
+➤ extract_cast_year[12,-1,0]  𝄀
+2010
+select str_to_date('2024-01-02', convert('%Y-%m-%d', char)) as str_to_date_convert,
+str_to_date('2024-01-02', cast('%Y-%m-%d' as char)) as str_to_date_cast,
+to_date('2024-01-02', convert('%Y-%m-%d', char)) as to_date_convert,
+to_date('2024-01-02', cast('%Y-%m-%d' as char)) as to_date_cast;
+➤ str_to_date_convert[91,64,0]  ¦  str_to_date_cast[91,64,0]  ¦  to_date_convert[91,64,0]  ¦  to_date_cast[91,64,0]  𝄀
+2024-01-02  ¦  2024-01-02  ¦  2024-01-02  ¦  2024-01-02

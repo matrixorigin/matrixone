@@ -144,3 +144,36 @@ select least(convert('2024-01-01', char), cast('2024-01-02' as date),
                 cast('"2024-01-03"' as json)) as greatest_cast_json_date;
 select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"' as json))
          is null as least_null_peer_is_null;
+
+-- CEIL and FLOOR keep the string/numeric parsing semantics for the TEXT cast
+-- results: decimal and negative strings parse as floating-point values on
+-- the string overload, for both CAST and CONVERT spellings.
+select ceil(cast('1.2' as char)) as ceil_cast,
+       floor(cast('1.2' as char)) as floor_cast,
+       ceil(convert('-1.2', char)) as ceil_convert_neg,
+       floor(convert('-1.2', char)) as floor_convert_neg;
+
+-- TIMESTAMPADD keeps the string temporal path for the TEXT cast results: a
+-- datetime string keeps its time-of-day before the interval is applied, for
+-- both spellings, instead of going through DATE as midnight.
+select timestampadd(hour, 1, convert('2024-01-01 12:34:56', char)) as tsadd_convert,
+       timestampadd(hour, 1, cast('2024-01-01 12:34:56' as char)) as tsadd_cast;
+
+-- TIMESTAMP keeps the string temporal path for the TEXT cast results: the
+-- datetime string's time-of-day is preserved for both spellings.
+select timestamp(cast('2024-01-01 12:34:56' as char)) as ts_cast,
+       timestamp(convert('2024-01-01 12:34:56', char)) as ts_convert;
+
+-- EXTRACT keeps the string parsing path for the TEXT cast results: the short
+-- colon-separated string parses as TIME for time units (not as a colon date
+-- whose minutes read zero) and as the colon date for date units.
+select extract(minute from cast('10:11:12' as char)) as extract_cast_minute,
+       extract(minute from convert('10:11:12', char)) as extract_convert_minute;
+select extract(year from cast('10:11:12' as char)) as extract_cast_year;
+
+-- STR_TO_DATE and TO_DATE accept the widened TEXT cast results as format
+-- strings and keep parsing the date for both spellings.
+select str_to_date('2024-01-02', convert('%Y-%m-%d', char)) as str_to_date_convert,
+       str_to_date('2024-01-02', cast('%Y-%m-%d' as char)) as str_to_date_cast,
+       to_date('2024-01-02', convert('%Y-%m-%d', char)) as to_date_convert,
+       to_date('2024-01-02', cast('%Y-%m-%d' as char)) as to_date_cast;
