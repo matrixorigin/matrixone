@@ -182,28 +182,40 @@ func TestFlushErrorMsg(t *testing.T) {
 	spec := iscp.JobSpec{}
 	specStr, err := iscp.MarshalJobSpec(&spec)
 	require.NoError(t, err)
-	status := iscp.JobStatus{}
+	status := iscp.JobStatus{LSN: 1}
 	statusStr, err := iscp.MarshalJobStatus(&status)
 	require.NoError(t, err)
 	sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(uint32(accountId), 1, "test", 1, specStr, 2, types.TS{}, statusStr)
 	err = exec_sql(disttaeEngine, ctxWithTimeout, sql)
 	require.NoError(t, err)
-	err = iscp.FlushPermanentErrorMessage(
-		ctx,
-		"",
-		disttaeEngine.Engine,
-		disttaeEngine.GetTxnClient(),
-		uint32(accountId),
-		1,
-		[]string{"test"},
-		[]uint64{1},
-		[]uint64{1},
-		[]*iscp.JobStatus{{}},
-		types.MaxTs(),
-		"test",
-		[]uint64{0},
+	err = iscp.FlushJobStatusOnIterationState(
+		ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), uint32(accountId), 1,
+		[]string{"test"}, []uint64{1}, []uint64{1},
+		[]*iscp.JobStatus{{LSN: 1, ErrorCode: iscp.PermanentErrorThreshold, ErrorMsg: "test"}},
+		types.TS{}, iscp.ISCPJobState_Error, []uint64{1},
 	)
 	require.NoError(t, err)
+	txn, err := disttaeEngine.GetTxnClient().New(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	defer txn.Rollback(ctxWithTimeout)
+	require.NoError(t, disttaeEngine.Engine.New(ctxWithTimeout, txn))
+	result, err := iscp.ExecWithResult(ctxWithTimeout, "select job_state, watermark, job_status from mo_catalog.mo_iscp_log where table_id = 1 and job_name = 'test' and job_id = 1", "", txn)
+	require.NoError(t, err)
+	defer result.Close()
+	rowsRead := 0
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		rowsRead += rows
+		require.Equal(t, iscp.ISCPJobState_Error, vector.GetFixedAtNoTypeCheck[int8](cols[0], 0))
+		require.Equal(t, (types.TS{}).ToString(), cols[1].GetStringAt(0))
+		got, err := iscp.UnmarshalJobStatus([]byte(cols[2].GetStringAt(0)))
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), got.LSN)
+		require.Equal(t, iscp.PermanentErrorThreshold, got.ErrorCode)
+		require.Equal(t, "test", got.ErrorMsg)
+		return true
+	})
+	require.Equal(t, 1, rowsRead)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 }
 
 func TestChangesHandle1(t *testing.T) {
@@ -4325,34 +4337,29 @@ func TestCancelIteration1(t *testing.T) {
 		func(
 			context.Context,
 			string,
-			client.TxnClient,
-			engine.Engine,
 			client.TxnOperator,
 			uint32,
 			uint64,
 			[]string,
 			[]uint64,
-			types.TS,
-			[]*iscp.JobStatus,
-			[]uint64,
-		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, err error) {
+		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, prevStates []int8, err error) {
 			cancelCh <- struct{}{}
 			<-cancelCh
 			return []*iscp.JobSpec{
-					{
-						ConsumerInfo: iscp.ConsumerInfo{
-							ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-							SrcTable: iscp.TableInfo{
-								DBName:    "srcdb",
-								TableName: "src_table",
-							},
+				{
+					ConsumerInfo: iscp.ConsumerInfo{
+						ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+						SrcTable: iscp.TableInfo{
+							DBName:    "srcdb",
+							TableName: "src_table",
 						},
 					},
-				}, []*iscp.JobStatus{
-					{
-						Stage: iscp.JobStage_Running,
-					},
-				}, nil
+				},
+			}, []*iscp.JobStatus{
+				{
+					Stage: iscp.JobStage_Running,
+				},
+			}, []int8{iscp.ISCPJobState_Completed}, nil
 		},
 	)
 	defer stub.Reset()
@@ -4433,32 +4440,27 @@ func TestCancelIteration2(t *testing.T) {
 		func(
 			context.Context,
 			string,
-			client.TxnClient,
-			engine.Engine,
 			client.TxnOperator,
 			uint32,
 			uint64,
 			[]string,
 			[]uint64,
-			types.TS,
-			[]*iscp.JobStatus,
-			[]uint64,
-		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, err error) {
+		) (jobSpec []*iscp.JobSpec, prevStatus []*iscp.JobStatus, prevStates []int8, err error) {
 			return []*iscp.JobSpec{
-					{
-						ConsumerInfo: iscp.ConsumerInfo{
-							ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-							SrcTable: iscp.TableInfo{
-								DBName:    "srcdb",
-								TableName: "src_table",
-							},
+				{
+					ConsumerInfo: iscp.ConsumerInfo{
+						ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+						SrcTable: iscp.TableInfo{
+							DBName:    "srcdb",
+							TableName: "src_table",
 						},
 					},
-				}, []*iscp.JobStatus{
-					{
-						Stage: iscp.JobStage_Running,
-					},
-				}, nil
+				},
+			}, []*iscp.JobStatus{
+				{
+					Stage: iscp.JobStage_Running,
+				},
+			}, []int8{iscp.ISCPJobState_Completed}, nil
 		},
 	)
 	defer stub.Reset()
@@ -4482,6 +4484,7 @@ func TestCancelIteration2(t *testing.T) {
 			[]uint64,
 		) error {
 			if flushCount == 0 {
+				flushCount++
 				cancelCh <- struct{}{}
 				<-cancelCh
 				return nil
@@ -4520,7 +4523,7 @@ func TestCancelIteration2(t *testing.T) {
 			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, []uint64{1}, types.TS{}, types.TS{}),
 			common.DebugAllocator,
 		)
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
 	}()
 	<-cancelCh
 	cancel()
