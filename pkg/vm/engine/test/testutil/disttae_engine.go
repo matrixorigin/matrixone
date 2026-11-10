@@ -303,6 +303,21 @@ func NewTestDisttaeEngine(
 	if err = database.Delete(bootstrapCtx, temporaryInventory); err != nil {
 		return de, err
 	}
+	// The raw engine fixture has no frontend catalog bootstrap. These reduced
+	// definitions provide only the predicates used when retiring a database;
+	// they are not a substitute for the full routine and compatibility schemas.
+	for _, ddl := range []string{
+		"create table mo_catalog.mo_stored_procedure (db varchar(100))",
+		"create table mo_catalog.mo_user_defined_function (db varchar(100))",
+		"create table mo_catalog.mo_mysql_compatibility_mode (account_id int, dat_name varchar(5000))",
+	} {
+		result, err = sqlExecutor.Exec(bootstrapCtx, ddl, executor.Options{}.WithTxn(bootstrap).
+			WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
+		if err != nil {
+			return de, err
+		}
+		result.Close()
+	}
 	if err = bootstrap.Commit(bootstrapCtx); err != nil {
 		return de, err
 	}

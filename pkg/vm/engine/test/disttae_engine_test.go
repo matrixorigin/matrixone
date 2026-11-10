@@ -847,18 +847,62 @@ func TestEngineInventoryFixture(t *testing.T) {
 
 	internal, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
 	require.True(t, ok)
-	query := fmt.Sprintf("select epoch from mo_catalog.mo_database_inventory where account_id=0 and database_id=%s", databaseID)
-	result, err := internal.(executor.SQLExecutor).Exec(p.Ctx, query, executor.Options{})
-	require.NoError(t, err)
-	defer result.Close()
-	var epochs []uint64
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			epochs = append(epochs, vector.GetFixedAtNoTypeCheck[uint64](cols[0], i))
-		}
-		return true
-	})
+	sqlExecutor := internal.(executor.SQLExecutor)
+	epochs := func() []uint64 {
+		query := fmt.Sprintf("select epoch from mo_catalog.mo_database_inventory where account_id=0 and database_id=%s", databaseID)
+		result, err := sqlExecutor.Exec(p.Ctx, query, executor.Options{})
+		require.NoError(t, err)
+		defer result.Close()
+		var epochs []uint64
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				epochs = append(epochs, vector.GetFixedAtNoTypeCheck[uint64](cols[0], i))
+			}
+			return true
+		})
+		return epochs
+	}()
 	require.Equal(t, []uint64{2}, epochs, "create database initializes and create table advances the same row")
+
+	for _, query := range []string{
+		"insert into mo_catalog.mo_stored_procedure (db) values ('inventory_fixture_db'), ('other_db')",
+		"insert into mo_catalog.mo_user_defined_function (db) values ('inventory_fixture_db'), ('other_db')",
+		"insert into mo_catalog.mo_mysql_compatibility_mode (account_id, dat_name) values (0, 'inventory_fixture_db'), (0, 'other_db'), (1, 'inventory_fixture_db')",
+	} {
+		result, err := sqlExecutor.Exec(p.Ctx, query, executor.Options{})
+		require.NoError(t, err)
+		result.Close()
+	}
+	op = p.StartCNTxn()
+	require.NoError(t, p.D.Engine.Delete(p.Ctx, "inventory_fixture_db", op))
+	require.NoError(t, op.Commit(p.Ctx))
+
+	for _, check := range []struct {
+		query string
+		want  int64
+	}{
+		{"select count(*) from mo_catalog.mo_stored_procedure where db = 'inventory_fixture_db'", 0},
+		{"select count(*) from mo_catalog.mo_stored_procedure where db = 'other_db'", 1},
+		{"select count(*) from mo_catalog.mo_user_defined_function where db = 'inventory_fixture_db'", 0},
+		{"select count(*) from mo_catalog.mo_user_defined_function where db = 'other_db'", 1},
+		{"select count(*) from mo_catalog.mo_mysql_compatibility_mode where account_id = 0 and dat_name = 'inventory_fixture_db'", 0},
+		{"select count(*) from mo_catalog.mo_mysql_compatibility_mode where account_id = 0 and dat_name = 'other_db'", 1},
+		{"select count(*) from mo_catalog.mo_mysql_compatibility_mode where account_id = 1 and dat_name = 'inventory_fixture_db'", 1},
+	} {
+		func() {
+			result, err := sqlExecutor.Exec(p.Ctx, check.query, executor.Options{})
+			require.NoError(t, err)
+			defer result.Close()
+			var counts []int64
+			result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					counts = append(counts, vector.GetFixedAtNoTypeCheck[int64](cols[0], i))
+				}
+				return true
+			})
+			require.Equal(t, []int64{check.want}, counts, check.query)
+		}()
+	}
 }
 
 func TestShowDatabasesInRestoreTxn(t *testing.T) {
