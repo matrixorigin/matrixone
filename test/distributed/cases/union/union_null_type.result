@@ -191,6 +191,52 @@ select c, c+1 as next_value from decimal_result order by c;
 ➤ c[3,10,2]  ¦  next_value[3,38,2]  𝄀
 null  ¦  null  𝄀
 2.00  ¦  3.00
+select 'a' as c union all select cast('abcdefgh' as char(8)) union all select null order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+abcdefgh
+select 'a' as c union select cast('abcdefgh' as char(8)) union select null order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+abcdefgh
+select cast('abcdefgh' as char(8)) as c union all select 'a' union all select null order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+abcdefgh
+select 'a' as c union all select cast('abcdefgh' as char(8)) order by c;
+➤ c[12,-1,0]  𝄀
+a  𝄀
+abcdefgh
+create table mixed_all as select 'a' as c union all select cast('abcdefgh' as char(8)) union all select null;
+create table mixed_distinct as select 'a' as c union select cast('abcdefgh' as char(8)) union select null;
+create table mixed_reversed as select cast('abcdefgh' as char(8)) as c union all select 'a' union all select null;
+select table_name,data_type,character_maximum_length,is_nullable from information_schema.columns
+where table_schema='union_null_type' and table_name in ('mixed_all','mixed_distinct','mixed_reversed') and column_name='c' order by table_name;
+➤ table_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  is_nullable[12,-1,0]  𝄀
+mixed_all  ¦  VARCHAR  ¦  8  ¦  YES  𝄀
+mixed_distinct  ¦  VARCHAR  ¦  8  ¦  YES  𝄀
+mixed_reversed  ¦  VARCHAR  ¦  65535  ¦  YES
+select c,char_length(c) as value_length from mixed_all order by c;
+➤ c[12,-1,0]  ¦  value_length[-5,64,0]  𝄀
+null  ¦  null  𝄀
+a  ¦  1  𝄀
+abcdefgh  ¦  8
+select c from mixed_distinct order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+abcdefgh
+select count(*) as distinct_rows from mixed_distinct;
+➤ distinct_rows[-5,64,0]  𝄀
+3
+select c from mixed_reversed order by c;
+➤ c[12,-1,0]  𝄀
+null  𝄀
+a  𝄀
+abcdefgh
 select cast('a' as char(1)) as c union all select null order by c;
 ➤ c[1,1,0]  𝄀
 null  𝄀

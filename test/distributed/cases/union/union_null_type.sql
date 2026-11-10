@@ -71,6 +71,22 @@ select c from string_result order by c;
 select c, c+1 as next_value from unsigned_result order by c;
 select c, c+1 as next_value from decimal_result order by c;
 
+-- 混合 CHAR/VARCHAR 即使需要隐式转换，也必须在转换前扩宽，避免截断和 DISTINCT 丢行。
+-- @metacmp(true)
+select 'a' as c union all select cast('abcdefgh' as char(8)) union all select null order by c;
+select 'a' as c union select cast('abcdefgh' as char(8)) union select null order by c;
+select cast('abcdefgh' as char(8)) as c union all select 'a' union all select null order by c;
+select 'a' as c union all select cast('abcdefgh' as char(8)) order by c;
+create table mixed_all as select 'a' as c union all select cast('abcdefgh' as char(8)) union all select null;
+create table mixed_distinct as select 'a' as c union select cast('abcdefgh' as char(8)) union select null;
+create table mixed_reversed as select cast('abcdefgh' as char(8)) as c union all select 'a' union all select null;
+select table_name,data_type,character_maximum_length,is_nullable from information_schema.columns
+where table_schema='union_null_type' and table_name in ('mixed_all','mixed_distinct','mixed_reversed') and column_name='c' order by table_name;
+select c,char_length(c) as value_length from mixed_all order by c;
+select c from mixed_distinct order by c;
+select count(*) as distinct_rows from mixed_distinct;
+select c from mixed_reversed order by c;
+
 -- 裸 NULL 的占位宽度不参与 CHAR/VARCHAR 扩宽，显式类型和真实字符串仍参与。
 -- @metacmp(true)
 select cast('a' as char(1)) as c union all select null order by c;
