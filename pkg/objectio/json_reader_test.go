@@ -17,10 +17,12 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -296,11 +298,14 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 			}()
 			capacity := uint64(data.Capacity())
 			require.Positive(t, capacity)
+			ownerMeta := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(vector.Vector{}) + unsafe.Sizeof(vector.RefCountedBufferLease{}))
+			handleMeta := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONReader{}))
+			cursorMeta := vector.JSONReaderMetadataCapacity(unsafe.Sizeof(cacheJSONCursor{}))
 			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
 			require.NoError(t, err)
-			limit := capacity
+			limit := capacity + ownerMeta + 2*handleMeta + cursorMeta
 			if insufficient {
-				limit--
+				limit = capacity - 1
 			}
 			account, err := registry.Open(limit)
 			require.NoError(t, err)
@@ -331,18 +336,20 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, capacity, account.Snapshot().Used)
+			require.Equal(t, capacity+ownerMeta+handleMeta, account.Snapshot().Used)
 			view, err := reader.Window(0, 1)
 			require.NoError(t, err)
 			defer view.Close()
+			require.Equal(t, capacity+ownerMeta+2*handleMeta, account.Snapshot().Used)
 			cursor, err := view.OpenCursor()
 			require.NoError(t, err)
 			defer cursor.Close()
+			require.Equal(t, capacity+ownerMeta+2*handleMeta+cursorMeta, account.Snapshot().Used)
 			data.Release()
 			data = nil
 			reader.Close()
 			view.Close()
-			require.Equal(t, capacity, account.Snapshot().Used, "a surviving cursor must retain the one pin charge")
+			require.Equal(t, capacity+ownerMeta+cursorMeta, account.Snapshot().Used, "a surviving cursor retains its metadata and the one pin charge")
 			selected, err := cursor.QueryText(0, []byte("$.keep"), false)
 			require.NoError(t, err)
 			require.Equal(t, "ORIGINAL", selected.Text)
@@ -375,6 +382,39 @@ func TestCacheJSONReaderPinAdmissionFailureAndSnapshotFallback(t *testing.T) {
 	require.Greater(t, mp.CurrNB(), before, "an unaccounted pin must use an owned snapshot")
 	reader.Close()
 	require.Equal(t, before, mp.CurrNB())
+}
+
+func TestCacheJSONReaderMetadataAdmissionFailureIsAtomic(t *testing.T) {
+	for _, failAt := range []int{2, 3} {
+		t.Run(fmt.Sprintf("admission=%d", failAt), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+			source := vector.NewVec(types.T_json.ToType())
+			defer source.Free(mp)
+			doc, err := types.ParseStringToByteJson(`{"keep":1}`)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+			data := privateJSONColumnForTest(t, source)
+			defer data.Release()
+			want := errors.New("metadata admission rejected")
+			var live uint64
+			calls, partialReleases := 0, 0
+			admission := func(capacity uint64) (func(), error) {
+				calls++
+				if calls == failAt {
+					return func() { partialReleases++ }, want
+				}
+				live += capacity
+				return func() { live -= capacity }, nil
+			}
+			reader, err := OpenJSONReader(data, mp, nil, admission)
+			require.ErrorIs(t, err, want)
+			require.Nil(t, reader)
+			require.Zero(t, live)
+			require.Equal(t, 1, partialReleases)
+			require.Positive(t, data.Size(), "failed metadata admission keeps the cache owner usable")
+		})
+	}
 }
 
 func TestOpenJSONReaderCacheLifetime(t *testing.T) {

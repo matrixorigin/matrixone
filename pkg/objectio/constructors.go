@@ -1065,7 +1065,7 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 
 // JSONCachePinAdmission reserves physical non-MPool backing for the lifetime
 // of a reader owner and returns its unique release function.
-type JSONCachePinAdmission func(uint64) (release func(), err error)
+type JSONCachePinAdmission = vector.JSONReaderMemoryAdmission
 
 // OpenJSONReader retains a private cache column only after its complete backing
 // is admitted to the caller's account. Without a pin admission, it returns an
@@ -1073,6 +1073,10 @@ type JSONCachePinAdmission func(uint64) (release func(), err error)
 func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.AllocationAccountSelection, admissions ...JSONCachePinAdmission) (vector.JSONReader, error) {
 	if data == nil || mp == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires data and a pool")
+	}
+	var admission vector.JSONReaderMemoryAdmission
+	if len(admissions) != 0 {
+		admission = admissions[0]
 	}
 	private, isPrivate := data.(*privateJSONVectorCacheData)
 	if isPrivate {
@@ -1099,7 +1103,7 @@ func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.Alloca
 			return nil, err
 		}
 		if releasePin != nil {
-			return newCacheJSONReader(data, private, selection, capacity, releasePin)
+			return newCacheJSONReader(data, private, selection, capacity, releasePin, admission)
 		}
 		if len(admissions) > 0 && admissions[0] != nil {
 			return nil, moerr.NewInternalErrorNoCtx("JSON cache pin admission returned no release")
@@ -1125,5 +1129,5 @@ func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.Alloca
 	if err := mustVectorTo(&source, buf, isPrivate); err != nil {
 		return nil, err
 	}
-	return vector.NewJSONReaderSnapshotWithAllocation(&source, mp, selection)
+	return vector.NewJSONReaderSnapshotWithAllocation(&source, mp, selection, admission)
 }

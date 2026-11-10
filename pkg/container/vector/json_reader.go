@@ -17,6 +17,7 @@ package vector
 import (
 	"io"
 	"math"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -92,6 +93,8 @@ type jsonReader struct {
 	length      int
 	repeated    bool
 	repeatedRow int
+	admission   JSONReaderMemoryAdmission
+	releaseMeta func()
 }
 
 // IsPrivateJSONReader recognizes this package's live immutable owner without
@@ -115,19 +118,19 @@ func NewJSONReaderSnapshot(source *Vector, mp *mpool.MPool) (JSONReader, error) 
 
 // NewJSONReaderSnapshotWithAllocation explicitly selects the receiving owner's
 // account, including when the source is a cache-owned borrowed vector.
-func NewJSONReaderSnapshotWithAllocation(source *Vector, mp *mpool.MPool, selection *AllocationAccountSelection) (JSONReader, error) {
+func NewJSONReaderSnapshotWithAllocation(source *Vector, mp *mpool.MPool, selection *AllocationAccountSelection, admissions ...JSONReaderMemoryAdmission) (JSONReader, error) {
 	rows := 0
 	if source != nil {
 		rows = source.length
 	}
-	return NewJSONReaderSnapshotForRows(source, rows, mp, selection)
+	return NewJSONReaderSnapshotForRows(source, rows, mp, selection, admissions...)
 }
 
 // NewJSONReaderSnapshotForRows binds an explicit batch row domain. Constants
 // have one physical value and can span that domain without payload repetition.
 // The source is still copied and fully validated; its metadata is not changed.
-func NewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPool, selection *AllocationAccountSelection) (JSONReader, error) {
-	reader, _, err := TryNewJSONReaderSnapshotForRows(source, logicalRows, mp, selection)
+func NewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPool, selection *AllocationAccountSelection, admissions ...JSONReaderMemoryAdmission) (JSONReader, error) {
+	reader, _, err := TryNewJSONReaderSnapshotForRows(source, logicalRows, mp, selection, admissions...)
 	return reader, err
 }
 
@@ -136,7 +139,7 @@ func NewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPo
 // reader. Callers that preserve expression short-circuit order may defer this
 // particular error to the ordinary evaluator; allocation and other failures
 // remain terminal, and every document actually read must still be validated.
-func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPool, selection *AllocationAccountSelection) (reader JSONReader, invalidInput bool, err error) {
+func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.MPool, selection *AllocationAccountSelection, admissions ...JSONReaderMemoryAdmission) (reader JSONReader, invalidInput bool, err error) {
 	if source == nil || mp == nil || source.typ.Oid != types.T_json || source.length < 0 || uint64(source.length) > math.MaxUint32 || logicalRows < 0 || uint64(logicalRows) > math.MaxUint32 {
 		return nil, false, moerr.NewInvalidInputNoCtx("invalid JSON reader source")
 	}
@@ -155,6 +158,12 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 	if !source.IsConstNull() && (rows > len(source.data)/types.VarlenaSize) {
 		return nil, true, moerr.NewInvalidInputNoCtx("invalid JSON reader descriptors")
 	}
+	admission := firstJSONReaderMemoryAdmission(admissions)
+	ownerMeta, err := ReserveJSONReaderMetadata(selection, admission, JSONReaderMetadataCapacity(unsafe.Sizeof(Vector{})+unsafe.Sizeof(RefCountedBufferLease{})))
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { releaseJSONReaderMetadata(ownerMeta) }()
 	private, err := source.dup(mp, true, true, selection)
 	if err != nil {
 		return nil, false, err
@@ -167,11 +176,12 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 			return nil, true, err
 		}
 	}
-	reader, err = publishJSONReader(private, mp)
+	reader, err = publishJSONReader(private, mp, admission, ownerMeta)
 	if err != nil {
 		private.Free(mp)
 		return nil, false, err
 	}
+	ownerMeta = nil
 	return reader, false, nil
 }
 
@@ -180,19 +190,27 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 // of its column is exported, so Finish can transfer ownership without a scan.
 // Close releases unfinished storage; calls are sequential.
 type JSONReaderBuilder struct {
-	column *Vector
-	mp     *mpool.MPool
+	column    *Vector
+	mp        *mpool.MPool
+	admission JSONReaderMemoryAdmission
+	ownerMeta func()
 }
 
-func NewJSONReaderBuilder(mp *mpool.MPool, selection *AllocationAccountSelection) (*JSONReaderBuilder, error) {
+func NewJSONReaderBuilder(mp *mpool.MPool, selection *AllocationAccountSelection, admissions ...JSONReaderMemoryAdmission) (*JSONReaderBuilder, error) {
 	if mp == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON reader builder requires a pool")
 	}
-	column, err := NewOffHeapVecWithTypeAndAllocation(types.T_json.ToType(), selection)
+	admission := firstJSONReaderMemoryAdmission(admissions)
+	ownerMeta, err := ReserveJSONReaderMetadata(selection, admission, JSONReaderMetadataCapacity(unsafe.Sizeof(Vector{})+unsafe.Sizeof(RefCountedBufferLease{})+unsafe.Sizeof(JSONReaderBuilder{})))
 	if err != nil {
 		return nil, err
 	}
-	return &JSONReaderBuilder{column: column, mp: mp}, nil
+	column, err := NewOffHeapVecWithTypeAndAllocation(types.T_json.ToType(), selection)
+	if err != nil {
+		releaseJSONReaderMetadata(ownerMeta)
+		return nil, err
+	}
+	return &JSONReaderBuilder{column: column, mp: mp, admission: admission, ownerMeta: ownerMeta}, nil
 }
 
 func (b *JSONReaderBuilder) Append(raw []byte, null bool) error {
@@ -216,11 +234,13 @@ func (b *JSONReaderBuilder) Finish() (JSONReader, error) {
 	if b == nil || b.column == nil {
 		return nil, io.ErrClosedPipe
 	}
-	reader, err := publishJSONReader(b.column, b.mp)
+	reader, err := publishJSONReader(b.column, b.mp, b.admission, b.ownerMeta)
 	if err != nil {
 		return nil, err
 	}
 	b.column = nil
+	b.ownerMeta = nil
+	b.admission = nil
 	return reader, nil
 }
 
@@ -228,15 +248,23 @@ func (b *JSONReaderBuilder) Close() {
 	if b != nil && b.column != nil {
 		b.column.Free(b.mp)
 		b.column = nil
+		releaseJSONReaderMetadata(b.ownerMeta)
+		b.ownerMeta = nil
+		b.admission = nil
 	}
 }
 
-func publishJSONReader(column *Vector, mp *mpool.MPool) (JSONReader, error) {
-	lease, err := NewRefCountedBufferLease(nil, int64(column.Allocated()), func() { column.Free(mp) })
+func publishJSONReader(column *Vector, mp *mpool.MPool, admission JSONReaderMemoryAdmission, ownerMeta func()) (JSONReader, error) {
+	releaseMeta, err := ReserveJSONReaderMetadata(column.allocationAccount, admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
 	if err != nil {
 		return nil, err
 	}
-	return &jsonReader{column: column, lease: lease, length: column.length}, nil
+	lease, err := NewRefCountedBufferLease(nil, int64(column.Allocated()), func() { column.Free(mp); releaseJSONReaderMetadata(ownerMeta) })
+	if err != nil {
+		releaseJSONReaderMetadata(releaseMeta)
+		return nil, err
+	}
+	return &jsonReader{column: column, lease: lease, length: column.length, admission: admission, releaseMeta: releaseMeta}, nil
 }
 
 func (r *jsonReader) Length() int {
@@ -255,10 +283,15 @@ func (r *jsonReader) Window(start, end int) (JSONReader, error) {
 	if start < 0 || end < start || end > r.length {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader window")
 	}
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	if err != nil {
+		return nil, err
+	}
 	if !r.lease.Retain() {
+		releaseJSONReaderMetadata(releaseMeta)
 		return nil, io.ErrClosedPipe
 	}
-	return &jsonReader{column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows, repeated: r.repeated, repeatedRow: r.repeatedRow}, nil
+	return &jsonReader{column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows, repeated: r.repeated, repeatedRow: r.repeatedRow, admission: r.admission, releaseMeta: releaseMeta}, nil
 }
 
 // Repeat retains one physical row without constructing a batch-sized mapping.
@@ -270,10 +303,15 @@ func (r *jsonReader) Repeat(row, length int) (JSONReader, error) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader repeated row")
 	}
 	physicalRow := r.physicalRow(row)
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	if err != nil {
+		return nil, err
+	}
 	if !r.lease.Retain() {
+		releaseJSONReaderMetadata(releaseMeta)
 		return nil, io.ErrClosedPipe
 	}
-	return &jsonReader{column: r.column, lease: r.lease, length: length, repeated: true, repeatedRow: physicalRow}, nil
+	return &jsonReader{column: r.column, lease: r.lease, length: length, repeated: true, repeatedRow: physicalRow, admission: r.admission, releaseMeta: releaseMeta}, nil
 }
 
 // Select copies row indices into accounted private storage. It keeps no alias
@@ -290,6 +328,16 @@ func (r *jsonReader) Select(rows []int64, mp *mpool.MPool) (JSONReader, error) {
 			return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader selection")
 		}
 	}
+	ownerMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(Vector{})+unsafe.Sizeof(RefCountedBufferLease{})))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { releaseJSONReaderMetadata(ownerMeta) }()
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonReader{})))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { releaseJSONReaderMetadata(releaseMeta) }()
 	mapping, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.column.allocationAccount)
 	if err != nil {
 		return nil, err
@@ -305,13 +353,17 @@ func (r *jsonReader) Select(rows []int64, mp *mpool.MPool) (JSONReader, error) {
 		mapping.Free(mp)
 		return nil, io.ErrClosedPipe
 	}
-	lease, err := NewRefCountedBufferLease(nil, int64(mapping.Allocated()), func() { mapping.Free(mp); parent.Release() })
+	ownedMeta := ownerMeta
+	lease, err := NewRefCountedBufferLease(nil, int64(mapping.Allocated()), func() { mapping.Free(mp); parent.Release(); releaseJSONReaderMetadata(ownedMeta) })
 	if err != nil {
 		mapping.Free(mp)
 		parent.Release()
 		return nil, err
 	}
-	return &jsonReader{column: r.column, rows: mapping, lease: lease, length: len(rows)}, nil
+	reader := &jsonReader{column: r.column, rows: mapping, lease: lease, length: len(rows), admission: r.admission, releaseMeta: releaseMeta}
+	ownerMeta = nil
+	releaseMeta = nil
+	return reader, nil
 }
 
 func (r *jsonReader) physicalRow(row int) int {
@@ -355,10 +407,14 @@ func (r *jsonReader) Materialize(mp *mpool.MPool) (*Vector, error) {
 func (r *jsonReader) Close() {
 	if r != nil && r.lease != nil {
 		lease := r.lease
+		releaseMeta := r.releaseMeta
 		r.lease = nil
+		r.releaseMeta = nil
+		r.admission = nil
 		// Row coordinates remain immutable for outstanding cursors. The
 		// final lease frees all column and mapping backing.
 		lease.Release()
+		releaseJSONReaderMetadata(releaseMeta)
 	}
 }
 
@@ -369,10 +425,15 @@ func (r *jsonReader) Query(row int, path *bytejson.Path) (JSONQueryResult, error
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonQueryResult{})))
+	if err != nil {
+		return nil, err
+	}
 	if !r.lease.Retain() {
+		releaseJSONReaderMetadata(releaseMeta)
 		return nil, io.ErrClosedPipe
 	}
-	result := &jsonQueryResult{lease: r.lease}
+	result := &jsonQueryResult{lease: r.lease, releaseMeta: releaseMeta}
 	if err := r.fillQuery(row, path, result); err != nil {
 		result.Close()
 		return nil, err
@@ -418,37 +479,48 @@ func (r *jsonReader) OpenCursor() (JSONCursor, error) {
 	if r == nil || r.lease == nil {
 		return nil, io.ErrClosedPipe
 	}
+	releaseMeta, err := ReserveJSONReaderMetadata(r.column.allocationAccount, r.admission, JSONReaderMetadataCapacity(unsafe.Sizeof(jsonCursor{})))
+	if err != nil {
+		return nil, err
+	}
 	if !r.lease.Retain() {
+		releaseJSONReaderMetadata(releaseMeta)
 		return nil, io.ErrClosedPipe
 	}
-	return &jsonCursor{reader: r, jsonQueryResult: jsonQueryResult{lease: r.lease}}, nil
+	return &jsonCursor{
+		reader:          jsonReader{rows: r.rows, column: r.column, start: r.start, length: r.length, repeated: r.repeated, repeatedRow: r.repeatedRow},
+		jsonQueryResult: jsonQueryResult{lease: r.lease, releaseMeta: releaseMeta},
+	}, nil
 }
 
 type jsonCursor struct {
 	jsonQueryResult
-	reader *jsonReader
+	reader jsonReader
 }
 
 func (cursor *jsonCursor) ResetQuery(row int, path bytejson.Path) error {
-	if cursor.reader == nil || cursor.jsonQueryResult.lease == nil {
+	if cursor == nil || cursor.jsonQueryResult.lease == nil {
 		return io.ErrClosedPipe
 	}
 	return cursor.reader.fillQuery(row, &path, &cursor.jsonQueryResult)
 }
 
 func (cursor *jsonCursor) Close() {
-	cursor.reader = nil
-	cursor.jsonQueryResult.Close()
+	if cursor != nil {
+		cursor.reader = jsonReader{}
+		cursor.jsonQueryResult.Close()
+	}
 }
 
 // jsonQueryResult keeps the borrowed ByteJson inside this package. Output
 // methods return owned text or copy into an explicitly supplied destination.
 // Separate query results may be consumed concurrently; Close is sequential.
 type jsonQueryResult struct {
-	value   bytejson.ByteJson
-	exists  bool
-	sqlNull bool
-	lease   *RefCountedBufferLease
+	value       bytejson.ByteJson
+	exists      bool
+	sqlNull     bool
+	lease       *RefCountedBufferLease
+	releaseMeta func()
 }
 
 func (r *jsonQueryResult) Exists() bool  { return r != nil && r.lease != nil && r.exists }
@@ -477,9 +549,12 @@ func (r *jsonQueryResult) AppendJSON(destination *Vector, mp *mpool.MPool) error
 func (r *jsonQueryResult) Close() {
 	if r != nil && r.lease != nil {
 		lease := r.lease
+		releaseMeta := r.releaseMeta
 		r.lease = nil
+		r.releaseMeta = nil
 		r.value = bytejson.ByteJson{}
 		lease.Release()
+		releaseJSONReaderMetadata(releaseMeta)
 	}
 }
 
@@ -608,7 +683,7 @@ func (r *jsonQueryResult) selectText(simple, legacyFloat bool) (JSONTextSelectio
 // An absent input has no path evaluation; invalid non-NULL paths are tagged
 // separately so callers retain their own error text and response policy.
 func (cursor *jsonCursor) QueryText(row int, pathBytes []byte, legacyFloat bool) (JSONTextSelection, error) {
-	if cursor == nil || cursor.reader == nil {
+	if cursor == nil || cursor.jsonQueryResult.lease == nil {
 		return JSONTextSelection{}, io.ErrClosedPipe
 	}
 	value, err := cursor.reader.loadQueryRow(row, &cursor.jsonQueryResult)
