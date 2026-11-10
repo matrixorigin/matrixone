@@ -61,6 +61,25 @@ type validatedVectorCacheData struct {
 	data fscache.Data
 }
 
+// privateJSONVectorCacheData is created only by the private JSON column
+// constructor, which owns the allocation from creation through validation.
+// The older validation marker alone does not prove absence of writable aliases.
+type privateJSONVectorCacheData struct{ *validatedVectorCacheData }
+
+func (d *privateJSONVectorCacheData) Slice(length int) fscache.Data {
+	buf := d.data.Bytes()
+	if length == len(buf) {
+		return d
+	}
+	return fileservice.NewBytes(bytes.Clone(buf[:length]))
+}
+
+// A public callback may retain both its input and its returned Data. Pass it a
+// snapshot and do not transfer private-reader qualification to its result.
+func (d *privateJSONVectorCacheData) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
+	return copyData(d.validatedVectorSnapshot())
+}
+
 var _ fscache.Data = (*validatedVectorCacheData)(nil)
 var _ fscache.DataOwnership = (*validatedVectorCacheData)(nil)
 var _ fscache.DataCacheReservation = (*validatedVectorCacheData)(nil)
@@ -238,6 +257,29 @@ func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
 				cacheData.Release()
 			}
 			return nil, err
+		}
+		return validated, nil
+	}
+}
+
+// privateJSONColumnCacheConstructorFactory is selected only for an actual
+// JSON_VALUE input request. Its allocator cannot retain the constructor's
+// writable buffer; the validated wrapper is published only after construction.
+func privateJSONColumnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
+	construct := constructorFactory(size, algo)
+	return func(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error) {
+		privateAllocator := fileservice.NewPrivateCacheDataAllocator(allocator)
+		owned, err := construct(ctx, reader, data, privateAllocator)
+		if err != nil {
+			return nil, err
+		}
+		validated, err := validateVectorCacheData(owned)
+		if err != nil {
+			owned.Release()
+			return nil, err
+		}
+		if marked, ok := validated.(*validatedVectorCacheData); ok {
+			return &privateJSONVectorCacheData{validatedVectorCacheData: marked}, nil
 		}
 		return validated, nil
 	}
@@ -1028,14 +1070,22 @@ func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.Alloca
 	if data == nil || mp == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires data and a pool")
 	}
-	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+	if marked, ok := data.(*privateJSONVectorCacheData); ok {
 		return newCacheJSONReader(data, marked, selection)
 	}
 	data.Retain()
 	defer data.Release()
+	buf := data.Bytes()
+	if len(buf) < IOEntryHeaderSize {
+		return nil, io.ErrUnexpectedEOF
+	}
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ColData || header.Version != IOET_ColumnData_V1 && header.Version != IOET_ColumnData_V2 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid JSON object column header")
+	}
 	var source vector.Vector
 	defer source.Free(nil)
-	if err := mustVectorTo(&source, data.Bytes(), false); err != nil {
+	if err := mustVectorTo(&source, buf, false); err != nil {
 		return nil, err
 	}
 	return vector.NewJSONReaderSnapshotWithAllocation(&source, mp, selection)

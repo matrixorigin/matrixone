@@ -15,15 +15,240 @@
 package objectio
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/require"
 )
+
+func privateJSONColumnForTest(t *testing.T, source *vector.Vector) fscache.Data {
+	t.Helper()
+	raw := marshalLegacyTestColumn(t, source)
+	constructor := privateJSONColumnCacheConstructorFactory(int64(len(raw)), compress.None)
+	data, err := constructor(context.Background(), nil, raw, fileservice.DefaultCacheDataAllocator())
+	require.NoError(t, err)
+	_, ok := data.(*privateJSONVectorCacheData)
+	require.True(t, ok)
+	return data
+}
+
+// A cache validator can receive bytes from an arbitrary caller. Admission must
+// not grant immutable-reader authority over that caller's writable storage.
+func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	raw := marshalLegacyTestColumn(t, source)
+	data := fileservice.NewBytes(raw)
+	sealed, err := validateVectorCacheData(data)
+	require.NoError(t, err)
+	defer sealed.Release()
+	reader, err := OpenJSONReader(sealed, mp, nil)
+	require.NoError(t, err)
+	defer reader.Close()
+	pos := bytes.Index(raw, []byte("ORIGINAL"))
+	require.GreaterOrEqual(t, pos, 0)
+	copy(raw[pos:pos+len("ORIGINAL")], "MUTATED!")
+	cursor, err := reader.OpenCursor()
+	require.NoError(t, err)
+	defer cursor.Close()
+	result, err := cursor.QueryText(0, []byte("$.keep"), false)
+	require.NoError(t, err)
+	require.Equal(t, "ORIGINAL", result.Text)
+	fresh, err := OpenJSONReader(sealed, mp, nil)
+	require.NoError(t, err)
+	defer fresh.Close()
+	freshCursor, err := fresh.OpenCursor()
+	require.NoError(t, err)
+	defer freshCursor.Close()
+	updated, err := freshCursor.QueryText(0, []byte("$.keep"), false)
+	require.NoError(t, err)
+	require.Equal(t, "MUTATED!", updated.Text)
+	raw[pos] = 0xff
+	invalid, err := OpenJSONReader(sealed, mp, nil)
+	require.Error(t, err)
+	require.Nil(t, invalid)
+	again, err := cursor.QueryText(0, []byte("$.keep"), false)
+	require.NoError(t, err)
+	require.Equal(t, "ORIGINAL", again.Text)
+}
+
+func TestJSONCacheReaderRejectsMalformedColumnHeader(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":1}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	valid := marshalLegacyTestColumn(t, source)
+	for _, tc := range []struct {
+		name   string
+		mutate func([]byte) []byte
+	}{
+		{name: "short", mutate: func(b []byte) []byte { return b[:1] }},
+		{name: "type", mutate: func(b []byte) []byte { DecodeIOEntryHeader(b).Type = 0xffff; return b }},
+		{name: "version", mutate: func(b []byte) []byte { DecodeIOEntryHeader(b).Version = 0xffff; return b }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := fileservice.NewBytes(tc.mutate(bytes.Clone(valid)))
+			defer data.Release()
+			require.NotPanics(t, func() {
+				reader, err := OpenJSONReader(data, mp, nil)
+				require.Error(t, err)
+				require.Nil(t, reader)
+			})
+		})
+	}
+}
+
+// Rehoming is a public callback boundary. Neither the callback's input nor an
+// alias to its returned data may modify an already admitted immutable version.
+func TestJSONCacheRehomeDoesNotExposeAdmittedBacking(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	data := privateJSONColumnForTest(t, source)
+	defer data.Release()
+	reader, err := OpenJSONReader(data, mp, nil)
+	require.NoError(t, err)
+	defer reader.Close()
+	// A full-range Slice must not reveal the embedded general marker.
+	require.Same(t, data, data.Slice(int(data.Size())))
+	var callbackInput, callbackOutput []byte
+	rehomed := data.(fscache.DataOwnership).RehomeCacheData(func(value []byte) fscache.Data {
+		callbackInput = value
+		callbackOutput = bytes.Clone(value)
+		return fileservice.NewBytes(callbackOutput)
+	})
+	defer rehomed.Release()
+	rehomedReader, err := OpenJSONReader(rehomed, mp, nil)
+	require.NoError(t, err)
+	defer rehomedReader.Close()
+	for _, alias := range [][]byte{callbackInput, callbackOutput} {
+		pos := bytes.Index(alias, []byte("ORIGINAL"))
+		require.GreaterOrEqual(t, pos, 0)
+		copy(alias[pos:pos+len("ORIGINAL")], "MUTATED!")
+	}
+	for _, current := range []vector.JSONReader{reader, rehomedReader} {
+		cursor, err := current.OpenCursor()
+		require.NoError(t, err)
+		result, err := cursor.QueryText(0, []byte("$.keep"), false)
+		cursor.Close()
+		require.NoError(t, err)
+		require.Equal(t, "ORIGINAL", result.Text)
+	}
+}
+
+type aliasingCacheAllocator struct{ calls int }
+
+func (a *aliasingCacheAllocator) BackingSize(size int) int { a.calls++; return size }
+func (a *aliasingCacheAllocator) AllocateCacheData(context.Context, int) fscache.Data {
+	a.calls++
+	return fileservice.NewBytes(nil)
+}
+func (a *aliasingCacheAllocator) AllocateCacheDataWithHint(context.Context, int, malloc.Hints) fscache.Data {
+	a.calls++
+	return fileservice.NewBytes(nil)
+}
+func (a *aliasingCacheAllocator) CopyToCacheData(_ context.Context, raw []byte) fscache.Data {
+	a.calls++
+	return fileservice.NewBytes(raw)
+}
+
+func TestJSONCachePrivateConstructorRejectsAliasingAllocator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	raw := marshalLegacyTestColumn(t, source)
+	allocator := new(aliasingCacheAllocator)
+	constructor := privateJSONColumnCacheConstructorFactory(int64(len(raw)), compress.None)
+	data, err := constructor(context.Background(), nil, raw, allocator)
+	require.NoError(t, err)
+	defer data.Release()
+	require.Zero(t, allocator.calls)
+	reader, err := OpenJSONReader(data, mp, nil)
+	require.NoError(t, err)
+	defer reader.Close()
+	pos := bytes.Index(raw, []byte("ORIGINAL"))
+	require.GreaterOrEqual(t, pos, 0)
+	copy(raw[pos:pos+len("ORIGINAL")], "MUTATED!")
+	view := data.Bytes()
+	pos = bytes.Index(view, []byte("ORIGINAL"))
+	require.GreaterOrEqual(t, pos, 0)
+	copy(view[pos:pos+len("ORIGINAL")], "MUTATED!")
+	cursor, err := reader.OpenCursor()
+	require.NoError(t, err)
+	defer cursor.Close()
+	value, err := cursor.QueryText(0, []byte("$.keep"), false)
+	require.NoError(t, err)
+	require.Equal(t, "ORIGINAL", value.Text)
+}
+
+func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	data := privateJSONColumnForTest(t, source)
+	reader, err := OpenJSONReader(data, mp, nil)
+	require.NoError(t, err)
+	data.Release()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var done sync.WaitGroup
+	for range 2 {
+		view, err := reader.Window(0, 1)
+		require.NoError(t, err)
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			defer view.Close()
+			<-start
+			cursor, err := view.OpenCursor()
+			if err == nil {
+				var value vector.JSONTextSelection
+				value, err = cursor.QueryText(0, []byte("$.keep"), false)
+				if err == nil && value.Text != "ORIGINAL" {
+					err = io.ErrUnexpectedEOF
+				}
+				cursor.Close()
+			}
+			results <- err
+		}()
+	}
+	reader.Close()
+	close(start)
+	done.Wait()
+	for range 2 {
+		require.NoError(t, <-results)
+	}
+}
 
 func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 	for _, sealed := range []bool{false, true} {
@@ -37,9 +262,8 @@ func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 			require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
 			var data fscache.Data = fileservice.NewBytes(marshalLegacyTestColumn(t, source))
 			if sealed {
-				validated, err := validateVectorCacheData(data)
-				require.NoError(t, err)
-				data = validated
+				data.Release()
+				data = privateJSONColumnForTest(t, source)
 			}
 			before := mp.CurrNB()
 			reader, err := OpenJSONReader(data, mp, nil)
@@ -73,8 +297,7 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	private, err := vector.NewJSONReaderSnapshot(source, mp)
 	require.NoError(t, err)
 	defer private.Close()
-	data, err := validateVectorCacheData(fileservice.NewBytes(marshalLegacyTestColumn(t, source)))
-	require.NoError(t, err)
+	data := privateJSONColumnForTest(t, source)
 	cache, err := OpenJSONReader(data, mp, nil)
 	data.Release()
 	require.NoError(t, err)
