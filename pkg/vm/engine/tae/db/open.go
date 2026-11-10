@@ -111,7 +111,8 @@ func Open(
 
 	logutil.Info(Phase_Open + "-open-wal-start")
 	if opts.WalClientFactory != nil {
-		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory, opts.MaxWALRecordSize)
+		db.Wal = wal.NewLogserviceHandleWithContext(
+			opts.WalClientFactory, opts.WalContextClientFactory, opts.MaxWALRecordSize)
 	} else {
 		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}

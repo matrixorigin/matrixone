@@ -15,8 +15,10 @@
 package wal
 
 import (
+	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
@@ -47,9 +49,18 @@ func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
 	maxRecordSize int,
 ) *StoreImpl {
+	return NewLogserviceHandleWithContext(factory, nil, maxRecordSize)
+}
+
+func NewLogserviceHandleWithContext(
+	factory logservicedriver.LogServiceClientFactory,
+	contextFactory func(context.Context) (logservice.Client, error),
+	maxRecordSize int,
+) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
+		logservicedriver.WithConfigOptContextClientFactory(contextFactory),
 		logservicedriver.WithConfigOptMaxWALRecordSize(maxRecordSize),
 	)
 	driver := logservicedriver.NewLogServiceDriver(&cfg)
