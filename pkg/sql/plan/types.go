@@ -322,6 +322,10 @@ type BindContext struct {
 	hasSingleRow  bool
 	isGroupingSet bool
 
+	// bareNulls records projection provenance, not the executable type. Only
+	// direct set-operation arms propagate it; derived-table columns are typed.
+	bareNulls map[int]bool
+
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
 	cteName string
