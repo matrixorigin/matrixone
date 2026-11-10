@@ -887,26 +887,47 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 			backgroundQueries[idx] = DeepCopyQuery(query)
 		}
 	}
+	var domains []*plan.LocalRuntimeFilterDomain
+	if qry.LocalRuntimeFilterDomains != nil {
+		domains = make([]*plan.LocalRuntimeFilterDomain, len(qry.LocalRuntimeFilterDomains))
+	}
+	for i, domain := range qry.LocalRuntimeFilterDomains {
+		if domain == nil {
+			continue
+		}
+		copy := &plan.LocalRuntimeFilterDomain{SourceScanNodeId: domain.SourceScanNodeId,
+			SourceColumnName: domain.SourceColumnName, KeyType: domain.KeyType}
+		if domain.Targets != nil {
+			copy.Targets = make([]*plan.LocalRuntimeFilterTarget, len(domain.Targets))
+		}
+		for j, target := range domain.Targets {
+			if target != nil {
+				copy.Targets[j] = &plan.LocalRuntimeFilterTarget{ScanNodeId: target.ScanNodeId, ColumnName: target.ColumnName, ProbeNdv: target.ProbeNdv}
+			}
+		}
+		domains[i] = copy
+	}
 	newQry := &plan.Query{
-		IntegerPrecision:         cloneIntegerPrecisionGraph(qry.IntegerPrecision),
-		ExecutionDependentAccess: qry.ExecutionDependentAccess,
-		StmtType:                 qry.StmtType,
-		Steps:                    slices.Clone(qry.Steps),
-		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
-		Params:                   DeepCopyExprList(qry.Params),
-		Headings:                 slices.Clone(qry.Headings),
-		LoadTag:                  qry.LoadTag,
-		LoadWriteS3:              qry.LoadWriteS3,
-		BackgroundQueries:        backgroundQueries,
-		MaxDop:                   qry.MaxDop,
-		HasForeignKeyAction:      qry.HasForeignKeyAction,
-		HasReturning:             qry.HasReturning,
-		ReturningStep:            qry.ReturningStep,
-		ApplySqlSelectLimit:      qry.ApplySqlSelectLimit,
-		DetectSqls:               slices.Clone(qry.DetectSqls),
-		CatalogDependencies:      make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
-		ViewMetadataDependsOnUdf: qry.ViewMetadataDependsOnUdf,
-		Correlation:              DeepCopyCorrelation(qry.Correlation),
+		LocalRuntimeFilterDomains: domains,
+		IntegerPrecision:          cloneIntegerPrecisionGraph(qry.IntegerPrecision),
+		ExecutionDependentAccess:  qry.ExecutionDependentAccess,
+		StmtType:                  qry.StmtType,
+		Steps:                     slices.Clone(qry.Steps),
+		Nodes:                     make([]*plan.Node, len(qry.Nodes)),
+		Params:                    DeepCopyExprList(qry.Params),
+		Headings:                  slices.Clone(qry.Headings),
+		LoadTag:                   qry.LoadTag,
+		LoadWriteS3:               qry.LoadWriteS3,
+		BackgroundQueries:         backgroundQueries,
+		MaxDop:                    qry.MaxDop,
+		HasForeignKeyAction:       qry.HasForeignKeyAction,
+		HasReturning:              qry.HasReturning,
+		ReturningStep:             qry.ReturningStep,
+		ApplySqlSelectLimit:       qry.ApplySqlSelectLimit,
+		DetectSqls:                slices.Clone(qry.DetectSqls),
+		CatalogDependencies:       make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		ViewMetadataDependsOnUdf:  qry.ViewMetadataDependsOnUdf,
+		Correlation:               DeepCopyCorrelation(qry.Correlation),
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)

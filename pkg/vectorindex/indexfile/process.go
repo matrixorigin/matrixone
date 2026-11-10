@@ -28,29 +28,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-// Files is where a caller without a process reads and writes index files: the storage
-// engine and the CN's index-file cache (nil when the CN has none).
+// Files is where a caller without a process, such as a background job running on a
+// SqlContext, reads and writes index files: the storage engine and the CN's index-file
+// cache (nil when the CN has none).
 type Files struct {
 	Engine engine.Engine
 	Cache  *fileservice.IndexFileCache
 }
 
 // ReadTarget is what a read of index files runs under, as sqlproc's internal SQL does: the
-// account that SQL executes as, and the process's transaction pinned at its named snapshot
-// when that is historical.
+// account that SQL executes as, and sqlproc's transaction pinned at its named snapshot when
+// that is historical.
 func ReadTarget(sqlproc *sqlexec.SqlProcess) (context.Context, client.TxnOperator, error) {
-	if sqlproc.Proc == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("index file: reading needs a process")
-	}
 	account, err := sqlproc.EffectiveAccountID()
 	if err != nil {
 		return nil, nil, err
 	}
-	txn := sqlproc.Proc.GetTxnOperator()
-	if ts := sqlproc.EffectiveSnapshotTS(); ts != nil && txn != nil {
+	txn := sqlprocTxn(sqlproc)
+	if txn == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("index file: reading needs a transaction")
+	}
+	if ts := sqlproc.EffectiveSnapshotTS(); ts != nil {
 		txn = txn.CloneSnapshotOp(*ts)
 	}
 	return defines.AttachAccountId(sqlproc.GetContext(), account), txn, nil
+}
+
+// sqlprocTxn is the transaction of sqlproc's process, or of its SqlContext.
+func sqlprocTxn(sqlproc *sqlexec.SqlProcess) client.TxnOperator {
+	if sqlproc.Proc != nil {
+		return sqlproc.Proc.GetTxnOperator()
+	}
+	if sqlproc.SqlCtx != nil {
+		return sqlproc.SqlCtx.Txn()
+	}
+	return nil
 }
 
 // NewEnv is the environment in txn (nil means the process's transaction), from files or else
@@ -59,6 +71,9 @@ func ReadTarget(sqlproc *sqlexec.SqlProcess) (context.Context, client.TxnOperato
 func NewEnv(sqlproc *sqlexec.SqlProcess, files *Files, txn client.TxnOperator, tempDir string) *Env {
 	proc := sqlproc.Proc
 	env := &Env{Proc: proc, Txn: txn, TempDir: tempDir}
+	if proc != nil || sqlproc.SqlCtx != nil {
+		env.Service = sqlproc.GetService()
+	}
 	if files != nil {
 		env.Engine, env.Cache = files.Engine, files.Cache
 	} else if proc != nil {
@@ -67,8 +82,8 @@ func NewEnv(sqlproc *sqlexec.SqlProcess, files *Files, txn client.TxnOperator, t
 		}
 		env.Cache = fileservice.GetIndexFileCache(proc.Base.FileService)
 	}
-	if env.Txn == nil && proc != nil {
-		env.Txn = proc.GetTxnOperator()
+	if env.Txn == nil {
+		env.Txn = sqlprocTxn(sqlproc)
 	}
 	if env.Engine == nil {
 		env.Cache = nil
@@ -76,16 +91,16 @@ func NewEnv(sqlproc *sqlexec.SqlProcess, files *Files, txn client.TxnOperator, t
 	return env
 }
 
-// OpenWithProcess opens the file ref names as sqlproc's internal SQL reads (ReadTarget),
-// keeping a file rebuilt outside the cache in tempDir.
-func OpenWithProcess(sqlproc *sqlexec.SqlProcess, ref Ref, tempDir string) (*File, error) {
+// OpenWithProcess opens the file ref names as sqlproc's internal SQL reads (ReadTarget), from
+// files or else from sqlproc's process, keeping a file rebuilt outside the cache in tempDir.
+func OpenWithProcess(sqlproc *sqlexec.SqlProcess, files *Files, ref Ref, tempDir string) (*File, error) {
 	ctx, txn, err := ReadTarget(sqlproc)
 	if err != nil {
 		return nil, err
 	}
-	env := NewEnv(sqlproc, nil, txn, tempDir)
-	if env.Engine == nil || env.Proc == nil {
-		return nil, moerr.NewInternalErrorNoCtx("index file: reading needs a process with a storage engine")
+	env := NewEnv(sqlproc, files, txn, tempDir)
+	if env.Engine == nil {
+		return nil, moerr.NewInternalErrorNoCtx("index file: reading needs a storage engine")
 	}
 	return Open(ctx, env, ref)
 }
