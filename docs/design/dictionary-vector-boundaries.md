@@ -91,3 +91,23 @@ SQL BVT belongs to producer enablement; existing owning package tests cover the
 unchanged flat route. Shared immutable core race evidence is reusable; boundary
 state is one execution lane, with existing asynchronous-owner cleanup tests.
 The neutral SF10/SF100 all-query gate remains required before leaving draft.
+
+## Approved producer-owned revision
+
+The requester approved this revision after SF10 disk Total regressed1.48%.
+Restore main OperatorBase layout and vm.Exec exactly. Only dictionary producers
+embed DictionaryOutputState, retire prior output at Call entry, and normalize
+the final projected batch before publication. Configure direct producer edges
+within preparation rather than a second whole-tree walk. Unknown consumers and
+external roots require flat output; aware edges retain dictionary output.
+
+State owns at most one accounted FlatCopy and is private to an execution lane.
+Reset cleans after stopped work; Free cleans before account disposal. A cancelled
+Exec that never calls the producer retires its prior result during terminal
+cleanup. Preparation clears old configuration. No registry, adapter operator,
+cache or opcode is added. No production producers are enabled in this stage.
+Legacy class-2 row buffers retain the merged core FLAT decoding contract.
+
+Validate concrete callbacks, projection, EOF/error/cancel, reset/free/reuse and
+allocation failure. Verify Base layout and Exec source match main, then perform
+fresh isolated all22/Total SF10/SF100 neutral acceptance with unchanged gates.
