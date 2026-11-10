@@ -2855,6 +2855,20 @@ var supportedStringBuiltIns = []FuncNew{
 					return Reverse
 				},
 			},
+			{
+				// TEXT must bind directly: REVERSE's CHAR overload is listed
+				// first, so a by-cast tie from TEXT would otherwise insert a
+				// width-255 implicit cast and truncate before reversing
+				// (#32336: CAST/CONVERT ... AS CHAR results are TEXT).
+				overloadId: 3,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Reverse
+				},
+			},
 		},
 	},
 

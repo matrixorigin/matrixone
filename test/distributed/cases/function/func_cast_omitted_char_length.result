@@ -114,3 +114,27 @@ from func_cast_omit_json_ctas;
 ➤ ctas_json_valid[-7,1,0]  ¦  ctas_json_suffix[12,0,0]  ¦  ctas_json_bytes[-5,64,0]  𝄀
 1  ¦  a"}  ¦  100009
 drop table if exists func_cast_omit_json_ctas;
+select length(reverse(cast(repeat('a', 300) as char))) as reverse_cast_len,
+length(reverse(convert(repeat('a', 300), char))) as reverse_convert_len,
+length(reverse(cast(concat(repeat('a', 50000), repeat('b', 50000))
+as char))) as reverse_over_64k_len;
+➤ reverse_cast_len[-5,64,0]  ¦  reverse_convert_len[-5,64,0]  ¦  reverse_over_64k_len[-5,64,0]  𝄀
+300  ¦  300  ¦  100000
+select reverse(cast('你好a' as char)) as reverse_mb,
+reverse(cast(null as char)) is null as reverse_null_is_null;
+➤ reverse_mb[12,0,0]  ¦  reverse_null_is_null[-7,1,0]  𝄀
+a好你  ¦  1
+select least(convert('2024-01-01', char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as least_convert_json_date,
+greatest(convert('2024-01-01', char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as greatest_convert_json_date,
+least(cast('2024-01-01' as char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as least_cast_json_date,
+greatest(cast('2024-01-01' as char), cast('2024-01-02' as date),
+cast('"2024-01-03"' as json)) as greatest_cast_json_date;
+➤ least_convert_json_date[12,-1,0]  ¦  greatest_convert_json_date[12,-1,0]  ¦  least_cast_json_date[12,-1,0]  ¦  greatest_cast_json_date[12,-1,0]  𝄀
+2024-01-01  ¦  2024-01-03  ¦  2024-01-01  ¦  2024-01-03
+select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"' as json))
+is null as least_null_peer_is_null;
+➤ least_null_peer_is_null[-7,1,0]  𝄀
+1

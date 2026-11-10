@@ -2,9 +2,9 @@
 -- omitted never truncate the value. MySQL infers the result length for the
 -- omitted-length CHAR target, so strings and serialized JSON larger than
 -- 64 KiB survive the cast intact. Explicit CHAR(N) keeps width truncation.
--- Content assertions use LENGTH/SUBSTRING/JSON_VALID, the string functions
--- whose overloads accept TEXT natively; LEFT/RIGHT routes TEXT through an
--- implicit convert first.
+-- Content assertions use LENGTH/SUBSTRING/JSON_VALID; REVERSE takes the
+-- unbounded TEXT cast target natively (no width-narrowing cast), and
+-- LEAST/GREATEST keep binding it in JSON and temporal compositions.
 
 -- concat result above the 65,535-byte varchar default, expression cast
 select length(concat(repeat('a', 50000), repeat('b', 50000))) as input_bytes,
@@ -120,3 +120,27 @@ select json_valid(doc_text) as ctas_json_valid,
        length(doc_text) as ctas_json_bytes
 from func_cast_omit_json_ctas;
 drop table if exists func_cast_omit_json_ctas;
+
+-- REVERSE consumed the pre-change VARCHAR cast target without any narrowing
+-- cast; the TEXT target must keep that length-preserving path for both CAST
+-- and CONVERT, below and above 64 KiB, multibyte, and NULL.
+select length(reverse(cast(repeat('a', 300) as char))) as reverse_cast_len,
+       length(reverse(convert(repeat('a', 300), char))) as reverse_convert_len,
+       length(reverse(cast(concat(repeat('a', 50000), repeat('b', 50000))
+                           as char))) as reverse_over_64k_len;
+select reverse(cast('你好a' as char)) as reverse_mb,
+       reverse(cast(null as char)) is null as reverse_null_is_null;
+
+-- LEAST and GREATEST keep binding omitted-length CHAR casts together with
+-- JSON and temporal arguments: the string peers compare as packed dates,
+-- matching the pre-change CHAR/VARCHAR behavior in both syntaxes.
+select least(convert('2024-01-01', char), cast('2024-01-02' as date),
+             cast('"2024-01-03"' as json)) as least_convert_json_date,
+       greatest(convert('2024-01-01', char), cast('2024-01-02' as date),
+                cast('"2024-01-03"' as json)) as greatest_convert_json_date,
+       least(cast('2024-01-01' as char), cast('2024-01-02' as date),
+             cast('"2024-01-03"' as json)) as least_cast_json_date,
+       greatest(cast('2024-01-01' as char), cast('2024-01-02' as date),
+                cast('"2024-01-03"' as json)) as greatest_cast_json_date;
+select least(cast(null as char), cast('2024-01-02' as date), cast('"2024-01-03"' as json))
+         is null as least_null_peer_is_null;

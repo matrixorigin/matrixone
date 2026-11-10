@@ -804,8 +804,19 @@ func TestLeastGreatestTemporalResolution(t *testing.T) {
 			wantTargets:  []types.T{types.T_year, types.T_date, types.T_varchar},
 		},
 		{
-			name:   "json date text rejected",
-			inputs: []types.Type{types.T_json.ToType(), types.T_date.ToType(), types.T_text.ToType()},
+			name:         "json date text resolves like varchar peers",
+			inputs:       []types.Type{types.T_json.ToType(), types.T_date.ToType(), types.T_text.ToType()},
+			wantOK:       true,
+			wantReturn:   types.T_varchar,
+			wantOverload: leastGreatestJSONTemporalOverload,
+			wantMode:     leastGreatestComparePackedDate,
+			wantTargets:  []types.T{types.T_varchar, types.T_date, types.T_varchar},
+		},
+		{
+			// The branch keeps its binary restriction even for TEXT-input
+			// compositions drawn in by CAST/CONVERT to an omitted-length CHAR.
+			name:   "json date blob still rejected",
+			inputs: []types.Type{types.T_json.ToType(), types.T_date.ToType(), types.T_blob.ToType()},
 		},
 	}
 
@@ -825,6 +836,59 @@ func TestLeastGreatestTemporalResolution(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Omitted-length CAST/CONVERT to CHAR targets TEXT (#32336), so LEAST/GREATEST
+// JSON + temporal compositions must keep binding those inputs exactly like the
+// pre-mapping CHAR/VARCHAR peers, and the executor must compare the resolved
+// argument types.
+func TestLeastGreatestJSONTemporalTextComposition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, fnName := range []string{"least", "greatest"} {
+		get, err := GetFunctionByName(proc.Ctx, fnName, []types.Type{
+			types.T_text.ToType(),
+			types.T_date.ToType(),
+			types.T_json.ToType(),
+		})
+		require.NoError(t, err, fnName)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid, fnName)
+		targets, shouldCast := get.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast, fnName)
+		require.Len(t, targets, 3, fnName)
+		require.Equal(t, []types.T{types.T_varchar, types.T_date, types.T_varchar},
+			[]types.T{targets[0].Oid, targets[1].Oid, targets[2].Oid}, fnName)
+	}
+
+	// Executor level: the binder delivers non-temporal arguments at the
+	// resolved VARCHAR target (the JSON scalar arrives unquoted, as implicit
+	// coercion keeps the payload), and the values compare as packed dates.
+	varcharTyp := types.T_varchar.ToType()
+	dateTyp := types.T_date.ToType()
+	middle, err := types.ParseDateCast("2024-01-02")
+	require.NoError(t, err)
+
+	tcLeast := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(varcharTyp, []string{"2024-01-01"}, nil),
+			NewFunctionTestInput(dateTyp, []types.Date{middle}, nil),
+			NewFunctionTestInput(varcharTyp, []string{"2024-01-03"}, nil),
+		},
+		NewFunctionTestResult(varcharTyp, false, []string{"2024-01-01"}, nil),
+		leastJSONTemporalFn)
+	ok, info := tcLeast.Run()
+	require.True(t, ok, info)
+
+	tcGreatest := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(varcharTyp, []string{"2024-01-01"}, nil),
+			NewFunctionTestInput(dateTyp, []types.Date{middle}, nil),
+			NewFunctionTestInput(varcharTyp, []string{"2024-01-03"}, nil),
+		},
+		NewFunctionTestResult(varcharTyp, false, []string{"2024-01-03"}, nil),
+		greatestJSONTemporalFn)
+	ok, info = tcGreatest.Run()
+	require.True(t, ok, info)
 }
 
 func TestLeastGreatestMixedTemporalResolutionPreservesMaxScale(t *testing.T) {
