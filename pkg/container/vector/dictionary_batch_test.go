@@ -73,4 +73,18 @@ func TestDictionaryRetentionDeclinesCopyOnlySource(t *testing.T) {
 	require.False(t, admitted)
 	require.Nil(t, output[0])
 	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](source))
+	t.Run("decline-after-first-column", func(t *testing.T) {
+		first := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		t.Cleanup(func() { first.Free(mp) })
+		require.NoError(t, AppendFixedList(first, []int64{10, 20, 30}, nil, mp))
+		used := state.account.Snapshot().Used
+		destinations := make([]*Vector, 2)
+		admitted, err := TrySelectDictionaryVectors([]*Vector{first, source}, destinations, []int64{2}, 3, mp, state.selection)
+		require.NoError(t, err)
+		require.False(t, admitted)
+		require.Nil(t, destinations[0], "partial first-column publication must roll back")
+		require.Nil(t, destinations[1])
+		require.Equal(t, used, state.account.Snapshot().Used)
+		require.Equal(t, []int64{10, 20, 30}, MustFixedColNoTypeCheck[int64](first))
+	})
 }

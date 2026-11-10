@@ -101,3 +101,55 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 	})
 
 }
+
+func TestDictionaryCharComparisonReadsSelectedRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	typ := types.New(types.T_char, 10, 0)
+	source := vector.NewVec(typ)
+	t.Cleanup(func() { source.Free(mp) })
+	for i, value := range []string{"AA  ", "B", "unused"} {
+		require.NoError(t, vector.AppendBytes(source, []byte(value), i == 2, mp))
+	}
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{1, 0, 1, 2}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	dict, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = dict
+	input.SetRowCount(4)
+	t.Cleanup(func() { input.Clean(mp) })
+	column := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	literal := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "AA"}}}}
+	for _, tc := range []struct {
+		op   string
+		want []bool
+	}{
+		{"=", []bool{false, true, false}},
+		{"<>", []bool{true, false, true}},
+		{"<", []bool{false, false, false}},
+		{"<=", []bool{false, true, false}},
+		{">", []bool{true, false, true}},
+		{">=", []bool{true, true, true}},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, tc.op, column, literal))
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			for row, want := range tc.want {
+				require.False(t, result.IsNull(uint64(row)))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, row))
+			}
+			require.True(t, result.IsNull(3))
+			require.Empty(t, executor.(*FunctionExpressionExecutor).dictionaryScratch, "CHAR comparison must read the selected view directly")
+			require.True(t, dict.IsDictionary())
+		})
+	}
+}

@@ -202,10 +202,29 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 			matches = vector.GetSels()
 		}
 		matches = matches[:0]
-		for row := 0; row < current.RowCount(); row++ {
-			keep, isNull := (*parameter).GetValue(uint64(row))
-			if !isNull && keep {
-				matches = append(matches, int64(row))
+		view := vector.ResolveFixedReadView[bool](value)
+		if view.Selection == nil && !view.Nulls.Any() {
+			// Ordinary predicate results keep the existing direct flat loop.
+			for row, keep := range view.Values[:current.RowCount()] {
+				if keep {
+					matches = append(matches, int64(row))
+				}
+			}
+		} else {
+			for row := 0; row < current.RowCount(); row++ {
+				if view.AllNull || view.Nulls.Contains(uint64(row)) {
+					continue
+				}
+				physical := row
+				if view.Selection != nil {
+					physical = int(view.Selection[row])
+				}
+				if view.Constant {
+					physical = 0
+				}
+				if view.Values[physical] {
+					matches = append(matches, int64(row))
+				}
 			}
 		}
 		if len(matches) == current.RowCount() {

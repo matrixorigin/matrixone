@@ -61,7 +61,7 @@ var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterWithoutNullSpe
 func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector) FunctionParameterWrapper[T] {
 	if v.IsDictionary() {
 		backing := v.dictionaryState()
-		return &functionParameterDictionary[T]{source: v, rows: backing.rows.storageFixed()[:v.length],
+		return &functionParameterDictionary[T]{source: v, rows: backing.rows.storageFixed()[:v.length], hasNull: v.HasNull(),
 			base: GenerateFunctionFixedTypeParameter[T](backing.base.vec)}
 	}
 	t := v.GetType()
@@ -187,7 +187,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		if !ReuseFunctionFixedTypeParameter(backing.base.vec, r.base) {
 			r.base = GenerateFunctionFixedTypeParameter[T](backing.base.vec)
 		}
-		r.source, r.rows = v, backing.rows.storageFixed()[:v.length]
+		r.source, r.rows, r.hasNull = v, backing.rows.storageFixed()[:v.length], v.HasNull()
 		return true
 	}
 	// A different effective type must be rebuilt by the parameter conversion owner.
@@ -239,7 +239,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varlena] {
 	if v.IsDictionary() {
 		backing := v.dictionaryState()
-		return &functionParameterDictionary[types.Varlena]{source: v, rows: backing.rows.storageFixed()[:v.length],
+		return &functionParameterDictionary[types.Varlena]{source: v, rows: backing.rows.storageFixed()[:v.length], hasNull: v.HasNull(),
 			base: GenerateFunctionStrParameter(backing.base.vec)}
 	}
 	t := v.GetType()
@@ -302,7 +302,7 @@ func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varle
 		if !ReuseFunctionStrParameter(backing.base.vec, r.base) {
 			r.base = GenerateFunctionStrParameter(backing.base.vec)
 		}
-		r.source, r.rows = v, backing.rows.storageFixed()[:v.length]
+		r.source, r.rows, r.hasNull = v, backing.rows.storageFixed()[:v.length], v.HasNull()
 		return true
 	}
 	// A different effective type must be rebuilt by the parameter conversion owner.

@@ -21,22 +21,23 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 // Resolve the backing wrapper once, preserving its existing conversion rules.
 // Logical NULL coordinates must never be replaced by physical value indices.
 type functionParameterDictionary[T types.FixedSizeT] struct {
-	source *Vector
-	rows   []int64
-	base   FunctionParameterWrapper[T]
+	source  *Vector
+	rows    []int64
+	base    FunctionParameterWrapper[T]
+	hasNull bool
 }
 
 func (p *functionParameterDictionary[T]) GetType() types.Type      { return p.base.GetType() }
 func (p *functionParameterDictionary[T]) GetSourceVector() *Vector { return p.source }
-func (p *functionParameterDictionary[T]) WithAnyNullValue() bool   { return p.source.HasNull() }
+func (p *functionParameterDictionary[T]) WithAnyNullValue() bool   { return p.hasNull }
 func (p *functionParameterDictionary[T]) GetValue(row uint64) (value T, isNull bool) {
-	if p.source.IsNull(row) {
+	if p.hasNull && p.source.nsp.Contains(row) {
 		return value, true
 	}
 	return p.base.GetValue(uint64(p.rows[row]))
 }
 func (p *functionParameterDictionary[T]) GetStrValue(row uint64) ([]byte, bool) {
-	if p.source.IsNull(row) {
+	if p.hasNull && p.source.nsp.Contains(row) {
 		return nil, true
 	}
 	return p.base.GetStrValue(uint64(p.rows[row]))

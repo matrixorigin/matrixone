@@ -22,14 +22,22 @@ import (
 // These shapes reach the existing wrapper-based comparison loops. Mixed types,
 // prepared JSON routing and native/raw-slice branches retain the flat boundary.
 func dictionaryComparisonInputs(parameters []*vector.Vector) bool {
-	if len(parameters) != 2 || parameters[0] == nil || parameters[1] == nil ||
-		parameters[0].GetType().Oid != parameters[1].GetType().Oid {
+	if len(parameters) != 2 || parameters[0] == nil || parameters[1] == nil {
 		return false
 	}
 	for _, v := range parameters {
 		if v.IsPreparedJSONComparisonParam() || v.HasGrouping() {
 			return false
 		}
+	}
+	// The CHAR branch reads both operands through string wrappers. A bound
+	// CHAR literal can retain VARCHAR physical storage; comparison semantics
+	// still belong to the first CHAR operand, as on the ordinary flat path.
+	if parameters[0].GetType().Oid == types.T_char && parameters[1].GetType().Oid.IsMySQLString() {
+		return true
+	}
+	if parameters[0].GetType().Oid != parameters[1].GetType().Oid {
+		return false
 	}
 	switch parameters[0].GetType().Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,

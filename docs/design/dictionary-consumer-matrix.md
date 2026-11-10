@@ -137,3 +137,17 @@ The selection callback now accepts a complete eager schema; Apply-only legacy
 validation remains unchanged. Targeted race checks passed for vector, VM and
 owned shuffle. The requester restricted timing to local SF10 memory/disk and
 local SF100 disk-backed, no spill; no server129 activity is needed.
+
+### Profile-driven hot-path correction
+
+The first local six-suite campaign on merged main 39e470bad8 exposed repeatable
+extra CPU work in selected metadata, Boolean predicate wrappers and row-at-a-time
+function compatibility gathers. Preserve the approved architecture and remove
+those costs: skip absent bitmap metadata/inline-only area scans, read ordinary
+Boolean predicate results through their flat slices, bulk gather compatibility
+operands, and admit the existing CHAR comparison wrapper path (including the
+binder's VARCHAR literal carrier). Generic VARCHAR equality keeps its raw-slice
+normalization boundary. No SQL types, cache tiers/algorithm or join placement
+change. All six selected CHAR comparisons have independent expected values,
+repeats, trailing spaces and NULL controls. The first SF100 timing window was
+excluded for external CPU interference; it is not acceptance evidence.

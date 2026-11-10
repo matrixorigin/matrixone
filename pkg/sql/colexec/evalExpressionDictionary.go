@@ -73,10 +73,8 @@ func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters
 		} else {
 			dst.Reset(*source.GetType())
 		}
-		for row := 0; row < source.Length(); row++ {
-			if err := dst.UnionOne(source, int64(row), expr.m); err != nil {
-				return nil, err
-			}
+		if err := dst.UnionBatch(source, 0, source.Length(), nil, expr.m); err != nil {
+			return nil, err
 		}
 		source.CopyExpressionMetadataTo(dst)
 		expr.dictionaryParameters[i] = dst

@@ -164,7 +164,7 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 		return nil, moerr.NewInvalidStateNoCtx("dictionary selection was released")
 	}
 	area := 0
-	if metadata.typ.IsVarlen() && !base.vec.IsConstNull() {
+	if metadata.typ.IsVarlen() && len(base.vec.area) > 0 && !base.vec.IsConstNull() {
 		for row, index := range mapping.storageFixed()[:len(logical)] {
 			if result.IsNull(uint64(row)) {
 				continue
@@ -297,12 +297,20 @@ func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) 
 		}
 	}
 	dst.setLengthAfterExtendWithSource(len(rows), source.stringSource, false)
-	for i, row := range rows {
-		if source.IsNull(uint64(row)) {
-			dst.nsp.Add(uint64(i))
+	if source.IsConstNull() {
+		nulls.AddRange(&dst.nsp, 0, uint64(len(rows)))
+	} else if !source.IsConst() && source.HasNull() {
+		for i, row := range rows {
+			if source.nsp.Contains(uint64(row)) {
+				dst.nsp.Add(uint64(i))
+			}
 		}
-		if source.gsp.Contains(uint64(row)) {
-			dst.gsp.Add(uint64(i))
+	}
+	if source.HasGrouping() {
+		for i, row := range rows {
+			if source.gsp.Contains(uint64(row)) {
+				dst.gsp.Add(uint64(i))
+			}
 		}
 	}
 	if err := propagatePrepareParamKindsSelection(dst, source, 0, rows, mp); err != nil {
