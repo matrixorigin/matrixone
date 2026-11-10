@@ -153,6 +153,47 @@ func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 	assert.NoError(t, handle.Close())
 }
 
+func TestCombinedTxnTable_BoundaryComparisonRejectsIncompleteInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		primary bool
+		parent  bool
+		storage bool
+		equal   bool
+	}{
+		{name: "missing primary", parent: true, storage: true, equal: true},
+		{name: "missing parent", primary: true, storage: true, equal: true},
+		{name: "missing resources", primary: true, parent: true, equal: true},
+		{name: "different timestamps", primary: true, parent: true, storage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := newMockCombinedTxnTable()
+			if tc.primary {
+				table.primary = &txnTable{}
+			}
+			table.tablesFunc = func() ([]engine.Relation, error) {
+				t.Fatal("boundary comparison must not dispatch the parent to individual partitions")
+				return nil, nil
+			}
+			ctx := engine.WithVisibleStateBoundaryComparison(t.Context())
+			if tc.parent {
+				ctx = engine.WithVisibleStateStartRelation(ctx, &mockRelation{})
+			}
+			if tc.storage {
+				ctx = engine.WithVisibleStateRecoveryResources(ctx, newTestVisibleStateResources())
+			}
+			from := types.BuildTS(1, 0)
+			to := types.BuildTS(2, 0)
+			if tc.equal {
+				to = from
+			}
+			handle, err := table.CollectChanges(ctx, from, to, false, nil)
+			require.Error(t, err)
+			require.Nil(t, handle)
+		})
+	}
+}
+
 func TestCombinedTxnTable_CollectChangesOrdersPartitionsByCommitTS(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

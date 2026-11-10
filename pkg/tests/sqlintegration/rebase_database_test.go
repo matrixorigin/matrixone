@@ -855,7 +855,7 @@ func TestCloneCreationCommitMutationMerge(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 		db.SetMaxOpenConns(1)
-		defer cleanupSQLIntegration(t, cn, "drop snapshot if exists nr_creation_base", "drop database if exists nr_creation_f", "drop database if exists nr_creation_u")
+		defer cleanupSQLIntegration(t, cn, "drop snapshot if exists nr_creation_base", "drop database if exists nr_creation_f", "drop database if exists nr_creation_u", "drop database if exists nr_partition_merge")
 		f := rebaseSQLFixture{t, ctx, db, "nr_creation_"}
 		f.exec("create database nr_creation_u")
 		f.exec("create table nr_creation_u.a(id int primary key,v int)")
@@ -900,6 +900,9 @@ func TestCloneCreationCommitMutationMerge(t *testing.T) {
 		require.Equal(t, int64(99), f.scalar("select v from nr_creation_u.b where id=1"), "an unchanged clone must not overwrite upstream changes")
 		f.exec("data branch merge nr_creation_f.a into nr_creation_u.a when conflict accept")
 		require.Equal(t, want, f.rows("nr_creation_u", "a"))
+		t.Run("partition_boundaries", func(t *testing.T) {
+			checkBranchMergePreservesUnchangedPartitionRows(t, ctx, db)
+		})
 	})
 }
 
