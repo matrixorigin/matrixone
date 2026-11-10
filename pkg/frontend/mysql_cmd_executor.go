@@ -1047,12 +1047,6 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-		} else if name == "optimizer_hints" {
-			err = setVarFunc(assign.System, assign.Global, name, value, sql)
-			if err != nil {
-				return err
-			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
 		} else if name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
