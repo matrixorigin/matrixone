@@ -821,6 +821,46 @@ func TestCacheGC(t *testing.T) {
 
 }
 
+func TestEngineInventoryFixture(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	op := p.StartCNTxn()
+	catalogDB, err := p.D.Engine.Database(p.Ctx, catalog.MO_CATALOG, op)
+	require.NoError(t, err)
+	inventory, err := catalogDB.Relation(p.Ctx, catalog.MODatabaseInventory, nil)
+	require.NoError(t, err)
+	key := inventory.GetTableDef(p.Ctx).Pkey
+	require.NotNil(t, key)
+	require.Equal(t, []string{"account_id", "database_id"}, key.Names)
+	require.Equal(t, catalog.CPrimaryKeyColName, key.PkeyColName)
+	_, err = catalogDB.Relation(p.Ctx, "mo_indexes_inventory_fixture", nil)
+	require.Error(t, err, "bootstrap-only relation must be removed")
+	require.NoError(t, op.Commit(p.Ctx))
+
+	schema := catalog2.MockSchemaAll(2, -1)
+	schema.Name = "fixture_t"
+	op = p.StartCNTxn()
+	db, _ := p.CreateDBAndTable(op, "inventory_fixture_db", schema)
+	databaseID := db.GetDatabaseId(p.Ctx)
+	require.NoError(t, op.Commit(p.Ctx))
+
+	internal, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	query := fmt.Sprintf("select epoch from mo_catalog.mo_database_inventory where account_id=0 and database_id=%s", databaseID)
+	result, err := internal.(executor.SQLExecutor).Exec(p.Ctx, query, executor.Options{})
+	require.NoError(t, err)
+	defer result.Close()
+	var epochs []uint64
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			epochs = append(epochs, vector.GetFixedAtNoTypeCheck[uint64](cols[0], i))
+		}
+		return true
+	})
+	require.Equal(t, []uint64{2}, epochs, "create database initializes and create table advances the same row")
+}
+
 func TestShowDatabasesInRestoreTxn(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)

@@ -193,7 +193,6 @@ func NewTestDisttaeEngine(
 	defer stopNotify()
 
 	op, err := de.txnClient.New(de.ctx, types.TS{}.ToTimestamp())
-	stopNotify()
 	if err != nil {
 		return nil, err
 	}
@@ -242,16 +241,69 @@ func NewTestDisttaeEngine(
 	if err = de.Engine.StartGCScheduler(de.ctx); err != nil {
 		return de, err
 	}
+	fixtureReady := false
+	defer func() {
+		if !fixtureReady {
+			stopNotify()
+			de.Close(context.WithoutCancel(ctx))
+		}
+	}()
 
-	// This fixture skips frontend bootstrap; normal user DDL still requires
-	// the durable inventory installed by bootstrap in a running CN.
-	result, err := sqlExecutor.Exec(de.ctx, catalog.MoDatabaseInventoryDDL,
-		executor.Options{}.WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG).
-			WithWaitCommittedLogApplied())
+	// This fixture skips frontend bootstrap. Build the real inventory definition
+	// without requiring mo_indexes, which individual engine tests own themselves.
+	bootstrap, err := de.txnClient.New(de.ctx, de.Now())
+	if err != nil {
+		return de, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = bootstrap.Rollback(de.ctx)
+		}
+	}()
+	if err = de.Engine.New(de.ctx, bootstrap); err != nil {
+		return de, err
+	}
+	const temporaryInventory = "mo_indexes_inventory_fixture"
+	ddl := strings.Replace(catalog.MoDatabaseInventoryDDL, catalog.MODatabaseInventory, temporaryInventory, 1)
+	result, err := sqlExecutor.Exec(de.ctx, ddl, executor.Options{}.WithTxn(bootstrap).
+		WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
 	if err != nil {
 		return de, err
 	}
 	result.Close()
+	database, err := de.Engine.Database(de.ctx, catalog.MO_CATALOG, bootstrap)
+	if err != nil {
+		return de, err
+	}
+	temporary, err := database.Relation(de.ctx, temporaryInventory, nil)
+	if err != nil {
+		return de, err
+	}
+	defs, err := temporary.TableDefs(de.ctx)
+	if err != nil {
+		return de, err
+	}
+	for _, def := range defs {
+		if properties, ok := def.(*engine.PropertiesDef); ok {
+			for i := range properties.Properties {
+				if properties.Properties[i].Key == catalog.SystemRelAttr_CreateSQL {
+					properties.Properties[i].Value = catalog.MoDatabaseInventoryDDL
+				}
+			}
+		}
+	}
+	if err = database.Create(de.ctx, catalog.MODatabaseInventory, defs); err != nil {
+		return de, err
+	}
+	if err = database.Delete(de.ctx, temporaryInventory); err != nil {
+		return de, err
+	}
+	if err = bootstrap.Commit(de.ctx); err != nil {
+		return de, err
+	}
+	committed = true
+	fixtureReady = true
 
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, nil
