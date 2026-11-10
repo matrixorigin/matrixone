@@ -76,9 +76,11 @@ func ExecuteIterationWithRuntime(
 	iterCtx *IterationContext,
 	mp *mpool.MPool,
 ) (err error) {
-	iterCtx = runtime.filterFencedIteration(iterCtx)
 	if iterCtx == nil {
 		return nil
+	}
+	if err = runtime.checkIterationFences(iterCtx); err != nil {
+		return err
 	}
 	packer := types.NewPacker()
 	defer packer.Close()
@@ -106,24 +108,8 @@ func ExecuteIterationWithRuntime(
 	}
 
 	statuses := make([]*JobStatus, len(iterCtx.jobNames))
-	jobSpecs, prevStatus, prevStates, err := GetJobSpecs(
-		ctx,
-		cnUUID,
-		cnTxnClient,
-		cnEngine,
-		txnOp,
-		iterCtx.accountID,
-		iterCtx.tableID,
-		iterCtx.jobNames,
-		iterCtx.lsn,
-		iterCtx.fromTS,
-		statuses,
-		iterCtx.jobIDs,
-	)
+	jobSpecs, prevStatus, prevStates, err := GetJobSpecs(ctx, cnUUID, txnOp, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.jobIDs)
 	if err != nil {
-		if isPermanentError(err) {
-			return nil
-		}
 		return
 	}
 	iterCtx, jobSpecs, prevStatus, err = unfinishedIteration(iterCtx, jobSpecs, prevStatus, prevStates)
@@ -156,31 +142,13 @@ func ExecuteIterationWithRuntime(
 	for i := range prevStatus {
 		if prevStatus[i].Stage == JobStage_Init && jobSpecs[i].ConsumerInfo.InitSQL != "" {
 			if len(iterCtx.jobNames) != 1 {
-				errMsg := "init sql is not supported for multiple jobs"
-				return FlushPermanentErrorMessage(
-					ctx,
-					cnUUID,
-					cnEngine,
-					cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					iterCtx.jobNames,
-					iterCtx.jobIDs,
-					iterCtx.lsn,
-					statuses,
-					types.MaxTs(),
-					errMsg,
-					preLSN,
-				)
+				return moerr.NewInternalError(ctx, "init sql is not supported for multiple jobs")
 			}
 			needInit = true
 			break
 		}
 	}
 	if needInit {
-		if len(iterCtx.jobNames) != 1 {
-			return moerr.NewInternalError(ctx, "multiple jobs cannot share an initializer")
-		}
 		status := &JobStatus{LSN: iterCtx.lsn[0], Stage: prevStatus[0].Stage, From: iterCtx.fromTS, To: previousWatermark(iterCtx.fromTS)}
 		statuses[0] = status
 		if err = FlushJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.jobIDs, iterCtx.lsn, statuses, previousWatermark(iterCtx.fromTS), ISCPJobState_Running, preLSN); err != nil {
@@ -194,10 +162,14 @@ func ExecuteIterationWithRuntime(
 		if err = initializer.captureOutputTables(ctxWithAccount, db); err != nil {
 			return err
 		}
-		retriever := NewDataRetriever(ctx, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0], status, iterCtx.lsn[0], ISCPDataType_Snapshot)
+		// Admission remains immutable until success is durable. A rolled-back
+		// completion must not make the next generation skip the initializer.
+		completedStatus := *status
+		completedStatus.Stage = JobStage_Running
+		retriever := NewDataRetriever(ctx, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0], &completedStatus, iterCtx.lsn[0], ISCPDataType_Snapshot)
 		defer retriever.Close()
 		retriever.validateOutput = initializer.validateOutputTables
-		var snapshotMarker *cuvsSnapshotMarker
+		var finishSnapshot func(*sqlexec.SqlProcess) error
 		err = runInitSQLWithRuntime(ctx, runtime, iterCtx, func(initCtx context.Context) error {
 			initCtx = defines.AttachAccountId(initCtx, iterCtx.accountID)
 			return processInitSQL(initCtx, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL, dbName, tableName, jobSpecs[0].ConsumerInfo.IndexName,
@@ -206,18 +178,24 @@ func ExecuteIterationWithRuntime(
 						return err
 					}
 					if jobSpecs[0].InitSQLCoversSnapshot {
+						owner, ok := initializer.sqlWriter.(SourceSnapshotWriter)
+						if !ok {
+							return moerr.NewInternalError(proc.GetContext(), "full-source initializer has no snapshot publication owner")
+						}
 						var err error
-						snapshotMarker, err = initializer.prepareCuvsSnapshotMarker(proc)
+						finishSnapshot, err = owner.PrepareSourceSnapshot(proc)
 						return err
 					}
 					return nil
 				}, func(proc *sqlexec.SqlProcess, snapshot types.TS) error {
-					status.Stage = JobStage_Running
 					if jobSpecs[0].InitSQLCoversSnapshot {
-						if err := snapshotMarker.persist(proc); err != nil {
+						if err := finishSnapshot(proc); err != nil {
 							return err
 						}
-						status.To = snapshot
+						completedStatus.To = snapshot
+					}
+					if objectio.ISCPIndexWatermarkErrInjected() {
+						return injectedISCPIndexErr("watermark")
 					}
 					err := retriever.UpdateWatermark(proc.GetContext(), cnUUID, proc.SqlCtx.Txn())
 					if err != nil {
@@ -237,10 +215,11 @@ func ExecuteIterationWithRuntime(
 			return nil
 		}
 		if errors.Is(err, errInitSQLJobFenced) {
-			return nil
+			return errIterationNeedsRecovery
 		}
-		status.SetError(err)
-		publicationErr := flushFinalJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx, 0, status, previousWatermark(iterCtx.fromTS), ISCPJobState_Completed)
+		failureStatus := *status
+		failureStatus.SetError(err)
+		publicationErr := flushFinalJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx, 0, &failureStatus, previousWatermark(iterCtx.fromTS), ISCPJobState_Completed)
 		return errors.Join(err, publicationErr)
 	}
 
@@ -353,6 +332,7 @@ func ExecuteIterationWithRuntime(
 			consumer.invalidateOutputCaches()
 		}
 		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
+			publicationErr = errors.Join(publicationErr, errIterationNeedsRecovery)
 			continue
 		}
 		_, indexConsumer := consumers[i].(*IndexConsumer)
@@ -386,7 +366,7 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 
-	return publicationErr
+	return errors.Join(publicationErr, runtime.checkIterationFences(iterCtx))
 }
 
 func runISCPTaskIterationConsumers(
@@ -761,20 +741,7 @@ func normalizeJobStatuses(jobStatuses []*JobStatus, lsns []uint64) []*JobStatus 
 	return jobStatuses
 }
 
-var GetJobSpecs = func(
-	ctx context.Context,
-	cnUUID string,
-	cnTxnClient client.TxnClient,
-	cnEngine engine.Engine,
-	txn client.TxnOperator,
-	tenantId uint32,
-	tableID uint64,
-	jobName []string,
-	lsns []uint64,
-	watermark types.TS,
-	jobStatuses []*JobStatus,
-	jobIDs []uint64,
-) (jobSpec []*JobSpec, prevStatus []*JobStatus, prevStates []int8, err error) {
+var GetJobSpecs = func(ctx context.Context, cnUUID string, txn client.TxnOperator, tenantId uint32, tableID uint64, jobName []string, jobIDs []uint64) (jobSpec []*JobSpec, prevStatus []*JobStatus, prevStates []int8, err error) {
 	var buf bytes.Buffer
 	buf.WriteString("SELECT job_name, job_id, job_spec, job_status, job_state FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
@@ -789,10 +756,6 @@ var GetJobSpecs = func(
 	if err != nil {
 		return
 	}
-	prevLSNs := make([]uint64, len(jobName))
-	for i := range jobName {
-		prevLSNs[i] = lsns[i] - 1
-	}
 	defer execResult.Close()
 	expectedJobs := make(map[JobKey]int, len(jobName))
 	for i := range jobName {
@@ -801,7 +764,6 @@ var GetJobSpecs = func(
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
 	prevStates = make([]int8, len(jobName))
-	var foundRows int
 	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		currentJobNames := executor.GetStringRows(cols[0])
@@ -828,36 +790,18 @@ var GetJobSpecs = func(
 				return false
 			}
 			prevStates[jobIdx] = currentStates[i]
-			foundRows++
 		}
 		return true
 	})
-	if permanentErrMsg == "" && foundRows != len(jobName) {
-		// Retirement can remove one member of a shared iteration. Let the
-		// worker reconcile each surviving generation rather than failing siblings.
-		return nil, nil, nil, errIterationNeedsRecovery
-	}
 	if permanentErrMsg != "" {
-		err = FlushPermanentErrorMessage(
-			ctx,
-			cnUUID,
-			cnEngine,
-			cnTxnClient,
-			tenantId,
-			tableID,
-			jobName,
-			jobIDs,
-			lsns,
-			jobStatuses,
-			types.MaxTs(),
-			permanentErrMsg,
-			prevLSNs,
-		)
 		if err == nil {
-			err = errPermanent
+			err = moerr.NewInternalError(ctx, permanentErrMsg)
 		}
 		return nil, nil, nil, err
 	}
+	// Absent exact generations are retired independently; malformed rows above
+	// remain errors and never authorize writes to sibling jobs.
+
 	return
 }
 

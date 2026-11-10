@@ -56,6 +56,13 @@ type SnapshotSQLWriter interface {
 	SnapshotTarget() (database, table string)
 }
 
+// SourceSnapshotWriter owns format-specific replacement recency in the same
+// transaction as a compiler-provided complete source initializer.
+type SourceSnapshotWriter interface {
+	IndexSqlWriter
+	PrepareSourceSnapshot(*sqlexec.SqlProcess) (func(*sqlexec.SqlProcess) error, error)
+}
+
 // Base implementation of IVFFLAT and FULLTEXT.  Their implementation are simliar.
 type BaseIndexSqlWriter struct {
 	lastCdcOp string

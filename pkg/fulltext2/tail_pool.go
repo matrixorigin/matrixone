@@ -29,6 +29,7 @@ const (
 
 type tailState struct {
 	baseGeneration int64
+	minChunk       int64
 	maxChunk       int64
 	segments       []*segmentLease
 	deletes        map[any]int64
@@ -349,13 +350,14 @@ func acquireTailViews(state *tailState) ([]*Segment, map[any]int64) {
 	return segs, cloneDeletes(state.deletes)
 }
 
-func newTailState(baseGeneration, maxChunk int64, segs []*Segment, deletes map[any]int64) *tailState {
+func newTailState(baseGeneration, minChunk, maxChunk int64, segs []*Segment, deletes map[any]int64) *tailState {
 	leases := make([]*segmentLease, 0, len(segs))
 	for _, seg := range segs {
 		leases = append(leases, newSegmentLease(seg))
 	}
 	state := &tailState{
 		baseGeneration: baseGeneration,
+		minChunk:       minChunk,
 		maxChunk:       maxChunk,
 		segments:       leases,
 		deletes:        cloneDeletes(deletes),
@@ -366,20 +368,21 @@ func newTailState(baseGeneration, maxChunk int64, segs []*Segment, deletes map[a
 }
 
 // loadTailWithReuse reuses the prior tail generation when the durable tail
-// maximum is unchanged, or reads only chunks after the prior maximum when it
-// advanced. A base generation change or tail regression forces a full tail
+// bounds are unchanged, or reads only chunks after the prior maximum when it
+// advanced without changing the minimum. A changed minimum detects replacement
+// even when no new base was produced. A base change or tail regression forces a full tail
 // reload and retires the old tail leases after active readers release them.
-func loadTailWithReuse(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMax int64, trace *loadTrace) ([]*Segment, map[any]int64, int64, error) {
-	return loadTailWithReuseForGeneration(sqlproc, cfg, baseGeneration, tailMax, trace, loadGeneration{})
+func loadTailWithReuse(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMin, tailMax int64, trace *loadTrace) ([]*Segment, map[any]int64, int64, error) {
+	return loadTailWithReuseForGeneration(sqlproc, cfg, baseGeneration, tailMin, tailMax, trace, loadGeneration{})
 }
 
-func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMax int64, trace *loadTrace, generation loadGeneration) ([]*Segment, map[any]int64, int64, error) {
+func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMin, tailMax int64, trace *loadTrace, generation loadGeneration) ([]*Segment, map[any]int64, int64, error) {
 	index := cfg.DbName + "." + cfg.IndexTable
 	current := func() bool {
 		return generation.attempt == 0 || loadGenerationCurrent(generation)
 	}
 	old := loadedTailPool.state(index)
-	if old != nil && old.baseGeneration == baseGeneration && tailMax == old.maxChunk {
+	if old != nil && old.baseGeneration == baseGeneration && old.minChunk == tailMin && tailMax == old.maxChunk {
 		segs, deletes, ok := loadedTailPool.acquireViews(index, old)
 		if ok {
 			return segs, deletes, old.maxChunk, nil
@@ -388,7 +391,7 @@ func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 	}
 
 	after := int64(-1)
-	if old != nil && old.baseGeneration == baseGeneration && tailMax > old.maxChunk {
+	if old != nil && old.baseGeneration == baseGeneration && old.minChunk == tailMin && tailMax > old.maxChunk {
 		if loadedTailPool.current(index, old) {
 			after = old.maxChunk
 		} else {
@@ -416,7 +419,7 @@ func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 		// when that snapshot has no tail rows to materialize.
 		appliedMax = tailMax
 	}
-	state := newTailState(baseGeneration, appliedMax, newSegs, newDeletes)
+	state := newTailState(baseGeneration, tailMin, appliedMax, newSegs, newDeletes)
 	if after >= 0 && old != nil {
 		// Transfer old leases into the new state and append only the new frames.
 		state.segments = append(append([]*segmentLease(nil), old.segments...), state.segments...)
@@ -449,7 +452,7 @@ func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 		if appliedMax < tailMax {
 			appliedMax = tailMax
 		}
-		state = newTailState(baseGeneration, appliedMax, newSegs, newDeletes)
+		state = newTailState(baseGeneration, tailMin, appliedMax, newSegs, newDeletes)
 	}
 	segs, deletes, ok := loadedTailPool.installAndAcquireIfCurrent(index, state, current)
 	if !ok {

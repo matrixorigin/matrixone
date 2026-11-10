@@ -128,8 +128,8 @@ func TestIvfpqGenDeleteSQL(t *testing.T) {
 	sqls, err := genDeleteSQL(defs, "db1")
 	require.NoError(t, err)
 	require.Len(t, sqls, 2)
-	require.Contains(t, sqls[0], "DELETE FROM `db1`.`__mo_meta_001`")
-	require.Contains(t, sqls[1], "DELETE FROM `db1`.`__mo_idx_001`")
+	require.Contains(t, sqls[0], "DELETE FROM `db1`.`__mo_meta_001` WHERE TRUE")
+	require.Contains(t, sqls[1], "DELETE FROM `db1`.`__mo_idx_001` WHERE TRUE")
 }
 
 func TestIvfpqGenDeleteSQL_MissingMeta(t *testing.T) {
@@ -439,8 +439,8 @@ func TestSourceSnapshotInitializerIncludesResetAndFullBuild(t *testing.T) {
 	sqls, err := Hooks{}.SourceSnapshotInitSQL(ctx, ivfpqIndexDefs())
 	require.NoError(t, err)
 	require.Len(t, sqls, 3)
-	require.Contains(t, sqls[0], "DELETE FROM `db1`.`__mo_ivfpq_meta_001`")
-	require.Contains(t, sqls[1], "DELETE FROM `db1`.`__mo_ivfpq_idx_001`")
+	require.Contains(t, sqls[0], "DELETE FROM `db1`.`__mo_meta_001` WHERE TRUE")
+	require.Contains(t, sqls[1], "DELETE FROM `db1`.`__mo_idx_001` WHERE TRUE")
 	require.Contains(t, sqls[2], "`db1`.`t`")
 	require.Contains(t, sqls[2], "ivfpq_create")
 	require.NotContains(t, sqls[2], "REINDEX")

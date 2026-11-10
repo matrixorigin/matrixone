@@ -147,10 +147,6 @@ func (w *worker) Submit(iteration *IterationContext) error {
 }
 
 func (w *worker) onItem(iterCtx *IterationContext) {
-	iterCtx = w.exec.filterFencedIteration(iterCtx)
-	if iterCtx == nil {
-		return
-	}
 	var recovery error
 	err := retry(w.ctx, func() error {
 		err := ExecuteIterationWithRuntime(w.ctx, w.exec, w.cnUUID, w.cnEngine, w.cnTxnClient, iterCtx, w.mp)
@@ -166,24 +162,9 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 	if err == nil || w.ctx.Err() != nil {
 		return
 	}
-	failure := err
-	var uncertain error
-	err = retry(w.ctx, func() error {
-		err := w.failIteration(iterCtx, failure)
-		if errors.Is(err, errIterationNeedsRecovery) {
-			uncertain = err
-			return nil
-		}
-		return err
-	}, SubmitRetryTimes, DefaultRetryInterval, SubmitRetryDuration)
-	if err == nil {
-		err = uncertain
-	}
-	if err != nil && w.ctx.Err() == nil {
-		logutil.Error("ISCP-Task worker failed to reconcile iteration", zap.Error(err))
-		if w.exec != nil {
-			go w.exec.abandonWorker(w)
-		}
+	logutil.Error("ISCP-Task worker cannot establish iteration ownership", zap.Error(err))
+	if w.exec != nil {
+		go w.exec.abandonWorker(w)
 	}
 }
 

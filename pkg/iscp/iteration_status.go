@@ -18,10 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -47,6 +47,9 @@ func previousWatermark(from types.TS) types.TS {
 func unfinishedIteration(iter *IterationContext, specs []*JobSpec, statuses []*JobStatus, states []int8) (*IterationContext, []*JobSpec, []*JobStatus, error) {
 	keep := make([]int, 0, len(statuses))
 	for i, status := range statuses {
+		if status == nil {
+			continue
+		}
 		if states[i] == ISCPJobState_Error || states[i] == ISCPJobState_Canceled || status.LSN > iter.lsn[i] || (status.LSN == iter.lsn[i] && states[i] != ISCPJobState_Running) {
 			continue
 		}
@@ -126,33 +129,24 @@ func reconcileIterationPublication(ctx context.Context, cnUUID string, eng engin
 	return true, nil
 }
 
-// failIteration releases only unfinished jobs owned by this admitted iteration.
-// Completed siblings and retired/successor generations retain their outcomes.
-func (w *worker) failIteration(iter *IterationContext, failure error) (err error) {
-	ctx, cancel := context.WithTimeout(defines.AttachAccountId(w.ctx, catalog.System_Account), 5*time.Minute)
-	defer cancel()
-	txn, err := getTxn(ctx, w.cnEngine, w.cnTxnClient, "iscp recover iteration")
+func (c *IndexConsumer) jobAdvancedInTxn(proc *sqlexec.SqlProcess, prior uint64) (bool, error) {
+	account, err := proc.GetAccountID()
 	if err != nil {
-		return err
+		return false, err
 	}
-	defer func() { err = finishISCPTransaction(ctx, txn, err) }()
-	for i, name := range iter.jobNames {
-		status, state, watermark, e := readIterationJob(ctx, w.cnUUID, txn, iter.accountID, iter.tableID, name, iter.jobIDs[i])
-		if e != nil {
-			return e
-		}
-		if status == nil || state == ISCPJobState_Error || state == ISCPJobState_Canceled || status.LSN > iter.lsn[i] || (status.LSN == iter.lsn[i] && state != ISCPJobState_Running) {
-			continue
-		}
-		if !((status.LSN == iter.lsn[i] && state == ISCPJobState_Running) || (status.LSN+1 == iter.lsn[i] && state == ISCPJobState_Completed)) {
-			return errIterationNeedsRecovery
-		}
-		priorLSN := status.LSN
-		status.LSN = iter.lsn[i]
-		status.SetError(failure)
-		if err = FlushStatus(ctx, w.cnUUID, txn, iter.accountID, iter.tableID, name, iter.jobIDs[i], status, watermark, ISCPJobState_Completed, priorLSN); err != nil {
-			return err
-		}
+	query := fmt.Sprintf("SELECT job_id FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND table_id = %d AND job_name = %s AND drop_at IS NULL", account, c.tableDef.TblId, sqlquote.String(c.jobID.JobName))
+	ctx := defines.AttachAccountId(proc.GetContext(), catalog.System_Account)
+	res, err := ExecWithResult(ctx, query, proc.SqlCtx.GetService(), proc.SqlCtx.Txn())
+	if err != nil {
+		return false, err
 	}
-	return nil
+	defer res.Close()
+	advanced := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			advanced = vector.GetFixedAtNoTypeCheck[uint64](cols[0], i) > prior
+		}
+		return true
+	})
+	return advanced, nil
 }

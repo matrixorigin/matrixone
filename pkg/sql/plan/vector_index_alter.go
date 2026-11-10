@@ -27,19 +27,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func indexDependsOnColumn(indexDef *planpb.IndexDef, colName string) (bool, error) {
-	if indexDef == nil {
-		return false, nil
-	}
-	for _, part := range indexDef.Parts {
-		if catalog.ResolveAlias(part) == colName {
-			return true, nil
-		}
-	}
-
-	return includedColumnAffected(indexDef, colName)
-}
-
 func includedColumnAffected(indexDef *planpb.IndexDef, colName string) (bool, error) {
 	if indexDef == nil {
 		return false, nil
@@ -175,36 +162,6 @@ func renameColumnRequiresPluginIndexRebuild(tableDef *planpb.TableDef, oldColNam
 		}
 	}
 	return false, nil
-}
-
-func collectAffectedIndexNamesForAlter(indexDefs []*planpb.IndexDef, affectedCols []string) ([]string, error) {
-	if len(indexDefs) == 0 || len(affectedCols) == 0 {
-		return nil, nil
-	}
-
-	affectedIndexNames := make(map[string]struct{}, len(indexDefs))
-	for _, colName := range affectedCols {
-		for _, idxDef := range indexDefs {
-			depends, err := indexDependsOnColumn(idxDef, colName)
-			if err != nil {
-				return nil, err
-			}
-			if depends {
-				affectedIndexNames[idxDef.IndexName] = struct{}{}
-			}
-		}
-	}
-
-	if len(affectedIndexNames) == 0 {
-		return nil, nil
-	}
-
-	names := make([]string, 0, len(affectedIndexNames))
-	for name := range affectedIndexNames {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
 }
 
 func handleAlterRenameColumnWithPluginHooks(tableDef *planpb.TableDef, oldColName, newColName string) ([]string, error) {
