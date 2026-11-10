@@ -45,9 +45,9 @@ Duplicate entry '1' for key 'id'
 insert into events values (2,1,'duplicate unique',101);
 Duplicate entry '101' for key 'u'
 insert into events values (2,999,'missing parent',102);
-Cannot add or update a child row: a foreign key constraint fails
+internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from parents where id = 1;
-Cannot delete or update a parent row: a foreign key constraint fails
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select id, parent_id, payload, u from events order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  payload[12,25,0]  ¦  u[4,32,0]  𝄀
 1  ¦  1  ¦  12  ¦  101
