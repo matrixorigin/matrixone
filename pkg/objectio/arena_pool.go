@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // Arena size tiers.  Small arenas serve flush tasks and sinkers that
@@ -93,6 +95,7 @@ func GetArena(tier int) *WriteArena {
 		}
 		if pool.head.CompareAndSwap(head, head.next) {
 			pool.count.Add(-1)
+			metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(head.arena.serialBuf.Cap()))
 			return head.arena
 		}
 	}
@@ -104,6 +107,10 @@ func PutArena(a *WriteArena) {
 	if a == nil {
 		return
 	}
+	// The caller still owns the arena here; drop oversized Go-heap scratch
+	// before publishing it to the lock-free free list.
+	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit)
+	serialCap := a.serialBuf.Cap()
 	tier := ArenaSmall
 	if a.sizeLimit > arenaSmallMax {
 		tier = ArenaLarge
@@ -118,6 +125,9 @@ func PutArena(a *WriteArena) {
 		return
 	}
 	node := &arenaNode{arena: a}
+	// Account before publishing: a concurrent pop can otherwise subtract
+	// before this put is counted and expose a transient negative gauge.
+	metric.MemObjectIOPooledSerialBytesGauge.Add(float64(serialCap))
 	for {
 		oldHead := pool.head.Load()
 		node.next = oldHead
@@ -170,6 +180,7 @@ func drainArenaPools() {
 				// are not silently erased.
 				var n int32
 				for node := head; node != nil; node = node.next {
+					metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(node.arena.serialBuf.Cap()))
 					node.arena.FreeBuffers()
 					n++
 				}
