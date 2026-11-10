@@ -261,3 +261,17 @@ release authority; reusable flat-boundary pointer stability and terminal account
 closure. Qualify TOTAL cost (wall/CPU/instructions, allocation/zeroing, bytes,
 retained memory), not just eliminated compaction copies. All-query local protocol
 and approval-before-correction on a new regression remain mandatory.
+
+### Completion of approved private metadata reuse
+
+The first ownership-only screen remained slower, so native-buffer pointer reuse
+was not treated as full qualification. Complete the already approved metadata
+step before another full campaign: reader and predicate owners keep fixed,
+per-column EMPTY publication-header slots after the prior borrow ends. Vector
+constructors take only exclusive, empty compatible slots; ordinary constructors
+retain their original API/behavior. Consumed headers are cleaned on construction
+failure; unconsumed slots remain caller-owned. Retained sibling snapshots are
+never reused or mutated. Namespace/schema changes and terminal Free release slots.
+Owned flat fallbacks are not retained as an extra header-cache payload bank.
+No global pool/cache or new tier is introduced. Selected body inputs still share
+one immutable backing; final publication remains transactional.

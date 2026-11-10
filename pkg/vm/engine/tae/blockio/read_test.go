@@ -775,9 +775,15 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			output.Clean(queryMP)
 			output = batch.NewOffHeapWithSize(len(colTypes))
 			workspace := make([]*vector.Vector, len(colTypes))
+			headers := make([]*vector.Vector, len(colTypes))
 			t.Cleanup(func() {
 				output.Clean(queryMP)
 				for _, v := range workspace {
+					if v != nil {
+						v.Free(queryMP)
+					}
+				}
+				for _, v := range headers {
 					if v != nil {
 						v.Free(queryMP)
 					}
@@ -804,6 +810,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: selection,
 				Workspace:        workspace,
+				ReusableHeaders:  headers,
 				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 					t.Fatal("selected read must not rerun Apply")
 					return engine.ReaderFilterResult{}, nil
@@ -826,9 +833,11 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.True(t, output.Vecs[0].IsDictionary())
 			require.NotNil(t, workspace[0])
 			original := workspace[0].GetData()
+			firstHeader := output.Vecs[0]
 			for col, v := range workspace {
 				if v != nil {
-					output.Vecs[col].Free(queryMP)
+					output.Vecs[col].CleanOnlyData()
+					headers[col] = output.Vecs[col]
 					output.Vecs[col] = v
 					workspace[col] = nil
 				}
@@ -839,6 +848,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			_, err = BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "selected-late-read-reuse", output, cacheVectors, queryMP, fs, early, request)
 			require.NoError(t, err)
 			require.Equal(t, 2, calls)
+			require.Same(t, firstHeader, output.Vecs[0], "publication header must be reused after its previous borrow ends")
 			require.True(t, output.Vecs[0].IsDictionary())
 
 			require.Equal(t, complete, output.Vecs[1].IsDictionary())

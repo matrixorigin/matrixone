@@ -24,6 +24,16 @@ import (
 // slots. All columns in the same row domain share their immutable mapping.
 // A normal decline leaves every destination nil and preserves source values.
 func TrySelectDictionaryVectors(sources, destinations []*Vector, selected []int64, domain int, mp *mpool.MPool, account *AllocationAccountSelection) (retained bool, retErr error) {
+	return TrySelectDictionaryVectorsReuse(sources, destinations, selected, domain, mp, account, nil)
+}
+
+// TrySelectDictionaryVectorsReuse preserves transactional destination publication
+// and shares mappings while taking eligible private headers from reusable slots.
+func TrySelectDictionaryVectorsReuse(sources, destinations []*Vector, selected []int64, domain int, mp *mpool.MPool, account *AllocationAccountSelection, reuse []*Vector) (retained bool, retErr error) {
+	if reuse != nil && len(reuse) != len(sources) {
+		return false, moerr.NewInvalidInputNoCtx("invalid reusable dictionary slots")
+	}
+
 	if len(sources) != len(destinations) || mp == nil {
 		return false, moerr.NewInvalidInputNoCtx("invalid dictionary vector destinations")
 	}
@@ -70,6 +80,10 @@ func TrySelectDictionaryVectors(sources, destinations []*Vector, selected []int6
 		}
 	}()
 	for i, source := range sources {
+		var spare **Vector
+		if reuse != nil {
+			spare = &reuse[i]
+		}
 		if source.IsDictionary() {
 			backing := source.dictionaryState()
 			mapping := mappings[backing.rows]
@@ -83,7 +97,7 @@ func TrySelectDictionaryVectors(sources, destinations []*Vector, selected []int6
 				}
 				mappings[backing.rows] = mapping
 			}
-			destinations[i], err = newDictionaryHeader(backing.base, mapping, source, selected, mp, account)
+			destinations[i], err = newDictionaryHeaderReuse(backing.base, mapping, source, selected, mp, account, spare)
 		} else {
 			base := bases[source]
 			if base == nil {
@@ -100,7 +114,7 @@ func TrySelectDictionaryVectors(sources, destinations []*Vector, selected []int6
 				}
 				bases[source] = base
 			}
-			destinations[i], err = NewDictionaryVector(base, rows, mp, account)
+			destinations[i], err = NewDictionaryVectorReuse(base, rows, mp, account, spare)
 
 		}
 		if err != nil {

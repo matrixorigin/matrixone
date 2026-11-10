@@ -150,7 +150,17 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		// read data from storage engine
 		for col, workspace := range tableScan.ctr.readerWorkspace {
 			if workspace != nil {
-				tableScan.ctr.buf.Vecs[col].Free(proc.Mp())
+				header := tableScan.ctr.buf.Vecs[col]
+				reusable := header.IsDictionary()
+				header.CleanOnlyData()
+				if reusable && len(tableScan.ctr.readerHeaders) == len(tableScan.ctr.buf.Vecs) {
+					if old := tableScan.ctr.readerHeaders[col]; old != nil {
+						old.Free(proc.Mp())
+					}
+					tableScan.ctr.readerHeaders[col] = header
+				} else {
+					header.Free(proc.Mp())
+				}
 				tableScan.ctr.buf.Vecs[col] = workspace
 				tableScan.ctr.readerWorkspace[col] = nil
 			}

@@ -99,17 +99,37 @@ func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
 			}
 		}
 	})
-	first, err := selectPredicateInput(proc, input, nil, executor, []int64{2, 0}, nil, bases, declined)
+	first, err := selectPredicateInput(proc, input, nil, executor, []int64{2, 0}, nil, bases, declined, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { first.Clean(mp) })
 	require.Nil(t, first.Vecs[1])
 	require.Nil(t, bases[1])
 	require.True(t, first.Vecs[0].IsDictionary())
 	base := bases[0]
-	second, err := selectPredicateInput(proc, input, nil, executor, []int64{1}, nil, bases, declined)
+	second, err := selectPredicateInput(proc, input, nil, executor, []int64{1}, nil, bases, declined, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { second.Clean(mp) })
 	require.Same(t, base, bases[0])
 	require.Equal(t, int64(20), vector.GetFixedAtNoTypeCheck[int64](second.Vecs[0], 0))
 	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](first.Vecs[0], 0))
+	headers := make([]*vector.Vector, 2)
+	headers[0] = second.Vecs[0]
+	saved := headers[0]
+	saved.CleanOnlyData()
+	second.Vecs[0] = nil
+	t.Cleanup(func() {
+		for _, v := range headers {
+			if v != nil {
+				v.Free(mp)
+			}
+		}
+	})
+	third, err := selectPredicateInput(proc, input, nil, executor, []int64{0}, nil, bases, declined, headers)
+	require.NoError(t, err)
+	t.Cleanup(func() { third.Clean(mp) })
+	require.Same(t, saved, third.Vecs[0])
+	require.Nil(t, headers[0])
+	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](third.Vecs[0], 0))
+	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](first.Vecs[0], 0), "an unretired sibling view must remain immutable")
+
 }

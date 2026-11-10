@@ -1305,7 +1305,9 @@ type ReaderFilterRequest struct {
 	// Workspace contains caller-owned original read vectors displaced by selected
 	// publication. The caller retires published views, restores these slots, then
 	// reclaims unique backing before its next read; terminal cleanup frees both.
-	Workspace        []*vector.Vector
+	Workspace []*vector.Vector
+	// ReusableHeaders are cleared publication headers owned by the same caller.
+	ReusableHeaders  []*vector.Vector
 	Select           ReaderSelection
 	OutputAllocation *vector.AllocationAccountSelection
 	ObserveSelection func(rows, columns int, logicalBytes int64)

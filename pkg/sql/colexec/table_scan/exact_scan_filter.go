@@ -222,8 +222,12 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 	if tableScan.ctr.readerWorkspace == nil {
 		tableScan.ctr.readerWorkspace = make([]*vector.Vector, len(tableScan.Types))
 	}
+	if tableScan.ctr.readerHeaders == nil {
+		tableScan.ctr.readerHeaders = make([]*vector.Vector, len(tableScan.Types))
+	}
 	tableScan.ctr.readerFilter = &engine.ReaderFilterRequest{
-		Workspace: tableScan.ctr.readerWorkspace,
+		Workspace:       tableScan.ctr.readerWorkspace,
+		ReusableHeaders: tableScan.ctr.readerHeaders,
 		Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			return tableScan.applyReaderFilter(proc, bat, loaded)
 		},

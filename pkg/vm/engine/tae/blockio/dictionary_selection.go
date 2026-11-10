@@ -45,7 +45,20 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 			}
 		}
 	}()
-	admitted, err := vector.TrySelectDictionaryVectors(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation)
+	var reuse []*vector.Vector
+	if len(request.ReusableHeaders) == len(output.Vecs) {
+		reuse = make([]*vector.Vector, len(positions))
+		for i, pos := range positions {
+			reuse[i] = request.ReusableHeaders[pos]
+			request.ReusableHeaders[pos] = nil
+		}
+		defer func() {
+			for i, pos := range positions {
+				request.ReusableHeaders[pos] = reuse[i]
+			}
+		}()
+	}
+	admitted, err := vector.TrySelectDictionaryVectorsReuse(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse)
 	if err != nil {
 		return err
 	}

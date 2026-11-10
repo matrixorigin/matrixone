@@ -165,7 +165,11 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 	var owned *batch.Batch
 	defer func() {
 		if owned != nil {
-			owned.Clean(proc.Mp())
+			if frame != nil {
+				frame.recyclePredicate(owned, proc.Mp())
+			} else {
+				owned.Clean(proc.Mp())
+			}
 		}
 	}()
 	var matches []int64
@@ -185,14 +189,25 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 		}
 		if selected {
 			if owned != nil {
-				owned.Clean(proc.Mp())
+				if frame != nil {
+					frame.recyclePredicate(owned, proc.Mp())
+				} else {
+					owned.Clean(proc.Mp())
+				}
 				owned = nil
 			}
 			if bases == nil {
 				bases = make([]*vector.DictionaryBase, len(input.Vecs))
 				declined = make([]bool, len(input.Vecs))
 			}
-			next, err := selectPredicateInput(proc, input, loaded, executors[i], *scratch, account, bases, declined)
+			var reuse []*vector.Vector
+			if frame != nil {
+				if frame.predicateHeaders == nil {
+					frame.predicateHeaders = make([]*vector.Vector, len(input.Vecs))
+				}
+				reuse = frame.predicateHeaders
+			}
+			next, err := selectPredicateInput(proc, input, loaded, executors[i], *scratch, account, bases, declined, reuse)
 			if err != nil {
 				return nil, false, err
 			}
@@ -322,7 +337,7 @@ func predicateColumns(executor ExpressionExecutor, seen []bool, columns *[]int) 
 	return true
 }
 
-func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection, bases []*vector.DictionaryBase, declined []bool) (result *batch.Batch, retErr error) {
+func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection, bases []*vector.DictionaryBase, declined []bool, reuse []*vector.Vector) (result *batch.Batch, retErr error) {
 	var columns []int
 	if !predicateColumns(executor, make([]bool, len(input.Vecs)), &columns) {
 		result, _, err := SelectBatchColumns(input, loaded, rows, proc.Mp(), account, false)
@@ -332,7 +347,7 @@ func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []in
 	defer func() {
 		if retErr != nil {
 			output.Clean(proc.Mp())
-			if errors.Is(retErr, mpool.ErrAllocationAccountCapacity) {
+			if errors.Is(retErr, mpool.ErrAllocationAccountCapacity) || errors.Is(retErr, mpool.ErrAllocationAccountMismatch) {
 				result, _, retErr = SelectBatchColumns(input, columns, rows, proc.Mp(), account, false)
 			}
 		}
@@ -352,12 +367,16 @@ func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []in
 	}
 	defer selection.Release()
 	for _, col := range columns {
+		var spare **vector.Vector
+		if reuse != nil {
+			spare = &reuse[col]
+		}
 		source := input.Vecs[col]
 		if source == nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "predicate references unloaded column")
 		}
 		if source.IsDictionary() {
-			output.Vecs[col], err = source.SelectDictionary(selection, proc.Mp(), account)
+			output.Vecs[col], err = source.SelectDictionaryReuse(selection, proc.Mp(), account, spare)
 		} else {
 			if bases[col] == nil && !declined[col] {
 				var admitted bool
@@ -368,7 +387,7 @@ func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []in
 				declined[col] = !admitted
 			}
 			if bases[col] != nil {
-				output.Vecs[col], err = vector.NewDictionaryVector(bases[col], selection, proc.Mp(), account)
+				output.Vecs[col], err = vector.NewDictionaryVectorReuse(bases[col], selection, proc.Mp(), account, spare)
 			} else {
 				output.Vecs[col], err = vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), account)
 				if err == nil {

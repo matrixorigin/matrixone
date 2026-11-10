@@ -27,6 +27,7 @@ import (
 // Masked evaluation compacts operands first, so those vectors cannot match these
 // full-domain input slots. The frame is execution-lane local, never concurrent.
 type DictionaryInputFrame struct {
+	predicateHeaders []*vector.Vector
 	// Gathers counts committed materializations in the current owner generation.
 	Gathers                                      uint64
 	gatherRows, gatherBytes                      uint64
@@ -52,6 +53,11 @@ func (f *DictionaryInputFrame) Begin(bat *batch.Batch, allocation *vector.Alloca
 func (f *DictionaryInputFrame) End() { clear(f.inputs); clear(f.ready) }
 func (f *DictionaryInputFrame) Free(mp *mpool.MPool) {
 	for _, v := range f.flat {
+		if v != nil {
+			v.Free(mp)
+		}
+	}
+	for _, v := range f.predicateHeaders {
 		if v != nil {
 			v.Free(mp)
 		}
@@ -130,4 +136,28 @@ func (f *DictionaryInputFrame) Observe(analyzer process.Analyzer) {
 	}
 	stats.SetMaxExtraStat("DictionaryExpressionScratchBytes", allocated)
 	f.reportedGathers, f.reportedRows, f.reportedBytes = f.Gathers, f.gatherRows, f.gatherBytes
+}
+
+func (f *DictionaryInputFrame) recyclePredicate(input *batch.Batch, mp *mpool.MPool) {
+	if len(f.predicateHeaders) != len(input.Vecs) {
+		input.Clean(mp)
+		return
+	}
+	for col, v := range input.Vecs {
+		if v == nil {
+			continue
+		}
+		if !v.IsDictionary() {
+			v.Free(mp)
+			input.Vecs[col] = nil
+			continue
+		}
+		v.CleanOnlyData()
+		if old := f.predicateHeaders[col]; old != nil {
+			old.Free(mp)
+		}
+		f.predicateHeaders[col] = v
+		input.Vecs[col] = nil
+	}
+	input.Clean(mp)
 }

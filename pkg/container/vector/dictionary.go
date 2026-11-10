@@ -108,6 +108,14 @@ func (v *Vector) requirePhysical() {
 // and mapping. It retains both incoming handles; callers keep their references.
 // No engine producer calls this API until the consumer migration is complete.
 func NewDictionaryVector(base *DictionaryBase, rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+	return NewDictionaryVectorReuse(base, rows, mp, account, nil)
+}
+
+// NewDictionaryVectorReuse consumes an exclusively owned, empty compatible
+// header from spare only when construction reaches header allocation. On error
+// consumed headers are cleaned; unconsumed slots remain owned by the caller.
+func NewDictionaryVectorReuse(base *DictionaryBase, rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
+
 	if mp == nil || !base.Retain() {
 		return nil, moerr.NewInvalidInputNoCtx("dictionary base is unavailable")
 	}
@@ -123,7 +131,7 @@ func NewDictionaryVector(base *DictionaryBase, rows *RowSelection, mp *mpool.MPo
 		(rows.Length() > 0 && !dictionaryAccountsMatch(rows.storage.allocationAccount, account)) {
 		return nil, mpool.ErrAllocationAccountMismatch
 	}
-	return newDictionaryHeader(base, rows, base.vec, rows.storageFixed(), mp, account)
+	return newDictionaryHeaderReuse(base, rows, base.vec, rows.storageFixed(), mp, account, spare)
 }
 
 func dictionaryAccountsMatch(left, right *AllocationAccountSelection) bool {
@@ -135,13 +143,30 @@ func (s *RowSelection) storageFixed() []int64 {
 }
 
 func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *Vector, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+	return newDictionaryHeaderReuse(base, mapping, metadata, logical, mp, account, nil)
+}
+
+func newDictionaryHeaderReuse(base *DictionaryBase, mapping *RowSelection, metadata *Vector, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
+
 	if metadata.typ.TypeSize() <= 0 || len(logical) > math.MaxInt/metadata.typ.TypeSize() ||
 		base.RetainedBytes() > int64(math.MaxInt)-mapping.RetainedBytes() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dictionary representation size")
 	}
-	result, err := NewOffHeapVecWithTypeAndAllocation(metadata.typ, account)
-	if err != nil {
-		return nil, err
+	var result *Vector
+	if spare != nil && *spare != nil {
+		candidate := *spare
+		if candidate.offHeap && candidate.class == FLAT && candidate.length == 0 && cap(candidate.data) == 0 && cap(candidate.area) == 0 && !candidate.HasBorrowedBacking() && AllocationAccountSelectionsEqual(candidate.allocationAccount, account) {
+			result = candidate
+			*spare = nil
+			result.typ = metadata.typ
+		}
+	}
+	if result == nil {
+		var err error
+		result, err = NewOffHeapVecWithTypeAndAllocation(metadata.typ, account)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := copyDictionaryMetadata(result, metadata, logical, mp); err != nil {
 		result.Free(mp)
@@ -200,6 +225,13 @@ func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *
 // It never retains a chain of dictionary headers. Metadata follows the current
 // logical header, independently of the physical row used for its payload.
 func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
+	return v.SelectDictionaryReuse(rows, mp, account, nil)
+}
+
+// SelectDictionaryReuse composes rows with the same ownership contract as
+// NewDictionaryVectorReuse, retaining exactly one immutable base.
+func (v *Vector) SelectDictionaryReuse(rows *RowSelection, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
+
 	if v == nil || mp == nil || !rows.Retain() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dictionary composition")
 	}
@@ -230,21 +262,21 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 			return nil, err
 		}
 		defer base.Release()
-		return NewDictionaryVector(base, rows, mp, account)
+		return NewDictionaryVectorReuse(base, rows, mp, account, spare)
 	}
 	if !dictionaryAccountsMatch(v.allocationAccount, account) {
 		return nil, mpool.ErrAllocationAccountMismatch
 	}
 	logical := rows.storageFixed()
 	if len(logical) == 0 {
-		return newDictionaryHeader(v.dictionaryState().base, rows, v, nil, mp, account)
+		return newDictionaryHeaderReuse(v.dictionaryState().base, rows, v, nil, mp, account, spare)
 	}
 	mapping, err := composeDictionaryRows(v.dictionaryState().rows, logical, mp, account)
 	if err != nil {
 		return nil, err
 	}
 	defer mapping.Release()
-	return newDictionaryHeader(v.dictionaryState().base, mapping, v, logical, mp, account)
+	return newDictionaryHeaderReuse(v.dictionaryState().base, mapping, v, logical, mp, account, spare)
 }
 
 // composeDictionaryRows owns one accounted map per distinct input mapping.

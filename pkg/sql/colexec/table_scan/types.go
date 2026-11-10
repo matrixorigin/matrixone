@@ -53,6 +53,7 @@ type container struct {
 	readerFilter              *engine.ReaderFilterRequest
 	dictionaryOnlyReader      bool
 	readerWorkspace           []*vector.Vector
+	readerHeaders             []*vector.Vector
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -229,6 +230,12 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 		}
 	}
 	tableScan.ctr.readerWorkspace = nil
+	for _, v := range tableScan.ctr.readerHeaders {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	tableScan.ctr.readerHeaders = nil
 
 	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()

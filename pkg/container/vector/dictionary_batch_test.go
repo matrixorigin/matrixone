@@ -79,11 +79,22 @@ func TestDictionaryRetentionDeclinesCopyOnlySource(t *testing.T) {
 		require.NoError(t, AppendFixedList(first, []int64{10, 20, 30}, nil, mp))
 		used := state.account.Snapshot().Used
 		destinations := make([]*Vector, 2)
-		admitted, err := TrySelectDictionaryVectors([]*Vector{first, source}, destinations, []int64{2}, 3, mp, state.selection)
+		spare, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), state.selection)
+		require.NoError(t, err)
+		reuse := []*Vector{spare, nil}
+		t.Cleanup(func() {
+			for _, v := range reuse {
+				if v != nil {
+					v.Free(mp)
+				}
+			}
+		})
+		admitted, err := TrySelectDictionaryVectorsReuse([]*Vector{first, source}, destinations, []int64{2}, 3, mp, state.selection, reuse)
 		require.NoError(t, err)
 		require.False(t, admitted)
 		require.Nil(t, destinations[0], "partial first-column publication must roll back")
 		require.Nil(t, destinations[1])
+		require.Nil(t, reuse[0], "the consumed first header must be cleaned on second-column decline")
 		require.Equal(t, used, state.account.Snapshot().Used)
 		require.Equal(t, []int64{10, 20, 30}, MustFixedColNoTypeCheck[int64](first))
 	})
