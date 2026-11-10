@@ -7578,7 +7578,7 @@ var supportedMathBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		// the two-argument TEXT overload stays reachable for TEXT inputs
 		// only, matching ROUND's rule for the widened sources.
-		checkFn:    fixedTypeMatchWithExactText,
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -7844,7 +7844,7 @@ var supportedMathBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		// the two-argument TEXT overload stays reachable for TEXT inputs
 		// only, matching ROUND's rule for the widened sources.
-		checkFn:    fixedTypeMatchWithExactText,
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -8504,7 +8504,7 @@ var supportedMathBuiltIns = []FuncNew{
 		// the direct TEXT overloads stay reachable for TEXT inputs only,
 		// so DATE/DATETIME/... keep rejecting at bind time as before
 		// those overloads joined (ci: func_coalesce.test rows 133/144).
-		checkFn:    fixedTypeMatchWithExactText,
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
@@ -8668,7 +8668,7 @@ var supportedMathBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		// same TEXT-exact rule as ROUND: temporal sources keep the bind-time
 		// rejection they had before the TEXT overloads joined.
-		checkFn:    fixedTypeMatchWithExactText,
+		checkFn: fixedTypeMatchWithExactText,
 
 		Overloads: []overload{
 			{
