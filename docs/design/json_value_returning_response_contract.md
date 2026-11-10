@@ -671,3 +671,16 @@ Review decision: require a matched base/candidate structure-size probe and
 zero-allocation demand discovery, in addition to lifecycle, selection, folding
 and real SQL tests. A nil pointer or an uncharged larger common executor is not
 evidence that an unrelated query has no additional memory cost.
+
+### Representative warm measurements (candidate revision 37)
+
+The first warm harness built a standalone snapshot without a statement
+admission callback. That omitted the metadata reservations made by SQL reader
+views and cursors, even though the cold SQL measurement included them. Warm
+reader and resident projection candidates must use the same generation-bound
+admission as production; only their one-time publication remains outside the
+warm timer. Cold SQL continues to time publication and result release. The
+matched legacy baseline and input fixtures remain unchanged.
+
+Review decision: report standalone unaccounted timings only as separate
+mechanism observations. They cannot establish the warm performance gate.
