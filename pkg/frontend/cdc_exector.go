@@ -3838,6 +3838,15 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 		return moerr.NewNotSupportedf(ctx,
 			"CDC target identity catalog columns are not available: %v", capabilityErr)
 	}
+	if exec.sinkUri.SinkTyp == cdc.CDCSinkType_MySQL {
+		sendSQLTimeout, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string)
+		if sendSQLTimeout == "" {
+			sendSQLTimeout = cdc.CDCDefaultSendSqlTimeout
+		}
+		if exec.sinkUri.SinkTyp, err = cdc.ResolveTargetSinkType(ctx, exec.sinkUri, sendSQLTimeout); err != nil {
+			return err
+		}
+	}
 	exec.explicitStart = !exec.startTs.IsEmpty() &&
 		(!exec.noFull || protocol != cdc.CDCInitialSnapshotProtocolNoFullHLC)
 	return nil

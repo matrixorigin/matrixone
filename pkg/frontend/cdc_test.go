@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
@@ -4532,6 +4533,27 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
+	targetGuardErr := error(&gomysql.MySQLError{Number: moerr.ER_SP_DOES_NOT_EXIST})
+	var targetMocks []sqlmock.Sqlmock
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		targetDB, targetMock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		targetMock.ExpectBegin()
+		probe := targetMock.ExpectExec(regexp.QuoteMeta("CALL mo_cdc_target_guard_capability()"))
+		if targetGuardErr != nil {
+			probe.WillReturnError(targetGuardErr)
+		} else {
+			probe.WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+		targetMock.ExpectRollback()
+		targetMock.ExpectClose()
+		targetMocks = append(targetMocks, targetMock)
+		return targetDB, nil
+	})
+	defer stubOpenDbConn.Reset()
+
 	sqlx := "SELECT sink_uri, sink_type, sink_password, tables, filters, start_ts, end_ts, no_full, additional_config FROM mo_catalog.mo_cdc_task WHERE account_id = .* AND task_id =.*"
 	sinkUri, err := cdc.JsonEncode(&cdc.UriInfo{
 		User: "root",
@@ -4631,7 +4653,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cdc := &CDCTaskExecutor{
+			executor := &CDCTaskExecutor{
 				logger:           tt.fields.logger,
 				ie:               tt.fields.ie,
 				cnUUID:           tt.fields.cnUUID,
@@ -4649,9 +4671,35 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 				activeRoutine:    tt.fields.activeRoutine,
 				watermarkUpdater: tt.fields.sunkWatermarkUpdater,
 			}
-			err := cdc.retrieveCdcTask(tt.args.ctx)
+			err := executor.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
+			require.Equal(t, cdc.CDCSinkType_MySQL, executor.sinkUri.SinkTyp)
 		})
+	}
+
+	// A mysql URI uses MatrixOne's existing guarded protocol only when the
+	// target positively proves that capability. The first retrieval above
+	// exercises the genuine-MySQL fallback through MySQL error 1305.
+	targetGuardErr = nil
+	mock.ExpectQuery(sqlx).WillReturnRows(sqlmock.NewRows(
+		[]string{"sink_uri", "sink_type", "sink_password", "tables", "filters", "start_ts", "end_ts", "no_full", "additional_config"},
+	).AddRow(
+		sinkUri, cdc.CDCSinkType_MySQL, pwd, tables, filters,
+		"2006-01-02T15:04:05-07:00", "2006-01-02T15:04:05-07:00", true,
+		fmt.Sprintf("{\"InitSnapshotSplitTxn\": false,\"%s\":\"%s\",\"%s\":\"%s\"}",
+			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolStableEpoch,
+			cdc.CDCTaskExtraOptions_GenerationProtocol, cdc.CDCGenerationAwareProtocolV2),
+	))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")).
+		WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
+	matrixOneTarget := &CDCTaskExecutor{ie: tie, spec: &task.CreateCdcDetails{
+		TaskId: "taskID_matrixone", Accounts: []*task.Account{{Id: 0, Name: "sys"}},
+	}}
+	require.NoError(t, matrixOneTarget.retrieveCdcTask(context.Background()))
+	require.Equal(t, cdc.CDCSinkType_MO, matrixOneTarget.sinkUri.SinkTyp)
+	require.Len(t, targetMocks, 2)
+	for _, targetMock := range targetMocks {
+		require.NoError(t, targetMock.ExpectationsWereMet())
 	}
 
 	// Legacy persisted tasks must fail closed before the capability probe.
