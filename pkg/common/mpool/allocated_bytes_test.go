@@ -38,6 +38,10 @@ func TestAllocatedBytesOwnership(t *testing.T) {
 			b, err = owner.ReallocZero(b, cap(b)+4096, native)
 			require.NoError(t, err)
 			require.Equal(t, int64(cap(b)), owner.AllocatedBytes())
+			owner.Free(b)
+			require.Zero(t, owner.AllocatedBytes())
+			b, err = owner.Alloc(129, native)
+			require.NoError(t, err)
 			other.Free(b)
 			require.Zero(t, owner.AllocatedBytes())
 			require.Zero(t, other.AllocatedBytes())
@@ -49,17 +53,30 @@ func TestAllocatedBytesOwnership(t *testing.T) {
 }
 
 func TestAllocatedBytesTransferredBeyondPoolRegistry(t *testing.T) {
-	owner := MustNew("deleted-go-owner")
-	consumer := MustNew("live-consumer")
-	defer DeleteMPool(consumer)
-	b, err := owner.Alloc(100, false)
-	require.NoError(t, err)
-	DeleteMPool(owner)
-	require.Equal(t, int64(100), owner.AllocatedBytes(), "deleting a registry entry cannot retire a live owner")
-	consumer.Free(b)
-	require.Zero(t, owner.AllocatedBytes())
-	_, exists := allocationCounters.Load(owner.id)
-	require.False(t, exists)
+	for _, sameOwner := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cross-pool", true: "same-pool"}[sameOwner], func(t *testing.T) {
+			owner := MustNew("deleted-go-owner")
+			t.Cleanup(func() {
+				if !owner.allocated.deleted.Load() {
+					DeleteMPool(owner)
+				}
+			})
+			consumer := MustNew("live-consumer")
+			defer DeleteMPool(consumer)
+			b, err := owner.Alloc(100, false)
+			require.NoError(t, err)
+			DeleteMPool(owner)
+			require.Equal(t, int64(100), owner.AllocatedBytes(), "deleting a registry entry cannot retire a live owner")
+			if sameOwner {
+				owner.Free(b)
+			} else {
+				consumer.Free(b)
+			}
+			require.Zero(t, owner.AllocatedBytes())
+			_, exists := allocationCounters.Load(owner.id)
+			require.False(t, exists)
+		})
+	}
 }
 
 func TestGrowCapacityPredictsActualNewAllocation(t *testing.T) {

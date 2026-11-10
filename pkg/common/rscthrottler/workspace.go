@@ -180,7 +180,8 @@ func (w *WorkingSet) TryGrow(ctx context.Context, next WorkingSetSpec) error {
 	// An already admitted owner has priority over new admission. Queuing here
 	// could wait on the very writer that is pulling this owner's next row.
 	if delta > 0 && !w.throttler.physicalFits(delta) {
-		return moerr.NewInternalErrorNoCtxf("import record growth cannot reserve %d additional bytes", delta)
+		available := int64(w.throttler.actualTotalMemory.Load()) - w.throttler.physicalUsed() - c.dataReserved.Load() - c.inputPromise.Load() - c.workspacePromise.Load()
+		return &WorkingSetCapacityError{Minimum: delta, Available: max(0, available)}
 	}
 	c.inputPromise.Add(input - w.inputBytes)
 	c.workspacePromise.Store(max(c.workspacePromise.Load(), next.IOBytes))
@@ -227,6 +228,25 @@ func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, 
 }
 
 func (l *InputLease) Capacity() int64 { return l.ticket.InputCapacity(l.index) }
+
+// TryGrow keeps cumulative operator output under its existing slot owner.
+// Growth uses the same nonblocking admission as a wider input record.
+func (l *InputLease) TryGrow(ctx context.Context, size int64) error {
+	if l == nil || l.released.Load() {
+		return ErrWorkingSetClosed
+	}
+	if size < 0 {
+		return &WorkingSetCapacityError{Minimum: size}
+	}
+	current := l.ticket.spec.Load()
+	if size <= current.Inputs[l.index].Bytes {
+		return nil
+	}
+	next := *current
+	next.Inputs = append([]InputSlotSpec(nil), current.Inputs...)
+	next.Inputs[l.index].Bytes = size
+	return l.ticket.TryGrow(ctx, next)
+}
 
 func (l *InputLease) Release() {
 	if l == nil || !l.released.CompareAndSwap(false, true) {

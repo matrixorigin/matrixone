@@ -58,7 +58,8 @@ func TestSinkerByteWindowsAndAllocationPrediction(t *testing.T) {
 	} {
 		require.Equal(t, tc.rows, byteWindowEnd(b, 0, 3, 0, tc.limit))
 	}
-	s := NewSinker(-1, b.Attrs, []types.Type{types.T_text.ToType()}, mockFactory(nil, nil), mp, nil, WithBufferBytes(40<<10), WithMemorySizeThreshold(1<<30), WithTailSizeCap(0))
+	// Sorted windows remain staged for merge; unsorted partial blocks now finish their object immediately.
+	s := NewSinker(0, b.Attrs, []types.Type{types.T_text.ToType()}, mockFactory(nil, nil), mp, nil, WithBufferBytes(40<<10), WithMemorySizeThreshold(1<<30), WithTailSizeCap(0))
 	defer s.Close()
 	ask := s.AppendAllocation(b)
 	require.NoError(t, s.Write(context.Background(), b))
@@ -333,4 +334,156 @@ func TestSinkerBoundedSortedUploadOwnership(t *testing.T) {
 			lease.Release()
 		})
 	}
+}
+
+func TestSinkerPersistedBlockLayout(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		rows, sortKey      int
+		window             int64
+		pipeline, borrowed bool
+	}{
+		{"default", 35, 0, 0, false, false},
+		{"sorted_windows", 35, 0, 512, false, false},
+		{"sorted_pipeline", 35, 0, 512, true, false},
+		{"unsorted_windows", 35, -1, 512, false, false},
+		{"unsorted_pipeline", 35, -1, 512, true, false},
+		{"borrowed_windows", 35, 0, 512, false, true},
+		{"full_block_tail", objectio.BlockMaxRows + 1, 0, 0, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := fileservice.NewLocalFS(ctx, "SHARED", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(ctx) })
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			attrs := []string{"id", "payload"}
+			typs := []types.Type{types.T_int32.ToType(), types.T_varchar.ToType()}
+			input := batch.NewWithSchema(false, attrs, typs)
+			t.Cleanup(func() { input.Clean(mp) })
+			suffix := strings.Repeat("x", 192)
+			for id := tc.rows - 1; id >= 0; id-- {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(id), false, mp))
+				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(fmt.Sprintf("%08d", id)+suffix), false, mp))
+			}
+			input.SetRowCount(tc.rows)
+			opts := []SinkerOption{WithTailSizeCap(0)}
+			if tc.window > 0 {
+				opts = append(opts, WithBufferBytes(tc.window))
+			}
+			if tc.pipeline {
+				opts = append(opts, WithPipelineFlush())
+			}
+			sink := NewSinker(tc.sortKey, attrs, typs, NewFSinkerImplFactory([]uint16{0, 1}, tc.sortKey, tc.sortKey >= 0, false, 0), mp, fs, opts...)
+			t.Cleanup(func() { require.NoError(t, sink.Close()) })
+			if tc.borrowed {
+				bound, _, err := BatchIOEnvelope(input, tc.window)
+				require.NoError(t, err)
+				m := rscthrottler.NewMemThrottler("borrowed-layout", 1, rscthrottler.WithConstLimit(8<<30))
+				w, err := m.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: tc.window, IOBytes: bound}})
+				require.NoError(t, err)
+				t.Cleanup(w.Close)
+				lease, err := w.AcquireIO(ctx, bound)
+				require.NoError(t, err)
+				t.Cleanup(lease.Release)
+				require.NoError(t, sink.WriteBorrowedToFile(ctx, input, lease))
+				lease.Release()
+			} else {
+				require.NoError(t, sink.Write(ctx, input))
+			}
+			require.NoError(t, sink.Sync(ctx))
+			stats, tail := sink.GetResult()
+			require.Empty(t, tail)
+			require.NotEmpty(t, stats)
+			seen := make(map[int32]bool, tc.rows)
+			for _, stat := range stats {
+				objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+					func() {
+						loc := objectio.Location(info.MetaLoc[:])
+						reader, err := NewObjectReader(fs, loc)
+						require.NoError(t, err)
+						got, release, err := reader.LoadColumns(ctx, []uint16{0, 1}, typs, loc.ID(), mp)
+						require.NoError(t, err)
+						defer release()
+						require.EqualValues(t, got.RowCount(), loc.Rows(), "stats-only rows must match persisted rows")
+						if uint32(loc.ID())+1 < stat.BlkCnt() {
+							require.Equal(t, objectio.BlockMaxRows, got.RowCount())
+						}
+						ids := vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])
+						for row, id := range ids {
+							require.False(t, seen[id])
+							seen[id] = true
+							require.GreaterOrEqual(t, id, int32(0))
+							require.Less(t, id, int32(tc.rows))
+							require.Equal(t, fmt.Sprintf("%08d", id)+suffix, string(got.Vecs[1].GetBytesAt(row)))
+						}
+					}()
+					return true
+				}, stat)
+			}
+			require.Len(t, seen, tc.rows)
+		})
+	}
+}
+
+func TestSinkerUnsortedPartialSpillErrorOwnsNextBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	input := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.T_text.ToType()})
+	t.Cleanup(func() { input.Clean(mp) })
+	for range 3 {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 32<<10)), false, mp))
+	}
+	input.SetRowCount(3)
+	before := mp.AllocatedBytes()
+	failure := errors.New("partial object sync failed")
+	sink := NewSinker(-1, input.Attrs, []types.Type{types.T_text.ToType()}, mockFactory(nil, failure), mp, nil, WithBufferBytes(40<<10))
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	require.ErrorIs(t, sink.Write(context.Background(), input), failure)
+	require.NoError(t, sink.Close())
+	require.Equal(t, before, mp.AllocatedBytes(), "both the preceding run and next batch must release exactly once")
+	require.Equal(t, 3, input.RowCount())
+}
+
+func TestSinkerExpandedMergeRequiresCompleteWorkspace(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	fs, err := fileservice.NewLocalFS(ctx, "SHARED", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	attrs := []string{"v"}
+	typs := []types.Type{types.T_varchar.ToType()}
+	input := batch.NewWithSchema(false, attrs, typs)
+	t.Cleanup(func() { input.Clean(mp) })
+	constant, err := vector.NewConstBytes(typs[0], []byte(strings.Repeat("x", 4096)), 100, mp)
+	require.NoError(t, err)
+	func() {
+		defer constant.Free(mp)
+		require.NoError(t, input.Vecs[0].UnionBatch(constant, 0, 100, nil, mp))
+	}()
+	input.SetRowCount(100)
+	physical := int64(input.Size())
+	expanded := input.Vecs[0].WindowSize(0, 100)
+	require.Greater(t, expanded, physical)
+	bound, err := IOEnvelope([][]types.Type{typs}, physical, physical)
+	require.NoError(t, err)
+	m := rscthrottler.NewMemThrottler("expanded-layout", 1, rscthrottler.WithConstLimit(8<<30))
+	w, err := m.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 4 << 20, IOBytes: bound}})
+	require.NoError(t, err)
+	t.Cleanup(w.Close)
+	sink := NewSinker(0, attrs, typs, NewFSinkerImplFactory([]uint16{0}, 0, true, false, 0), mp, fs, WithBufferBytes(4<<20), WithMemoryWorkspace(w), WithTailSizeCap(0))
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	require.NoError(t, sink.Write(ctx, input))
+	var capacity *rscthrottler.RequestTooLargeError
+	require.ErrorAs(t, sink.Sync(ctx), &capacity, "the IO claim must cover materialized aliases before writing")
+	require.NoError(t, sink.Close())
+	lease, err := w.TryAcquireIO(ctx, bound)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	lease.Release()
+	files, err := fileservice.SortedList(fs.List(ctx, ""))
+	require.NoError(t, err)
+	require.Empty(t, files)
 }

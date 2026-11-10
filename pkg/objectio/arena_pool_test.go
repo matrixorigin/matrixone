@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +37,7 @@ func TestArenaPoolByteBudget(t *testing.T) {
 		{"zero budget", 8, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			pooledBefore := promtestutil.ToFloat64(metric.MemObjectIOPooledSerialBytesGauge)
 			p := &arenaFreeList{maxCount: tc.count, maxBytes: tc.budget}
 			// Tiny arenas prove the same capacity boundary as wide-column writers.
 			for i := 0; i < 3; i++ {
@@ -51,11 +54,13 @@ func TestArenaPoolByteBudget(t *testing.T) {
 			t.Cleanup(p.drain)
 			require.Equal(t, tc.wantCount, p.count.Load())
 			require.Equal(t, int64(tc.wantCount)*256, p.bytes.Load())
+			require.Equal(t, pooledBefore+float64(tc.wantCount)*64, promtestutil.ToFloat64(metric.MemObjectIOPooledSerialBytesGauge))
 			for i := tc.wantCount; i > 0; i-- {
 				a := p.get()
 				require.NotNil(t, a)
 				require.Equal(t, 256, a.Allocated())
 				require.Equal(t, int64(i-1)*256, p.bytes.Load())
+				require.Equal(t, pooledBefore+float64(i-1)*64, promtestutil.ToFloat64(metric.MemObjectIOPooledSerialBytesGauge))
 			}
 			require.Nil(t, p.get())
 			p.drain()
@@ -66,6 +71,7 @@ func TestArenaPoolByteBudget(t *testing.T) {
 }
 
 func TestArenaPoolConcurrentReuseAndDrain(t *testing.T) {
+	pooledBefore := promtestutil.ToFloat64(metric.MemObjectIOPooledSerialBytesGauge)
 	p := &arenaFreeList{maxCount: 8, maxBytes: 2048}
 	t.Cleanup(p.drain)
 	var wg sync.WaitGroup
@@ -107,6 +113,7 @@ func TestArenaPoolConcurrentReuseAndDrain(t *testing.T) {
 	wg.Wait()
 	p.drain()
 	require.False(t, invalid.Load(), "checked-out buffers stay owned; idle bytes stay bounded")
+	require.Equal(t, pooledBefore, promtestutil.ToFloat64(metric.MemObjectIOPooledSerialBytesGauge))
 	require.Zero(t, p.count.Load())
 	require.Zero(t, p.bytes.Load())
 }

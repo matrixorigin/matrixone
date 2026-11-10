@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -1511,8 +1513,10 @@ func ExecuteIteration(
 		}
 	}
 
+	applyCtx, stopProtection := withSyncProtection(ctx, syncProtectionWorker, syncProtectionJobID)
+	defer stopProtection()
 	err = ApplyObjects(
-		ctx,
+		applyCtx,
 		iterationCtx.TaskID,
 		iterationCtx.SrcInfo.AccountID,
 		iterationCtx.IndexTableMappings,
@@ -1533,8 +1537,11 @@ func ExecuteIteration(
 		iterationCtx.AObjectMap,
 		ttlChecker,
 	)
+	if cause := context.Cause(applyCtx); cause != nil {
+		err = errors.Join(err, cause)
+	}
 	if err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)
+		err = errutil.Wrap(err, "failed to apply object list")
 		return
 	}
 

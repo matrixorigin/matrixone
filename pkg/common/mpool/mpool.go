@@ -917,14 +917,17 @@ var allocationCounters sync.Map // pool id -> *allocationCounter
 
 func releaseAllocated(poolID int64, sz int64) {
 	if value, ok := allocationCounters.Load(poolID); ok {
-		counter := value.(*allocationCounter)
-		remaining := counter.bytes.Add(-sz)
-		if remaining < 0 {
-			panic("mpool allocation ownership underflow")
-		}
-		if remaining == 0 && counter.deleted.Load() {
-			allocationCounters.Delete(poolID)
-		}
+		value.(*allocationCounter).release(poolID, sz)
+	}
+}
+
+func (counter *allocationCounter) release(poolID, sz int64) {
+	remaining := counter.bytes.Add(-sz)
+	if remaining < 0 {
+		panic("mpool allocation ownership underflow")
+	}
+	if remaining == 0 && counter.deleted.Load() {
+		allocationCounters.Delete(poolID)
 	}
 }
 
@@ -1328,7 +1331,7 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	}
 
 	mp.freePtrInternal(detailk, ptr, hdr, lease)
-	releaseAllocated(hdr.poolId, int64(hdr.allocSz))
+	mp.allocated.release(mp.id, int64(hdr.allocSz))
 }
 
 func (mp *MPool) freePtrInternal(

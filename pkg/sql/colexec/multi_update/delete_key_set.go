@@ -20,9 +20,10 @@ import (
 	"encoding/binary"
 	"hash/maphash"
 	"io"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // deleteKeySet retains transaction-local row-id deduplication on disk. Its
@@ -30,7 +31,7 @@ import (
 // Randomized hashing avoids a data-controlled fixed-bucket collision pattern.
 // Only one fixed record buffer is live per lookup, regardless of row count.
 type deleteKeySet struct {
-	file *os.File
+	file *colexec.MetadataSpool
 	seed maphash.Seed
 	end  int64
 }
@@ -39,16 +40,17 @@ const deleteKeyBuckets = 1 << 16
 const deleteKeyHeadBytes = deleteKeyBuckets * 8
 const deleteKeyRecordBytes = 8 + types.RowidSize
 
-func (s *deleteKeySet) add(ctx context.Context, key types.Rowid) (bool, error) {
+func (s *deleteKeySet) add(proc *process.Process, key types.Rowid) (bool, error) {
+	ctx := proc.Ctx
 	if err := context.Cause(ctx); err != nil {
 		return false, err
 	}
 	if s.file == nil {
-		f, err := os.CreateTemp("", "mo-delete-keys-*.spool")
+		f, err := colexec.NewMetadataSpool(proc)
 		if err != nil {
 			return false, err
 		}
-		if err = os.Remove(f.Name()); err != nil {
+		if err = f.Reserve(deleteKeyHeadBytes); err != nil {
 			f.Close()
 			return false, err
 		}
@@ -78,6 +80,9 @@ func (s *deleteKeySet) add(ctx context.Context, key types.Rowid) (bool, error) {
 			return false, nil
 		}
 		next = binary.LittleEndian.Uint64(rec[:8])
+	}
+	if err := s.file.Reserve(deleteKeyRecordBytes); err != nil {
+		return false, err
 	}
 	var rec [deleteKeyRecordBytes]byte
 	binary.LittleEndian.PutUint64(rec[:8], start)

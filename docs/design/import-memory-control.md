@@ -118,7 +118,7 @@ index semantics. DOP recompilation must not mutate caller routing labels.
 Eligible ordinary CSV writers use the existing bounded SinkPool; other writers
 keep their existing pipeline policy. Lack of optional D buffering flushes owned
 sources or uses the admitted borrowed-input path instead of failing the import.
-Neither path enlarges source units or metadata/output slots.
+Neither path enlarges source units or the per-object metadata frame bound.
 
 1. Reserve complete W for actual payload, block limit, merge backing, encoding,
    compression, arenas, file-service storage and final metadata before queueing.
@@ -128,7 +128,7 @@ Neither path enlarges source units or metadata/output slots.
 3. Once Sink has consumed and destroyed source vectors, shrink only their part
    of W. Keep every remaining buffer and its effective pool owner alive through
    Sync and Close; an upload worker cannot borrow an uncharged merge output.
-4. Collect successful object stats into the existing metadata spool. Transfer
+4. Collect successful object stats into retained transaction metadata. Transfer
    output into reserved I or an existing D owner before releasing its W.
 
 A borrowed write clones/sorts/encodes under its caller's W lease. Its private
@@ -163,6 +163,109 @@ Serial upload boundaries prevent overlap. Reserving a worst-case W maximum per
 worker wastes capacity or overcommits it. The selected mechanism charges actual
 peaks within one shared maximum and reuses the existing coordinator, envelopes
 and SinkPool, without a new worker, timer, configuration or workload threshold.
+
+## Transaction metadata ownership
+
+Admitted INSERT and insert-only MultiUpdate keep compact object/block metadata
+in operator memory until Build completes, then emit the existing bounded
+MergeBlock/MultiUpdate protocol during Eval. INSERT retains ObjectStats and
+expands one object at a time; insert-only MultiUpdate retains its existing
+five-column output. Object payloads remain in object storage.
+
+In the representative replay, each 39-table round generated about 2,000 objects and
+14,000 blocks including indexes, or approximately 3 MB of encoded metadata
+across the statements. That is an encoding estimate, not a measured simultaneous
+peak. It does not describe uncommitted-delete output, which contains raw RowIDs
+and primary keys proportional to the deleted rows. There is no evidence that
+compact metadata required file storage for this load.
+The memory fast path avoids temporary IO for this ordinary workload; this
+sample is not a capacity bound for arbitrarily many objects or raw delete keys.
+
+For admitted imports, retained metadata and the current output share the existing
+output input-slot lease. Before vector backing grows, extend that lease through WorkingSet's
+nonblocking growth admission using the existing four-copy metadata allowance.
+This charges cumulative capacity, preserves the fixed per-frame protocol limit,
+and adds no workload threshold, configuration, queue owner or worker. Capacity
+denial switches to bounded temporary storage instead of waiting behind retained
+output. INSERT streams fixed ObjectStats records; insert-only MultiUpdate
+migrates one already-encoded row at a time into the existing frame spool. Its old
+four-copy claim covers retained input plus old/new one-row backing, and direct
+serialization adds no whole-frame encoding copy. The old vectors are retired
+only after migration succeeds. Cancellation, closed owners and malformed frames
+remain errors rather than triggering fallback. Eval can switch after partial
+consumption and resumes at the unread object/row; it never replays emitted rows.
+A single frame must still fit its admitted envelope.
+Legacy and delete-capable MultiUpdate preserve the existing per-frame temporary
+storage and delete-before-insert replay. Retire each encoded frame before the
+next window, so raw-key output need not fit in D for the whole statement.
+Eval acquires only the current decoded frame from D after retiring the previous
+frame. It holds that claim until the consumer advances or cleanup destroys it.
+At partition Build EOF, finalize all legacy writers to their existing frame
+storage and retire their source/future D before replaying any partition. A later
+partition cannot be expected to release D while the current partition waits.
+Independent owners retain their cancellable release/wait behavior.
+EOF preflush keeps unhanded objects under the existing writer/metadata owner.
+Object-stat frames carry compact cleanup names in their private temporary-file
+trailer; raw-delete frames do not. Frame creation transfers ownership from
+block-info to the file, and complete replay transfers it to the existing
+transaction consumer. Failed replay cannot advance that watermark. Free/Reset
+remove unread objects without materializing raw-key payloads, using a bounded
+cleanup context independent of query cancellation, with one deadline shared by
+all partition writers. Partially successful uploads remain in their existing
+sinker until discarded or handed off. A fully drained
+writer skips the cleanup scan. This closes the added EOF preflush window; it
+does not introduce a second transaction-object registry or change persistence.
+Metadata files use the configured LOCAL spill service rather than OS TMPDIR.
+Existing query/CN spill-disk and FD reservations cover both INSERT
+and MultiUpdate files; each full append is admitted before writing, and file
+close retires its reservations. Transaction-local delete-key deduplication uses
+the same owner: admit its bucket table before sizing the file, then admit each
+distinct RowID record before appending; duplicate lookups spend no new storage.
+Reset/Free closes all partition/table files and returns both byte and FD claims.
+This reuses the native spill policy and adds no new setting.
+Known-autocommit writers retain cancellable D acquisition and release notifications;
+explicit transactions retain 4.2's nonblocking guard against their own workspace/locks.
+There is no new cumulative D-memory claim or blanket rejection while output is
+pending. Reset/Free close the unlinked frame file, including partial writes and
+cancelled replay. Admitted imports open temporary storage only after capacity
+denial; the same temporary-volume requirements and IO-error behavior apply.
+
+Eval retires each metadata batch after it is fully consumed. Error, cancellation,
+Reset and Free destroy remaining vectors before releasing the output lease. Verify multiple objects,
+delete-before-insert order, growth denial, unchanged prior output and reuse.
+
+## Publication object buffers
+
+ApplyObjects resolves the existing CN coordinator from Engine.GetService at
+its common entry, so direct callers and ExecuteIteration share the same owner.
+Explicitly supplied owners remain effective; a missing owner still fails before
+source allocation. Service test fixtures install the same real coordinator.
+
+Every FilterObject attempt reserves its source-buffer peak through the CN memory
+coordinator before fetching data, for ordinary data, appendable and tombstone
+objects alike. The promise covers class-rounded final storage, returned chunks
+and driver decoding backing. Fixed-name tombstone rewriting starts with the existing
+IO envelope as a conservative source-buffer floor. The object-format size ceiling is unchanged. Empty or
+initially unknown sizes start with a nonzero input slot and grow from GETOBJECT
+metadata before allocating the source buffer.
+
+The root attempt retains that owner through decoding/copying and the final
+fileservice write; returning from fetch does not return the credit. If the
+reported size needs more memory and nonblocking growth fails, retire every
+resource of that attempt before waiting for a larger reservation and refetching.
+Capacity denial alone takes this path; cancellation and closed owners propagate.
+Failed submission and cancellation join accepted jobs before root retirement.
+No workload threshold, extra queue or configuration is introduced.
+
+The protected Apply phase owns one expiration timer and cancellation context.
+The worker returns the authoritative TTL and its change notification under one
+lock. Registration updates, renewal replies and removal wake the observer, so
+earlier and later deadlines both rearm the timer without a lost notification.
+A reply from a removed registration cannot change a replacement generation.
+Expiry cancels queued admission and IO.
+This uses no polling or per-object timer. Parent cancellation and phase exit
+stop and join the observer, while existing job retirement retains live buffers
+until consumers exit. Preserve both the primary failure and protection cause.
 
 ## Build, spill and ordinary execution
 
@@ -248,3 +351,9 @@ cgroup users can consume headroom. Hash partition recovery can repeat probe IO. 
 limits of bounded execution. Raw measurements, manifests and review records stay
 outside source; results and tested revisions belong in the PR body or linked
 evidence.
+
+## Persisted block layout and recovery retirement
+
+Persisted objects require every non-final block to contain `BlockMaxRows` rows. Byte windows bound source admission and independently publishable runs, not the blocks emitted inside a sorted object. Sorted and borrowed output therefore packs full row blocks; an unsorted writer finishes an object before staging another block after a partial one. The IO claim covers the complete run's materialized payload, including constant/aliased expansion. Legacy single-object callers retain the row-block memory unit; this does not add a new byte cap to those unadmitted paths.
+
+A fallback worker keeps generation ownership through recovery, timer cleanup and actual retirement. Closing its stop channel only requests retirement. `workerDone` prevents replacement while recovery is blocked; under the coordinator mutex, retirement closes that completion and starts a replacement only when requests remain queued. Request cancellation removes its waiter without joining recovery. This reuses the existing worker and channels; no new timer, pool or setting is introduced.
