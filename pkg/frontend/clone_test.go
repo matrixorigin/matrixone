@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -946,6 +947,42 @@ func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *
 	require.False(t, lockCalled)
 }
 
+type cloneRoutineInventoryExec struct {
+	*inventoryBackgroundExecTest
+	epoch uint64
+}
+
+func (b *cloneRoutineInventoryExec) ExecWithSQLMode(ctx context.Context, query, mode string) error {
+	if query == databaseInventoryReadSQL(sysAccountID, "destination") {
+		b.sql2result[query] = newMrsForRestoreStringRows(
+			[]string{"dat_id", "epoch"}, [][]interface{}{{uint64(42), b.epoch}})
+	}
+	return b.inventoryBackgroundExecTest.ExecWithSQLMode(ctx, query, mode)
+}
+
+func (b *cloneRoutineInventoryExec) Exec(ctx context.Context, query string) error {
+	advance := catalog.DatabaseInventoryIncrementSQL(sysAccountID, 42) + fmt.Sprintf(" and epoch=%d", b.epoch)
+	if query == advance {
+		if _, exists := b.affectedBySQL[query]; !exists {
+			b.affectedBySQL[query] = 1
+		}
+	}
+	if err := b.inventoryBackgroundExecTest.Exec(ctx, query); err != nil {
+		return err
+	}
+	if query == advance && b.GetLastAffectedRows() == 1 {
+		b.epoch++
+	}
+	return nil
+}
+
+func newCloneRoutineInventoryExec() *cloneRoutineInventoryExec {
+	return &cloneRoutineInventoryExec{
+		inventoryBackgroundExecTest: newInventoryBackgroundExec(sysAccountID, "destination", 42, 3),
+		epoch:                       3,
+	}
+}
+
 func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 	newSource := func() *cloneDatabaseSource {
 		return &cloneDatabaseSource{
@@ -983,8 +1020,7 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		ses := newTestSession(t, ctrl)
 		t.Cleanup(ses.Close)
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newCloneRoutineInventoryExec()
 		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
 		bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
 
@@ -993,19 +1029,23 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 			ses, bh, newStatement(), newSource(),
 		)
 		require.NoError(t, err)
-		require.Len(t, bh.executedSQLs, 4)
+		require.Len(t, bh.executedSQLs, 8)
 		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
-		require.Equal(t, checkSQL, bh.executedSQLs[2])
-		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_stored_procedure")
+		require.Equal(t, databaseInventoryReadSQL(sysAccountID, "destination"), bh.executedSQLs[1])
+		require.Equal(t, catalog.DatabaseInventoryIncrementSQL(sysAccountID, 42)+" and epoch=3", bh.executedSQLs[2])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, databaseInventoryReadSQL(sysAccountID, "destination"), bh.executedSQLs[4])
+		require.Equal(t, checkSQL, bh.executedSQLs[5])
+		require.Equal(t, catalog.DatabaseInventoryIncrementSQL(sysAccountID, 42)+" and epoch=4", bh.executedSQLs[6])
+		require.Contains(t, bh.executedSQLs[7], "insert into mo_catalog.mo_stored_procedure")
+		require.Equal(t, uint64(5), bh.epoch)
 	})
 
 	t.Run("propagates procedure restoration failures", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		ses := newTestSession(t, ctrl)
 		t.Cleanup(ses.Close)
-		bh := &backgroundExecTest{}
-		bh.init()
+		bh := newCloneRoutineInventoryExec()
 		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
 		wantErr := errors.New("procedure lookup failed")
 		bh.sql2err[checkSQL] = wantErr
@@ -1015,10 +1055,33 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 			ses, bh, newStatement(), newSource(),
 		)
 		require.ErrorIs(t, err, wantErr)
-		require.Len(t, bh.executedSQLs, 3)
+		require.Len(t, bh.executedSQLs, 6)
 		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
-		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
-		require.Equal(t, checkSQL, bh.executedSQLs[2])
+		require.Equal(t, databaseInventoryReadSQL(sysAccountID, "destination"), bh.executedSQLs[1])
+		require.Equal(t, catalog.DatabaseInventoryIncrementSQL(sysAccountID, 42)+" and epoch=3", bh.executedSQLs[2])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, databaseInventoryReadSQL(sysAccountID, "destination"), bh.executedSQLs[4])
+		require.Equal(t, checkSQL, bh.executedSQLs[5])
+		require.Equal(t, uint64(4), bh.epoch)
+	})
+
+	t.Run("inventory conflict rejects routine restoration", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := newCloneRoutineInventoryExec()
+		advance := catalog.DatabaseInventoryIncrementSQL(sysAccountID, 42) + " and epoch=3"
+		bh.affectedBySQL[advance] = 0
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		require.Equal(t, []string{
+			"create database `destination`", databaseInventoryReadSQL(sysAccountID, "destination"), advance,
+		}, bh.executedSQLs)
+		require.Equal(t, uint64(3), bh.epoch)
 	})
 
 	t.Run("rejects imported functions before target database creation", func(t *testing.T) {
