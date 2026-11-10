@@ -593,3 +593,18 @@ cancellation tests without letting production accept arbitrary readers. Earlier
 references to sealed interfaces mean this enforced consumption boundary, not a
 claim that the Go compiler prevents other packages from implementing an exported
 interface.
+
+### Synchronous text output copy (candidate revision 33)
+
+The first complete paired run found that small-document SQL still exceeded the
+1.10x target, with per-row string-to-byte allocation in the result-writing
+path. The existing result writer synchronously validates and copies input into
+its own varlena storage, including its constant-result path. The evaluator may
+therefore pass a temporary read-only byte view of an already owned string for
+that call only; the view is neither retained nor exposed. Length, UTF-8,
+collation and allocation-failure behavior remain unchanged for both overloads.
+
+Review decision: this removes an intermediate output copy, not document
+validation or the final caller-owned output copy. It adds no path cache or new
+JSON decoder. Keep a regression proving long output survives reader closure
+and source mutation, and measure this change separately from admission reuse.
