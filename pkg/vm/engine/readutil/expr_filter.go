@@ -101,6 +101,17 @@ func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
 	return
 }
 
+// Storage's float ordering is not monotonic when a sort key contains NaN.
+// Per-block summaries remain useful, but cannot justify seeking or stopping.
+func orderedBlockSearch(isSorted bool, colDef *plan.ColDef) bool {
+	return isSorted && !isFloatColumn(colDef)
+}
+
+func isFloatColumn(colDef *plan.ColDef) bool {
+	oid := types.T(colDef.Typ.Id)
+	return oid == types.T_float32 || oid == types.T_float64
+}
+
 type temporalZoneMapMatch struct {
 	matches    bool
 	comparable bool
@@ -246,7 +257,17 @@ func makeTemporalFilterMatcher(
 	}, true
 }
 
-func reverseTemporalFilterOperator(op string) string {
+// 列/常量提取不会保留左右位置，两个读取过滤器必须在分派时恢复方向。
+// 只返回操作符，不修改仍由行过滤或后续参数执行持有的表达式。
+func columnFilterOperator(fn *plan.Function) string {
+	op := fn.Func.ObjName
+	if len(fn.Args) == 2 && fn.Args[1].GetCol() != nil {
+		return reverseComparisonOperator(op)
+	}
+	return op
+}
+
+func reverseComparisonOperator(op string) string {
 	switch op {
 	case "<":
 		return ">"
@@ -348,7 +369,7 @@ func compileTemporalFilterExpr(
 	}
 	colDef := getColDefByName(expr, colExpr.Col, tableDef)
 	if !columnOnLeft {
-		op = reverseTemporalFilterOperator(op)
+		op = reverseComparisonOperator(op)
 	}
 
 	matchers := make([]func(objectio.ZoneMap) temporalZoneMapMatch, len(values))
@@ -615,7 +636,7 @@ func compileFilterExpr(
 			return op1, op2, op3, op4, op5, can, hsh
 		}
 
-		switch exprImpl.F.Func.ObjName {
+		switch columnFilterOperator(exprImpl.F) {
 		case "or":
 			highSelectivityHint = true
 			fastOps := make([]FastFilterOp, 0, len(exprImpl.F.Args))
@@ -818,7 +839,7 @@ func compileFilterExpr(
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().AnyLEByValue(vals[0]), nil
@@ -831,13 +852,15 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(vals[0]), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.AnyLEByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
-				ok := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(vals[0])
-				if isSorted {
+				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				ok := !zm.IsInited() || zm.AnyLEByValue(vals[0])
+				if orderedBlockSearch(isSorted, colDef) {
 					return !ok, ok, nil
 				}
 				return false, ok, nil
@@ -852,7 +875,7 @@ func compileFilterExpr(
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().AnyGEByValue(vals[0]), nil
@@ -865,18 +888,21 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0]), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.AnyGEByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0]), nil
+				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return false, !zm.IsInited() || zm.AnyGEByValue(vals[0]), nil
 			}
-			if isSorted {
+			if orderedBlockSearch(isSorted, colDef) {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
 					blkIdx := sort.Search(blockCnt, func(j int) bool {
-						return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0])
+						zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap()
+						return !zm.IsInited() || zm.AnyGEByValue(vals[0])
 					})
 					return blkIdx
 				}
@@ -891,7 +917,7 @@ func compileFilterExpr(
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().AnyGTByValue(vals[0]), nil
@@ -904,18 +930,21 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(vals[0]), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.AnyGTByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(vals[0]), nil
+				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return false, !zm.IsInited() || zm.AnyGTByValue(vals[0]), nil
 			}
-			if isSorted {
+			if orderedBlockSearch(isSorted, colDef) {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
 					blkIdx := sort.Search(blockCnt, func(j int) bool {
-						return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(vals[0])
+						zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap()
+						return !zm.IsInited() || zm.AnyGTByValue(vals[0])
 					})
 					return blkIdx
 				}
@@ -930,7 +959,7 @@ func compileFilterExpr(
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().AnyLTByValue(vals[0]), nil
@@ -943,13 +972,15 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(vals[0]), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.AnyLTByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
-				ok := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(vals[0])
-				if isSorted {
+				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				ok := !zm.IsInited() || zm.AnyLTByValue(vals[0])
+				if orderedBlockSearch(isSorted, colDef) {
 					return !ok, ok, nil
 				}
 				return false, ok, nil
@@ -1106,7 +1137,7 @@ func compileFilterExpr(
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().Between(vals[0], vals[1]), nil
@@ -1119,22 +1150,27 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().Between(vals[0], vals[1]), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.Between(vals[0], vals[1]), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && !zm.AnyLEByValue(vals[1]) {
+				if !zm.IsInited() {
+					return false, true, nil
+				}
+				if orderedBlockSearch(isSorted, colDef) && !zm.AnyLEByValue(vals[1]) {
 					return true, false, nil
 				}
 				return false, zm.Between(vals[0], vals[1]), nil
 			}
-			if isSorted {
+			if orderedBlockSearch(isSorted, colDef) {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
 					return sort.Search(blockCnt, func(j int) bool {
-						return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0])
+						zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap()
+						return !zm.IsInited() || zm.AnyGEByValue(vals[0])
 					})
 				}
 			}
@@ -1149,7 +1185,7 @@ func compileFilterExpr(
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().InRange(vals[0], vals[1], hint), nil
@@ -1162,13 +1198,17 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().InRange(vals[0], vals[1], hint), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.InRange(vals[0], vals[1], hint), nil
 			}
 			blockFilterOp = func(
 				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted {
+				if !zm.IsInited() {
+					return false, true, nil
+				}
+				if orderedBlockSearch(isSorted, colDef) {
 					if hint == 2 || hint == 3 {
 						// open UB: break when min >= ub
 						if !zm.AnyLTByValue(vals[1]) {
@@ -1183,11 +1223,14 @@ func compileFilterExpr(
 				}
 				return false, zm.InRange(vals[0], vals[1], hint), nil
 			}
-			if isSorted {
+			if orderedBlockSearch(isSorted, colDef) {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
 					return sort.Search(blockCnt, func(j int) bool {
 						zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap()
+						if !zm.IsInited() {
+							return true
+						}
 						if hint == 1 || hint == 3 {
 							return zm.AnyGTByValue(vals[0])
 						}
@@ -1309,13 +1352,13 @@ func compileFilterExpr(
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().AnyIn(vec), nil
 				}
 			}
-			if isPK {
+			if isPK && !isFloatColumn(colDef) {
 				loadOp = loadMetadataAndBFOpFactory(fs)
 			} else {
 				loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1329,7 +1372,8 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.AnyIn(vec), nil
 			}
 			vecHasNull := vec.IsConstNull() || vec.GetNulls().Any()
 			var maxVal []byte
@@ -1340,13 +1384,16 @@ func compileFilterExpr(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted && maxVal != nil && !zm.AnyLEByValue(maxVal) {
+				if !zm.IsInited() {
+					return false, true, nil
+				}
+				if orderedBlockSearch(isSorted, colDef) && maxVal != nil && !zm.AnyLEByValue(maxVal) {
 					return true, false, nil
 				}
 				if !zm.AnyIn(vec) {
 					return false, false, nil
 				}
-				if isPK {
+				if isPK && !isFloatColumn(colDef) {
 					blkBf := bf.GetBloomFilter(uint32(blkIdx))
 					blkBfIdx := index.NewEmptyBloomFilter()
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
@@ -1359,7 +1406,7 @@ func compileFilterExpr(
 				}
 				return false, true, nil
 			}
-			if isSorted && vec.Length() > 0 && !vecHasNull {
+			if orderedBlockSearch(isSorted, colDef) && vec.Length() > 0 && !vecHasNull {
 				minVal := vec.GetRawBytesAt(0)
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
@@ -1378,13 +1425,13 @@ func compileFilterExpr(
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
-					if obj.ZMIsEmpty() {
+					if obj.ZMIsEmpty() || !obj.SortKeyZoneMap().IsInited() {
 						return true, nil
 					}
 					return obj.SortKeyZoneMap().ContainsKey(vals[0]), nil
 				}
 			}
-			if isPK {
+			if isPK && !isFloatColumn(colDef) {
 				loadOp = loadMetadataAndBFOpFactory(fs)
 			} else {
 				loadOp = loadMetadataOnlyOpFactory(fs)
@@ -1398,7 +1445,8 @@ func compileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(vals[0]), nil
+				zm := dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				return !zm.IsInited() || zm.ContainsKey(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -1407,7 +1455,10 @@ func compileFilterExpr(
 					can, ok bool
 				)
 				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
-				if isSorted {
+				if !zm.IsInited() {
+					return false, true, nil
+				}
+				if orderedBlockSearch(isSorted, colDef) {
 					can = !zm.AnyLEByValue(vals[0])
 					if can {
 						ok = false
@@ -1421,7 +1472,7 @@ func compileFilterExpr(
 				if !ok {
 					return can, ok, nil
 				}
-				if isPK {
+				if isPK && !isFloatColumn(colDef) {
 					var blkBF index.BloomFilter
 					buf := bf.GetBloomFilter(uint32(blkIdx))
 					if err := blkBF.Unmarshal(buf); err != nil {
@@ -1434,11 +1485,12 @@ func compileFilterExpr(
 				}
 				return false, true, nil
 			}
-			if isSorted {
+			if orderedBlockSearch(isSorted, colDef) {
 				seekOp = func(meta objectio.ObjectDataMeta) int {
 					blockCnt := int(meta.BlockCount())
 					blkIdx := sort.Search(blockCnt, func(j int) bool {
-						return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0])
+						zm := meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(seqNum)).ZoneMap()
+						return !zm.IsInited() || zm.AnyGEByValue(vals[0])
 					})
 					return blkIdx
 				}

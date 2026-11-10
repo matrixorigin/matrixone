@@ -67,6 +67,7 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_index_edge_cases.test_vector_edge_cases  𝄀
                     Filter Cond: (test_vector_edge_cases.score >= 4)  𝄀
+                    Block Filter Cond: (test_vector_edge_cases.score >= 4)  𝄀
                     Runtime Filter Probe: test_vector_edge_cases.id  𝄀
               ->  Table Function on ivf_search  𝄀
                     Index Reader Param:  Limit: 15  𝄀
