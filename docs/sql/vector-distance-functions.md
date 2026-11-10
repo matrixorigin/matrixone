@@ -130,11 +130,13 @@ SELECT vecblock_json(CAST('[1,2,3]' AS vecf4(3)));   -- {"g":0.0011160715,"s":[4
 | `abs(v)` | `vecf32`, `vecf64`, `vecf8`, `vecf4` | `T`; **`vecf32` for `vecf8`, `vecf4`** |
 | `sqrt(v)` | `vecf32`, `vecf64`, `vecf8`, `vecf4` | **`vecf64`** for all four |
 | `+`, `-`, `*`, `/` (vector with vector, or vector with a number) | `vecf32`, `vecf64`, `vecf8`, `vecf4` | `T`; **`vecf32`** when an operand is `vecf8` or `vecf4` |
-| `=`, `<>`, `<`, `<=`, `>`, `>=`, `IN` | all eight | `BOOL`; a text literal compared with a `vecf8`/`vecf4` column is quantized to the column's type, so a row matches the text it was inserted from |
-| `coalesce`, `if`, `case` over one vector type | all eight | `T` |
+| `=`, `<>`, `<`, `<=`, `>`, `>=`, `IN` | all eight | `BOOL`; a text literal compared with a `vecf8`/`vecf4` column is quantized to the column's type, so a row matches the text it was inserted from; two vector types are compared as their common type ([vector-common-type.md](vector-common-type.md)) |
+| `coalesce`, `if`, `ifnull`, `case`, `UNION` | all eight | `T` over one vector type; the common type over several ([vector-common-type.md](vector-common-type.md)) |
+| `nullif(a, b)` | all eight | the type of `a` |
+| `greatest`, `least` | all eight | as `coalesce`; **`vecf32`** for `vecf8`, `vecf4` |
 | `hex(v)`, `to_base64(v)` | `vecf32`, `vecf64` | `TEXT` |
 | `CAST(v AS vecf32(N) / vecf64(N) / vecbf16(N) / vecf16(N) / vecint8(N) / vecuint8(N))` | all six | the target type. To `vecint8`/`vecuint8` each element is rounded to the nearest integer and saturated (`[-300, 300, 1.6]` → `[-128, 127, 2]`); an element that overflows a float target is an error |
-| `CAST(v AS vecf8(N) / vecf4(N))`, and `CAST` of a `vecf8`/`vecf4` | text, `vecf32`, `vecf8`, `vecf4` | the target type; a cast between `vecf8`/`vecf4` and `vecf64`, `vecbf16`, `vecf16`, `vecint8` or `vecuint8` is rejected (`invalid argument operator cast, bad value [VECF8 VECF64]`); cast through `vecf32` |
+| `CAST(v AS vecf8(N) / vecf4(N))`, and `CAST` of a `vecf8`/`vecf4` | text, `vecf32`, `vecf8`, `vecf4`; a `vecf8`/`vecf4` also casts to `vecf64` | the target type; a cast between `vecf8`/`vecf4` and `vecbf16`, `vecf16`, `vecint8` or `vecuint8` is rejected (`invalid argument operator cast, bad value [VECF8 VECBF16]`); cast through `vecf32` |
 | `vecblock_json(v)`, `vecblock_binary(v)` | `vecf8`, `vecf4` | `TEXT`, `BLOB`: the stored cell |
 | `COUNT(DISTINCT v)`, `GROUP BY v` | all eight | |
 | `ANY_VALUE(v)` | all eight | `T` |
