@@ -35,6 +35,7 @@ mo_configurations
 mo_data_key
 mo_database
 mo_database_defaults
+mo_database_inventory
 mo_feature_limit
 mo_feature_registry
 mo_foreign_keys
