@@ -1,9 +1,9 @@
 # Native Rebase R1 executor - revision 1
 
-Status: APPROVED_FOR_MINIMAL_R1_IMPLEMENTATION (2026-10-30). Scope is the native replay primitive, not R2
-branch-name/history publication. Base: b01e952ad1021ef8f188641f3a11a1360c001218.
-P1 substrate and runtime evidence: `native_rebase_validation.json`, committed
-in cb28006f08. This review is separate from implementation acceptance.
+Status: selected R1 replay contract, not R2 branch-name/history publication.
+The fixed R1 implementation is independently reviewable at `5ebbf0f9de`.
+Runtime qualification and current-head integration evidence are external
+artifacts; this design is not a substitute for implementation acceptance.
 
 ## Contract
 
@@ -108,13 +108,12 @@ Each side's first non-nullable PK component is its presence marker. Join the
 third side on coalesced Bf/F PK components. Use typed <=> comparisons for full
 visible-row equality, EXCEPT that every PK identity predicate, including
 base correspondence, third-endpoint joins and destination deletes, reuses
-dataBranchSQLKeyEqual with the resolved column type. FLOAT/DOUBLE PK identity
-uses serial(left)=serial(right), not numeric equality: +0/-0 and NaN payloads
-must never collapse. Composite keys apply this per component. Stored PK
-components are non-nullable; a zero numeric key remains a present row. SQL
-tests must include both signed zeros and distinct NaN storage identities
-before advertising float-key support; unsupported literal construction is not
-a reason to silently substitute ordinary equality.
+dataBranchSQLKeyEqual with the resolved column type. Composite keys apply this
+per component. Stored PK components are non-nullable; a zero numeric key remains
+a present row. Current admission rejects FLOAT/DOUBLE primary keys rather than
+silently collapse signed zeros or NaN identities. Supporting those keys needs
+separate storage-identity qualification. Non-key floating-point values retain
+the separately tested typed comparison contract.
 The generated relational plan computes feature changes,
 upstream changes, conflicts and applied insert/update/delete counts. It returns
 only aggregates to Go; never all rows.
@@ -186,14 +185,3 @@ Test KEEP_* and a second Rebase after new upstream/feature changes, then Merge.
 Restart/crash evidence must bind the coordinator, not be relabeled P1 probe
 results. Only after these pass integrate R2 and run matched W1 correctness/cost.
 Do not run SF100, full data_agent, Reset/Revert or generic infrastructure sweeps.
-
-## Design-first review
-
-Independent read-only review (Faraday, 2026-10-30) initially blocked on FLOAT
-PK identity. Reusing dataBranchSQLKeyEqual in every PK predicate plus explicit
-signed-zero/NaN acceptance closed that finding. Re-review approved this revision
-for minimal R1 implementation, including K/T -> quota Q -> snapshot E ordering,
-one multi-source admission, non-nil clone owner, branch-pin validation and
-post-commit result publication. This is not code/runtime/release approval or
-approval of an R2 publication protocol. Implementation must preserve these
-invariants and supply its own tests, not relabel P1 substrate tests.

@@ -1,7 +1,0 @@
-# Track the native Rebase design probes despite the root *.py ignore rule.
-!native_rebase_model.py
-!test_native_rebase_model.py
-!native_rebase_probe_linux.py
-!test_native_rebase_probe_linux.py
-!test_native_rebase_adapter_contract.py
-__pycache__/
