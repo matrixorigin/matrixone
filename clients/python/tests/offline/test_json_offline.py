@@ -234,7 +234,8 @@ class TestStandardSyntax:
             ('items[0]', '$."items[0]"'),
             ('\n\t\r\b\f\x00', '$."\\n\\t\\r\\b\\f\\u0000"'),
             ('中文😀', '$."中文😀"'),
-            (42, '$."42"'),
+            ('42', '$."42"'),
+            (42, '$[42]'),
         ],
     )
     def test_member_path_is_bound_data(self, key, path):

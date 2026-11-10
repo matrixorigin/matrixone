@@ -2,12 +2,13 @@
 Custom JSON type for MatrixOne with SQLAlchemy standard syntax support.
 
 This module provides enhanced JSON type that supports:
-- column['key'] dictionary-style access
+- column['key'] object access and column[index] array access
 - .astext property for automatic quote removal
 - Better Python type mapping
 """
 
 import json
+from typing import Union
 
 from sqlalchemy import cast, String
 from sqlalchemy.types import TypeDecorator
@@ -16,6 +17,14 @@ from sqlalchemy.sql.expression import ColumnElement
 from sqlalchemy.sql.visitors import InternalTraversal
 
 from .json_functions import json_extract, json_extract_string
+
+
+def _path_component(key: Union[str, int]) -> str:
+    if isinstance(key, int) and not isinstance(key, bool):
+        if key < 0:
+            raise ValueError('JSON array indices must be non-negative')
+        return f'[{key}]'
+    return '.' + json.dumps(str(key), ensure_ascii=False)
 
 
 class JSONPathElement(ColumnElement):
@@ -37,14 +46,14 @@ class JSONPathElement(ColumnElement):
     # equality builds a SQL predicate.
     __hash__ = ColumnElement.__hash__
 
-    def __init__(self, column: ColumnElement, key: str):
+    def __init__(self, column: ColumnElement, key: Union[str, int]):
         self.column = column
         self.key = key
-        self._current_path = '$.' + json.dumps(str(key), ensure_ascii=False)
+        self._current_path = '$' + _path_component(key)
         # Call parent init
         super().__init__()
 
-    def __getitem__(self, key: str) -> 'JSONPathElement':
+    def __getitem__(self, key: Union[str, int]) -> 'JSONPathElement':
         """
         Support nested access: column['key1']['key2']
 
@@ -55,7 +64,7 @@ class JSONPathElement(ColumnElement):
         new_element = JSONPathElement.__new__(JSONPathElement)
         new_element.column = self.column
         new_element.key = key
-        new_element._current_path = self._current_path + '.' + json.dumps(str(key), ensure_ascii=False)
+        new_element._current_path = self._current_path + _path_component(key)
         return new_element
 
     @property
@@ -230,12 +239,12 @@ class JSON(TypeDecorator):
     class Comparator(MySQLJSON.Comparator):
         """Custom comparator for JSON column operations."""
 
-        def __getitem__(self, key: str) -> JSONPathElement:
+        def __getitem__(self, key: Union[str, int]) -> JSONPathElement:
             """
-            Enable dictionary-style access: column['key']
+            Enable object or array access: column['key'] or column[index]
 
             Args:
-                key: JSON object key
+                key: JSON object key or non-negative integer array index
 
             Returns:
                 JSONPathElement that can be further accessed or compared
