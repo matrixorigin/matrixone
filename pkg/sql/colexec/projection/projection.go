@@ -55,6 +55,11 @@ func (projection *Projection) Prepare(proc *process.Process) (err error) {
 	if len(projection.ctr.projExecutors) == 0 {
 		projection.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
 
+		if err != nil {
+			return err
+		}
+		projection.ctr.jsonInputs = colexec.PrepareJSONProjectionInputs(proc, projection.ctr.projExecutors)
+		projection.ctr.jsonColumns = projection.ctr.jsonInputs.Columns()
 		projection.ctr.buf = batch.NewWithSize(len(projection.ProjectList))
 		if projection.GroupingSetCount > 0 {
 			projection.ctr.expandBuf = batch.NewWithSize(len(projection.ProjectList))
@@ -81,6 +86,11 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 		return projection.emitRuntimeEmptyGroupingSet(proc)
 	}
 
+	if len(projection.ctr.jsonColumns) != 0 {
+		if source, ok := projection.GetChildren(0).(colexec.JSONInputRequester); ok {
+			source.RequestJSONInputs(projection.ctr.jsonColumns)
+		}
+	}
 	result, err := vm.ChildrenCall(projection.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return result, err
@@ -100,6 +110,21 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	}
 	bat := result.Batch
 	projection.ctr.inputSeen = true
+
+	var versions map[int]vector.JSONReader
+	if len(projection.ctr.jsonColumns) != 0 {
+		if publisher, ok := projection.GetChildren(0).(colexec.JSONInputPublisher); ok {
+			versions, err = publisher.PublishJSONInputs(proc, bat, projection.ctr.jsonColumns)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			defer colexec.CloseJSONInputVersions(versions)
+		}
+		if err := projection.ctr.jsonInputs.Bind(proc, bat, nil, versions); err != nil {
+			return vm.CancelResult, err
+		}
+		defer projection.ctr.jsonInputs.Release()
+	}
 
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX

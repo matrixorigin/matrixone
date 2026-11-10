@@ -128,6 +128,9 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
+	if expr, ok := node.(tree.Expr); ok {
+		node = normalizeJSONValueSemantics(expr)
+	}
 	display := tree.String(node, dialect.MYSQL)
 	// Display formatting omits string quotes: 0.5 and '0.5' look equal
 	// but bind to different domains. Preserve literal boundaries as well as
@@ -137,6 +140,29 @@ func semanticNodeKey(node tree.NodeFormatter) string {
 		return display
 	}
 	return identity + "\x00" + display
+}
+
+// normalizeJSONValueSemantics works on a clone so formatting used for
+// expression identity never changes the AST that will later be rebound or
+// shown to the user.
+func normalizeJSONValueSemantics(astExpr tree.Expr) tree.Expr {
+	if astExpr == nil {
+		return nil
+	}
+	clone := cloneTreeExpr(astExpr)
+	if clone == nil {
+		return astExpr
+	}
+	// Semantic normalization is syntax-only, so continue into nested SELECTs.
+	// The reflection walker also handles legacy nodes whose Accept panics.
+	walkTreeExpr(clone, func(expr tree.Expr) bool {
+		if fn, ok := expr.(*tree.FuncExpr); ok && fn.JsonValue != nil {
+			spec := fn.JsonValue.SemanticNormalized()
+			fn.JsonValue = &spec
+		}
+		return true
+	}, true)
+	return clone
 }
 
 func semanticAstDisplayName(key string) string {

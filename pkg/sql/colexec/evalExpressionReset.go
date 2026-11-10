@@ -92,6 +92,10 @@ func (fI *functionInformationForEval) reset() {
 }
 
 func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
+	if expr.jsonConstructorConstant != nil {
+		expr.jsonConstructorConstant.Close()
+		expr.jsonConstructorConstant = nil
+	}
 	// reset the constant folding state.
 	expr.folded.reset(expr.m)
 	// reset the function information.
@@ -132,6 +136,13 @@ func (expr *FunctionExpressionExecutor) tryFoldParameter(
 	index int,
 ) (bool, error) {
 	parameter := expr.parameterExecutor[index]
+	if literal, ok := parameter.(*jsonLiteralExpressionExecutor); ok && expr.fid == function.JSON_VALUE && index == 0 {
+		if _, err := literal.constantJSONReader(); err != nil {
+			return false, err
+		}
+		expr.parameterResults[index] = nil
+		return true, nil
+	}
 	if constant, ok := parameter.(*FixedVectorExpressionExecutor); ok {
 		expr.parameterResults[index] = constant.resultVector
 		if !constant.noNeedToSetLength {
@@ -145,6 +156,10 @@ func (expr *FunctionExpressionExecutor) tryFoldParameter(
 		}
 		if functionParameter.folded.canFold {
 			expr.parameterResults[index] = functionParameter.getFoldedVector(1)
+			return true, nil
+		}
+		if expr.fid == function.JSON_VALUE && index == 0 && functionParameter.jsonConstructorConstant != nil {
+			expr.parameterResults[index] = nil
 			return true, nil
 		}
 		return false, nil
@@ -311,7 +326,22 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 		evalProc.Ctx = proc.Ctx
 		evalProc.WarningSink = probe
 	}
-	if err := expr.evalFn(expr.parameterResults, expr.resultVector, evalProc, execLen, nil); err != nil {
+	var evaluationError error
+	var documentReader vector.JSONReader
+	if expr.fid == function.JSON_VALUE && len(expr.parameterExecutor) > 0 {
+		switch input := expr.parameterExecutor[0].(type) {
+		case *FunctionExpressionExecutor:
+			documentReader = input.jsonConstructorConstant
+		case *jsonLiteralExpressionExecutor:
+			documentReader = input.reader
+		}
+	}
+	if documentReader != nil {
+		evaluationError = function.JsonValueWithReader(documentReader, expr.parameterResults, expr.resultVector, evalProc, execLen, nil)
+	} else {
+		evaluationError = expr.evalFn(expr.parameterResults, expr.resultVector, evalProc, execLen, nil)
+	}
+	if err := evaluationError; err != nil {
 		if probe != nil {
 			// Selection owns failures as well as warnings. Leave the expression
 			// executable so an inactive branch never observes a probe failure.
@@ -394,9 +424,17 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	//  See the pull request: https://github.com/matrixorigin/matrixone/pull/13403.
 	execLen := 1
 	if len(expr.parameterResults) > 0 { // todo: == 1 ?
-		if !expr.parameterResults[0].IsConst() {
+		if expr.parameterResults[0] != nil && !expr.parameterResults[0].IsConst() {
 			execLen = expr.parameterResults[0].Length()
 		}
+	}
+	if expr.jsonConstructorInput && execLen == 1 {
+		reader, err := function.EvalJSONConstructorReader(expr.fid, expr.semanticParameterVectors(expr.parameterResults), proc, 1, nil, expr.allocation)
+		if err != nil {
+			return err
+		}
+		expr.jsonConstructorConstant = reader
+		return nil
 	}
 
 	return expr.finishFolding(proc, execLen)

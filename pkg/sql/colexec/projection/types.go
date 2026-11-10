@@ -73,6 +73,8 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
+	jsonInputs    colexec.JSONProjectionInputs
+	jsonColumns   []int
 	buf           *batch.Batch
 	expandBuf     *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
@@ -109,6 +111,8 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		}
 	}
 	projection.ctr.projExecutors = nil
+	projection.ctr.jsonInputs = nil
+	projection.ctr.jsonColumns = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

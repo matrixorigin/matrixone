@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -33,6 +34,9 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
+	jsonColumns               []int
+	jsonDeliveryColumns       map[int]int
+	jsonPublication           *objectio.JSONReadSet
 	maxAllocSize              int
 	buf                       *batch.Batch
 	msgReceiver               *message.MessageReceiver
@@ -107,6 +111,12 @@ func (tableScan *TableScan) Release() {
 }
 
 func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	clear(tableScan.ctr.jsonDeliveryColumns)
+	if tableScan.ctr.jsonPublication != nil {
+		tableScan.ctr.jsonPublication.Close()
+		tableScan.ctr.jsonPublication = nil
+	}
+
 	allocSize := int64(0)
 	allocSize += int64(tableScan.ctr.maxAllocSize)
 	if tableScan.ProjectList != nil {
@@ -145,6 +155,12 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.jsonDeliveryColumns = nil
+	if tableScan.ctr.jsonPublication != nil {
+		tableScan.ctr.jsonPublication.Close()
+		tableScan.ctr.jsonPublication = nil
+	}
+
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
 		tableScan.ctr.buf = nil
@@ -197,10 +213,17 @@ func (tableScan *TableScan) closeReader() {
 
 func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	var err error
-	batch := input
-	if tableScan.ProjectList != nil {
-		batch, err = tableScan.EvalProjection(input, proc)
+	output := input
+	if len(tableScan.ProjectList) != 0 {
+		if tableScan.ctr.jsonPublication != nil {
+			output, err = tableScan.EvalProjectionWithJSONReaders(input, proc, tableScan.ctr.jsonPublication.Readers())
+		} else {
+			output, err = tableScan.EvalProjection(input, proc)
+		}
 	}
-
-	return batch, err
+	if tableScan.ctr.jsonPublication != nil && (err != nil || len(tableScan.ctr.jsonDeliveryColumns) == 0) {
+		tableScan.ctr.jsonPublication.Close()
+		tableScan.ctr.jsonPublication = nil
+	}
+	return output, err
 }

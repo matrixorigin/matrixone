@@ -17,6 +17,9 @@ package merge
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -92,4 +95,10 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	return result, nil
+}
+
+// PublishJSONInputs admits one delivered version only when a consumer requests
+// JSON_VALUE input columns. Reset and receiver ACK behavior remain unchanged.
+func (*Merge) PublishJSONInputs(proc *process.Process, input *batch.Batch, columns []int) (map[int]vector.JSONReader, error) {
+	return colexec.PublishJSONInputSnapshotsForEvaluation(proc, input, columns)
 }
