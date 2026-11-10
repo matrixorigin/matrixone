@@ -195,3 +195,20 @@ Design review: PASS before implementation of the amendment. The source remains
 independent, partial membership remains invisible, memory geometry is unchanged,
 and final gain/regression evidence is still required. Capture estimate/observed
 rows, filter bytes, completion and per-target PASS reasons in physical stats.
+
+## Eager-stage profitability envelope
+
+Earlier eager-domain revisions showed a confirmed Q9 gain alongside a confirmed
+Q10 regression. Q10 already performs selective return-flag filtering in the scan;
+post-filter membership cannot eliminate that string-comparison work and adds
+source construction/synchronization. A bounded coalescing experiment reduced
+native calls but still failed the unchanged end-to-end gate; its buffering is
+removed and the failed evidence is retained.
+
+This eager-scan stage admits only targets without existing row, block or runtime
+scan filters. Existing filtered reader paths keep ordinary execution and overlap.
+The separately planned reader integration can compose membership before their
+predicates/payload construction. This is a structural consumer-cost boundary,
+with no query/table-specific names and no acceptance-rule change. Single-source
+geometry, complete-domain correctness, memory cap, estimates and join placement
+are unchanged. Refinement review: PASS before this narrower admission is enabled.
