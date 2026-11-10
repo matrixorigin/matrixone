@@ -259,7 +259,9 @@ type IsMoLogger struct{}
 
 type IgnoreForeignKey struct{}
 
-type AlterCopyOpt struct{}
+// InternalInsertOptionsKey carries the execution purpose and dedup options of
+// an internal INSERT. It is scoped to a single internal SQL statement.
+type InternalInsertOptionsKey struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}

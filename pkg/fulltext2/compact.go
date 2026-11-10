@@ -150,6 +150,11 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 	if e := sealFresh(); e != nil {
 		return 0, e
 	}
+	if nlive == 0 {
+		if err := PersistEmptyTail(sqlproc, cfg, recency); err != nil {
+			return 0, err
+		}
+	}
 	return nlive, nil
 }
 

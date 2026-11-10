@@ -35,7 +35,7 @@ func ChangeColumn(
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableChangeColumnClause,
 	alterCtx *AlterTableContext,
-) (bool, error) {
+) error {
 	tableDef := alterPlan.CopyTableDef
 
 	ctx := cctx.GetContext()
@@ -51,7 +51,7 @@ func ChangeColumn(
 	// Check whether original column has existed.
 	oCol := FindColumn(tableDef.Cols, oldColName)
 	if oCol == nil || oCol.Hidden {
-		return false, moerr.NewBadFieldError(
+		return moerr.NewBadFieldError(
 			ctx,
 			oldColNameOrigin,
 			alterPlan.TableDef.Name,
@@ -62,13 +62,13 @@ func ChangeColumn(
 	// you need to first check if the new name already exists.
 	if newColName != oldColName &&
 		FindColumn(tableDef.Cols, newColName) != nil {
-		return false, moerr.NewErrDupFieldName(ctx, newColName)
+		return moerr.NewErrDupFieldName(ctx, newColName)
 	}
 
 	// If renaming the column, check if any generated column depends on it
 	if newColName != oldColName {
 		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
-			return false, err
+			return err
 		}
 	}
 
@@ -81,34 +81,30 @@ func ChangeColumn(
 				newColNameOrigin)...)
 	}
 
-	pkAffected, err := updateNewColumnInTableDef(
+	err := updateNewColumnInTableDef(
 		cctx, tableDef, oCol, specNewColumn, spec.Position,
 	)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	if oldColName != newColName {
 		sqls, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
 		if err != nil {
-			return false, err
+			return err
 		}
 		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, sqls...)
 	}
 
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
 
-	delete(alterCtx.alterColMap, oldColName)
-	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oldColName,
-	}
+	alterCtx.renameColumnSource(oldColName, newColName)
 
 	if tmpCol, ok := alterCtx.changColDefMap[oCol.ColId]; ok {
 		tmpCol.Name = newColName
 		tmpCol.OriginName = newColNameOrigin
 	}
-	return pkAffected, nil
+	return nil
 }
 
 // buildColumnAndConstraint Build the changed new column definition, and check its column level integrity constraints,
@@ -267,20 +263,20 @@ func buildColumnAndConstraint(
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
 	if newColName != oldCol.Name {
-		for _, indexInfo := range targetTableDef.Indexes {
-			for j, partCol := range indexInfo.Parts {
-				partCol = catalog.ResolveAlias(partCol)
-				if partCol == oldCol.Name {
-					indexInfo.Parts[j] = newColName
-				}
-			}
+		if _, _, err := renameIndexColumnParts(targetTableDef, oldCol.Name, newColName); err != nil {
+			return nil, err
 		}
 
 		primaryKeyDef := targetTableDef.Pkey
-		for j, partCol := range primaryKeyDef.Names {
-			if partCol == oldCol.Name {
-				primaryKeyDef.Names[j] = newColName
-				break
+		if primaryKeyDef != nil {
+			for j, partCol := range primaryKeyDef.Names {
+				if partCol == oldCol.Name {
+					primaryKeyDef.Names[j] = newColName
+					if len(primaryKeyDef.Names) == 1 {
+						primaryKeyDef.PkeyColName = newColName
+					}
+					break
+				}
 			}
 		}
 	}

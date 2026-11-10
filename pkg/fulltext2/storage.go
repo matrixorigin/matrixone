@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1034,4 +1035,17 @@ func FrameChunkCount(frameLen int) int64 {
 		n = 1
 	}
 	return n
+}
+
+// EmptyTailSQL retains a replacement's recency without adding documents or
+// tombstones. Future appends cannot reuse a generation held by a remote cache.
+func EmptyTailSQL(cfg TableConfig, recency int64) string {
+	frame := cuvscdc.FrameCdcChunk(nil, nil, 0, 0, 0)
+	return fmt.Sprintf("INSERT INTO %s VALUES (%s,%d,unhex(%s),%d)", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), sqlquote.String(vectorindex.CdcTailId), recency, sqlquote.String(hex.EncodeToString(frame)), vectorindex.Tag_CdcEvents)
+}
+
+func PersistEmptyTail(proc *sqlexec.SqlProcess, cfg TableConfig, recency int64) error {
+	res, err := runSql(proc, EmptyTailSQL(cfg, recency))
+	res.Close()
+	return err
 }

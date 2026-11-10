@@ -217,7 +217,8 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 	require.NoError(t, err)
 	require.Equal(t, uint32(catalog.System_Account), accountID)
 
-	opt := spyExec.insertOption.AlterCopyDedupOpt()
+	opt := spyExec.insertOption.InternalInsertOptions().Dedup
+	require.False(t, spyExec.insertOption.InternalInsertOptions().IsCopyTarget("test", opt.TargetTableName))
 	require.NotNil(t, opt)
 	require.True(t, opt.SkipPkDedup)
 	require.Equal(t, indexDef.IndexTableName, opt.TargetTableName)

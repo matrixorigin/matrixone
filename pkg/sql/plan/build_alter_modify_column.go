@@ -31,41 +31,41 @@ func updateNewColumnInTableDef(
 	oCol *ColDef,
 	nColSpec *tree.ColumnTableDef,
 	nPos *tree.ColumnPosition,
-) (bool, error) {
+) error {
 	ctx := cctx.GetContext()
 
 	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
-		return false, err
+		return err
 	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
-		return false, err
+		return err
 	}
 
 	// check if the type of the new column is compatible with the old column
 	if err = checkChangeTypeCompatible(ctx, &oCol.Typ, &nTy); err != nil {
-		return false, err
+		return err
 	}
 
 	nCol, err := buildColumnAndConstraint(cctx, tableDef, oCol, nColSpec, nTy)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	// Check new column foreign key constraints
 	if err = checkColumnForeignkeyConstraint(cctx, tableDef, oCol, nCol); err != nil {
-		return false, err
+		return err
 	}
 
 	if err = modifyColPosition(ctx, tableDef, oCol, nCol, nPos); err != nil {
-		return false, err
+		return err
 	}
 
-	return nCol.Primary, nil
+	return nil
 
 }
 
@@ -76,8 +76,7 @@ func ModifyColumn(
 	cctx CompilerContext,
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableModifyColumnClause,
-	alterCtx *AlterTableContext,
-) (bool, error) {
+) error {
 	tableDef := alterPlan.CopyTableDef
 	nColSpec := spec.NewColumn
 	nPos := spec.Position
@@ -86,7 +85,7 @@ func ModifyColumn(
 	// Check whether added column has existed.
 	oCol := FindColumn(tableDef.Cols, nColName)
 	if oCol == nil || oCol.Hidden {
-		return false, moerr.NewBadFieldError(
+		return moerr.NewBadFieldError(
 			cctx.GetContext(),
 			nColSpec.Name.ColNameOrigin(),
 			alterPlan.TableDef.Name,
@@ -95,20 +94,15 @@ func ModifyColumn(
 
 	// If the column is referenced by a generated column, block the modification
 	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
-		return false, err
+		return err
 	}
 
-	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
+	err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	alterCtx.alterColMap[nColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oCol.Name,
-	}
-
-	return pkAffected, nil
+	return nil
 }
 
 // modifyColPosition Check the position information of the newly formed column

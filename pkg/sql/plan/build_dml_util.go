@@ -212,33 +212,28 @@ func buildInsertPlans(
 	ifNeedCheckPkDup := !builder.qry.LoadTag
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
-	var skipIndexesCoyp map[string]bool
+	var alterCopyOpt *plan.AlterCopyOpt
 
-	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
-		dedupOpt := v.(*plan.AlterCopyOpt)
-		if dedupOpt.TargetTableName == tableDef.Name {
-			logutil.Info("alter copy dedup exec",
-				zap.String("tableDef", tableDef.Name),
-				zap.Bool("originalDedup", ifNeedCheckPkDup),
-				zap.Any("insertWithoutUniqueKeyMap", insertWithoutUniqueKeyMap),
-				zap.Any("dedupOpt", dedupOpt))
-			if dedupOpt.SkipPkDedup {
-				ifNeedCheckPkDup = false
-			}
-			if insertWithoutUniqueKeyMap == nil {
-				insertWithoutUniqueKeyMap = dedupOpt.SkipUniqueIdxDedup
-			} else {
-				for skipIdxName := range dedupOpt.SkipUniqueIdxDedup {
-					insertWithoutUniqueKeyMap[skipIdxName] = true
-				}
-			}
+	if dedupOpt := executor.InternalInsertFromContext(builder.compCtx.GetContext()).DedupFor(tableDef.DbName, tableDef.Name); dedupOpt != nil {
+		if executor.InternalInsertFromContext(builder.compCtx.GetContext()).IsCopyTarget(tableDef.DbName, tableDef.Name) {
+			alterCopyOpt = dedupOpt
 		}
-		skipIndexesCoyp = dedupOpt.SkipIndexesCopy
+		logutil.Info("internal insert dedup exec",
+			zap.String("tableDef", tableDef.Name),
+			zap.Bool("originalDedup", ifNeedCheckPkDup),
+			zap.Any("insertWithoutUniqueKeyMap", insertWithoutUniqueKeyMap),
+			zap.Any("dedupOpt", dedupOpt))
+		if dedupOpt.SkipPkDedup {
+			ifNeedCheckPkDup = false
+		}
+		// Source uniqueness does not prove target uniqueness after COPY
+		// projections and conversions.
+		ifInsertFromUniqueColMap = nil
 	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
 		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage,
-		insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil, skipIndexesCoyp,
+		insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil, alterCopyOpt,
 	)
 }
 
@@ -2059,6 +2054,13 @@ func appendSelfReferCascadeSource(
 	return appendAggNodeForFkJoin(builder, bindCtx, lastNodeID), nil
 }
 
+// COPY either clones plugin indexes or rebuilds them after the base rows are
+// copied. Maintaining them during the INSERT would duplicate the rebuild.
+func skipAlterCopyIndexMaintenance(opt *plan.AlterCopyOpt, index *plan.IndexDef) bool {
+	return opt != nil && (opt.SkipIndexesCopy[index.IndexName] ||
+		(!index.Unique && indexplugin.IsPluginAlgo(index.IndexAlgo)))
+}
+
 // buildInsertPlansWithRelatedHiddenTable build insert plan recursively for origin table
 func buildInsertPlansWithRelatedHiddenTable(
 	stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef,
@@ -2066,7 +2068,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
-	updateColPosMap map[string]int, skipIndexesCopy map[string]bool,
+	updateColPosMap map[string]int, alterCopyOpt *plan.AlterCopyOpt,
 ) error {
 	//var lastNodeId int32
 	var err error
@@ -2079,12 +2081,11 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 	for idx, indexdef := range tableDef.Indexes {
 		if updateColLength == 0 {
-			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {
+			if alterCopyOpt == nil && indexdef.GetUnique() && insertWithoutUniqueKeyMap[indexdef.IndexName] {
 				continue
 			}
 
-			// we will clone this index data to new index table, skip insert.
-			if skipIndexesCopy != nil && skipIndexesCopy[indexdef.IndexName] {
+			if skipAlterCopyIndexMaintenance(alterCopyOpt, indexdef) {
 				continue
 			}
 

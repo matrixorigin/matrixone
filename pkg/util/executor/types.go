@@ -49,6 +49,32 @@ type TxnExecutor interface {
 	Txn() client.TxnOperator
 }
 
+// InternalInsertPurpose distinguishes COPY from other internal inserts that
+// use the same dedup options, such as unique-index backfill.
+type InternalInsertPurpose uint8
+
+const (
+	InternalInsertCopy InternalInsertPurpose = iota + 1
+	InternalInsertIndexBackfill
+)
+
+type InternalInsertOptions struct {
+	Purpose  InternalInsertPurpose
+	Database string
+	Dedup    *plan.AlterCopyOpt
+}
+
+func (o *InternalInsertOptions) DedupFor(database, tableName string) *plan.AlterCopyOpt {
+	if o == nil || o.Dedup == nil || o.Database != database || o.Dedup.TargetTableName != tableName {
+		return nil
+	}
+	return o.Dedup
+}
+
+func (o *InternalInsertOptions) IsCopyTarget(database, tableName string) bool {
+	return o != nil && o.Purpose == InternalInsertCopy && tableName != "" && o.DedupFor(database, tableName) != nil
+}
+
 // Options execute options.
 type Options struct {
 	disableIncrStatement    bool
@@ -105,7 +131,7 @@ type StatementOption struct {
 	ignoreCheckExperimental  bool
 	params                   []string
 	paramNulls               []bool
-	alterCopyOpt             *plan.AlterCopyOpt
+	internalInsertOptions    *InternalInsertOptions
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64

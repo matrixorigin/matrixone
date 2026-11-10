@@ -398,21 +398,6 @@ func TestAdvanceAlterDataBranchLineageSnapshotUsesWorkspace(t *testing.T) {
 	require.Equal(t, int64(2000), cloneTS)
 }
 
-func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {
-	indexDef := &plan2.IndexDef{
-		IndexName:       "idx_vec",
-		Parts:           []string{"embedding"},
-		IncludedColumns: []string{"doc_id", catalog.CreateAlias("category")},
-	}
-
-	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"idx_vec"}))
-	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"embedding"}))
-	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"category"}))
-	require.False(t, isAlterAffectedPluginIndex(indexDef, []string{"other"}))
-	require.False(t, isAlterAffectedPluginIndex(indexDef, nil))
-	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
-}
-
 func TestReplaceRefChildTableID(t *testing.T) {
 	t.Run("replace altered child and preserve siblings", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
@@ -816,6 +801,8 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 		skipPkDedup        bool
 		nilCtxBeforeInsert bool
 		wantPipelineFlush  bool
+		insertErr          error
+		wantReplan         bool
 	}{
 		{
 			name:               "skip pk dedup false",
@@ -834,6 +821,19 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			skipPkDedup:        true,
 			nilCtxBeforeInsert: true,
 			wantPipelineFlush:  true,
+		},
+		{
+			name:       "copy retry rebuilds the plan",
+			insertErr:  moerr.NewTxnNeedRetryNoCtx(),
+			wantReplan: true,
+		},
+		{
+			name:      "definition retry is preserved",
+			insertErr: moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+		},
+		{
+			name:      "cancellation is preserved",
+			insertErr: context.Canceled,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -873,7 +873,7 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 				CopyTableDef:      copyTableDef,
 				CreateTmpTableSql: "create table dept_copy",
 				InsertTmpDataSql:  "insert into dept_copy select * from dept",
-				Options:           &plan2.AlterCopyOpt{SkipPkDedup: tc.skipPkDedup},
+				Options:           &plan2.AlterCopyOpt{SkipPkDedup: tc.skipPkDedup, TargetTableName: "dept_copy"},
 			}
 			s := &Scope{
 				Magic: AlterTable,
@@ -915,9 +915,13 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(mockDb, nil).AnyTimes()
 
+			caseErr := insertErr
+			if tc.insertErr != nil {
+				caseErr = tc.insertErr
+			}
 			spyExec := &alterCopyInsertSpyExecutor{
 				insertSQL: alterTable.InsertTmpDataSql,
-				insertErr: insertErr,
+				insertErr: caseErr,
 			}
 			rt := moruntime.DefaultRuntime()
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spyExec)
@@ -928,7 +932,11 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			origCtx := proc.Ctx
 
 			err := s.AlterTableCopy(c)
-			require.ErrorIs(t, err, insertErr)
+			if tc.wantReplan {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+			} else {
+				require.ErrorIs(t, err, caseErr)
+			}
 			require.NotNil(t, spyExec.insertCtx)
 			assert.Equal(t, tc.wantPipelineFlush, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
 
@@ -949,11 +957,8 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			}
 			assert.NotEqual(t, true, proc.Ctx.Value(ioutil.PipelineFlushKey))
 
-			if tc.skipPkDedup {
-				require.Same(t, alterTable.Options, spyExec.insertOption.AlterCopyDedupOpt())
-			} else {
-				require.Nil(t, spyExec.insertOption.AlterCopyDedupOpt())
-			}
+			require.Equal(t, "dept_copy", spyExec.insertOption.InternalInsertOptions().Dedup.TargetTableName)
+			require.Same(t, alterTable.Options, spyExec.insertOption.InternalInsertOptions().Dedup)
 		})
 	}
 }
@@ -1040,8 +1045,9 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			qry := &plan2.AlterTable{
-				TableDef:     tc.tableDef,
-				CopyTableDef: tc.copyTableDef,
+				TableDef:          tc.tableDef,
+				CopyTableDef:      tc.copyTableDef,
+				ChangeTblColIdMap: map[uint64]*plan2.ColDef{0: {Name: "col4"}},
 				Options: &plan2.AlterCopyOpt{
 					SkipPkDedup:     tc.skipPkDedup,
 					TargetTableName: "dept_copy",
@@ -1051,6 +1057,70 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 			assert.Equal(t, tc.wantCols, pkCols)
 			assert.Equal(t, tc.wantCheckNotNull, checkNotNull)
 		})
+	}
+}
+
+func TestAlterCopyPkPrecheckRequiresOriginalColumnIdentity(t *testing.T) {
+	testCases := []struct {
+		name   string
+		change func(*plan2.AlterTable)
+		want   bool
+	}{
+		{name: "same source", want: true},
+		{name: "case insensitive final name", change: func(a *plan2.AlterTable) { a.ChangeTblColIdMap[1].Name = "A" }, want: true},
+		{name: "missing map", change: func(a *plan2.AlterTable) { a.ChangeTblColIdMap = nil }},
+		{name: "missing second key", change: func(a *plan2.AlterTable) { delete(a.ChangeTblColIdMap, 2) }},
+		{name: "nil mapping", change: func(a *plan2.AlterTable) { a.ChangeTblColIdMap[1] = nil }},
+		{name: "different final name", change: func(a *plan2.AlterTable) { a.ChangeTblColIdMap[1].Name = "other" }},
+		{name: "replacement with same name", change: func(a *plan2.AlterTable) { a.CopyTableDef.Cols[0].ColId = 3 }},
+		{name: "different sequence", change: func(a *plan2.AlterTable) { a.CopyTableDef.Cols[0].Seqnum++ }},
+		{name: "generated source", change: func(a *plan2.AlterTable) { a.TableDef.Cols[0].GeneratedCol = &plan2.GeneratedCol{} }},
+		{name: "generated target", change: func(a *plan2.AlterTable) { a.CopyTableDef.Cols[0].GeneratedCol = &plan2.GeneratedCol{} }},
+		{name: "hidden source", change: func(a *plan2.AlterTable) { a.TableDef.Cols[0].Hidden = true }},
+		{name: "unknown identity", change: func(a *plan2.AlterTable) {
+			a.TableDef.Cols[0].ColId, a.CopyTableDef.Cols[0].ColId = plan.UnKnownColId, plan.UnKnownColId
+			a.ChangeTblColIdMap[plan.UnKnownColId] = &plan2.ColDef{Name: "a"}
+		}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := plan2.Type{Id: int32(types.T_decimal64), Width: 10, Table: "t"}
+			old := &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0, Typ: typ},
+				{Name: "b", ColId: 2, Seqnum: 1, Typ: typ, NotNull: true},
+			}}
+			copyDef := &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0, Typ: typ},
+				{Name: "b", ColId: 2, Seqnum: 1, Typ: typ, NotNull: true},
+			}, Pkey: &plan2.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"a", "b"}}}
+			query := &plan2.AlterTable{TableDef: old, CopyTableDef: copyDef, Options: &plan2.AlterCopyOpt{},
+				ChangeTblColIdMap: map[uint64]*plan2.ColDef{1: {Name: "a"}, 2: {Name: "b"}}}
+			if tc.change != nil {
+				tc.change(query)
+			}
+			cols, checkNotNull := getAlterCopyPkPrecheck(query)
+			if tc.want {
+				require.Equal(t, []string{"a", "b"}, cols)
+				require.True(t, checkNotNull)
+			} else {
+				require.Empty(t, cols)
+				require.False(t, checkNotNull)
+			}
+		})
+	}
+}
+
+func TestAlterCopyStatementOptionPreservesCopyContext(t *testing.T) {
+	require.Nil(t, alterCopyStatementOption("db", nil).InternalInsertOptions())
+	for _, opt := range []*plan2.AlterCopyOpt{
+		{TargetTableName: "t_copy"},
+		{TargetTableName: "t_copy", SkipIndexesCopy: map[string]bool{"idx": true}},
+	} {
+		options := alterCopyStatementOption("db", opt).InternalInsertOptions()
+		require.Same(t, opt, options.DedupFor("db", "t_copy"))
+		require.True(t, options.IsCopyTarget("db", "t_copy"))
+		require.False(t, options.IsCopyTarget("other", "t_copy"))
+		require.Nil(t, options.DedupFor("db", "other"))
 	}
 }
 
@@ -1097,6 +1167,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 		Database:          "test",
 		TableDef:          tableDef,
 		CopyTableDef:      copyTableDef,
+		ChangeTblColIdMap: map[uint64]*plan2.ColDef{0: {Name: "col4"}},
 		CreateTmpTableSql: "create table dept_copy",
 		InsertTmpDataSql:  "insert into dept_copy select * from dept",
 		Options: &plan2.AlterCopyOpt{
@@ -1148,9 +1219,9 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	assert.False(t, alterTable.Options.SkipPkDedup)
 	require.NotNil(t, spyExec.insertCtx)
 	assert.Equal(t, true, spyExec.insertCtx.Value(ioutil.PipelineFlushKey) == true)
-	require.NotSame(t, alterTable.Options, spyExec.insertOption.AlterCopyDedupOpt())
-	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
-	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
+	require.NotSame(t, alterTable.Options, spyExec.insertOption.InternalInsertOptions().Dedup)
+	require.True(t, spyExec.insertOption.InternalInsertOptions().Dedup.SkipPkDedup)
+	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.InternalInsertOptions().Dedup.TargetTableName)
 	assert.Equal(t, []string{
 		databranchutils.LineageOwnerPublicationLockSQL(),
 		alterDataBranchParticipationSQL(1),
@@ -1203,6 +1274,22 @@ func TestPrecheckAlterCopyPkDedupRejectsDuplicate(t *testing.T) {
 	assert.Equal(t, []string{alterCopyTestPkNullCheckSQL, alterCopyTestPkDuplicateCheckSQL}, spyExec.executedSQLs)
 }
 
+func TestPrecheckAlterCopyPkDedupDoesNotCheckDifferentSource(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	alterTable := testAlterCopyAddPrimaryKeyPlan()
+	alterTable.ChangeTblColIdMap[0].Name = "other"
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+
+	opt, err := c.precheckAlterCopyPkDedup("test", "dept", alterTable)
+	require.NoError(t, err)
+	require.Same(t, alterTable.Options, opt)
+	require.False(t, opt.SkipPkDedup)
+	require.False(t, shouldEnableAlterCopyPipelineFlush(opt))
+	require.Empty(t, spyExec.executedSQLs)
+}
+
 func TestPrecheckAlterCopyPkDedupCanSkipNullCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1252,7 +1339,8 @@ func TestPrecheckAlterCopyPkDedupDoesNotMutatePlanOption(t *testing.T) {
 
 func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
 	return &plan2.AlterTable{
-		Database: "test",
+		Database:          "test",
+		ChangeTblColIdMap: map[uint64]*plan2.ColDef{0: {Name: "col4"}},
 		TableDef: &plan.TableDef{
 			Name: "dept",
 			Cols: []*plan.ColDef{
@@ -2395,4 +2483,17 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.AlterTableCopy(c))
 	})
+}
+
+func TestPluginCdcCopyReplacementScope(t *testing.T) {
+	alter := &plan2.AlterTable{AlgorithmType: plan2.AlterTable_COPY, TableDef: &plan2.TableDef{TblId: 10}, CopyTableDef: &plan2.TableDef{TblId: 10}}
+	ctx := &pluginCompileCtx{scope: &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{Definition: &plan2.DataDefinition_AlterTable{AlterTable: alter}}}}}, qryDatabase: "db", mainTableID: 20, originalTableDef: &plan2.TableDef{Name: "t", TblId: 20}}
+	require.True(t, ctx.isCopyReplacement("db", "t", 20), "the copied plan still carries the old table ID")
+	require.False(t, ctx.isCopyReplacement("other", "t", 20))
+	require.False(t, ctx.isCopyReplacement("db", "other", 20))
+	require.False(t, ctx.isCopyReplacement("db", "t", 10))
+	alter.AlgorithmType = plan2.AlterTable_INPLACE
+	require.False(t, ctx.isCopyReplacement("db", "t", 20), "nested REINDEX has its own scope")
+	ctx.scope = nil
+	require.False(t, ctx.isCopyReplacement("db", "t", 20))
 }

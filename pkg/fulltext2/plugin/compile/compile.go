@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
@@ -104,7 +105,20 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 // not replay history over the fresh base. On REBUILD (clearTail) the prior tag=1
 // tail is discarded first — the fresh base already reflects every committed row.
 func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *plan.IndexDef, origTable *plan.TableDef, db string, clearTail bool) error {
+	var recency int64
+	cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 	if clearTail {
+		result, err := ctx.RunSqlWithResult(fulltext2.NextTailChunkIdSql(cfg))
+		if err != nil {
+			return err
+		}
+		for _, bat := range result.Batches {
+			if bat != nil && bat.RowCount() > 0 {
+				recency = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+				break
+			}
+		}
+		result.Close()
 		cfg := fulltext2.TableConfig{DbName: db, IndexTable: storeDef.IndexTableName, MetadataTable: metaDef.IndexTableName}
 		// REBUILD: clear the tail AND the prior tag=0 base(s) here. The create TVF also
 		// clears the bases, but it SKIPS that when the rebuild sees zero source rows
@@ -123,6 +137,11 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
 		return err
+	}
+	if clearTail {
+		if err := ctx.RunSql(fulltext2.EmptyTailSQL(cfg, recency)); err != nil {
+			return err
+		}
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexFullText2Algo.ToString())
 	if err := ctx.DropIndexCdcTask(origTable, db, origTable.Name, storeDef.IndexName); err != nil {

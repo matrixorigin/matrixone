@@ -117,6 +117,17 @@ func (w *flushEveryRowWriter) Reset() { w.rows = 0 }
 
 func (w *flushEveryRowWriter) Empty() bool { return w.rows == 0 }
 
+func (w *flushEveryRowWriter) SnapshotTarget() (string, string) { return "db", "sink" }
+
+const testSnapshotDelete = "DELETE FROM `db`.`sink` LIMIT 8192"
+const testSnapshotRemaining = "SELECT 1 FROM `db`.`sink` LIMIT 1"
+
+func snapshotRowsRemain() executor.Result {
+	rows := batch.NewWithSize(0)
+	rows.SetRowCount(1)
+	return executor.Result{Batches: []*batch.Batch{rows}}
+}
+
 func init() {
 	Register(testDeadlockAlgo, flushEveryRowHooks{})
 }
@@ -147,6 +158,10 @@ func (r *MockRetriever) UpdateWatermark(ctx context.Context, cnUUID string, txn 
 	if r.updateWatermark != nil {
 		return r.updateWatermark(ctx, cnUUID, txn)
 	}
+	return nil
+}
+
+func (r *MockRetriever) GuardSnapshot(context.Context, string, client.TxnOperator) error {
 	return nil
 }
 
@@ -183,6 +198,10 @@ func (r *blockingAfterFirstRetriever) Next() *ISCPData {
 }
 
 func (r *blockingAfterFirstRetriever) UpdateWatermark(context.Context, string, client.TxnOperator) error {
+	return nil
+}
+
+func (r *blockingAfterFirstRetriever) GuardSnapshot(context.Context, string, client.TxnOperator) error {
 	return nil
 }
 
@@ -324,7 +343,7 @@ func TestConsumer(t *testing.T) {
 	sqls := make([]string, 0, 1)
 	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
 		sqls = append(sqls, sql)
-		return executor.Result{}, nil
+		return executor.Result{AffectedRows: 1}, nil
 	})
 	defer stub1.Reset()
 
@@ -349,13 +368,65 @@ func TestConsumer(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRunIndexSnapshotResetFailureStopsBeforeWriting(t *testing.T) {
+	failure := errors.New("snapshot reset failed")
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
+	calls := 0
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		calls++
+		switch calls {
+		case 1:
+			require.Equal(t, testSnapshotDelete, sql)
+			return executor.Result{}, nil
+		case 2:
+			require.Equal(t, testSnapshotRemaining, sql)
+			return snapshotRowsRemain(), nil
+		}
+		require.Equal(t, testSnapshotDelete, sql)
+		return executor.Result{}, failure
+	})
+	defer stubExec.Reset()
+	consumer := &IndexConsumer{sqlWriter: &flushEveryRowWriter{}, sqlBufSendCh: make(chan []byte, 1)}
+	consumer.sqlBufSendCh <- []byte("row batch")
+	close(consumer.sqlBufSendCh)
+	errs := make(chan error, 1)
+	runIndex(consumer, context.Background(), errs, &MockRetriever{dtype: ISCPDataType_Snapshot})
+	require.ErrorIs(t, <-errs, failure)
+	require.Equal(t, 3, calls)
+}
+
+func TestRunIndexSnapshotResetCompletesBeforeWriting(t *testing.T) {
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
+	var sqls []string
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		sqls = append(sqls, sql)
+		if len(sqls) == 2 && sql == testSnapshotRemaining {
+			return snapshotRowsRemain(), nil
+		}
+		return executor.Result{}, nil
+	})
+	defer stubExec.Reset()
+	consumer := &IndexConsumer{sqlWriter: &flushEveryRowWriter{}, sqlBufSendCh: make(chan []byte, 1)}
+	consumer.sqlBufSendCh <- []byte("row batch")
+	close(consumer.sqlBufSendCh)
+	errs := make(chan error, 1)
+	runIndex(consumer, context.Background(), errs, &MockRetriever{dtype: ISCPDataType_Snapshot})
+	require.Empty(t, errs)
+	require.Equal(t, []string{testSnapshotDelete, testSnapshotRemaining, testSnapshotDelete, testSnapshotRemaining, "row batch"}, sqls)
+}
+
 func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	injectedErr := errors.New("injected index SQL failure")
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		if sql == testSnapshotDelete || sql == testSnapshotRemaining {
+			return executor.Result{}, nil
+		}
 		return executor.Result{}, injectedErr
 	})
 	defer stub1.Reset()
@@ -540,8 +611,13 @@ func TestRunIndexBeforeExecCtxFaultReturnsContextError(t *testing.T) {
 
 			consumer := &IndexConsumer{
 				info:         info,
+				sqlWriter:    &flushEveryRowWriter{},
 				sqlBufSendCh: make(chan []byte),
 			}
+			stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+				return executor.Result{}, nil
+			})
+			defer stubExec.Reset()
 			retriever := &MockRetriever{dtype: dtype}
 			errch := make(chan error, 2)
 			done := make(chan struct{})
@@ -573,7 +649,10 @@ func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	defer cancel()
 
 	execErr := errors.New("worker failed after first chunk")
-	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		if sql == testSnapshotDelete || sql == testSnapshotRemaining {
+			return executor.Result{}, nil
+		}
 		return executor.Result{}, execErr
 	})
 	defer stubExec.Reset()
@@ -684,7 +763,10 @@ func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		if sql == testSnapshotDelete || sql == testSnapshotRemaining {
+			return executor.Result{}, nil
+		}
 		cancel()
 		select {
 		case <-execCtx.Done():
@@ -826,9 +908,17 @@ func TestDataRetrieverStatusJSONAndAccessors(t *testing.T) {
 	require.Equal(t, uint64(99), retriever.GetTableID())
 }
 
-func TestDataRetrieverUpdateWatermarkSnapshotNoop(t *testing.T) {
-	retriever := NewDataRetriever(context.Background(), 0, 0, "job", 0, &JobStatus{}, 0, ISCPDataType_Snapshot)
+func TestDataRetrieverPublishesSnapshotWatermark(t *testing.T) {
+	status := &JobStatus{To: types.BuildTS(10, 1)}
+	retriever := NewDataRetriever(context.Background(), 7, 8, "job", 9, status, 11, ISCPDataType_Snapshot)
+	stub := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		require.Contains(t, sql, "job_state = 2")
+		require.Contains(t, sql, "10-1")
+		return executor.Result{AffectedRows: 1}, nil
+	})
+	defer stub.Reset()
 	require.NoError(t, retriever.UpdateWatermark(context.Background(), "", nil))
+	require.Equal(t, uint64(11), status.LSN)
 }
 
 func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
@@ -841,7 +931,7 @@ func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
 		execSQL = sql
 		require.Equal(t, "cn", cnUUID)
 		require.Equal(t, catalog.System_Account, execCtx.Value(defines.TenantIDKey{}))
-		return executor.Result{}, nil
+		return executor.Result{AffectedRows: 1}, nil
 	})
 	defer stubExec.Reset()
 
@@ -849,6 +939,15 @@ func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
 	require.Equal(t, uint64(11), status.LSN)
 	require.Contains(t, execSQL, "UPDATE mo_catalog.mo_iscp_log")
 	require.Contains(t, execSQL, "job")
+}
+
+func TestDataRetrieverUpdateWatermarkRejectsStaleJob(t *testing.T) {
+	retriever := NewDataRetriever(context.Background(), 7, 8, "job", 9, &JobStatus{}, 11, ISCPDataType_Tail)
+	stub := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, nil
+	})
+	defer stub.Reset()
+	require.ErrorContains(t, retriever.UpdateWatermark(context.Background(), "cn", nil), "affected 0 rows")
 }
 
 func TestDataRetrieverUpdateWatermarkTailExecError(t *testing.T) {
@@ -1096,8 +1195,10 @@ func TestIvfSnapshot(t *testing.T) {
 		}
 		err = consumer.Consume(ctx, output)
 		require.NoError(t, err)
-		require.Equal(t, len(sqls), 1)
-		sql := sqls[0]
+		require.Len(t, sqls, 3)
+		require.Equal(t, "DELETE FROM `test_db`.`entries` LIMIT 8192", sqls[0])
+		require.Equal(t, "SELECT 1 FROM `test_db`.`entries` LIMIT 1", sqls[1])
+		sql := sqls[2]
 		expected := "REPLACE INTO `test_db`.`entries` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centriods` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF32(2)) as `src1` FROM (VALUES ROW(1,CAST('[0.1, 0.2]' as VECF32(2))),ROW(2,CAST('[0.3, 0.4]' as VECF32(2)))) as __mo_iscp_values) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)"
 
 		require.Equal(t, string(sql), expected)
@@ -1119,7 +1220,7 @@ func TestIvfSnapshot(t *testing.T) {
 		}
 		err = consumer.Consume(ctx, output)
 		require.NoError(t, err)
-		require.Equal(t, len(sqls), 0)
+		require.Equal(t, []string{"DELETE FROM `test_db`.`entries` LIMIT 8192", "SELECT 1 FROM `test_db`.`entries` LIMIT 1"}, sqls)
 	})
 }
 

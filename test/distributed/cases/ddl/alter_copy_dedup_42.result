@@ -1,0 +1,38 @@
+drop database if exists alter_copy_dedup_42;
+create database alter_copy_dedup_42;
+use alter_copy_dedup_42;
+create table u (id int primary key, val decimal(5,2), unique key uv(val));
+insert into u values (1,1.21),(2,1.24);
+alter table u modify val decimal(5,1);
+Duplicate entry '1.2' for key 'val'
+show create table u;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `id` int NOT NULL,
+  `val` decimal(5,2) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uv` (`val`)
+)
+select id, cast(val * 100 as signed) from u force index(uv) order by id;
+➤ id[4,32,0]  ¦  cast(val * 100 as signed)[-5,64,0]  𝄀
+1  ¦  121  𝄀
+2  ¦  124
+insert into u values (3,2.50);
+select id, cast(val * 100 as signed) from u ignore index(uv) order by id;
+➤ id[4,32,0]  ¦  cast(val * 100 as signed)[-5,64,0]  𝄀
+1  ¦  121  𝄀
+2  ¦  124  𝄀
+3  ¦  250
+create table ok (id int primary key, val decimal(5,2), unique key uv(val));
+insert into ok values (1,1.20),(2,2.30);
+alter table ok modify val decimal(5,1);
+select id, cast(val * 10 as signed) from ok force index(uv) order by id;
+➤ id[4,32,0]  ¦  cast(val * 10 as signed)[-5,64,0]  𝄀
+1  ¦  12  𝄀
+2  ¦  23
+alter table ok rename column val to value1, add column extra int default 9;
+select id, cast(value1 * 10 as signed), extra from ok force index(uv) order by id;
+➤ id[4,32,0]  ¦  cast(value1 * 10 as signed)[-5,64,0]  ¦  extra[4,32,0]  𝄀
+1  ¦  12  ¦  9  𝄀
+2  ¦  23  ¦  9
+drop database alter_copy_dedup_42;

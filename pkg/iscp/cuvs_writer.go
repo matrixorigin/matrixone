@@ -338,7 +338,6 @@ type CuvsSyncFactory func(sqlproc *sqlexec.SqlProcess) (CuvsSync, error)
 // HNSW stays on RunHnsw[T] / VectorIndexCdc[T] — different sync
 // architecture (in-memory graph mutation, no event log).
 func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever, factory CuvsSyncFactory) {
-	datatype := r.GetDataType()
 
 	var sync CuvsSync
 	err := c.RunTxn(ctx, r, 30*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
@@ -386,14 +385,11 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 					if e := sync.Save(sqlproc); e != nil {
 						return e
 					}
-					if datatype == ISCPDataType_Tail {
-						if objectio.ISCPIndexWatermarkErrInjected() {
-							return injectedISCPIndexErr("watermark")
-						}
-						sqlctx := sqlproc.SqlCtx
-						return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+					if objectio.ISCPIndexWatermarkErrInjected() {
+						return injectedISCPIndexErr("watermark")
 					}
-					return nil
+					sqlctx := sqlproc.SqlCtx
+					return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 				})
 				if err != nil {
 					reportIndexConsumerErr(errch, err)

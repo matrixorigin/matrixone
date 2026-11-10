@@ -15,14 +15,33 @@
 package executor
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInternalInsertPurposeAndQualifiedTarget(t *testing.T) {
+	dedup := &plan.AlterCopyOpt{TargetTableName: "target", SkipPkDedup: true}
+	copyOpts := StatementOption{}.WithAlterTableCopy("db", dedup).InternalInsertOptions()
+	require.Same(t, dedup, copyOpts.DedupFor("db", "target"))
+	require.True(t, copyOpts.IsCopyTarget("db", "target"))
+	require.False(t, copyOpts.IsCopyTarget("other", "target"))
+	require.False(t, copyOpts.IsCopyTarget("db", "other"))
+	backfill := StatementOption{}.WithIndexBackfillOpt("db", dedup).InternalInsertOptions()
+	require.Same(t, dedup, backfill.DedupFor("db", "target"))
+	require.False(t, backfill.IsCopyTarget("db", "target"))
+	ctx := context.WithValue(t.Context(), defines.InternalInsertOptionsKey{}, copyOpts)
+	require.Same(t, copyOpts, InternalInsertFromContext(ctx))
+	require.Nil(t, InternalInsertFromContext(t.Context()))
+	require.False(t, (*InternalInsertOptions)(nil).IsCopyTarget("db", "target"))
+}
 
 func TestOptionsStreaming(t *testing.T) {
 	var opts Options
