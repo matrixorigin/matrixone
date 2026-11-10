@@ -232,6 +232,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	}
 
 	entry.SetLocation(location, location)
+	entry.SetVersion(data.FormatVersion())
 
 	files = append(files, location.Name().String())
 	var name string

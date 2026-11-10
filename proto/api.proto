@@ -302,6 +302,7 @@ enum AlterKind {
     RenameColumn     = 8;
     ReplaceDef       = 9;
     UpdateAutoIncrement = 10;
+    ValidateRebaseSnapshot = 11;
 }
 
 message AlterTablePolicy {
@@ -358,6 +359,11 @@ message AlterTableAutoIncrement {
     uint32 epoch = 2;
 }
 
+// An ephemeral commit-time dependency; it does not alter the table schema.
+message AlterTableRebaseSnapshot {
+    int64 physical_time = 1;
+}
+
 message AlterTableReq {
     uint64 table_id = 1;
     uint64 db_id    = 2;
@@ -373,6 +379,7 @@ message AlterTableReq {
         AlterTableRenameCol rename_col       = 11;
         AlterTableReplaceDef replace_def     = 12;
         AlterTableAutoIncrement update_auto_increment = 13;
+        AlterTableRebaseSnapshot validate_rebase_snapshot = 14;
     }
 }
 

@@ -36,6 +36,7 @@ const DefaultCheckpointSize = 512 * 1024 * 1024
 const (
 	CheckpointVersion12 uint32 = 12
 	CheckpointVersion13 uint32 = 13
+	CheckpointVersion14 uint32 = 14 // opt-in logical-DML bounds; default remains13
 
 	CheckpointCurrentVersion = CheckpointVersion13
 )

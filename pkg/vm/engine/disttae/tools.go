@@ -34,11 +34,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+func orderRebaseDependencies(writes []Entry) []Entry {
+	// Dependencies address already-committed tables and must be registered on
+	// TN before the same transaction's catalog DROP makes those tables invisible.
+	for _, e := range writes {
+		if e.typ == REBASE_SNAPSHOT_DEPENDENCY {
+			ordered := make([]Entry, 0, len(writes))
+			for _, candidate := range writes {
+				if candidate.typ == REBASE_SNAPSHOT_DEPENDENCY {
+					ordered = append(ordered, candidate)
+				}
+			}
+			for _, candidate := range writes {
+				if candidate.typ != REBASE_SNAPSHOT_DEPENDENCY {
+					ordered = append(ordered, candidate)
+				}
+			}
+			return ordered
+		}
+	}
+	return writes
+}
+
 func genWriteReqs(
 	ctx context.Context,
 	txnCommit *Transaction,
 ) ([]txn.TxnRequest, error) {
 	writes, tablesInVain := txnCommit.writes, txnCommit.tablesInVain
+	if txnCommit.hasRebaseSnapshotDependencies {
+		writes = orderRebaseDependencies(writes)
+	}
 	var pendingDatabaseCreates map[databaseKey]uint64
 	if txnCommit.haveDDL.Load() {
 		pendingDatabaseCreates = txnCommit.pendingCreatedDatabaseWrites()
@@ -191,7 +216,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 			}
 		}
 
-	} else if e.typ == ALTER {
+	} else if e.typ == ALTER || e.typ == REBASE_SNAPSHOT_DEPENDENCY {
 		typ = api.Entry_Alter
 	} else if e.typ == SOFT_DELETE_OBJECT {
 		typ = api.Entry_Delete

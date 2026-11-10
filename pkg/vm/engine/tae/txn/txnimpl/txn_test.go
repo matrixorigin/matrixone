@@ -390,6 +390,120 @@ func TestTxnDBApplyCommitPreservesTableErrorBeforeDrop(t *testing.T) {
 	}
 }
 
+func TestRebaseSnapshotDependencyUsesFixedTimestamp(t *testing.T) {
+	var observed []bool
+	restore := SetRebaseSnapshotValidationHookForTest(func(id uint64, fixed, latest types.TS, reject bool) {
+		require.EqualValues(t, 42, id)
+		require.Equal(t, types.BuildTS(10, 0), fixed)
+		require.True(t, latest.EQ(&fixed) || latest.GT(&fixed))
+		observed = append(observed, reject)
+	})
+	defer restore()
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	txn := newPreparingEpochTestTxn(t, "rebase-guard", types.BuildTS(20, 0), types.BuildTS(30, 0))
+	table := &txnTable{store: &txnStore{txn: txn}, entry: entry, txnEntries: newTxnEntries()}
+	ctx := context.Background()
+
+	require.Error(t, table.AlterTable(ctx, &apipb.AlterTableReq{Kind: apipb.AlterKind_ValidateRebaseSnapshot}))
+	require.Error(t, table.AlterTable(ctx, apipb.NewValidateRebaseSnapshotReq(1, 42, 0)))
+	require.Error(t, table.AlterTable(ctx, apipb.NewValidateRebaseSnapshotReq(1, 42, 10)))
+	txn.GetMemo().EnableLogicalDMLTracking()
+	require.Error(t, table.AlterTable(ctx, apipb.NewValidateRebaseSnapshotReq(1, 42, 21)))
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, table.AlterTable(cancelled, apipb.NewValidateRebaseSnapshotReq(1, 42, 10)), context.Canceled)
+	require.True(t, table.rebaseSnapshot.IsEmpty())
+	require.NoError(t, table.AlterTable(ctx, apipb.NewValidateRebaseSnapshotReq(1, 42, 10)))
+	require.NoError(t, table.AlterTable(ctx, apipb.NewValidateRebaseSnapshotReq(1, 42, 15)))
+	require.Equal(t, types.BuildTS(10, 0), table.rebaseSnapshot)
+	entry.RestoreRebaseLogicalDMLBound(types.BuildTS(10, 0))
+	require.NoError(t, table.PrepareCommit())
+	require.NoError(t, entry.RegisterRebaseLogicalDML("pending-source-write"))
+	err := table.PrepareCommit()
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	entry.ResolveRebaseLogicalDML("pending-source-write", nil)
+	require.NoError(t, table.PrepareCommit())
+	entry.RestoreRebaseLogicalDMLBound(types.BuildTS(11, 0))
+	err = table.PrepareCommit()
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	require.Equal(t, []bool{false, true, false, true}, observed)
+}
+
+func TestRebaseLogicalDMLTagging(t *testing.T) {
+	for _, scenario := range []string{"disabled", "physical", "metadata", "user", "user_with_alter"} {
+		t.Run(scenario, func(t *testing.T) {
+			db := catalog.MockDBEntryWithAccInfo(0, 1)
+			entry := catalog.MockTableEntryWithDB(db, 42)
+			txn := newPreparingEpochTestTxn(t, scenario, types.BuildTS(20, 0), types.BuildTS(30, 0))
+			memo := txn.GetMemo()
+			memo.AddTable(db.ID, entry.ID)
+			if scenario != "disabled" {
+				memo.EnableLogicalDMLTracking()
+			}
+			memo.IsFlushOrMerge = scenario == "physical"
+			table := &txnTable{store: &txnStore{txn: txn}, entry: entry, txnEntries: newTxnEntries(), autoIncrementAlter: scenario == "user_with_alter"}
+			if scenario != "metadata" {
+				table.expectedAutoIncrEpochs = map[uint32]struct{}{0: {}}
+			}
+			require.NoError(t, table.PrepareCommit())
+			want := scenario == "user" || scenario == "user_with_alter"
+			require.Equal(t, want, entry.HasRebaseLogicalDMLAfter(types.BuildTS(10, 0)))
+			require.Equal(t, want, len(memo.LogicalDMLTables()) == 1)
+			entry.ResolveRebaseLogicalDML(txn.GetID(), nil)
+			require.False(t, entry.HasRebaseLogicalDMLAfter(types.BuildTS(10, 0)))
+		})
+	}
+}
+
+func TestReplayLogicalDMLClassification(t *testing.T) {
+	for _, classification := range []string{"legacy", "physical", "logical", "rollback"} {
+		t.Run(classification, func(t *testing.T) {
+			c := catalog.MockCatalog(nil)
+			defer c.Close()
+			mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+			mgr.Start(context.Background())
+			defer mgr.Stop()
+			setup, err := mgr.StartTxn(nil)
+			require.NoError(t, err)
+			db, err := c.CreateDBEntry("logical_replay", "", "", setup)
+			require.NoError(t, err)
+			first, err := db.CreateTableEntry(catalog.MockSchemaAll(3, 1), setup, nil)
+			require.NoError(t, err)
+			schema := catalog.MockSchemaAll(3, 1)
+			schema.Name = "second"
+			second, err := db.CreateTableEntry(schema, setup, nil)
+			require.NoError(t, err)
+			require.NoError(t, setup.Commit(context.Background()))
+			fixed, commit := types.BuildTS(10, 0), types.BuildTS(12, 0)
+			txn := newPreparingEpochTestTxn(t, classification, fixed, types.BuildTS(11, 0))
+			memo := txn.GetMemo()
+			memo.AddTable(db.ID, first.ID)
+			memo.AddTable(db.ID, second.ID)
+			if classification != "legacy" {
+				memo.EnableLogicalDMLTracking()
+				if classification != "physical" {
+					require.NoError(t, memo.RecordLogicalDML(db.ID, first.ID))
+				}
+			}
+			require.NoError(t, txn.SetCommitTS(commit))
+			store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+			require.NoError(t, store.prepareCommit(txn))
+			require.Equal(t, classification != "physical", first.HasRebaseLogicalDMLAfter(fixed))
+			require.Equal(t, classification == "legacy", second.HasRebaseLogicalDMLAfter(fixed))
+			if classification == "rollback" {
+				require.NoError(t, store.applyRollback(txn))
+				require.False(t, first.HasRebaseLogicalDMLAfter(fixed))
+			} else {
+				require.NoError(t, store.applyCommit(txn))
+				require.Equal(t, classification != "physical", first.HasRebaseLogicalDMLAfter(fixed))
+				require.Equal(t, classification == "legacy", second.HasRebaseLogicalDMLAfter(fixed))
+				// The old allocator watermark retains its conservative semantics.
+				require.Equal(t, commit, second.GetLatestKnownDMLPrepare())
+			}
+		})
+	}
+}
+
 func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
 	c := catalog.MockCatalog(nil)
 	defer c.Close()

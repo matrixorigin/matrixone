@@ -144,11 +144,18 @@ func MergeCheckpoint(
 	}
 
 	sinker := ckputil.NewDataSinker(pool, fs)
-	defer sinker.Close()
+	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)
+	defer ckpWriter.Close()
 	if err = sinker.Write(ctx, ckpData); err != nil {
 		return
 	}
-	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)
+	logicalInputs := make([]logtail.LogicalDMLCheckpoint, 0, len(ckpEntries))
+	for _, entry := range ckpEntries {
+		logicalInputs = append(logicalInputs, logtail.LogicalDMLCheckpoint{Version: entry.GetVersion(), Location: entry.GetLocation(), End: entry.GetEnd()})
+	}
+	if err = ckpWriter.MergeLogicalDML(ctx, logicalInputs, *end, fs); err != nil {
+		return
+	}
 	var location objectio.Location
 	var files []string
 	if location, files, err = ckpWriter.Sync(ctx, fs); err != nil {
@@ -162,7 +169,7 @@ func MergeCheckpoint(
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(location), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(false, false)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(logtail.CheckpointCurrentVersion, false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(ckpWriter.FormatVersion(), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append([]byte(location), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
@@ -189,7 +196,7 @@ func MergeCheckpoint(
 	checkpointEntry.SetLocation(location, location)
 	checkpointEntry.SetLSN(ckpEntries[len(ckpEntries)-1].LSN(), ckpEntries[len(ckpEntries)-1].GetTruncateLsn())
 	checkpointEntry.SetState(checkpoint.ST_Finished)
-	checkpointEntry.SetVersion(logtail.CheckpointCurrentVersion)
+	checkpointEntry.SetVersion(ckpWriter.FormatVersion())
 	newFiles = append(newFiles, name)
 	return
 }

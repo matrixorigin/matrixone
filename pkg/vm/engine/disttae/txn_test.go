@@ -1072,6 +1072,90 @@ func TestIssue25589MergeTxnWorkspaceRestoresAccountingForTablesInVain(t *testing
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
 }
 
+func TestRebaseSnapshotDependencySurvivesDropAndPrecedesCatalogWrites(t *testing.T) {
+	proc := testutil.NewProc(t)
+	payload, err := api.NewValidateRebaseSnapshotReq(7, 42, 10).Marshal()
+	require.NoError(t, err)
+	txn := &Transaction{
+		proc:            proc,
+		tablesInVain:    map[uint64]int{42: 1},
+		batchSelectList: make(map[*batch.Batch][]int64),
+		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+	}
+	insert := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2})
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 43, bat: insert})
+	defer txn.releaseWorkspaceEntryBatchLocked(0)
+	require.False(t, txn.hasRebaseSnapshotDependencies)
+	guard, err := catalog.GenTableAlterTuple([][]byte{payload}, proc.Mp())
+	require.NoError(t, err)
+	txn.appendWorkspaceEntryLocked(Entry{typ: REBASE_SNAPSHOT_DEPENDENCY, databaseId: 7, tableId: 42, bat: guard})
+	defer txn.releaseWorkspaceEntryBatchLocked(1)
+	require.True(t, txn.hasRebaseSnapshotDependencies)
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Same(t, insert, txn.writes[0].bat)
+	require.Same(t, guard, txn.writes[1].bat)
+	ordered := orderRebaseDependencies(txn.writes)
+	require.Equal(t, REBASE_SNAPSHOT_DEPENDENCY, ordered[0].typ)
+	require.Equal(t, INSERT, ordered[1].typ)
+	require.Equal(t, INSERT, txn.writes[0].typ)
+	encoded, err := toPBEntry(ordered[0])
+	require.NoError(t, err)
+	require.Equal(t, api.Entry_Alter, encoded.EntryType)
+	parsed, rest, err := catalog.ParseEntryList([]*api.Entry{encoded})
+	require.NoError(t, err)
+	require.Empty(t, rest)
+	requests, ok := parsed.([]*api.AlterTableReq)
+	require.True(t, ok)
+	require.Len(t, requests, 1)
+	require.Equal(t, api.AlterKind_ValidateRebaseSnapshot, requests[0].Kind)
+	require.Equal(t, int64(10), requests[0].GetValidateRebaseSnapshot().PhysicalTime)
+}
+
+func TestRebaseSnapshotDependencyRejectsSourceWritesBeforeDropCleanup(t *testing.T) {
+	proc := testutil.NewProc(t)
+	payload, err := api.NewValidateRebaseSnapshotReq(7, 42, 10).Marshal()
+	require.NoError(t, err)
+	txn := &Transaction{
+		proc:            proc,
+		tablesInVain:    map[uint64]int{42: 1},
+		batchSelectList: make(map[*batch.Batch][]int64),
+	}
+	insert := newInsertBatchWithRowIDForTest(t, proc, []int64{1})
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: insert})
+	defer txn.releaseWorkspaceEntryBatchLocked(0)
+	guard, err := catalog.GenTableAlterTuple([][]byte{payload}, proc.Mp())
+	require.NoError(t, err)
+	txn.appendWorkspaceEntryLocked(Entry{typ: REBASE_SNAPSHOT_DEPENDENCY, databaseId: 7, tableId: 42, bat: guard})
+	defer txn.releaseWorkspaceEntryBatchLocked(1)
+	require.ErrorContains(t, txn.mergeTxnWorkspaceLocked(t.Context()), "source modified")
+	require.Same(t, insert, txn.writes[0].bat, "DROP cleanup must not hide the conflicting source write")
+}
+
+func TestRebaseSnapshotDependencyCancelledBeforeAcquisition(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	table := &txnTable{}
+	require.ErrorIs(t, table.RegisterRebaseSnapshotDependency(ctx, 10), context.Canceled)
+}
+
+func TestValidateRebaseSourceWrites(t *testing.T) {
+	ctx := context.Background()
+	nonempty := batch.NewWithSize(0)
+	nonempty.SetRowCount(1)
+	empty := batch.NewWithSize(0)
+	guard := Entry{typ: REBASE_SNAPSHOT_DEPENDENCY, accountId: 3, databaseId: 7, tableId: 42, bat: nonempty}
+	for _, typ := range []int{INSERT, DELETE, ALTER, SOFT_DELETE_OBJECT} {
+		write := Entry{typ: typ, accountId: 3, databaseId: 7, tableId: 42, bat: nonempty}
+		require.ErrorContains(t, validateRebaseSourceWrites(ctx, []Entry{guard, write}), "Rebase")
+		require.ErrorContains(t, validateRebaseSourceWrites(ctx, []Entry{write, guard}), "Rebase")
+	}
+	require.NoError(t, validateRebaseSourceWrites(ctx, []Entry{guard, {typ: INSERT, accountId: 3, databaseId: 7, tableId: 43, bat: nonempty}}))
+	require.NoError(t, validateRebaseSourceWrites(ctx, []Entry{guard, {typ: INSERT, accountId: 3, databaseId: 8, tableId: 42, bat: nonempty}}))
+	require.NoError(t, validateRebaseSourceWrites(ctx, []Entry{guard, {typ: INSERT, accountId: 4, databaseId: 7, tableId: 42, bat: nonempty}}))
+	require.NoError(t, validateRebaseSourceWrites(ctx, []Entry{guard, {typ: INSERT, accountId: 3, databaseId: 7, tableId: 42, bat: empty}}))
+	require.NoError(t, validateRebaseSourceWrites(ctx, []Entry{{typ: REBASE_SNAPSHOT_DEPENDENCY, accountId: 3, databaseId: 7, tableId: 42}, {typ: INSERT, accountId: 3, databaseId: 7, tableId: 42, bat: nonempty}}))
+}
+
 func TestIssue25589MergeTxnWorkspaceRestoresAccountingAfterShrink(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{1, 2, 3, 4})

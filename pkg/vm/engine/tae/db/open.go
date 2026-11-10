@@ -146,6 +146,9 @@ func Open(
 		logutil.Error(Phase_Open+"-open-catalog-error", zap.Error(err))
 		return
 	}
+	if opts.EnableRebaseDataHistory {
+		db.Catalog.EnableLogicalDMLHistory()
+	}
 	rollbackSteps.Add("rollback open catalog", func() error {
 		db.Catalog.Close()
 		return nil

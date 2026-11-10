@@ -248,6 +248,7 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	}
 	files = append(files, location.Name().String())
 	entry.SetLocation(location, location)
+	entry.SetVersion(data.FormatVersion())
 
 	return
 }

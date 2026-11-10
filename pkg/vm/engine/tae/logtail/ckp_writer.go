@@ -87,6 +87,19 @@ func (collector *BaseCollector_V2) OrphanData() *CheckpointData_V2 {
 	return data
 }
 func (collector *BaseCollector_V2) Collect(c *catalog.Catalog) (err error) {
+	if c.LogicalDMLHistoryEnabled() {
+		collector.data.logicalDML = newCheckpointLogicalDMLBatch()
+		if err = appendCheckpointLogicalDML(collector.data.logicalDML, 0, 0, collector.end, collector.data.allocator); err != nil {
+			return
+		}
+		collector.TableFn = func(table *catalog.TableEntry) error {
+			bound := table.RebaseLogicalDMLBound()
+			if bound.GT(&collector.end) {
+				bound = collector.end
+			}
+			return appendCheckpointLogicalDML(collector.data.logicalDML, table.GetDB().ID, table.ID, bound, collector.data.allocator)
+		}
+	}
 	err = c.RecurLoop(collector)
 	return
 }
@@ -233,11 +246,12 @@ func collectObjectBatch(
 }
 
 type CheckpointData_V2 struct {
-	batch     *batch.Batch
-	sinker    *ioutil.Sinker
-	rows      int
-	size      int
-	allocator *mpool.MPool
+	batch      *batch.Batch
+	logicalDML *batch.Batch
+	sinker     *ioutil.Sinker
+	rows       int
+	size       int
+	allocator  *mpool.MPool
 }
 
 func NewCheckpointData_V2(
@@ -309,6 +323,21 @@ func (data *CheckpointData_V2) Sync(
 	if _, err = writer.WriteBatch(ranges); err != nil {
 		return
 	}
+	if data.logicalDML != nil {
+		for start := 0; start < data.logicalDML.RowCount(); start += DefaultCheckpointBlockRows {
+			end := min(start+DefaultCheckpointBlockRows, data.logicalDML.RowCount())
+			window, windowErr := data.logicalDML.Window(start, end)
+			if windowErr != nil {
+				err = windowErr
+				return
+			}
+			_, _, err = writer.WriteSubBatch(window, objectio.CkpMetaStart)
+			window.Clean(nil)
+			if err != nil {
+				return
+			}
+		}
+	}
 	var blks []objectio.BlockObject
 	if blks, _, err = writer.Sync(ctx); err != nil {
 		return
@@ -335,7 +364,12 @@ func deletePersistedCheckpointObjects(ctx context.Context, sinker *ioutil.Sinker
 }
 
 func (data *CheckpointData_V2) Close() {
-	data.batch.FreeColumns(data.allocator)
+	if data.batch != nil {
+		data.batch.FreeColumns(data.allocator)
+	}
+	if data.logicalDML != nil {
+		data.logicalDML.Clean(data.allocator)
+	}
 	data.sinker.Close()
 }
 func (data *CheckpointData_V2) ExportStats(prefix string) []zap.Field {

@@ -36,6 +36,7 @@ const (
 	IOET_WALTxnEntry_V3            uint16 = 3
 	IOET_WALTxnEntry_V4            uint16 = 4
 	IOET_WALTxnEntry_V5            uint16 = 5
+	IOET_WALTxnEntry_V6            uint16 = 6
 	IOET_WALTxnCommand_Composed_V1 uint16 = 1
 	IOET_WALTxnCommand_TxnState_V1 uint16 = 1
 
@@ -106,6 +107,12 @@ func putMarshalBuffer(buf *bytes.Buffer) {
 }
 
 func init() {
+	objectio.RegisterIOEnrtyCodec(objectio.IOEntryHeader{Type: IOET_WALTxnEntry, Version: IOET_WALTxnEntry_V6}, nil,
+		func(b []byte) (any, error) {
+			entry := NewEmptyTxnCmd()
+			err := entry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V6)
+			return entry, err
+		})
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALTxnEntry,
@@ -426,6 +433,10 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		return
 	}
 	n += sn
+	if ver >= IOET_WALTxnEntry_V6 {
+		sn, err = c.Memo.ReadLogicalDMLFrom(r)
+		n += sn
+	}
 	return
 }
 
@@ -447,6 +458,9 @@ func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 		return err
 	}
 	v := IOET_WALTxnEntry_CurrVer
+	if c.Memo.LogicalDMLTrackingEnabled() {
+		v = IOET_WALTxnEntry_V6
+	}
 	if _, err := buf.Write(types.EncodeUint16(&v)); err != nil {
 		return err
 	}
@@ -503,6 +517,11 @@ func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	// Write Memo directly to buffer
 	if _, err := c.Memo.WriteTo(buf); err != nil {
 		return err
+	}
+	if v == IOET_WALTxnEntry_V6 {
+		if _, err := c.Memo.WriteLogicalDMLTo(buf); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -562,6 +581,9 @@ func (c *TxnCmd) UnmarshalBinaryWithVersion(buf []byte, ver uint16) (err error) 
 	n += int(composeedCmdBufLength)
 	bbuf := bytes.NewBuffer(buf[n:])
 	_, err = c.ReadFromWithVersion(bbuf, ver)
+	if err == nil && ver >= IOET_WALTxnEntry_V6 && bbuf.Len() != 0 {
+		return moerr.NewInternalErrorNoCtxf("unexpected trailing logical DML WAL bytes")
+	}
 	return err
 }
 func (c *TxnCmd) GetType() uint16 { return IOET_WALTxnEntry }

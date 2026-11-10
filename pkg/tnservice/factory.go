@@ -165,21 +165,22 @@ func (s *store) newTAEStorage(
 	}
 
 	opt := &options.Options{
-		Clock:             s.rt.Clock(),
-		Fs:                fs,
-		LocalFs:           localFs,
-		TmpFs:             tmpFs.(*fileservice.TmpFileService),
-		WalClientFactory:  logservicedriver.LogServiceClientFactory(factory),
-		MaxWALRecordSize:  int(s.cfg.LogService.MaxWALRecordSize),
-		Shard:             shard,
-		CheckpointCfg:     ckpcfg,
-		GCCfg:             gcCfg,
-		MergeCfg:          mergeCfg,
-		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
-		IsStandalone:      s.cfg.InStandalone,
-		Ctx:               ctx,
-		TaskServiceGetter: s.GetTaskService,
-		SID:               s.cfg.UUID,
+		Clock:                   s.rt.Clock(),
+		Fs:                      fs,
+		LocalFs:                 localFs,
+		TmpFs:                   tmpFs.(*fileservice.TmpFileService),
+		WalClientFactory:        logservicedriver.LogServiceClientFactory(factory),
+		MaxWALRecordSize:        int(s.cfg.LogService.MaxWALRecordSize),
+		Shard:                   shard,
+		CheckpointCfg:           ckpcfg,
+		GCCfg:                   gcCfg,
+		MergeCfg:                mergeCfg,
+		IncrementalDedup:        s.cfg.Txn.IncrementalDedup == "true",
+		EnableRebaseDataHistory: s.cfg.Txn.EnableRebaseDataHistory,
+		IsStandalone:            s.cfg.InStandalone,
+		Ctx:                     ctx,
+		TaskServiceGetter:       s.GetTaskService,
+		SID:                     s.cfg.UUID,
 	}
 	options.WithCatalogGCInterval(s.cfg.GCCfg.CatalogGCInterval.Duration)(opt)
 	return taestorage.NewTAEStorage(

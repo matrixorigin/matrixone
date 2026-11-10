@@ -283,6 +283,9 @@ func (store *txnStore) Close() error {
 func (store *txnStore) BindTxn(txn txnif.AsyncTxn, offline bool) {
 	store.isOffline = offline
 	store.txn = txn
+	if store.rt != nil && store.rt.Options != nil && store.rt.Options.EnableRebaseDataHistory {
+		txn.GetMemo().EnableLogicalDMLTracking()
+	}
 }
 
 func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err error) {

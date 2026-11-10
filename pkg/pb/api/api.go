@@ -105,6 +105,19 @@ func NewUpdateAutoIncrementReq(did, tid, offset uint64, epoch uint32) *AlterTabl
 	}
 }
 
+// NewValidateRebaseSnapshotReq describes a transaction-local dependency, not
+// an ALTER TABLE schema change.
+func NewValidateRebaseSnapshotReq(did, tid uint64, physicalTime int64) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_ValidateRebaseSnapshot,
+		Operation: &AlterTableReq_ValidateRebaseSnapshot{
+			ValidateRebaseSnapshot: &AlterTableRebaseSnapshot{PhysicalTime: physicalTime},
+		},
+	}
+}
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,

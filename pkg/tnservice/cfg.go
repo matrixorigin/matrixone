@@ -179,6 +179,9 @@ type Config struct {
 		// If empty, it will set 'false' when CN.Txn.Mode is optimistic,  set 'true' when CN.Txn.Mode is pessimistic
 		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 		IncrementalDedup string `toml:"incremental-dedup"`
+		// EnableRebaseDataHistory opts in to logical-write WAL/checkpoint metadata.
+		// It is false by default and does not enable the public Rebase publisher.
+		EnableRebaseDataHistory bool `toml:"enable-rebase-data-history"`
 
 		// Storage txn storage config
 		Storage struct {
