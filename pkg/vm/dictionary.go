@@ -44,10 +44,15 @@ type DictionaryConsumer interface {
 // Each execution lane owns its state and its one borrowed output.
 type DictionaryOutputState struct {
 	required   bool
+	allowed    bool
 	allocation *vector.AllocationAccountSelection
 	output     *batch.Batch
 	pool       *mpool.MPool
 }
+
+// AllowsDictionaryOutput is false until preparation admits this producer's
+// destination. Producers must consult it before retaining a selected backing.
+func (b *DictionaryOutputState) AllowsDictionaryOutput() bool { return b.allowed }
 
 func (b *DictionaryOutputState) BeginCall() {
 	if b.output != nil {
@@ -82,11 +87,11 @@ func configureDictionaryBoundary(op Operator, acceptsOutput bool) {
 	if op == nil {
 		return
 	}
+	configureDictionaryProducer(op, acceptsOutput)
 	consumer, accepts := op.(DictionaryConsumer)
 	for i, child := range op.GetOperatorBase().Children {
 		configureDictionaryBoundary(child, accepts && consumer.AcceptsDictionary(i))
 	}
-	configureDictionaryProducer(op, acceptsOutput)
 }
 
 func configureDictionaryProducer(op Operator, accepts bool) {
@@ -94,13 +99,24 @@ func configureDictionaryProducer(op Operator, accepts bool) {
 		state := producer.DictionaryOutputState()
 		state.BeginCall()
 		possible, allocation := producer.DictionaryOutput()
+		wasAllowed := state.allowed
+		state.allowed = possible && accepts
 		state.required = possible && !accepts
 		state.allocation = allocation
+		// Pure forwarding consumers can now re-evaluate their child edges. This
+		// touches declared producers only, never walks an ordinary flat subtree.
+		if wasAllowed != state.allowed {
+			configureDictionaryChildren(op)
+		}
 	}
 }
 
 func configureDictionaryEdges(op Operator) {
 	configureDictionaryProducer(op, false)
+	configureDictionaryChildren(op)
+}
+
+func configureDictionaryChildren(op Operator) {
 	for i, child := range op.GetOperatorBase().Children {
 		if _, ok := child.(DictionaryProducer); !ok {
 			continue

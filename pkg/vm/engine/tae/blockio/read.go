@@ -1145,13 +1145,36 @@ func blockDataReadWithFilter(
 		return nil
 	}
 
-	filterResult, err := applyFilter.Apply(outputBat, earlyColumns)
-	if err != nil {
-		return err
+	var filterResult engine.ReaderFilterResult
+	selectedOutput := applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() &&
+		orderByLimit == nil && phyAddrColumnPos < 0 && len(outputBat.ExtraBuf) == 0
+	if selectedOutput {
+		filterResult, err = applyFilter.Select(outputBat, earlyColumns)
+		if err != nil {
+			return err
+		}
+		selectedRows := liveRows
+		if !filterResult.All {
+			selectedRows = len(filterResult.Sels)
+		}
+		if err = validateReaderFilterResult(filterResult, liveRows, selectedRows); err != nil {
+			return err
+		}
+		if !filterResult.All {
+			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
+				return err
+			}
+		}
+	} else {
+		filterResult, err = applyFilter.Apply(outputBat, earlyColumns)
+		if err != nil {
+			return err
+		}
+		if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
+			return err
+		}
 	}
-	if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
-		return err
-	}
+
 	for _, pos := range earlyColumns {
 		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
 			return moerr.NewInvalidInputNoCtxf(

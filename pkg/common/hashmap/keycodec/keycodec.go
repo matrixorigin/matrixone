@@ -820,6 +820,7 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 // BY from silently defining different equality domains.
 func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
 	if vec.IsDictionary() {
+		// typeswitch:partial F32/F64 need logical reads; other representations use the general codec below.
 		switch vec.GetType().Oid {
 		case types.T_float32:
 			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(vector.GetFixedAtNoTypeCheck[float32](vec, row))

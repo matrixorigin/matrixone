@@ -239,8 +239,16 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 	if len(logical) == 0 {
 		return newDictionaryHeader(v.dictionaryState().base, rows, v, nil, mp, account)
 	}
-	// The intermediate mapping is an accounted vector, never an unbounded
-	// Go-heap copy. Transfer its immutable storage into a selection lease.
+	mapping, err := composeDictionaryRows(v.dictionaryState().rows, logical, mp, account)
+	if err != nil {
+		return nil, err
+	}
+	defer mapping.Release()
+	return newDictionaryHeader(v.dictionaryState().base, mapping, v, logical, mp, account)
+}
+
+// composeDictionaryRows owns one accounted map per distinct input mapping.
+func composeDictionaryRows(source *RowSelection, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection) (*RowSelection, error) {
 	composed, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), account)
 	if err != nil {
 		return nil, err
@@ -251,7 +259,7 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 	}
 	composed.length = len(logical)
 	indices := MustFixedColNoTypeCheck[int64](composed)
-	old := v.dictionaryState().rows.storageFixed()
+	old := source.storageFixed()
 	monotonic := true
 	for i, row := range logical {
 		indices[i] = old[row]
@@ -264,9 +272,8 @@ func (v *Vector) SelectDictionary(rows *RowSelection, mp *mpool.MPool, account *
 		composed.Free(mp)
 		return nil, err
 	}
-	mapping := &RowSelection{lease: lease, storage: composed, domain: v.dictionaryState().rows.domain, monotonic: monotonic}
-	defer mapping.Release()
-	return newDictionaryHeader(v.dictionaryState().base, mapping, v, logical, mp, account)
+	mapping := &RowSelection{lease: lease, storage: composed, domain: source.domain, monotonic: monotonic}
+	return mapping, nil
 }
 
 func copyDictionaryMetadata(dst, source *Vector, rows []int64, mp *mpool.MPool) error {

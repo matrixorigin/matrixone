@@ -56,6 +56,26 @@ type Shuffle struct {
 	vm.OperatorBase
 }
 
+// AcceptsDictionary admits synchronous complete-key routing whose data
+// partitions are copied into existing statement-accounted output buffers.
+func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
+	return child == 0 && shuffle.OwnedOutput && shuffle.DrainAllBuckets &&
+		len(shuffle.ShuffleKeyColumns) > 0 && shuffle.ShuffleExpr == nil &&
+		shuffle.ShuffleType == int32(plan.ShuffleType_Hash)
+}
+
+// Marker forwarding can preserve a dictionary even though ordinary owned
+// partitions stay flat. Declare that edge so unknown destinations remain safe.
+func (shuffle *Shuffle) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
+	return shuffle.OwnedOutput, shuffle.outputAllocation
+}
+func (shuffle *Shuffle) DictionaryOutputState() *vm.DictionaryOutputState {
+	return &shuffle.ctr.dictionaryBoundary
+}
+func (shuffle *Shuffle) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return shuffle.ctr.dictionaryBoundary.Normalize(input, proc.Mp())
+}
+
 func (shuffle *Shuffle) GetOperatorBase() *vm.OperatorBase {
 	return &shuffle.OperatorBase
 }
@@ -95,6 +115,7 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
+	dictionaryBoundary   vm.DictionaryOutputState
 	ending               bool
 	sels                 [][]int32
 	buf                  *batch.Batch

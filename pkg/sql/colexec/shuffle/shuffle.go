@@ -150,6 +150,9 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
+	if shuffle.OwnedOutput {
+		shuffle.ctr.dictionaryBoundary.BeginCall()
+	}
 	if !shuffle.DrainAllBuckets {
 		return shuffle.callLocal(proc)
 	}

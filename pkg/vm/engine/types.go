@@ -1288,14 +1288,26 @@ type ReaderFilter func(
 	loadedColumns []int,
 ) (ReaderFilterResult, error)
 
+// ReaderSelection returns original-row positions without changing input values,
+// vector lengths or batch row count. All means identity. The reader must consume
+// the borrowed mapping before another callback or ReadWithFilter return.
+type ReaderSelection func(*batch.Batch, []int) (ReaderFilterResult, error)
+
 // ReaderFilterRequest owns one prepared scan's two execution forms. Readers
 // invoke Apply on owned batches unless Exact completed the same predicate chain.
 // Observe consumes scalar input/work metadata only; cached vectors never escape.
 // Like ReaderFilter, requests are sequential and must not be shared concurrently.
 type ReaderFilterRequest struct {
-	Apply   ReaderFilter
-	Exact   *objectio.ExactScanState
-	Observe func(objectio.ExactScanStats)
+	// Select evaluates the same ordered predicate chain without shrinking its
+	// input. Sels uses the original live-row domain and is borrowed until the
+	// next callback. A supporting reader retains views or gathers that mapping
+	// once; unsupported readers continue calling Apply.
+	Select           ReaderSelection
+	OutputAllocation *vector.AllocationAccountSelection
+	ObserveSelection func(rows, columns int, logicalBytes int64)
+	Apply            ReaderFilter
+	Exact            *objectio.ExactScanState
+	Observe          func(objectio.ExactScanStats)
 }
 
 // LateMaterializationReader is an optional Reader capability. It reads the

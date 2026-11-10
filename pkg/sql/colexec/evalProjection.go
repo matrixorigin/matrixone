@@ -106,7 +106,9 @@ func (projection *Projection) FreeProjection(proc *process.Process) {
 	projection.ProjectExecutors = nil
 
 	if projection.projectBat != nil {
-		// allways call batch.Clean, even if there is no data
+		// Vectors are borrowed from the child/expression executors. Retire
+		// only the wrapper; each payload has its own effective owner.
+		clear(projection.projectBat.Vecs)
 		projection.projectBat.Clean(proc.Mp())
 		projection.projectBat = nil
 	}

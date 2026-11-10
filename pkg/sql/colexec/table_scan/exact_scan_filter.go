@@ -203,6 +203,17 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.earlyColumns[i] = i
 		}
 	}
+	tableScan.ctr.dictionaryOnlyReader = false
+	if len(tableScan.ctr.earlyColumns) == 0 && tableScan.OutputAllocation != nil && len(tableScan.ctr.allFilterExecutors) > 0 &&
+		len(tableScan.Attrs) == len(tableScan.Types) {
+		// The eager path already loads every column. Request the same scheduling
+		// with a selection result only when the destination later admits views.
+		tableScan.ctr.dictionaryOnlyReader = true
+		tableScan.ctr.earlyColumns = make([]int, len(tableScan.Types))
+		for i := range tableScan.ctr.earlyColumns {
+			tableScan.ctr.earlyColumns[i] = i
+		}
+	}
 	if len(tableScan.ctr.earlyColumns) == 0 {
 		tableScan.ctr.readerFilter = nil
 		return
@@ -210,6 +221,16 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 	tableScan.ctr.readerFilter = &engine.ReaderFilterRequest{
 		Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			return tableScan.applyReaderFilter(proc, bat, loaded)
+		},
+		OutputAllocation: tableScan.OutputAllocation,
+		ObserveSelection: func(rows, columns int, logicalBytes int64) {
+			stats := tableScan.OpAnalyzer.GetOpStats()
+			stats.AddExtraStat("DictionaryReaderSelectedRows", int64(rows))
+			stats.AddExtraStat("DictionaryReaderViewColumns", int64(columns))
+			stats.AddExtraStat("DictionaryReaderLogicalBytes", logicalBytes)
+			if tableScan.allocationAccount != nil {
+				stats.SetMaxExtraStat("DictionaryAccountUsedBytes", int64(tableScan.allocationAccount.Snapshot().Used))
+			}
 		},
 		Exact: objectio.NewExactScanState(program),
 		Observe: func(stats objectio.ExactScanStats) {

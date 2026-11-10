@@ -95,6 +95,18 @@ func (b *DictionaryBase) Release() { b.lease.Release() }
 
 func (b *DictionaryBase) RetainedBytes() int64 { return b.lease.AccountedBytes() }
 
+var errDictionaryRequiresCopy = moerr.NewNotSupportedNoCtx("dictionary backing requires materialization")
+
+// TryFreezeVector retains a snapshot only when payload can be shared. Ownership
+// or capacity refusal is a normal decline; it never copies a complete backing.
+func TryFreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection) (*DictionaryBase, bool, error) {
+	base, err := freezeVector(source, mp, account, false)
+	if errors.Is(err, errDictionaryRequiresCopy) || errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+		return nil, false, nil
+	}
+	return base, err == nil, err
+}
+
 // FreezeVector snapshots metadata and promotes uniquely owned payload into
 // immutable leases without copying it. The caller must own the source header
 // exclusively, including any mutable physical slices it has handed out.
@@ -102,6 +114,10 @@ func (b *DictionaryBase) RetainedBytes() int64 { return b.lease.AccountedBytes()
 // payload from a different account are copied into the destination account.
 // Allocation failure leaves source values and ownership valid.
 func FreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection) (*DictionaryBase, error) {
+	return freezeVector(source, mp, account, true)
+}
+
+func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection, allowCopy bool) (*DictionaryBase, error) {
 	if source == nil || mp == nil || (source.class != FLAT && source.class != CONSTANT) {
 		return nil, moerr.NewInvalidInputNoCtx("dictionary base requires a flat or constant source")
 	}
@@ -120,6 +136,9 @@ func FreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 	if account != nil && source.allocationAccount == nil &&
 		((source.dataLease == nil && cap(source.data) > 0) || (source.areaLease == nil && cap(source.area) > 0)) {
 		copyPayload = true
+	}
+	if copyPayload && !allowCopy {
+		return nil, errDictionaryRequiresCopy
 	}
 	var reservation *mpool.CapacityReservation
 	var pinned uint64
@@ -140,6 +159,9 @@ func FreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 		if upper > 0 {
 			reservation, err = account.account.ReserveCapacityWithClass(upper, account.capacityClass, account.owner, account.dataSite)
 			if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+				if !allowCopy {
+					return nil, errDictionaryRequiresCopy
+				}
 				copyPayload = true
 			} else if err != nil {
 				return nil, err

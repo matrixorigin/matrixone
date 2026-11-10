@@ -223,7 +223,16 @@ func (tableScan *TableScan) readBatch(
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
 	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
-	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
+	if tableScan.ctr.readerFilter != nil {
+		tableScan.ctr.readerFilter.Select = nil
+		if tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() {
+			tableScan.ctr.readerFilter.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				return tableScan.selectReaderFilter(proc, bat, loaded)
+			}
+		}
+	}
+	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled ||
+		tableScan.ctr.dictionaryOnlyReader && !tableScan.ctr.dictionaryBoundary.AllowsDictionaryOutput() {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(
 				ctx,
