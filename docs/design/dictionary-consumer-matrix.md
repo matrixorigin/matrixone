@@ -31,7 +31,7 @@ Performance uses one process/configuration, one load/open, six full suites,
 first cold suite excluded, profiling/accounting over the five warm suites.
 All Q1-Q22 and Total are reported. No benchmark-time result verification.
 Final combined acceptance additionally requires attributable Q12 gain at SF10
-and SF100 memory profiles, no unexplained all-query/Total regression, and no
+and local SF100 disk-backed profiles, no unexplained all-query/Total regression, and no
 SF100 spill. Results are appended as issue/PR comments.
 
 ### First implementation evidence
@@ -126,3 +126,14 @@ the compiler account-lifecycle endpoint also passed. No timing is claimed.
 Pending: public SQL expected-result generation/comparison, targeted race and
 final self/static review, pinned builds and the six-suite SF10/SF100 comparison.
 Q1 is a secondary scan-copy target; Q12 remains the primary required gain.
+
+### Local delivery checkpoint — 2026-11-10
+
+On candidate 7dce9f9bb3 the focused public SQL fixture passed twice against one
+isolated service (19/19 each, 0.585s and 0.579s), with the test database confirmed
+absent between runs and after the second run. Independent expected results were
+A / 0.05 / 2 and join pairs (2,1), (2,2), (3,3), before and after persisted flush.
+The selection callback now accepts a complete eager schema; Apply-only legacy
+validation remains unchanged. Targeted race checks passed for vector, VM and
+owned shuffle. The requester restricted timing to local SF10 memory/disk and
+local SF100 disk-backed, no spill; no server129 activity is needed.

@@ -159,7 +159,8 @@ The requester replaced the repeated-process protocol for future PRs:
   process samples; do not reuse the old independent-pair confidence claim.
 - Preserve matched resource budgets, cold exclusion, no-spill/swap/OOM rules,
   software pins and no benchmark-time dataset/result verification.
-- Use local SF10 and server129 SF100. Separate timing/work evidence from changes
+- Use local SF10 (memory and disk-backed) and local SF100 (disk-backed), per
+  the requester’s latest instruction. Do not use server129. Separate timing/work evidence from changes
   in warm cache residency and disclose profiling overhead consistently.
 
 For producer PRs, require the predeclared target to show repeatable memory-profile
