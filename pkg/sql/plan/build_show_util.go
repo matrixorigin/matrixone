@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -33,6 +34,8 @@ import (
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -56,8 +59,39 @@ func constructCreateTableSQL(
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
 ) (string, tree.Statement, error) {
+	sqlMode := ""
+	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
+	}
+	return constructCreateTableSQLWithDefaultFormat(ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks, false, sqlMode)
+}
+
+// ConstructCreateTableSQLForSchemaHash preserves the 4.2 persisted DUMP
+// fingerprint. This is hash input, not executable DDL: its legacy default
+// escaping must not change when SHOW CREATE becomes replayable (#31066).
+func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
+	sql, _, err := constructCreateTableSQLWithDefaultFormat(nil, tableDef, nil, false, nil, true, true, "")
+	return sql, err
+}
+
+func constructCreateTableSQLWithDefaultFormat(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+	legacyDumpDefaults bool,
+	sqlMode string,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
+	noBackslashEscapes := mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes)
+	// Match the parser to the rendering mode. In 4.2 getRewriteSQLStmt always
+	// parses ordinary mode, which would corrupt a NO_BACKSLASH_ESCAPES AST.
+	parseRenderedSQL := func(sql string) (tree.Statement, error) {
+		return mysql.ParseOneWithSQLMode(ctx.GetContext(), sql, 0, sqlMode)
+	}
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
@@ -178,7 +212,16 @@ func constructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
+				defaultSQL := strings.TrimSpace(col.Default.OriginString)
+				if legacyDumpDefaults {
+					defaultSQL = formatDefaultExpr(col.Default.OriginString)
+				} else if noBackslashEscapes && strings.Contains(defaultSQL, "\\") {
+					defaultSQL, err = formatDefaultWithoutBackslashEscapes(defaultSQL)
+					if err != nil {
+						return "", nil, err
+					}
+				}
+				buf.WriteString(" DEFAULT " + defaultSQL)
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -673,7 +716,7 @@ func constructCreateTableSQL(
 			createStr += formatIcebergTableOptionsForShowCreate(env)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
@@ -681,7 +724,7 @@ func constructCreateTableSQL(
 			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
@@ -691,7 +734,7 @@ func constructCreateTableSQL(
 			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
@@ -701,7 +744,7 @@ func constructCreateTableSQL(
 			createStr += formatForeignTableOptionsForShowCreate(fCfg)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
@@ -711,7 +754,7 @@ func constructCreateTableSQL(
 			createStr += formatKafkaTableOptionsForShowCreate(kCfg)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = parseRenderedSQL(createStr)
 			}
 			return createStr, stmt, err
 		}
@@ -795,7 +838,7 @@ func constructCreateTableSQL(
 		for _, pair := range rewritePairs {
 			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
 		}
-		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
+		stmt, err = parseRenderedSQL(rewriteStr)
 	}
 	return createStr, stmt, err
 }
@@ -1505,12 +1548,48 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
+// Historical 4.2 archive hashes include this exact policy. Do not use it for
+// replayable DDL, and do not replace it with main's newer fingerprint policy.
 func formatDefaultExpr(expr string) string {
 	trimmed := strings.TrimSpace(expr)
 	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
 		return trimmed
 	}
 	return formatStr(expr)
+}
+
+// Catalog origins use ordinary backslash escaping regardless of the reader's
+// mode. Reformat the scalar AST without evaluating or rebinding its default.
+func formatDefaultWithoutBackslashEscapes(origin string) (string, error) {
+	stmt, err := mysql.ParseOne(context.Background(), "select "+origin, 1)
+	if err != nil {
+		return "", err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 || (clause.Exprs[0].As != nil && !clause.Exprs[0].As.Empty()) ||
+		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || len(clause.Windows) != 0 ||
+		selectStmt.With != nil || len(selectStmt.OrderBy) != 0 || selectStmt.Limit != nil {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	// A SELECT without FROM has a single implicit empty table name in this AST.
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	table, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	name, ok := table.Expr.(*tree.TableName)
+	if !ok || name.ObjectName != "" {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	return tree.StringWithOpts(clause.Exprs[0].Expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithNoBackslashEscape()), nil
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {
