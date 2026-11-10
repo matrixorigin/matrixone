@@ -2947,3 +2947,147 @@ func testSumAvg(t *testing.T,
 		}
 	})
 }
+
+// TestAvgDecimal128WideSumStateDispatchPromotedResult covers the promoted
+// branch of avgDecimal128UsesWideSumState: widths whose promoted AVG result
+// is Decimal256 (widths 35..38 at scale 0) must select the wide executor,
+// and the helper classifies both promotion and the width rule directly.
+func TestAvgDecimal128WideSumStateDispatchPromotedResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	for _, width := range []int32{35, 36, 37, 38} {
+		typ := types.New(types.T_decimal128, width, 0)
+		require.Equal(t, types.T_decimal256, AvgReturnType([]types.Type{typ}).Oid, "width %d", width)
+		exec := makeAvgExec(t, mp, typ)
+		defer exec.Free()
+		require.IsType(t, &sumAvgDecExec[types.Decimal128, types.Decimal256]{}, exec)
+		_, retType := exec.TypesInfo()
+		require.Equal(t, AvgReturnType([]types.Type{typ}), retType)
+	}
+
+	require.True(t, avgDecimal128UsesWideSumState(types.New(types.T_decimal128, 35, 0)))
+	require.True(t, avgDecimal128UsesWideSumState(types.New(types.T_decimal128, 29, 2)))
+	require.False(t, avgDecimal128UsesWideSumState(types.New(types.T_decimal128, 28, 0)))
+}
+
+// TestAvgDecimal128WideSumStateBoundaryPromotedResult runs the boundary
+// fixture through the promoted Decimal256-result AVG path (width 35), which
+// shares the wide sum state without the narrowing finalizer.
+func TestAvgDecimal128WideSumStateBoundaryPromotedResult(t *testing.T) {
+	param := types.New(types.T_decimal128, 35, 0)
+	resultType := AvgReturnType([]types.Type{param})
+	require.Equal(t, types.T_decimal256, resultType.Oid)
+
+	v, err := types.ParseDecimal128(strings.Repeat("9", 34), 34, 0)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	input := vector.NewVec(param)
+	defer input.Free(mp)
+	for row := 0; row < 17015; row++ {
+		require.NoError(t, vector.AppendFixed(input, v, false, mp))
+	}
+
+	exec := makeAvgExec(t, mp, param)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 1, len(results))
+	defer results[0].Free(mp)
+	require.Equal(t, resultType, *results[0].GetType())
+	require.Equal(t, "9999999999999999999999999999999999.0000",
+		vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(4))
+}
+
+// TestNarrowDecimal256AvgRejectsInvalidResultType proves the finalizer's
+// invalid-result-type guard for every malformed declared result type.
+func TestNarrowDecimal256AvgRejectsInvalidResultType(t *testing.T) {
+	sum, err := types.ParseDecimal256("12345", 5, 0)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		oid     types.T
+		width   int32
+		scale   int32
+		wantErr string
+	}{
+		{"decimal256 result", types.T_decimal256, 40, 0, "invalid decimal avg result type"},
+		{"zero width", types.T_decimal128, 0, 0, "invalid decimal avg result type"},
+		{"width beyond table", types.T_decimal128, 39, 0, "invalid decimal avg result type"},
+		{"negative scale", types.T_decimal128, 38, -1, "invalid decimal avg result type"},
+		{"scale above width", types.T_decimal128, 38, 39, "invalid decimal avg result type"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resultType := types.New(tc.oid, tc.width, tc.scale)
+			_, err := narrowDecimal256Avg(sum, 3, 0, resultType)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+// TestNarrowDecimal256AvgWideningAndPrecisionOverflow proves the scale
+// overflow, physical narrowing, and declared-precision guards of the
+// Decimal256-state AVG finalizer through direct finalization calls.
+func TestNarrowDecimal256AvgWideningAndPrecisionOverflow(t *testing.T) {
+	sum, err := types.ParseDecimal256("12345", 5, 0)
+	require.NoError(t, err)
+
+	// A result scale below the input scale fails inside the wide-domain
+	// average; the finalizer surfaces it as a Div-overflow failure of the
+	// shown sum/count pair.
+	_, err = narrowDecimal256Avg(sum, 3, 6, types.New(types.T_decimal128, 38, 4))
+	require.ErrorContains(t, err, "Decimal256 Div overflow: 0.012345/3")
+
+	// A sum beyond 2^127-1 scaled to four fractional digits leaves the
+	// Decimal128 domain during narrowing (Div overflow), before the
+	// declared-precision check applies.
+	bigSum, err := types.ParseDecimal256(strings.Repeat("9", 40), 40, 0)
+	require.NoError(t, err)
+	_, err = narrowDecimal256Avg(bigSum, 1, 0, types.New(types.T_decimal128, 38, 4))
+	require.ErrorContains(t, err, "Decimal128 Div overflow")
+
+	// A mean that fits the Decimal128 bits but exceeds the declared width
+	// is rejected by the precision check.
+	narrowSum, err := types.ParseDecimal256(strings.Repeat("9", 30), 30, 0)
+	require.NoError(t, err)
+	_, err = narrowDecimal256Avg(narrowSum, 1, 0, types.New(types.T_decimal128, 26, 4))
+	require.ErrorContains(t, err, "beyond the range")
+}
+
+// TestAvgDecimal128WideSumStateDistinctErrorPropagates proves a finalization
+// error from narrowDecimal256Avg surfaces from Flush on the distinct
+// populated path instead of being silently dropped.
+func TestAvgDecimal128WideSumStateDistinctErrorPropagates(t *testing.T) {
+	param := types.New(types.T_decimal128, 35, 0)
+	resultType := AvgReturnType([]types.Type{param})
+	require.Equal(t, types.T_decimal256, resultType.Oid)
+
+	// value with 35 integer digits: promoted result decimal(39,4) holds 35
+	// integer digits, so the mean is exactly at the representable boundary.
+	v, err := types.ParseDecimal128(strings.Repeat("9", 35), 35, 0)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	input, err := vector.NewConstFixed(param, v, 1, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+
+	exec, err := MakeAgg(mp, AggIdOfAvg, true, param)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 1, len(results))
+	defer results[0].Free(mp)
+	require.Equal(t, resultType, *results[0].GetType())
+	require.Equal(t, "99999999999999999999999999999999999.0000",
+		vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(4))
+}
