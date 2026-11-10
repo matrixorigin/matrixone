@@ -55,7 +55,11 @@ func TestNativeRebaseSnapshotDependencyPublication(t *testing.T) {
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db.Close()
-		for _, scenario := range []string{"control", "catalog_after_snapshot", "before_dependency", "after_replay", "publication_first", "retirement_before_write"} {
+		for _, scenario := range []string{
+			"control", "catalog_after_snapshot", "catalog_view", "catalog_function", "catalog_procedure",
+			"catalog_rename", "catalog_drop", "catalog_recreated_database",
+			"before_dependency", "after_replay", "publication_first", "retirement_before_write",
+		} {
 			if !t.Run(scenario, func(t *testing.T) {
 				prefix := "nr_dep_" + scenario + "_"
 				upstream, source, target, meta := prefix+"u", prefix+"f", prefix+"next", prefix+"meta"
@@ -68,6 +72,10 @@ func TestNativeRebaseSnapshotDependencyPublication(t *testing.T) {
 				f.exec("create database " + upstream)
 				f.exec("create table " + upstream + ".t(id int primary key,v int)")
 				f.exec("create table " + upstream + ".history(v int)")
+				if scenario == "catalog_rename" || scenario == "catalog_drop" {
+					f.exec("create table " + upstream + ".extra(id int primary key,v int)")
+					f.exec("insert into " + upstream + ".extra values(9,90)")
+				}
 				f.exec("insert into " + upstream + ".t values(1,10)")
 				f.exec("insert into " + upstream + ".history values(1),(1),(NULL)")
 				bu := f.snapshot(upstream, "bu")
@@ -87,9 +95,28 @@ func TestNativeRebaseSnapshotDependencyPublication(t *testing.T) {
 				if scenario == "before_dependency" {
 					f.exec("insert into " + source + ".history values(2)")
 				}
-				if scenario == "catalog_after_snapshot" {
+				catalogChanged := strings.HasPrefix(scenario, "catalog_")
+				switch scenario {
+				case "catalog_after_snapshot":
 					f.exec("create table " + source + ".extra(id int primary key,v int)")
 					f.exec("insert into " + source + ".extra values(9,90)")
+				case "catalog_view":
+					f.exec("create view " + source + ".extra as select id,v from " + source + ".t")
+				case "catalog_function":
+					f.exec("create function " + source + ".inventory_fn(x int) returns int language sql as '$1+1'")
+				case "catalog_procedure":
+					f.exec("create procedure " + source + ".inventory_proc() 'begin select 1; end'")
+				case "catalog_rename":
+					f.exec("alter table " + source + ".extra rename to renamed")
+				case "catalog_drop":
+					f.exec("drop table " + source + ".extra")
+				case "catalog_recreated_database":
+					f.exec("drop database " + source)
+					f.exec("create database " + source)
+					f.exec("create table " + source + ".t(id int primary key,v int)")
+					f.exec("insert into " + source + ".t values(1,11),(9,90)")
+					replacement := f.scalar("select cast(dat_id as signed) from mo_catalog.mo_database where account_id=0 and datname='" + source + "'")
+					require.NotEqual(t, id, replacement)
 				}
 
 				owner, err := db.Conn(ctx)
@@ -117,16 +144,41 @@ func TestNativeRebaseSnapshotDependencyPublication(t *testing.T) {
 				require.Equal(t, pbtxn.TxnIsolation_RC, op.Txn().Isolation)
 				query := fmt.Sprintf("data branch rebase database %s from %s against %s between %s and %s tables (t) for update expect (%d,%d)", target, fh, uh, bf, bu, id, fixed)
 				rows, err := owner.QueryContext(ctx, query)
-				if scenario == "catalog_after_snapshot" {
+				if catalogChanged {
 					if rows != nil {
 						require.NoError(t, rows.Close())
 					}
-					require.ErrorContains(t, err, "def changed", "successful CREATE/INSERT after F must invalidate publication")
+					if scenario == "catalog_rename" || scenario == "catalog_drop" {
+						// The fixed relation may already be absent before epoch reservation.
+						require.Error(t, err, "a removed fixed relation must reject publication")
+					} else {
+						require.ErrorContains(t, err, "def changed", "committed catalog changes after F must invalidate publication")
+					}
 					_, err = owner.ExecContext(ctx, "rollback")
 					require.NoError(t, err)
-					require.Equal(t, []string{"9:90"}, f.rows(source, "extra"))
-					require.Equal(t, []string{"1:11"}, f.rows(source, "t"))
-					require.Greater(t, f.scalar(version), fixed)
+					switch scenario {
+					case "catalog_after_snapshot":
+						require.Equal(t, []string{"9:90"}, f.rows(source, "extra"))
+					case "catalog_view":
+						require.Equal(t, []string{"1:11"}, f.rows(source, "extra"))
+					case "catalog_function":
+						require.EqualValues(t, 1, f.scalar("select count(*) from mo_catalog.mo_user_defined_function where db='"+source+"' and name='inventory_fn'"))
+					case "catalog_procedure":
+						require.EqualValues(t, 1, f.scalar("select count(*) from mo_catalog.mo_stored_procedure where db='"+source+"' and name='inventory_proc'"))
+					case "catalog_rename":
+						require.Equal(t, []string{"9:90"}, f.rows(source, "renamed"))
+					case "catalog_recreated_database":
+						require.Equal(t, []string{"1:11", "9:90"}, f.rows(source, "t"))
+					}
+					if scenario == "catalog_rename" || scenario == "catalog_drop" {
+						require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='"+source+"' and relname='extra'"))
+					}
+					if scenario == "catalog_recreated_database" {
+						require.Zero(t, f.scalar(fmt.Sprintf("select count(*) from mo_catalog.mo_database_inventory where account_id=0 and database_id=%d", id)))
+					} else {
+						require.Equal(t, []string{"1:11"}, f.rows(source, "t"))
+						require.Greater(t, f.scalar(version), fixed)
+					}
 					require.Zero(t, f.scalar("select count(*) from mo_catalog.mo_database where account_id=0 and datname='"+target+"'"))
 					require.Zero(t, f.scalar("select gen from "+meta+".registry where name='feature' and db='"+source+"'"))
 					require.Equal(t, []string{"1:10", "2:20", "3:30"}, f.rows(upstream, "t"))
