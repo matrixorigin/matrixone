@@ -93,3 +93,38 @@ const/NULL domains and scoped concurrent reads. Coverage-count workloads compare
 sealed and unmarked data, owner retention and zero extra payload allocation.
 Consumer SQL, end-to-end performance, supported-release recovery and independent
 review remain separate acceptance work; local owning tests cannot establish them.
+
+### Private cache ownership boundary (candidate revision 28)
+
+The pre-existing ObjectIO validation marker is not an immutable-ownership
+proof: its validator accepts caller-owned `fscache.Data`, and its public rehome
+callback can retain the source or destination writable bytes. Both behaviors
+are covered by reproductions. JSON readers therefore must not derive a private
+owner from that marker alone.
+
+A requested JSON column may be published from a distinct ObjectIO-owned cache
+version only when its constructor created a fresh allocation, retained every
+writable view locally through decompression and complete validation, and
+published the wrapper without exposing those views. The constructor obtains
+fresh storage through a FileService allocator adapter restricted to the known
+allocator implementations; it uses non-recycled allocation and falls back to
+the FileService default for an unknown allocator. Selection of an allocator, a
+lease, or a marker does not by itself upgrade pre-existing data. Only the
+constructor performing the entire private creation and validation can publish
+the capability. Non-JSON_VALUE reads keep their existing path.
+
+The new private wrapper must not lend its backing to the public cache-rehome
+callback. Rehoming passes a copy and drops JSON-reader qualification, because
+the callback can retain or replace its output. Ordinary or remotely received
+cache data is copied and fully admitted before use as a JSON reader; an old
+reader remains stable if the source changes, and a new admission observes the
+changed source or rejects it. Query result, descriptor, row map, null metadata
+and lifetime rules remain unchanged. A safe cache miss can use the direct
+private constructor; a pre-existing unqualified cache hit incurs explicit
+readmission, shared by the consuming batch's JSON_VALUE expressions.
+
+Review decision: the previous general cache marker cannot support the claimed
+immutability contract and its use as reader authority is rejected. The revised
+boundary must pass alias-retention, malicious-allocator, rehome, independent
+reader/lease, production scan and end-to-end cost checks before acceptance.
+This is a development review decision, not an external reviewer approval.
