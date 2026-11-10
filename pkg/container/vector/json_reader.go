@@ -33,6 +33,7 @@ type JSONReader interface {
 	OpenCursor() (JSONCursor, error)
 	Length() int
 	Window(int, int) (JSONReader, error)
+	Repeat(int, int) (JSONReader, error)
 	Select([]int64, *mpool.MPool) (JSONReader, error)
 	Materialize(*mpool.MPool) (*Vector, error)
 	Query(int, *bytejson.Path) (JSONQueryResult, error)
@@ -84,11 +85,13 @@ type JSONCursor interface {
 // same reader. Sources must remain stable while a snapshot is being copied.
 // The zero value is closed. A reader must not be copied by value.
 type jsonReader struct {
-	rows   *Vector // private absolute physical row map, nil for contiguous views
-	column *Vector
-	lease  *RefCountedBufferLease
-	start  int
-	length int
+	rows        *Vector // private absolute physical row map, nil for contiguous views
+	column      *Vector
+	lease       *RefCountedBufferLease
+	start       int
+	length      int
+	repeated    bool
+	repeatedRow int
 }
 
 // NewJSONReaderSnapshot copies both descriptors and payloads, then validates
@@ -248,7 +251,22 @@ func (r *jsonReader) Window(start, end int) (JSONReader, error) {
 	if !r.lease.Retain() {
 		return nil, io.ErrClosedPipe
 	}
-	return &jsonReader{column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows}, nil
+	return &jsonReader{column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows, repeated: r.repeated, repeatedRow: r.repeatedRow}, nil
+}
+
+// Repeat retains one physical row without constructing a batch-sized mapping.
+func (r *jsonReader) Repeat(row, length int) (JSONReader, error) {
+	if r == nil || r.lease == nil {
+		return nil, io.ErrClosedPipe
+	}
+	if row < 0 || row >= r.length || length < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader repeated row")
+	}
+	physicalRow := r.physicalRow(row)
+	if !r.lease.Retain() {
+		return nil, io.ErrClosedPipe
+	}
+	return &jsonReader{column: r.column, lease: r.lease, length: length, repeated: true, repeatedRow: physicalRow}, nil
 }
 
 // Select copies row indices into accounted private storage. It keeps no alias
@@ -290,6 +308,9 @@ func (r *jsonReader) Select(rows []int64, mp *mpool.MPool) (JSONReader, error) {
 }
 
 func (r *jsonReader) physicalRow(row int) int {
+	if r.repeated {
+		return r.repeatedRow
+	}
 	if r.rows != nil {
 		return int(MustFixedColNoTypeCheck[int64](r.rows)[r.start+row])
 	}

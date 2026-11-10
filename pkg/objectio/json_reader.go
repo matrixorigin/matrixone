@@ -28,12 +28,14 @@ import (
 // representation. Its private Vector cannot escape; all output operations copy.
 // A lease pins the cache entry across readers, windows and selected results.
 type cacheJSONReader struct {
-	rows      *vector.Vector
-	column    *vector.Vector
-	lease     *vector.RefCountedBufferLease
-	selection *vector.AllocationAccountSelection
-	start     int
-	length    int
+	rows        *vector.Vector
+	column      *vector.Vector
+	lease       *vector.RefCountedBufferLease
+	selection   *vector.AllocationAccountSelection
+	start       int
+	length      int
+	repeated    bool
+	repeatedRow int
 }
 
 func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, selection *vector.AllocationAccountSelection, capacity int64, releasePin func()) (vector.JSONReader, error) {
@@ -79,7 +81,22 @@ func (r *cacheJSONReader) Window(start, end int) (vector.JSONReader, error) {
 	if !r.lease.Retain() {
 		return nil, io.ErrClosedPipe
 	}
-	return &cacheJSONReader{selection: r.selection, column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows}, nil
+	return &cacheJSONReader{selection: r.selection, column: r.column, lease: r.lease, start: r.start + start, length: end - start, rows: r.rows, repeated: r.repeated, repeatedRow: r.repeatedRow}, nil
+}
+
+// Repeat retains one physical row without constructing a batch-sized mapping.
+func (r *cacheJSONReader) Repeat(row, length int) (vector.JSONReader, error) {
+	if r == nil || r.lease == nil {
+		return nil, io.ErrClosedPipe
+	}
+	if row < 0 || row >= r.length || length < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid JSON reader repeated row")
+	}
+	physicalRow := r.physicalRow(row)
+	if !r.lease.Retain() {
+		return nil, io.ErrClosedPipe
+	}
+	return &cacheJSONReader{selection: r.selection, column: r.column, lease: r.lease, length: length, repeated: true, repeatedRow: physicalRow}, nil
 }
 
 // Select copies row indices into accounted private storage. It keeps no alias
@@ -121,6 +138,9 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 }
 
 func (r *cacheJSONReader) physicalRow(row int) int {
+	if r.repeated {
+		return r.repeatedRow
+	}
 	if r.rows != nil {
 		return int(vector.MustFixedColNoTypeCheck[int64](r.rows)[r.start+row])
 	}

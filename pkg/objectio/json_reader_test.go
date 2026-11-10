@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -523,4 +524,72 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	result.Close()
 	require.NoError(t, err)
 	require.Equal(t, "1", text)
+}
+
+func TestCacheJSONReaderRepeatView(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	for _, text := range []string{`{"keep":1}`, `{"keep":2}`} {
+		doc, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	}
+	require.NoError(t, vector.AppendBytes(source, nil, true, mp))
+	data := privateJSONColumnForTest(t, source)
+	reader, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
+	data.Release()
+	require.NoError(t, err)
+	defer reader.Close()
+	_, err = reader.Repeat(3, 1)
+	require.Error(t, err)
+	_, err = reader.Repeat(0, -1)
+	require.Error(t, err)
+
+	before := mp.CurrNB()
+	repeated, err := reader.Repeat(1, 100_000)
+	require.NoError(t, err)
+	defer repeated.Close()
+	require.Equal(t, before, mp.CurrNB())
+	window, err := repeated.Window(40_000, 40_003)
+	require.NoError(t, err)
+	defer window.Close()
+	selected, err := window.Select([]int64{2, 0}, mp)
+	require.NoError(t, err)
+	defer selected.Close()
+	again, err := selected.Repeat(0, 3)
+	require.NoError(t, err)
+	defer again.Close()
+	nullView, err := reader.Repeat(2, 2)
+	require.NoError(t, err)
+	null, err := nullView.IsNull(1)
+	require.NoError(t, err)
+	require.True(t, null)
+	nullView.Close()
+	materialized, err := again.Materialize(mp)
+	require.NoError(t, err)
+	defer materialized.Free(mp)
+	cursor, err := again.OpenCursor()
+	require.NoError(t, err)
+	reader.Close()
+	repeated.Close()
+	window.Close()
+	selected.Close()
+	again.Close()
+	result, err := cursor.QueryText(2, []byte("$.keep"), false)
+	require.NoError(t, err)
+	require.Equal(t, "2", result.Text)
+	cursor.Close()
+	_, err = again.Repeat(0, 1)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Equal(t, 3, materialized.Length())
+	for row := 0; row < 3; row++ {
+		value := types.DecodeJson(materialized.GetBytesAt(row))
+		path, err := types.ParseStringToPath("$.keep")
+		require.NoError(t, err)
+		selectedValue, exists := value.QueryWithExists([]*bytejson.Path{&path})
+		require.True(t, exists)
+		require.Equal(t, int64(2), selectedValue.GetInt64())
+	}
 }
