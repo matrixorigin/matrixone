@@ -919,8 +919,144 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
 		"select n_name from nation minus all select n_name from nation2", // not support
+		"(((select missing from nation)) union ((select missing from nation)))",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestUnionUntypedNullOutputType(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		query    string
+		typ      types.T
+		nullable bool
+	}{
+		{"numeric control", "select 2 as c union all select 10", types.T_int64, false},
+		{"null right", "select 2 as c union all select null", types.T_int64, true},
+		{"null left", "select null as c union all select 2", types.T_int64, true},
+		{"multiple branches", "select 2 as c union all select null union all select 10 union all select null", types.T_int64, true},
+		{"count", "select count(*) as c from nation union all select null", types.T_int64, true},
+		{"count reversed", "select null as c union all select count(*) from nation", types.T_int64, true},
+		{"distinct", "select 2 as c union select null", types.T_int64, true},
+		{"parenthesized null", "select 2 as c union all select (null)", types.T_int64, true},
+		{"nested numeric", "select null as c union all (select 2 union all select 10)", types.T_int64, true},
+		{"nested nulls", "select 2 as c union all (select null union all select null)", types.T_int64, true},
+		{"nested nulls left", "(select null as c union all select null) union all select 2", types.T_int64, true},
+		{"nested distinct nulls", "select 2 as c union all (select null union select null)", types.T_int64, true},
+		{"folded parenthesized nulls", "select 2 as c union all select 10 union all (((select null)) union ((select null))) order by c", types.T_int64, true},
+		{"folded nulls reversed", "(((select null as c)) union ((select null as c))) union all select 2 union all select 10 order by c", types.T_int64, true},
+		{"folded count", "select count(*) as c from nation union all (((select null)) union ((select null)))", types.T_int64, true},
+		{"folded typed char", "select 2 as c union all (((select cast(null as char))) union ((select cast(null as char))))", types.T_varchar, true},
+		{"folded derived null", "select 2 as c union all (((select c from (select null as c) d)) union ((select c from (select null as c) d)))", types.T_varchar, true},
+		{"folded independent columns", "select c from (select 2 as c,'a' as d union all (((select null as c,null as d)) union ((select null as c,null as d)))) u", types.T_int64, true},
+		{"branch order limit", "select 2 as c union all (select null as c order by c limit 1)", types.T_int64, true},
+		{"parenthesized branch order limit", "select 2 as c union all (select (null) as c order by c limit 1)", types.T_int64, true},
+		{"nested parenthesized nulls", "select 2 as c union all (select (null) union select (null))", types.T_int64, true},
+		{"computed order", "select null as c union all select 2 order by c+1 limit 2", types.T_int64, true},
+		{"derived", "select c from (select 2 as c union all select null) u", types.T_int64, true},
+		{"cte", "with u as (select null as c union all select 2) select c from u", types.T_int64, true},
+		{"reused cte", "with u as (select null as c union all select 2) select c from u union all select c from u", types.T_int64, true},
+		{"typed derived null", "select c from (select null as c) u union all select 2", types.T_varchar, true},
+		{"typed derived nulls", "select c from (select null as c union all select null) u union all select 2", types.T_varchar, true},
+		{"independent columns", "select c from (select null as c,2 as d union all select 10,cast(null as char)) u", types.T_int64, true},
+		{"independent string column", "select d from (select null as c,2 as d union all select 10,cast(null as char)) u", types.T_varchar, true},
+		{"typed char null", "select 2 as c union all select cast(null as char)", types.T_varchar, true},
+		{"typed char null left", "select cast(null as char) as c union all select 2", types.T_varchar, true},
+		{"real string", "select 2 as c union all select '10' union all select null", types.T_varchar, true},
+		{"typed numeric null", "select cast(null as signed) as c union all select null", types.T_int64, true},
+		{"unsigned", "select cast(2 as unsigned) as c union all select null", types.T_uint64, true},
+		{"decimal", "select cast(2 as decimal(10,2)) as c union all select null", types.T_decimal64, true},
+		{"all null", "select null as c union all select null", types.T_text, true},
+		{"standalone null", "select null as c", types.T_text, true},
+		{"standalone parenthesized null", "select (null) as c", types.T_text, true},
+		{"intersect", "select 2 as c intersect select null", types.T_int64, false},
+		{"minus", "select 2 as c minus select null", types.T_int64, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Run("select", func(t *testing.T) {
+				p, err := buildSingleStmt(NewMockOptimizer(false), t, test.query)
+				require.NoError(t, err)
+				query := p.GetQuery()
+				require.NotNil(t, query)
+				require.Len(t, query.Steps, 1)
+				output := query.Nodes[query.Steps[0]].ProjectList
+				require.Len(t, output, 1)
+				require.Equal(t, int32(test.typ), output[0].Typ.Id)
+				require.Equal(t, !test.nullable, output[0].Typ.NotNullable)
+				if test.name == "decimal" {
+					require.Equal(t, int32(10), output[0].Typ.Width)
+					require.Equal(t, int32(2), output[0].Typ.Scale)
+				}
+			})
+			t.Run("ctas", func(t *testing.T) {
+				p, err := buildSingleStmt(NewMockOptimizer(false), t, "create table union_null_type as "+test.query)
+				require.NoError(t, err)
+				col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+				require.Equal(t, int32(test.typ), col.Typ.Id)
+				require.Equal(t, !test.nullable, col.Typ.NotNullable)
+				require.Equal(t, test.nullable, col.Default.NullAbility)
+			})
+		})
+	}
+}
+
+func TestUnionUntypedNullStringWidth(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		query    string
+		typ      types.T
+		width    int32
+		nullable bool
+	}{
+		{"char null right", "select cast('a' as char(1)) as c union all select null", types.T_char, 1, true},
+		{"char null left", "select null as c union all select cast('a' as char(1))", types.T_char, 1, true},
+		{"varchar null right", "select cast('ab' as varchar(2)) as c union all select null", types.T_varchar, 2, true},
+		{"varchar null left", "select null as c union all select cast('ab' as varchar(2))", types.T_varchar, 2, true},
+		{"nested char", "select cast('a' as char(1)) as c union all (select null union select null)", types.T_char, 1, true},
+		{"nested varchar", "(select null as c union all select cast('ab' as varchar(2))) union all select null", types.T_varchar, 2, true},
+		{"folded char", "select cast('a' as char(1)) as c union all (((select null)) union ((select null)))", types.T_char, 1, true},
+		{"mixed strings without null", "select 'a' as c union all select cast('abcdefgh' as char(8))", types.T_varchar, 8, false},
+		{"mixed strings with null", "select 'a' as c union all select cast('abcdefgh' as char(8)) union all select null order by c", types.T_varchar, 8, true},
+		{"mixed strings reversed", "select cast('abcdefgh' as char(8)) as c union all select 'a' union all select null", types.T_varchar, types.MaxVarcharLen, true},
+		{"mixed explicit varchar", "select cast('ab' as varchar(2)) as c union all select cast('abcdefgh' as char(8)) union all select null", types.T_varchar, 8, true},
+		{"mixed strings nested", "select c from (select 'a' as c union all select cast('abcdefgh' as char(8))) u union all select null", types.T_varchar, 8, true},
+		{"mixed strings distinct", "select 'a' as c union select cast('abcdefgh' as char(8)) union select null", types.T_varchar, 8, true},
+		{"mixed strings folded nulls", "select 'a' as c union all select cast('abcdefgh' as char(8)) union all (((select null)) union ((select null)))", types.T_varchar, 8, true},
+		{"mixed typed char null", "select 'a' as c union all select cast(null as char(8))", types.T_varchar, 8, true},
+		{"real char widening", "select cast('a' as char(1)) as c union all select cast('abcdefgh' as char(8))", types.T_char, 8, false},
+		{"real varchar widening", "select cast('ab' as varchar(2)) as c union all select cast('abcdefgh' as varchar(8))", types.T_varchar, 8, false},
+		{"typed char null", "select cast('a' as char(1)) as c union all select cast(null as char(8))", types.T_char, 8, true},
+		{"typed varchar null", "select cast('ab' as varchar(2)) as c union all select cast(null as varchar(8))", types.T_varchar, 8, true},
+		{"all null fallback", "select null as c union all select null", types.T_text, 4, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, ctas := range []bool{false, true} {
+				name, sql := "select", test.query
+				if ctas {
+					name, sql = "ctas", "create table union_string_width as "+sql
+				}
+				t.Run(name, func(t *testing.T) {
+					p, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+					require.NoError(t, err)
+					var typ plan.Type
+					if ctas {
+						col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+						typ = col.Typ
+						require.Equal(t, test.nullable, col.Default.NullAbility)
+					} else {
+						query := p.GetQuery()
+						require.Len(t, query.Steps, 1)
+						output := query.Nodes[query.Steps[0]].ProjectList
+						require.Len(t, output, 1)
+						typ = output[0].Typ
+					}
+					require.Equal(t, int32(test.typ), typ.Id)
+					require.Equal(t, test.width, typ.Width)
+					require.Equal(t, !test.nullable, typ.NotNullable)
+				})
+			}
+		})
+	}
 }
 
 // test CTE plan building

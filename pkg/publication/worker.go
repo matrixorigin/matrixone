@@ -257,6 +257,8 @@ type Worker interface {
 	UnregisterSyncProtection(jobID string)
 	// GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
 	GetSyncProtectionTTL(jobID string) int64
+	// WatchSyncProtection returns one atomic TTL snapshot and its change notification.
+	WatchSyncProtection(jobID string) (int64, <-chan struct{})
 }
 
 // FilterObjectWorker is the interface for filter object worker pool
@@ -293,6 +295,7 @@ type WriteObjectJobInfo interface {
 type syncProtectionEntry struct {
 	jobID       string
 	ttlExpireTS atomic.Int64
+	changed     chan struct{} // protected by syncProtectionMu
 }
 
 type worker struct {
@@ -524,11 +527,12 @@ func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
 	w.syncProtectionMu.Lock()
 	defer w.syncProtectionMu.Unlock()
 
-	entry := &syncProtectionEntry{
-		jobID: jobID,
+	entry := w.syncProtectionJobs[jobID]
+	if entry == nil {
+		entry = &syncProtectionEntry{jobID: jobID}
+		w.syncProtectionJobs[jobID] = entry
 	}
-	entry.ttlExpireTS.Store(ttlExpireTS)
-	w.syncProtectionJobs[jobID] = entry
+	entry.setTTL(ttlExpireTS)
 
 	logutil.Info("ccpr-worker registered sync protection",
 		zap.String("job_id", jobID),
@@ -541,6 +545,9 @@ func (w *worker) UnregisterSyncProtection(jobID string) {
 	w.syncProtectionMu.Lock()
 	defer w.syncProtectionMu.Unlock()
 
+	if entry := w.syncProtectionJobs[jobID]; entry != nil && entry.changed != nil {
+		close(entry.changed)
+	}
 	delete(w.syncProtectionJobs, jobID)
 
 	logutil.Info("ccpr-worker unregistered sync protection",
@@ -550,13 +557,35 @@ func (w *worker) UnregisterSyncProtection(jobID string) {
 
 // GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
 func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
+	ttl, _ := w.WatchSyncProtection(jobID)
+	return ttl
+}
+
+func (w *worker) WatchSyncProtection(jobID string) (int64, <-chan struct{}) {
 	w.syncProtectionMu.RLock()
 	defer w.syncProtectionMu.RUnlock()
-
-	if entry, exists := w.syncProtectionJobs[jobID]; exists {
-		return entry.ttlExpireTS.Load()
+	if entry := w.syncProtectionJobs[jobID]; entry != nil {
+		return entry.ttlExpireTS.Load(), entry.changed
 	}
-	return 0
+	return 0, nil
+}
+
+// The worker lock serializes the value and notification, including registration
+// updates and renewal replies. A snapshot cannot miss a deadline change.
+func (entry *syncProtectionEntry) setTTL(ttl int64) {
+	entry.ttlExpireTS.Store(ttl)
+	if entry.changed != nil {
+		close(entry.changed)
+	}
+	entry.changed = make(chan struct{})
+}
+
+func (w *worker) updateSyncProtectionTTL(jobID string, entry *syncProtectionEntry, ttl int64) {
+	w.syncProtectionMu.Lock()
+	defer w.syncProtectionMu.Unlock()
+	if w.syncProtectionJobs[jobID] == entry {
+		entry.setTTL(ttl)
+	}
 }
 
 // RunSyncProtectionKeepAlive runs a background goroutine that periodically renews
@@ -635,7 +664,7 @@ func (w *worker) renewAllSyncProtections() {
 		}
 
 		// Update the TTL in our tracking
-		entry.ttlExpireTS.Store(newTTLExpireTS)
+		w.updateSyncProtectionTTL(jobID, entry, newTTLExpireTS)
 		logutil.Debug("ccpr-worker renewed sync protection",
 			zap.String("job_id", jobID),
 			zap.Int64("new_ttl_expire_ts", newTTLExpireTS),
@@ -751,55 +780,74 @@ func (w *filterObjectWorker) Stop() {
 type getChunkWorker struct {
 	jobChan chan Job
 	wg      sync.WaitGroup
+	mu      sync.RWMutex
 	cancel  context.CancelFunc
 	ctx     context.Context
 	closed  atomic.Bool
 }
 
-// NewGetChunkWorker creates a new get chunk worker pool
 func NewGetChunkWorker() GetChunkWorker {
-	w := &getChunkWorker{
-		jobChan: make(chan Job, 10000),
-	}
+	w := &getChunkWorker{jobChan: make(chan Job, 10000)}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	go w.Run()
+	// Register every worker before Stop can wait for this generation.
+	w.Run()
 	return w
 }
 
+func chunkJobContext(job Job) context.Context {
+	switch j := job.(type) {
+	case *GetMetaJob:
+		return j.ctx
+	case *GetChunkJob:
+		return j.ctx
+	default:
+		return context.Background()
+	}
+}
+
+func (w *getChunkWorker) execute(job Job) {
+	ctx, cancel := context.WithCancel(chunkJobContext(job))
+	stop := context.AfterFunc(w.ctx, cancel)
+	defer stop()
+	defer cancel()
+	if context.Cause(w.ctx) != nil {
+		cancel()
+	}
+	switch j := job.(type) {
+	case *GetMetaJob:
+		j.ctx = ctx
+	case *GetChunkJob:
+		j.ctx = ctx
+	}
+	job.Execute()
+}
+
 func (w *getChunkWorker) Run() {
-	workerThreadCount := GetGetChunkWorkerThread()
-	for i := 0; i < workerThreadCount; i++ {
+	for i := 0; i < GetGetChunkWorkerThread(); i++ {
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
-			for {
-				select {
-				case <-w.ctx.Done():
-					return
-				case job := <-w.jobChan:
-					jobType := job.GetType()
-					switch jobType {
-					case JobTypeGetMeta:
-						globalJobStats.IncrementGetMetaRunning()
-						job.Execute()
-						globalJobStats.DecrementGetMetaRunning()
-					default:
-						// JobTypeGetChunk
-						globalJobStats.IncrementGetChunkRunning()
-						startTime := time.Now()
-						job.Execute()
-						duration := time.Since(startTime)
-						globalJobStats.DecrementGetChunkRunning()
-
-						// Record duration for GetChunk jobs
-						if chunkJobInfo, ok := job.(GetChunkJobInfo); ok {
-							globalJobStats.RecordGetChunkDuration(
-								chunkJobInfo.GetObjectName(),
-								chunkJobInfo.GetChunkIndex(),
-								duration,
-							)
-						}
-					}
+			// Stop cancels active jobs and closes admission; accepted jobs
+			// still execute their cancellation/terminal path before retirement.
+			for job := range w.jobChan {
+				if job.GetType() == JobTypeGetMeta {
+					globalJobStats.IncrementGetMetaRunning()
+					w.execute(job)
+					globalJobStats.DecrementGetMetaRunning()
+					continue
+				}
+				// Cache metadata before completion allows callers to recycle jobs.
+				var name string
+				var index int64
+				if info, ok := job.(GetChunkJobInfo); ok {
+					name, index = info.GetObjectName(), info.GetChunkIndex()
+				}
+				globalJobStats.IncrementGetChunkRunning()
+				start := time.Now()
+				w.execute(job)
+				globalJobStats.DecrementGetChunkRunning()
+				if name != "" {
+					globalJobStats.RecordGetChunkDuration(name, index, time.Since(start))
 				}
 			}
 		}()
@@ -807,25 +855,44 @@ func (w *getChunkWorker) Run() {
 }
 
 func (w *getChunkWorker) SubmitGetChunk(job Job) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
 	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "GetChunkWorker is closed")
+		if w.ctx != nil && context.Cause(w.ctx) != nil {
+			return context.Cause(w.ctx)
+		}
+		return moerr.NewInternalErrorNoCtx("GetChunkWorker is closed")
 	}
-	jobType := job.GetType()
-	switch jobType {
-	case JobTypeGetMeta:
-		globalJobStats.IncrementGetMetaPending()
-	default:
-		globalJobStats.IncrementGetChunkPending()
+	var stopped <-chan struct{}
+	if w.ctx != nil {
+		stopped = w.ctx.Done()
 	}
-	w.jobChan <- job
-	return nil
+	pending := &globalJobStats.GetChunkPending
+	if job.GetType() == JobTypeGetMeta {
+		pending = &globalJobStats.GetMetaPending
+	}
+	pending.Add(1)
+	select {
+	case <-stopped:
+		pending.Add(-1)
+		return context.Cause(w.ctx)
+	case <-chunkJobContext(job).Done():
+		pending.Add(-1)
+		return context.Cause(chunkJobContext(job))
+	case w.jobChan <- job:
+		return nil
+	}
 }
 
 func (w *getChunkWorker) Stop() {
-	w.closed.Store(true)
+	// Unblock submitters before waiting for their read-side admission gate.
 	w.cancel()
+	w.mu.Lock()
+	if !w.closed.Swap(true) {
+		close(w.jobChan)
+	}
+	w.mu.Unlock()
 	w.wg.Wait()
-	close(w.jobChan)
 }
 
 // ============================================================================

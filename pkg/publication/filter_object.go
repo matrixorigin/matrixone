@@ -16,11 +16,13 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,7 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"go.uber.org/zap"
@@ -102,22 +106,41 @@ func FilterObject(
 	var stats objectio.ObjectStats
 	stats.UnMarshal(objectStatsBytes)
 
-	// Check if it's an appendable object
-	isAObj := stats.GetAppendable()
-	if isAObj {
-		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
-	} else {
-		// Handle non-appendable object - write directly to fileservice with new UUID
-		// For tombstone, need to convert to batch and rewrite rowids using aobjectMap
-		newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
-		if err != nil {
-			return nil, err
+	var minimum int64
+	for {
+		result, err := func() (*FilterObjectResult, error) {
+			if ttlChecker != nil && !ttlChecker() {
+				return nil, ErrSyncProtectionTTLExpired
+			}
+			memory, release, err := reservePublicationObject(ctx, &stats, minimum, isTombstone && !stats.GetAppendable() && aobjectMap != nil)
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			ctx := context.WithValue(ctx, publicationFetchMemoryKey{}, memory)
+			// Check if it's an appendable object
+			isAObj := stats.GetAppendable()
+			if isAObj {
+				// Handle appendable object
+				return filterAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, subscriptionAccountName, pubName, aobjectMap, ttlChecker)
+			} else {
+				// Handle non-appendable object - write directly to fileservice with new UUID
+				// For tombstone, need to convert to batch and rewrite rowids using aobjectMap
+				newStats, err := filterNonAppendableObject(ctx, &stats, snapshotTS, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker, writeObjectWorker, subscriptionAccountName, pubName, ccprCache, txnID, aobjectMap, ttlChecker)
+				if err != nil {
+					return nil, err
+				}
+				// Return the new downstream stats with new object name
+				return &FilterObjectResult{
+					DownstreamStats: newStats,
+				}, nil
+			}
+		}()
+		var growth *objectMemoryGrowth
+		if !errors.As(err, &growth) {
+			return result, err
 		}
-		// Return the new downstream stats with new object name
-		return &FilterObjectResult{
-			DownstreamStats: newStats,
-		}, nil
+		minimum = growth.bytes
 	}
 }
 
@@ -150,7 +173,7 @@ func filterAppendableObject(
 	// Get object file from upstream using GETOBJECT
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return nil, errutil.Wrap(err, "failed to get object from upstream")
 	}
 
 	// Check TTL after getting object
@@ -359,18 +382,16 @@ func filterNonAppendableObject(
 	aobjectMap *AObjectMap,
 	ttlChecker TTLChecker,
 ) (objectio.ObjectStats, error) {
-	// Check TTL before processing
 	if ttlChecker != nil && !ttlChecker() {
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
-
+	memory, _ := ctx.Value(publicationFetchMemoryKey{}).(*rscthrottler.InputLease)
 	// Get upstream object name from stats
 	upstreamObjectName := stats.ObjectName().String()
 
-	// Get object file from upstream
 	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, upstreamObjectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return objectio.ObjectStats{}, errutil.Wrap(err, "failed to get object from upstream")
 	}
 
 	// Check TTL after getting object
@@ -378,10 +399,10 @@ func filterNonAppendableObject(
 		return objectio.ObjectStats{}, ErrSyncProtectionTTLExpired
 	}
 
-	// For tombstone objects, read blocks one by one and rewrite rowids using aobjectMap
+	// Tombstone RowIDs may change order across source blocks after remapping.
 	if isTombstone && aobjectMap != nil {
 		objStats, err := rewriteNonAppendableTombstoneWithSinker(
-			ctx, objectContent, stats, localFS, mp, aobjectMap,
+			ctx, objectContent, stats, localFS, mp, aobjectMap, memory,
 		)
 		if err != nil {
 			return objectio.ObjectStats{}, err
@@ -392,7 +413,9 @@ func filterNonAppendableObject(
 	// For data objects (or tombstone without aobjectMap), write directly to fileservice
 	writeJob := NewWriteObjectJob(ctx, localFS, upstreamObjectName, objectContent, ccprCache, txnID)
 	if writeObjectWorker != nil {
-		writeObjectWorker.SubmitWriteObject(writeJob)
+		if err := writeObjectWorker.SubmitWriteObject(writeJob); err != nil {
+			return objectio.ObjectStats{}, err
+		}
 	} else {
 		writeJob.Execute()
 	}
@@ -414,63 +437,119 @@ var GetObjectFromUpstreamWithWorker = func(
 	subscriptionAccountName string,
 	pubName string,
 ) ([]byte, error) {
+	return fetchObjectChunks(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName, GetChunkSize)
+}
+
+// chunkSize follows the GETOBJECT protocol in frontend/get_object.go. Keeping
+// geometry explicit also permits small tests of the same multi-chunk path.
+func fetchObjectChunks(ctx context.Context, upstreamExecutor SQLExecutor, objectName string, getChunkWorker GetChunkWorker, subscriptionAccountName, pubName string, chunkSize int64) ([]byte, error) {
 	if upstreamExecutor == nil {
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
-
-	// First, get offset 0 to get metadata (total_chunks, total_size, etc.)
-	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
-	// offset 0 returns metadata with data = nil
-	metaResult, err := getMetaWithRetry(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName)
+	meta, err := getMetaWithRetry(ctx, upstreamExecutor, objectName, getChunkWorker, subscriptionAccountName, pubName)
 	if err != nil {
 		return nil, err
 	}
-
-	totalChunks := metaResult.TotalChunks
-
-	// Fetch data chunks starting from chunk 1
-	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
-	allChunks := make([][]byte, totalChunks)
-
-	// Submit all chunk jobs to worker pool
-	chunkJobs := make([]*GetChunkJob, totalChunks)
-	for i := int64(1); i <= totalChunks; i++ {
-		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i, subscriptionAccountName, pubName)
-		chunkJobs[i-1] = chunkJob
-		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
-		} else {
-			chunkJob.Execute()
-		}
+	expectedChunks, err := objectChunkCount(meta.TotalSize, chunkSize)
+	if err != nil {
+		return nil, err
+	}
+	if meta.TotalChunks != expectedChunks {
+		return nil, moerr.NewInternalErrorNoCtx("inconsistent GETOBJECT chunk count")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	memory, ok := ctx.Value(publicationFetchMemoryKey{}).(*rscthrottler.InputLease)
+	if !ok || memory == nil {
+		return nil, moerr.NewInternalErrorNoCtx("publication fetch requires an object reservation")
+	}
+	peak, err := publicationBufferBytes(meta.TotalSize)
+	if err != nil {
+		return nil, err
+	}
+	if err := growPublicationObject(ctx, memory, peak); err != nil {
+		return nil, err
 	}
 
-	// Wait for all chunk jobs to complete, retry failed chunks
-	for i := int64(0); i < totalChunks; i++ {
-		chunkResult := chunkJobs[i].WaitDone().(*GetChunkJobResult)
-		if chunkResult.Err != nil {
-			// Retry failed chunk
-			chunkData, err := getChunkWithRetry(ctx, upstreamExecutor, objectName, i+1, getChunkWorker, subscriptionAccountName, pubName)
+	objectContent := make([]byte, int(meta.TotalSize))
+	limit := min(GetGetChunkWorkerThread(), cap(getOrCreateChunkSemaphore()))
+	if getChunkWorker == nil {
+		limit = 1
+	}
+	limit = int(min(int64(max(1, limit)), meta.TotalChunks))
+	completed := make(chan *GetChunkJobResult, limit)
+	ctx, cancel := context.WithCancel(ctx)
+	pending := 0
+	defer func() {
+		cancel()
+		// Every accepted job publishes after query/semaphore cleanup, even
+		// when submission fails or the worker stops. Keep the owner until then.
+		for pending > 0 {
+			<-completed
+			pending--
+		}
+	}()
+	next := int64(1)
+	submit := func() error {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		job := NewGetChunkJob(ctx, upstreamExecutor, objectName, next, subscriptionAccountName, pubName)
+		job.result = completed
+		if getChunkWorker != nil {
+			if err := getChunkWorker.SubmitGetChunk(job); err != nil {
+				return err
+			}
+		} else {
+			job.Execute()
+		}
+		pending++
+		next++
+		return nil
+	}
+	for pending < limit && next <= meta.TotalChunks {
+		if err := submit(); err != nil {
+			return nil, err
+		}
+	}
+	for pending > 0 {
+		res := <-completed
+		pending--
+		data := res.ChunkData
+		if res.Err != nil {
+			if !(DefaultClassifier{}).IsRetryable(res.Err) {
+				return nil, res.Err
+			}
+			data, err = getChunkWithRetry(ctx, upstreamExecutor, objectName, res.ChunkIndex, getChunkWorker, subscriptionAccountName, pubName)
 			if err != nil {
 				return nil, err
 			}
-			allChunks[i] = chunkData
-		} else {
-			allChunks[i] = chunkResult.ChunkData
+		}
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		if res.ChunkIndex < 1 || res.ChunkIndex > meta.TotalChunks {
+			return nil, moerr.NewInternalErrorNoCtx("invalid GETOBJECT chunk index")
+		}
+		start := (res.ChunkIndex - 1) * chunkSize
+		end := start + min(chunkSize, meta.TotalSize-start)
+		if int64(len(data)) != end-start {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid GETOBJECT chunk %d length %d", res.ChunkIndex, len(data))
+		}
+		copy(objectContent[start:end], data)
+		res.ChunkData = nil
+		if next <= meta.TotalChunks {
+			if err := submit(); err != nil {
+				return nil, err
+			}
 		}
 	}
-
-	// Combine all chunks
-	totalLen := 0
-	for _, chunk := range allChunks {
-		totalLen += len(chunk)
-	}
-	objectContent := make([]byte, 0, totalLen)
-	for _, chunk := range allChunks {
-		objectContent = append(objectContent, chunk...)
-	}
-
 	return objectContent, nil
 }
+
+// ObjectStats stores file size as uint32. Validate before allocating or
+// multiplying offsets; an empty file still has one protocol data chunk.
 
 // getMetaWithRetry gets object metadata with retry logic
 func getMetaWithRetry(
@@ -493,7 +572,9 @@ func getMetaWithRetry(
 
 		metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(metaJob)
+			if err := getChunkWorker.SubmitGetChunk(metaJob); err != nil {
+				return nil, err
+			}
 		} else {
 			metaJob.Execute()
 		}
@@ -533,7 +614,9 @@ func getChunkWithRetry(
 
 		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, chunkIndex, subscriptionAccountName, pubName)
 		if getChunkWorker != nil {
-			getChunkWorker.SubmitGetChunk(chunkJob)
+			if err := getChunkWorker.SubmitGetChunk(chunkJob); err != nil {
+				return nil, err
+			}
 		} else {
 			chunkJob.Execute()
 		}
@@ -596,9 +679,8 @@ func extractSortKeyFromObject(
 	return sortKeySeqnum, nil
 }
 
-// rewriteNonAppendableTombstoneWithSinker reads tombstone blocks one by one,
-// rewrites rowids using aobjectMap, and writes to a sorted sinker with the original object name.
-// This avoids loading the entire object into memory at once.
+// Rewrite and globally sort under one admitted job slot. A single file sinker
+// owns the fixed-name object through the final Sync; source blocks never Sync it.
 func rewriteNonAppendableTombstoneWithSinker(
 	ctx context.Context,
 	objectContent []byte,
@@ -606,11 +688,18 @@ func rewriteNonAppendableTombstoneWithSinker(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 	aobjectMap *AObjectMap,
+	memory *rscthrottler.InputLease,
 ) (objectio.ObjectStats, error) {
+	if err := context.Cause(ctx); err != nil {
+		return objectio.ObjectStats{}, err
+	}
 	// Step 1: Parse object metadata
 	metaExtent := stats.Extent()
 	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+	}
+	if memory == nil {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorNoCtx("publication rewrite requires a memory slot")
 	}
 	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
 
@@ -643,84 +732,101 @@ func rewriteNonAppendableTombstoneWithSinker(
 		return objectio.ObjectStats{}, nil
 	}
 
-	// Step 2: Get column information from first block meta
+	// CN-created tombstones retain RowID and PK; commit timestamps are not
+	// needed after the upstream non-appendable object is visible in the snapshot.
 	firstBlkMeta := dataMeta.GetBlockMeta(0)
 	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
-
-	// Prepare columns and types (excluding commit TS for non-appendable)
-	cols := make([]uint16, 0, maxSeqnum+1)
-	typs := make([]types.Type, 0, maxSeqnum+1)
-	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := firstBlkMeta.ColumnMeta(seqnum)
-		if colMeta.DataType() == 0 {
-			continue
+	cols := []uint16{objectio.TombstoneAttr_Rowid_SeqNum, objectio.TombstoneAttr_PK_SeqNum}
+	typs := []types.Type{types.T_Rowid.ToType(), types.T(firstBlkMeta.ColumnMeta(objectio.TombstoneAttr_PK_SeqNum).DataType()).ToType()}
+	// Serialized constants can be tiny while their flat vectors still need
+	// rows*TypeSize backing. Admit both before decoding any source vectors.
+	payload := int64(len(objectContent)) + int64(metaExtent.OriginSize())
+	for block := uint32(0); block < blkCnt; block++ {
+		meta := dataMeta.GetBlockMeta(block)
+		if meta.GetRows() > objectio.BlockMaxRows {
+			return objectio.ObjectStats{}, moerr.NewInternalErrorNoCtx("publication source block exceeds row limit")
 		}
-		cols = append(cols, seqnum)
-		typ := types.T(colMeta.DataType()).ToType()
-		typs = append(typs, typ)
+		for i, col := range cols {
+			payload += int64(meta.ColumnMeta(col).Location().OriginSize()) + int64(meta.GetRows())*int64(typs[i].TypeSize())
+		}
 	}
-
-	// Step 3: Create sinker factory with specified object name
-	// Use the original object name (segmentID + num)
-	segid := stats.ObjectName().SegmentId()
-	num := stats.ObjectName().Num()
-	objectName := objectio.BuildObjectName(&segid, num)
-
-	// Get PK type from second column (TombstoneAttr_PK_Idx = 1)
-	pkType := typs[objectio.TombstoneAttr_PK_Idx]
-
-	// Create tombstone sinker with the specified object name
-	sinkerFactory := newTombstoneFSinkerFactoryWithName(objectName, objectio.HiddenColumnSelection_None)
-	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
-
-	sinker := ioutil.NewSinker(
-		objectio.TombstonePrimaryKeyIdx,
-		attrs,
-		attrTypes,
-		sinkerFactory,
-		mp,
-		localFS,
-		ioutil.WithTailSizeCap(0), // Force all data to be written to object
-	)
-	defer sinker.Close()
-
-	// Step 4: Read blocks one by one and write to sinker
+	peak, err := ioutil.IOEnvelope([][]types.Type{typs}, 1, payload)
+	if err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	if err := growPublicationObject(ctx, memory, peak); err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	var inputs []*batch.Batch
+	defer func() {
+		for _, input := range inputs {
+			if input != nil {
+				input.Clean(mp)
+			}
+		}
+	}()
 	allocator := fileservice.DefaultCacheDataAllocator()
-
 	for blkIdx := uint32(0); blkIdx < blkCnt; blkIdx++ {
-		// Read single block
+		if err := context.Cause(ctx); err != nil {
+			return objectio.ObjectStats{}, err
+		}
 		blkBat, err := readSingleBlockToBatch(ctx, objectContent, dataMeta, blkIdx, cols, typs, maxSeqnum, allocator, mp)
 		if err != nil {
 			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to read block %d: %v", blkIdx, err)
 		}
 
-		// Rewrite tombstone rowids using aobjectMap
+		inputs = append(inputs, blkBat)
 		if err := rewriteTombstoneRowidsBatch(ctx, blkBat, aobjectMap, mp); err != nil {
-			blkBat.Clean(mp)
 			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to rewrite tombstone rowids for block %d: %v", blkIdx, err)
 		}
-
-		// Write to sinker
-		if err := sinker.Write(ctx, blkBat); err != nil {
-			blkBat.Clean(mp)
-			return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write block %d to sinker: %v", blkIdx, err)
+		if err := mergeutil.SortColumnsByIndex(blkBat.Vecs, objectio.TombstonePrimaryKeyIdx, mp); err != nil {
+			return objectio.ObjectStats{}, err
 		}
-
-		blkBat.Clean(mp)
 	}
-
-	// Step 5: Sync sinker and get result
-	if err := sinker.Sync(ctx); err != nil {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to sync sinker: %v", err)
+	// Before merge/encoding, charge expanded constant and alias payloads, not
+	// just the serialized source size. Growth never waits behind these inputs.
+	payload = int64(len(objectContent)) + int64(metaExtent.OriginSize())
+	for _, input := range inputs {
+		for _, vec := range input.Vecs {
+			payload += vec.WindowSize(0, input.RowCount())
+		}
 	}
-
-	persisted, _ := sinker.GetResult()
-	if len(persisted) == 0 {
-		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "no object was created by sinker")
+	peak, err = ioutil.IOEnvelope([][]types.Type{typs}, 1, payload)
+	if err != nil {
+		return objectio.ObjectStats{}, err
 	}
-
-	// Return the first (and only) object stats
-	return persisted[0], nil
+	if err := growPublicationObject(ctx, memory, peak); err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	file := newTombstoneFSinkerFactoryWithName(stats.ObjectName(), objectio.HiddenColumnSelection_None)(mp, localFS)
+	defer file.Close()
+	attrs, _ := objectio.GetTombstoneSchema(typs[1], objectio.HiddenColumnSelection_None)
+	buffer := batch.NewWithSchema(false, attrs, typs)
+	defer buffer.Clean(mp)
+	// The admitted complete-job peak covers each full output block. The
+	// ordinary byte target would create invalid partial intermediate blocks.
+	_, err = mergeutil.MergeSortBatches(inputs, objectio.TombstonePrimaryKeyIdx, buffer,
+		func(data *batch.Batch) (*batch.Batch, error) {
+			if err := context.Cause(ctx); err != nil {
+				return data, err
+			}
+			if err := file.Sink(ctx, data); err != nil {
+				return data, err
+			}
+			data.CleanOnlyData()
+			return data, nil
+		}, mp, func(i int) { inputs[i].Clean(mp); inputs[i] = nil }, peak)
+	if err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	result, err := file.Sync(ctx)
+	if err != nil {
+		return objectio.ObjectStats{}, err
+	}
+	if result == nil {
+		return objectio.ObjectStats{}, moerr.NewInternalErrorNoCtx("empty publication tombstone object")
+	}
+	return *result, nil
 }
 
 // newTombstoneFSinkerFactoryWithName creates a FileSinkerFactory for tombstone

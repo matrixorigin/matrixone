@@ -2409,7 +2409,15 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 					Limit:   astLimit,
 					OrderBy: astOrderBy,
 				}
-				return builder.bindSelect(tmpSltStmt, ctx, isRoot)
+				nodeID, err := builder.bindSelect(tmpSltStmt, ctx, isRoot)
+				if err != nil {
+					return 0, err
+				}
+				// This synthetic SELECT DISTINCT * preserves the arm's column
+				// provenance; it is not a user-written derived-table boundary.
+				subCtx := builder.ctxByNode[ctx.bindings[0].nodeId]
+				ctx.bareNulls = maps.Clone(subCtx.bareNulls)
+				return nodeID, nil
 			}
 
 		case *tree.SelectClause:
@@ -2463,10 +2471,20 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
-		for _, typ := range argsType {
-			if typ.Oid != types.T_any {
+		for idx, typ := range argsType {
+			if typ.Oid != types.T_any && !subCtxList[idx].bareNulls[columnIdx] {
 				tmpArgsType = append(tmpArgsType, typ)
 			}
+		}
+
+		if len(tmpArgsType) == 0 {
+			// All-NULL arms still need a concrete execution type. Preserve their
+			// provenance separately so an enclosing set operation can ignore it.
+			tmpArgsType = append(tmpArgsType, makeTypeByPlan2Expr(MakePlan2NullTextConstExprWithType("null")))
+			if ctx.bareNulls == nil {
+				ctx.bareNulls = make(map[int]bool)
+			}
+			ctx.bareNulls[columnIdx] = true
 		}
 
 		if len(tmpArgsType) > 0 {
@@ -2485,16 +2503,17 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
-				// if string union string, different length may cause error.
-				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range argsType {
-						if targetArgType.Width < typ.Width {
-							targetArgType.Width = typ.Width
-						}
-					}
-				}
 			} else {
 				targetArgType = argsCastType[0]
+			}
+			// Reconcile widths before casting any arm, including implicit
+			// CHAR/VARCHAR conversions that can otherwise truncate values.
+			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+				for _, typ := range tmpArgsType {
+					if targetArgType.Width < typ.Width {
+						targetArgType.Width = typ.Width
+					}
+				}
 			}
 
 			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
@@ -4510,6 +4529,17 @@ func appendSelectList(
 		return nil, err
 	}
 	for _, selectExpr := range exprs {
+		if nullExpr, ok := unwrapParenExpr(selectExpr.Expr).(*tree.NumVal); ok && nullExpr.ValType == tree.P_null {
+			if ctx.bareNulls == nil {
+				ctx.bareNulls = make(map[int]bool)
+			}
+			ctx.bareNulls[len(selectList)] = true
+			// Keep a concrete execution type, including beneath branch-local
+			// ORDER BY/LIMIT, without losing provenance or mutating a reused AST.
+			nullText := *nullExpr
+			nullText.ValType = tree.P_nulltext
+			selectExpr.Expr = &nullText
+		}
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
 			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
@@ -4579,10 +4609,6 @@ func appendSelectList(
 				})
 			}
 		case *tree.NumVal:
-			if expr.ValType == tree.P_null {
-				expr.ValType = tree.P_nulltext
-			}
-
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
 			} else {

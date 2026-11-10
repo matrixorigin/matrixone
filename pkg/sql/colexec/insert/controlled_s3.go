@@ -16,20 +16,19 @@ package insert
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
-	"io"
 	"math"
 	"os"
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -40,9 +39,10 @@ import (
 )
 
 // controlledS3 keeps staged data, IO scratch, and transaction output in their
-// admitted domains. Metadata is streamed to an anonymous file during Build;
-// Eval returns the original MergeBlock protocol one frame per Call.
+// admitted domains. Build retains compact object stats in the output slot;
+// Eval expands the original MergeBlock protocol one object per Call.
 type controlledS3 struct {
+	proc        *process.Process
 	owner       *Insert
 	fs          fileservice.FileService
 	memory      *process.ImportMemory
@@ -57,9 +57,10 @@ type controlledS3 struct {
 	mu          sync.Mutex
 	granted     int64
 	mutations   int
-	spool       *os.File
-	written     int64
-	read        int64
+	statsSpool  *os.File
+	statsCount  int64
+	stats       *vector.Vector
+	read        int
 	output      *batch.Batch
 	counters    *perfcounter.CounterSet
 }
@@ -98,7 +99,7 @@ func (insert *Insert) insertControlledS3(proc *process.Process, analyzer process
 	}
 	if insert.ctr.state == vm.Eval {
 		var output *batch.Batch
-		if output, err = s.next(); err != nil {
+		if output, err = s.next(proc.Ctx); err != nil {
 			return vm.CancelResult, err
 		}
 		if output != nil {
@@ -126,7 +127,7 @@ func newControlledS3(proc *process.Process, owner *Insert, fs fileservice.FileSe
 	}
 	_, schema, _, _, _ := colexec.GetSequmsAttrsSortKeyIdxFromTableDef(owner.InsertCtx.TableDef)
 	bufferBytes := ioutil.WriterBufferBytes(memory.WorkingSet, rscthrottler.BatchBytes(throttler), [][]types.Type{schema})
-	return &controlledS3{owner: owner, fs: fs, memory: memory, throttler: throttler,
+	return &controlledS3{proc: proc, owner: owner, fs: fs, memory: memory, throttler: throttler,
 		unit: unit, bufferBytes: bufferBytes, outputSlot: lease, dataMP: mpool.MustNew("insert-data"), outputMP: mpool.MustNew("insert-output")}, nil
 }
 
@@ -267,7 +268,7 @@ func (s *controlledS3) appendWindow(proc *process.Process, analyzer process.Anal
 			if err != nil {
 				return err
 			}
-			return s.spoolStats(stats)
+			return s.collectStats(proc.Ctx, stats)
 		}
 		s.end()
 		if s.staged > 0 || s.dataMP.AllocatedBytes() > 0 {
@@ -298,7 +299,7 @@ func (s *controlledS3) appendWindow(proc *process.Process, analyzer process.Anal
 		if err != nil {
 			return err
 		}
-		return s.spoolStats(stats)
+		return s.collectStats(proc.Ctx, stats)
 	}
 }
 
@@ -317,7 +318,7 @@ func (s *controlledS3) flushPending(proc *process.Process) error {
 		return err
 	}
 	s.staged = s.writer.StagedSize()
-	return s.spoolStats(stats)
+	return s.collectStats(proc.Ctx, stats)
 }
 
 func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) error {
@@ -331,7 +332,7 @@ func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) e
 	ctx := s.writeContext(proc.Ctx)
 	stats, err := s.writer.Sync(ctx)
 	if err == nil {
-		err = s.spoolStats(stats)
+		err = s.collectStats(proc.Ctx, stats)
 	}
 	// Close drains async jobs and destroys the retained free list. Its source
 	// callbacks may return only actual capacity, never the prepaid next N.
@@ -358,86 +359,87 @@ func (s *controlledS3) reportCounters(analyzer process.Analyzer) {
 	}
 }
 
-func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) error {
-	// Completed uploads can arrive in bursts. The metadata frame contract
-	// bounds one complete object, not the combined backlog.
+func (s *controlledS3) collectStats(ctx context.Context, stats []objectio.ObjectStats) error {
 	for i := range stats {
-		if err := s.spoolObjectStats(stats[i]); err != nil {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		limit, err := s.metadataFrameLimit()
+		if err != nil {
+			return err
+		}
+		blocks := int64(stats[i].BlkCnt())
+		if blocks > (math.MaxInt64-int64(objectio.ObjectStatsLen+24))/int64(objectio.BlockInfoSize+24) {
+			return moerr.NewInternalErrorNoCtx("insert block metadata size overflow")
+		}
+		bound := blocks*int64(objectio.BlockInfoSize+24) + int64(objectio.ObjectStatsLen+24)
+		if bound > limit-4096 {
+			return moerr.NewInternalErrorNoCtxf("insert metadata exceeds admitted frame capacity: %d", bound)
+		}
+		if s.statsSpool != nil {
+			if err := s.writeStat(&stats[i]); err != nil {
+				return err
+			}
+			continue
+		}
+		if s.stats == nil {
+			s.stats = vector.NewOffHeapVecWithType(types.T_binary.ToType())
+		}
+		growth := s.stats.AppendAllocation(1, objectio.ObjectStatsLen)
+		if err = colexec.GrowMetadataOutput(ctx, s.outputSlot, s.outputMP.AllocatedBytes(), growth); err != nil {
+			var capacity *rscthrottler.WorkingSetCapacityError
+			if !errors.As(err, &capacity) {
+				return err
+			}
+			if err := s.spoolStats(ctx); err != nil {
+				return err
+			}
+			if err := s.writeStat(&stats[i]); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = vector.AppendBytes(s.stats, stats[i][:], false, s.outputMP); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *controlledS3) spoolObjectStats(stats objectio.ObjectStats) (err error) {
-	blocks := int64(stats.BlkCnt())
-	frameLimit, err := s.metadataFrameLimit()
+// Fixed ObjectStats records need no serialization copy or offset index. The
+// old output promise remains owned until all retained stats have been written.
+func (s *controlledS3) writeStat(stats *objectio.ObjectStats) error {
+	if _, err := s.statsSpool.Write(stats[:]); err != nil {
+		return err
+	}
+	s.statsCount++
+	return nil
+}
+
+func (s *controlledS3) spoolStats(ctx context.Context) error {
+	fs, err := s.proc.GetSpillFileService()
 	if err != nil {
 		return err
 	}
-	// Fixed encoding/footer and vector headers have ample room in the output
-	// envelope's fixed overhead. Check the variable payload before allocation.
-	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) {
-		return moerr.NewInternalErrorNoCtx("insert block metadata size overflow")
+	f, err := fs.CreateAndRemoveFile(ctx, "import_metadata_"+uuid.NewString())
+	if err != nil {
+		return err
 	}
-	bound := blocks*int64(objectio.BlockInfoSize+24) + int64(objectio.ObjectStatsLen+24)
-	if bound < 0 || bound > frameLimit-4096 {
-		return moerr.NewInternalErrorNoCtxf("insert metadata exceeds admitted frame capacity: %d", bound)
-	}
-	if s.output != nil {
-		s.output.Clean(s.outputMP)
-	}
-	s.output = colexec.AllocCNS3ResultBat(false, false)
-	defer func() {
-		s.output.Clean(s.outputMP)
-		s.output = nil
-	}()
-	counts := []int64{blocks, 1}
-	widths := []int64{int64(objectio.BlockInfoSize), int64(objectio.ObjectStatsLen)}
-	var allocation int64
-	for i, count := range counts {
-		if count > int64(math.MaxInt)/widths[i] {
-			return moerr.NewInternalErrorNoCtx("insert metadata allocation overflow")
+	s.statsSpool = f
+	for i := s.read; s.stats != nil && i < s.stats.Length(); i++ {
+		if err := context.Cause(ctx); err != nil {
+			return err
 		}
-		allocation += s.output.Vecs[i].AppendAllocation(int(count), int(count*widths[i]))
-	}
-	if allocation > s.outputSlot.Capacity()-s.outputMP.AllocatedBytes() {
-		return moerr.NewInternalErrorNoCtx("insert metadata allocation exceeds admitted output capacity")
-	}
-	for i, count := range counts {
-		if err = s.output.Vecs[i].PreExtendWithArea(int(count), int(count*widths[i]), s.outputMP); err != nil {
+		stats := objectio.ObjectStats(s.stats.GetBytesAt(i))
+		if err := s.writeStat(&stats); err != nil {
 			return err
 		}
 	}
-	if err = colexec.ExpandObjectStatsToBatch(s.outputMP, false, s.output, true, stats); err != nil {
-		return err
+	if s.stats != nil {
+		s.stats.Free(s.outputMP)
+		s.stats = nil
 	}
-	n := s.output.MarshalBinarySize()
-	if n < 0 || n > frameLimit {
-		return moerr.NewInternalErrorNoCtxf("insert metadata frame exceeds admitted output capacity: %d", n)
-	}
-	if s.spool == nil {
-		s.spool, err = os.CreateTemp("", "mo-insert-*.spool")
-		if err != nil {
-			return err
-		}
-		if err = os.Remove(s.spool.Name()); err != nil {
-			return err
-		}
-	}
-	if _, err = s.spool.Seek(s.written, io.SeekStart); err != nil {
-		return err
-	}
-	var header [8]byte
-	binary.LittleEndian.PutUint64(header[:], uint64(n))
-	if _, err = s.spool.Write(header[:]); err != nil {
-		return err
-	}
-	if err = s.output.MarshalBinaryTo(s.spool); err != nil {
-		_ = s.spool.Truncate(s.written)
-		return err
-	}
-	s.written += 8 + n
+	s.read = 0
 	return nil
 }
 
@@ -451,43 +453,62 @@ func (s *controlledS3) metadataFrameLimit() (int64, error) {
 	return min(limit, s.outputSlot.Capacity()/4), nil
 }
 
-func (s *controlledS3) next() (*batch.Batch, error) {
+func (s *controlledS3) next(ctx context.Context) (*batch.Batch, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if s.output != nil {
 		s.output.Clean(s.outputMP)
 		s.output = nil
 	}
-	if s.read == s.written {
-		return nil, nil
+	var stats objectio.ObjectStats
+	if s.statsSpool != nil {
+		if int64(s.read) == s.statsCount {
+			return nil, nil
+		}
+		if _, err := s.statsSpool.ReadAt(stats[:], int64(s.read)*int64(objectio.ObjectStatsLen)); err != nil {
+			return nil, err
+		}
+	} else {
+		if s.stats == nil {
+			return nil, nil
+		}
+		if s.read == s.stats.Length() {
+			s.stats.Free(s.outputMP)
+			s.stats = nil
+			s.read = 0
+			return nil, nil
+		}
+		stats = objectio.ObjectStats(s.stats.GetBytesAt(s.read))
 	}
-	if s.written-s.read < 8 {
-		return nil, io.ErrUnexpectedEOF
+	s.output = colexec.AllocCNS3ResultBat(false, false)
+	counts := []int64{int64(stats.BlkCnt()), 1}
+	widths := []int64{int64(objectio.BlockInfoSize), int64(objectio.ObjectStatsLen)}
+	var allocation int64
+	for i, count := range counts {
+		allocation += s.output.Vecs[i].AppendAllocation(int(count), int(count*widths[i]))
 	}
-	var header [8]byte
-	if _, err := s.spool.ReadAt(header[:], s.read); err != nil {
+	if err := colexec.GrowMetadataOutput(ctx, s.outputSlot, s.outputMP.AllocatedBytes(), allocation); err != nil {
+		var capacity *rscthrottler.WorkingSetCapacityError
+		if s.statsSpool != nil || !errors.As(err, &capacity) {
+			return nil, err
+		}
+		s.output.Clean(s.outputMP)
+		s.output = nil
+		if err := s.spoolStats(ctx); err != nil {
+			return nil, err
+		}
+		return s.next(ctx)
+	}
+	for i, count := range counts {
+		if err := s.output.Vecs[i].PreExtendWithArea(int(count), int(count*widths[i]), s.outputMP); err != nil {
+			return nil, err
+		}
+	}
+	if err := colexec.ExpandObjectStatsToBatch(s.outputMP, false, s.output, true, stats); err != nil {
 		return nil, err
 	}
-	n := binary.LittleEndian.Uint64(header[:])
-	frameLimit, err := s.metadataFrameLimit()
-	if err != nil {
-		return nil, err
-	}
-	if n > uint64(s.written-s.read-8) || n > uint64(frameLimit) {
-		return nil, moerr.NewInternalErrorNoCtxf("invalid insert metadata frame size %d", n)
-	}
-	r := io.NewSectionReader(s.spool, s.read+8, int64(n))
-	s.output = batch.NewOffHeapEmpty()
-	if err := s.output.UnmarshalFromReader(r, s.outputMP); err != nil {
-		return nil, err
-	}
-	if remaining, _ := r.Seek(0, io.SeekCurrent); remaining != int64(n) {
-		return nil, moerr.NewInternalErrorNoCtx("unconsumed insert metadata frame bytes")
-	}
-	if len(s.output.Vecs) != 2 || len(s.output.Attrs) != 2 ||
-		s.output.Attrs[0] != catalog.BlockMeta_BlockInfo || s.output.Attrs[1] != catalog.ObjectMeta_ObjectStats ||
-		s.output.RowCount() != s.output.Vecs[0].Length() {
-		return nil, moerr.NewInternalErrorNoCtx("invalid insert metadata frame schema")
-	}
-	s.read += 8 + int64(n)
+	s.read++
 	return s.output, nil
 }
 
@@ -507,10 +528,16 @@ func (s *controlledS3) close() (err error) {
 		s.output.Clean(s.outputMP)
 		s.output = nil
 	}
-	if s.spool != nil {
-		err = errors.Join(err, s.spool.Close())
-		s.spool = nil
+	if s.stats != nil {
+		s.stats.Free(s.outputMP)
+		s.stats = nil
 	}
+	if s.statsSpool != nil {
+		err = errors.Join(err, s.statsSpool.Close())
+		s.statsSpool = nil
+	}
+	s.statsCount = 0
+	s.read = 0
 	if s.outputSlot != nil {
 		s.outputSlot.Release()
 		s.outputSlot = nil
