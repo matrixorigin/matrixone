@@ -2259,7 +2259,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			bat,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}
@@ -2534,7 +2534,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 }
 
 func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+	ibat, err := tbl.getTxn().copyWorkspaceBatchForTable(bat, tbl.db.databaseName)
 	if err != nil {
 		return err
 	}

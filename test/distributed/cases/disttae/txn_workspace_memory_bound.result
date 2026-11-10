@@ -1,0 +1,39 @@
+drop database if exists bvt_workspace_memory;
+create database bvt_workspace_memory;
+use bvt_workspace_memory;
+create table t(pk varchar(128) primary key, v int);
+insert into t values ('one',1),('two',2);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',1,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 1, bvt_workspace_memory)
+1
+insert into t values ('three',3);
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from t;
+n	total
+2	3
+delete from t where pk='one';
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from t;
+n	total
+2	3
+update t set v=10 where pk='two';
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from t;
+n	total
+2	3
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
+update t set v=10 where pk='two';
+delete from t where pk='one';
+insert into t values ('three',3);
+select count(*) as n, sum(v) as total from t;
+n	total
+2	13
+drop database bvt_workspace_memory;

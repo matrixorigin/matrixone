@@ -94,7 +94,11 @@ func newIssue25590TxnForTest(t *testing.T, stmts int) (*Transaction, *process.Pr
 }
 
 func newProcForTest(t *testing.T) *process.Process {
-	return testutil.NewProc(t)
+	proc := testutil.NewProc(t)
+	// Spill/compaction fixtures construct multi-block batches, exceeding the
+	// generic test Process's 1 MiB query limit. Keep real admission enabled.
+	proc.Base.Lim.Size = 64 << 20
+	return proc
 }
 
 // issue25590InsertBatch allocates a one-row INSERT batch carrying a fresh
@@ -906,6 +910,8 @@ func issue25590ArmDumpFault(t *testing.T, key, freq string) (disarm func()) {
 // DumpAndRollback does: pk column typing, TN stores, accounting maps and
 // dump thresholds far above the working set.
 func issue25590InitDumpableFixture(t *testing.T, txn *Transaction) {
+	// These spill fixtures construct multi-block batches before writing them.
+	txn.proc.Base.Lim.Size = 64 << 20
 	t.Helper()
 	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 	require.NotNil(t, tbl)
