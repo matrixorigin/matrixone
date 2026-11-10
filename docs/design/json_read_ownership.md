@@ -71,10 +71,14 @@ unselected descendants. Views do not copy complete documents per path.
 Canonical admission checks scalar encodings, finite floats, shortest varints,
 UTF-8 keys/strings, sorted unique keys, bounds, nonoverlapping ranges, depth and
 bounded traversal work. It retains no width-dependent child/frame list.
-Within an object the existing remaining-byte budget is checked against a
-running total of key lengths and debited once before value callbacks or child
-traversal. The running check retains the amplification bound, including for
-ordinary validation that permits overlapping key ranges.
+Within an object each key is charged against the remaining-byte budget before
+value callbacks or child traversal. This retains the amplification bound,
+including for ordinary validation that permits overlapping key ranges.
+The canonical stored validator may process adjacent strings as one run: it
+checks each descriptor, shortest length prefix, range and UTF-8 payload while
+enforcing running byte and node budgets. It commits those charges before any
+other scalar callback or child descent. Generic validators keep their existing
+callbacks; the optimization never accepts an unvalidated document.
 GetBytesAtChecked provides bounds-checked access to mutable descriptors but does
 not validate JSON or establish read ownership.
 
