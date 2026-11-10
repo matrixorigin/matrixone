@@ -292,10 +292,24 @@ func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 	require.NoError(b, err)
 	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
 	require.NoError(b, err)
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(b, err)
+	cnRegistry, err := generation.AllocationAccountRegistry()
+	require.NoError(b, err)
+	cnAccount, err := cnRegistry.OpenWithController(generation.Cap(), generation)
+	require.NoError(b, err)
+	b.Cleanup(func() {
+		require.Zero(b, cnAccount.Snapshot().Used)
+		_, _, err := cnRegistry.CompleteTerminal(cnAccount)
+		require.NoError(b, err)
+		generation.Close()
+	})
+	cnSelection, err := vector.NewAllocationAccountSelection(cnAccount, mpool.AllocationOwnerTxnWorkspace, 1, 2, 3, 4)
+	require.NoError(b, err)
 	for _, tc := range []struct {
 		name      string
 		selection *vector.AllocationAccountSelection
-	}{{"generic", nil}, {"workspace", selection}} {
+	}{{"generic", nil}, {"workspace", selection}, {"workspace_cn", cnSelection}} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {

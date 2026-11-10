@@ -4756,10 +4756,17 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				}
 			}
 
-			// Stage the merged batch: the anchor's full copy carries the
-			// rows of every source and the regenerated rowids. None of
-			// the workspace entries is touched before this completes.
-			staged, dupErr := txn.copyWorkspaceBatch(a.bat)
+			// Stage only columns whose values survive publication. INSERT rowids
+			// have already been regenerated, so copying old ones wastes budget.
+			firstColumn := 0
+			if rowIdVector != nil {
+				firstColumn = 1
+			}
+			payload := batch.NewWithSize(0)
+			payload.Vecs, payload.Attrs = a.bat.Vecs[firstColumn:], a.bat.Attrs[firstColumn:]
+			payload.SetRowCount(a.bat.RowCount())
+			payload.Recursive, payload.ShuffleIDX = a.bat.Recursive, a.bat.ShuffleIDX
+			staged, dupErr := txn.copyWorkspaceBatch(payload)
 			if dupErr != nil {
 				if rowIdVector != nil {
 					rowIdVector.Free(mp)
@@ -4767,7 +4774,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				return dupErr
 			}
 			for _, j := range sources {
-				if _, aerr := staged.Append(ctx, mp, txn.writes[j].bat); aerr != nil {
+				source := txn.writes[j].bat
+				payload.Vecs, payload.Attrs = source.Vecs[firstColumn:], source.Attrs[firstColumn:]
+				payload.SetRowCount(source.RowCount())
+				if _, aerr := staged.Append(ctx, mp, payload); aerr != nil {
 					staged.Clean(mp)
 					if rowIdVector != nil {
 						rowIdVector.Free(mp)
@@ -4776,17 +4786,11 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				}
 			}
 			if rowIdVector != nil {
-				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVector)
-				for x := range staged.RowCount() {
-					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](
-						staged.Vecs[0], x, rowIds[x],
-					); err != nil {
-						staged.Clean(mp)
-						rowIdVector.Free(mp)
-						return err
-					}
-				}
-				rowIdVector.Free(mp)
+				// All fallible work is complete. The staged batch becomes the
+				// sole owner; no old rowid was copied, appended or overwritten.
+				staged.InsertVector(0, objectio.PhysicalAddr_Attr, rowIdVector)
+				staged.SetRowCount(rowCount) // also handles a rowid-only batch
+				rowIdVector = nil
 			}
 
 			// Every fallible step succeeded: publish the merged batch and

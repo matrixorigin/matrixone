@@ -287,3 +287,81 @@ func TestWorkspaceInsertPreservesRawBatchProvenance(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceMergeAdoptsRegeneratedRowids(t *testing.T) {
+	colexec.NewServer("")
+	for _, limit := range []uint64{140000, 200000} {
+		txn := newTransactionWithActivePKTableForTest(t, "v")
+		t.Cleanup(txn.delTransaction)
+		txn.deletedBlocks = &deletedBlocks{}
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+		budget := process.MustNewExecutionResourceBudget(limit, limit)
+		parent, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		t.Cleanup(parent.Close)
+		require.NoError(t, txn.proc.SetExecutionResourceBudgetForTesting(parent))
+		src := batch.NewWithSize(1)
+		t.Cleanup(func() { src.Clean(txn.proc.Mp()) })
+		src.Attrs = []string{"v"}
+		src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		for range 64 {
+			require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, txn.proc.Mp()))
+		}
+		src.SetRowCount(64)
+		for k := range 30 {
+			for i := range 64 {
+				require.NoError(t, vector.SetFixedAtWithTypeCheck(src.Vecs[0], i, int64(k*64+i)))
+			}
+			b, e := txn.copyWorkspaceBatch(src)
+			require.NoError(t, e)
+			_, e = txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
+			if e != nil {
+				b.Clean(txn.proc.Mp())
+			}
+			require.NoError(t, e)
+		}
+		before := txn.workspaceAccount.Snapshot().Used
+		txn.Lock()
+		err = txn.mergeTxnWorkspaceLocked(context.Background())
+		txn.Unlock()
+		if limit == 200000 {
+			require.NoError(t, err)
+			require.LessOrEqual(t, txn.workspaceAccount.Snapshot().Peak, limit)
+		} else {
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+		}
+		t.Logf("limit=%d before=%d after=%d peak=%d", limit, before, txn.workspaceAccount.Snapshot().Used, txn.workspaceAccount.Snapshot().Peak)
+		total, active := 0, 0
+		seen := map[int64]bool{}
+		for _, e := range txn.writes {
+			if e.bat == nil {
+				continue
+			}
+			active++
+			total += e.bat.RowCount()
+			ids := vector.MustFixedColNoTypeCheck[types.Rowid](e.bat.Vecs[0])
+			values := vector.MustFixedColNoTypeCheck[int64](e.bat.Vecs[1])
+			for i, id := range ids {
+				require.Equal(t, uint32(i), id.GetRowOffset())
+				require.False(t, seen[values[i]])
+				seen[values[i]] = true
+			}
+		}
+		require.Equal(t, 1920, total)
+		require.Len(t, seen, 1920)
+		if err == nil {
+			require.Equal(t, 1, active)
+		} else {
+			require.Equal(t, 30, active)
+		}
+		if err != nil {
+			require.Equal(t, before, txn.workspaceAccount.Snapshot().Used)
+			require.Len(t, txn.writes, 30)
+		}
+		src.Clean(txn.proc.Mp())
+		txn.delTransaction()
+		require.Zero(t, txn.workspaceAccount.Snapshot().Used)
+		require.Zero(t, budget.AggregateUsed())
+		parent.Close()
+	}
+}

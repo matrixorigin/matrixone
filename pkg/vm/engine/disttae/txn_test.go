@@ -473,6 +473,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		for i := 0; i < 10; i++ {
@@ -494,6 +495,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := options.DefaultBlockMaxRows*11 + 1
@@ -529,6 +531,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 			proc: proc,
 		}
 
+		defer txn.closeWorkspaceAllocation()
 		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 		ll := math.MaxUint16

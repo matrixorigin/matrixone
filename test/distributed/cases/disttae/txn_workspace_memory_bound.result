@@ -96,4 +96,52 @@ remove_fault_point(fj/cn/workspace_allocation_limit)
 select disable_fault_injection();
 disable_fault_injection()
 1
+create table merge_tx(v bigint primary key);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',200000,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 200000, bvt_workspace_memory)
+1
+begin;
+insert into merge_tx select result + 0 from generate_series(0,63) g;
+insert into merge_tx select result + 64 from generate_series(0,63) g;
+insert into merge_tx select result + 128 from generate_series(0,63) g;
+insert into merge_tx select result + 192 from generate_series(0,63) g;
+insert into merge_tx select result + 256 from generate_series(0,63) g;
+insert into merge_tx select result + 320 from generate_series(0,63) g;
+insert into merge_tx select result + 384 from generate_series(0,63) g;
+insert into merge_tx select result + 448 from generate_series(0,63) g;
+insert into merge_tx select result + 512 from generate_series(0,63) g;
+insert into merge_tx select result + 576 from generate_series(0,63) g;
+insert into merge_tx select result + 640 from generate_series(0,63) g;
+insert into merge_tx select result + 704 from generate_series(0,63) g;
+insert into merge_tx select result + 768 from generate_series(0,63) g;
+insert into merge_tx select result + 832 from generate_series(0,63) g;
+insert into merge_tx select result + 896 from generate_series(0,63) g;
+insert into merge_tx select result + 960 from generate_series(0,63) g;
+insert into merge_tx select result + 1024 from generate_series(0,63) g;
+insert into merge_tx select result + 1088 from generate_series(0,63) g;
+insert into merge_tx select result + 1152 from generate_series(0,63) g;
+insert into merge_tx select result + 1216 from generate_series(0,63) g;
+insert into merge_tx select result + 1280 from generate_series(0,63) g;
+insert into merge_tx select result + 1344 from generate_series(0,63) g;
+insert into merge_tx select result + 1408 from generate_series(0,63) g;
+insert into merge_tx select result + 1472 from generate_series(0,63) g;
+insert into merge_tx select result + 1536 from generate_series(0,63) g;
+insert into merge_tx select result + 1600 from generate_series(0,63) g;
+insert into merge_tx select result + 1664 from generate_series(0,63) g;
+insert into merge_tx select result + 1728 from generate_series(0,63) g;
+insert into merge_tx select result + 1792 from generate_series(0,63) g;
+insert into merge_tx select result + 1856 from generate_series(0,63) g;
+commit;
+select count(*) as n, count(distinct v) as unique_values, sum(v) as total from merge_tx;
+n	unique_values	total
+1920	1920	1842240
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
 drop database bvt_workspace_memory;
