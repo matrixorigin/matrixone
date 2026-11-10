@@ -1426,7 +1426,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
-	case queryMaxWorkers, queryPoolStrict:
+	case queryMaxWorkers, queryPoolStrict, "optimizer_hints":
 		return getUpstreamSysVar()
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return getUpstreamSysVar()

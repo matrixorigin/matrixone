@@ -279,6 +279,27 @@ func TestNestedBackSessionInheritsSchedulingSysVarsThroughParent(t *testing.T) {
 	require.Equal(t, 3, intent.WorkerSet.MaxWorkers)
 }
 
+func TestBackSessionPlannerInheritsOptimizerHints(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	parent := (&backSession{}).initFeSes(ses, nil, "", nil)
+	parent.upstream = ses
+	child := (&backSession{}).initFeSes(parent, nil, "", nil)
+	require.Nil(t, child.upstream)
+
+	for _, backSes := range []*backSession{parent, child} {
+		backSes.txnCompileCtx.SetExecCtx(&ExecCtx{reqCtx: ctx, ses: backSes})
+	}
+	for _, hint := range []string{"applyIndices=1", ""} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "optimizer_hints", hint))
+		for _, backSes := range []*backSession{parent, child} {
+			value, err := backSes.txnCompileCtx.ResolveVariable("optimizer_hints", true, false)
+			require.NoError(t, err)
+			require.Equal(t, hint, value)
+		}
+	}
+}
+
 func TestCreateCompileFromBackSessionUsesInheritedIvfScheduling(t *testing.T) {
 	labels := map[string]string{"account": "tp", "role": "tp"}
 	intent := schedule.SchedulingIntent{

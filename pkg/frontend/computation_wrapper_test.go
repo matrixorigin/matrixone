@@ -419,6 +419,32 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	require.Equal(t, vector.PrepareParamNone, kind)
 }
 
+func TestResolveVariableSystemScopeIgnoresStoredProcedureLocal(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "optimizer_hints", ""))
+	scopes := []map[string]interface{}{{"optimizer_hints": "applyIndices=1"}}
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
+
+	for _, local := range []interface{}{"applyIndices=1", nil} {
+		scopes[0]["optimizer_hints"] = local
+		value, err := ses.txnCompileCtx.ResolveVariable("OPTIMIZER_HINTS", false, false)
+		require.NoError(t, err)
+		require.Equal(t, local, value, "ordinary lookup still reads the procedure local")
+		value, err = ses.txnCompileCtx.ResolveVariable("OPTIMIZER_HINTS", true, false)
+		require.NoError(t, err)
+		require.Equal(t, "", value, "system lookup must read the session value")
+	}
+
+	scopes[0]["autocommit"] = int64(0)
+	wantGlobal, err := ses.GetGlobalSysVar("autocommit")
+	require.NoError(t, err)
+	value, err := ses.txnCompileCtx.ResolveVariable("AUTOCOMMIT", true, true)
+	require.NoError(t, err)
+	require.Equal(t, wantGlobal, value, "global lookup must also bypass procedure locals")
+}
+
 func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 105)
 	defer prepareStmt.Close()
