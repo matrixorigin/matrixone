@@ -553,12 +553,12 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	}}, nil
 }
 
-// readQueuedObject moves the queued download of the object of vector to the front of
-// the queue, and the read reads its ranges.
+// readQueuedObject drops the queued download of the object of vector, which the read
+// reached first, and the read reads its ranges.
 func (s *S3FS) readQueuedObject(vector *IOVector) {
-	if s.prefetcher.promote(vector.FilePath) {
+	if s.prefetcher.remove(vector.FilePath) {
 		vector.Policy |= SkipFullFilePreloads
-		metric.FSPrefetchReadQueuedCounter.Inc()
+		metric.FSPrefetchMissedCounter.Inc()
 	}
 }
 

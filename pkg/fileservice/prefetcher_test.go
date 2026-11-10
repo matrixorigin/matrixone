@@ -18,7 +18,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -98,28 +97,28 @@ func TestPrefetchQueueLimit(t *testing.T) {
 	require.LessOrEqual(t, fs.prefetchQueueLimit(1<<30)(), fs.diskCache.capacityFunc()/2)
 }
 
-// A read of a queued object moves its download to the front of the queue.
-func TestPrefetcherPromote(t *testing.T) {
+// A read that reaches a queued object drops its download.
+func TestPrefetcherRemove(t *testing.T) {
 	r := newPrefetchRecorder()
 	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string) bool { return false }, r.run)
 	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
 	require.Equal(t, "first", <-r.started)
-	later := time.Now().Add(time.Hour).UnixNano()
 	for _, path := range []string{"a", "b", "c"} {
-		p.add(ObjectPrefetch{FilePath: path, Size: 100, Due: later})
+		p.add(ObjectPrefetch{FilePath: path, Size: 100})
 	}
-	require.True(t, p.promote("c"))
-	require.True(t, p.promote("c"), "already in front")
-	require.False(t, p.promote("first"), "a running download is not queued")
-	require.False(t, p.promote("missing"))
+	require.True(t, p.remove("b"))
+	require.False(t, p.remove("b"), "already dropped")
+	require.False(t, p.remove("first"), "a running download is not queued")
+	require.False(t, p.remove("missing"))
+	require.Equal(t, int64(200), p.queuedBytes)
 	close(r.release)
-	for range 3 {
+	for range 2 {
 		<-r.started
 	}
 	p.close(context.Background())
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	require.Equal(t, []string{"first", "c", "a", "b"}, r.ran)
+	require.Equal(t, []string{"first", "a", "c"}, r.ran)
 }
 
 // The prefetcher downloads first the objects the reads need soonest, whatever order they
@@ -141,6 +140,60 @@ func TestPrefetcherDownloadsSoonestFirst(t *testing.T) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	require.Equal(t, []string{"first", "far", "near", "mid"}, r.ran, "far was asked for again, due sooner")
+}
+
+// The prefetcher downloads first the objects of which the reads read a larger share, then
+// those needed sooner.
+func TestPrefetcherDownloadsLargerShareFirst(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string) bool { return false }, r.run)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
+	require.Equal(t, "first", <-r.started)
+	p.add(ObjectPrefetch{FilePath: "tenth", Size: 100, Due: 10, Reads: 6, Blocks: 57})
+	p.add(ObjectPrefetch{FilePath: "half", Size: 100, Due: 20, Reads: 5, Blocks: 10})
+	p.add(ObjectPrefetch{FilePath: "whole", Size: 100, Due: 900, Reads: 65, Blocks: 65})
+	p.add(ObjectPrefetch{FilePath: "unknown", Size: 100, Due: 30})
+	p.add(ObjectPrefetch{FilePath: "tenth", Size: 100, Due: 40, Reads: 57, Blocks: 57})
+	close(r.release)
+	for range 4 {
+		<-r.started
+	}
+	p.close(context.Background())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	require.Equal(t, []string{"first", "tenth", "unknown", "whole", "half"}, r.ran,
+		"tenth was asked for again, read whole")
+}
+
+// A download not started is dropped once every read it is for ended.
+func TestPrefetcherDropsEndedScans(t *testing.T) {
+	r := newPrefetchRecorder()
+	p := newPrefetcher(1, func() int64 { return 1 << 40 }, func(string) bool { return false }, r.run)
+	p.add(ObjectPrefetch{FilePath: "first", Size: 100})
+	require.Equal(t, "first", <-r.started)
+	a, b := new(PrefetchScan), new(PrefetchScan)
+	p.add(ObjectPrefetch{FilePath: "ended", Size: 100, Scan: a})
+	p.add(ObjectPrefetch{FilePath: "shared", Size: 100, Scan: a})
+	p.add(ObjectPrefetch{FilePath: "shared", Size: 100, Scan: b})
+	p.add(ObjectPrefetch{FilePath: "live", Size: 100, Scan: b})
+	a.End()
+	p.add(ObjectPrefetch{FilePath: "late", Size: 100, Scan: a})
+	require.False(t, p.isQueued("late"), "a read that ended asks for nothing")
+	close(r.release)
+	for range 2 {
+		<-r.started
+	}
+	p.close(context.Background())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	require.Equal(t, []string{"first", "shared", "live"}, r.ran)
+}
+
+func TestObjectPrefetchMerge(t *testing.T) {
+	a, b := new(PrefetchScan), new(PrefetchScan)
+	got := ObjectPrefetch{Due: 20, Reads: 1, Blocks: 10, Scan: a}.Merge(ObjectPrefetch{Size: 7, Due: 30, Reads: 9, Blocks: 10, Scan: a})
+	require.Equal(t, ObjectPrefetch{Size: 7, Due: 20, Reads: 9, Blocks: 10, Scan: a}, got)
+	require.Nil(t, ObjectPrefetch{Scan: a}.Merge(ObjectPrefetch{Scan: b}).Scan, "merged for two reads, it never ends")
 }
 
 // A queue at its most bytes makes room for an object needed sooner by dropping the one

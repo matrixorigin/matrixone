@@ -17,6 +17,7 @@ package fileservice
 import (
 	"container/heap"
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,11 +28,55 @@ import (
 )
 
 // ObjectPrefetch asks to download, ahead of the read, the object at FilePath, of Size
-// bytes, which the read reaches at Due, in Unix nanoseconds.
+// bytes, which the read reaches at Due, in Unix nanoseconds, and of whose Blocks blocks
+// it reads Reads, 0 when unknown. The download is dropped if Scan ends before it starts.
 type ObjectPrefetch struct {
 	FilePath string
 	Size     int64
 	Due      int64
+	Reads    int
+	Blocks   int
+	Scan     *PrefetchScan
+}
+
+// PrefetchScan is the read prefetches are for. A nil PrefetchScan never ends.
+type PrefetchScan struct {
+	ended atomic.Bool
+}
+
+// End ends the read: its downloads not started are dropped.
+func (s *PrefetchScan) End() {
+	if s != nil {
+		s.ended.Store(true)
+	}
+}
+
+func (s *PrefetchScan) live() bool {
+	return s == nil || !s.ended.Load()
+}
+
+// Merge returns the prefetch of the object for both r and o: the sooner Due, the larger
+// share, and a Scan that ends when both do.
+func (r ObjectPrefetch) Merge(o ObjectPrefetch) ObjectPrefetch {
+	if r.Size == 0 {
+		r.Size = o.Size
+	}
+	r.Due = min(r.Due, o.Due)
+	if o.share() > r.share() {
+		r.Reads, r.Blocks = o.Reads, o.Blocks
+	}
+	if r.Scan != o.Scan {
+		r.Scan = nil
+	}
+	return r
+}
+
+// share returns, in tenths, the share of the object's blocks the read reads.
+func (r ObjectPrefetch) share() int {
+	if r.Blocks <= 0 || r.Reads >= r.Blocks {
+		return 10
+	}
+	return r.Reads * 10 / r.Blocks
 }
 
 // ObjectPrefetcher is a file service that downloads objects ahead of the reads that need
@@ -50,13 +95,34 @@ const prefetchHorizon = 30 * time.Second
 // prefetchEntry is an object queued, or being downloaded, by a prefetcher.
 type prefetchEntry struct {
 	req   ObjectPrefetch
+	scans []*PrefetchScan
 	seq   uint64
 	index int // in the queue, or -1 once its download started
 }
 
-// before reports whether e is downloaded before o: a read reaches it sooner, or as soon
-// and it was asked for first.
+// live reports whether a read the download is for has not ended.
+func (e *prefetchEntry) live() bool {
+	for _, s := range e.scans {
+		if s.live() {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *prefetchEntry) addScan(s *PrefetchScan) {
+	e.scans = slices.DeleteFunc(e.scans, func(s *PrefetchScan) bool { return !s.live() })
+	if !slices.Contains(e.scans, s) {
+		e.scans = append(e.scans, s)
+	}
+}
+
+// before reports whether e is downloaded before o: the read reads a larger share of it,
+// or a read reaches it sooner, or as soon and it was asked for first.
 func (e *prefetchEntry) before(o *prefetchEntry) bool {
+	if a, b := e.req.share(), o.req.share(); a != b {
+		return a > b
+	}
 	if e.req.Due != o.req.Due {
 		return e.req.Due < o.req.Due
 	}
@@ -116,18 +182,24 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	if p.closed {
 		return
 	}
+	if !req.Scan.live() {
+		return
+	}
 	if e, ok := p.entries[req.FilePath]; ok {
-		if e.index >= 0 && req.Due < e.req.Due {
-			e.req.Due = req.Due
+		e.addScan(req.Scan)
+		metric.FSPrefetchMergedCounter.Inc()
+		if e.index >= 0 {
+			e.req = e.req.Merge(req)
 			heap.Fix(&p.queue, e.index)
 		}
 		return
 	}
 	if p.have(req.FilePath) {
+		metric.FSPrefetchCachedCounter.Inc()
 		return
 	}
 	p.seq++
-	e := &prefetchEntry{req: req, seq: p.seq}
+	e := &prefetchEntry{req: req, scans: []*PrefetchScan{req.Scan}, seq: p.seq}
 	limit := p.limit()
 	for p.queuedBytes+req.Size > limit {
 		last := -1
@@ -143,6 +215,7 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 		p.dropLocked(last)
 	}
 	heap.Push(&p.queue, e)
+	metric.FSPrefetchQueuedCounter.Inc()
 	p.entries[req.FilePath] = e
 	p.queuedBytes += req.Size
 	p.queued.Add(1)
@@ -163,6 +236,11 @@ func (p *prefetcher) startLocked() {
 		e := heap.Pop(&p.queue).(*prefetchEntry)
 		p.queuedBytes -= e.req.Size
 		p.queued.Add(-1)
+		if !e.live() {
+			delete(p.entries, e.req.FilePath)
+			metric.FSPrefetchEndedCounter.Inc()
+			continue
+		}
 		p.running++
 		p.wg.Add(1)
 		go func() {
@@ -198,9 +276,9 @@ func (p *prefetcher) isQueued(filePath string) bool {
 	return ok && e.index >= 0
 }
 
-// promote moves the queued download of filePath to the front of the queue, as a read
-// needs the object now, and reports whether it was queued.
-func (p *prefetcher) promote(filePath string) bool {
+// remove drops the queued download of filePath, as a read reached the object before it,
+// and reports whether it was queued.
+func (p *prefetcher) remove(filePath string) bool {
 	if p.queued.Load() == 0 {
 		return false
 	}
@@ -210,10 +288,10 @@ func (p *prefetcher) promote(filePath string) bool {
 	if !ok || e.index < 0 {
 		return false
 	}
-	if now := time.Now().UnixNano(); e.req.Due > now {
-		e.req.Due = now
-		heap.Fix(&p.queue, e.index)
-	}
+	heap.Remove(&p.queue, e.index)
+	delete(p.entries, filePath)
+	p.queuedBytes -= e.req.Size
+	p.queued.Add(-1)
 	return true
 }
 
@@ -278,6 +356,9 @@ func (s *S3FS) prefetchObject(req ObjectPrefetch) {
 	}
 	s.diskCache.prefetched.store(s.diskCache.pathForFile(path.File), req.Size)
 	if err := s.PrefetchFile(ctx, req.FilePath); err != nil {
+		metric.FSPrefetchFailedCounter.Inc()
 		logutil.Debug("fileservice: prefetch object", zap.String("path", req.FilePath), zap.Error(err))
+		return
 	}
+	metric.FSPrefetchDownloadedCounter.Inc()
 }

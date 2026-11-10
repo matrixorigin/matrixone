@@ -35,7 +35,7 @@ func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 }
 
 // A read of an object whose download is queued reads its range, and the queued download
-// goes first.
+// is dropped.
 func TestS3FSReadOfQueuedObjectReadsRange(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
@@ -45,7 +45,7 @@ func TestS3FSReadOfQueuedObjectReadsRange(t *testing.T) {
 	require.Equal(t, data[100:110], got)
 	require.Equal(t, int64(1), storage.reads.Load())
 	require.Equal(t, int64(10), storage.bytes.Load(), "a range read of the entry")
-	require.True(t, fs.prefetcher.isQueued("object"))
+	require.False(t, fs.prefetcher.isQueued("object"))
 	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
 }
 

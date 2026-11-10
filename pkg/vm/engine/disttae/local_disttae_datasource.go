@@ -120,6 +120,8 @@ type LocalDisttaeDataSource struct {
 	rc struct {
 		prefetchDisabled    bool
 		batchPrefetchCursor int
+		// prefetchScan is what the scan's prefetches are for.
+		prefetchScan *fileservice.PrefetchScan
 		// paceStart and paceCursor are when and where the scan's pace is measured from.
 		paceStart       time.Time
 		paceCursor      int
@@ -428,6 +430,8 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 }
 
 func (ls *LocalDisttaeDataSource) Close() {
+	ls.rc.prefetchScan.End()
+	ls.rc.prefetchScan = nil
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
@@ -1762,6 +1766,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		due := now.Add(time.Duration(float64(idx-ls.rangesCursor) / pace * float64(time.Second))).UnixNano()
 		blk := ls.rangeSlice.Get(idx)
 		obj := *blk.BlockID.Object()
+		first := idx
 		// The object's blocks past the window are its too: the next window does not
 		// prefetch it again.
 		idx++
@@ -1775,13 +1780,19 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 
 		// prefetch blk data
 		var size int64
+		var blocks int
 		if ls.pState != nil {
 			if entry, ok := ls.pState.GetObject(*blk.MetaLocation().Name().Short()); ok {
-				size = int64(entry.ObjectStats.Size())
+				size, blocks = int64(entry.ObjectStats.Size()), int(entry.ObjectStats.BlkCnt())
 			}
 		}
+		if ls.rc.prefetchScan == nil {
+			ls.rc.prefetchScan = new(fileservice.PrefetchScan)
+		}
 		err := ioutil.PrefetchObject(
-			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation(), size, due)
+			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation(), fileservice.ObjectPrefetch{
+				Size: size, Due: due, Reads: idx - first, Blocks: blocks, Scan: ls.rc.prefetchScan,
+			})
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",
 				err.Error(),
