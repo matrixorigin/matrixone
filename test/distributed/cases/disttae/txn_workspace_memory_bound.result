@@ -36,4 +36,42 @@ insert into t values ('three',3);
 select count(*) as n, sum(v) as total from t;
 n	total
 2	13
+create table copy_tx(v tinyint, payload mediumtext);
+create table rowid_tx(v tinyint);
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/cn/workspace_allocation_limit',':::','echo',65536,'bvt_workspace_memory');
+add_fault_point(fj/cn/workspace_allocation_limit, :::, echo, 65536, bvt_workspace_memory)
+1
+begin;
+insert into copy_tx values (1,'prior');
+insert into copy_tx values (9,repeat('x',131072));
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from copy_tx;
+n	total
+1	1
+insert into copy_tx values (3,'later');
+commit;
+select count(*) as n, sum(v) as total from copy_tx;
+n	total
+2	4
+begin;
+insert into rowid_tx values (1);
+insert into rowid_tx select cast(9 as tinyint) from generate_series(1,4096) g;
+allocation account capacity exceeded
+select count(*) as n, sum(v) as total from rowid_tx;
+n	total
+1	1
+insert into rowid_tx values (3);
+commit;
+select count(*) as n, sum(v) as total from rowid_tx;
+n	total
+2	4
+select remove_fault_point('fj/cn/workspace_allocation_limit');
+remove_fault_point(fj/cn/workspace_allocation_limit)
+1
+select disable_fault_injection();
+disable_fault_injection()
+1
 drop database bvt_workspace_memory;
