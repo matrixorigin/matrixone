@@ -3898,13 +3898,13 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, false)
 			ctx := NewBindContext(builder, nil)
 			bindTag := builder.genNewBindTag()
 			idxDef := &planpb.IndexDef{
 				IndexName:      "idx_status_id",
 				IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
-				IndexTableName: "__mo_idx_status_id",
+				IndexTableName: catalog.IndexTableNamePrefix + "status_id",
 				Parts:          []string{"status", "id"},
 				Unique:         false,
 				TableExist:     true,
@@ -3937,6 +3937,11 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			idxNode := builder.qry.Nodes[idxNodeID]
 			require.Len(t, idxNode.FilterList, 2)
 			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+			if tt.lookupFunc == "prefix_eq" || tt.lookupFunc == "prefix_in" {
+				// MockCompilerContext reports unavailable statistics. The newly
+				// constructed index scan must still receive its safe lookup filter.
+				requireFuncNames(t, idxNode.BlockFilterList, tt.lookupFunc)
+			}
 
 			residual := idxNode.FilterList[1].GetF()
 			require.NotNil(t, residual)

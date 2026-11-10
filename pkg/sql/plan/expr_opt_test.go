@@ -283,14 +283,23 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 					readCols[i] = col.Name
 				}
 				require.Equal(t, tc.readCols, readCols, "block-only composite key must not become a reader attribute")
-				blockKey := node.BlockFilterList[0].GetF().Args[0].GetCol()
+				// 普通列范围也可下推；按语义定位复合键，不依赖谓词顺序。
+				var blockExpr *planpb.Expr
+				for _, filter := range node.BlockFilterList {
+					if fn := filter.GetF(); fn != nil && fn.Func.ObjName == "prefix_in_range" {
+						blockExpr = filter
+						break
+					}
+				}
+				require.NotNil(t, blockExpr)
+				blockKey := blockExpr.GetF().Args[0].GetCol()
 				qualifier := table.Name
 				if strings.Contains(tc.sql, "`x.y`") {
 					qualifier = "x.y"
 				}
 				require.Equal(t, qualifier+"."+table.ClusterBy.Name, blockKey.Name)
 				require.Equal(t, qualifier, blockKey.TblName)
-				copied := DeepCopyExpr(node.BlockFilterList[0])
+				copied := DeepCopyExpr(blockExpr)
 				require.Equal(t, qualifier, copied.GetF().Args[0].GetCol().TblName)
 				data, err := copied.Marshal()
 				require.NoError(t, err)
@@ -306,6 +315,7 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 					blockFilters = append([]*planpb.Expr{rowCol}, blockFilters...)
 				}
 				GetColumnMapByExprs(blockFilters, table, columnMap)
+				require.Equal(t, int(table.Cols[table.Name2ColIndex["a"]].Seqnum), columnMap[0])
 				require.Equal(t, int(table.Cols[table.Name2ColIndex[table.ClusterBy.Name]].Seqnum), columnMap[int(blockKey.ColPos)])
 				if len(readCols) == 2 {
 					require.Equal(t, int(table.Cols[table.Name2ColIndex["b"]].Seqnum), columnMap[1])

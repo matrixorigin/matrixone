@@ -340,6 +340,9 @@ func (zm ZM) ContainsKey(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if zm.IsString() {
 		return zm.containsString(k)
 	}
@@ -353,6 +356,9 @@ func (zm ZM) AnyLTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
+	if zm.hasNaNBound() {
+		return true
+	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) < 0
 	}
@@ -365,6 +371,9 @@ func (zm ZM) AnyLTByValue(k []byte) bool {
 func (zm ZM) AnyGTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
+	}
+	if zm.hasNaNBound() {
+		return true
 	}
 	if !zm.IsString() || len(k) < 31 {
 		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) > 0
@@ -382,7 +391,7 @@ func (zm ZM) IsInited() bool {
 // cannot safely prove absence. Older writers could publish [NaN, NaN] for a
 // batch beginning with NaN even when the batch also contained ordinary
 // values. Such metadata is indistinguishable from an all-NaN batch, so the
-// runtime-IN pruning chain must fail open.
+// scalar and runtime-IN pruning chains must fail open.
 func (zm ZM) hasNaNBound() bool {
 	if !zm.IsInited() {
 		return false
@@ -746,6 +755,9 @@ func (zm ZM) PrefixInRange(lb, ub []byte, hint uint8) bool {
 }
 
 func (zm ZM) Between(lb, ub []byte) bool {
+	if zm.hasNaNBound() {
+		return true
+	}
 	oth := BuildZM(zm.GetType(), lb)
 	oth.SetScale(zm.GetScale())
 	if zm.IsString() {
