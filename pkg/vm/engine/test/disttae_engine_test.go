@@ -848,13 +848,16 @@ func TestPrivateAlterCopyRealInventoryFence(t *testing.T) {
 	handled, err = disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "fenced", defs)
 	require.True(t, handled)
 	require.NoError(t, err)
+	handled, err = disttae.TryCreatePrivateAlterCopy(p.Ctx, db, op, "private_inventory_db", "fenced_index", defs)
+	require.True(t, handled)
+	require.NoError(t, err)
 	require.NoError(t, db.Create(p.Ctx, "public_fence", defs), "public CREATE advances the epoch in the same transaction")
 	require.NoError(t, op.Commit(p.Ctx))
 
 	op = p.StartCNTxn()
 	db, err = p.D.Engine.Database(p.Ctx, "private_inventory_db", op)
 	require.NoError(t, err)
-	for _, name := range []string{"fenced", "public_fence"} {
+	for _, name := range []string{"fenced", "fenced_index", "public_fence"} {
 		_, err = db.Relation(p.Ctx, name, nil)
 		require.NoError(t, err)
 	}

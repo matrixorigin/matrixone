@@ -2436,11 +2436,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		indexExtra.FeatureFlag |= features.IndexTable
 		indexExtra.ParentTableID = main.GetTableID(c.proc.Ctx)
 
-		if err := dbSource.Create(
-			context.WithValue(c.proc.Ctx, defines.TableIDKey{}, def.TblId),
-			def.Name,
-			append(exeCols, exeDefs...),
-		); err != nil {
+		indexCtx := context.WithValue(c.proc.Ctx, defines.TableIDKey{}, def.TblId)
+		indexDefs := append(exeCols, exeDefs...)
+		handled := false
+		if private {
+			// These definitions belong to the already certified private CREATE.
+			handled, err = disttae.TryCreatePrivateAlterCopy(indexCtx, dbSource, c.proc.GetTxnOperator(), dbName, def.Name, indexDefs)
+		}
+		if err == nil && !handled {
+			err = dbSource.Create(indexCtx, def.Name, indexDefs)
+		}
+		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),

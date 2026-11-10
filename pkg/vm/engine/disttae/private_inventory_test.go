@@ -60,8 +60,9 @@ func TestPrivateInventoryFenceCommitAndRollback(t *testing.T) {
 	txn := &Transaction{tableOps: newTableOps()}
 	txn.readOnly.Store(true)
 	txn.tableOps.addPrivateInventory(7, 41, 1)
+	txn.tableOps.addPrivateInventory(7, 41, 1)
 	_, err := txn.Commit(context.Background())
-	require.Error(t, err, "an unfenced private relation cannot commit")
+	require.Error(t, err, "unfenced private relations cannot commit")
 
 	txn.tableOps.fencePrivateInventory(8, 41, 2)
 	txn.tableOps.fencePrivateInventory(7, 42, 2)
