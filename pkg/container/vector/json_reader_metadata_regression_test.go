@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -172,4 +173,50 @@ func TestJSONReaderContainerMetadataCapacityBounds(t *testing.T) {
 		_, err = JSONReaderContainerMetadataCapacity(0, int(^uint(0)>>1))
 		require.Error(t, err)
 	}
+}
+
+func TestJSONReaderMetadataSelectionTakesPrecedence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(t, 1<<20, 128)
+	defer finalizeTestVectorAllocationAccount(t, state)
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	calls := 0
+	admission := func(uint64) (func(), error) {
+		calls++
+		return nil, errors.New("unexpected transient admission")
+	}
+	builder, err := NewJSONReaderBuilder(mp, state.selection, admission)
+	require.NoError(t, err)
+	defer builder.Close()
+	require.NoError(t, builder.Append(jsonAdmissionValue(t, `{"keep":1}`), false))
+	reader, err := builder.Finish()
+	require.NoError(t, err)
+	view, err := reader.Window(0, 1)
+	require.NoError(t, err)
+	cursor, err := view.OpenCursor()
+	require.NoError(t, err)
+	result, err := view.Query(0, jsonReaderPath(t, "$.keep"))
+	require.NoError(t, err)
+	require.Positive(t, state.account.Snapshot().Used)
+	require.Zero(t, calls)
+	result.Close()
+	cursor.Close()
+	view.Close()
+	reader.Close()
+	require.Zero(t, state.account.Snapshot().Used)
+}
+
+func TestJSONReaderSnapshotAdmissionFailureIsTerminal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
+	want := errors.New("statement budget rejected")
+	reader, invalid, err := TryNewJSONReaderSnapshotForRows(source, 1, mp, nil, func(uint64) (func(), error) {
+		return nil, want
+	})
+	require.ErrorIs(t, err, want)
+	require.Nil(t, reader)
+	require.False(t, invalid, "a budget rejection must not become a deferred document error")
 }
