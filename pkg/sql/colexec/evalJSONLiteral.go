@@ -85,7 +85,7 @@ func (source *jsonLiteralExpressionExecutor) jsonReaderInput(proc *process.Proce
 	if err != nil {
 		return nil, err
 	}
-	return jsonConstantReaderView(reader, expressionRowCount(batches), proc)
+	return jsonConstantReaderView(reader, expressionRowCount(batches))
 }
 
 func (source *jsonLiteralExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selected []bool) (*vector.Vector, error) {

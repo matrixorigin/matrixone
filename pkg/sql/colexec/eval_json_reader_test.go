@@ -455,3 +455,23 @@ func TestJSONValuePrivateBinaryLiteral(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONConstantReaderViewDoesNotAllocateRowMap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	builder, err := vector.NewJSONReaderBuilder(proc.Mp(), nil)
+	require.NoError(t, err)
+	defer builder.Close()
+	doc, err := types.ParseStringToByteJson(`{"keep":1}`)
+	require.NoError(t, err)
+	require.NoError(t, builder.AppendByteJson(doc, false))
+	reader, err := builder.Finish()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	before := proc.Mp().CurrNB()
+	view, err := jsonConstantReaderView(reader, 100_000)
+	require.NoError(t, err)
+	defer view.Close()
+	require.Equal(t, 100_000, view.Length())
+	require.Equal(t, before, proc.Mp().CurrNB(), "constant view must not allocate a batch-sized row map")
+}

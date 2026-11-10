@@ -142,11 +142,11 @@ func (expr *FunctionExpressionExecutor) supportsJSONReaderConstructor() bool {
 	return false
 }
 
-func jsonConstantReaderView(reader vector.JSONReader, length int, proc *process.Process) (vector.JSONReader, error) {
+func jsonConstantReaderView(reader vector.JSONReader, length int) (vector.JSONReader, error) {
 	if length <= 1 {
 		return reader.Window(0, length)
 	}
-	return reader.Select(make([]int64, length), proc.Mp())
+	return reader.Repeat(0, length)
 }
 
 func (expr *FunctionExpressionExecutor) jsonReaderInput(proc *process.Process, batches []*batch.Batch, selected []bool) (vector.JSONReader, error) {
@@ -161,7 +161,7 @@ func (expr *FunctionExpressionExecutor) jsonReaderInput(proc *process.Process, b
 	if reader := expr.jsonConstructorConstant; reader != nil {
 		// A scalar constructor has one physical document. Views repeat its
 		// row coordinate, without repeating payload copies or admission.
-		return jsonConstantReaderView(reader, expressionRowCount(batches), proc)
+		return jsonConstantReaderView(reader, expressionRowCount(batches))
 	}
 	for i, parameter := range expr.parameterExecutor {
 		result, err := parameter.Eval(proc, batches, selected)
