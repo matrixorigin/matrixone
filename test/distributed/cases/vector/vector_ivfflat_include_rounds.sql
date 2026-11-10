@@ -129,5 +129,43 @@ order by l2_distance(embedding, "[0,0,0]")
 limit 1 by rank with option 'mode=include';
 
 drop table include_rounds_residual;
+
+-- Persist the entries explicitly: vector Top-N leaves its embedding column
+-- unmaterialized. A residual string predicate must compact the populated
+-- columns without indexing that empty vector.
+set @include_rounds_table_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = 'vector_ivfflat_include_rounds' and relname = 'include_rounds_main'
+);
+set @include_rounds_entries = (
+    select index_table_name from mo_catalog.mo_indexes
+    where table_id = @include_rounds_table_id
+      and name = 'idx_ivf_include_rounds' and algo_table_type = 'entries'
+);
+-- @regex("OK", true)
+select mo_ctl('dn', 'flush', concat('vector_ivfflat_include_rounds.', @include_rounds_entries));
+
+-- @regex("Table Function on ivf_search", true)
+explain select id, title, category
+from include_rounds_main
+where locate('1', title) > 0
+order by l2_distance(embedding, "[0,0,0]")
+limit 100 by rank with option 'mode=include';
+
+-- @separator:table
+select id, title, category
+from include_rounds_main
+where locate('1', title) > 0
+order by l2_distance(embedding, "[0,0,0]")
+limit 100 by rank with option 'mode=include';
+
+-- Independent exact-scan control: both paths must return IDs 2 and 6.
+-- @separator:table
+select id, title, category
+from include_rounds_main
+where locate('1', title) > 0
+order by l2_distance(embedding, "[0,0,0]")
+limit 100 by rank with option 'mode=force';
+
 drop table include_rounds_main;
 drop database vector_ivfflat_include_rounds;
