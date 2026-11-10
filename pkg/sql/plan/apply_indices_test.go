@@ -9566,13 +9566,16 @@ func TestRegularIndexCompositeSuffixRangeBounds(t *testing.T) {
 		name       string
 		index      string
 		closed     bool
+		closedPair bool
 		lookupName string
 		flag       uint32
 	}{
 		{name: "nonunique open pair", index: "idx_ab", lookupName: "prefix_in_range", flag: 3},
 		{name: "nonunique closed pair", index: "idx_ab", closed: true, lookupName: "prefix_between"},
+		{name: "nonunique closed comparison pair", index: "idx_ab", closedPair: true, lookupName: "prefix_between"},
 		{name: "unique open pair", index: "uk_ab", lookupName: "in_range", flag: 3},
 		{name: "unique closed pair", index: "uk_ab", closed: true, lookupName: "between"},
+		{name: "unique closed comparison pair", index: "uk_ab", closedPair: true, lookupName: "between"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
@@ -9580,6 +9583,8 @@ func TestRegularIndexCompositeSuffixRangeBounds(t *testing.T) {
 			where := "a = 9 and b > 90 and b < 100"
 			if tt.closed {
 				where = "a = 9 and b between 90 and 100"
+			} else if tt.closedPair {
+				where = "a = 9 and b >= 90 and b <= 100"
 			}
 			projection := "id, a, b"
 			if tt.index == "uk_ab" {
@@ -9597,7 +9602,11 @@ func TestRegularIndexCompositeSuffixRangeBounds(t *testing.T) {
 				require.Equal(t, "between", indexScan.FilterList[1].GetF().Func.ObjName)
 			} else {
 				require.Len(t, indexScan.FilterList, 3)
-				require.ElementsMatch(t, []string{">", "<"}, []string{
+				wantResiduals := []string{">", "<"}
+				if tt.closedPair {
+					wantResiduals = []string{">=", "<="}
+				}
+				require.ElementsMatch(t, wantResiduals, []string{
 					indexScan.FilterList[1].GetF().Func.ObjName,
 					indexScan.FilterList[2].GetF().Func.ObjName,
 				})
