@@ -142,10 +142,6 @@ func (s *RowSelection) storageFixed() []int64 {
 	return MustFixedColNoTypeCheck[int64](s.storage)
 }
 
-func newDictionaryHeader(base *DictionaryBase, mapping *RowSelection, metadata *Vector, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection) (*Vector, error) {
-	return newDictionaryHeaderReuse(base, mapping, metadata, logical, mp, account, nil)
-}
-
 func newDictionaryHeaderReuse(base *DictionaryBase, mapping *RowSelection, metadata *Vector, logical []int64, mp *mpool.MPool, account *AllocationAccountSelection, spare **Vector) (*Vector, error) {
 
 	if metadata.typ.TypeSize() <= 0 || len(logical) > math.MaxInt/metadata.typ.TypeSize() ||
