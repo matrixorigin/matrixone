@@ -6073,14 +6073,25 @@ func TestIterationError(t *testing.T) {
 
 	fault.Enable()
 	defer fault.Disable()
-	rmFn, err := objectio.InjectCDCExecutor("processInitSQLNewTxn")
-	assert.NoError(t, err)
-	defer rmFn()
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	encoded := base64.StdEncoding.EncodeToString([]byte("invalid sql"))
+	func() {
+		rmFn, err := objectio.InjectCDCExecutor("processInitSQLNewTxn")
+		require.NoError(t, err)
+		defer rmFn()
+		encoded := base64.StdEncoding.EncodeToString([]byte("invalid sql"))
+		err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded, "", "", "")
+		require.Error(t, err)
+	}()
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(`["create database init_sql_rollback", "invalid sql"]`))
 	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded, "", "", "")
 	require.Error(t, err)
+	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, txn.Rollback(ctx)) }()
+	_, err = disttaeEngine.Engine.Database(ctx, "init_sql_rollback", txn)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB), "failed initialization must leave no database: %v", err)
 }
 
 func TestFileNotFoundFallbackToSnapshotRead(t *testing.T) {

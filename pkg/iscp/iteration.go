@@ -154,24 +154,60 @@ func ExecuteIterationWithRuntime(
 		if err = FlushJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.jobIDs, iterCtx.lsn, statuses, previousWatermark(iterCtx.fromTS), ISCPJobState_Running, preLSN); err != nil {
 			return err
 		}
-		consumer, initErr := NewIndexConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, JobID{DBName: dbName, TableName: tableName, JobName: iterCtx.jobNames[0]}, &jobSpecs[0].ConsumerInfo)
-		if initErr != nil {
-			return initErr
-		}
-		initializer := consumer.(*IndexConsumer)
-		if err = initializer.captureOutputTables(ctxWithAccount, db); err != nil {
-			return err
-		}
+		var initializer *IndexConsumer
 		// Admission remains immutable until success is durable. A rolled-back
 		// completion must not make the next generation skip the initializer.
 		completedStatus := *status
 		completedStatus.Stage = JobStage_Running
 		retriever := NewDataRetriever(ctx, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0], &completedStatus, iterCtx.lsn[0], ISCPDataType_Snapshot)
 		defer retriever.Close()
-		retriever.validateOutput = initializer.validateOutputTables
 		var finishSnapshot func(*sqlexec.SqlProcess) error
-		err = runInitSQLWithRuntime(ctx, runtime, iterCtx, func(initCtx context.Context) error {
+		var uncertain bool
+		err = runInitSQLWithRuntime(ctx, runtime, iterCtx, func(initCtx context.Context) (initErr error) {
 			initCtx = defines.AttachAccountId(initCtx, iterCtx.accountID)
+			defer func() {
+				if initErr == nil {
+					return
+				}
+				if initCtx.Err() != nil {
+					initErr = errors.Join(errIterationNeedsRecovery, initErr)
+					return
+				}
+				if uncertain {
+					resolved, readErr := reconcileIterationPublication(initCtx, cnUUID, cnEngine, cnTxnClient, iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.jobIDs, iterCtx.lsn)
+					if resolved {
+						initErr = nil
+					} else {
+						initErr = errors.Join(errIterationNeedsRecovery, initErr, readErr)
+					}
+					return
+				}
+				failureStatus := *status
+				failureStatus.SetError(initErr)
+				publicationErr := flushFinalJobStatusOnIterationState(initCtx, cnUUID, cnEngine, cnTxnClient, iterCtx, 0, &failureStatus, previousWatermark(iterCtx.fromTS), ISCPJobState_Completed)
+				if publicationErr != nil {
+					initErr = errors.Join(initErr, publicationErr)
+				}
+			}()
+			switch jobSpecs[0].ConsumerInfo.ConsumerType {
+			case int8(ConsumerType_IndexSync):
+				consumer, e := NewIndexConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, JobID{DBName: dbName, TableName: tableName, JobName: iterCtx.jobNames[0]}, &jobSpecs[0].ConsumerInfo)
+				if e != nil {
+					return e
+				}
+				initializer = consumer.(*IndexConsumer)
+				defer initializer.invalidateOutputCaches()
+				if e = initializer.captureOutputTables(initCtx, db); e != nil {
+					return e
+				}
+				retriever.validateOutput = initializer.validateOutputTables
+			case int8(ConsumerType_CNConsumer):
+				if jobSpecs[0].InitSQLCoversSnapshot {
+					return moerr.NewInternalError(initCtx, "non-index initializer cannot publish a source snapshot")
+				}
+			default:
+				return moerr.NewInternalErrorf(initCtx, "unsupported ISCP consumer type %d", jobSpecs[0].ConsumerInfo.ConsumerType)
+			}
 			return processInitSQL(initCtx, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL, dbName, tableName, jobSpecs[0].ConsumerInfo.IndexName,
 				func(proc *sqlexec.SqlProcess) error {
 					if err := retriever.GuardSnapshot(proc.GetContext(), cnUUID, proc.SqlCtx.Txn()); err != nil {
@@ -201,26 +237,25 @@ func ExecuteIterationWithRuntime(
 					if err != nil {
 						// A legacy REINDEX initializer can retire its own job. Its successor
 						// owns the new output and cursor inside this same transaction.
-						advanced, readErr := initializer.jobAdvancedInTxn(proc, iterCtx.jobIDs[0])
-						if advanced {
-							return nil
+						if initializer != nil {
+							advanced, readErr := initializer.jobAdvancedInTxn(proc, iterCtx.jobIDs[0])
+							if advanced {
+								return nil
+							}
+							return errors.Join(err, readErr)
 						}
-						return errors.Join(err, readErr)
+						return err
 					}
 					return nil
-				})
+				}, &uncertain)
 		})
-		initializer.invalidateOutputCaches()
 		if err == nil {
 			return nil
 		}
 		if errors.Is(err, errInitSQLJobFenced) {
 			return errIterationNeedsRecovery
 		}
-		failureStatus := *status
-		failureStatus.SetError(err)
-		publicationErr := flushFinalJobStatusOnIterationState(ctx, cnUUID, cnEngine, cnTxnClient, iterCtx, 0, &failureStatus, previousWatermark(iterCtx.fromTS), ISCPJobState_Completed)
-		return errors.Join(err, publicationErr)
+		return err
 	}
 
 	if iterCtx.fromTS.IsEmpty() {
@@ -951,7 +986,7 @@ func runInitSQLWithRuntime(
 	runtime *ISCPTaskExecutor,
 	iterCtx *IterationContext,
 	run func(context.Context) error,
-) error {
+) (err error) {
 	if run == nil {
 		return nil
 	}
@@ -959,19 +994,24 @@ func runInitSQLWithRuntime(
 		return run(ctx)
 	}
 	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
-	initCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	initCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	handle, ok := runtime.RegisterRunningConsumer(
 		key,
 		iterCtx.jobIDs[0],
 		iterCtx.lsn[0],
-		cancel,
+		func() { cancel(errIterationNeedsRecovery) },
 		nil,
 	)
 	if !ok {
 		return errInitSQLJobFenced
 	}
-	defer runtime.UnregisterRunningConsumer(handle)
+	defer func() {
+		runtime.UnregisterRunningConsumer(handle)
+		if errors.Is(context.Cause(initCtx), errIterationNeedsRecovery) {
+			err = errors.Join(errIterationNeedsRecovery, err)
+		}
+	}()
 	return run(initCtx)
 }
 
@@ -985,10 +1025,10 @@ func ProcessInitSQL(
 	tableName string,
 	indexName string,
 ) (err error) {
-	return processInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, sql, dbName, tableName, indexName, nil, nil)
+	return processInitSQL(ctx, cnUUID, cnEngine, cnTxnClient, sql, dbName, tableName, indexName, nil, nil, nil)
 }
 
-func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, sql, dbName, tableName, indexName string, before func(*sqlexec.SqlProcess) error, complete func(*sqlexec.SqlProcess, types.TS) error) (err error) {
+func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, sql, dbName, tableName, indexName string, before func(*sqlexec.SqlProcess) error, complete func(*sqlexec.SqlProcess, types.TS) error, uncertain *bool) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
 		return
@@ -1000,15 +1040,34 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 		"",
 		"iscp process init sql",
 		0)
+	completed := false
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
 		// Commit only when every InitSQL statement succeeded; roll back on any
 		// error so a multi-statement InitSQL (postings-populate + WAND build) is
 		// atomic — a mid-sequence failure must not leave the earlier statements
-		// committed (which an ISCP retry would then re-apply). finishISCPTransaction
-		// runs that commit/rollback under a detached 5-minute timeout context.
+		// committed (which an ISCP retry would then re-apply). Finalize under a
+		// bounded cleanup context, and roll back on abnormal unwinding.
 		defer func() {
-			err = finishISCPTransaction(ctx, txnOp, err)
+			if err == nil {
+				err = ctx.Err()
+			}
+			cleanupCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), 5*time.Minute, moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"))
+			defer cancel()
+			if err != nil || !completed {
+				rollbackErr := txnOp.Rollback(cleanupCtx)
+				if uncertain != nil && rollbackErr != nil {
+					*uncertain = true
+				}
+				if rollbackErr != nil {
+					err = errors.Join(err, rollbackErr)
+				}
+				return
+			}
+			err = txnOp.Commit(cleanupCtx)
+			if uncertain != nil && err != nil {
+				*uncertain = true
+			}
 		}()
 	}
 	// injection is for ut
@@ -1081,6 +1140,7 @@ func processInitSQL(ctx context.Context, cnUUID string, cnEngine engine.Engine, 
 	if complete != nil {
 		err = complete(sqlproc, types.TimestampToTS(txnOp.SnapshotTS()))
 	}
+	completed = true
 	return
 }
 

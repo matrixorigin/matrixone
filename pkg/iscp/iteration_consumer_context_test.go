@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,8 +189,57 @@ func TestRunInitSQLWithRuntimeCancelInFlightInitSQL(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, errIterationNeedsRecovery)
 	case <-time.After(time.Second):
 		t.Fatal("init sql was not drained")
+	}
+}
+
+func TestInitSQLRetainsFenceCauseAfterFenceRemoval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	exec := newRuntimeTestExecutor()
+	iter := testIterationContext("index_idx01")
+	key := NewJobRuntimeKey(iter.accountID, iter.tableID, iter.jobNames[0], iter.jobIDs[0])
+	entered, stopped, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	done, drained := make(chan error, 1), make(chan error, 1)
+	go func() {
+		done <- runInitSQLWithRuntime(ctx, exec, iter, func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			close(stopped)
+			<-release
+			return ctx.Err()
+		})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("initializer did not start")
+	}
+	go func() {
+		drained <- exec.CancelAndDrainJobConsumer(ctx, key.AccountID, key.TableID, key.JobName, key.JobID)
+	}()
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		t.Fatal("initializer did not observe cancellation")
+	}
+	exec.RemoveJobFence(key)
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-drained:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("drain did not finish")
+	}
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, errIterationNeedsRecovery)
+	case <-ctx.Done():
+		t.Fatal("initializer did not finish")
 	}
 }
 
@@ -354,8 +404,12 @@ func TestConsumerFenceRollbackRetainsRecoveryOutcome(t *testing.T) {
 			iter := testIterationContext("index_fenced", "index_completed")
 			key := NewJobRuntimeKey(iter.accountID, iter.tableID, iter.jobNames[0], iter.jobIDs[0])
 			entered := make(chan struct{})
+			readerEntered := make(chan struct{})
 			producerStopped, releaseProducer := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releaseProducer) }) }
 			changes := &iterationChangesHandle{next: func(ctx context.Context, _ *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+				close(readerEntered)
 				<-ctx.Done()
 				close(producerStopped)
 				<-releaseProducer
@@ -368,12 +422,31 @@ func TestConsumerFenceRollbackRetainsRecoveryOutcome(t *testing.T) {
 			statuses := []*JobStatus{{LSN: 10}, {LSN: 11, Stage: JobStage_Running}}
 			before := *statuses[1]
 			mp := mpool.MustNewZero()
-			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			done := make(chan []bool, 1)
+			joined := false
+			t.Cleanup(func() {
+				if joined {
+					require.Zero(t, mp.CurrNB())
+					mpool.DeleteMPool(mp)
+				}
+			})
+			t.Cleanup(func() {
+				cancel()
+				release()
+				if !joined {
+					select {
+					case <-done:
+						joined = true
+					case <-time.After(3 * time.Second):
+						t.Error("iteration did not stop during cleanup")
+					}
+				}
+			})
 			go func() {
 				packer := types.NewPacker()
-				defer packer.Close()
-				done <- runISCPTaskIterationConsumers(ctx, exec, iter, changes, []Consumer{stopped, failingIterationConsumer{}}, statuses, ISCPDataType_Tail, packer, mp, 1, 0, 1, 0)
+				result := runISCPTaskIterationConsumers(ctx, exec, iter, changes, []Consumer{stopped, readerEntryConsumer{entered: readerEntered}}, statuses, ISCPDataType_Tail, packer, mp, 1, 0, 1, 0)
+				packer.Close()
+				done <- result
 			}()
 			if registered {
 				select {
@@ -390,9 +463,10 @@ func TestConsumerFenceRollbackRetainsRecoveryOutcome(t *testing.T) {
 			}
 			exec.RemoveJobFence(key)
 			require.NoError(t, exec.checkIterationFences(iter), "the final map no longer contains the rolled-back fence")
-			close(releaseProducer)
+			release()
 			select {
 			case recovery := <-done:
+				joined = true
 				require.Equal(t, []bool{true, false}, recovery)
 				require.Equal(t, before, *statuses[1], "completed sibling retains its outcome")
 				require.Zero(t, statuses[0].ErrorCode, "an observed fence does not authorize failure publication")
@@ -411,6 +485,17 @@ func TestConsumerFenceRollbackRetainsRecoveryOutcome(t *testing.T) {
 }
 
 type fenceRollbackIterationConsumer struct{ entered chan struct{} }
+
+type readerEntryConsumer struct{ entered <-chan struct{} }
+
+func (c readerEntryConsumer) Consume(ctx context.Context, _ DataRetriever) error {
+	select {
+	case <-c.entered:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func (c fenceRollbackIterationConsumer) Consume(ctx context.Context, _ DataRetriever) error {
 	close(c.entered)
