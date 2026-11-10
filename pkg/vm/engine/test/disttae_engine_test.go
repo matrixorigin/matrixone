@@ -834,8 +834,10 @@ func TestEngineInventoryFixture(t *testing.T) {
 	require.NotNil(t, key)
 	require.Equal(t, []string{"account_id", "database_id"}, key.Names)
 	require.Equal(t, catalog.CPrimaryKeyColName, key.PkeyColName)
-	_, err = catalogDB.Relation(p.Ctx, "mo_indexes_inventory_fixture", nil)
-	require.Error(t, err, "bootstrap-only relation must be removed")
+	for _, name := range []string{"mo_indexes_inventory_fixture", "mo_indexes_procedure_fixture", "mo_indexes_function_fixture", "mo_indexes_compatibility_fixture"} {
+		_, err = catalogDB.Relation(p.Ctx, name, nil)
+		require.Error(t, err, "bootstrap-only relation %s must be removed", name)
+	}
 	require.NoError(t, op.Commit(p.Ctx))
 
 	schema := catalog2.MockSchemaAll(2, -1)
@@ -865,9 +867,9 @@ func TestEngineInventoryFixture(t *testing.T) {
 	require.Equal(t, []uint64{2}, epochs, "create database initializes and create table advances the same row")
 
 	for _, query := range []string{
-		"insert into mo_catalog.mo_stored_procedure (db) values ('inventory_fixture_db'), ('other_db')",
-		"insert into mo_catalog.mo_user_defined_function (db) values ('inventory_fixture_db'), ('other_db')",
-		"insert into mo_catalog.mo_mysql_compatibility_mode (account_id, dat_name) values (0, 'inventory_fixture_db'), (0, 'other_db'), (1, 'inventory_fixture_db')",
+		"insert into mo_catalog.mo_stored_procedure (id, db) values (1, 'inventory_fixture_db'), (2, 'other_db')",
+		"insert into mo_catalog.mo_user_defined_function (id, db) values (1, 'inventory_fixture_db'), (2, 'other_db')",
+		"insert into mo_catalog.mo_mysql_compatibility_mode (id, account_id, dat_name) values (1, 0, 'inventory_fixture_db'), (2, 0, 'other_db'), (3, 1, 'inventory_fixture_db')",
 	} {
 		result, err := sqlExecutor.Exec(p.Ctx, query, executor.Options{})
 		require.NoError(t, err)

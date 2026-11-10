@@ -268,55 +268,54 @@ func NewTestDisttaeEngine(
 	if err = de.Engine.New(bootstrapCtx, bootstrap); err != nil {
 		return de, err
 	}
-	const temporaryInventory = "mo_indexes_inventory_fixture"
-	ddl := strings.Replace(catalog.MoDatabaseInventoryDDL, catalog.MODatabaseInventory, temporaryInventory, 1)
-	result, err := sqlExecutor.Exec(bootstrapCtx, ddl, executor.Options{}.WithTxn(bootstrap).
-		WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
-	if err != nil {
-		return de, err
-	}
-	result.Close()
 	database, err := de.Engine.Database(bootstrapCtx, catalog.MO_CATALOG, bootstrap)
 	if err != nil {
 		return de, err
 	}
-	temporary, err := database.Relation(bootstrapCtx, temporaryInventory, nil)
-	if err != nil {
-		return de, err
-	}
-	defs, err := temporary.TableDefs(bootstrapCtx)
-	if err != nil {
-		return de, err
-	}
-	for _, def := range defs {
-		if properties, ok := def.(*engine.PropertiesDef); ok {
-			for i := range properties.Properties {
-				if properties.Properties[i].Key == catalog.SystemRelAttr_CreateSQL {
-					properties.Properties[i].Value = catalog.MoDatabaseInventoryDDL
+	createFixture := func(name, temporaryName, ddl string) error {
+		temporaryDDL := strings.Replace(ddl, name, temporaryName, 1)
+		result, err := sqlExecutor.Exec(bootstrapCtx, temporaryDDL, executor.Options{}.WithTxn(bootstrap).
+			WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
+		if err != nil {
+			return err
+		}
+		result.Close()
+		temporary, err := database.Relation(bootstrapCtx, temporaryName, nil)
+		if err != nil {
+			return err
+		}
+		defs, err := temporary.TableDefs(bootstrapCtx)
+		if err != nil {
+			return err
+		}
+		for _, def := range defs {
+			if properties, ok := def.(*engine.PropertiesDef); ok {
+				for i := range properties.Properties {
+					if properties.Properties[i].Key == catalog.SystemRelAttr_CreateSQL {
+						properties.Properties[i].Value = ddl
+					}
 				}
 			}
 		}
+		if err = database.Create(bootstrapCtx, name, defs); err != nil {
+			return err
+		}
+		return database.Delete(bootstrapCtx, temporaryName)
 	}
-	if err = database.Create(bootstrapCtx, catalog.MODatabaseInventory, defs); err != nil {
-		return de, err
-	}
-	if err = database.Delete(bootstrapCtx, temporaryInventory); err != nil {
+	if err = createFixture(catalog.MODatabaseInventory, "mo_indexes_inventory_fixture", catalog.MoDatabaseInventoryDDL); err != nil {
 		return de, err
 	}
 	// The raw engine fixture has no frontend catalog bootstrap. These reduced
 	// definitions provide only the predicates used when retiring a database;
 	// they are not a substitute for the full routine and compatibility schemas.
-	for _, ddl := range []string{
-		"create table mo_catalog.mo_stored_procedure (db varchar(100))",
-		"create table mo_catalog.mo_user_defined_function (db varchar(100))",
-		"create table mo_catalog.mo_mysql_compatibility_mode (account_id int, dat_name varchar(5000))",
+	for _, fixture := range []struct{ name, temporary, ddl string }{
+		{"mo_stored_procedure", "mo_indexes_procedure_fixture", "create table mo_catalog.mo_stored_procedure (id bigint primary key, db varchar(100))"},
+		{"mo_user_defined_function", "mo_indexes_function_fixture", "create table mo_catalog.mo_user_defined_function (id bigint primary key, db varchar(100))"},
+		{"mo_mysql_compatibility_mode", "mo_indexes_compatibility_fixture", "create table mo_catalog.mo_mysql_compatibility_mode (id bigint primary key, account_id int, dat_name varchar(5000))"},
 	} {
-		result, err = sqlExecutor.Exec(bootstrapCtx, ddl, executor.Options{}.WithTxn(bootstrap).
-			WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG))
-		if err != nil {
+		if err = createFixture(fixture.name, fixture.temporary, fixture.ddl); err != nil {
 			return de, err
 		}
-		result.Close()
 	}
 	if err = bootstrap.Commit(bootstrapCtx); err != nil {
 		return de, err
