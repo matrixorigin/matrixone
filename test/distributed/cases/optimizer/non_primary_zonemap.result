@@ -233,7 +233,34 @@ execute zm_commuted using @zm_lower;
 200  𝄀
 201
 deallocate prepare zm_commuted;
+create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
+insert into range_bound values (1),(11),(21);
+prepare zm_partition from 'select a from range_bound where a = ?';
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+set @zm_partition_value=null;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+deallocate prepare zm_partition;
 set optimizer_hints='blockFilter=2';
+prepare zm_partition from 'select a from range_bound where a = ?';
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+set @zm_partition_value=null;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+➤ a[4,32,0]  𝄀
+11
+deallocate prepare zm_partition;
 select k from clustered where 100 < k order by k;
 ➤ k[4,32,0]  𝄀
 150  𝄀

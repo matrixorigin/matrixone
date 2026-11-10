@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +67,102 @@ func TestRangeFilterFoldedConstant(t *testing.T) {
 			require.Equal(t, stored, after, "不能修改共享分区表达式")
 		}
 	}
+}
+
+func TestUnrepresentableFoldDoesNotPrunePartitions(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+	methods := []struct {
+		name     string
+		metadata partition.PartitionMetadata
+	}{
+		{"range", namedRangePartitionMetadata("a")},
+		{"hash", partition.PartitionMetadata{Method: partition.PartitionMethod_Hash, Partitions: []partition.Partition{
+			{Position: 0, Expr: newTestHashExpr("a", 0)}, {Position: 1, Expr: newTestHashExpr("a", 1)}, {Position: 2, Expr: newTestHashExpr("a", 2)},
+		}}},
+		{"list", partition.PartitionMetadata{Method: partition.PartitionMethod_List, Partitions: []partition.Partition{
+			{Position: 0, Expr: newTestValuesInExpr("a")}, {Position: 1, Expr: newTestValuesInExpr("a")}, {Position: 2, Expr: newTestValuesInExpr("a")},
+		}}},
+	}
+	for _, method := range methods {
+		for _, bound := range []struct {
+			name string
+			typ  types.T
+			data []byte
+		}{
+			{"null", types.T_int64, nil},
+			{"empty string", types.T_varchar, []byte{}},
+			{"unsupported type", types.T_time, types.EncodeInt64(new(int64))},
+		} {
+			t.Run(method.name+"/"+bound.name, func(t *testing.T) {
+				filter := makeNamedEqualExpr(0, "a", 1)
+				filter.GetF().Args[1] = &plan.Expr{Typ: plan.Type{Id: int32(bound.typ)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: bound.data}}}
+				before := plan2.DeepCopyExpr(filter)
+				beforeBytes, err := filter.Marshal()
+				require.NoError(t, err)
+				metadataBytes, err := method.metadata.Marshal()
+				require.NoError(t, err)
+				got, err := Filter(proc, []*plan.Expr{filter}, method.metadata)
+				require.NoError(t, err)
+				require.Equal(t, []int{0, 1, 2}, got)
+				require.Equal(t, before, filter)
+				afterBytes, err := filter.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, beforeBytes, afterBytes)
+				afterMetadata, err := method.metadata.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, metadataBytes, afterMetadata)
+			})
+		}
+	}
+}
+
+func TestUnrepresentableFoldInORDoesNotPrune(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+	unknown := makeNamedEqualExpr(0, "a", 1)
+	unknown.GetF().Args[1].Expr = &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true}}
+	filter := makeOrExpr(makeNamedEqualExpr(0, "a", 1), unknown)
+	got, err := Filter(proc, []*plan.Expr{filter}, namedRangePartitionMetadata("a"))
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2}, got)
+}
+
+func TestRangeFoldNormalizationDoesNotMutateFilter(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+	filter := makeNamedEqualExpr(0, "a", 1)
+	one := int64(1)
+	filter.GetF().Args[1] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "+"},
+		Args: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeInt64(&one)}}},
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true}}},
+		},
+	}}}
+	before := plan2.DeepCopyExpr(filter)
+	got, err := Filter(proc, []*plan.Expr{filter}, namedRangePartitionMetadata("a"))
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2}, got)
+	require.Equal(t, before, filter)
+}
+
+func TestFoldNormalizationAmbiguousAndMalformedData(t *testing.T) {
+	empty := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{}}}}
+	encoded, err := empty.Marshal()
+	require.NoError(t, err)
+	roundTripped := new(plan.Expr)
+	require.NoError(t, roundTripped.Unmarshal(encoded))
+	got, err := ConvertFoldExprToNormal(roundTripped)
+	require.NoError(t, err)
+	require.Nil(t, got, "serialized empty data cannot distinguish an empty string from NULL")
+
+	invalidVector := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{Data: []byte{1}}}}
+	_, err = ConvertFoldExprToNormal(invalidVector)
+	require.Error(t, err, "malformed vectors must still report an error")
 }
 
 func TestFilter(t *testing.T) {

@@ -164,6 +164,9 @@ func hashFilterExpr(
 				if err != nil {
 					return nil, false, err
 				}
+				if exprs[i] == nil {
+					return nil, false, nil
+				}
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -282,6 +285,9 @@ func rangeFilterExpr(
 				normalized, err := ConvertFoldExprToNormal(exprs[i])
 				if err != nil {
 					return nil, false, err
+				}
+				if normalized == nil {
+					return nil, false, nil
 				}
 				exprs[i] = normalized
 			}
@@ -406,7 +412,9 @@ func mustReplaceCol(expr, value *plan.Expr) {
 		for i := range e.F.Args {
 			switch e.F.Args[i].Expr.(type) {
 			case *plan.Expr_Col:
-				e.F.Args[i], _ = appendCastBeforeExpr(context.Background(), value, e.F.Args[i].Typ)
+				// Normalization mutates function arguments. The filter remains owned
+				// by the reader, so its replacement subtree must not be shared.
+				e.F.Args[i], _ = appendCastBeforeExpr(context.Background(), p.DeepCopyExpr(value), e.F.Args[i].Typ)
 				return
 			case *plan.Expr_F:
 				mustReplaceCol(e.F.Args[i], value)
@@ -606,6 +614,9 @@ func listFilterExpr(
 	if err != nil {
 		return nil, false, err
 	}
+	if expr == nil {
+		return nil, false, nil
+	}
 	return listFilterExprNormalized(proc, colPosition, expr, metadata)
 }
 
@@ -765,6 +776,8 @@ func appendCastBeforeExpr(ctx context.Context, expr *plan.Expr, typ plan.Type) (
 
 // ConvertFoldExprToNormal converts a folded expression to its normal form.
 // Handles both constant and vector expressions, converting them to their literal representations.
+// A nil expression with no error means the value cannot be represented safely
+// and the caller must retain the partitions rather than evaluate the filter.
 func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
@@ -772,6 +785,11 @@ func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
 			c, err := getConstantFromBytes(ef.Fold.Data, expr.Typ)
 			if err != nil {
 				return expr, err
+			}
+			if c == nil {
+				// Empty data may be NULL, an empty string, or an unsupported
+				// constant. Unsupported types can also have nonempty data.
+				return nil, nil
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
@@ -806,6 +824,9 @@ func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
 			newExpr, err := ConvertFoldExprToNormal(ef.F.Args[i])
 			if err != nil {
 				return nil, err
+			}
+			if newExpr == nil {
+				return nil, nil
 			}
 			ef.F.Args[i] = newExpr
 		}

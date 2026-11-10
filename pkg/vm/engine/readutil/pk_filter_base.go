@@ -150,6 +150,16 @@ func ConstructBasePKFilter(
 	tblDef *plan.TableDef,
 	mp *mpool.MPool,
 ) (filter BasePKFilter, err error) {
+	if tblDef != nil && tblDef.Pkey != nil && tblDef.Pkey.CompPkeyCol == nil {
+		for _, col := range tblDef.Cols {
+			if col.Name == tblDef.Pkey.PkeyColName && isFloatColumn(col) {
+				// Float keys can contain NaNs that break sorted row searches;
+				// their raw encoding also distinguishes SQL-equal signed zeros.
+				// Leave the original predicate to the row filter instead.
+				return BasePKFilter{}, nil
+			}
+		}
+	}
 	cleanup := &basePKFilterCleanup{}
 	filter, err = constructBasePKFilter(expr, tblDef, mp, cleanup)
 	if err != nil || !filter.Valid {

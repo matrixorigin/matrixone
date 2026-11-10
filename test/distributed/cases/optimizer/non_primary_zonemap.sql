@@ -79,8 +79,27 @@ set @zm_lower=100;
 execute zm_commuted using @zm_lower;
 deallocate prepare zm_commuted;
 
+-- 范围分区裁剪收到物化参数时，NULL 不能中断查询或污染后续执行。
+create table range_bound (a int) partition by range(a) (partition p0 values less than (10), partition p1 values less than (20), partition p2 values less than maxvalue);
+insert into range_bound values (1),(11),(21);
+prepare zm_partition from 'select a from range_bound where a = ?';
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+set @zm_partition_value=null;
+execute zm_partition using @zm_partition_value;
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+deallocate prepare zm_partition;
+
 -- 显式禁用仍须生效，但不能改变结果。
 set optimizer_hints='blockFilter=2';
+prepare zm_partition from 'select a from range_bound where a = ?';
+execute zm_partition using @zm_partition_value;
+set @zm_partition_value=null;
+execute zm_partition using @zm_partition_value;
+set @zm_partition_value=11;
+execute zm_partition using @zm_partition_value;
+deallocate prepare zm_partition;
 select k from clustered where 100 < k order by k;
 select id from clustered where 3 < id order by id;
 select k from clustered where k between 100 and 150 order by k;

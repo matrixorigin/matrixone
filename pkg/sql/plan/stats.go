@@ -1733,9 +1733,15 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		hint = builder.optimizerHints.blockFilter
 	}
 	var blockSel float64 = 1
-	var preservedCompositeFilters []*plan.Expr
+	var preservedBlockFilters []*plan.Expr
 	if hint != 2 {
-		preservedCompositeFilters = existingCompositeBlockFilters(node)
+		if s == nil {
+			// The previous missing-stats path left every existing block filter
+			// untouched, including prefix filters produced by other rewrites.
+			preservedBlockFilters = append([]*plan.Expr(nil), node.BlockFilterList...)
+		} else {
+			preservedBlockFilters = existingCompositeBlockFilters(node)
+		}
 	}
 
 	var blockExprList []*plan.Expr
@@ -1748,8 +1754,12 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		}
 		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。
 		// 简单比较仍下推；其余表达式保留既有成本策略及语义安全检查。
-		if hint != 2 && (hint == 1 || isSimpleZoneMapFilter(filter) || currentBlockSel < 1 ||
-			strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix)) &&
+		admit := isSimpleZoneMapFilter(filter)
+		if s != nil {
+			admit = admit || hint == 1 || currentBlockSel < 1 ||
+				strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix)
+		}
+		if hint != 2 && admit &&
 			ExprIsZonemappable(builder.GetContext(), filter) {
 			copyOfExpr := DeepCopyExpr(filter)
 			copyOfExpr.Selectivity = currentBlockSel
@@ -1757,7 +1767,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
-	blockExprList = append(blockExprList, preservedCompositeFilters...)
+	blockExprList = append(blockExprList, preservedBlockFilters...)
 	node.BlockFilterList = deduplicateBlockFilterList(blockExprList)
 	if s == nil {
 		return DefaultStats()

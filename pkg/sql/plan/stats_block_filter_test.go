@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -29,6 +30,69 @@ type zoneMapStatsTestCompilerContext struct {
 	*MockCompilerContext
 	stats *statsinfo.StatsInfo
 	err   error
+}
+
+func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
+	ctx := context.Background()
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	intCol := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 0)
+	strCol := GetColExpr(planpb.Type{Id: int32(types.T_varchar)}, 1, 1)
+	compoundCol := GetColExpr(planpb.Type{Id: int32(types.T_varchar)}, 1, 2)
+	for _, tc := range []struct {
+		name     string
+		statsErr bool
+		disabled bool
+	}{
+		{name: "missing"}, {name: "error", statsErr: true}, {name: "disabled", disabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compCtx := &zoneMapStatsTestCompilerContext{MockCompilerContext: &MockCompilerContext{ctx: ctx}}
+			if tc.statsErr {
+				compCtx.err = errors.New("statistics unavailable")
+			}
+			builder := NewQueryBuilder(planpb.Query_SELECT, compCtx, false, false)
+			builder.optimizerHints = &OptimizerHints{blockFilter: 1}
+			if tc.disabled {
+				builder.optimizerHints.blockFilter = 2
+			}
+			prefix := func(value string) *planpb.Expr {
+				return bind("prefix_eq", strCol, MakePlan2StringConstExprWithType(value))
+			}
+			oldA := prefix("existing")
+			oldB := bind("prefix_eq", compoundCol, MakePlan2StringConstExprWithType("composite"))
+			oldList := []*planpb.Expr{oldA, oldB}
+			newPrefix := prefix("new")
+			simple := bind("=", intCol, MakePlan2Int64ConstExprWithType(7))
+			node := &planpb.Node{
+				NodeType: planpb.Node_TABLE_SCAN,
+				ObjRef:   &planpb.ObjectRef{Obj: 42},
+				TableDef: &planpb.TableDef{Name: catalog.IndexTableNamePrefix + "test", Pkey: &planpb.PrimaryKeyDef{PkeyColName: "compound", Names: []string{"id", "other"}},
+					Name2ColIndex: map[string]int32{"id": 0, "k": 1, "compound": 2, "other": 3},
+					Cols:          []*planpb.ColDef{{Name: "id", Typ: intCol.Typ}, {Name: "k", Typ: strCol.Typ}, {Name: "compound", Typ: compoundCol.Typ}, {Name: "other", Typ: intCol.Typ}}},
+				BindingTags: []int32{1}, FilterList: []*planpb.Expr{simple, newPrefix}, BlockFilterList: oldList,
+			}
+			for range 2 {
+				require.Equal(t, DefaultStats(), calcScanStats(node, builder))
+				if tc.disabled {
+					require.Empty(t, node.BlockFilterList)
+				} else {
+					require.Len(t, node.BlockFilterList, 3)
+					for _, expected := range []*planpb.Expr{oldA, oldB, simple} {
+						found := false
+						for _, actual := range node.BlockFilterList {
+							found = found || blockFilterSemanticallyEquivalent(expected, actual)
+						}
+						require.True(t, found, "existing and simple filters must survive")
+					}
+				}
+				require.Equal(t, []*planpb.Expr{oldA, oldB}, oldList, "must not overwrite a shared input slice")
+			}
+		})
+	}
 }
 
 func (ctx *zoneMapStatsTestCompilerContext) Stats(*ObjectRef, *Snapshot) (*statsinfo.StatsInfo, error) {

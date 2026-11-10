@@ -38,6 +38,135 @@ func TestCompileFilterExprLegacyNaNZoneMap(t *testing.T) {
 	t.Run("float64", func(t *testing.T) { testLegacyNaNZoneMap(t, types.T_float64, math.NaN()) })
 }
 
+// Storage's raw floating-point sort does not order rows across NaNs. Even
+// valid per-block summaries therefore need not be ordered between blocks.
+func TestFloatSortedKeyDoesNotSkipUnorderedBlocks(t *testing.T) {
+	t.Run("float32", func(t *testing.T) { testFloatSortedKeyUnordered(t, types.T_float32, float32(math.NaN())) })
+	t.Run("float64", func(t *testing.T) { testFloatSortedKeyUnordered(t, types.T_float64, math.NaN()) })
+}
+
+func TestFloatPrimaryKeyFiltersFailOpenSafely(t *testing.T) {
+	t.Run("float32", func(t *testing.T) { testFloatPrimaryKeyFilters(t, types.T_float32, float32(math.Copysign(0, -1))) })
+	t.Run("float64", func(t *testing.T) { testFloatPrimaryKeyFilters(t, types.T_float64, math.Copysign(0, -1)) })
+}
+
+func testFloatPrimaryKeyFilters[T ~float32 | ~float64](t *testing.T, oid types.T, negativeZero T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	col := MakeColExprForTest(0, oid, "v")
+	table := &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "v"},
+		Name2ColIndex: map[string]int32{"v": 0},
+		Cols:          []*plan.ColDef{{Name: "v", Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(oid)}}},
+	}
+	zero := T(0)
+	bound := &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeValue(zero, oid)}}}
+	equal := MakeFunctionExprForTest("=", []*plan.Expr{col, bound})
+	for _, expr := range []*plan.Expr{equal, MakeInExprForTest(col, []T{zero}, oid, mp)} {
+		base, err := ConstructBasePKFilter(expr, table, mp)
+		require.NoError(t, err)
+		require.False(t, base.Valid, "float PK row filters must leave the residual predicate in control")
+		base.Cleanup()
+
+		fast, _, _, block, seek, can, _ := CompileFilterExpr(expr, table, nil)
+		require.True(t, can)
+		require.Nil(t, seek)
+		meta := objectio.BuildMetaData(1, 1)
+		meta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(index.BuildZM(oid, types.EncodeValue(negativeZero, oid)))
+		stop, keep, err := block(0, meta.GetBlockMeta(0), nil)
+		require.NoError(t, err)
+		require.False(t, stop)
+		require.True(t, keep, "SQL-equal signed zero must not be rejected by a raw-byte Bloom filter")
+
+		meta.GetBlockMeta(0).MustGetColumn(0).SetZoneMap(index.NewZM(oid, 0))
+		stop, keep, err = block(0, meta.GetBlockMeta(0), nil)
+		require.NoError(t, err)
+		require.False(t, stop)
+		require.True(t, keep, "uninitialized block summaries cannot reject the block")
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&stats, index.NewZM(oid, 0)))
+		keep, err = fast(&stats)
+		require.NoError(t, err)
+		require.True(t, keep, "a typed but uninitialized object summary is unknown")
+	}
+}
+
+func testFloatSortedKeyUnordered[T ~float32 | ~float64](t *testing.T, oid types.T, nan T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%v", legacy), func(t *testing.T) {
+			meta := objectio.BuildMetaData(4, 1)
+			bounds := [][2]T{{4, 4}, {5, 100}, {2, 2}, {1, 3}}
+			for i, bound := range bounds {
+				if legacy && (i == 0 || i == 2) {
+					bound = [2]T{nan, nan}
+				}
+				zm := index.BuildZM(oid, types.EncodeValue(bound[0], oid))
+				copy(zm.GetMaxBuf(), types.EncodeValue(bound[1], oid))
+				meta.GetBlockMeta(uint32(i)).MustGetColumn(0).SetZoneMap(zm)
+			}
+			for i, bound := range bounds {
+				if legacy && (i == 0 || i == 2) {
+					continue
+				}
+				zm := meta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap()
+				require.Equal(t, types.EncodeValue(bound[0], oid), zm.GetMinBuf())
+				require.Equal(t, types.EncodeValue(bound[1], oid), zm.GetMaxBuf())
+			}
+			table := &plan.TableDef{Name2ColIndex: map[string]int32{"v": 0}, Cols: []*plan.ColDef{
+				{Name: "v", Seqnum: 0, ClusterBy: true, Typ: plan.Type{Id: int32(oid)}},
+			}}
+			for _, q := range []struct {
+				op     string
+				lo, hi T
+				match  int
+			}{
+				{"=", 100, 0, 1}, {">", 99, 0, 1}, {">=", 100, 0, 1},
+				{"<", 1.5, 0, 3}, {"<=", 1.5, 0, 3},
+				{"between", 99, 101, 1}, {"in_range", 99, 101, 1}, {"in", 100, 0, 1},
+			} {
+				t.Run(q.op, func(t *testing.T) {
+					bound := func(v T) *plan.Expr {
+						return &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: types.EncodeValue(v, oid)}}}
+					}
+					args := []*plan.Expr{MakeColExprForTest(0, oid, "v"), bound(q.lo)}
+					if q.op == "between" || q.op == "in_range" {
+						args = append(args, bound(q.hi))
+					}
+					if q.op == "in_range" {
+						args = append(args, &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint8)}, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte{0}}}})
+					}
+					var expr *plan.Expr
+					if q.op == "in" {
+						expr = MakeInExprForTest(args[0], []T{q.lo}, oid, mp)
+					} else {
+						expr = MakeFunctionExprForTest(q.op, args)
+					}
+					_, _, _, block, seek, can, _ := CompileFilterExpr(expr, table, nil)
+					require.True(t, can)
+					start := 0
+					if seek != nil {
+						start = seek(meta)
+					}
+					found := false
+					for i := start; i < 4; i++ {
+						stop, keep, err := block(i, meta.GetBlockMeta(uint32(i)), nil)
+						require.NoError(t, err)
+						if stop {
+							break
+						}
+						if i == q.match && keep {
+							found = true
+						}
+					}
+					require.True(t, found, "seek or early stop skipped a matching block")
+				})
+			}
+		})
+	}
+}
+
 func testLegacyNaNZoneMap[T ~float32 | ~float64](t *testing.T, oid types.T, nan T) {
 	t.Helper()
 	ctx := context.Background()
