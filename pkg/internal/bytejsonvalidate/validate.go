@@ -91,7 +91,7 @@ func DecimalJSONPayload(data []byte) bool {
 // twice, while rejecting alias expansion before it exceeds linear input work.
 func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 	remaining := uint64(len(data))
-	return container(tp, data, validScalar, 1, &remaining, nil, nil, false)
+	return container(tp, data, validScalar, 1, &remaining, nil, nil, false, false)
 }
 
 // ContainerWithNumericEncoding validates the same complete bounded document as
@@ -101,7 +101,7 @@ func Container(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 // Container; this does not assert immutability or skip any descendant bounds.
 func ContainerWithNumericEncoding(tp byte, data []byte, validScalar func(byte, []byte) bool) bool {
 	remaining := uint64(len(data))
-	return container(tp, data, validScalar, 1, &remaining, nil, nil, true)
+	return container(tp, data, validScalar, 1, &remaining, nil, nil, true, false)
 }
 
 // StoredContainer adds canonical key/range checks to the same bounded walk.
@@ -110,11 +110,11 @@ func ContainerWithNumericEncoding(tp byte, data []byte, validScalar func(byte, [
 // serialized-byte budget. No child list or width-dependent frame is retained.
 func StoredContainer(tp byte, data []byte, validScalar func(byte, []byte) bool, workLimit uint64) (valid, depthExceeded bool) {
 	remaining := uint64(len(data))
-	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, false)
+	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, false, false)
 	return
 }
 
-func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining, storedWork *uint64, depthExceeded *bool, numericEncoding bool) bool {
+func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth int, remaining, storedWork *uint64, depthExceeded *bool, numericEncoding, canonicalStrings bool) bool {
 	if depth > maxContainerDepth {
 		if depthExceeded != nil {
 			*depthExceeded = true
@@ -151,6 +151,8 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 	previousRangeEnd := payloadStart
 	if tp == typeObject {
 		var previousKey []byte
+		var keyRunStart, keyRunEnd uint64
+		var hasKeyRun bool
 		for i := uint64(0); i < count; i++ {
 			entryOffset := uint64(headerSize) + i*uint64(keyEntrySize)
 			keyOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset:]))
@@ -163,13 +165,26 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 			}
 			if storedWork != nil {
 				key := data[keyOffset : keyOffset+keyLength]
-				if keyOffset < previousRangeEnd || !utf8.Valid(key) ||
+				if keyOffset < previousRangeEnd || len(key) > 0 && !utf8.RuneStart(key[0]) ||
 					i > 0 && bytes.Compare(previousKey, key) >= 0 {
 					return false
 				}
+				if hasKeyRun && keyOffset != keyRunEnd {
+					if !utf8.Valid(data[keyRunStart:keyRunEnd]) {
+						return false
+					}
+					hasKeyRun = false
+				}
+				if !hasKeyRun {
+					keyRunStart, hasKeyRun = keyOffset, true
+				}
+				keyRunEnd = keyOffset + keyLength
 				previousKey = key
-				previousRangeEnd = keyOffset + keyLength
+				previousRangeEnd = keyRunEnd
 			}
+		}
+		if hasKeyRun && !utf8.Valid(data[keyRunStart:keyRunEnd]) {
+			return false
 		}
 	}
 
@@ -253,6 +268,63 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 			}
 			continue
 		}
+		if canonicalStrings && childType == typeString && entryOffset+valEntrySize < len(valueTable) && valueTable[entryOffset+valEntrySize] == typeString {
+			// The canonical string rule has no caller callback. Charge an
+			// adjacent run once, before another scalar callback or descent,
+			// while checking each member against both budgets as it is read.
+			byteBudget, workBudget := *remaining, *storedWork
+			var used, visited uint64
+			var utf8Start, utf8End uint64
+			var hasUTF8Run bool
+			end := entryOffset
+			for end < len(valueTable) {
+				stringEntry := valueTable[end : end+valEntrySize]
+				if stringEntry[0] != typeString {
+					break
+				}
+				offset := uint64(binary.LittleEndian.Uint32(stringEntry[valTypeSize:]))
+				if offset < previousRangeEnd || offset >= documentSize {
+					return false
+				}
+				child, ok := childValue(typeString, data[offset:])
+				if !ok || visited >= workBudget || uint64(len(child)) > byteBudget-used {
+					return false
+				}
+				previousRangeEnd = offset + uint64(len(child))
+				if child[0] < 0x80 {
+					// A one-byte length is ASCII and separates payloads, so no
+					// UTF-8 rune can span the boundary between two strings.
+					if hasUTF8Run && offset != utf8End {
+						if !utf8.Valid(data[utf8Start:utf8End]) {
+							return false
+						}
+						hasUTF8Run = false
+					}
+					if !hasUTF8Run {
+						utf8Start, hasUTF8Run = offset, true
+					}
+					utf8End = previousRangeEnd
+				} else {
+					if hasUTF8Run && !utf8.Valid(data[utf8Start:utf8End]) {
+						return false
+					}
+					hasUTF8Run = false
+					if !validCanonicalStringPayload(child) {
+						return false
+					}
+				}
+				used += uint64(len(child))
+				visited++
+				end += valEntrySize
+			}
+			if hasUTF8Run && !utf8.Valid(data[utf8Start:utf8End]) {
+				return false
+			}
+			*remaining -= used
+			*storedWork -= visited
+			entryOffset = end - valEntrySize
+			continue
+		}
 		if childOffset < payloadStart || childOffset >= documentSize {
 			return false
 		}
@@ -267,19 +339,36 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 			previousRangeEnd = childOffset + uint64(len(childData))
 		}
 		if childType == typeArray || childType == typeObject {
-			if !container(childType, childData, validScalar, depth+1, remaining, storedWork, depthExceeded, numericEncoding) {
+			if !container(childType, childData, validScalar, depth+1, remaining, storedWork, depthExceeded, numericEncoding, canonicalStrings) {
 				return false
 			}
 		} else {
 			if storedWork != nil && !charge(storedWork, 1) {
 				return false
 			}
-			if !charge(remaining, uint64(len(childData))) || !validScalar(childType, childData) {
+			if !charge(remaining, uint64(len(childData))) {
+				return false
+			}
+			if canonicalStrings && childType == typeString {
+				if !validCanonicalStringPayload(childData) {
+					return false
+				}
+			} else if !validScalar(childType, childData) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// childValue has already checked the shortest length prefix and exact payload
+// bounds. Only the string payload's UTF-8 rule remains here.
+func validCanonicalStringPayload(data []byte) bool {
+	prefix := 1
+	if data[0] >= 0x80 {
+		_, prefix = binary.Uvarint(data)
+	}
+	return utf8.Valid(data[prefix:])
 }
 
 func charge(remaining *uint64, size uint64) bool {
@@ -332,6 +421,15 @@ func childValue(tp byte, data []byte) ([]byte, bool) {
 // Its caller must use the numeric semantics of ContainerWithNumericEncoding.
 func StoredContainerWithNumericEncoding(tp byte, data []byte, validScalar func(byte, []byte) bool, workLimit uint64) (valid, depthExceeded bool) {
 	remaining := uint64(len(data))
-	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, true)
+	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, true, false)
+	return
+}
+
+// StoredContainerWithCanonicalStrings validates the same complete stored
+// layout and budgets. Numeric encodings and UTF-8 strings use their fixed
+// canonical semantics; validScalar handles literals and all other scalar types.
+func StoredContainerWithCanonicalStrings(tp byte, data []byte, validScalar func(byte, []byte) bool, workLimit uint64) (valid, depthExceeded bool) {
+	remaining := uint64(len(data))
+	valid = container(tp, data, validScalar, 1, &remaining, &workLimit, &depthExceeded, true, true)
 	return
 }

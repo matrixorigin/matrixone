@@ -41,7 +41,7 @@ func ValidateStoredJSONDocument(document ByteJson) error {
 	}
 
 	if document.Type == TpCodeArray || document.Type == TpCodeObject {
-		valid, depthExceeded := bytejsonvalidate.StoredContainerWithNumericEncoding(document.Type, document.Data, validStoredJSONScalar, workLimit)
+		valid, depthExceeded := bytejsonvalidate.StoredContainerWithCanonicalStrings(document.Type, document.Data, validStoredJSONScalar, workLimit)
 		if depthExceeded {
 			return newJSONDocumentDepthError(JSONDocumentMaxNestingDepth)
 		}
