@@ -149,6 +149,17 @@ func TestRebaseOmittedTableSchema(t *testing.T) {
 }
 
 func TestRebaseSchemaFloatingPointKeys(t *testing.T) {
+	for _, typ := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		for _, column := range []int{0, 1} {
+			defs := rebaseSchemaFixture()
+			for _, def := range defs {
+				def.Cols[column].Typ.Id = int32(typ)
+			}
+			columns, err := validateRebaseTableSchema(t.Context(), defs)
+			require.ErrorContains(t, err, "stored scalar columns", "unsupported float type=%v column=%d", typ, column)
+			require.Nil(t, columns)
+		}
+	}
 	for _, typ := range []types.T{types.T_float32, types.T_float64} {
 		t.Run(typ.String(), func(t *testing.T) {
 			defs := rebaseSchemaFixture()

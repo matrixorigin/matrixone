@@ -163,3 +163,24 @@ func TestInventoryUpgradeRegisteredTarget(t *testing.T) {
 	require.Equal(t, "4.0.6", h.Metadata().MinUpgradeVersion)
 	require.Equal(t, int64(defines.MORPCVersion126), h.Metadata().RequiredProtocolVersion, "no new wire protocol gate")
 }
+
+func TestInventoryUpgradeDefaultObjectLimit(t *testing.T) {
+	for _, configured := range []uint64{0, 8192} {
+		t.Run(fmt.Sprint(configured), func(t *testing.T) {
+			calls := 0
+			active, err := runPagedTenantHandle(t.Context(), v4_0_7.Handler, 7, configured,
+				func(_ string, limit uint64, _ bool, _ func(executor.TxnExecutor) error) (bool, error) {
+					calls++
+					want := configured
+					if want == 0 {
+						want = DefaultCatalogUpgradeObjectBytes
+					}
+					require.Equal(t, want, limit)
+					return false, nil
+				})
+			require.NoError(t, err)
+			require.False(t, active)
+			require.Equal(t, 1, calls)
+		})
+	}
+}

@@ -76,6 +76,10 @@ func pagedTenantHandle(h VersionHandle) bool {
 
 func runPagedTenantHandle(ctx context.Context, h VersionHandle, accountID int32, objectLimit uint64,
 	run func(string, uint64, bool, func(executor.TxnExecutor) error) (bool, error)) (bool, error) {
+	// Login/manual callers may run before the scheduled upgrade initializes defaults.
+	if objectLimit == 0 {
+		objectLimit = DefaultCatalogUpgradeObjectBytes
+	}
 	switch h {
 	case v4_0_7.Handler:
 		return v4_0_7.Handler.UpgradeTenant(ctx, accountID, objectLimit, run)

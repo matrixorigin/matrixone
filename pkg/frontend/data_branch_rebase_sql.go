@@ -58,6 +58,7 @@ type rebaseTableSQL struct {
 // text compared using a case-insensitive collation. Rebase preserves the
 // stored value; key joins still use the table's logical key equality.
 func rebaseComparableValue(value string, typ types.Type) string {
+	// typeswitch:partial schema admission rejects low-precision floats before SQL lowering.
 	switch typ.Oid {
 	case types.T_float32, types.T_float64, types.T_char, types.T_varchar,
 		types.T_text, types.T_binary, types.T_varbinary, types.T_blob:

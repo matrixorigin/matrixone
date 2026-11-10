@@ -392,7 +392,7 @@ func TestColumnsUpgradeManualFailFastThenComplete(t *testing.T) {
 	setRecoveryCNHandles(c, append(columns46ShapeChain(), v4_0_7.Handler), false)
 	_, err = start()
 	require.Error(t, err, "manual mode must fail startup against a not-ready final catalog")
-	require.Contains(t, err.Error(), "catalog version 4.0.6/5 is not ready for 4.0.7/41; enable auto-upgrade for the stopped upgrade and restart")
+	require.Contains(t, err.Error(), fmt.Sprintf("catalog version 4.0.6/5 is not ready for 4.0.7/%d; enable auto-upgrade for the stopped upgrade and restart", v4_0_7.Handler.Metadata().VersionOffset))
 
 	err = c.Stop()
 	require.NoError(t, err)

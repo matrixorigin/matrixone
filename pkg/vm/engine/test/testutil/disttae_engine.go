@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
@@ -241,6 +242,16 @@ func NewTestDisttaeEngine(
 	if err = de.Engine.StartGCScheduler(de.ctx); err != nil {
 		return de, err
 	}
+
+	// This fixture skips frontend bootstrap; normal user DDL still requires
+	// the durable inventory installed by bootstrap in a running CN.
+	result, err := sqlExecutor.Exec(de.ctx, catalog.MoDatabaseInventoryDDL,
+		executor.Options{}.WithAccountID(catalog.System_Account).WithDatabase(catalog.MO_CATALOG).
+			WithWaitCommittedLogApplied())
+	if err != nil {
+		return de, err
+	}
+	result.Close()
 
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, nil

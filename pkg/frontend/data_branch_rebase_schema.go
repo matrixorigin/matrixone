@@ -79,7 +79,7 @@ func validateRebaseTableSchema(ctx context.Context, defs [4]*plan.TableDef) ([]r
 			keyNames[name] = true
 		}
 		for _, col := range cols {
-			if keyNames[strings.ToLower(col.Name)] && (types.T(col.Typ.Id) == types.T_float32 || types.T(col.Typ.Id) == types.T_float64) {
+			if keyNames[strings.ToLower(col.Name)] && types.T(col.Typ.Id).IsFloat() {
 				return nil, moerr.NewNotSupported(ctx, "Rebase does not yet support floating-point primary keys")
 			}
 		}
@@ -170,6 +170,7 @@ func rebaseLiteralDefault(expr *plan.Expr) bool {
 }
 
 func rebaseScalarType(typ types.T) bool {
+	// typeswitch:partial low-precision float storage and replay identity are not supported by this restricted executor.
 	switch typ {
 	case types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
