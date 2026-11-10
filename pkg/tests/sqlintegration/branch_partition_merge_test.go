@@ -37,7 +37,10 @@ func checkBranchMergePreservesUnchangedPartitionRows(t *testing.T, ctx context.C
 		{name: "partitioned_same_txn", partition: " partition by range columns(id) (partition p0 values less than (10), partition p1 values less than (maxvalue))", sameTxn: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := rebaseSQLFixture{t, ctx, db, "nr_partition_merge_"}
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			f := rebaseSQLFixture{t, ctx, conn, "nr_partition_merge_"}
 			base := tc.name + "_base"
 			branch := tc.name + "_branch"
 			f.exec("create table nr_partition_merge." + base + "(id int primary key,v int)" + tc.partition)
@@ -47,13 +50,13 @@ func checkBranchMergePreservesUnchangedPartitionRows(t *testing.T, ctx context.C
 				defer func() {
 					cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
 					defer stop()
-					_, _ = db.ExecContext(cleanup, "rollback")
+					_, _ = conn.ExecContext(cleanup, "rollback")
 				}()
 			}
 			f.exec("data branch create table nr_partition_merge." + branch + " from nr_partition_merge." + base)
 			require.Equal(t, []string{"1:10", "11:110", "12:120"}, f.rows("nr_partition_merge", branch))
 			if !tc.sameTxn {
-				unchanged, err := db.QueryContext(ctx, "data branch diff nr_partition_merge."+branch+" against nr_partition_merge."+base)
+				unchanged, err := conn.QueryContext(ctx, "data branch diff nr_partition_merge."+branch+" against nr_partition_merge."+base)
 				require.NoError(t, err)
 				defer unchanged.Close()
 				require.False(t, unchanged.Next(), "a pure clone must have no changes")
@@ -70,7 +73,7 @@ func checkBranchMergePreservesUnchangedPartitionRows(t *testing.T, ctx context.C
 			require.Equal(t, []string{"1:10", "11:110", "12:120"}, f.rows("nr_partition_merge", base))
 			require.Equal(t, []string{"1:10", "2:20", "11:111", "21:210"}, f.rows("nr_partition_merge", branch))
 
-			rows, err := db.QueryContext(ctx, "data branch diff nr_partition_merge."+branch+" against nr_partition_merge."+base)
+			rows, err := conn.QueryContext(ctx, "data branch diff nr_partition_merge."+branch+" against nr_partition_merge."+base)
 			require.NoError(t, err)
 			defer rows.Close()
 			changes := make(map[int]string)

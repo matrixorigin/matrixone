@@ -27,10 +27,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type rebaseSQLClient interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 type rebaseSQLFixture struct {
 	t      *testing.T
 	ctx    context.Context
-	db     *sql.DB
+	db     rebaseSQLClient
 	prefix string
 }
 
