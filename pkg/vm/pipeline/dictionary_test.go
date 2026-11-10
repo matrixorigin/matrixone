@@ -26,10 +26,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-type dictionaryPipelineSource struct{ *colexec.MockOperator }
+type dictionaryPipelineSource struct {
+	*colexec.MockOperator
+	boundary vm.DictionaryOutputState
+}
+
+func (p *dictionaryPipelineSource) DictionaryOutputState() *vm.DictionaryOutputState {
+	return &p.boundary
+}
+func (p *dictionaryPipelineSource) Call(proc *process.Process) (vm.CallResult, error) {
+	p.boundary.BeginCall()
+	return p.MockOperator.Call(proc)
+}
+func (p *dictionaryPipelineSource) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	output, err := p.MockOperator.ExecProjection(proc, input)
+	if err != nil {
+		return nil, err
+	}
+	return p.boundary.Normalize(output, proc.Mp())
+}
 
 func (*dictionaryPipelineSource) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
 	return true, nil
@@ -54,7 +74,7 @@ func TestDictionaryBoundaryRealOutputAndFailedPipelineCleanup(t *testing.T) {
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = selected
 	input.SetRowCount(3)
-	child := &dictionaryPipelineSource{colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})}
+	child := &dictionaryPipelineSource{MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})}
 	failure := errors.New("injected output error")
 	calls := 0
 	root := output.NewArgument().WithFunc(func(bat *batch.Batch, _ *perfcounter.CounterSet) error {

@@ -16,9 +16,9 @@ whose destination does not admit dictionaries. No adapter node or transport
 opcode is introduced, so operator identity, terminal-sender and leaf-reader
 checks retain their current meaning. All-flat trees allocate no boundary.
 
-The producing OperatorBase owns at most one normalization buffer. Exec retires
-its prior borrowed output before the next Call, then explicitly copies dictionary
-output after projection and before publication. Flat batches pass through without
+The producer owns at most one normalization buffer in DictionaryOutputState.
+Its Call invokes BeginCall to retire the previous borrowed output. Its
+ExecProjection invokes Normalize after projection and before publication. Flat batches pass through without
 column copying. The copy owns private vector headers and storage, copies logical
 rows once, preserves constants and all vector metadata, and preserves batch
 attributes, row count, recursive/shuffle markers and ExtraBuf. The source batch
@@ -34,8 +34,8 @@ after the operator stops, and Free retires it before the operator can retire its
 allocation account. Pipeline sender/receiver/loop cleanup, prepared generations,
 compiler disposal and dependent native kernels use the same helpers. Repeated
 cleanup is harmless. Preparation discards any previous execution buffer and
-reconfigures capabilities; Exec cancellation/error/EOF and partial preparation
-are covered by the same owning cleanup. No goroutine, wait, registry or cache is
+reconfigures capabilities; Call errors, EOF and partial preparation use the same owning cleanup.
+Cancellation before Call retires output through terminal Reset/Free. No goroutine, wait, registry or cache is
 added. The live bound is one logical batch per active incompatible producer edge,
 plus the source backing until normal upstream release. Ordinary allocation
 admission applies to the full copy peak.
@@ -60,8 +60,7 @@ must be handled in #32385 before those operators may declare support. Consumers
 must not infer write permission from read capability. All future producers must
 use canonical runtime preparation (including dependent native setup).
 
-Wire/spill/protobuf remain unchanged flat formats; malformed DIST input remains
-invalid. No SQL/catalog/storage migration is introduced. Disabling producers
+Wire/spill/protobuf remain unchanged flat formats; accepted legacy class-2 row buffers decode as FLAT. No SQL/catalog/storage migration is introduced. Disabling producers
 restores ordinary execution. FlatCopy is explicit and transactional, never hidden
 inside physical accessors or serializers.
 
@@ -69,8 +68,8 @@ An operator wrapper was rejected: executable OpType/type assertions, compiler
 duplication and special cleanup rely on operator identity. In-place flattening
 was rejected because batches and expression result headers are borrowed. Eager
 normalization of every edge was rejected because it taxes all-flat pipelines.
-The optional capability plus OperatorBase-owned output preserves these contracts
-with one predictable Exec branch and prepare-time work only on declared edges.
+The optional capability plus producer-owned output preserves these contracts
+while ordinary OperatorBase layout and Exec remain identical to main.
 
 ## Delivery and validation
 

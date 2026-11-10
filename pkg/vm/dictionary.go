@@ -27,6 +27,8 @@ import (
 // copy. No production operator implements this contract in the boundary stage.
 type DictionaryProducer interface {
 	DictionaryOutput() (possible bool, allocation *vector.AllocationAccountSelection)
+	// DictionaryOutputState returns non-nil execution-lane-owned state.
+	DictionaryOutputState() *DictionaryOutputState
 }
 
 // DictionaryConsumer admits read-only dictionary inputs on one child edge.
@@ -37,21 +39,25 @@ type DictionaryConsumer interface {
 	AcceptsDictionary(child int) bool
 }
 
-type dictionaryBoundary struct {
+// DictionaryOutputState is embedded only by declared producers. Call must invoke
+// BeginCall, and ExecProjection must normalize its final result before returning.
+// Each execution lane owns its state and its one borrowed output.
+type DictionaryOutputState struct {
+	required   bool
 	allocation *vector.AllocationAccountSelection
 	output     *batch.Batch
 	pool       *mpool.MPool
 }
 
-func (b *dictionaryBoundary) clean() {
+func (b *DictionaryOutputState) BeginCall() {
 	if b.output != nil {
 		b.output.Clean(b.pool)
 		b.output, b.pool = nil, nil
 	}
 }
 
-func (b *dictionaryBoundary) normalize(input *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
-	if !input.HasDictionary() {
+func (b *DictionaryOutputState) Normalize(input *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
+	if !b.required || !input.HasDictionary() {
 		return input, nil
 	}
 	if input.HasAllocationAccount() && b.allocation == nil {
@@ -76,37 +82,57 @@ func configureDictionaryBoundary(op Operator, acceptsOutput bool) {
 	if op == nil {
 		return
 	}
-	base := op.GetOperatorBase()
-	if base.dictionaryOutput != nil {
-		base.dictionaryOutput.clean()
-		base.dictionaryOutput = nil
-	}
-	if producer, ok := op.(DictionaryProducer); ok && !acceptsOutput {
-		if possible, allocation := producer.DictionaryOutput(); possible {
-			base.dictionaryOutput = &dictionaryBoundary{allocation: allocation}
-		}
-	}
 	consumer, accepts := op.(DictionaryConsumer)
-	for i, child := range base.Children {
+	for i, child := range op.GetOperatorBase().Children {
 		configureDictionaryBoundary(child, accepts && consumer.AcceptsDictionary(i))
 	}
+	configureDictionaryProducer(op, acceptsOutput)
 }
 
-// Reset retires runtime-owned output after the operator has stopped its work.
-// All execution owners must use this rather than invoking Operator.Reset alone.
-func Reset(op Operator, proc *process.Process, failed bool, err error) {
-	op.Reset(proc, failed, err)
-	if boundary := op.GetOperatorBase().dictionaryOutput; boundary != nil {
-		boundary.clean()
+func configureDictionaryProducer(op Operator, accepts bool) {
+	if producer, ok := op.(DictionaryProducer); ok {
+		state := producer.DictionaryOutputState()
+		state.BeginCall()
+		possible, allocation := producer.DictionaryOutput()
+		state.required = possible && !accepts
+		state.allocation = allocation
 	}
 }
 
-// Free retires compatibility output before the operator can retire its account.
-// It is safe after Reset and for partially prepared operators.
+func configureDictionaryEdges(op Operator) {
+	configureDictionaryProducer(op, false)
+	for i, child := range op.GetOperatorBase().Children {
+		if _, ok := child.(DictionaryProducer); !ok {
+			continue
+		}
+		accepts := false
+		if consumer, ok := op.(DictionaryConsumer); ok {
+			accepts = consumer.AcceptsDictionary(i)
+		}
+		configureDictionaryProducer(child, accepts)
+	}
+}
+
+// Reset cleans private output after producer work has stopped.
+func Reset(op Operator, proc *process.Process, failed bool, err error) {
+	if producer, ok := op.(DictionaryProducer); ok {
+		state := producer.DictionaryOutputState()
+		prior := *state
+		state.output, state.pool = nil, nil
+		defer func() {
+			prior.BeginCall()
+			*producer.DictionaryOutputState() = prior
+		}()
+	}
+	op.Reset(proc, failed, err)
+}
+
+// Free cleans private output before its allocation account can be retired.
 func Free(op Operator, proc *process.Process, failed bool, err error) {
-	if boundary := op.GetOperatorBase().dictionaryOutput; boundary != nil {
-		boundary.clean()
-		op.GetOperatorBase().dictionaryOutput = nil
+	if producer, ok := op.(DictionaryProducer); ok {
+		state := producer.DictionaryOutputState()
+		state.BeginCall()
+		*state = DictionaryOutputState{}
 	}
 	op.Free(proc, failed, err)
 }

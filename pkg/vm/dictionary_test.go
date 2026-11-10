@@ -29,8 +29,26 @@ import (
 
 type dictionaryTestProducer struct {
 	testOperator
-	possible   bool
-	allocation *vector.AllocationAccountSelection
+	boundary      DictionaryOutputState
+	possible      bool
+	allocation    *vector.AllocationAccountSelection
+	projectionErr error
+}
+
+func (p *dictionaryTestProducer) DictionaryOutputState() *DictionaryOutputState { return &p.boundary }
+func (p *dictionaryTestProducer) Call(proc *process.Process) (CallResult, error) {
+	p.boundary.BeginCall()
+	return p.testOperator.Call(proc)
+}
+func (p *dictionaryTestProducer) Reset(proc *process.Process, failed bool, err error) {
+	p.testOperator.Reset(proc, failed, err)
+	p.boundary = DictionaryOutputState{}
+}
+func (p *dictionaryTestProducer) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	if p.projectionErr != nil {
+		return nil, p.projectionErr
+	}
+	return p.boundary.Normalize(input, proc.Mp())
 }
 
 func (p *dictionaryTestProducer) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
@@ -82,7 +100,7 @@ func TestDictionaryRuntimeCapabilityEdges(t *testing.T) {
 	consumer := &dictionaryTestConsumer{}
 	consumer.AppendChild(producer)
 	require.NoError(t, Prepare(consumer, proc))
-	require.NotNil(t, producer.dictionaryOutput, "unknown input capability defaults to flat")
+	require.True(t, producer.boundary.required, "unknown input capability defaults to flat")
 	output, err := Exec(producer, proc)
 	require.NoError(t, err)
 	require.NotSame(t, input, output.Batch)
@@ -93,25 +111,26 @@ func TestDictionaryRuntimeCapabilityEdges(t *testing.T) {
 	t.Cleanup(func() { Free(second, proc, false, nil) })
 	consumer.AppendChild(second)
 	require.NoError(t, Prepare(consumer, proc))
-	require.NotNil(t, second.dictionaryOutput, "capability is specific to each input edge")
-	require.Nil(t, producer.dictionaryOutput)
-	require.Nil(t, consumer.dictionaryOutput, "flat operator has no adapter")
+	require.True(t, second.boundary.required, "capability is specific to each input edge")
+	require.False(t, producer.boundary.required)
+	_, producerState := any(consumer).(DictionaryProducer)
+	require.False(t, producerState, "flat operator has no producer state")
 	output, err = Exec(producer, proc)
 	require.NoError(t, err)
 	require.Same(t, input, output.Batch)
 	// A producer used as the external root must also normalize.
 	require.NoError(t, Prepare(producer, proc))
-	require.NotNil(t, producer.dictionaryOutput)
+	require.True(t, producer.boundary.required)
 	output, err = Exec(producer, proc)
 	require.NoError(t, err)
 	require.False(t, output.Batch.HasDictionary())
 	producer.possible = false
 	require.NoError(t, Prepare(producer, proc))
-	require.Nil(t, producer.dictionaryOutput, "disabled producer incurs no batch scan")
+	require.False(t, producer.boundary.required, "disabled producer incurs no batch scan")
 }
 
 func TestDictionaryRuntimeOutputLifetimeAndTerminalPaths(t *testing.T) {
-	for _, terminal := range []string{"next", "eof", "error", "cancel", "reset", "free", "prepare"} {
+	for _, terminal := range []string{"next", "eof", "yield", "error", "projection_error", "cancel", "reset", "free", "prepare"} {
 		t.Run(terminal, func(t *testing.T) {
 			proc, input := dictionaryRuntimeFixture(t)
 			op := newDictionaryTestProducer(input)
@@ -134,6 +153,15 @@ func TestDictionaryRuntimeOutputLifetimeAndTerminalPaths(t *testing.T) {
 				output, err = Exec(op, proc)
 				require.NoError(t, err)
 				require.Nil(t, output.Batch)
+			case "yield":
+				op.result = CallResult{Status: ExecYield}
+				output, err = Exec(op, proc)
+				require.NoError(t, err)
+				require.Equal(t, ExecYield, output.Status)
+			case "projection_error":
+				op.projectionErr = errors.New("injected projection error")
+				_, err = Exec(op, proc)
+				require.ErrorIs(t, err, op.projectionErr)
 			case "error":
 				op.callErr = errors.New("injected call error")
 				_, err = Exec(op, proc)
@@ -144,6 +172,7 @@ func TestDictionaryRuntimeOutputLifetimeAndTerminalPaths(t *testing.T) {
 				proc.Ctx = ctx
 				_, err = Exec(op, proc)
 				require.ErrorIs(t, err, context.Canceled)
+				Reset(op, proc, true, err)
 			case "reset":
 				Reset(op, proc, false, nil)
 			case "free":
@@ -178,6 +207,52 @@ type dictionaryProjectedProducer struct {
 	projected *batch.Batch
 }
 
-func (p *dictionaryProjectedProducer) ExecProjection(*process.Process, *batch.Batch) (*batch.Batch, error) {
-	return p.projected, nil
+func (p *dictionaryProjectedProducer) ExecProjection(proc *process.Process, _ *batch.Batch) (*batch.Batch, error) {
+	return p.boundary.Normalize(p.projected, proc.Mp())
+}
+
+type dictionaryCapacity struct {
+	reject bool
+	used   uint64
+}
+
+func (c *dictionaryCapacity) AcquireAllocationCapacity(n uint64) error {
+	if c.reject {
+		return mpool.ErrAllocationAccountCapacity
+	}
+	c.used += n
+	return nil
+}
+func (c *dictionaryCapacity) ReleaseAllocationCapacity(n uint64) { c.used -= n }
+
+func TestDictionaryProducerCopyFailureAndReuse(t *testing.T) {
+	proc, input := dictionaryRuntimeFixture(t)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	capacity := &dictionaryCapacity{reject: true}
+	account, err := registry.OpenWithController(1<<20, capacity)
+	require.NoError(t, err)
+	op := newDictionaryTestProducer(input)
+	t.Cleanup(func() {
+		Free(op, proc, false, nil)
+		snapshot := account.Seal()
+		require.Zero(t, snapshot.Used)
+		require.Zero(t, capacity.used)
+		require.Zero(t, registry.LiveAllocationMetadata())
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	})
+	op.allocation, err = vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	require.NoError(t, Prepare(op, proc))
+	_, err = Exec(op, proc)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Nil(t, op.boundary.output)
+	require.Zero(t, account.Snapshot().Used)
+	require.True(t, input.HasDictionary())
+	capacity.reject = false
+	output, err := Exec(op, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{30, 10, 30}, vector.MustFixedColNoTypeCheck[int64](output.Batch.Vecs[0]))
+	require.True(t, input.HasDictionary())
 }
