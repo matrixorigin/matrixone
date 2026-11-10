@@ -97,25 +97,6 @@ func (jobEntry *JobEntry) update(
 		needApply = true
 	}
 	if needApply {
-		if jobEntry.watermark.GT(&watermark) {
-			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
-				watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
-			FlushPermanentErrorMessage(
-				ctx,
-				jobEntry.tableInfo.exec.cnUUID,
-				jobEntry.tableInfo.exec.txnEngine,
-				jobEntry.tableInfo.exec.cnTxnClient,
-				jobEntry.tableInfo.accountID,
-				jobEntry.tableInfo.tableID,
-				[]string{jobEntry.jobName},
-				[]uint64{jobEntry.jobID},
-				[]uint64{jobStatus.LSN},
-				[]*JobStatus{jobStatus},
-				types.MaxTs(),
-				errMsg,
-				[]uint64{jobEntry.currentLSN},
-			)
-		}
 		jobEntry.currentLSN = jobStatus.LSN
 		jobEntry.persistedWatermark = watermark
 		jobEntry.watermark = watermark
@@ -125,34 +106,6 @@ func (jobEntry *JobEntry) update(
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
 	return jobEntry.state == ISCPJobState_Completed
-}
-
-func (jobEntry *JobEntry) UpdateWatermark(
-	from, to types.TS,
-	watermarkFlushThreshold time.Duration,
-) {
-	if from.GE(&to) {
-		return
-	}
-	expectedFrom := jobEntry.watermark.Next()
-	if !expectedFrom.EQ(&from) {
-		FlushPermanentErrorMessage(
-			jobEntry.tableInfo.exec.ctx,
-			jobEntry.tableInfo.exec.cnUUID,
-			jobEntry.tableInfo.exec.txnEngine,
-			jobEntry.tableInfo.exec.cnTxnClient,
-			jobEntry.tableInfo.accountID,
-			jobEntry.tableInfo.tableID,
-			[]string{jobEntry.jobName},
-			[]uint64{jobEntry.jobID},
-			[]uint64{jobEntry.currentLSN},
-			[]*JobStatus{{}},
-			types.MaxTs(),
-			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), expectedFrom.ToString()),
-			[]uint64{jobEntry.currentLSN},
-		)
-	}
-	jobEntry.watermark = to
 }
 
 func (jobEntry *JobEntry) tryFlushWatermark(

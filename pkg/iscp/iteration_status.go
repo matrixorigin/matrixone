@@ -16,7 +16,6 @@ package iscp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-var errIterationNeedsRecovery = errors.New("iscp iteration needs durable recovery")
+var errIterationNeedsRecovery = moerr.NewInternalErrorNoCtx("iscp iteration needs durable recovery")
 
 // CollectChanges consumes an inclusive interval starting after the last safe
 // watermark. Publishing From on failure would skip the first failed timestamp.
