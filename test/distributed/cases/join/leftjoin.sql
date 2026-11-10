@@ -72,7 +72,7 @@ CREATE TABLE `routines` (
 `dtd_identifier` TEXT DEFAULT null,
 `routine_body` VARCHAR(3) DEFAULT null,
 `routine_definition` TEXT DEFAULT null,
-`external_name` BINARY(0) DEFAULT null,
+`external_name` BINARY(1) DEFAULT null,
 `external_language` VARCHAR(64) DEFAULT null,
 `parameter_style` VARCHAR(3) DEFAULT null,
 `is_deterministic` VARCHAR(3) DEFAULT null,

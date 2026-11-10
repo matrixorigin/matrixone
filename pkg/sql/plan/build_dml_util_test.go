@@ -483,6 +483,110 @@ func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 	}
 }
 
+func TestInsertBinaryStringLiteralUsesAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		for _, ignore := range []bool{false, true} {
+			typ := types.New(oid, 1, 0)
+			literal := tree.NewNumVal("ab", "ab", false, tree.P_char)
+			expr, err := MakeInsertValueConstExpr(proc, literal, &typ, ignore)
+			require.NoError(t, err)
+			fn := expr.GetF()
+			require.NotNil(t, fn)
+			want := "cast_assign"
+			if ignore {
+				want = "cast_ignore"
+			}
+			require.Equal(t, want, fn.Func.ObjName)
+			require.Equal(t, "ab", fn.Args[0].GetLit().GetSval())
+		}
+	}
+}
+
+func TestSameTypeDecimalWriteRetainsAssignmentValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal64, 5, 2)
+	planType := makePlan2Type(&typ)
+	source := MakePlan2Decimal64ExprWithType(types.Decimal64(100000), &planType)
+	assigned, err := forceAssignmentCastExprWithProcess(proc.Ctx, source, planType, false, proc)
+	require.NoError(t, err)
+	require.NotNil(t, assigned.GetF())
+	require.Contains(t, []string{"cast_assign", "cast_strict"}, assigned.GetF().Func.ObjName)
+}
+
+func TestNonStrictIntegerInsertLiteralKeepsSourceForAdjustment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.T_uint8.ToType()
+	literal := tree.NewNumVal(int64(300), "300", false, tree.P_int64)
+	expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, int32(types.T_int64), expr.GetF().Args[0].Typ.Id)
+}
+
+func TestNonStrictDecimalInsertLiteralKeepsSourceForAdjustment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.New(types.T_decimal64, 5, 2)
+	literal := tree.NewNumVal("1234.56", "1234.56", false, tree.P_decimal)
+	expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Greater(t, expr.GetF().Args[0].Typ.Width, int32(5))
+}
+
+func TestNonStrictQuotedNumericInsertLiteralUsesAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	for _, tc := range []struct {
+		typ   types.Type
+		value string
+	}{
+		{types.T_uint8.ToType(), "300"},
+		{types.New(types.T_decimal64, 5, 2), "1234.56"},
+		{types.T_date.ToType(), "2026-10-21 10:20:30"},
+	} {
+		literal := tree.NewNumVal(tc.value, tc.value, false, tree.P_char)
+		expr, err := MakeInsertValueConstExpr(proc, literal, &tc.typ, false)
+		require.NoError(t, err)
+		require.NotNil(t, expr.GetF())
+		require.Equal(t, "cast_assign", expr.GetF().Func.ObjName)
+		require.Equal(t, tc.value, expr.GetF().Args[0].GetLit().GetSval())
+	}
+}
+
+func TestNonStrictBinaryHexInsertLiteralUsesAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.New(types.T_binary, 1, 0)
+	literal := tree.NewNumVal("0x4142", "0x4142", false, tree.P_hexnum)
+	expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "AB", expr.GetF().Args[0].GetLit().GetSval())
+}
+
 func TestMakeInsertValueConstExprBitIgnoreTruncates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	colType := types.New(types.T_bit, 4, 0)

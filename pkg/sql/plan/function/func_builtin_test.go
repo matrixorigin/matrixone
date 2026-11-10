@@ -2840,6 +2840,15 @@ func testSerialExtractNamedType[T types.Enum | types.MoYear | types.Decimal256](
 	}
 }
 
+func TestDegreesFiniteOverflowReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), []float64{3.14e306, -3.14e306, 0, math.Pi}, nil)},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 0, 180}, []bool{true, true, false, false}), builtInDegrees)
+	ok, info := testCase.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{

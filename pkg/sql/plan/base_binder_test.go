@@ -63,7 +63,8 @@ func TestSerialExtractBinaryAssignment(t *testing.T) {
 	require.Equal(t, target, bound.Typ)
 	assigned, err := forceAssignmentCastExpr(t.Context(), bound, target)
 	require.NoError(t, err)
-	require.Same(t, bound, assigned)
+	require.Equal(t, "cast_assign", assigned.GetF().Func.ObjName)
+	require.Same(t, bound, assigned.GetF().Args[0])
 }
 
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {

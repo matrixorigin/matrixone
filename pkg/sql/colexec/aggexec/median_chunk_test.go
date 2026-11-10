@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -205,19 +206,27 @@ func TestPreallocatedMedianAndPercentileChunks(t *testing.T) {
 
 func TestMedianFlushErrorKeepsResultsOwned(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	typ := types.New(types.T_decimal128, 38, 0)
+	// Width 37 keeps a Decimal128 result. Two valid 37-digit inputs overflow
+	// its intermediate scale conversion in the second result chunk.
+	typ := types.New(types.T_decimal128, 37, 0)
 	exec, err := MakeAgg(mp, AggIdOfMedian, false, typ)
 	require.NoError(t, err)
 	t.Cleanup(exec.Free)
 	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, 2)
 	require.NoError(t, exec.GroupGrow(3))
-	large, err := types.ParseDecimal128("99999999999999999999999999999999999999", 38, 0)
+	large, err := types.ParseDecimal128(strings.Repeat("9", 37), 37, 0)
 	require.NoError(t, err)
-	input := medianTestVector(t, mp, typ, []types.Decimal128{{B0_63: 1}, large})
+	input := medianTestVector(t, mp, typ, []types.Decimal128{{B0_63: 1}, large, large})
 	t.Cleanup(func() { input.Free(mp) })
-	require.NoError(t, exec.BatchFill(0, []uint64{1, 3}, []*vector.Vector{input}))
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 3, 3}, []*vector.Vector{input}))
 	result, err := exec.Flush()
+	for _, v := range result {
+		if v != nil {
+			t.Cleanup(func() { v.Free(mp) })
+		}
+	}
 	require.Nil(t, result)
 	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error: %v", err)
 	require.ErrorContains(t, err, "Decimal128 scale overflow")

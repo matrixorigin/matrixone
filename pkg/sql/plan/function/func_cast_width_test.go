@@ -334,6 +334,144 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
+func TestDecimalAssignmentChecksPrecisionInStrictMode(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "strict", sqlMode: "STRICT_TRANS_TABLES"},
+		{name: "non-strict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.sqlMode, nil
+				}
+				return nil, nil
+			})
+			source := vector.NewVec(types.T_bool.ToType())
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(source, true, false, proc.Mp()))
+			targetType := types.New(types.T_decimal64, 1, 1)
+			target := vector.NewConstNull(targetType, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.sqlMode != "" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "0.9", vector.MustFixedColWithTypeCheck[types.Decimal64](result.GetResultVector())[0].Format(1))
+			}
+		})
+	}
+}
+
+func TestDateAssignmentKeepsZeroAndRejectsInvalidText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	targetType := types.T_date.ToType()
+	target := vector.NewConstNull(targetType, 1, proc.Mp())
+	defer target.Free(proc.Mp())
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{"0000-00-00", true},
+		{"2020-00-00", false},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			source := testutil.MakeVarcharVector([]string{tc.value}, nil, proc.Mp())
+			defer source.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, types.ZeroDate, vector.MustFixedColWithTypeCheck[types.Date](result.GetResultVector())[0])
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestTypedBinaryAssignmentPreservesShortPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	targetType := types.New(types.T_binary, 4, 0)
+	source := vector.NewVec(targetType)
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte{'A', 'B'}, false, proc.Mp()))
+	target := vector.NewConstNull(targetType, 1, proc.Mp())
+	defer target.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+	got, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, []byte{'A', 'B'}, got)
+}
+
+func TestAlterCopyCanNarrowDatetimeToDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "STRICT_TRANS_TABLES", nil
+		}
+		return nil, nil
+	})
+	value, err := types.ParseDatetime("2024-01-02 11:22:33", 0)
+	require.NoError(t, err)
+	source := vector.NewVec(types.T_datetime.ToType())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(source, value, false, proc.Mp()))
+	targetType := types.T_date.ToType()
+	target := vector.NewConstNull(targetType, 1, proc.Mp())
+	defer target.Free(proc.Mp())
+	run := func() error {
+		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		return NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil)
+	}
+	require.Error(t, run())
+	proc.Ctx = context.WithValue(proc.Ctx, defines.AlterCopyOpt{}, &plan.AlterCopyOpt{})
+	require.NoError(t, run())
+}
+
+func TestStrictBinaryAssignmentRejectsOverWidthValue(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return "STRICT_TRANS_TABLES", nil
+				}
+				return nil, nil
+			})
+			source := testutil.MakeVarcharVector([]string{"ab"}, nil, proc.Mp())
+			defer source.Free(proc.Mp())
+			typ := types.New(oid, 1, 0)
+			target := vector.NewConstNull(typ, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.Error(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+		})
+	}
+}
+
 func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -347,6 +485,8 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 		{name: "varchar non-space overflow", target: types.T_varchar, input: "abcd", want: "abc", wantWarning: true},
 		{name: "varchar multibyte overflow", target: types.T_varchar, input: "你好世界", want: "你好世", wantWarning: true},
 		{name: "varchar trailing space overflow", target: types.T_varchar, input: "abc ", want: "abc", wantWarning: true},
+		{name: "binary byte overflow", target: types.T_binary, input: "abcd", want: "abc", wantWarning: true},
+		{name: "varbinary byte overflow", target: types.T_varbinary, input: "abcd", want: "abc", wantWarning: true},
 		{name: "char trailing space exemption", target: types.T_char, input: "abc ", want: "abc", wantWarning: false},
 	}
 

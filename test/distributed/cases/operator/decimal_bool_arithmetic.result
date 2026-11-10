@@ -107,6 +107,8 @@ select id, d from tb order by id;
 5  ¦  null  𝄀
 6  ¦  1.0
 drop table tb;
+set @decimal_bool_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 create table ta(id int primary key, d decimal(1,1));
 insert into ta values (1,false),(2,0),(3,null);
 select id, d from ta order by id;
@@ -160,6 +162,7 @@ select id, d from ta256 order by id;
 3  ¦  null
 drop table ta128;
 drop table ta256;
+set session sql_mode = @decimal_bool_saved_sql_mode;
 create table ti(id int primary key, d decimal(10,2));
 insert into ti values (1,true),(2,false),(3,null);
 select id, d from ti order by id;

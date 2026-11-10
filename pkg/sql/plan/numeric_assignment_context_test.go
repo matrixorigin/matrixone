@@ -1281,7 +1281,8 @@ func collectExprEffectiveParamPlanTypesByPos(
 	if fn := expr.GetF(); fn != nil {
 		childType := inherited
 		if fn.Func != nil && (fn.Func.ObjName == "cast" ||
-			(fn.Func.ObjName == "cast_strict" && types.T(expr.Typ.Id).IsDateRelate())) {
+			((fn.Func.ObjName == "cast_strict" || fn.Func.ObjName == "cast_assign") &&
+				types.T(expr.Typ.Id).IsDateRelate())) {
 			childType = expr.Typ
 		} else if childType.Id == 0 && types.T(expr.Typ.Id).ToType().IsNumeric() {
 			// Numeric operators carry the resolved width and scale on their result;

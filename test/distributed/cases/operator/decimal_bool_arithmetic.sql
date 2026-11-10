@@ -70,6 +70,8 @@ drop table tb;
 
 -- declared-precision enforcement (#30639) applies to TRUE exactly like the
 -- integer 1: DECIMAL(p,p) holds at most 0.99..9, so both are rejected
+set @decimal_bool_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 create table ta(id int primary key, d decimal(1,1));
 insert into ta values (1,false),(2,0),(3,null);
 select id, d from ta order by id;
@@ -97,6 +99,7 @@ select id, d from ta128 order by id;
 select id, d from ta256 order by id;
 drop table ta128;
 drop table ta256;
+set session sql_mode = @decimal_bool_saved_sql_mode;
 
 -- insert/update of BOOL values into DECIMAL columns uses the same cast
 create table ti(id int primary key, d decimal(10,2));
