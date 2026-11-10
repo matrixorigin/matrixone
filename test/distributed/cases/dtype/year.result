@@ -395,6 +395,37 @@ select max(y) - min(y) as year_diff from t_year_arith;
 ➤ year_diff[-5,64,0]  𝄀
 2
 drop table t_year_arith;
+drop table if exists t_year_sym;
+create table t_year_sym (i int, b bigint, u bigint unsigned, y year);
+insert into t_year_sym values (4048, 9007199254741999, 9007199254741999, 2024);
+insert into t_year_sym values (10, -9007199254741999, 9223372036854775808, 2000);
+insert into t_year_sym values (null, null, null, null);
+select i + y, y + i, i - y, y - i, i * y, y * i from t_year_sym order by y;
+➤ i + y[-5,64,0]  ¦  y + i[-5,64,0]  ¦  i - y[-5,64,0]  ¦  y - i[-5,64,0]  ¦  i * y[-5,64,0]  ¦  y * i[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+2010  ¦  2010  ¦  -1990  ¦  1990  ¦  20000  ¦  20000  𝄀
+6072  ¦  6072  ¦  2024  ¦  -2024  ¦  8193152  ¦  8193152
+select i / y, y / i, i div y, y div i from t_year_sym order by y;
+➤ i / y[8,53,31]  ¦  y / i[8,53,31]  ¦  i div y[-5,64,0]  ¦  y div i[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+0.005  ¦  200.0  ¦  0  ¦  200  𝄀
+2.0  ¦  0.5  ¦  2  ¦  0
+select y + y, y - y, y div y from t_year_sym order by y;
+➤ y + y[-5,64,0]  ¦  y - y[-5,64,0]  ¦  y div y[-5,64,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+4000  ¦  0  ¦  1  𝄀
+4048  ¦  0  ¦  1
+select b div y, u div y from t_year_sym order by y;
+➤ b div y[-5,64,0]  ¦  u div y[-5,64,0]  𝄀
+null  ¦  null  𝄀
+-4503599627370  ¦  4611686018427387  𝄀
+4450197260248  ¦  4450197260248
+select i = y, y = i, i < y, y > i, u > y, u >= y, u = y from t_year_sym order by y;
+➤ i = y[-6,8,0]  ¦  y = i[-6,8,0]  ¦  i < y[-6,8,0]  ¦  y > i[-6,8,0]  ¦  u > y[-6,8,0]  ¦  u >= y[-6,8,0]  ¦  u = y[-6,8,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+0  ¦  0  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  1  ¦  1  ¦  0
+drop table t_year_sym;
 drop table if exists t_year_group;
 create table t_year_group (id int, y year, category varchar(10));
 insert into t_year_group values (1, 2020, 'A');

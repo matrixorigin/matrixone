@@ -220,6 +220,19 @@ select max(y) - min(y) as year_diff from t_year_arith;
 
 drop table t_year_arith;
 
+-- YEAR on either side of arithmetic and comparison (#31902)
+drop table if exists t_year_sym;
+create table t_year_sym (i int, b bigint, u bigint unsigned, y year);
+insert into t_year_sym values (4048, 9007199254741999, 9007199254741999, 2024);
+insert into t_year_sym values (10, -9007199254741999, 9223372036854775808, 2000);
+insert into t_year_sym values (null, null, null, null);
+select i + y, y + i, i - y, y - i, i * y, y * i from t_year_sym order by y;
+select i / y, y / i, i div y, y div i from t_year_sym order by y;
+select y + y, y - y, y div y from t_year_sym order by y;
+select b div y, u div y from t_year_sym order by y;
+select i = y, y = i, i < y, y > i, u > y, u >= y, u = y from t_year_sym order by y;
+drop table t_year_sym;
+
 -- =====================================================
 -- Test cases for GROUP BY and DISTINCT
 -- =====================================================

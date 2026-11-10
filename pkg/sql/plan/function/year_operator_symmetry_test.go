@@ -103,30 +103,53 @@ func Test_PlusFn_Year(t *testing.T) {
 	}
 }
 
-// TestYearIntegerDivExact pins the #31902 follow-up: integer DIV with a YEAR
-// operand must resolve the exact INT64 coercion targets produced by
-// integerDivExactTypes instead of falling through to the rule-2 FLOAT64
-// corridor, which rounds BIGINT dividends before division.
+// TestYearIntegerDivExact pins the #31902 follow-up: integral DIV YEAR and
+// YEAR DIV YEAR (pairs that did not bind before) must resolve the exact INT64
+// coercion targets produced by integerDivExactTypes instead of the rule-2
+// FLOAT64 corridor, which rounds BIGINT dividends before division. YEAR DIV
+// integral already bound in released versions through the rule-2 FLOAT64
+// targets; it must keep exactly those targets so stored generated columns and
+// other persisted expressions verify against the released cast tree.
 func TestYearIntegerDivExact(t *testing.T) {
 	year := types.T_year.ToType()
-	cases := [][2]types.Type{
+	exact := [][2]types.Type{
 		{types.T_int8.ToType(), year},
 		{types.T_int16.ToType(), year},
 		{types.T_int32.ToType(), year},
 		{types.T_int64.ToType(), year},
-		{year, types.T_int8.ToType()},
-		{year, types.T_int16.ToType()},
-		{year, types.T_int32.ToType()},
-		{year, types.T_int64.ToType()},
 		{year, year},
 	}
-	for _, c := range cases {
+	for _, c := range exact {
 		result := legacyIntegerDivCheck([]types.Type{c[0], c[1]})
 		require.Equal(t, succeedWithCast, result.status, "%s div %s", c[0].Oid, c[1].Oid)
 		require.Len(t, result.finalType, 2)
 		require.Equal(t, types.T_int64, result.finalType[0].Oid, "%s div %s", c[0].Oid, c[1].Oid)
 		require.Equal(t, types.T_int64, result.finalType[1].Oid, "%s div %s", c[0].Oid, c[1].Oid)
 	}
+
+	released := []types.Type{
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+	}
+	for _, num := range released {
+		result := legacyIntegerDivCheck([]types.Type{year, num})
+		require.Equal(t, succeedWithCast, result.status, "T_year div %s", num.Oid)
+		require.Len(t, result.finalType, 2)
+		require.Equal(t, types.T_float64, result.finalType[0].Oid, "T_year div %s", num.Oid)
+		require.Equal(t, types.T_float64, result.finalType[1].Oid, "T_year div %s", num.Oid)
+	}
+
+	// Released rule-1 coercion for YEAR <op> BIGINT UNSIGNED stays INT64; the
+	// new reverse pair uses the lossless DECIMAL128 domain so u > y does not
+	// overflow for u above MaxInt64.
+	has, l, r := fixedTypeCastRule1(year, types.T_uint64.ToType())
+	require.True(t, has)
+	require.Equal(t, types.T_int64, l.Oid)
+	require.Equal(t, types.T_int64, r.Oid)
+	has, l, r = fixedTypeCastRule1(types.T_uint64.ToType(), year)
+	require.True(t, has)
+	require.Equal(t, types.T_decimal128, l.Oid)
+	require.Equal(t, types.T_decimal128, r.Oid)
 }
 
 // Test_IntegerDivFn_YearBoundary pins the INT64-domain division boundary from
@@ -154,30 +177,16 @@ func Test_IntegerDivFn_YearBoundary(t *testing.T) {
 }
 
 // TestYearIntegerDivUnsignedMixed pins the mixed unsigned/YEAR integer DIV
-// pairs for #31902: unsigned x YEAR keeps the unsigned domain via
-// integerDivUnsignedMixedTypes ((UINT64, INT64)) and YEAR x unsigned binds
-// the lossless DECIMAL256 targets of integerDivExactTypes like other
-// signed x unsigned pairs, instead of falling through to fixedTypeCastRule2.
+// pair for #31902: unsigned x YEAR keeps the unsigned domain via
+// integerDivUnsignedMixedTypes ((UINT64, INT64)) instead of the FLOAT64
+// corridor, so 9007199254741999 DIV 2000 stays exact.
 func TestYearIntegerDivUnsignedMixed(t *testing.T) {
 	year := types.T_year.ToType()
-	u64 := types.T_uint64.ToType()
-	u32 := types.T_uint32.ToType()
-
-	result := legacyIntegerDivCheck([]types.Type{u64, year})
-	require.Equal(t, succeedWithCast, result.status, "T_uint64 div T_year")
-	require.Len(t, result.finalType, 2, "T_uint64 div T_year")
-	require.Equal(t, types.T_uint64, result.finalType[0].Oid, "T_uint64 div T_year")
-	require.Equal(t, types.T_int64, result.finalType[1].Oid, "T_uint64 div T_year")
-
-	result = legacyIntegerDivCheck([]types.Type{year, u64})
-	require.Equal(t, succeedWithCast, result.status, "T_year div T_uint64")
-	require.Len(t, result.finalType, 2, "T_year div T_uint64")
-	require.Equal(t, types.T_decimal256, result.finalType[0].Oid, "T_year div T_uint64")
-	require.Equal(t, types.T_decimal256, result.finalType[1].Oid, "T_year div T_uint64")
-
-	result = legacyIntegerDivCheck([]types.Type{year, u32})
-	require.Equal(t, succeedWithCast, result.status, "T_year div T_uint32")
-	require.Len(t, result.finalType, 2, "T_year div T_uint32")
-	require.Equal(t, types.T_decimal256, result.finalType[0].Oid, "T_year div T_uint32")
-	require.Equal(t, types.T_decimal256, result.finalType[1].Oid, "T_year div T_uint32")
+	for _, u := range []types.Type{types.T_uint8.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType()} {
+		result := legacyIntegerDivCheck([]types.Type{u, year})
+		require.Equal(t, succeedWithCast, result.status, "%s div T_year", u.Oid)
+		require.Len(t, result.finalType, 2, "%s div T_year", u.Oid)
+		require.Equal(t, types.T_uint64, result.finalType[0].Oid, "%s div T_year", u.Oid)
+		require.Equal(t, types.T_int64, result.finalType[1].Oid, "%s div T_year", u.Oid)
+	}
 }

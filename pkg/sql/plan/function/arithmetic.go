@@ -294,15 +294,16 @@ func integerDivUnsignedMixedTypes(left, right types.Type) (types.Type, types.Typ
 // integerDivExactTypes selects lossless physical domains for mixed integer
 // operands. DIV must not use the generic floating-point coercion table for
 // integer inputs because that can round BIGINT values before division.
-// YEAR stores a small signed integer, so it joins the signed-integer family
-// here: integral x YEAR, YEAR x integral and YEAR x YEAR resolve to
-// (INT64, INT64) like other exact signed pairs instead of falling through to
-// the rule-2 FLOAT64 corridor that rounds BIGINT dividends before division
-// (#31902). Unsigned-mixed combinations still belong to
-// integerDivUnsignedMixedTypes and fixedTypeCastRule2; unsigned x YEAR pairs
-// join the mixed/exact families here, away from the FLOAT64 corridor.
+// YEAR joins the signed-integer family only for the pairs that did not bind
+// before #31902: integral DIV YEAR and YEAR DIV YEAR resolve to
+// (INT64, INT64) like other exact signed pairs instead of the rule-2 FLOAT64
+// corridor that rounds BIGINT dividends before division. YEAR DIV integral
+// keeps its released rule-2 FLOAT64 targets so stored expressions written by
+// earlier releases verify against the same cast tree; that quotient is exact
+// because |YEAR| <= 2155. Unsigned x YEAR belongs to
+// integerDivUnsignedMixedTypes.
 func integerDivExactTypes(left, right types.Type) (types.Type, types.Type, bool) {
-	leftSigned := left.Oid.IsSignedInt() || left.Oid == types.T_year
+	leftSigned := left.Oid.IsSignedInt() || (left.Oid == types.T_year && right.Oid == types.T_year)
 	rightSigned := right.Oid.IsSignedInt() || right.Oid == types.T_year
 	switch {
 	case left.Oid.IsUnsignedInt() && right.Oid.IsUnsignedInt():

@@ -1963,7 +1963,7 @@ func initFixed1() {
 		{types.T_year, types.T_uint8, types.T_int64, types.T_int64},
 		{types.T_year, types.T_uint16, types.T_int64, types.T_int64},
 		{types.T_year, types.T_uint32, types.T_int64, types.T_int64},
-		{types.T_year, types.T_uint64, types.T_decimal128, types.T_decimal128},
+		{types.T_year, types.T_uint64, types.T_int64, types.T_int64},
 		{types.T_year, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_year, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_year, types.T_decimal64, types.T_decimal64, types.T_decimal64},
