@@ -1217,8 +1217,10 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					require.Equal(t, engine.Persisted, state)
 					require.Equal(t, data.GetBlockInfo(i).BlockID, blk.BlockID)
 				}
+				// The scan's own read fetches the first object; the prefetches fetch
+				// the others.
 				if prefetches {
-					for i := 0; i < count; i++ {
+					for i := 0; i < count-1; i++ {
 						select {
 						case <-fs.done:
 						case <-time.After(5 * time.Second):
@@ -1229,7 +1231,7 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 				}
 				expected := int32(0)
 				if prefetches {
-					expected = int32(count)
+					expected = int32(count - 1)
 				}
 				require.Equal(t, expected, fs.calls.Load())
 				if count >= 4 {

@@ -37,6 +37,10 @@ type PrefetchParams struct {
 	fs  fileservice.FileService
 	key objectio.Location
 	typ PrefetchType
+	// size is the size of the object, 0 when unknown.
+	size int64
+	// due is when, in Unix nanoseconds, the read reaches the object.
+	due int64
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (PrefetchParams, error) {
@@ -71,7 +75,14 @@ func buildPrefetchParams(service fileservice.FileService, key objectio.Location)
 func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
 	pc := make(map[string]PrefetchParams)
 	for _, p := range processes {
-		pc[p.key.Name().String()] = p
+		name := p.key.Name().String()
+		if prev, ok := pc[name]; ok {
+			if p.size == 0 {
+				p.size = prev.size
+			}
+			p.due = min(p.due, prev.due)
+		}
+		pc[name] = p
 	}
 	return pc
 }
@@ -96,6 +107,24 @@ func PrefetchSkipped(ctx context.Context, service fileservice.FileService, polic
 		return false
 	}
 	return fileservice.FullFilePreloadSkipped(ctx, service, policy, blk.MetaLocation().Name().String())
+}
+
+// PrefetchObject prefetches the object of key, of size bytes, which the read reaches at
+// due, in Unix nanoseconds.
+func PrefetchObject(
+	sid string,
+	service fileservice.FileService,
+	key objectio.Location,
+	size int64,
+	due int64,
+) error {
+	params, err := BuildPrefetchParams(service, key)
+	if err != nil {
+		return err
+	}
+	params.typ = PrefetchFileType
+	params.size, params.due = size, due
+	return MustGetPipeline(sid).Prefetch(params)
 }
 
 func PrefetchMeta(

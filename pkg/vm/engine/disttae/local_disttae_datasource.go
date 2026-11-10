@@ -19,8 +19,11 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -117,7 +120,10 @@ type LocalDisttaeDataSource struct {
 	rc struct {
 		prefetchDisabled    bool
 		batchPrefetchCursor int
-		WorkspaceLocked     bool
+		// paceStart and paceCursor are when and where the scan's pace is measured from.
+		paceStart       time.Time
+		paceCursor      int
+		WorkspaceLocked bool
 		//SkipPStateDeletes   bool
 	}
 
@@ -1731,32 +1737,51 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	if ls.rc.prefetchDisabled {
 		return
 	}
-	if ls.rc.batchPrefetchCursor >= ls.rangeSlice.Len() ||
-		ls.rangesCursor < ls.rc.batchPrefetchCursor {
+	n := ls.rangeSlice.Len()
+	// The prefetches stay at least half a window ahead of the scan.
+	if ls.rc.batchPrefetchCursor >= n ||
+		ls.rc.batchPrefetchCursor-ls.rangesCursor >= readutil.BatchPrefetchSize/2 {
 		return
 	}
 
-	batchSize := min(readutil.BatchPrefetchSize, ls.rangeSlice.Len()-ls.rangesCursor)
-
-	begin := ls.rangesCursor
-	end := ls.rangesCursor + batchSize
+	begin := ls.rc.batchPrefetchCursor
+	if begin <= ls.rangesCursor {
+		// The scan's own read fetches the object it reads now.
+		begin = ls.rangesCursor
+		current := *ls.rangeSlice.Get(begin).BlockID.Object()
+		for begin < n && ls.rangeSlice.Get(begin).BlockID.Object().EQ(&current) {
+			begin++
+		}
+	}
+	end := min(ls.rangesCursor+readutil.BatchPrefetchSize, n)
+	now := time.Now()
+	pace := ls.scanPace(now)
 
 	policy := fileservice.GetFileServicePolicy(ctx)
-	var preObj types.Objectid
-	for idx := begin; idx < end; idx++ {
+	for idx := begin; idx < end; {
+		due := now.Add(time.Duration(float64(idx-ls.rangesCursor) / pace * float64(time.Second))).UnixNano()
 		blk := ls.rangeSlice.Get(idx)
-		if blk.BlockID.Object().EQ(&preObj) {
-			continue
+		obj := *blk.BlockID.Object()
+		// The object's blocks past the window are its too: the next window does not
+		// prefetch it again.
+		idx++
+		for idx < n && ls.rangeSlice.Get(idx).BlockID.Object().EQ(&obj) {
+			idx++
 		}
-
-		preObj = *blk.BlockID.Object()
+		end = max(end, idx)
 		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
 			continue
 		}
 
 		// prefetch blk data
-		err := ioutil.Prefetch(
-			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation())
+		var size int64
+		if ls.pState != nil {
+			if entry, ok := ls.pState.GetObject(*blk.MetaLocation().Name().Short()); ok {
+				size = int64(entry.ObjectStats.Size())
+			}
+		}
+		err := ioutil.PrefetchObject(
+			ls.table.proc.Load().GetService(), ls.fs, blk.MetaLocation(), size, due)
 		if err != nil {
 			logutil.Errorf("pefetch block data: %s, blk:%s",
 				err.Error(),
@@ -1764,7 +1789,38 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 		}
 	}
 
-	ls.rc.batchPrefetchCursor = end
+	ls.rc.batchPrefetchCursor = max(end, begin)
+}
+
+const (
+	// scanPaceMin is how far a scan goes before its own pace is used.
+	scanPaceMinBlocks = 8
+	scanPaceMinTime   = 50 * time.Millisecond
+	// scanPaceWeight is the weight of a scan's pace in the pace of scans.
+	scanPaceWeight = 0.2
+)
+
+// scanPaces is the average pace of the scans, in blocks a second.
+var scanPaces atomic.Uint64
+
+func init() {
+	scanPaces.Store(math.Float64bits(100))
+}
+
+// scanPace returns the blocks a second the scan reads: its own pace once it has read
+// enough to measure it, which counts toward the pace of scans, or that pace before.
+func (ls *LocalDisttaeDataSource) scanPace(now time.Time) float64 {
+	if ls.rc.paceStart.IsZero() {
+		ls.rc.paceStart, ls.rc.paceCursor = now, ls.rangesCursor
+	}
+	blocks, elapsed := ls.rangesCursor-ls.rc.paceCursor, now.Sub(ls.rc.paceStart)
+	average := math.Float64frombits(scanPaces.Load())
+	if blocks < scanPaceMinBlocks || elapsed < scanPaceMinTime {
+		return average
+	}
+	pace := float64(blocks) / elapsed.Seconds()
+	scanPaces.Store(math.Float64bits((1-scanPaceWeight)*average + scanPaceWeight*pace))
+	return pace
 }
 
 func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(

@@ -28,6 +28,7 @@ import (
 type traceInfo struct {
 	mu    sync.Mutex
 	times traceTimes
+	host  string
 	trace *httptrace.ClientTrace
 }
 
@@ -90,6 +91,7 @@ func newTraceInfo() *traceInfo {
 func (t *traceInfo) GetConn(hostPort string) {
 	t.mu.Lock()
 	t.times.GetConn.start()
+	t.host = hostPort
 	t.mu.Unlock()
 	metric.FSHTTPTraceCounter.WithLabelValues("GetConn").Inc()
 }
@@ -100,6 +102,7 @@ func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 	if !start.IsZero() {
 		t.times.GotConn = time.Now()
 	}
+	host := t.host
 	t.mu.Unlock()
 	metric.FSHTTPTraceCounter.WithLabelValues("GotConn").Inc()
 	if info.Reused {
@@ -115,7 +118,9 @@ func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 		trackConnActive(info.Conn)
 	}
 	if !start.IsZero() {
-		metric.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
+		wait := time.Since(start)
+		metric.S3GetConnDurationHistogram.Observe(wait.Seconds())
+		connWaits.record(host, wait, info.Reused)
 	}
 }
 

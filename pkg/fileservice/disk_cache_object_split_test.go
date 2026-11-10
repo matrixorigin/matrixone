@@ -17,8 +17,8 @@ package fileservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,13 +52,16 @@ func (s *statCountingStorage) Stat(ctx context.Context, key string) (int64, erro
 func newObjectSplitFS(t *testing.T, split objectSplitConfig, size int) (*S3FS, *countingStorage, []byte) {
 	fs, storage, data := newPrefetchRangeFS(t, 0, false, size)
 	fs.diskCache.objectSplit = split
+	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), int64(size))
 	return fs, storage, data
 }
 
 func readFullObjectOf(fs *S3FS, offset, size int64) ([]byte, error) {
 	vec := &IOVector{FilePath: "object", Policy: SkipMemoryCache, Entries: []IOEntry{{Offset: offset, Size: size}}}
 	err := fs.Read(context.Background(), vec)
-	return vec.Entries[0].Data, err
+	data := slices.Clone(vec.Entries[0].Data)
+	vec.Release()
+	return data, err
 }
 
 // The download of an object of at least the split size reads its 64KiB-aligned halves
@@ -92,13 +95,8 @@ func TestS3FSObjectSplitSkipsSmallObjects(t *testing.T) {
 // range.
 func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	d := fs.diskCache
-	d.downloads.mu.Lock()
-	d.downloads.m = make(map[string]*objectDownload)
-	for i := 0; i < objectSplitMaxDownloads; i++ {
-		d.downloads.m[fmt.Sprintf("other-%d", i)] = newObjectDownload("", false, nil)
-	}
-	d.downloads.mu.Unlock()
+	fs.diskCache.downloadConns.Store(objectSplitMaxDownloads)
+	t.Cleanup(func() { fs.diskCache.downloadConns.Store(0) })
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
@@ -106,14 +104,18 @@ func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	require.Empty(t, storage.starts, "an open-ended read of the object")
 }
 
-// A download that is not split never asks object storage for the object's size.
-func TestS3FSObjectSplitOffMakesNoStat(t *testing.T) {
-	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 1, min: 0}, 300<<10)
+// A download of an object no prefetch told the size of reads it as one range, and never
+// asks object storage for its size.
+func TestS3FSObjectSplitNeedsKnownSize(t *testing.T) {
+	fs, counting, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
+	fs.diskCache.prefetched = prefetchedObjects{}
 	storage := &statCountingStorage{ObjectStorage: fs.storage}
 	fs.storage = storage
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
+	require.Equal(t, int64(1), counting.reads.Load())
+	require.Empty(t, counting.starts, "an open-ended read of the object")
 	require.Zero(t, storage.stats.Load())
 }
 
@@ -140,6 +142,10 @@ func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 	_, wait := o.estimate(0, 1)
 	require.GreaterOrEqual(t, wait, rangeReadCosts.firstByte(), "a part not yet read is a latency away")
 	o.advance(1, 4)
+	o.mu.Lock()
+	require.Zero(t, o.progressLocked(0, 4), "the other part's bytes are not progress for the first")
+	require.Equal(t, int64(4), o.progressLocked(2, 6))
+	o.mu.Unlock()
 	written, ok := o.waitFor(ctx, 4, 8, time.Millisecond)
 	require.True(t, ok)
 	require.Equal(t, int64(8), written)
@@ -165,11 +171,15 @@ func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 
 func TestObjectSplitBounds(t *testing.T) {
 	split := objectSplitConfig{parts: 2, min: 1 << 20}
-	require.Nil(t, split.bounds(1<<20-1))
-	require.Equal(t, []int64{0, 704 << 10, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10))
+	require.Nil(t, split.bounds(1<<20-1, 0))
+	require.Equal(t, []int64{0, 704 << 10, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10, 0))
 	require.Equal(t, []int64{0, 384 << 10, 768 << 10, 1152 << 10, 1<<20 + 300<<10},
-		objectSplitConfig{parts: 4, min: 1 << 20}.bounds(1<<20+300<<10))
-	require.Nil(t, objectSplitConfig{parts: 1, min: 0}.bounds(64<<20))
+		objectSplitConfig{parts: 4, min: 1 << 20}.bounds(1<<20+300<<10, 0))
+	require.Nil(t, objectSplitConfig{parts: 1, min: 0}.bounds(64<<20, 0))
+	require.Equal(t, []int64{0, 1 << 20, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10, 1<<20+1000),
+		"a part starts at the 64KiB block holding the read's first byte")
+	require.Equal(t, []int64{0, 704 << 10, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10, 1000), "inside the first block")
+	require.Equal(t, []int64{0, 704 << 10, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10, 2<<20), "past the object")
 }
 
 func TestDiskObjectSplitConfig(t *testing.T) {
@@ -179,4 +189,55 @@ func TestDiskObjectSplitConfig(t *testing.T) {
 		DiskPrefetchObjectSplit:    ptrTo(9),
 		DiskPrefetchObjectSplitMin: ptrTo[toml.ByteSize](1 << 20),
 	}).diskObjectSplit())
+}
+
+// A full-object read does not wait for the read that holds its merge.
+func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, false, 300<<10)
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 10 * time.Second
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+	key := fs.readMergeKey(&IOVector{FilePath: "object", Policy: SkipMemoryCache, Entries: []IOEntry{{Offset: 100, Size: 10}}})
+	require.True(t, key.FullObject)
+	done, wait := fs.ioMerger.Merge(key, maxIOWaitDuration)
+	require.NotNil(t, done)
+	require.Nil(t, wait)
+	defer done()
+
+	t0 := time.Now()
+	got, err := readFullObjectOf(fs, 100, 10)
+	require.NoError(t, err)
+	require.Equal(t, data[100:110], got)
+	require.Less(t, time.Since(t0), 2*time.Second)
+}
+
+// With the most downloads in flight, a read of a whole object reads its range instead of
+// downloading the object.
+func TestS3FSDownloadCapReadsRange(t *testing.T) {
+	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 300<<10)
+	d := fs.diskCache
+	d.maxDownloadConns = 3
+	d.downloadConns.Store(3)
+	got, err := readFullObjectOf(fs, 100, 10)
+	require.NoError(t, err)
+	require.Equal(t, data[100:110], got)
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Equal(t, int64(10), storage.bytes.Load(), "a range read of the entry")
+	require.False(t, d.cache.Contains(d.pathForFile("object")))
+}
+
+// A download releases its connections once its transfer ends, and a split that cannot
+// reserve a connection for each part downloads the object as one range.
+func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
+	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
+	d := fs.diskCache
+	d.maxDownloadConns = 2
+	d.downloadConns.Store(1)
+	got, err := readFullObjectOf(fs, 100, 10)
+	require.NoError(t, err)
+	require.Equal(t, data[100:110], got)
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Empty(t, storage.starts, "one open-ended range with one connection free")
+	require.Equal(t, int64(1), d.downloadConns.Load(), "its connection is released")
+	require.True(t, d.cache.Contains(d.pathForFile("object")))
 }

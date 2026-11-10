@@ -197,6 +197,19 @@ func (o *objectDownload) writtenLocked() int64 {
 	return n
 }
 
+// progressLocked returns the bytes written of the parts holding [off, end), or of the
+// parts from off on when end is negative.
+func (o *objectDownload) progressLocked(off, end int64) int64 {
+	var n int64
+	for _, p := range o.parts {
+		if p.end >= 0 && p.end <= off || end >= 0 && p.start >= end {
+			continue
+		}
+		n += p.written
+	}
+	return n
+}
+
 // availableLocked returns the end of the written bytes from off, or off when the byte at
 // off is not written.
 func (o *objectDownload) availableLocked(off int64) int64 {
@@ -273,11 +286,26 @@ func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
 // when end is negative. It returns the end of the written bytes from off, and false when
 // they will never cover end.
 func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout time.Duration) (int64, bool) {
+	return o.waitForProgress(ctx, off, end, timeout, 0)
+}
+
+// waitForProgress is waitFor that also gives up when the parts holding [off, end) write
+// nothing for stall, unless stall is 0.
+func (o *objectDownload) waitForProgress(ctx context.Context, off, end int64, timeout, stall time.Duration) (int64, bool) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	var stalled <-chan time.Time
+	var stallTimer *time.Timer
+	if stall > 0 {
+		stallTimer = time.NewTimer(stall)
+		defer stallTimer.Stop()
+		stalled = stallTimer.C
+	}
+	last := int64(-1)
 	for {
 		o.mu.Lock()
 		written, ended, complete, changed := o.availableLocked(off), o.ended, o.complete, o.changed
+		progress := o.progressLocked(off, end)
 		o.mu.Unlock()
 		if end >= 0 && written >= end || end < 0 && complete {
 			return written, true
@@ -285,14 +313,26 @@ func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout ti
 		if ended {
 			return written, false
 		}
+		if stallTimer != nil && last >= 0 && progress > last {
+			stallTimer.Reset(stall)
+		}
+		last = progress
 		select {
 		case <-changed:
+		case <-stalled:
+			return written, false
 		case <-ctx.Done():
 			return written, false
 		case <-timer.C:
 			return written, false
 		}
 	}
+}
+
+// downloadStall is how long a read waits for the bytes of the download it chose to
+// grow before it reads its range.
+func downloadStall() time.Duration {
+	return max(downloadStallMin, 4*rangeReadCosts.firstByte())
 }
 
 type downloadProgressWriter struct {
@@ -316,11 +356,19 @@ type objectSplitConfig struct {
 	min   int64
 }
 
+// objectLayout returns the size of an object to download, and the offset, or 0, a read
+// needs its bytes from first.
+type objectLayout func(context.Context) (size, splitAt int64, err error)
+
 // bounds returns the 64KiB-aligned bounds of the parts the download of an object of size
-// bytes reads at once, or nil to read it as one range.
-func (c objectSplitConfig) bounds(size int64) []int64 {
+// bytes reads at once, or nil to read it as one range. With splitAt inside the object, a
+// part starts there, so the bytes a read needs from there come first.
+func (c objectSplitConfig) bounds(size, splitAt int64) []int64 {
 	if c.parts <= 1 || size < c.min {
 		return nil
+	}
+	if at := splitAt / prefetchBlockMax * prefetchBlockMax; at > 0 && at < size {
+		return []int64{0, at, size}
 	}
 	part := (size + int64(c.parts) - 1) / int64(c.parts)
 	part = (part + prefetchBlockMax - 1) / prefetchBlockMax * prefetchBlockMax
@@ -449,11 +497,33 @@ func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
 	o.retire()
 }
 
-// downloading returns the number of whole-object downloads in flight.
-func (d *DiskCache) downloading() int {
-	d.downloads.mu.Lock()
-	defer d.downloads.mu.Unlock()
-	return len(d.downloads.m)
+// downloadConnLimit is the most object-storage connections whole-object downloads hold.
+func (d *DiskCache) downloadConnLimit() int64 {
+	if d.maxDownloadConns > 0 {
+		return d.maxDownloadConns
+	}
+	return int64(maxConnsPerHost / 2)
+}
+
+// prefetchWorkers is the most prefetches run at once, a quarter of the connections
+// downloads may hold: past it more streams share the bandwidth without adding any.
+func (d *DiskCache) prefetchWorkers() int {
+	return int(max(d.downloadConnLimit()/4, 4))
+}
+
+// reserveDownloadConns reserves n of the connections whole-object downloads may hold,
+// half the connections to the object storage host, or reports that they are taken.
+func (d *DiskCache) reserveDownloadConns(n int64) bool {
+	limit := d.downloadConnLimit()
+	for {
+		cur := d.downloadConns.Load()
+		if cur+n > limit {
+			return false
+		}
+		if d.downloadConns.CompareAndSwap(cur, cur+n) {
+			return true
+		}
+	}
 }
 
 func (d *DiskCache) download(diskPath string) *objectDownload {
@@ -464,8 +534,8 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 
 // readFromDownload fills entry from the download of the object at diskPath when its bytes
 // are written, or will be no more than the max extra wait later than a range read could
-// fetch them, or are more than an eighth of what the download writes before them. It reports whether
-// a download covers the object, and whether it filled entry.
+// fetch them, or are more than an eighth of what the download writes before them. It
+// reports whether a download covers the object, and whether it filled entry.
 func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
 	o := d.download(diskPath)
 	if o == nil {
@@ -489,9 +559,9 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 				metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
 				return true, false, nil
 			}
-			budget += wait
 		}
-		if _, ok := o.waitFor(ctx, entry.Offset, end, budget); !ok {
+		// The read waits for the download it chose while its bytes keep coming.
+		if _, ok := o.waitForProgress(ctx, entry.Offset, end, maxIOWaitDuration, downloadStall()); !ok {
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
 		}
@@ -518,6 +588,9 @@ const (
 	// downloadRateMinBytes is written by a part before its own rate is used, and each
 	// part's rate at that point is a sample of the recent downloads' rate.
 	downloadRateMinBytes = 256 << 10
+	// downloadStallMin is the least time a read waits for the bytes of its download to
+	// grow.
+	downloadStallMin = 100 * time.Millisecond
 	// objectSplitMaxDownloads is the most whole-object downloads in flight with which
 	// another download is split: beyond them the link is shared and a split adds no
 	// bandwidth.

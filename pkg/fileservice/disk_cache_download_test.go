@@ -167,6 +167,39 @@ func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
 	}
 }
 
+// A read that chose to wait for the download keeps waiting while its bytes keep coming,
+// however late, instead of switching to a range read.
+func TestDiskCacheReadKeepsWaitingForChosenDownload(t *testing.T) {
+	rangeReadsCost(t, 20*time.Millisecond)
+	cache, pw, filled := downloading(t)
+	pending := readRange(context.Background(), cache, 1, 3)
+	t0 := time.Now()
+	for _, b := range []byte("hello") {
+		time.Sleep(downloadStallMin * 9 / 10)
+		_, err := pw.Write([]byte{b})
+		require.NoError(t, err)
+	}
+	vec := waitVector(t, pending)
+	require.Greater(t, time.Since(t0), 20*time.Millisecond+cache.downloadMaxExtraWait, "past the budget")
+	require.True(t, vec.Entries[0].done)
+	require.Equal(t, []byte("ell"), vec.Entries[0].Data)
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+}
+
+// A read whose download stops writing its bytes reads its range after the stall,
+// not after the hang guard.
+func TestDiskCacheReadLeavesStalledDownload(t *testing.T) {
+	rangeReadsCost(t, 20*time.Millisecond)
+	cache, pw, filled := downloading(t)
+	t0 := time.Now()
+	vec := waitVector(t, readRange(context.Background(), cache, 1, 3))
+	require.False(t, vec.Entries[0].done)
+	require.Less(t, time.Since(t0), 10*downloadStall())
+	require.NoError(t, pw.Close())
+	require.NoError(t, <-filled)
+}
+
 // A read whose bytes the download writes later than a range read fetches them goes to a
 // range read at once, and a read of bytes already written still reads the download.
 func TestDiskCacheReadDeclinesDownloadFarBehind(t *testing.T) {

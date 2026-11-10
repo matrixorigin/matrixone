@@ -167,7 +167,9 @@ func (i *IOVector) ioMergeKey() IOMergeKey {
 	}
 	min, max, readFull := i.readRange()
 	if readFull {
+		// A full-object read and a prefetch of the object download the same bytes.
 		key.FullObject = true
+		key.Policy = 0
 		return key
 	}
 	return i.ioMergeKeyWithRange(key, min, max)

@@ -73,7 +73,9 @@ func readRangeOf(t *testing.T, fs *S3FS, policy Policy, offset, size int64) []by
 		Entries: []IOEntry{{Offset: offset, Size: size}}}
 	require.NoError(t, fs.Read(context.Background(), vec))
 	fs.diskCache.prefetchFlights.reads.Wait()
-	return vec.Entries[0].Data
+	data := slices.Clone(vec.Entries[0].Data)
+	vec.Release()
+	return data
 }
 
 // A short range read caches the aligned prefetch range around it, which serves a later

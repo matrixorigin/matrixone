@@ -57,6 +57,7 @@ type S3FS struct {
 
 	ioMerger     *IOMerger
 	decodedReads *decodedReadRegistry
+	prefetcher   *prefetcher
 
 	parallelMode ParallelMode
 }
@@ -188,6 +189,13 @@ func NewS3FS(
 	if !noCache {
 		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
+		}
+		if fs.diskCache != nil {
+			if args.MaxConnsPerHost > 0 {
+				fs.diskCache.maxDownloadConns = int64(args.MaxConnsPerHost / 2)
+			}
+			workers := fs.diskCache.prefetchWorkers()
+			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(workers), fs.haveObject, fs.prefetchObject)
 		}
 	}
 
@@ -527,7 +535,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 			return s.newReadCloser(ctx, filePath)
 		},
 		s.asyncUpdate,
-		s.statObject(s.pathToKey(filePath)),
+		s.prefetchedSize(path.File, 0),
 	); err != nil {
 		return err
 	}
@@ -545,10 +553,34 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	}}, nil
 }
 
-// statObject returns the size of the object at key.
-func (s *S3FS) statObject(key string) func(context.Context) (int64, error) {
-	return func(ctx context.Context) (int64, error) {
-		return s.storage.Stat(ctx, key)
+// readQueuedObject moves the queued download of the object of vector to the front of
+// the queue, and the read reads its ranges.
+func (s *S3FS) readQueuedObject(vector *IOVector) {
+	if s.prefetcher.promote(vector.FilePath) {
+		vector.Policy |= SkipFullFilePreloads
+		metric.FSPrefetchReadQueuedCounter.Inc()
+	}
+}
+
+// firstNeeded returns the least offset of the entries of vector not done.
+func firstNeeded(vector *IOVector) int64 {
+	first := int64(-1)
+	for i := range vector.Entries {
+		if e := &vector.Entries[i]; !e.done && (first < 0 || e.Offset < first) {
+			first = e.Offset
+		}
+	}
+	return max(first, 0)
+}
+
+// prefetchedSize returns the layout of the object of file: the size a prefetch told of,
+// or an error when none did, and splitAt.
+func (s *S3FS) prefetchedSize(file string, splitAt int64) objectLayout {
+	return func(context.Context) (int64, int64, error) {
+		if size, ok := s.diskCache.prefetched.size(s.diskCache.pathForFile(file)); ok {
+			return size, splitAt, nil
+		}
+		return 0, 0, errObjectSizeUnknown
 	}
 }
 
@@ -695,6 +727,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
 	}
+	if !vector.Policy.Any(SkipFullFilePreloads) && s.prefetcher != nil {
+		s.readQueuedObject(vector)
+	}
 	var finishDecode func()
 	var decodePrepared bool
 	var fillTicket *decodedFillTicket
@@ -780,6 +815,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
 	forceMinimalRangeRead := false
 	forcePerEntryRangeRead := false
+	rereadDiskCache := false
 read_memory_cache:
 	if s.memCache != nil {
 
@@ -920,10 +956,6 @@ read_disk_cache:
 		}
 		LogEvent(ctx, str_ioMerger_Merge_begin)
 		startLock := time.Now()
-		waitDuration := maxIOWaitDuration
-		if mergeKey.FullObject {
-			waitDuration = shortIOWaitDuration
-		}
 		done, generation := s.ioMerger.merge(mergeKey)
 		if done != nil {
 			finishMerge = done
@@ -933,12 +965,22 @@ read_disk_cache:
 			LogEvent(ctx, str_ioMerger_Merge_end)
 		} else {
 			LogEvent(ctx, str_ioMerger_Merge_wait)
-			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, waitDuration)
+			// A full-object read does not wait for the one that holds its merge.
+			var completed bool
+			var waitErr error
+			if !mergeKey.FullObject {
+				completed, waitErr = waitForIOGeneration(ctx, mergeKey, generation, maxIOWaitDuration)
+			}
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
 			if waitErr != nil {
 				return waitErr
+			}
+			if !completed && mergeKey.FullObject && mayReadDiskCache && !rereadDiskCache {
+				// The download of the merge's holder may be under way by now.
+				rereadDiskCache = true
+				goto read_disk_cache
 			}
 			if !completed && mergeKey.FullObject {
 				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
@@ -946,15 +988,12 @@ read_disk_cache:
 					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
 						logicalBytes, spanBytes)
 					waitStart := time.Now()
-					remainingWaitDuration := maxIOWaitDuration - waitDuration
-					if remainingWaitDuration > 0 {
-						completed, waitErr = waitForIOGeneration(
-							ctx,
-							mergeKey,
-							generation,
-							remainingWaitDuration,
-						)
-					}
+					completed, waitErr = waitForIOGeneration(
+						ctx,
+						mergeKey,
+						generation,
+						maxIOWaitDuration,
+					)
 					waitTime := time.Since(waitStart)
 					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
 					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
@@ -1180,6 +1219,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
+		if s.prefetcher != nil && s.prefetcher.isRunning(vector.FilePath) {
+			metric.FSPrefetchReadOwnRunningCounter.Inc()
+		} else {
+			metric.FSPrefetchReadOwnDownloadCounter.Inc()
+		}
 		done, err := s.readFullObjectToDiskCacheStreaming(ctx, vector, path.File, getReader)
 		if err != nil {
 			return err
@@ -1560,7 +1604,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 			}
 			started <- download
 			return &lazyObjectReader{ctx: fillCtx, read: getReader}, nil
-		}, s.asyncUpdate, s.statObject(s.pathToKey(file)))
+		}, s.asyncUpdate, s.prefetchedSize(file, firstNeeded(vector)))
 	}()
 	var setErr error
 	setFinished := false
@@ -1805,6 +1849,9 @@ func (s *S3FS) IndexFileCache() *IndexFileCache {
 }
 
 func (s *S3FS) Close(ctx context.Context) {
+	if s.prefetcher != nil {
+		s.prefetcher.close(ctx)
+	}
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })

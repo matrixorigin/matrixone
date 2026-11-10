@@ -404,6 +404,41 @@ var (
 			Help:      "Total bytes read from object storage by reads that did not wait for the download of their object",
 		})
 
+	// FSPrefetchReadCounter counts the reads of whole objects by what they found of the
+	// object's prefetch: queued and not started, so the read reads its ranges, or nothing
+	// cached, downloading or queued, so the read downloads the object itself, or taken by
+	// a prefetch worker that has not started its download yet.
+	FSPrefetchReadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "prefetch_read_total",
+			Help:      "Reads of whole objects by what they found of the object's prefetch",
+		}, []string{"state"})
+	FSPrefetchReadQueuedCounter      = FSPrefetchReadCounter.WithLabelValues("queued")
+	FSPrefetchReadOwnDownloadCounter = FSPrefetchReadCounter.WithLabelValues("own")
+	FSPrefetchReadOwnRunningCounter  = FSPrefetchReadCounter.WithLabelValues("own_running")
+
+	// FSPrefetchDroppedCounter counts the object prefetches dropped because the queue
+	// was full.
+	FSPrefetchDroppedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "prefetch_dropped_total",
+			Help:      "Object prefetches dropped because the prefetch queue was full",
+		})
+
+	// FSDiskCacheDownloadSkippedCounter counts the whole-object downloads not started
+	// because the most downloads allowed were in flight.
+	FSDiskCacheDownloadSkippedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_download_skipped_total",
+			Help:      "Whole-object downloads not started because the most downloads allowed were in flight",
+		})
+
 	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
 	// dropped when the bounded asynchronous queue cannot admit more work.
 	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(
