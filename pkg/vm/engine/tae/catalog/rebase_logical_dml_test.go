@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,4 +43,38 @@ func TestRebaseLogicalDMLLifecycle(t *testing.T) {
 	entry.RestoreRebaseLogicalDMLBound(fixed)
 	entry.ResolveRebaseLogicalDML("rolled-back", &committed)
 	require.Equal(t, committed, entry.RebaseLogicalDMLBound())
+}
+
+func TestRebaseLogicalDMLConcurrentCompletion(t *testing.T) {
+	entry := MockTableEntryWithDB(nil, 42)
+	require.NoError(t, entry.RegisterRebaseLogicalDML("held"))
+	done, failure := make(chan struct{}), make(chan error, 1)
+	go func() {
+		defer close(done)
+		for i := 1; i <= 64; i++ {
+			id := fmt.Sprintf("writer-%d", i)
+			if err := entry.RegisterRebaseLogicalDML(id); err != nil {
+				failure <- err
+				return
+			}
+			committed := types.BuildTS(int64(i), 0)
+			entry.ResolveRebaseLogicalDML(id, &committed)
+		}
+	}()
+	defer func() { <-done }()
+	maximum := types.BuildTS(64, 0)
+	for range 64 {
+		require.True(t, entry.HasRebaseLogicalDMLAfter(maximum), "held writer remains pending during other completions")
+		bound := entry.RebaseLogicalDMLBound()
+		require.False(t, bound.GT(&maximum))
+	}
+	<-done
+	select {
+	case err := <-failure:
+		require.NoError(t, err)
+	default:
+	}
+	entry.ResolveRebaseLogicalDML("held", nil)
+	require.Equal(t, maximum, entry.RebaseLogicalDMLBound())
+	require.False(t, entry.HasRebaseLogicalDMLAfter(maximum), "all pending owners have completed")
 }
