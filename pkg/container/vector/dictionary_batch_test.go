@@ -200,3 +200,71 @@ func TestDictionaryBulkFixedWidthsOffsetsAndFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestDictionaryWorkspaceRetiresOnlyAfterFinalBorrower(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, AppendFixedList(source, []int64{10, 20}, nil, mp))
+	snapshots := &DictionaryVectorSlot{}
+	rowsSlot := &DictionaryVectorSlot{}
+	t.Cleanup(func() { snapshots.Free(mp); rowsSlot.Free(mp) })
+	first, ok, err := TryFreezeVectorReuse(source, mp, nil, snapshots)
+	require.NoError(t, err)
+	require.True(t, ok)
+	oldHeader := first.vec
+	rows, err := NewRowSelectionReuse([]int64{1, 0}, 2, mp, nil, rowsSlot)
+	require.NoError(t, err)
+	oldRows := rows.storage
+	view, err := NewDictionaryVector(first, rows, mp, nil)
+	require.NoError(t, err)
+	defer view.Free(mp)
+	first.Release()
+	rows.Release()
+	next, ok, err := TryFreezeVectorReuse(source, mp, nil, snapshots)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotSame(t, oldHeader, next.vec, "a live view must prevent snapshot reuse")
+	spare := next.vec
+	next.Release()
+	next, ok, err = TryFreezeVectorReuse(source, mp, nil, snapshots)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Same(t, spare, next.vec)
+	next.Release()
+	otherRows, err := NewRowSelectionReuse([]int64{0}, 2, mp, nil, rowsSlot)
+	require.NoError(t, err)
+	require.NotSame(t, oldRows, otherRows.storage)
+	spareRows := otherRows.storage
+	otherRows.Release()
+	otherRows, err = NewRowSelectionReuse([]int64{1}, 2, mp, nil, rowsSlot)
+	require.NoError(t, err)
+	require.Same(t, spareRows, otherRows.storage)
+	require.Equal(t, []int64{1}, otherRows.storageFixed())
+	otherRows.Release()
+	require.Equal(t, int64(20), GetFixedAtNoTypeCheck[int64](view, 0))
+	snapshots.Free(mp)
+	rowsSlot.Free(mp)
+	view.Free(mp) // final release after owner shutdown cannot reopen either slot
+	require.Same(t, &closedDictionaryVectorSlot, snapshots.spare.Load())
+	require.Same(t, &closedDictionaryVectorSlot, rowsSlot.spare.Load())
+}
+
+func TestDictionaryWorkspaceFinalReleaseRacesClose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, AppendFixed(source, int64(7), false, mp))
+	slot := &DictionaryVectorSlot{}
+	base, ok, err := TryFreezeVectorReuse(source, mp, nil, slot)
+	require.NoError(t, err)
+	require.True(t, ok)
+	start, done := make(chan struct{}), make(chan struct{})
+	go func() { <-start; base.Release(); close(done) }()
+	close(start)
+	slot.Free(mp)
+	<-done
+	require.Same(t, &closedDictionaryVectorSlot, slot.spare.Load())
+}

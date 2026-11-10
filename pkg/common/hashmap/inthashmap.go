@@ -692,6 +692,26 @@ func (m *IntHashMap) FillGroupHashes(dst []uint64) []uint64 {
 // scratch, preserving the ordinary typed equality codec and NULL domain.
 func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, count int) {
 	typ := *vec.GetType()
+	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() {
+		fixed := vector.ResolveFixedBytesReadView(vec)
+		if !fixed.Constant {
+			switch fixed.Width {
+			case 1:
+				fillSelectedIntKeys[uint8](itr, fixed, start, count)
+				return
+			case 2:
+				fillSelectedIntKeys[uint16](itr, fixed, start, count)
+				return
+			case 4:
+				fillSelectedIntKeys[uint32](itr, fixed, start, count)
+				return
+			case 8:
+				fillSelectedIntKeys[uint64](itr, fixed, start, count)
+				return
+			}
+		}
+	}
+
 	var strings vector.VarlenaReadView
 	var fixed vector.FixedBytesReadView
 	if typ.IsVarlen() {
@@ -730,6 +750,27 @@ func (itr *intHashMapIterator) fillDictionaryKey(vec *vector.Vector, start, coun
 		} else {
 			encoded := keycodec.AppendCanonicalValue(key[:offset], typ, dictionaryFixedBytes(fixed, row))
 			itr.keyOffs[i] = uint32(len(encoded))
+		}
+	}
+}
+
+func fillSelectedIntKeys[T types.FixedSizeT](itr *intHashMapIterator, view vector.FixedBytesReadView, start, count int) {
+	values := types.DecodeSlice[T](view.Values[:len(view.Values)/view.Width*view.Width])
+	selected := view.Selection[start : start+count]
+	if !itr.mp.hasNull {
+		for i, row := range selected {
+			key := types.EncodeSlice(itr.keys[i : i+1])
+			offset := itr.keyOffs[i]
+			copy(key[offset:], types.EncodeSlice(values[row:row+1]))
+			itr.keyOffs[i] = offset + uint32(view.Width)
+		}
+	} else {
+		for i, row := range selected {
+			key := types.EncodeSlice(itr.keys[i : i+1])
+			offset := itr.keyOffs[i]
+			key[offset] = 0
+			copy(key[offset+1:], types.EncodeSlice(values[row:row+1]))
+			itr.keyOffs[i] = offset + 1 + uint32(view.Width)
 		}
 	}
 }

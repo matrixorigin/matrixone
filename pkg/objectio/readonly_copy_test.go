@@ -162,7 +162,7 @@ func (d *retainedDictionaryCacheProbe) Release() {
 	}
 }
 
-func TestRetainedCachedDictionaryLifetimeAndCow(t *testing.T) {
+func TestRetainedCachedVectorLifetimeAndCow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	source := vector.NewVec(types.T_varchar.ToType())
@@ -178,16 +178,11 @@ func TestRetainedCachedDictionaryLifetimeAndCow(t *testing.T) {
 	probe.refs.Store(1)
 	destination := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	t.Cleanup(func() { destination.Free(mp) })
-	var identity *vector.RowSelection
-	t.Cleanup(func() {
-		if identity != nil {
-			identity.Release()
-		}
-	})
-	admitted, err := TryBorrowCachedDictionary(destination, probe, &identity, mp)
+	admitted, err := TryBorrowCachedVector(destination, probe, mp)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	require.True(t, destination.IsDictionary())
+	require.False(t, destination.IsDictionary())
+	require.True(t, destination.HasBorrowedBacking())
 	require.Zero(t, probe.bytesCalls.Load())
 	visible := destination.GetBytesAt(0)
 	position := bytes.Index(probe.backing, long)
@@ -203,7 +198,7 @@ func TestRetainedCachedDictionaryLifetimeAndCow(t *testing.T) {
 	require.Equal(t, int32(1), probe.released.Load())
 }
 
-func TestRetainedCachedDictionaryPinRefusal(t *testing.T) {
+func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	source := vector.NewVec(types.T_varchar.ToType())
@@ -226,11 +221,9 @@ func TestRetainedCachedDictionaryPinRefusal(t *testing.T) {
 	destination, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), allocation)
 	require.NoError(t, err)
 	t.Cleanup(func() { destination.Free(mp) })
-	var identity *vector.RowSelection
-	admitted, err := TryBorrowCachedDictionary(destination, data, &identity, mp)
+	admitted, err := TryBorrowCachedVector(destination, data, mp)
 	require.NoError(t, err)
 	require.False(t, admitted)
-	require.Nil(t, identity)
 	require.Zero(t, destination.Length())
 	require.False(t, destination.IsDictionary())
 }

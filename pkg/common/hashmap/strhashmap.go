@@ -1470,6 +1470,41 @@ func (m *StrHashMap) FillGroupHashes(dst []uint64) []uint64 {
 func (itr *strHashmapIterator) fillDictionaryKeys(vec *vector.Vector, start, count int) {
 	typ := *vec.GetType()
 	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	if typ.IsFixedLen() && typ.Oid != types.T_float32 && typ.Oid != types.T_float64 && !vec.IsConst() && !vec.HasNull() && !vec.HasGrouping() {
+		fixed := vector.ResolveFixedBytesReadView(vec)
+		if !fixed.Constant {
+			switch fixed.Width {
+			case 1:
+				fillSelectedStrKeys[uint8](itr, fixed, start, count, withDomain)
+				return
+			case 2:
+				fillSelectedStrKeys[uint16](itr, fixed, start, count, withDomain)
+				return
+			case 4:
+				fillSelectedStrKeys[uint32](itr, fixed, start, count, withDomain)
+				return
+			case 8:
+				fillSelectedStrKeys[uint64](itr, fixed, start, count, withDomain)
+				return
+			case 12:
+				fillSelectedStrKeys[[12]byte](itr, fixed, start, count, withDomain)
+				return
+			case 16:
+				fillSelectedStrKeys[[16]byte](itr, fixed, start, count, withDomain)
+				return
+			case 20:
+				fillSelectedStrKeys[[20]byte](itr, fixed, start, count, withDomain)
+				return
+			case 24:
+				fillSelectedStrKeys[[24]byte](itr, fixed, start, count, withDomain)
+				return
+			case 32:
+				fillSelectedStrKeys[[32]byte](itr, fixed, start, count, withDomain)
+				return
+			}
+		}
+	}
+
 	var strings vector.VarlenaReadView
 	var fixed vector.FixedBytesReadView
 	if typ.IsVarlen() {
@@ -1510,5 +1545,20 @@ func (itr *strHashmapIterator) fillDictionaryKeys(vec *vector.Vector, start, cou
 			key = keycodec.AppendCanonicalValue(key, typ, dictionaryFixedBytes(fixed, row))
 		}
 		itr.keys[i] = key
+	}
+}
+
+func fillSelectedStrKeys[T any](itr *strHashmapIterator, view vector.FixedBytesReadView, start, count int, withDomain bool) {
+	values := types.DecodeSlice[T](view.Values[:len(view.Values)/view.Width*view.Width])
+	selected := view.Selection[start : start+count]
+	if !withDomain {
+		for i, row := range selected {
+			itr.keys[i] = append(itr.keys[i], types.EncodeSlice(values[row:row+1])...)
+		}
+	} else {
+		for i, row := range selected {
+			key := append(itr.keys[i], 0)
+			itr.keys[i] = append(key, types.EncodeSlice(values[row:row+1])...)
+		}
 	}
 }

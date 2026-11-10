@@ -28,6 +28,8 @@ import (
 // full-domain input slots. The frame is execution-lane local, never concurrent.
 type DictionaryInputFrame struct {
 	predicateHeaders []*vector.Vector
+	snapshots        []*vector.DictionaryVectorSlot
+	selectionSlot    *vector.DictionaryVectorSlot
 	// Gathers counts committed materializations in the current owner generation.
 	Gathers                                      uint64
 	gatherRows, gatherBytes                      uint64
@@ -46,6 +48,13 @@ func (f *DictionaryInputFrame) Begin(bat *batch.Batch, allocation *vector.Alloca
 		f.flat = make([]*vector.Vector, len(bat.Vecs))
 		f.ready = make([]bool, len(bat.Vecs))
 	}
+	if len(f.snapshots) != len(bat.Vecs) {
+		f.snapshots = make([]*vector.DictionaryVectorSlot, len(bat.Vecs))
+		for i := range f.snapshots {
+			f.snapshots[i] = &vector.DictionaryVectorSlot{}
+		}
+		f.selectionSlot = &vector.DictionaryVectorSlot{}
+	}
 	f.allocation = allocation
 	copy(f.inputs, bat.Vecs)
 }
@@ -62,6 +71,10 @@ func (f *DictionaryInputFrame) Free(mp *mpool.MPool) {
 			v.Free(mp)
 		}
 	}
+	for _, slot := range f.snapshots {
+		slot.Free(mp)
+	}
+	f.selectionSlot.Free(mp)
 	*f = DictionaryInputFrame{}
 }
 

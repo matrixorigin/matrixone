@@ -36,6 +36,12 @@ type RowSelection struct {
 }
 
 func NewRowSelection(rows []int64, domain int, mp *mpool.MPool, account *AllocationAccountSelection) (*RowSelection, error) {
+	return NewRowSelectionReuse(rows, domain, mp, account, nil)
+}
+
+// NewRowSelectionReuse takes bounded private scratch only after the previous
+// mapping's final borrower has released it. Retained mappings remain immutable.
+func NewRowSelectionReuse(rows []int64, domain int, mp *mpool.MPool, account *AllocationAccountSelection, slot *DictionaryVectorSlot) (*RowSelection, error) {
 	if mp == nil || domain < 0 || len(rows) > math.MaxInt/8 {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dictionary row-selection size")
 	}
@@ -48,17 +54,33 @@ func NewRowSelection(rows []int64, domain int, mp *mpool.MPool, account *Allocat
 			monotonic = false
 		}
 	}
-	storage, err := NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), account)
-	if err != nil {
-		return nil, err
+	storage := slot.take()
+	if storage != nil && !AllocationAccountSelectionsEqual(storage.allocationAccount, account) {
+		storage.Free(mp)
+		storage = nil
 	}
+	if storage == nil {
+		var err error
+		storage, err = NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), account)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if len(rows) > 0 {
 		if err := AppendFixedList(storage, rows, nil, mp); err != nil {
 			storage.Free(mp)
 			return nil, err
 		}
 	}
-	lease, err := NewRefCountedBufferLease(storage.data, int64(storage.Allocated()), func() { storage.Free(mp) })
+	lease, err := NewRefCountedBufferLease(storage.data, int64(storage.Allocated()), func() {
+		if slot == nil {
+			storage.Free(mp)
+		} else {
+			storage.CleanOnlyData()
+			slot.put(storage, mp)
+		}
+	})
 	if err != nil {
 		storage.Free(mp)
 		return nil, err
@@ -82,9 +104,9 @@ type DictionaryBase struct {
 	vec   *Vector
 }
 
-// This wrapper proves that a promoted MPool backing keeps its original
-// statement charge until the physical allocation's final release. A foreign
-// decoder/cache lease needs a separate bounded pin admission instead.
+// This wrapper proves that backing keeps its original statement charge until
+// final release: either a promoted MPool allocation or a cache lease with an
+// admitted full-capacity pin. Snapshots in that account share the same charge.
 type dictionaryPayloadLease struct {
 	origin    atomic.Pointer[Vector]
 	selection *AllocationAccountSelection
@@ -103,7 +125,10 @@ var errDictionaryRequiresCopy = moerr.NewNotSupportedNoCtx("dictionary backing r
 // TryFreezeVector retains a snapshot only when payload can be shared. Ownership
 // or capacity refusal is a normal decline; it never copies a complete backing.
 func TryFreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection) (*DictionaryBase, bool, error) {
-	base, err := freezeVector(source, mp, account, false)
+	return tryFreezeVector(source, mp, account, nil)
+}
+func tryFreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection, slot *DictionaryVectorSlot) (*DictionaryBase, bool, error) {
+	base, err := freezeVector(source, mp, account, false, slot)
 	if errors.Is(err, errDictionaryRequiresCopy) || errors.Is(err, mpool.ErrAllocationAccountCapacity) {
 		return nil, false, nil
 	}
@@ -117,10 +142,10 @@ func TryFreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccount
 // payload from a different account are copied into the destination account.
 // Allocation failure leaves source values and ownership valid.
 func FreezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection) (*DictionaryBase, error) {
-	return freezeVector(source, mp, account, true)
+	return freezeVector(source, mp, account, true, nil)
 }
 
-func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection, allowCopy bool) (*DictionaryBase, error) {
+func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSelection, allowCopy bool, slot *DictionaryVectorSlot) (*DictionaryBase, error) {
 	if source == nil || mp == nil || (source.class != FLAT && source.class != CONSTANT) {
 		return nil, moerr.NewInvalidInputNoCtx("dictionary base requires a flat or constant source")
 	}
@@ -179,7 +204,7 @@ func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 	if copyPayload {
 		snapshot, err = source.dup(mp, true, true, account)
 	} else {
-		snapshot, err = source.window(0, source.length, mp, account, true)
+		snapshot, err = source.windowReuse(0, source.length, mp, account, true, slot)
 	}
 	if err != nil {
 		return nil, err
@@ -221,6 +246,9 @@ func freezeVector(source *Vector, mp *mpool.MPool, account *AllocationAccountSel
 	}
 	lease, err := NewRefCountedBufferLease(nil, retained, func() {
 		snapshot.Free(mp)
+		if slot != nil {
+			slot.put(snapshot, mp)
+		}
 		pin.Release()
 	})
 	if err != nil {
@@ -326,27 +354,58 @@ func (v *Vector) retireDictionaryWorkspaceOrigin() {
 	}
 }
 
-// FreezeBorrowedBuffer snapshots scoped decoder metadata while retaining its
-// immutable external byte owner. Source bytes must be covered by lease; no
-// writable legacy alias or temporary decoder header escapes this operation.
-func FreezeBorrowedBuffer(source *Vector, lease BufferLease, mp *mpool.MPool, account *AllocationAccountSelection) (*DictionaryBase, bool, error) {
-	if source == nil || source.IsDictionary() || lease == nil || source.HasBorrowedBacking() || (source.DataBackingKind() != LegacyAlias && cap(source.data) > 0) || (source.AreaBackingKind() != LegacyAlias && cap(source.area) > 0) {
-		return nil, false, nil
+// RetainBorrowedBufferInto converts a scoped legacy decoder into an owned
+// header with immutable leased payload and private metadata. The full foreign
+// capacity is charged before publication. Free/COW releases the cache pin.
+func RetainBorrowedBufferInto(dst, source *Vector, lease BufferLease, mp *mpool.MPool) (bool, error) {
+	if dst == nil || source == nil || mp == nil || dst == source || lease == nil || dst.HasBorrowedBacking() || dst.Length() != 0 || dst.Allocated() != 0 || source.IsDictionary() || source.HasBorrowedBacking() || (source.DataBackingKind() != LegacyAlias && cap(source.data) > 0) || (source.AreaBackingKind() != LegacyAlias && cap(source.area) > 0) {
+		return false, nil
+	}
+	account := dst.allocationAccount
+	var pin *mpool.CapacityLease
+	if account != nil {
+		if err := account.validate(); err != nil {
+			return false, err
+		}
+		size := lease.AccountedBytes()
+		if size < 0 {
+			return false, moerr.NewInvalidInputNoCtx("invalid cache pin size")
+		}
+		reservation, err := account.account.ReserveCapacityWithClass(uint64(size), account.capacityClass, account.owner, account.dataSite)
+		if err != nil {
+			return false, err
+		}
+		defer reservation.Abort()
+		pin, err = reservation.Commit(uint64(size))
+		if err != nil {
+			return false, err
+		}
+	}
+	if !lease.Retain() {
+		pin.Release()
+		return false, moerr.NewInvalidInputNoCtx("immutable decoder lease is closed")
+	}
+	counted, err := NewRefCountedBufferLease(lease.Bytes(), lease.AccountedBytes(), func() { lease.Release(); pin.Release() })
+	if err != nil {
+		lease.Release()
+		pin.Release()
+		return false, err
+	}
+	defer counted.Release()
+	shared := &dictionaryPayloadLease{BufferLease: counted, selection: account}
+	if account != nil {
+		shared.account = account.account
 	}
 	temporary := *source
-	temporary.dataLease = nil
-	temporary.areaLease = nil
-	if !lease.Retain() {
-		return nil, false, moerr.NewInvalidInputNoCtx("immutable decoder lease is closed")
+	temporary.dataLease, temporary.areaLease = shared, shared
+	// window retains each used backing; the scoped decoder itself owns neither.
+	oldType, oldOffHeap := dst.typ, dst.offHeap
+	_, err = temporary.windowInto(0, source.length, mp, account, dst)
+	if err != nil {
+		dst.Free(mp)
+		*dst = Vector{typ: oldType, offHeap: oldOffHeap, allocationAccount: account, areaDisjoint: true}
+		return false, err
 	}
-	temporary.dataLease = lease
-	temporary.cantFreeData = true
-	defer temporary.releaseBorrowedData()
-	if !lease.Retain() {
-		return nil, false, moerr.NewInvalidInputNoCtx("immutable decoder lease is closed")
-	}
-	temporary.areaLease = lease
-	temporary.cantFreeArea = true
-	defer temporary.releaseBorrowedArea()
-	return TryFreezeVector(&temporary, mp, account)
+	source.CopyExpressionMetadataTo(dst)
+	return true, nil
 }

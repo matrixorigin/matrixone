@@ -99,14 +99,14 @@ func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
 			}
 		}
 	})
-	first, err := selectPredicateInput(proc, input, nil, executor, []int64{2, 0}, nil, bases, declined, nil)
+	first, err := selectPredicateInput(proc, input, nil, executor, []int64{2, 0}, nil, bases, declined, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { first.Clean(mp) })
 	require.Nil(t, first.Vecs[1])
 	require.Nil(t, bases[1])
 	require.True(t, first.Vecs[0].IsDictionary())
 	base := bases[0]
-	second, err := selectPredicateInput(proc, input, nil, executor, []int64{1}, nil, bases, declined, nil)
+	second, err := selectPredicateInput(proc, input, nil, executor, []int64{1}, nil, bases, declined, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { second.Clean(mp) })
 	require.Same(t, base, bases[0])
@@ -124,7 +124,7 @@ func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
 			}
 		}
 	})
-	third, err := selectPredicateInput(proc, input, nil, executor, []int64{0}, nil, bases, declined, headers)
+	third, err := selectPredicateInput(proc, input, nil, executor, []int64{0}, nil, bases, declined, headers, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { third.Clean(mp) })
 	require.Same(t, saved, third.Vecs[0])

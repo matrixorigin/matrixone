@@ -58,7 +58,14 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 			}
 		}()
 	}
-	admitted, err := vector.TrySelectDictionaryVectorsReuse(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse)
+	var snapshots []*vector.DictionaryVectorSlot
+	if len(request.SnapshotSlots) == len(output.Vecs) {
+		snapshots = make([]*vector.DictionaryVectorSlot, len(positions))
+		for i, pos := range positions {
+			snapshots[i] = request.SnapshotSlots[pos]
+		}
+	}
+	admitted, err := vector.TrySelectDictionaryVectorsWithWorkspace(sources, selected, rows, output.RowCount(), mp, request.OutputAllocation, reuse, snapshots, request.SelectionSlot)
 	if err != nil {
 		return err
 	}

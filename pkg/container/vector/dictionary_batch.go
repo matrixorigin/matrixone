@@ -30,6 +30,15 @@ func TrySelectDictionaryVectors(sources, destinations []*Vector, selected []int6
 // TrySelectDictionaryVectorsReuse preserves transactional destination publication
 // and shares mappings while taking eligible private headers from reusable slots.
 func TrySelectDictionaryVectorsReuse(sources, destinations []*Vector, selected []int64, domain int, mp *mpool.MPool, account *AllocationAccountSelection, reuse []*Vector) (retained bool, retErr error) {
+	return TrySelectDictionaryVectorsWithWorkspace(sources, destinations, selected, domain, mp, account, reuse, nil, nil)
+}
+
+// TrySelectDictionaryVectorsWithWorkspace reuses cleared publication headers,
+// private immutable snapshots and one selection bank owned by the execution lane.
+func TrySelectDictionaryVectorsWithWorkspace(sources, destinations []*Vector, selected []int64, domain int, mp *mpool.MPool, account *AllocationAccountSelection, reuse []*Vector, snapshots []*DictionaryVectorSlot, selectionSlot *DictionaryVectorSlot) (retained bool, retErr error) {
+	if snapshots != nil && len(snapshots) != len(sources) {
+		return false, moerr.NewInvalidInputNoCtx("invalid dictionary snapshot slots")
+	}
 	if reuse != nil && len(reuse) != len(sources) {
 		return false, moerr.NewInvalidInputNoCtx("invalid reusable dictionary slots")
 	}
@@ -64,7 +73,7 @@ func TrySelectDictionaryVectorsReuse(sources, destinations []*Vector, selected [
 			retErr = nil
 		}
 	}()
-	rows, err := NewRowSelection(selected, domain, mp, account)
+	rows, err := NewRowSelectionReuse(selected, domain, mp, account, selectionSlot)
 	if err != nil {
 		return false, err
 	}
@@ -102,7 +111,11 @@ func TrySelectDictionaryVectorsReuse(sources, destinations []*Vector, selected [
 			base := bases[source]
 			if base == nil {
 				var admitted bool
-				base, admitted, err = TryFreezeVector(source, mp, account)
+				var slot *DictionaryVectorSlot
+				if snapshots != nil {
+					slot = snapshots[i]
+				}
+				base, admitted, err = TryFreezeVectorReuse(source, mp, account, slot)
 				if err != nil {
 					return false, err
 				}

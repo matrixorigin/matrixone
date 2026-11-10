@@ -225,7 +225,16 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 	if tableScan.ctr.readerHeaders == nil {
 		tableScan.ctr.readerHeaders = make([]*vector.Vector, len(tableScan.Types))
 	}
+	if tableScan.ctr.readerSnapshots == nil {
+		tableScan.ctr.readerSnapshots = make([]*vector.DictionaryVectorSlot, len(tableScan.Types))
+		for i := range tableScan.ctr.readerSnapshots {
+			tableScan.ctr.readerSnapshots[i] = &vector.DictionaryVectorSlot{}
+		}
+		tableScan.ctr.readerSelection = &vector.DictionaryVectorSlot{}
+	}
 	tableScan.ctr.readerFilter = &engine.ReaderFilterRequest{
+		SnapshotSlots:   tableScan.ctr.readerSnapshots,
+		SelectionSlot:   tableScan.ctr.readerSelection,
 		Workspace:       tableScan.ctr.readerWorkspace,
 		ReusableHeaders: tableScan.ctr.readerHeaders,
 		Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {

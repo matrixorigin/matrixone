@@ -1307,6 +1307,8 @@ type ReaderFilterRequest struct {
 	// reclaims unique backing before its next read; terminal cleanup frees both.
 	Workspace []*vector.Vector
 	// ReusableHeaders are cleared publication headers owned by the same caller.
+	SnapshotSlots    []*vector.DictionaryVectorSlot
+	SelectionSlot    *vector.DictionaryVectorSlot
 	ReusableHeaders  []*vector.Vector
 	Select           ReaderSelection
 	OutputAllocation *vector.AllocationAccountSelection

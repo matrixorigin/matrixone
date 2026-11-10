@@ -179,9 +179,9 @@ func LoadColumnsDataIntoReadonly(
 	return
 }
 
-// LoadColumnsDataIntoDictionary borrows only entries with ObjectIO's immutable
+// LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
 // validation capability; every other shape uses ordinary owned materialization.
-func LoadColumnsDataIntoDictionary(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy) (bool, error) {
+func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy) (bool, error) {
 	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, true)
 	return hit, err
 }
@@ -198,7 +198,7 @@ func loadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	readonlyArea bool,
-	dictionaryColumns bool,
+	borrowedColumns bool,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
 		err = moerr.NewInvalidInputNoCtxf(
@@ -303,16 +303,10 @@ func loadColumnsDataInto(
 		}
 	}
 
-	var identity *vector.RowSelection
-	defer func() {
-		if identity != nil {
-			identity.Release()
-		}
-	}()
 	for i := range columns {
-		if dictionaryColumns {
+		if borrowedColumns {
 			var borrowed bool
-			borrowed, err = objectio.TryBorrowCachedDictionary(destinations[i], ioVectors.Entries[i].CachedData, &identity, m)
+			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, m)
 			if err != nil {
 				return
 			}

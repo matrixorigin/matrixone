@@ -1098,7 +1098,7 @@ func blockDataReadWithFilter(
 				typs[i] = colTypes[pos]
 				dest[i] = outputBat.Vecs[pos]
 			}
-			_, err = ioutil.LoadColumnsDataIntoDictionary(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy)
+			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy)
 		} else {
 			deleteMask, err = materializeBlockColumnsAtPositions(
 				ctx,

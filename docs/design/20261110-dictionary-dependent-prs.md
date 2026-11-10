@@ -317,3 +317,40 @@ last-view lifetime, COW cache isolation, pin-pressure refusal and an actual
 no-tombstone reader callback receiving a dictionary before predicate evaluation.
 Existing tombstone/late/visibility/Top-K cases remain fallback controls. Requalify
 all22 locally and present any new regression before changing product code again.
+
+## Approved correction after retained-cache qualification
+
+The requester approved fixing the measured SF10 regressions on 2026-11-11.
+Keep all other PR scopes above. No cache algorithm/tier or SQL typing change.
+
+The cache reader now installs privately copied metadata and immutable counted
+payload leases into its existing empty flat workspace. This removes the
+intermediate identity row mapping and dictionary. Full cache capacity is
+reserved before publication; the lease owns both cache retention and that pin.
+The tracked flat header follows existing read-only/COW rules; no unowned legacy
+alias escapes. Selected publication freezes this source and constructs the final
+surviving-row map. The pin is shared within the same statement account, rather
+than charged again for each snapshot. Original source headers are retired by the
+existing reader workspace boundary; downstream immutable references keep their
+own lifetime. Unmarked cache entries and reusable owned capacity keep copying.
+
+A per-column snapshot slot and one row-map slot are owned by each prepared
+reader/filter execution lane. A final-reference callback returns cleared
+snapshot metadata (without payload) or bounded row-map scratch. Live borrowers
+prevent reuse. Each slot holds at most one spare; concurrent final releases
+that lose admission free their objects. Free atomically seals the slot, releases
+its spare and makes later callbacks free their objects without reopening the
+old generation. No global pool, background worker or waiting is introduced.
+
+Non-null/non-grouping fixed selected keys resolve type, width and physical row
+mapping once, then use typed loops into existing iterator scratch. Floats retain
+the canonical codec, and nullable, grouping and constant inputs retain the
+audited generic path. Flat-only scan consumers already reject selected output
+at edge preparation, so they retain their direct owned path instead of creating
+views for immediate normalization; this existing admission must remain intact.
+
+Proof reuses the cached lifetime/COW/pin-refusal fixture and actual reader test,
+adds held-borrower/retirement/close-race and row-map reuse controls, and reuses
+key equality/float/NULL/grouping oracles. Run owning checks, targeted races, SQL
+and pre-push SCA, then local Q1-Q22 six-suite qualification with accounting.
+Any new regression again stops product edits for diagnosis and requester review.

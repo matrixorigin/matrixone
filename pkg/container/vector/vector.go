@@ -11451,15 +11451,26 @@ func (v *Vector) window(
 	selection *AllocationAccountSelection,
 	logicalRows bool,
 ) (*Vector, error) {
+	return v.windowReuse(start, end, mp, selection, logicalRows, nil)
+}
+
+func (v *Vector) windowReuse(start, end int, mp *mpool.MPool, selection *AllocationAccountSelection, logicalRows bool, slot *DictionaryVectorSlot) (*Vector, error) {
 	if v.IsDictionary() {
 		return nil, moerr.NewInvalidStateNoCtx("dictionary windows require an accounted logical selection or explicit materialization")
 	}
 	if !v.validWindowRange(start, end, logicalRows) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}
-	w := NewVec(v.typ)
+	w := slot.take()
+	if w == nil {
+		w = new(Vector)
+	}
+	return v.windowInto(start, end, mp, selection, w)
+}
+
+func (v *Vector) windowInto(start, end int, mp *mpool.MPool, selection *AllocationAccountSelection, w *Vector) (*Vector, error) {
+	*w = Vector{typ: v.typ, areaDisjoint: true, offHeap: selection != nil}
 	if selection != nil {
-		w.offHeap = true
 		if err := w.SetAllocationAccount(selection); err != nil {
 			return nil, err
 		}

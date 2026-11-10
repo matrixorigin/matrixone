@@ -70,6 +70,18 @@ func TestDictionaryIntegerHashKeys(t *testing.T) {
 				found, _, err = itr.Find(1, 3, []*vector.Vector{dict})
 				require.NoError(t, err)
 				require.Equal(t, []uint64{1, 2, last}, found)
+
+				// Logical NULL-free selections use the typed loop even when
+				// their physical base contains a NULL outside the selection.
+				cleanRows, err := vector.NewRowSelection([]int64{1, 0, 1}, 3, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(cleanRows.Release)
+				clean, err := vector.NewDictionaryVector(base, cleanRows, mp, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { clean.Free(mp) })
+				found, _, err = itr.Find(1, 2, []*vector.Vector{clean})
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 2}, found)
 			})
 		}
 	}
@@ -146,4 +158,39 @@ func TestDictionaryFloatHashKeysPreserveZeroAndNaN(t *testing.T) {
 	found, _, err := itr.Find(0, 3, []*vector.Vector{dict})
 	require.NoError(t, err)
 	require.Equal(t, []uint64{0, 1, 1}, found)
+}
+
+func TestDictionaryConstantHashKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	source, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { source.Free(mp) })
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{2, 0, 2}, 3, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	selected, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { selected.Free(mp) })
+	h8, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	t.Cleanup(h8.Free)
+	i8 := h8.NewIterator()
+	_, _, err = i8.Insert(0, 3, []*vector.Vector{source})
+	require.NoError(t, err)
+	found, _, err := i8.Find(0, 3, []*vector.Vector{selected})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1}, found)
+	hs, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	t.Cleanup(hs.Free)
+	is := hs.NewIterator()
+	_, _, err = is.Insert(0, 3, []*vector.Vector{source})
+	require.NoError(t, err)
+	found, _, err = is.Find(0, 3, []*vector.Vector{selected})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1}, found)
 }

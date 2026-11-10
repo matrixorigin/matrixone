@@ -207,7 +207,7 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 				}
 				reuse = frame.predicateHeaders
 			}
-			next, err := selectPredicateInput(proc, input, loaded, executors[i], *scratch, account, bases, declined, reuse)
+			next, err := selectPredicateInput(proc, input, loaded, executors[i], *scratch, account, bases, declined, reuse, frame)
 			if err != nil {
 				return nil, false, err
 			}
@@ -337,7 +337,7 @@ func predicateColumns(executor ExpressionExecutor, seen []bool, columns *[]int) 
 	return true
 }
 
-func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection, bases []*vector.DictionaryBase, declined []bool, reuse []*vector.Vector) (result *batch.Batch, retErr error) {
+func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection, bases []*vector.DictionaryBase, declined []bool, reuse []*vector.Vector, frame *DictionaryInputFrame) (result *batch.Batch, retErr error) {
 	var columns []int
 	if !predicateColumns(executor, make([]bool, len(input.Vecs)), &columns) {
 		result, _, err := SelectBatchColumns(input, loaded, rows, proc.Mp(), account, false)
@@ -361,7 +361,11 @@ func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []in
 	if len(columns) == 0 {
 		return output, nil
 	}
-	selection, err := vector.NewRowSelection(rows, input.RowCount(), proc.Mp(), account)
+	var rowSlot *vector.DictionaryVectorSlot
+	if frame != nil {
+		rowSlot = frame.selectionSlot
+	}
+	selection, err := vector.NewRowSelectionReuse(rows, input.RowCount(), proc.Mp(), account, rowSlot)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +384,11 @@ func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []in
 		} else {
 			if bases[col] == nil && !declined[col] {
 				var admitted bool
-				bases[col], admitted, err = vector.TryFreezeVector(source, proc.Mp(), account)
+				var slot *vector.DictionaryVectorSlot
+				if frame != nil {
+					slot = frame.snapshots[col]
+				}
+				bases[col], admitted, err = vector.TryFreezeVectorReuse(source, proc.Mp(), account, slot)
 				if err != nil {
 					return nil, err
 				}
