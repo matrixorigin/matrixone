@@ -191,7 +191,7 @@ func buildRebaseBagMismatchSQL(ctx context.Context, table string, left, right re
 	}
 	var grouped []string
 	var projected []string
-	var join []string
+	var aliases []string
 	seen := make(map[string]bool, len(columns))
 	for i, column := range columns {
 		name := strings.ToLower(column.name)
@@ -203,18 +203,22 @@ func buildRebaseBagMismatchSQL(ctx context.Context, table string, left, right re
 		value := rebaseComparableValue(quoteIdentifierForSQL(column.name), column.typ)
 		grouped = append(grouped, value)
 		projected = append(projected, value+" as "+alias)
-		join = append(join, "l."+alias+" <=> r."+alias)
+		aliases = append(aliases, alias)
 	}
 	for _, read := range []rebaseSQLRead{left, right} {
 		if read.database == "" || strings.ContainsRune(read.database, 0) || read.timestamp <= 0 {
 			return "", moerr.NewInvalidInput(ctx, "Rebase bag comparison requires fixed sources")
 		}
 	}
-	bag := func(read rebaseSQLRead, alias string) string {
-		return fmt.Sprintf("(select %s, count(*) as n from %s.%s{MO_TS=%d} group by %s) %s",
-			strings.Join(projected, ", "), quoteIdentifierForSQL(read.database), quoteIdentifierForSQL(table),
-			read.timestamp, strings.Join(grouped, ", "), alias)
+	bag := func(read rebaseSQLRead, sign string) string {
+		return fmt.Sprintf("select %s, %scast(count(*) as decimal(38,0)) as n from %s.%s{MO_TS=%d} group by %s",
+			strings.Join(projected, ", "), sign, quoteIdentifierForSQL(read.database), quoteIdentifierForSQL(table),
+			read.timestamp, strings.Join(grouped, ", "))
 	}
-	return "select count(*) from " + bag(left, "l") + " full outer join " + bag(right, "r") +
-		" on (" + strings.Join(join, " and ") + ") where not (l.n <=> r.n)", nil
+	// Null-safe join predicates are not hash keys, so a full join here compares
+	// every distinct row pair. Group signed multiplicities instead; GROUP BY
+	// retains NULL equality, and the wide signed counter cannot wrap COUNT.
+	keys := strings.Join(aliases, ", ")
+	return "select count(*) from (select " + keys + " from (" + bag(left, "") + " union all " + bag(right, "-") +
+		") rebase_bags group by " + keys + " having sum(n) <> 0) rebase_differences", nil
 }
