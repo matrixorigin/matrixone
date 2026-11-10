@@ -152,7 +152,14 @@ func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode str
 	_, verified := runChild("verify", nil)
 	select {
 	case err := <-verified:
-		require.NoError(t, err, "fresh-process recovery failed; see retained verify log")
+		stage := "unavailable"
+		if data, readErr := os.ReadFile(filepath.Join(root, "verify.stage")); readErr == nil {
+			switch string(data) {
+			case "identity", "new_cluster", "start_cluster", "sql_client", "inventory", "native", "verify_data", "verify_history":
+				stage = string(data)
+			}
+		}
+		require.NoError(t, err, "fresh-process recovery failed at %s; see retained verify log", stage)
 	case <-ctx.Done():
 		t.Fatal("recovery child did not finish")
 	}
@@ -184,12 +191,18 @@ func TestRebaseCrashHelper(t *testing.T) {
 		require.Contains(t, []string{"wal", "checkpoint", "dependency-wal", "dependency-checkpoint"}, inventoryMode)
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0700))
+	markStage := func(stage string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(root, phase+".stage"), []byte(stage), 0600))
+	}
+	markStage("identity")
 	var identity rebaseCrashIdentity
 	if phase == "verify" {
 		data, err := os.ReadFile(filepath.Join(root, "identity.json"))
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(data, &identity))
 	}
+	markStage("new_cluster")
 	c, err := NewCluster(WithTesting(), WithCNCount(1), WithTestAdmissionContext(t.Context()), func(c *cluster) { c.id = 12345; c.options.dataPath = filepath.Join(root, "data") }, WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
 		if inventoryMode != "" && svc.ServiceType() == metadata.ServiceType_TN {
@@ -237,9 +250,11 @@ func TestRebaseCrashHelper(t *testing.T) {
 	} else {
 		identity.PortBase = c.(*cluster).portLeaseBase
 	}
+	markStage("start_cluster")
 	require.NoError(t, c.Start())
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
+	markStage("sql_client")
 	db := recoverySQLClient(t, cn)
 	defer func() { require.NoError(t, db.Close()) }()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -252,10 +267,12 @@ func TestRebaseCrashHelper(t *testing.T) {
 		return n
 	}
 	if inventoryMode != "" {
+		markStage("inventory")
 		runRebaseInventoryRecoveryPhase(t, phase, inventoryMode, root, cn, db, ctx, identity)
 		return
 	}
 	if os.Getenv("MO_REBASE_NATIVE_CRASH") == "1" {
+		markStage("native")
 		if nativeRebaseCrashPhase == nil {
 			t.Fatal("native Rebase crash fixture is unavailable")
 		}
@@ -263,9 +280,11 @@ func TestRebaseCrashHelper(t *testing.T) {
 		return
 	}
 	if phase == "verify" {
+		markStage("verify_data")
 		require.Equal(t, 11, count("select v from rebase_crash_committed.a where id=1"))
 		require.Equal(t, 1, count("select count(*) from rebase_crash_committed.b"))
 		require.Zero(t, count("select count(*) from mo_catalog.mo_database where datname='rebase_crash_uncommitted'"))
+		markStage("verify_history")
 		for i, table := range []string{"a", "b"} {
 			require.Equal(t, 30, count(fmt.Sprintf("select sum(v) from rebase_crash_source.%s{MO_TS=%d}", table, identity.BaseTS)))
 			require.Equal(t, 1, count(fmt.Sprintf("select count(*) from mo_catalog.mo_branch_metadata where table_id=%d and clone_ts=%d", identity.Committed[i], identity.BaseTS)))
