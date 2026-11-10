@@ -388,6 +388,7 @@ cgo-native-prepare-internal:
 	@set -eu; \
 		case "$(firstword $(MAKEFLAGS))" in \
 			-*) ;; \
+			*=*) ;; \
 			*n*|*t*|*q*) exit 0 ;; \
 			esac; \
 		case " $(MAKEFLAGS) " in \
