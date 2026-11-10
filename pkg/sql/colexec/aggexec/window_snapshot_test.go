@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -35,21 +36,25 @@ func TestWindowPrefixSnapshot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			id := tc.id
 			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			input := vector.NewOffHeapVecWithType(types.T_float64.ToType())
+			t.Cleanup(func() { input.Free(mp) })
 			values := []float64{0, math.Copysign(0, -1), 1e16, 1, -1e16, math.Float64frombits(0x7ff8000000000001), math.Inf(1)}
 			for i, value := range values {
 				require.NoError(t, vector.AppendFixed(input, value, i == 0, mp))
 			}
 			running, err := MakeAgg(mp, id, false, *input.GetType())
 			require.NoError(t, err)
+			t.Cleanup(running.Free)
 			output, err := MakeAgg(mp, id, false, *input.GetType())
 			require.NoError(t, err)
+			t.Cleanup(output.Free)
 			oracle, err := MakeAgg(mp, id, false, *input.GetType())
 			require.NoError(t, err)
-			t.Cleanup(func() { running.Free(); output.Free(); oracle.Free(); input.Free(mp); require.Zero(t, mp.CurrNB()) })
+			t.Cleanup(oracle.Free)
 			require.True(t, SupportsWindowPrefixSnapshot(running))
-			require.NoError(t, running.GroupGrow(1))
-			require.NoError(t, output.GroupGrow(len(values)))
+			require.NoError(t, GrowWindowGroups(running, 1))
+			require.NoError(t, GrowWindowGroups(output, len(values)))
 			require.NoError(t, oracle.GroupGrow(len(values)))
 			for row := range values {
 				require.NoError(t, running.Fill(0, row, []*vector.Vector{input}))
@@ -59,12 +64,21 @@ func TestWindowPrefixSnapshot(t *testing.T) {
 				}
 			}
 			got, err := output.Flush()
+			t.Cleanup(func() {
+				for _, vec := range got {
+					vec.Free(mp)
+				}
+			})
 			require.NoError(t, err)
 			want, err := oracle.Flush()
+			t.Cleanup(func() {
+				for _, vec := range want {
+					vec.Free(mp)
+				}
+			})
 			require.NoError(t, err)
 			require.Len(t, got, 1)
 			require.Len(t, want, 1)
-			t.Cleanup(func() { got[0].Free(mp); want[0].Free(mp) })
 			for row := range values {
 				require.Equal(t, want[0].IsNull(uint64(row)), got[0].IsNull(uint64(row)))
 				if !want[0].IsNull(uint64(row)) {
@@ -72,6 +86,111 @@ func TestWindowPrefixSnapshot(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWindowGroupCapacity(t *testing.T) {
+	for _, id := range []int64{AggIdOfCountStar, AggIdOfCountColumn, AggIdOfSum, AggIdOfAvg, AggIdOfMin, AggIdOfMax} {
+		t.Run(fmt.Sprint(id), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			input := vector.NewVec(types.T_float64.ToType())
+			t.Cleanup(func() { input.Free(mp) })
+			require.NoError(t, vector.AppendFixed(input, float64(7), false, mp))
+			exec, err := MakeAgg(mp, id, false, *input.GetType())
+			require.NoError(t, err)
+			t.Cleanup(exec.Free)
+			require.NoError(t, GrowWindowGroups(exec, 3))
+			state := exec.(windowPrefixState).windowPrefixState()
+			require.Equal(t, 3, state.GetNumGroups())
+			require.Less(t, state.state[0].vecs[0].Capacity(), AggBatchSize)
+			require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			// Compact physical storage must not change the logical chunk map,
+			// initial NULLs or values when normal growth crosses a chunk boundary.
+			require.NoError(t, exec.GroupGrow(AggBatchSize))
+			require.Equal(t, AggBatchSize+3, state.GetNumGroups())
+			require.NoError(t, exec.Fill(AggBatchSize+2, 0, []*vector.Vector{input}))
+			result, err := exec.Flush()
+			t.Cleanup(func() {
+				for _, vec := range result {
+					vec.Free(mp)
+				}
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 2)
+			for chunk, vec := range result {
+				for row := 0; row < vec.Length(); row++ {
+					filled := (chunk == 0 && row == 0) || (chunk == 1 && row == 2)
+					if id == AggIdOfCountStar || id == AggIdOfCountColumn {
+						want := int64(0)
+						if filled {
+							want = 1
+						}
+						require.Equal(t, want, vector.GetAny(vec, row, false))
+					} else {
+						require.Equal(t, !filled, vec.IsNull(uint64(row)))
+						if filled {
+							require.Equal(t, float64(7), vector.GetAny(vec, row, false))
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkWindowGroupCapacity(b *testing.B) {
+	for _, groups := range []int{16, 256, AggBatchSize} {
+		for _, compact := range []bool{false, true} {
+			b.Run(fmt.Sprintf("groups_%d/compact_%t", groups, compact), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() {
+					if mp.CurrNB() != 0 {
+						b.Fatal("leaked aggregate memory")
+					}
+					mpool.DeleteMPool(mp)
+				})
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					exec := makeSumAvgExec(mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 2))
+					var err error
+					if compact {
+						err = GrowWindowGroups(exec, groups)
+					} else {
+						err = exec.GroupGrow(groups)
+					}
+					exec.Free()
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestWindowGroupCapacityAllocationFailure(t *testing.T) {
+	for _, id := range []int64{AggIdOfSum, AggIdOfAvg} {
+		allocations := 0
+		t.Run(fmt.Sprintf("%d/success", id), func(t *testing.T) {
+			f := newFixedMetadataPreflightFixture(t, id, types.T_float64.ToType())
+			require.NoError(t, GrowWindowGroups(f.exec, 3))
+			allocations = f.controller.calls
+			require.Positive(t, allocations)
+		})
+		for failAt := 1; failAt <= allocations; failAt++ {
+			t.Run(fmt.Sprintf("%d/fail_%d", id, failAt), func(t *testing.T) {
+				f := newFixedMetadataPreflightFixture(t, id, types.T_float64.ToType())
+				f.controller.failAt = failAt
+				require.ErrorIs(t, GrowWindowGroups(f.exec, 3), mpool.ErrAllocationAccountCapacity)
+				require.True(t, f.controller.rejected)
+				require.Empty(t, f.base.state)
+				require.Zero(t, f.controller.used)
+				f.controller.failAt = 0
+				require.NoError(t, GrowWindowGroups(f.exec, 3))
+				require.Equal(t, 3, f.base.GetNumGroups())
+			})
+		}
 	}
 }
 
@@ -89,6 +208,8 @@ func TestWindowPrefixSnapshotRejectsUnboundedStates(t *testing.T) {
 		exec, err := MakeAgg(mp, tc.id, tc.distinct, tc.typ)
 		require.NoError(t, err)
 		require.False(t, SupportsWindowPrefixSnapshot(exec))
+		require.NoError(t, GrowWindowGroups(exec, 1))
+		require.Equal(t, int32(AggBatchSize), exec.(aggregateBaseCarrier).aggregateBase().state[0].capacity)
 		exec.Free()
 	}
 	require.Zero(t, mp.CurrNB())

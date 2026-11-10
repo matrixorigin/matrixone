@@ -526,7 +526,7 @@ func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors 
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]T
+	var sums []T
 	var sumVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -632,7 +632,7 @@ func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors 
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]T
+	var sums []T
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -1507,7 +1507,7 @@ func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vecto
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]S
+	var sums []S
 	var sumVec *vector.Vector
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
@@ -1612,7 +1612,7 @@ func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vecto
 	}
 
 	lastX := -1
-	var sums *[AggBatchSize]S
+	var sums []S
 	var cnts []int64
 	for s := 0; s < nSlots; s++ {
 		g := localGrps[s]
