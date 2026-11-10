@@ -294,8 +294,68 @@ func TestJSONValueCancellationDuringReaderExecution(t *testing.T) {
 			require.NoError(t, err)
 			defer reader.Close()
 			require.NoError(t, fc.result.PreExtendAndReset(2))
-			err = JsonValueWithReader(&cancelDuringJSONQueryReader{JSONReader: reader, cancel: cancel}, fc.parameters, fc.result, proc, 2, nil)
+			err = jsonValueWithAdmittedReader(&cancelDuringJSONQueryReader{JSONReader: reader, cancel: cancel}, fc.parameters, fc.result, proc, 2, nil)
 			require.ErrorIs(t, err, context.Canceled, "a successful row query cannot turn in-flight cancellation into success or an ON ERROR response")
+		})
+	}
+}
+
+type forgedJSONValueReader struct {
+	vector.JSONReader
+	inspected bool
+}
+type forgedJSONValueCursor struct{ vector.JSONCursor }
+
+func (r *forgedJSONValueReader) Length() int {
+	r.inspected = true
+	return r.JSONReader.Length()
+}
+
+func (r *forgedJSONValueReader) OpenCursor() (vector.JSONCursor, error) {
+	cursor, err := r.JSONReader.OpenCursor()
+	if err != nil {
+		return nil, err
+	}
+	return &forgedJSONValueCursor{JSONCursor: cursor}, nil
+}
+
+func (c *forgedJSONValueCursor) QueryText(int, []byte, bool) (vector.JSONTextSelection, error) {
+	return vector.JSONTextSelection{Exists: true, Text: "forged"}, nil
+}
+
+func TestJSONValueRejectsForgedReader(t *testing.T) {
+	for _, contract := range []bool{false, true} {
+		name := "legacy"
+		if contract {
+			name = "contract"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			raw := mustJsonBinaryString(t, `{"keep":1}`)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{raw}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.keep"}, nil),
+			}
+			expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1"}, nil)
+			if contract {
+				inputs = append(inputs,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueNullResponse}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}))
+				expected = NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil)
+			}
+			fc := NewFunctionTestCase(proc, inputs, expected, JsonValue)
+			defer fc.Free()
+			reader, err := vector.NewJSONReaderSnapshot(fc.parameters[0], proc.Mp())
+			require.NoError(t, err)
+			defer reader.Close()
+			require.NoError(t, fc.result.PreExtendAndReset(1))
+			forged := &forgedJSONValueReader{JSONReader: reader}
+			err = JsonValueWithReader(forged, fc.parameters, fc.result, proc, 1, nil)
+			require.Error(t, err, "an arbitrary interface wrapper must not acquire a validated-reader capability")
+			require.False(t, forged.inspected, "reject the wrapper before calling any interface method")
 		})
 	}
 }

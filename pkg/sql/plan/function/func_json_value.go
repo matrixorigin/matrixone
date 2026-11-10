@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -965,6 +966,15 @@ func (e jsonValueExtracted) numericUint64() (uint64, bool) {
 // The closed reader supplies document type, NULL state and row mapping. Its
 // document parameter slot may be nil; ordinary mutable input still uses JsonValue.
 func JsonValueWithReader(reader vector.JSONReader, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if !vector.IsPrivateJSONReader(reader) && !objectio.IsPrivateJSONCacheReader(reader) {
+		return moerr.NewInvalidArg(jsonValueContext(proc), "json_value reader input", length)
+	}
+	return jsonValueWithAdmittedReader(reader, ivecs, result, proc, length, selectList)
+}
+
+// jsonValueWithAdmittedReader is reachable in production only after the
+// concrete owner check above. Tests also use it to inject mid-query cancellation.
+func jsonValueWithAdmittedReader(reader vector.JSONReader, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if reader == nil || reader.Length() != length || (len(ivecs) != 2 && len(ivecs) != 7) || (ivecs[0] != nil && ivecs[0].GetType().Oid != types.T_json) {
 		return moerr.NewInvalidArg(jsonValueContext(proc), "json_value reader input", length)
 	}
