@@ -452,7 +452,7 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
-			built, err := BuildPlan(ctx, stmt, false)
+			built, err := BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 			found := false
 			for _, node := range built.GetQuery().Nodes {
@@ -506,7 +506,7 @@ func TestCompositePartBlockFilterDoesNotReadRewrittenPart(t *testing.T) {
 	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
 	stmt, err := mysql.ParseOne(ctx.GetContext(), "select a from part_probe where a = 10 and b = 20", 1)
 	require.NoError(t, err)
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	for _, node := range built.GetQuery().Nodes {
 		if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
@@ -705,7 +705,7 @@ func TestCompositeKeyFoldedInVectorRetainsPartBlockFilters(t *testing.T) {
 		FilterList:  []*planpb.Expr{aEq, bIn},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(true, tableDef, tag, aEq, bIn)
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	foldTableScanFilters(ctx.GetProcess(), builder.qry, 0, true)
@@ -1012,7 +1012,7 @@ func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
 		FilterList:  []*planpb.Expr{aEq, bGt, bLt},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(true, tableDef, tag, aEq, bGt, bLt)
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, 0, true)
@@ -1034,7 +1034,7 @@ func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
 
 	// Rebuilding statistics must not lose constituent filters from an
 	// indexed scan whose row filter is already compounded.
-	parts, _ = builder.collectCompositePartBlockFilters(0, false)
+	parts, _ = builder.collectCompositePartBlockFilters(0, false, nil)
 	require.Len(t, parts[0], 3, "consumed predicates survive only in the block filters")
 	for _, candidate := range parts[0] {
 		require.NotSame(t, candidate.original, candidate.copy)
@@ -1067,7 +1067,7 @@ func TestCompositeKeyPartBlockFiltersRespectDisableHint(t *testing.T) {
 		},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	require.Empty(t, parts)
 	builder.qry.Nodes[0].FilterList = builder.doMergeFiltersOnCompositeKey(true,
 		tableDef, tag, builder.qry.Nodes[0].FilterList...)
@@ -1088,7 +1088,7 @@ func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.
 		FilterList:  []*planpb.Expr{aEq},
 	}}
 
-	parts, _ := builder.collectCompositePartBlockFilters(0, false)
+	parts, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.mergeFiltersOnCompositeKey(0, true)
 	builder.retainConsumedCompositePartBlockFilters(parts)
 	builder.appendCompoundKeyBlockFilters(0)
@@ -1122,7 +1122,7 @@ func TestCompositeKeyPartBlockFiltersDoNotRestoreUnchangedPredicates(t *testing.
 		FilterList:  []*planpb.Expr{filter},
 	}}
 
-	candidates, _ := builder.collectCompositePartBlockFilters(0, false)
+	candidates, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.retainConsumedCompositePartBlockFilters(candidates)
 	require.Empty(t, candidates, "unchanged predicates must be left to later rewrites and stats")
 }
@@ -1140,7 +1140,7 @@ func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *test
 		FilterList:  []*planpb.Expr{filter},
 	}}
 
-	candidates, _ := builder.collectCompositePartBlockFilters(0, false)
+	candidates, _ := builder.collectCompositePartBlockFilters(0, false, nil)
 	builder.mergeFiltersOnCompositeKey(0, true)
 	builder.retainConsumedCompositePartBlockFilters(candidates)
 	require.Empty(t, candidates, "an in-place canonicalized predicate was not consumed")

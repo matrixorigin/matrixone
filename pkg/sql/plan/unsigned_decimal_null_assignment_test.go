@@ -85,7 +85,7 @@ func buildUnsignedDecimalNullInsertPlan(t *testing.T, sql string) *plan.Plan {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
+	built, err := BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 	return built
 }

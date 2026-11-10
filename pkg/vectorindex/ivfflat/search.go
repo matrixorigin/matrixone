@@ -385,77 +385,36 @@ The old centroid-bloom narrowing only mattered to keep an approximate bloom
 filter small; with docfilter's exact integer set (cbitmap / Sorted64) it is a no-op,
 so the per-centroid bloom build/merge (and its preload path) has been removed.
 */
-func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (err error) {
-
-	if sqlproc == nil || sqlproc.Proc == nil {
-		return
-	}
-	if sqlproc.IvfMembershipFilterObject != nil {
+func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) error {
+	if sqlproc == nil || sqlproc.Proc == nil || sqlproc.IvfMembershipFilterObject != nil {
 		return nil
 	}
-
-	if len(sqlproc.IvfRuntimeFilterData) == 0 {
-		if len(sqlproc.RuntimeFilterSpecs) == 0 {
-			return
+	keys := sqlproc.IvfRuntimeFilterData
+	if keys == nil {
+		var err error
+		keys, err = sqlexec.WaitUniqueJoinKeys(sqlproc)
+		if err != nil {
+			return err
 		}
-		spec := sqlproc.RuntimeFilterSpecs[0]
-		if !spec.UseMembershipFilter {
-			return
+		if keys == nil {
+			return nil
 		}
+		defer keys.Release()
 	}
-
 	sqlproc.ExactPkFilter = ""
 	sqlproc.IvfMembershipFilter = nil
-
-	var vecbytes []byte
-	if len(sqlproc.IvfRuntimeFilterData) > 0 {
-		vecbytes = sqlproc.IvfRuntimeFilterData
-	} else {
-		vecbytes, err = sqlexec.WaitUniqueJoinKeys(sqlproc)
+	if keys.Rows() == 0 {
+		return nil
+	}
+	if sqlproc.RelationScanner == nil && exactPkFilterThreshold > 0 && keys.Rows() <= uint64(exactPkFilterThreshold) {
+		exactPk, err := sqlexec.BuildExactPkFilterKeys(sqlproc.GetContext(), keys)
 		if err != nil {
-			return
+			return err
 		}
+		sqlproc.ExactPkFilter = exactPk
+		return nil
 	}
-
-	if len(vecbytes) == 0 {
-		return
-	}
-
-	// Deserialize the unique join keys.
-	keyvec := new(vector.Vector)
-	err = keyvec.UnmarshalBinary(vecbytes)
-	if err != nil {
-		return
-	}
-	// No keyvec.Free here on purpose: UnmarshalBinary aliases vecbytes (it sets
-	// cantFreeData/cantFreeArea), so keyvec owns no mpool memory — the struct and
-	// the aliased bytes are reclaimed by GC. Calling Free(mp) would be a no-op for
-	// this zero-copy path, and tying its release to a specific mpool would be a
-	// cross-pool free hazard if the deserialization ever became owning.
-
-	// Small PK set: build an exact "pk IN (...)" SQL filter instead of a
-	// pushdown doc_id filter. For very small sets the IN-list is cheaper and
-	// more selective at the scan than a runtime membership filter.
-	if sqlproc.RelationScanner == nil && exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold {
-		exactPk, buildErr := sqlexec.BuildExactPkFilter(sqlproc.GetContext(), keyvec)
-		if buildErr != nil {
-			err = buildErr
-			return
-		}
-		if exactPk != "" {
-			sqlproc.ExactPkFilter = exactPk
-		}
-		return
-	}
-
-	// Build the doc_id pushdown filter directly from the unique join keys.
-	// docfilter picks the structure: an exact set (cbitmap / Sorted64) for
-	// integer PKs — no false positives — or a CBloomFilter otherwise. The
-	// reader's docfilter.New reconstructs it from the tag.
-	payload, err := docfilter.BuildWithMemoryAdmission(
-		keyvec,
-		docfilter.AdmissionForService(sqlproc.Proc.GetService()),
-	)
+	payload, err := docfilter.BuildKeysWithMemoryAdmission(sqlproc.GetContext(), keys, docfilter.AdmissionForService(sqlproc.Proc.GetService()))
 	if err != nil {
 		return err
 	}
@@ -471,17 +430,11 @@ func exactRelationMembershipScan(sqlproc *sqlexec.SqlProcess) (exact, empty bool
 	if sqlproc == nil || sqlproc.RelationScanner == nil || !sqlproc.IvfHasMembershipFilter {
 		return false, false, nil
 	}
-	if len(sqlproc.IvfRuntimeFilterData) == 0 {
+	rows := sqlproc.IvfRuntimeFilterData.Rows()
+	if rows == 0 {
 		return false, true, nil
 	}
-	keyvec := new(vector.Vector)
-	if err = keyvec.UnmarshalBinary(sqlproc.IvfRuntimeFilterData); err != nil {
-		return false, false, err
-	}
-	if keyvec.Length() == 0 {
-		return false, true, nil
-	}
-	return exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold, false, nil
+	return exactPkFilterThreshold > 0 && rows <= uint64(exactPkFilterThreshold), false, nil
 }
 
 func filterRequestedIncludeColumns(requested []string, configured []string) []string {
@@ -607,6 +560,19 @@ func (idx *IvfflatSearchIndex[T]) entryQueryExpression(
 
 	return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 		"ivfflat: cannot encode %T query for entries vector type %s", query, vectorType.String()))
+}
+
+// queryStorage returns how the index stores a query decoded to T.
+func (idx *IvfflatSearchIndex[T]) queryStorage(idxcfg vectorindex.IndexConfig) Storage {
+	_, f32 := any(*new(T)).(float32)
+	entry := types.T(idxcfg.Ivfflat.VectorType)
+	if entry == 0 {
+		entry = types.T_array_float64
+		if f32 {
+			entry = types.T_array_float32
+		}
+	}
+	return Storage{F32: f32, Entry: entry, Mul: idx.QuantMul, Add: idx.QuantAdd}
 }
 
 func (idx *IvfflatSearchIndex[T]) buildSearchRoundSQL(
@@ -821,6 +787,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
 		}
 	}()
+
+	if err = CheckQuery(idx.queryStorage(idxcfg), query); err != nil {
+		return nil, nil, err
+	}
 
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData

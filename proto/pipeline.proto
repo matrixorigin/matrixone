@@ -409,6 +409,7 @@ message ProductL2 {
   plan.Expr expr = 3;
   int32 join_map_tag = 4;
   string vector_op_type = 5;
+  string ignored = 6;
 }
 
 message IndexJoin {
@@ -425,6 +426,7 @@ message TableFunction {
   bool is_single = 6;
   reserved 7, 8, 9, 10;
   reserved "index_reader_param", "runtime_filter_probe_list", "fulltext_source_ref", "fulltext_index_ref";
+  IndexMaintenanceSpec index_maintenance = 11;
 }
 
 message ExternalName2ColIndex {
@@ -695,6 +697,7 @@ message Instruction {
   // PARTITION Top-N only: retain all peers of the Nth row. Planning is gated
   // by MORPCVersion69 so an older receiver cannot silently drop RANK ties.
   bool partition_top_n_with_ties = 64;
+  int32 top_value_tag = 65;
 }
 
 message AnalysisList {
@@ -832,6 +835,9 @@ message SessionInfo {
   // distinguishes an older sender that did not transport this state.
   uint64 last_insert_id = 23;
   bool last_insert_id_set = 24;
+  // Preserve fixed offsets independently of the worker's local time zone.
+  bool fixed_offset_present = 25;
+  int64 fixed_offset_seconds = 26;
 }
 
 message SessionLoggerInfo {
@@ -921,4 +927,20 @@ message ArrowRecordBatchShard {
   repeated int32 required_dictionary_block_indices = 4;
   int64 estimated_rows = 5;
   int64 estimated_wire_bytes = 6;
+}
+
+message IndexMaintenanceTarget {
+  string role = 1;
+  string name = 2;
+  uint64 id = 3;
+}
+
+message IndexMaintenanceSpec {
+  string function = 1;
+  uint32 account_id = 2;
+  string database = 3;
+  uint64 database_id = 4;
+  string base_name = 5;
+  uint64 base_id = 6;
+  repeated IndexMaintenanceTarget targets = 7;
 }

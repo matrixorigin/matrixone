@@ -35,6 +35,13 @@ import (
 
 const (
 	defaultWriteSocketSize = 64 * 1024
+	// Read and GetTruncatedLsn are safe to repeat after an isolated connection
+	// stops answering. This leaves room to try another replica within the WAL
+	// caller's deadline.
+	defaultLogServiceReadAttemptTimeout = 7 * time.Second
+	// A stalled established socket must fail before the WAL's one-minute
+	// attempt expires. A timed-out Append still has an unknown commit outcome.
+	defaultLogServiceBackendReadTimeout = 8 * time.Second
 )
 
 var (
@@ -252,9 +259,16 @@ func (c *managedClient) Read(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return nil, 0, err
 		}
-		recs, v, err := c.client.read(ctx, firstLsn, maxSize)
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		recs, v, err := c.client.read(attemptCtx, firstLsn, maxSize)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
 		}
 		if c.isRetryableError(err) {
 			continue
@@ -300,9 +314,16 @@ func (c *managedClient) GetTruncatedLsn(ctx context.Context) (Lsn, error) {
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
 		}
-		v, err := c.client.getTruncatedLsn(ctx)
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		v, err := c.client.getTruncatedLsn(attemptCtx)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
 		}
 		if c.isRetryableError(err) {
 			continue
@@ -528,7 +549,7 @@ func connectToLogServiceAddress(
 		c.respPool,
 		c.cfg.MaxMessageSize,
 		cfg.EnableCompress,
-		0,
+		defaultLogServiceBackendReadTimeout,
 		cfg.Tag,
 	)
 	if err != nil {

@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -744,12 +745,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	query := []float32{0, 0}
 
 	t.Run("malformed membership", func(t *testing.T) {
-		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.IvfHasMembershipFilter = true
-		sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
-		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
-			sqlproc, baseConfig(), tblcfg, query, 1, []int64{2}, nil, nil, 1)
-		require.Error(t, err)
+		testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 	})
 
 	t.Run("unknown storage metric", func(t *testing.T) {
@@ -818,7 +814,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.NoError(t, err)
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
-	expr, err := ivfRuntimeMembershipExpr(proc.Ctx, data,
+	expr, err := ivfRuntimeMembershipExpr(proc.Ctx, testutil.RuntimeKeyPayload(t, data),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
 
 	require.NoError(t, err)
@@ -828,16 +824,14 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.Equal(t, data, expr.GetF().Args[1].GetVec().Data)
 	_, err = ivfRuntimeMembershipExpr(proc.Ctx, nil, nil)
 	require.ErrorContains(t, err, "runtime membership filter is empty")
-	_, err = ivfRuntimeMembershipExpr(proc.Ctx, []byte("not-a-vector"),
-		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
-	require.Error(t, err)
+	testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 
 	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0))
 	defer bitKeys.Free(mp)
 	require.NoError(t, vector.AppendFixedList(bitKeys, []uint64{uint64(1) << 63, ^uint64(0)}, nil, mp))
 	bitData, err := bitKeys.MarshalBinary()
 	require.NoError(t, err)
-	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, bitData,
+	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, testutil.RuntimeKeyPayload(t, bitData),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_bit)}))
 	require.NoError(t, err)
 	require.Equal(t, function.InFunctionName, bitExpr.GetF().Func.ObjName)
@@ -1049,9 +1043,9 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 	emptyKeyData, err := emptyKeys.MarshalBinary()
 	require.NoError(t, err)
 	emptyKeys.Free(mp)
-	_, err = ivfRuntimeMembershipExpr(proc.Ctx, emptyKeyData,
+	_, err = ivfRuntimeMembershipExpr(proc.Ctx, testutil.RuntimeKeyPayload(t, emptyKeyData),
 		ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}))
-	require.ErrorContains(t, err, "runtime membership key set is empty")
+	require.ErrorContains(t, err, "runtime membership filter is empty")
 
 	_, hasBound, _, err := vectorDistanceBound(plan.BoundType_UNBOUNDED, nil)
 	require.NoError(t, err)
@@ -1637,7 +1631,39 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
-	require.Same(t, clone, proc.GetCloneTxnOperator())
+	require.Nil(t, proc.GetCloneTxnOperator(), "历史读取点不能发布到共享 Process")
+	require.Same(t, original, proc.GetTxnOperator())
+}
+
+func TestRelationScannerDoesNotBorrowAnotherSnapshotsTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 30}}).AnyTimes()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	openErr := errors.New("历史关系打开失败")
+	times := []timestamp.Timestamp{{PhysicalTime: 10, LogicalTime: 1}, {PhysicalTime: 10, LogicalTime: 2}}
+	scanners := make([]*relationScanner, len(times))
+	clones := make([]*mock_frontend.MockTxnOperator, len(times))
+	for i := range times {
+		clones[i] = mock_frontend.NewMockTxnOperator(ctrl)
+		clones[i].EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: times[i]}).AnyTimes()
+		original.EXPECT().CloneSnapshotOp(times[i]).Return(clones[i]).Times(1)
+		scanners[i] = &relationScanner{proc: proc, snapshot: &plan.Snapshot{TS: &times[i]}}
+	}
+	for _, i := range []int{0, 1, 0} {
+		eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).DoAndReturn(
+			func(_ context.Context, _ string, op client.TxnOperator) (engine.Database, error) {
+				require.Equal(t, times[i], op.Txn().SnapshotTS)
+				return nil, openErr
+			})
+		res, err := scanners[i].ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+		res.Close()
+		require.ErrorIs(t, err, openErr)
+	}
+	require.Same(t, original, proc.GetTxnOperator())
 }
 
 func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
@@ -2258,7 +2284,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 				req: searchplugin.Request{
 					ResultLimit:         2,
 					CandidateBudget:     12,
-					MembershipFilter:    membership,
+					MembershipFilter:    testutil.RuntimeKeyPayload(t, membership),
 					HasMembershipFilter: true,
 					DistanceRange: &plan.DistRange{
 						LowerBoundType: plan.BoundType_UNBOUNDED,
@@ -2544,7 +2570,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		require.NoError(t, vector.AppendFixedList(keys, []int64{1, 2}, nil, proc.Mp()))
 		payload, err := keys.MarshalBinary()
 		require.NoError(t, err)
-		r.req.MembershipFilter, r.req.HasMembershipFilter, r.req.MembershipFilterRequired = payload, true, true
+		r.req.MembershipFilter, r.req.HasMembershipFilter, r.req.MembershipFilterRequired = testutil.RuntimeKeyPayload(t, payload), true, true
 		r.req.CollectExplainDiagnostics = true
 		if parallelism > 1 {
 			r.req.Identity.Snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 10}}
@@ -2574,7 +2600,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 				require.Equal(t, i == 0, rr.scanner.ownsInMemory)
 				require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
 			}
-			require.Same(t, &payload[0], &rr.req.MembershipFilter[0])
+			require.Same(t, r.req.MembershipFilter, rr.req.MembershipFilter)
 			require.Same(t, generation.membership, rr.newSearchProcess().IvfMembershipFilterObject)
 		}
 	}

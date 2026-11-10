@@ -34,7 +34,7 @@ type viewMetadataConsumerContext struct {
 
 func (c *viewMetadataConsumerContext) BuildTableDefByMoColumns(db, name string) (*TableDef, error) {
 	c.fastCalls++
-	_, def, err := c.MockCompilerContext.Resolve(db, name, nil)
+	_, def, err := c.MockCompilerContext.Resolve(db, name, nil, nil)
 	if err != nil || def == nil {
 		return def, err
 	}
@@ -78,7 +78,7 @@ func buildViewMetadataConsumerPlan(t *testing.T, ctx CompilerContext, sql string
 	if prepared {
 		opt = NewPrepareOptimizer(ctx)
 	}
-	query, err := opt.Optimize(stmts[0], prepared)
+	query, err := opt.Optimize(stmts[0], prepared, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func TestViewMetadataShowValuesUsesCurrentTypes(t *testing.T) {
 	stmts, err := mysql.Parse(ctx.GetContext(), "show table_values from tpch.v1", 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	p, err := BuildPlan(ctx, stmts[0], false)
+	p, err := BuildPlan(ctx, stmts[0], false, nil)
 	require.NoError(t, err)
 	cols := GetResultColumnsFromPlan(p)
 	require.Len(t, cols, 2)
@@ -169,7 +169,7 @@ func TestViewMetadataShowConsumersRejectInvalidView(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			_, err = BuildPlan(ctx, stmts[0], false)
+			_, err = BuildPlan(ctx, stmts[0], false, nil)
 			require.Error(t, err, "an invalid View must not be described using its stored columns")
 		})
 	}
@@ -182,7 +182,7 @@ func TestViewMetadataShowConsumersTrackSourceAndTarget(t *testing.T) {
 			stmts, err := mysql.Parse(ctx.GetContext(), sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			p, err := BuildPlan(ctx, stmts[0], false)
+			p, err := BuildPlan(ctx, stmts[0], false, nil)
 			require.NoError(t, err)
 			var names []string
 			for _, ref := range p.GetQuery().GetCatalogDependencies() {

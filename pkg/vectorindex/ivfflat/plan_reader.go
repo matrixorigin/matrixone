@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -50,14 +52,15 @@ import (
 // planReader is the IVF-FLAT implementation of an optimizer-visible vector
 // index scan. It owns one execution generation and its direct relation scanner.
 type planReader struct {
-	proc        *process.Process
-	spec        *plan.IndexSearchScan
-	req         searchplugin.Request
-	opts        ivfflatplan.ScanOptions
-	scanner     *relationScanner
-	closed      bool
-	generation  *planSearchGeneration
-	ownsContext bool
+	proc            *process.Process
+	spec            *plan.IndexSearchScan
+	req             searchplugin.Request
+	opts            ivfflatplan.ScanOptions
+	scanner         *relationScanner
+	closed          bool
+	generation      *planSearchGeneration
+	ownedMembership docfilter.MembershipFilter
+	ownsContext     bool
 
 	initialized  bool
 	keys         []any
@@ -150,6 +153,10 @@ func (r *planReader) Close() error {
 	r.executionStats = nil
 	r.scanner = nil
 	r.req.MembershipFilter = nil
+	if r.ownedMembership != nil {
+		r.ownedMembership.Free()
+		r.ownedMembership = nil
+	}
 	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
 		r.proc.Cancel(nil)
 	}
@@ -266,6 +273,8 @@ func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
 	p.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
 	if r.generation != nil {
 		p.IvfMembershipFilterObject = r.generation.membership
+	} else {
+		p.IvfMembershipFilterObject = r.ownedMembership
 	}
 	p.IndexReaderParam = &plan.IndexReaderParam{
 		Limit: ivfTopKLimitExpr(r.req.CandidateBudget), OrderBy: []*plan.OrderBySpec{{Flag: r.spec.Direction}},
@@ -278,7 +287,7 @@ func (r *planReader) prepareSearch(prepareOnly bool) error {
 	if r.req.CandidateBudget == 0 {
 		return nil
 	}
-	if r.req.HasMembershipFilter && len(r.req.MembershipFilter) == 0 {
+	if r.req.HasMembershipFilter && r.req.MembershipFilter.Rows() == 0 {
 		// UNIQUEJOINKEYS with no payload is an exact empty build side. RF PASS
 		// is represented by HasMembershipFilter=false and must still search.
 		return nil
@@ -314,6 +323,24 @@ func (r *planReader) prepareSearch(prepareOnly bool) error {
 	pkPos, ok := r.spec.SourceTableDef.Name2ColIndex[pkName]
 	if !ok {
 		return moerr.NewInvalidInputNoCtxf("IVF source primary key %q not found", pkName)
+	}
+	if r.generation == nil && r.ownedMembership == nil && r.req.HasMembershipFilter {
+		if !types.MembershipKeyTypeCompatible(r.req.MembershipFilter.Type().Oid, types.T(r.spec.SourceTableDef.Cols[pkPos].Typ.Id)) {
+			return moerr.NewInvalidInputNoCtx("IVF membership key type does not match primary key")
+		}
+		if docfilter.SupportsBitset(r.req.MembershipFilter.Type()) {
+			admission := docfilter.AdmissionForService(r.proc.GetService())
+			var data []byte
+			data, err = docfilter.BuildKeysWithMemoryAdmission(r.proc.Ctx, r.req.MembershipFilter, admission)
+			if err == nil {
+				r.ownedMembership, err = docfilter.NewWithMemoryAdmission(data, admission)
+			}
+		} else {
+			r.ownedMembership, err = docfilter.NewExactKeys(r.proc.Ctx, r.req.MembershipFilter, types.MustTypeFromPlan(r.spec.SourceTableDef.Cols[pkPos].Typ), docfilter.AdmissionForService(r.proc.GetService()))
+		}
+		if err != nil {
+			return err
+		}
 	}
 	includeColumns := append([]string(nil), r.spec.Index.IncludedColumns...)
 	if len(includeColumns) == 0 {
@@ -595,18 +622,14 @@ func (r *planReader) widensMembership() bool {
 // the search applies them exactly: a required filter, or integer keys, which build an
 // exact set. A bloom filter of other keys admits false positives, so its key count is
 // no bound on the rows a search returns; it returns 0, unknown, then.
-func exactMembershipCount(payload []byte, required bool) (uint64, error) {
-	if len(payload) == 0 {
+func exactMembershipCount(payload *keycodec.KeyPayload, required bool) (uint64, error) {
+	if payload.Rows() == 0 {
 		return 0, nil
 	}
-	var keys vector.Vector
-	if err := keys.UnmarshalBinary(payload); err != nil {
-		return 0, err
-	}
-	if !required && !docfilter.SupportsBitset(*keys.GetType()) {
+	if !required && !docfilter.SupportsBitset(payload.Type()) {
 		return 0, nil
 	}
-	return uint64(keys.Length()), nil
+	return payload.Rows(), nil
 }
 
 func (r *planReader) recordSearchRoundDiagnostic(
@@ -705,10 +728,12 @@ func (r *planReader) sortAndLimit(candidateLimit uint64) {
 // relationScanner executes typed hidden-table reads in the caller's current
 // transaction. It is the direct-engine replacement for sqlexec.RunSql.
 type relationScanner struct {
-	proc           *process.Process
-	generation     *planSearchGeneration
-	accountID      *uint32
-	snapshot       *plan.Snapshot
+	proc       *process.Process
+	generation *planSearchGeneration
+	accountID  *uint32
+	snapshot   *plan.Snapshot
+	// 只在本 reader 的执行代际内复用；Close 释放 scanner，不写入共享 Process。
+	snapshotTxn    client.TxnOperator
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
@@ -736,12 +761,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	} else if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
 		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
-		clone := s.proc.GetCloneTxnOperator()
-		if clone == nil {
-			clone = txn.CloneSnapshotOp(*s.snapshot.TS)
-			s.proc.SetCloneTxnOperator(clone)
+		if s.snapshotTxn == nil {
+			s.snapshotTxn = txn.CloneSnapshotOp(*s.snapshot.TS)
 		}
-		txn = clone
+		txn = s.snapshotTxn
 	}
 	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
 	if err != nil {

@@ -796,7 +796,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <expr> merge_search_condition_opt
 %type <str> matched_keyword
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
-%type <statement> explain_stmt explain_plan_stmt explainable_stmt
+%type <statement> explain_stmt explain_plan_stmt explainable_stmt describe_table_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
@@ -984,7 +984,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
+%type <str> database_name_opt auth_string
+%type <cstr> constraint_keyword_opt constraint_keyword
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
@@ -1176,6 +1177,10 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> AUTO_ID_CACHE
 // Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
 %left <str> SOUNDS
+// MySQL SERIAL column-alias type. Declared last so every existing token
+// keeps its generated lexer constant number, per the append-to-end contract
+// above.
+%token <str> SERIAL
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -2583,6 +2588,22 @@ grant_stmt:
             },
         }
     }
+|   GRANT priv_list ON priv_level TO role_spec_list grant_option_opt
+    {
+        // MySQL permits omitting object_type in `GRANT priv ON level`; the
+        // omitted form defaults to TABLE and shares the parse of the
+        // keyword form downstream.
+        $$ = &tree.Grant{
+            Typ: tree.GrantTypePrivilege,
+            GrantPrivilege: tree.GrantPrivilege{
+                Privileges: $2,
+                ObjType: tree.OBJECT_TYPE_TABLE,
+                Level: $4,
+                Roles: $6,
+                GrantOption: $7,
+            },
+        }
+    }
 |   GRANT role_spec_list TO drop_user_spec_list grant_role_option_opt
     {
         $$ = &tree.Grant{
@@ -2648,6 +2669,22 @@ revoke_stmt:
                 ObjType: $5,
                 Level: $6,
                 Roles: $8,
+            },
+        }
+    }
+|   REVOKE exists_opt priv_list ON priv_level FROM role_spec_list
+    {
+        // MySQL permits omitting object_type in `REVOKE priv ON level`; the
+        // omitted form defaults to TABLE and revokes the same grants as the
+        // keyword form.
+        $$ = &tree.Revoke{
+            Typ: tree.RevokeTypePrivilege,
+            RevokePrivilege: tree.RevokePrivilege{
+                IfExists: $2,
+                Privileges: $3,
+                ObjType: tree.OBJECT_TYPE_TABLE,
+                Level: $5,
+                Roles: $7,
             },
         }
     }
@@ -3690,6 +3727,7 @@ unlock_table_stmt:
 prepareable_stmt:
     create_stmt
 |   alter_stmt
+|   describe_table_stmt
 |   explain_plan_stmt
 |   insert_stmt
 |   replace_stmt
@@ -3762,7 +3800,7 @@ explainable_stmt:
         $$ = $1
     }
 
-explain_stmt:
+describe_table_stmt:
     explain_sym unresolved_object_name
     {
         $$ = &tree.ShowColumns{Table: $2}
@@ -3771,6 +3809,9 @@ explain_stmt:
     {
         $$ = &tree.ShowColumns{Table: $2, ColName: $3}
     }
+
+explain_stmt:
+    describe_table_stmt
 |   explain_sym FOR CONNECTION INTEGRAL
     {
         $$ = tree.NewExplainFor("", integralToUint64($4))
@@ -8440,6 +8481,10 @@ optype_opt:
     {
 	$$ = $2
     }
+|	'(' optype ',' STRING ',' STRING ')'
+    {
+	$$ = tree.CentroidxOption{OpType: $2, Params: $4, Config: $6}.String()
+    }
 
 straight_join:
     STRAIGHT_JOIN
@@ -12584,15 +12629,15 @@ index_def:
 constaint_def:
     constraint_keyword constraint_elem
     {
-        if $1 != "" {
+        if $1.Origin() != "" {
             switch v := $2.(type) {
             case *tree.PrimaryKeyIndex:
-                v.ConstraintSymbol = $1
+                v.ConstraintSymbol = $1.Compare()
             case *tree.ForeignKey:
-                v.ConstraintSymbol = $1
+                v.ConstraintSymbol = $1.Compare()
             case *tree.UniqueIndex:
-                v.ConstraintSymbol = $1
-            case *tree.CheckIndex: v.ConstraintSymbol = $1
+                v.ConstraintSymbol = $1.Origin()
+            case *tree.CheckIndex: v.ConstraintSymbol = $1.Compare()
             }
         }
         $$ = $2
@@ -12751,6 +12796,31 @@ column_def:
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
+|   column_name SERIAL column_attribute_list_opt
+    {
+        // MySQL SERIAL is the alias for BIGINT UNSIGNED NOT NULL
+        // AUTO_INCREMENT UNIQUE. Expanding at the column-definition owner
+        // keeps the alias out of CAST/CONVERT, sequence AS, JSON_TABLE and
+        // ARRAY, which parse their types through column_type; CREATE and
+        // ALTER ADD both accept column definitions here.
+        locale := ""
+        typ := &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.IntFamily,
+                FamilyString: "bigint",
+                Width:  64,
+                Locale: &locale,
+                Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
+                Unsigned: true,
+            },
+        }
+        serialAttrs := []tree.ColumnAttribute{
+            tree.NewAttributeNull(false),
+            tree.NewAttributeAutoIncrement(),
+            tree.NewAttributeUnique(),
+        }
+        $$ = tree.NewColumnTableDef($1, typ, append(serialAttrs, $3...))
+    }
 
 column_name_unresolved:
     ident
@@ -12897,11 +12967,11 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, true, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1.Compare())
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
-        $$ = tree.NewAttributeCheckConstraint($4, $6, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, $6, $1.Compare())
     }
 |   ON UPDATE name_datetime_scale datetime_scale_opt
     {
@@ -12988,7 +13058,7 @@ enforce:
 
 constraint_keyword_opt:
     {
-        $$ = ""
+        $$ = tree.NewCStr("", 1)
     }
  |    constraint_keyword
      {
@@ -12998,11 +13068,11 @@ constraint_keyword_opt:
 constraint_keyword:
     CONSTRAINT
     {
-        $$ = ""
+        $$ = tree.NewCStr("", 1)
     }
 |   CONSTRAINT ident
     {
-        $$ = $2.Compare()
+        $$ = $2
     }
 
 references_def:
@@ -14704,6 +14774,22 @@ std_dev_pop:
 function_call_generic:
     ID '(' expression_list_opt ')'
     {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            Exprs: $3,
+        }
+    }
+|   SERIAL '(' expression_list_opt ')'
+    {
+        // `serial` is a keyword (SERIAL column-alias type, see column_def) but
+        // the serial(...)/serial_extract(serial(...))/composite-index consumers
+        // use it as an ordinary generic function. Keep the generic-call shape
+        // of the ID arm above so the write/spellings, nesting and arity are
+        // byte-identical to what `serial` parsed as before the keyword was
+        // introduced (#31748).
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -16982,6 +17068,7 @@ non_reserved_keyword:
 |   ASYNC
 |   BEGIN
 |   BIGINT
+|   SERIAL
 |   BIT
 |   BLOB
 |   BOOL

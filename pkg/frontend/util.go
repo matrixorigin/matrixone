@@ -1593,44 +1593,23 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		nsp := nulls.NewWithSize(cnt)
 
 		switch typ.Oid {
-		case types.T_varchar:
+		case types.T_varchar, types.T_text, types.T_varbinary:
+			// Byte-valued and vector-valued cells must save the exact bytes
+			// the client-visible result presents (issue #31535): fmt.Sprintf
+			// renders []byte and vector values as numeric lists.
 			for rowIdx, row := range rows {
-				var val string
+				var val []byte
 				if row[colIndex] == nil {
 					nsp.Add(uint64(rowIdx))
 				} else {
-					strVal, ok := row[colIndex].(string)
-					if ok {
-						val = strVal
-					} else {
-						val = fmt.Sprintf("%v", row[colIndex])
-					}
+					val = textRowValueBytes(row[colIndex])
 				}
-				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
+				err := vector.AppendBytes(bat.Vecs[colIndex], val, false, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 
-		case types.T_text:
-			for rowIdx, row := range rows {
-				var val string
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					strVal, ok := row[colIndex].(string)
-					if ok {
-						val = strVal
-					} else {
-						val = fmt.Sprintf("%v", row[colIndex])
-					}
-				}
-
-				err := vector.AppendBytes(bat.Vecs[colIndex], []byte(val), false, pool)
-				if err != nil {
-					return nil, nil, err
-				}
-			}
 		case types.T_int8:
 			for rowIdx, row := range rows {
 				var val int8
@@ -1936,6 +1915,38 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 	return bat, planColDefs, nil
 }
 
+// textRowValueBytes renders a hand-built result row value as the exact bytes
+// the client-visible result presents. []byte cells (VARCHAR/VARBINARY engine
+// values) carry their raw bytes, and vector cells render with the same
+// ArrayToString text the protocol shows; other scalar types keep their
+// existing fmt.Sprintf presentation (issue #31535).
+func textRowValueBytes(value any) []byte {
+	switch v := value.(type) {
+	case string:
+		return []byte(v)
+	case []byte:
+		return v
+	case []float32:
+		return []byte(types.ArrayToString[float32](v))
+	case []float64:
+		return []byte(types.ArrayToString[float64](v))
+	case []types.BF16:
+		return []byte(types.ArrayToString[types.BF16](v))
+	case []types.Float16:
+		return []byte(types.ArrayToString[types.Float16](v))
+	case []int8:
+		return []byte(types.ArrayToString[int8](v))
+	case types.BlockScaledValue:
+		text, berr := types.BlockScaledToString(v.Cell)
+		if berr != nil {
+			return []byte(fmt.Sprintf("%v", value))
+		}
+		return []byte(text)
+	default:
+		return []byte(fmt.Sprintf("%v", value))
+	}
+}
+
 func getDecimal64FromRowValue(v any, typ types.Type) (types.Decimal64, error) {
 	switch val := v.(type) {
 	case types.Decimal64:
@@ -2029,10 +2040,21 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 		}
 		switch columnType {
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
-			pType = plan.Type{
-				Id: int32(types.T_varchar),
+			// A VAR_STRING/VARCHAR column carrying the binary charset is a
+			// VARBINARY engine value: its cells hold raw bytes, and the saved
+			// result must keep the binary type instead of coercing them into
+			// text (issue #31535).
+			if mysqlColumn, ok := col.(*MysqlColumn); ok && mysqlColumn.Charset() == charsetBinary {
+				pType = plan.Type{
+					Id: int32(types.T_varbinary),
+				}
+				tType = types.New(types.T_varbinary, types.MaxVarBinaryLen, 0)
+			} else {
+				pType = plan.Type{
+					Id: int32(types.T_varchar),
+				}
+				tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 			}
-			tType = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case defines.MYSQL_TYPE_TEXT:
 			pType = plan.Type{
 				Id: int32(types.T_text),
@@ -2509,8 +2531,13 @@ type UserInput struct {
 	sameStatementAuthorization bool
 	preparePlan                *plan.Plan // binary protocol execute
 	sqlSourceType              []string
-	isRestore                  bool
-	isBinaryProtExecute        bool
+	// Fragments belong only to this input's successful scheduling parse. They
+	// can be reused by statement recording while the SQL and parser mode match.
+	recordFragments     []mysql.SQLFragment
+	recordSQL           string
+	recordSQLMode       string
+	isRestore           bool
+	isBinaryProtExecute bool
 	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
 	// admission; binary execution passes the inner AST rather than tree.Execute.
 	preparedDefaultDatabase string
@@ -2542,6 +2569,21 @@ type UserInput struct {
 
 func (ui *UserInput) getSql() string {
 	return ui.sql
+}
+
+func (ui *UserInput) clearRecordFragments() {
+	ui.recordFragments = nil
+	ui.recordSQL = ""
+	ui.recordSQLMode = ""
+}
+
+func (ui *UserInput) setRecordFragments(fragments []mysql.SQLFragment, sqlMode string) {
+	if fragments == nil {
+		return
+	}
+	ui.recordFragments = fragments
+	ui.recordSQL = ui.sql
+	ui.recordSQLMode = sqlMode
 }
 
 func (ui *UserInput) genHash() {

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -163,13 +164,13 @@ func TestDependentNativeStages(t *testing.T) {
 		name, sql string
 		want      []string
 	}{
-		{"range_row_operand_skipped", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_operand_skipped", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"0", "0", "0"}},
 		{"range_row_operand_selected_error", `SELECT CASE WHEN o.N_NATIONKEY>0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o WHERE o.N_NATIONKEY=2`, nil},
-		{"range_row_operand_selected_one", `SELECT CASE WHEN o.N_NATIONKEY=1 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"true", "false", "false"}},
+		{"range_row_operand_selected_one", `SELECT CASE WHEN o.N_NATIONKEY=1 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"1", "0", "0"}},
 		{"range_row_operand_empty", `SELECT (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<0))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"NULL", "NULL", "NULL"}},
-		{"range_row_operand_uncorrelated", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_operand_uncorrelated", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"0", "0", "0"}},
 		{"range_row_operand_inner_case", `SELECT (o.N_NATIONKEY,CASE WHEN o.N_NATIONKEY<0 THEN (SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY) ELSE o.N_NATIONKEY END)=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"true", "true", "true"}},
-		{"range_row_operand_deep_guard", `SELECT (SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END) FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_operand_deep_guard", `SELECT (SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END) FROM NATION o`, []string{"0", "0", "0"}},
 		{"range_row_operand_coalesce", `SELECT COALESCE(o.N_NATIONKEY=1,(o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY)) FROM NATION o`, []string{"true", "false", "false"}},
 		{"range_row_limit_zero", `SELECT (0,NULL)<=>(SELECT COUNT(*),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY LIMIT 0) FROM NATION o`, []string{"false", "false", "false"}},
 		{"range_row_computed_input", `SELECT (0,NULL)<=>(SELECT SUM(COALESCE(i.N_NATIONKEY,0)),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY) FROM NATION o`, []string{"false", "false", "false"}},
@@ -293,7 +294,7 @@ func TestDependentNativeStages(t *testing.T) {
 			stmts, err := mysql.Parse(proc.Ctx, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmts[0].Free()
-			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+			query, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 			require.NoError(t, err)
 			require.NotNil(t, query.Correlation)
 			budget, err := proc.GetExecutionResourceBudget()
@@ -435,7 +436,7 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 	stmts, err := mysql.Parse(proc.Ctx, `SELECT (SELECT (SELECT MAX(n2.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY<=n1.N_NATIONKEY)) FROM NATION n1`, 1)
 	require.NoError(t, err)
 	defer stmts[0].Free()
-	q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+	q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, q.Correlation)
 	scans := 0
@@ -448,6 +449,22 @@ func TestDependentExternalSourceReuse(t *testing.T) {
 		n.ExternScan = &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB), LoadType: tree.INLINE,
 			Data: "1\n2\n3\n", Format: tree.CSV, Terminated: ",", EnclosedBy: []byte{'"'}, EscapedBy: []byte{'\\'},
 			TbColToDataCol: map[string]int32{n.TableDef.Cols[0].Name: 0}}
+		// An inline external scan reconstructs its reader options from the
+		// serialized source param in TableDef.Createsql; the inline payload
+		// and the flat escape byte travel in ExternScan like the LOAD planners
+		// encode them.
+		src := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INLINE,
+				Format:   tree.CSV,
+				Tail: &tree.TailParameter{
+					Fields: &tree.Fields{Terminated: &tree.Terminated{Value: ","}},
+				},
+			},
+		}
+		payload, err := json.Marshal(src)
+		require.NoError(t, err)
+		n.TableDef.Createsql = string(payload)
 		scans++
 	}
 	require.Equal(t, 2, scans)
@@ -506,7 +523,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 				stmts, err := mysql.Parse(proc.Ctx, `SELECT (SELECT (SELECT n.N_NATIONKEY)) FROM NATION n`, 1)
 				require.NoError(t, err)
 				defer stmts[0].Free()
-				q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false)
+				q, err := plan2.NewBaseOptimizer(mock.CurrentContext()).Optimize(stmts[0], false, nil)
 				require.NoError(t, err)
 				require.NotNil(t, q.Correlation)
 				var scan *plan.Node

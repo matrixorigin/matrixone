@@ -364,7 +364,7 @@ select coalesce(cast(null as decimal(23,2)), cast(null as decimal(20,5)), 7.0197
 drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 c  ¦  decimal(29,7)  ¦  NO  ¦    ¦  null
 drop view v_coalesce_meta;
 drop view if exists v_flow_metadata_safe;
@@ -378,7 +378,7 @@ nullif('01', 1) as nullif_mixed,
 coalesce(null, '8', 9) as coalesce_str_num,
 greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_date;
 desc v_flow_metadata_safe;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 if_str_num  ¦  varchar(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 if_unsigned_signed  ¦  decimal(21,0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 case_date_dt  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -408,7 +408,7 @@ drop view if exists v_case_temporal_else;
 create view v_case_temporal_else as
 select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
 desc v_case_temporal_else;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 case_date_dt_else  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from v_case_temporal_else;
 ➤ case_date_dt_else[93,64,0]  𝄀
@@ -418,7 +418,7 @@ drop view if exists v_if_binary_char;
 create view v_if_binary_char as
 select if(1, _binary 'a', 'bc') as if_binary_char;
 desc v_if_binary_char;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 if_binary_char  ¦  varbinary(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
 ➤ if_binary_char_hex[12,65535,0]  𝄀
@@ -448,7 +448,7 @@ greatest(d_nullable, cast('2023-12-31' as date)) as greatest_nullable_col,
 greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
 from t_flow_metadata;
 desc v_flow_metadata_columns;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 ifnull_null_first  ¦  decimal(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_nullable_col  ¦  decimal(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_notnull_col  ¦  decimal(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -507,7 +507,7 @@ drop view if exists v_case_binary_utf8;
 create view v_case_binary_utf8 as
 select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
 desc v_case_binary_utf8;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 case_binary_utf8  ¦  varbinary(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 ➤ case_utf8_hex[12,65535,0]  𝄀
@@ -522,7 +522,7 @@ case when 1 then null else cast('a' as varbinary(4)) end as var_leading_null,
 case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
 case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
 desc v_case_binary_null;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 fixed_leading_null  ¦  binary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 fixed_trailing_null  ¦  binary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 fixed_middle_null  ¦  binary(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -549,7 +549,7 @@ coalesce(dt, '2024-01-01') as dt_coalesce,
 coalesce(ts, '2024-01-01') as ts_coalesce
 from t_conditional_literal_temporal;
 desc v_conditional_literal_temporal;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 d_case_literal  ¦  decimal(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dte_coalesce  ¦  varchar(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 dt_coalesce  ¦  varchar(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -559,7 +559,7 @@ create view v_conditional_literal_temporal_nested as
 select d_case_literal, dte_coalesce, dt_coalesce, ts_coalesce
 from v_conditional_literal_temporal;
 desc v_conditional_literal_temporal_nested;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 d_case_literal  ¦  decimal(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dte_coalesce  ¦  varchar(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 dt_coalesce  ¦  varchar(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -583,7 +583,7 @@ if(false, 'x', f) as float_result,
 if(false, 'x', cast(d as double)) as double_result
 from t_conditional_unknown_width;
 desc v_conditional_unknown_width;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 text_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 blob_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 float_result  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -623,7 +623,7 @@ select case when false then 'x' when false then 1 else tm end as case_time,
 coalesce(s, i, tm) as coalesce_time
 from t_conditional_time_varchar;
 desc v_conditional_time_varchar;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 case_time  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_time  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from v_conditional_time_varchar;
@@ -694,3 +694,17 @@ show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1292  ¦  Truncated incorrect DECIMAL value: 'bad'
 drop table t_case_nullable_condition;
+select case when 1 then 'x' else false end as case_str_bool_t, case when 0 then 'x' else false end as case_str_bool_f;
+➤ case_str_bool_t[12,65535,0]  ¦  case_str_bool_f[12,65535,0]  𝄀
+x  ¦  0
+select case when 0 then true else 'y' end as case_bool_str_f;
+➤ case_bool_str_f[12,65535,0]  𝄀
+y
+drop table if exists t_case_str_bool;
+create table t_case_str_bool (id int primary key, s varchar(10), b bool);
+insert into t_case_str_bool values (1, 'abc', true), (2, 'def', false);
+select id, case when b then s else b end as case_col from t_case_str_bool order by id;
+➤ id[4,32,0]  ¦  case_col[12,65535,0]  𝄀
+1  ¦  abc  𝄀
+2  ¦  0
+drop table t_case_str_bool;

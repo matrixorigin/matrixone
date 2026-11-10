@@ -104,15 +104,25 @@ func TestNewMergeScopePreservesIndependentRemoteInputs(t *testing.T) {
 		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 2},
 	}
 	c := newCompileForShuffleJoinTest(t, nodes)
-	inputs := []*Scope{
-		newRemoteMergeInputForTest(c, nodes[1], 0),
-		newRemoteMergeInputForTest(c, nodes[1], 0),
+	inputs := make([]*Scope, 2)
+	for i := range inputs {
+		input := newScope(Remote)
+		input.NodeInfo = scopeNodeWithMcpu(nodes[1], 1)
+		input.Proc = c.proc.NewNoContextChildProc(0)
+		input.setRootOperator(merge.NewArgument())
+		inputs[i] = input
 	}
 
 	result := c.newMergeScope(inputs)
+	t.Cleanup(func() { ReleaseScopes([]*Scope{result}) })
 
 	require.Equal(t, inputs, result.PreScopes,
 		"independent remote pipelines should not pay for an extra per-CN merge")
+	require.Len(t, result.Proc.Reg.MergeReceivers, len(inputs))
+	require.NotSame(t, result.Proc.Reg.MergeReceivers[0], result.Proc.Reg.MergeReceivers[1])
+	for i, input := range inputs {
+		require.Same(t, result.Proc.Reg.MergeReceivers[i], input.RootOp.(*connector.Connector).Reg)
+	}
 }
 
 func TestNewMergeTopScopeGroupsRemoteCrossTreeDependenciesByCN(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,8 +96,15 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		informationSchemaColumnsEnumSetDDL(preAttributesBinaryNull)),
 		informationSchemaCurrentColumnsDDL(),
 		"the #31461-era derivation of the pre-change template is the pre-decoration current")
-	require.Equal(t, informationSchemaColumnsWithUnsignedDecimalDDL(), InformationSchemaColumnsDDL,
-		"the current identity is the attributed-DECIMAL decoration over the merged pre-decoration chain")
+	require.Equal(t, informationSchemaColumnsWithUnsignedDecimalDDL(), InformationSchemaColumnsPreDefaultGeneratedDDL(),
+		"the frozen pre-change identity of the DEFAULT_GENERATED revision is exactly the previous current derivation")
+	withoutPhysicalFilter := strings.NewReplacer(
+		" AND "+catalog.NonIndexRelationSQLPredicate("tbl"), "",
+		" AND "+catalog.NonIndexRelationSQLPredicate("mt"), "",
+		" AND "+catalog.NonIndexRelationSQLPredicateForColumns("mc.att_relname", "mc.relkind", "mc.extra_info"), "",
+	).Replace(InformationSchemaColumnsDDL)
+	require.Equal(t, informationSchemaColumnsDefaultGeneratedExtraOver(InformationSchemaColumnsPreDefaultGeneratedDDL()), withoutPhysicalFilter,
+		"the current identity combines expression-default metadata with physical-index filters")
 	require.NotEqual(t, InformationSchemaColumnsDDL, preAttributes,
 		"the decorated current template differs from the pre-change identity")
 	require.NotEqual(t, InformationSchemaColumnsDDL, preAttributesBinaryNull,
@@ -212,6 +220,42 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	require.True(t, IsInformationSchemaColumnsMigrationDDL(published4018),
 		"the 4.0.18 identity gates historical snapshot adaptation until the 4.0.19 refresh")
 
+	// D3 (issue #31161): the frozen pre-change identity of the
+	// DEFAULT_GENERATED revision is exactly what binaries between the
+	// merged current and this revision persisted as their live definition:
+	// the label-aware, unbounded pre-decoration chain under the
+	// attributed-DECIMAL decoration, without the expression-default EXTRA
+	// arm. It is built only from frozen templates and the fixed
+	// decoration/layer functions, stays distinct from the new current
+	// identity, and binds at every reader seam until the refresh.
+	preDefaultGenerated := InformationSchemaColumnsPreDefaultGeneratedDDL()
+	require.Equal(t, informationSchemaColumnsUnsignedDecimalColumnsTypeOver(
+		informationSchemaColumnsUnboundedGeneratedExpressionDDL(
+			informationSchemaColumnsEnumSetDDL(preAttributesBinaryNull))),
+		preDefaultGenerated,
+		"the pre-change identity is the decoration over the frozen pre-decoration chain")
+	require.NotEqual(t, InformationSchemaColumnsDDL, preDefaultGenerated,
+		"the current identity adds the expression-default EXTRA arm")
+	require.Contains(t, preDefaultGenerated, "case mc.att_is_unsigned when 3 then ' unsigned zerofill' when 1 then ' unsigned' else '' end")
+	require.Contains(t, preDefaultGenerated, "internal_char_length(mc.atttyp, mc.attr_enum)")
+	require.NotContains(t, preDefaultGenerated, "as varchar(500)) as GENERATION_EXPRESSION")
+	require.Contains(t, preDefaultGenerated, "WHEN 2 then NULL")
+	require.NotContains(t, preDefaultGenerated, "mo_show_visible_bin(mc.att_default, 7)")
+	adaptedPreDefaultGenerated, ok := AdaptLegacyInformationSchemaColumnsDDL(preDefaultGenerated)
+	require.True(t, ok)
+	require.Equal(t, preDefaultGenerated, adaptedPreDefaultGenerated, "the pre-change identity is a pass-through identity")
+	lowerPreDefaultGenerated := strings.Replace(preDefaultGenerated, "information_schema.COLUMNS", "information_schema.columns", 1)
+	lowerAdaptedPreDefaultGenerated, ok := AdaptLegacyInformationSchemaColumnsDDL(lowerPreDefaultGenerated)
+	require.True(t, ok)
+	require.Equal(t, preDefaultGenerated, lowerAdaptedPreDefaultGenerated, "only the historical lowercase view name is normalized")
+	metadataPreDefaultGenerated, ok := ViewMetadataColumnsDDL(preDefaultGenerated)
+	require.True(t, ok, "the pre-change identity is known to the derived-metadata adapter")
+	require.Contains(t, metadataPreDefaultGenerated, "mo_view_columns(mt.reldatabase, mt.relname, mt.rel_id)")
+	require.False(t, IsCurrentInformationSchemaColumnsDDL(preDefaultGenerated),
+		"the pre-change identity is historical, not the current identity")
+	require.True(t, IsInformationSchemaColumnsMigrationDDL(preDefaultGenerated),
+		"the pre-change identity gates historical snapshot adaptation until the refresh")
+
 	adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(InformationSchemaColumnsV58DDL())
 	require.True(t, ok)
 	// The current view knows native Unicode selector identities, while a
@@ -224,7 +268,7 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	require.Equal(t, InformationSchemaColumnsV100DDL(), adapted)
 	require.NotContains(t, adapted, "WHEN 4 then")
 	require.NotContains(t, adapted, "WHEN 5 then")
-	for _, unknown := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL, v109 + " ", preAttributes + " ", preAttributesBinaryNull + " ", published4018 + " ", strings.Replace(v109, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) + " "} {
+	for _, unknown := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL, v109 + " ", preAttributes + " ", preAttributesBinaryNull + " ", published4018 + " ", preDefaultGenerated + " ", strings.Replace(v109, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) + " "} {
 		adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(unknown)
 		require.False(t, ok)
 		require.Empty(t, adapted)
@@ -247,6 +291,7 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		{InformationSchemaColumnsV100DDL(), false, true},
 		{InformationSchemaColumnsV58DDL(), false, false},
 		{InformationSchemaColumns4018DDL(), false, true},
+		{InformationSchemaColumnsPreDefaultGeneratedDDL(), false, true},
 		{InformationSchemaColumnsDDL + " ", false, false},
 	} {
 		replacement := strings.Replace(tc.definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)

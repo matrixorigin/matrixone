@@ -1678,9 +1678,11 @@ func (node *JoinTableExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		if node.JoinType == JOIN_TYPE_CENTROIDX {
 			ctx.WriteString(strings.ToLower(node.JoinType))
-			ctx.WriteString(" ('")
-			ctx.WriteString(strings.ToLower(node.Option))
-			ctx.WriteString("')")
+			opt, err := ParseCentroidxOption(node.Option)
+			if err != nil {
+				opt = CentroidxOption{OpType: node.Option}
+			}
+			opt.format(ctx)
 		} else {
 			ctx.WriteString(strings.ToLower(node.JoinType))
 		}

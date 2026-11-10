@@ -125,7 +125,7 @@ func TestNewMatDecodesNarrowProbeColumns(t *testing.T) {
 			ap := &Productl2{OnExpr: onExprWithProbeCol(0)}
 
 			probes := make([][]float32, 1)
-			got, err := newMat[float32](ctr, ap, probes, nil)
+			got, err := newMat[float32](ctr, ap, probes, nil, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got[0])
 		})
@@ -147,7 +147,7 @@ func TestNewMatDecodesNarrowProbeColumns(t *testing.T) {
 
 		nullvec := make([]float32, 3)
 		probes := make([][]float32, 1)
-		got, err := newMat[float32](ctr, ap, probes, nullvec)
+		got, err := newMat[float32](ctr, ap, probes, nullvec, nil)
 		require.NoError(t, err)
 		require.Equal(t, []float32{1, 0, 0}, got[0])
 	})
@@ -166,7 +166,7 @@ func TestNewMatDecodesNarrowProbeColumns(t *testing.T) {
 		ap := &Productl2{OnExpr: onExprWithProbeCol(0)}
 
 		probes := make([][]float64, 1)
-		got, err := newMat[float64](ctr, ap, probes, nil)
+		got, err := newMat[float64](ctr, ap, probes, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, []float64{1, -2, 3}, got[0])
 	})

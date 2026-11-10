@@ -1,0 +1,59 @@
+drop database if exists desc_col_30890_db;
+create database desc_col_30890_db;
+use desc_col_30890_db;
+create table t30890 (id int primary key, val varchar(10), `MixCase` int, v_1 int, va1 int);
+desc desc_col_30890_db.t30890;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+MixCase  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+va1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 val;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+describe desc_col_30890_db.t30890 ID;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
+explain desc_col_30890_db.t30890 val;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 nosuch;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]
+desc desc_col_30890_db.t30890 `MixCase`;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+MixCase  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 `v%`;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v_1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+va1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 `Mix%`;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+MixCase  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc desc_col_30890_db.t30890 `v_1`;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+v_1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+va1  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show columns from desc_col_30890_db.t30890 like 'val';
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show columns from desc_col_30890_db.t30890 like 'Mix%';
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+MixCase  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+use desc_col_30890_db;
+desc t30890 val;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create or replace view vt30890 as select id, val from t30890;
+desc desc_col_30890_db.vt30890 val;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show columns from desc_col_30890_db.vt30890 like 'val';
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+val  ¦  varchar(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+drop view vt30890;
+drop database desc_col_30890_db;
+select count(*) as postdesc_absence from information_schema.columns where table_schema='desc_col_30890_db';
+➤ postdesc_absence[-5,64,0]  𝄀
+0

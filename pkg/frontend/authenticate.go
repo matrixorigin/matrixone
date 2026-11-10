@@ -49,6 +49,7 @@ import (
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -3726,8 +3727,12 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		}
 
 		// step3 : switch the default role and role id;
+		wasIndexAdmin := verifyAccountCanExecMoCtrl(account)
 		account.SetDefaultRoleID(uint32(roleId))
 		account.SetDefaultRole(sr.Role.UserName)
+		if wasIndexAdmin != verifyAccountCanExecMoCtrl(account) {
+			ses.invalidateCachedPlans(true)
+		}
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
@@ -5733,6 +5738,16 @@ func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses 
 		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
 	}
 	privLevel, objID, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
+	if err == nil && ot == tree.OBJECT_TYPE_TABLE &&
+		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
+		dbName := pl.DbName
+		if pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+			dbName = ses.GetDatabaseName()
+		}
+		if err = checkLockedGrantRelation(ctx, bh, dbName, pl.TabName, objID); err != nil {
+			return 0, 0, err
+		}
+	}
 	if err == nil || ot != tree.OBJECT_TYPE_TABLE || !isMissingPrivilegeObjectError(err) ||
 		(pl.Level != tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE && pl.Level != tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
 		return privLevel, objID, err
@@ -5762,6 +5777,61 @@ func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses 
 		)
 	}
 	return privLevel, objID, err
+}
+
+// The first lookup owns the relation's lifecycle lock until the grant commits.
+// Read kind and feature data from that same account/name/logical-ID row in the
+// same background transaction; a logical privilege ID is not a physical ID.
+func lockedGrantRelationSQL(ctx context.Context, dbName, tableName string, logicalID int64) (string, error) {
+	account, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("select rel_logical_id, relkind, extra_info from mo_catalog.mo_tables where relname = %s and reldatabase = %s and account_id = %d and rel_logical_id = %d for share;",
+		escapeSQLString(tableName), escapeSQLString(dbName), account, logicalID), nil
+}
+
+func checkLockedGrantRelation(ctx context.Context, bh BackgroundExec, dbName, tableName string, logicalID int64) error {
+	sql, err := lockedGrantRelationSQL(ctx, dbName, tableName, logicalID)
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(results) || results[0].GetRowCount() != 1 {
+		return moerr.NewInternalError(ctx, "locked grant relation is unavailable")
+	}
+	id, err := results[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	if id != logicalID {
+		return moerr.NewInternalError(ctx, "locked grant relation identity changed")
+	}
+	kind, err := results[0].GetString(ctx, 0, 1)
+	if err != nil {
+		return err
+	}
+	data, err := results[0].GetString(ctx, 0, 2)
+	if err != nil {
+		return err
+	}
+	var extra api.SchemaExtra
+	if len(data) != 0 {
+		if err = extra.Unmarshal([]byte(data)); err != nil {
+			return err
+		}
+	}
+	if catalog.RequiresPrivilegedRelationAccess(tableName, kind, extra.FeatureFlag) {
+		return moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", tableName)
+	}
+	return nil
 }
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(
@@ -12814,7 +12884,7 @@ func doInterpretCall(
 	}
 
 	var interpreter Interpreter
-	interpreter.ctx = ctx
+	interpreter.ctx = withHiddenIndexCaller(ctx, ses)
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses
 	interpreter.varScope = &varScope
@@ -12844,7 +12914,7 @@ func doInterpretCall(
 			return nil, err
 		}
 
-		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		interpreter.ctx, err = enterSQLProcedure(interpreter.ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
 		}
@@ -12867,7 +12937,7 @@ func doInterpretCall(
 		if readOnly {
 			return nil, moerr.NewCantExecuteInReadOnlyTransaction(ctx)
 		}
-		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		interpreter.ctx, err = enterSQLProcedure(interpreter.ctx, ses, dbName, string(call.Name.Name.ObjectName))
 		if err != nil {
 			return nil, err
 		}

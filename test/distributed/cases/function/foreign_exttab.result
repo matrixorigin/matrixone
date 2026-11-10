@@ -22,7 +22,7 @@ select * from orders where __mo_query = 'select id, name, amount, created from s
 ➤ id[-5,64,0]  ¦  name[12,64,0]  ¦  amount[3,12,2]  ¦  created[93,19,0]  𝄀
 2  ¦  bob  ¦  null  ¦  2026-01-02 11:00:00
 desc orders;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
 id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 amount  ¦  decimal(12,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

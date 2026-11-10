@@ -103,6 +103,16 @@ func (d *validatedVectorCacheData) CommitCacheReservation() {
 	}
 }
 
+func (d *validatedVectorCacheData) CacheReservationPending() bool {
+	switch reserved := d.data.(type) {
+	case fscache.DataCachePendingReservation:
+		return reserved.CacheReservationPending()
+	case fscache.DataCacheReservation:
+		return true
+	}
+	return false
+}
+
 func (d *validatedVectorCacheData) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
 	if admission, ok := d.data.(fscache.DataCacheAdmission); ok {
 		return admission.CacheAdmissionAllowed(owner)
