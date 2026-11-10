@@ -110,14 +110,15 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 		scale int32
 	}{
 		{
-			sql:   "select convert(12345, char)",
-			oid:   types.T_varchar,
-			width: types.MaxVarcharLen,
+			// Omitted-length CONVERT(x, CHAR) binds the unbounded string type
+			// (T_text); the cast must preserve complete strings and never
+			// width-truncate large values (issues #32336, #32374).
+			sql: "select convert(12345, char)",
+			oid: types.T_text,
 		},
 		{
-			sql:   "select convert('ABCDE', char)",
-			oid:   types.T_varchar,
-			width: types.MaxVarcharLen,
+			sql: "select convert('ABCDE', char)",
+			oid: types.T_text,
 		},
 		{
 			sql:   "select convert(12345, char(3))",
