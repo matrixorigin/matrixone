@@ -367,7 +367,7 @@ func startDynamicCtlHTTPServer(addr string) error {
 			}
 		})
 	go func() {
-		dynamicListenAndServe(*httpListenAddr, nil)
+		dynamicListenAndServe(addr, nil)
 	}()
 	return nil
 }
