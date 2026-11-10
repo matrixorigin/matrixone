@@ -1,0 +1,122 @@
+-- Issue group #32336/#32374: CAST and CONVERT to CHAR with the length
+-- omitted never truncate the value. MySQL infers the result length for the
+-- omitted-length CHAR target, so strings and serialized JSON larger than
+-- 64 KiB survive the cast intact. Explicit CHAR(N) keeps width truncation.
+-- Content assertions use LENGTH/SUBSTRING/JSON_VALID, the string functions
+-- whose overloads accept TEXT natively; LEFT/RIGHT routes TEXT through an
+-- implicit convert first.
+
+-- concat result above the 65,535-byte varchar default, expression cast
+select length(concat(repeat('a', 50000), repeat('b', 50000))) as input_bytes,
+       length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char)) as cast_bytes,
+       length(convert(concat(repeat('a', 50000), repeat('b', 50000)), char)) as convert_bytes,
+       substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 99998, 3) as cast_tail,
+       substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 1, 3) as cast_head;
+
+-- boundary sizes around the 65,535-byte default
+select length(cast(concat(repeat('a', 65534), 'x') as char)) as bytes_65535_fit,
+       length(cast(concat(repeat('a', 65535), 'x') as char)) as bytes_65536_over;
+
+-- multibyte content beyond 65,535 characters keeps its full byte length
+select length(cast(concat(repeat('好', 21845), repeat('好', 21845),
+                          repeat('好', 21845), repeat('好', 21845)) as char)) as multibyte_bytes;
+
+-- null and empty inputs behave as before
+select cast(null as char) is null as null_stays_null,
+       length(cast('' as char)) as empty_len;
+
+-- explicit-length truncation is unchanged
+select length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10))) as explicit_len,
+       substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10)), 8, 3) as explicit_tail;
+
+-- oversized REPEAT still returns NULL (issue #28103) and the cast keeps NULL
+select length(repeat('a', 100000)) as repeat_null_len,
+       length(cast(repeat('a', 100000) as char)) as repeat_null_cast_len;
+
+-- stored longtext read through the cast keeps every byte
+drop table if exists func_cast_omit_char_t1;
+create table func_cast_omit_char_t1 (id int primary key, body longtext);
+insert into func_cast_omit_char_t1 values (1, concat(repeat('a', 50000), repeat('b', 50000)));
+select length(body) as stored_bytes,
+       length(cast(body as char)) as cast_bytes,
+       substring(cast(body as char), 99998, 3) as cast_tail
+from func_cast_omit_char_t1 order by id;
+drop table if exists func_cast_omit_char_t1;
+
+-- serialized JSON beyond 65,535 bytes stays complete and valid
+set @chunk = repeat('a', 10000);
+set @payload = concat(@chunk, @chunk, @chunk, @chunk, @chunk,
+                      @chunk, @chunk, @chunk, @chunk, @chunk);
+select length(@payload) as payload_bytes,
+       length(cast(json_object('s', @payload) as char)) as cast_bytes,
+       json_valid(cast(json_object('s', @payload) as char)) as valid_json,
+       substring(cast(json_object('s', @payload) as char), 1, 6) as cast_prefix,
+       substring(cast(json_object('s', @payload) as char),
+                 length(cast(json_object('s', @payload) as char)) - 2, 3) as cast_suffix;
+
+-- stored JSON column read through the cast keeps its full serialization
+drop table if exists func_cast_omit_json_t1;
+create table func_cast_omit_json_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_t1 values (1, json_object('s', @payload));
+select length(cast(doc as char)) as cast_bytes,
+       json_valid(cast(doc as char)) as valid_json,
+       substring(cast(doc as char), length(cast(doc as char)) - 2, 3) as cast_suffix
+from func_cast_omit_json_t1 order by id;
+drop table if exists func_cast_omit_json_t1;
+
+-- explicit CAST serializes the JSON value (MySQL's JSON conversion rule):
+-- a scalar string keeps its enclosing quotes, stays valid JSON, keeps every
+-- byte, and round-trips back to the original payload
+select length(cast(cast('"aaaa"' as json) as char)) as scalar_small_len,
+       json_valid(cast(cast('"aaaa"' as json) as char)) as scalar_small_valid,
+       length(convert(cast('"aaaa"' as json), char)) as scalar_small_convert_len;
+set @scalar = concat('"', @payload, '"');
+select length(cast(cast(@scalar as json) as char)) as scalar_large_len,
+       json_valid(cast(cast(@scalar as json) as char)) as scalar_large_valid,
+       substring(cast(cast(@scalar as json) as char), 99998, 3) as scalar_tail,
+       substring(cast(cast(@scalar as json) as char),
+                 length(cast(cast(@scalar as json) as char)) - 1, 2) as scalar_closing_quote,
+       length(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$'))) as scalar_roundtrip_len,
+       hex(substring(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$')),
+                     length(@payload), 1)) as scalar_roundtrip_last;
+
+-- escaped scalar content serializes with JSON escaping intact and round-trips
+set @esc = concat('a', '"', 'b');
+select length(cast(cast(json_quote(@esc) as json) as char)) as esc_len,
+       json_valid(cast(cast(json_quote(@esc) as json) as char)) as esc_valid,
+       hex(cast(cast(json_quote(@esc) as json) as char)) as esc_hex,
+       json_unquote(json_extract(cast(cast(json_quote(@esc) as json) as char), '$')) as esc_roundtrip;
+
+-- stored scalar JSON column read through the cast keeps its serialized form
+drop table if exists func_cast_omit_json_scalar_t1;
+create table func_cast_omit_json_scalar_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_scalar_t1 values (1, cast(@scalar as json));
+select length(cast(doc as char)) as stored_scalar_len,
+       json_valid(cast(doc as char)) as stored_scalar_valid,
+       substring(cast(doc as char), length(cast(doc as char)) - 1, 2) as stored_scalar_tail
+from func_cast_omit_json_scalar_t1 order by id;
+drop table if exists func_cast_omit_json_scalar_t1;
+
+-- CREATE TABLE ... AS SELECT rewrites the source select into an
+-- INSERT ... SELECT by re-rendering and re-parsing it, so the omitted-length
+-- cast must render as a plain re-parseable text target; the derived column
+-- is a TEXT-family column and keeps every byte.
+set @ctas_payload = concat(repeat('a', 50000), repeat('b', 50000));
+drop table if exists func_cast_omit_char_ctas;
+create table func_cast_omit_char_ctas
+  as select cast(@ctas_payload as char) as casted_value;
+select length(casted_value) as ctas_bytes,
+       substring(casted_value, 99998, 3) as ctas_tail
+from func_cast_omit_char_ctas;
+show create table func_cast_omit_char_ctas;
+drop table if exists func_cast_omit_char_ctas;
+
+-- the JSON cast travels the same CTAS re-parse path and stays complete
+drop table if exists func_cast_omit_json_ctas;
+create table func_cast_omit_json_ctas
+  as select cast(json_object('s', @payload) as char) as doc_text;
+select json_valid(doc_text) as ctas_json_valid,
+       substring(doc_text, length(doc_text) - 2, 3) as ctas_json_suffix,
+       length(doc_text) as ctas_json_bytes
+from func_cast_omit_json_ctas;
+drop table if exists func_cast_omit_json_ctas;

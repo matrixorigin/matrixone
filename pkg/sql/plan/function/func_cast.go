@@ -793,6 +793,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_TS: {
 		types.T_TS,
 		types.T_varchar,
+		types.T_text,
 		types.T_timestamp,
 		types.T_int64,
 	},
@@ -1122,7 +1123,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = jsonToOthers(execProc.Ctx, s, *toType, result, length, selectList,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+			strictStringWidth, allowTrailingSpaceTrim, mode == castModeExplicit, reportDataTooLong)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
 		err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -2752,7 +2753,7 @@ func tsToOthers(proc *process.Process,
 	case types.T_TS:
 		rs := vector.MustFunctionResult[types.TS](result)
 		return rs.DupFromParameter(source, length)
-	case types.T_varchar:
+	case types.T_varchar, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return tsToStr(proc.Ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_timestamp:
@@ -2788,7 +2789,7 @@ func blockidToOthers(ctx context.Context,
 func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, explicitCast bool, reportDataTooLong bool) error {
 	switch toType.Oid {
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2802,7 +2803,7 @@ func jsonToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+			strictStringWidth, allowTrailingSpaceTrim, explicitCast, reportDataTooLong)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
@@ -7957,7 +7958,7 @@ func jsonToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, explicitCast bool, reportDataTooLong bool) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -7969,7 +7970,13 @@ func jsonToStr(
 		} else {
 			bj := types.DecodeJson(v)
 			var str string
-			if bj.Type == bytejson.TpCodeString {
+			if !explicitCast && bj.Type == bytejson.TpCodeString {
+				// Implicit casts and assignments expose the JSON string's
+				// character payload; only explicit CAST serializes the JSON
+				// value. MySQL's JSON conversion rules require the serialized
+				// form for CAST(JSON AS CHAR) (issues #32336, #32374: the cast
+				// must keep the original JSON representation, including the
+				// enclosing quotes and escaping of scalar strings).
 				s, err := bj.Unquote()
 				if err != nil {
 					return err

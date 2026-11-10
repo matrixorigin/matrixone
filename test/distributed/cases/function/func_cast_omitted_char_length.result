@@ -1,0 +1,116 @@
+select length(concat(repeat('a', 50000), repeat('b', 50000))) as input_bytes,
+length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char)) as cast_bytes,
+length(convert(concat(repeat('a', 50000), repeat('b', 50000)), char)) as convert_bytes,
+substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 99998, 3) as cast_tail,
+substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char), 1, 3) as cast_head;
+➤ input_bytes[-5,64,0]  ¦  cast_bytes[-5,64,0]  ¦  convert_bytes[-5,64,0]  ¦  cast_tail[12,0,0]  ¦  cast_head[12,0,0]  𝄀
+100000  ¦  100000  ¦  100000  ¦  bbb  ¦  aaa
+select length(cast(concat(repeat('a', 65534), 'x') as char)) as bytes_65535_fit,
+length(cast(concat(repeat('a', 65535), 'x') as char)) as bytes_65536_over;
+➤ bytes_65535_fit[-5,64,0]  ¦  bytes_65536_over[-5,64,0]  𝄀
+65535  ¦  65536
+select length(cast(concat(repeat('好', 21845), repeat('好', 21845),
+repeat('好', 21845), repeat('好', 21845)) as char)) as multibyte_bytes;
+➤ multibyte_bytes[-5,64,0]  𝄀
+262140
+select cast(null as char) is null as null_stays_null,
+length(cast('' as char)) as empty_len;
+➤ null_stays_null[-7,1,0]  ¦  empty_len[-5,64,0]  𝄀
+1  ¦  0
+select length(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10))) as explicit_len,
+substring(cast(concat(repeat('a', 50000), repeat('b', 50000)) as char(10)), 8, 3) as explicit_tail;
+➤ explicit_len[-5,64,0]  ¦  explicit_tail[1,255,0]  𝄀
+10  ¦  aaa
+select length(repeat('a', 100000)) as repeat_null_len,
+length(cast(repeat('a', 100000) as char)) as repeat_null_cast_len;
+➤ repeat_null_len[-5,64,0]  ¦  repeat_null_cast_len[-5,64,0]  𝄀
+null  ¦  null
+drop table if exists func_cast_omit_char_t1;
+create table func_cast_omit_char_t1 (id int primary key, body longtext);
+insert into func_cast_omit_char_t1 values (1, concat(repeat('a', 50000), repeat('b', 50000)));
+select length(body) as stored_bytes,
+length(cast(body as char)) as cast_bytes,
+substring(cast(body as char), 99998, 3) as cast_tail
+from func_cast_omit_char_t1 order by id;
+➤ stored_bytes[-5,64,0]  ¦  cast_bytes[-5,64,0]  ¦  cast_tail[12,0,0]  𝄀
+100000  ¦  100000  ¦  bbb
+drop table if exists func_cast_omit_char_t1;
+set @chunk = repeat('a', 10000);
+set @payload = concat(@chunk, @chunk, @chunk, @chunk, @chunk,
+@chunk, @chunk, @chunk, @chunk, @chunk);
+select length(@payload) as payload_bytes,
+length(cast(json_object('s', @payload) as char)) as cast_bytes,
+json_valid(cast(json_object('s', @payload) as char)) as valid_json,
+substring(cast(json_object('s', @payload) as char), 1, 6) as cast_prefix,
+substring(cast(json_object('s', @payload) as char),
+length(cast(json_object('s', @payload) as char)) - 2, 3) as cast_suffix;
+➤ payload_bytes[-5,64,0]  ¦  cast_bytes[-5,64,0]  ¦  valid_json[-7,1,0]  ¦  cast_prefix[12,0,0]  ¦  cast_suffix[12,0,0]  𝄀
+100000  ¦  100009  ¦  1  ¦  {"s":   ¦  a"}
+drop table if exists func_cast_omit_json_t1;
+create table func_cast_omit_json_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_t1 values (1, json_object('s', @payload));
+select length(cast(doc as char)) as cast_bytes,
+json_valid(cast(doc as char)) as valid_json,
+substring(cast(doc as char), length(cast(doc as char)) - 2, 3) as cast_suffix
+from func_cast_omit_json_t1 order by id;
+➤ cast_bytes[-5,64,0]  ¦  valid_json[-7,1,0]  ¦  cast_suffix[12,0,0]  𝄀
+100009  ¦  1  ¦  a"}
+drop table if exists func_cast_omit_json_t1;
+select length(cast(cast('"aaaa"' as json) as char)) as scalar_small_len,
+json_valid(cast(cast('"aaaa"' as json) as char)) as scalar_small_valid,
+length(convert(cast('"aaaa"' as json), char)) as scalar_small_convert_len;
+➤ scalar_small_len[-5,64,0]  ¦  scalar_small_valid[-7,1,0]  ¦  scalar_small_convert_len[-5,64,0]  𝄀
+6  ¦  1  ¦  6
+set @scalar = concat('"', @payload, '"');
+select length(cast(cast(@scalar as json) as char)) as scalar_large_len,
+json_valid(cast(cast(@scalar as json) as char)) as scalar_large_valid,
+substring(cast(cast(@scalar as json) as char), 99998, 3) as scalar_tail,
+substring(cast(cast(@scalar as json) as char),
+length(cast(cast(@scalar as json) as char)) - 1, 2) as scalar_closing_quote,
+length(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$'))) as scalar_roundtrip_len,
+hex(substring(json_unquote(json_extract(cast(cast(@scalar as json) as char), '$')),
+length(@payload), 1)) as scalar_roundtrip_last;
+➤ scalar_large_len[-5,64,0]  ¦  scalar_large_valid[-7,1,0]  ¦  scalar_tail[12,0,0]  ¦  scalar_closing_quote[12,0,0]  ¦  scalar_roundtrip_len[-5,64,0]  ¦  scalar_roundtrip_last[12,-1,0]  𝄀
+100002  ¦  1  ¦  aaa  ¦  a"  ¦  100000  ¦  61
+set @esc = concat('a', '"', 'b');
+select length(cast(cast(json_quote(@esc) as json) as char)) as esc_len,
+json_valid(cast(cast(json_quote(@esc) as json) as char)) as esc_valid,
+hex(cast(cast(json_quote(@esc) as json) as char)) as esc_hex,
+json_unquote(json_extract(cast(cast(json_quote(@esc) as json) as char), '$')) as esc_roundtrip;
+➤ esc_len[-5,64,0]  ¦  esc_valid[-7,1,0]  ¦  esc_hex[12,-1,0]  ¦  esc_roundtrip[12,-1,0]  𝄀
+6  ¦  1  ¦  22615C226222  ¦  a"b
+drop table if exists func_cast_omit_json_scalar_t1;
+create table func_cast_omit_json_scalar_t1 (id int primary key, doc json);
+insert into func_cast_omit_json_scalar_t1 values (1, cast(@scalar as json));
+select length(cast(doc as char)) as stored_scalar_len,
+json_valid(cast(doc as char)) as stored_scalar_valid,
+substring(cast(doc as char), length(cast(doc as char)) - 1, 2) as stored_scalar_tail
+from func_cast_omit_json_scalar_t1 order by id;
+➤ stored_scalar_len[-5,64,0]  ¦  stored_scalar_valid[-7,1,0]  ¦  stored_scalar_tail[12,0,0]  𝄀
+100002  ¦  1  ¦  a"
+drop table if exists func_cast_omit_json_scalar_t1;
+set @ctas_payload = concat(repeat('a', 50000), repeat('b', 50000));
+drop table if exists func_cast_omit_char_ctas;
+create table func_cast_omit_char_ctas
+as select cast(@ctas_payload as char) as casted_value;
+select length(casted_value) as ctas_bytes,
+substring(casted_value, 99998, 3) as ctas_tail
+from func_cast_omit_char_ctas;
+➤ ctas_bytes[-5,64,0]  ¦  ctas_tail[12,0,0]  𝄀
+100000  ¦  bbb
+show create table func_cast_omit_char_ctas;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+func_cast_omit_char_ctas  ¦  CREATE TABLE `func_cast_omit_char_ctas` (
+  `casted_value` text DEFAULT NULL
+)
+drop table if exists func_cast_omit_char_ctas;
+drop table if exists func_cast_omit_json_ctas;
+create table func_cast_omit_json_ctas
+as select cast(json_object('s', @payload) as char) as doc_text;
+select json_valid(doc_text) as ctas_json_valid,
+substring(doc_text, length(doc_text) - 2, 3) as ctas_json_suffix,
+length(doc_text) as ctas_json_bytes
+from func_cast_omit_json_ctas;
+➤ ctas_json_valid[-7,1,0]  ¦  ctas_json_suffix[12,0,0]  ¦  ctas_json_bytes[-5,64,0]  𝄀
+1  ¦  a"}  ¦  100009
+drop table if exists func_cast_omit_json_ctas;

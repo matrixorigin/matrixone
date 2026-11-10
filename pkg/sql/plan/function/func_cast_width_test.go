@@ -578,6 +578,14 @@ func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
 
 func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
 	t.Helper()
+	return runJSONToStrWidthExplicit(t, mp, jsonText, toType, strict, allowTrim, false)
+}
+
+// runJSONToStrWidthExplicit is runJSONToStrWidth with control over whether the
+// call models an explicit CAST (serialized JSON output) or an implicit
+// conversion/assignment (legacy scalar-string payload).
+func runJSONToStrWidthExplicit(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool, explicitCast bool) (string, error) {
+	t.Helper()
 	encoded := makeJSONEncodedFromText(t, []string{jsonText}, nil)[0]
 	src := vector.NewVec(types.T_json.ToType())
 	require.NoError(t, vector.AppendBytes(src, []byte(encoded), false, mp))
@@ -589,7 +597,7 @@ func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType ty
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim); err != nil {
+	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim, explicitCast, allowTrim); err != nil {
 		return "", err
 	}
 	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
@@ -636,4 +644,18 @@ func TestJSONToStrWidthEnforcement(t *testing.T) {
 			require.Equal(t, c.want, got)
 		})
 	}
+
+	// An explicit CAST serializes the JSON value first (MySQL's JSON
+	// conversion rules), so width enforcement applies to the serialized
+	// text — including the scalar string's enclosing quotes.
+	t.Run("explicit_serialize_truncates_quoted_payload", func(t *testing.T) {
+		got, err := runJSONToStrWidthExplicit(t, mp, `"abcd"`, vc3, false, true, true)
+		require.NoError(t, err)
+		require.Equal(t, `"ab`, got)
+	})
+	t.Run("explicit_serialize_fits_with_quotes", func(t *testing.T) {
+		got, err := runJSONToStrWidthExplicit(t, mp, `"a"`, vc3, true, true, true)
+		require.NoError(t, err)
+		require.Equal(t, `"a"`, got)
+	})
 }

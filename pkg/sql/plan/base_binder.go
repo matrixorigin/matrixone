@@ -331,6 +331,16 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	}
 	internal := t.InternalType
 	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
+		// Character and binary casts are semantic boundaries even though the
+		// value conversion is shared with ordinary overload-coercion casts:
+		// an explicit CAST/CONVERT serializes a JSON value into its JSON
+		// text (scalar strings keep their enclosing quotes and escaping),
+		// while implicit conversions keep exposing the payload (#32374).
+		return true
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
 	case defines.MYSQL_TYPE_LONGLONG:
@@ -5470,7 +5480,7 @@ func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
 	}
 	return fn.Args[0].GetLit() != nil &&
 		fn.Args[0].GetLit().IsBin &&
-		types.T(expr.Typ.Id) == types.T_varchar
+		(types.T(expr.Typ.Id) == types.T_varchar || types.T(expr.Typ.Id) == types.T_text)
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {

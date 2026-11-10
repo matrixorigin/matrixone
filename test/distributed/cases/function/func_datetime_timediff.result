@@ -35,10 +35,10 @@ SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-01 00:00:00') AS datetime_zero;
 ➤ datetime_zero[92,64,0]  𝄀
 00:00:00
 SELECT CAST(TIMEDIFF ('2000-01-01 15:30:45', '2026-02-02 15:30:45')AS char) AS mixed_format1;
-➤ mixed_format1[12,-1,0]  𝄀
+➤ mixed_format1[12,0,0]  𝄀
 -228696:00:00.000000
 SELECT CAST(TIMEDIFF('2026-02-02 15:30:45', '2000-01-01 15:30:45')AS char) AS mixed_format2;
-➤ mixed_format2[12,-1,0]  𝄀
+➤ mixed_format2[12,0,0]  𝄀
 228696:00:00.000000
 SELECT TIMEDIFF('2000-01-01 00:00:00.500000', '2000-01-01 00:00:00.200000') AS with_microseconds;
 ➤ with_microseconds[92,64,0]  𝄀

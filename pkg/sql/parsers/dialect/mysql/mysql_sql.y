@@ -12421,9 +12421,17 @@ mo_cast_type:
    if str == "binary" {
         t.InternalType.Scale = -1
    } else if str == "char" {
+   	// MySQL infers the result length of CAST(expr AS CHAR) when N is
+   	// omitted, so the cast never truncates the value (issue #32336,
+   	// #32374). The plan's unbounded string type (TEXT) carries that
+   	// contract; explicit CHAR(N) keeps width-enforced truncation.
+   	// DisplayWith 0 mirrors the TEXT column type so the canonical SQL
+   	// rendering is "text" (re-parseable), not "text(0)": CTAS rebuilds its
+   	// INSERT ... SELECT by rendering and re-parsing the select.
    	if t.InternalType.DisplayWith == -1 {
-   		t.InternalType.FamilyString = "varchar"
-   		t.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+   		t.InternalType.FamilyString = "text"
+   		t.InternalType.Oid = uint32(defines.MYSQL_TYPE_TEXT)
+   		t.InternalType.DisplayWith = 0
    	}
    }
 }
@@ -12492,9 +12500,14 @@ mysql_cast_type:
         locale := ""
         oid := uint32(defines.MYSQL_TYPE_STRING)
         familyString := $1
+        displayWith := $2
         if $2 == -1 {
-            oid = uint32(defines.MYSQL_TYPE_VARCHAR)
-            familyString = "varchar"
+            // CONVERT(expr, CHAR) with omitted N shares the CAST(expr AS CHAR)
+            // contract: no target-length truncation (issues #32336, #32374).
+            // DisplayWith 0 renders as re-parseable "text" for CTAS.
+            oid = uint32(defines.MYSQL_TYPE_TEXT)
+            familyString = "text"
+            displayWith = 0
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -12502,7 +12515,7 @@ mysql_cast_type:
                 FamilyString: familyString,
                 Locale: &locale,
                 Oid:    oid,
-                DisplayWith: $2,
+                DisplayWith: displayWith,
             },
         }
     }

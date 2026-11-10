@@ -193,7 +193,7 @@ SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
 ➤ cast(COALESCE(a, a) as signed)[-5,64,0]  𝄀
 20000101
 SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
-➤ cast(COALESCE(a, a) as varchar)[12,-1,0]  𝄀
+➤ cast(COALESCE(a, a) as text)[12,0,0]  𝄀
 2000-01-01
 SELECT CAST(COALESCE(a,a) AS DECIMAL(25,3)) FROM t1;
 ➤ cast(COALESCE(a, a) as decimal(25, 3))[3,25,3]  𝄀
@@ -213,7 +213,7 @@ SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
 ➤ cast(COALESCE(a, a) as signed)[-5,64,0]  𝄀
 20000101000000
 SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
-➤ cast(COALESCE(a, a) as varchar)[12,-1,0]  𝄀
+➤ cast(COALESCE(a, a) as text)[12,0,0]  𝄀
 2000-01-01 00:00:00
 SELECT CAST(COALESCE(a,a) AS DECIMAL(25,3)) FROM t1;
 ➤ cast(COALESCE(a, a) as decimal(25, 3))[3,25,3]  𝄀
