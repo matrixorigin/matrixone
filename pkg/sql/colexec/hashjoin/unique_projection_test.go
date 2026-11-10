@@ -101,6 +101,84 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	}
 }
 
+func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
+	for _, grouping := range []bool{false, true} {
+		t.Run(fmt.Sprintf("grouping=%t", grouping), func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}, {Rel: 1, Pos: 1}}}
+			ctr := &arg.ctr
+			ctr.leftBat = makeInt32Batch(proc, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+			ctr.resBat = batch.NewWithSize(3)
+			want := batch.NewWithSize(3)
+			t.Cleanup(func() {
+				want.Clean(proc.Mp())
+				ctr.leftBat.Clean(proc.Mp())
+				for _, bat := range ctr.rightBats {
+					bat.Clean(proc.Mp())
+				}
+				arg.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			for _, bat := range []*batch.Batch{ctr.resBat, want} {
+				for col, typ := range []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_decimal128.ToType()} {
+					bat.Vecs[col] = vector.NewVec(typ)
+				}
+			}
+			for source := range 2 {
+				bat := batch.NewWithSize(2)
+				ctr.rightBats = append(ctr.rightBats, bat)
+				bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_decimal128.ToType())
+				for row := range 4 {
+					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(source*10+row), row == 2, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.Decimal128{B0_63: uint64(source*10 + row)}, row == 1, proc.Mp()))
+				}
+				if grouping {
+					bat.Vecs[0].GetGrouping().Add(2)
+				}
+				bat.SetRowCount(4)
+			}
+			ctr.probeTrackBuildMatches = true
+			ctr.rightRowsMatched = new(bitmap.Bitmap)
+			ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize + 4)
+			ctr.vs, ctr.zvs = make([]uint64, 16), make([]int64, 16)
+			for row := range 16 {
+				ctr.vs[row], ctr.zvs[row] = uint64(1+row%4+(row%2)*colexec.DefaultBatchSize), 1
+			}
+			ctr.zvs[5], ctr.vs[6] = 0, 0
+			for row, match := range ctr.vs {
+				if ctr.zvs[row] == 0 || match == 0 {
+					continue
+				}
+				r := int64(match - 1)
+				require.NoError(t, want.Vecs[0].UnionOne(ctr.leftBat.Vecs[0], int64(row), proc.Mp()))
+				for col := range 2 {
+					require.NoError(t, want.Vecs[col+1].UnionOne(ctr.rightBats[r/colexec.DefaultBatchSize].Vecs[col], r%colexec.DefaultBatchSize, proc.Mp()))
+				}
+			}
+			matched, err := ctr.appendUniqueMatches(arg, proc, 16)
+			require.NoError(t, err)
+			require.Equal(t, 14, matched)
+			require.EqualValues(t, 4, ctr.rightRowsMatched.Count())
+			for col, expected := range want.Vecs {
+				actual := ctr.resBat.Vecs[col]
+				require.Equal(t, expected.Length(), actual.Length())
+				for row := range matched {
+					require.Equal(t, expected.IsNull(uint64(row)), actual.IsNull(uint64(row)))
+					require.Equal(t, expected.GetGrouping().Contains(uint64(row)), actual.GetGrouping().Contains(uint64(row)))
+					if !expected.IsNull(uint64(row)) {
+						if col < 2 {
+							require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](expected, row), vector.GetFixedAtNoTypeCheck[int32](actual, row))
+						} else {
+							require.Equal(t, vector.GetFixedAtNoTypeCheck[types.Decimal128](expected, row), vector.GetFixedAtNoTypeCheck[types.Decimal128](actual, row))
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 	for _, shape := range []string{"contiguous", "holes", "constant"} {
 		t.Run(shape, func(t *testing.T) {

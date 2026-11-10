@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -27,7 +28,7 @@ import (
 type indexFile interface {
 	File() *os.File
 	Size() int64
-	Keep() func()
+	Keep() *fileservice.IndexFileHold
 	Close() error
 }
 
@@ -35,7 +36,7 @@ type indexFile interface {
 // tests replace them.
 var (
 	openIndexFile = func(sqlproc *sqlexec.SqlProcess, ref indexfile.Ref) (indexFile, error) {
-		return indexfile.OpenWithProcess(sqlproc, ref, localSpillDir(sqlproc))
+		return indexfile.OpenWithProcess(sqlproc, nil, ref, localSpillDir(sqlproc))
 	}
 	writeIndexFile = func(sqlproc *sqlexec.SqlProcess, files *indexfile.Files, txn client.TxnOperator, ref indexfile.Ref,
 		src io.Reader, tempDir string, runSQL func(sql string) error) (int64, string, error) {

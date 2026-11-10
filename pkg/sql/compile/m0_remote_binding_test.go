@@ -901,11 +901,10 @@ func TestM0RemoteHistoricalSnapshotReaderAccount(t *testing.T) {
 				child.EXPECT().SnapshotTS().Return(old).AnyTimes()
 				c.proc.Base.TxnOperator = &m0StampedTxn{TxnOperator: parent}
 				boundClone := &m0StampedTxn{TxnOperator: child}
-				if tc.name == "snapshot tenant" && cnCount == 1 {
-					// Ranges and reader construction must share the one selected
-					// clone, rather than creating equal-TS workspaces independently.
-					parent.EXPECT().CloneSnapshotOp(old).Return(boundClone).Times(1)
-				} else {
+				// Select a scan-local transaction even when a process-level
+				// clone exists. Ranges and readers share this selected binding.
+				parent.EXPECT().CloneSnapshotOp(old).Return(boundClone).Times(1)
+				if tc.name != "snapshot tenant" || cnCount != 1 {
 					c.proc.SetCloneTxnOperator(boundClone)
 				}
 				def := &plan.TableDef{TblId: 42, Version: 1, Name: tableName, TableType: tc.tableType, Cols: []*plan.ColDef{
@@ -1030,6 +1029,7 @@ func testM0RemoteHistoricalRangesParentChange(t *testing.T, cancelDuringRanges b
 	childInner.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: old}).AnyTimes()
 	childInner.EXPECT().SnapshotTS().Return(old).AnyTimes()
 	child := &m0StampedTxn{TxnOperator: childInner}
+	parentInner.EXPECT().CloneSnapshotOp(old).Return(child).Times(1)
 	c.proc.Base.TxnOperator = parent
 	c.proc.SetCloneTxnOperator(child)
 	def := &plan.TableDef{TblId: 42, Version: 1, Name: "customer", Cols: []*plan.ColDef{

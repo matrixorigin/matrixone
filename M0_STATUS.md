@@ -1,6 +1,30 @@
 # M0 restricted metadata-only ADD prototype
 
 
+## Relation-local snapshot integration, 2026-11-10
+
+This revision merges main `11d2e1ef7e1b3ed3a20e6d7f29f912e55118db5b`
+into candidate `65496eb6042bed8f16966db0861b7097f726aba4`.
+The compile conflict now uses main's relation-local snapshot transaction and
+context helpers in both modes, without reusing the process-level clone slot.
+M0 still checks the explicitly bound remote transaction and preserves account
+precedence, pipeline cancellation and the statement view in tombstone reads.
+The superseded M0-only snapshot selection helper is removed.
+
+Existing M0 fixtures now expect creation of a scan-local clone, retaining exact
+account, generation-change, cancellation and cleanup assertions. Main's mixed
+snapshot SQL/BVT regression is preserved. Native and dependency inputs are
+unchanged. Focused validation passed: six default roots, seventeen M0 roots,
+the same seventeen roots under race, and both modes of incremental lint.
+The selected tests used vet=all; formatting and candidate-relative diff checks
+passed. External BVT, current-head CI, Linux, maintainer approval and QA are
+separate pending gates; local checks do not establish their completion.
+
+The official SCA recovery-rule issue remains open pending acceptance of
+matrixorigin/linter#56. The fixed tool dependency and necessary panic/object
+cleanup behavior are unchanged. Old-head download failures are not code test
+failures and do not constitute a successful execution of coverage or BVT.
+
 ## Partition ALTER integration repair, 2026-11-09
 
 This revision merges frozen main `c99234dcf4c94d1ff9d372917cd35041f1a3a682`

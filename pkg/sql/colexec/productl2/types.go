@@ -49,6 +49,11 @@ type container struct {
 	centersF64 *[][]float64
 	nullvecF32 *[]float32
 	nullvecF64 *[]float64
+
+	// ignored counts the probe rows left out, firstPk and firstErr are the first of them.
+	ignored  int64
+	firstPk  string
+	firstErr error
 }
 
 type Productl2 struct {
@@ -57,6 +62,8 @@ type Productl2 struct {
 	OnExpr       *plan.Expr
 	JoinMapTag   int32
 	VectorOpType string
+	// Ignored is set when the build side is an IVF-FLAT index.
+	Ignored *Ignored
 
 	vm.OperatorBase
 }
@@ -102,6 +109,7 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	productl2.ctr.release()
 	productl2.ctr.inBat = nil
 	productl2.ctr.state = Build
+	productl2.ctr.ignored = 0
 }
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -87,6 +87,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -551,6 +552,7 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	c.productL2IgnoredOf = nil
 	// Materialized sources own allocation-account-backed retained and decoded
 	// batches but are not VM operators. Close their compile-owned safety nets
 	// before sealing the execution account, especially on partial-run failures
@@ -559,6 +561,10 @@ func (c *Compile) clear() {
 		source.Close()
 		delete(c.materializedSources, k)
 	}
+	for _, domain := range c.localRuntimeDomains {
+		domain.Close()
+	}
+	c.localRuntimeDomains = nil
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -1575,6 +1581,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
+	c.bindLocalRuntimeFilterDomains(qry, steps)
 	if queryNeedsGroupingTransport(qry) {
 		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
@@ -2231,6 +2238,18 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		right = c.ensureCoordinatorOnlyFunctions(node, right)
+		if node.JoinType == plan.Node_L2 {
+			ig, err := c.productL2Ignored(node)
+			if err != nil {
+				return nil, err
+			}
+			if ig != nil {
+				if c.productL2IgnoredOf == nil {
+					c.productL2IgnoredOf = make(map[*plan.Node]*productl2.Ignored)
+				}
+				c.productL2IgnoredOf[node] = ig
+			}
+		}
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -5725,17 +5744,6 @@ func (c *Compile) indexSearchScanParallelism(node *plan.Node, capacity int) (int
 	return max(1, min(int(node.Stats.Dop), capacity, c.ncpu)), nil
 }
 
-// m0ScanSnapshotTxn avoids reusing a process-level clone belonging to another
-// scan or transaction. It does not establish object-membership authority.
-func m0ScanSnapshotTxn(proc *process.Process, ts timestamp.Timestamp) client.TxnOperator {
-	parent := proc.GetTxnOperator()
-	clone := proc.GetCloneTxnOperator()
-	if clone != nil && clone.SnapshotTS().Equal(ts) && bytes.Equal(clone.Txn().ID, parent.Txn().ID) {
-		return clone
-	}
-	return parent.CloneSnapshotOp(ts)
-}
-
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
 	var err error
 	var txnOp client.TxnOperator
@@ -5747,25 +5755,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if err != nil {
 		return nil, nil, err
 	}
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if activeM0Enabled {
-				// Bind each scan to its requested snapshot. The process-level
-				// clone can belong to a different scan in this statement.
-				txnOp = m0ScanSnapshotTxn(c.proc, *node.ScanSnapshot.TS)
-			} else if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx = scanSnapshotTxn(ctx, txnOp, node.ScanSnapshot)
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -7356,6 +7346,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
+			op.Ignored = c.productL2IgnoredOf[node]
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			if rs[i].NodeInfo.Mcpu != 1 {
@@ -11020,21 +11011,8 @@ func collectTombstones(
 	var tombstone engine.Tombstoner
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := m0read.WithStatementReadView(c.proc.GetTopContext(), c.statementView)
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
-		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
-		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
-			if c.proc.GetCloneTxnOperator() == nil {
-				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	ctx, _ := scanSnapshotContext(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
+	ctx = m0read.WithStatementReadView(ctx, c.statementView)
 	//-----------------------------------------------------------------------------------------------------
 
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
@@ -11046,7 +11024,8 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
+	// 读取事务由 rel 持有，不能把其他扫描的 clone 当作本次读取点记录。
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, nil)
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
@@ -11174,28 +11153,10 @@ func (c *Compile) handleDbRelContextWithBoundTxn(node *plan.Node, onRemoteCN boo
 	if ctx == nil && pipelineCtx != nil {
 		return nil, nil, nil, moerr.NewInternalErrorNoCtx("M0: remote range selection has no query context")
 	}
-	txnOp = c.proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-
-			if bound != nil {
-				txnOp = bound
-			} else if activeM0Enabled {
-				txnOp = m0ScanSnapshotTxn(c.proc, *node.ScanSnapshot.TS)
-			} else if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
-	if bound != nil {
+	if bound == nil {
+		txnOp, ctx = scanSnapshotTxn(ctx, c.proc.GetTxnOperator(), node.ScanSnapshot)
+	} else {
+		ctx, _ = scanSnapshotContext(ctx, c.proc.GetTxnOperator(), node.ScanSnapshot)
 		expected := c.proc.GetTxnOperator().Txn().SnapshotTS
 		if snapshot := node.GetScanSnapshot().GetTS(); snapshot != nil && !snapshot.IsEmpty() && snapshot.Less(expected) {
 			expected = *snapshot
