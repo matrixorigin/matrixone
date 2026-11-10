@@ -79,7 +79,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			(len(stmt.OnDuplicateUpdate) == 0 ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)

@@ -123,7 +123,8 @@ function run_tests(){
 
     else
         logger "INF" "Run UT with race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            bash "${BUILD_WKSP}/optools/run_race_ut.sh" "${UT_REPORT}" "${UT_PARALLEL}" "${UT_TIMEOUT}" "${TAGS}" $test_scope
     fi
 }
 
@@ -156,6 +157,7 @@ elif [[ 'UT' == $TEST_TYPE ]]; then
     echo "# Running UT"
     horiz_rule
     run_tests
+    test_status=$?
 
     horiz_rule
     echo "# Post testing"
@@ -163,6 +165,7 @@ elif [[ 'UT' == $TEST_TYPE ]]; then
     post_test
 
     ut_summary
+    exit "$test_status"
 else
     logger "ERR" "Wrong test type"
     exit 1
