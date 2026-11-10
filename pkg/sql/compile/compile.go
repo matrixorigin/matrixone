@@ -553,6 +553,10 @@ func (c *Compile) clear() {
 		source.Close()
 		delete(c.materializedSources, k)
 	}
+	for _, domain := range c.localRuntimeDomains {
+		domain.Close()
+	}
+	c.localRuntimeDomains = nil
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -1564,6 +1568,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
+	c.bindLocalRuntimeFilterDomains(qry, steps)
 	if queryNeedsGroupingTransport(qry) {
 		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
