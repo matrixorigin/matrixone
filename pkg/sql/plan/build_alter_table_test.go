@@ -80,6 +80,28 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 	}
 }
 
+func TestAlterTableCopyPreservesSourceAcrossChainedRename(t *testing.T) {
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE t1 ALGORITHM=COPY, DROP PRIMARY KEY, ADD PRIMARY KEY(b), DROP COLUMN a, RENAME COLUMN b TO tmp, RENAME COLUMN tmp TO a;`)
+	if !assert.NoError(t, err) {
+		return
+	}
+	alter := logicPlan.GetDdl().GetAlterTable()
+	oldKey := FindColumn(alter.TableDef.Cols, "a")
+	oldSource := FindColumn(alter.TableDef.Cols, "b")
+	newKey := FindColumn(alter.CopyTableDef.Cols, "a")
+	if !assert.NotNil(t, oldKey) || !assert.NotNil(t, oldSource) || !assert.NotNil(t, newKey) {
+		return
+	}
+	assert.NotEqual(t, oldKey.ColId, newKey.ColId)
+	assert.Equal(t, oldSource.ColId, newKey.ColId)
+	_, mappedOldKey := alter.ChangeTblColIdMap[oldKey.ColId]
+	assert.False(t, mappedOldKey)
+	if source, ok := alter.ChangeTblColIdMap[oldSource.ColId]; assert.True(t, ok) && assert.NotNil(t, source) {
+		assert.Equal(t, "a", source.Name)
+	}
+}
+
 func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		sql              string
@@ -888,6 +910,53 @@ func TestAlterCopyIndexControls(t *testing.T) {
 			if table == "fake_pk_t" {
 				assert.Equal(t, 2, strings.Count(alter.InsertTmpDataSql, "`"+catalog.FakePrimaryKeyColName+"`"))
 			}
+		})
+	}
+}
+
+func TestAlterCopyPrimaryKeyDefaultPreservesIndexes(t *testing.T) {
+	for _, clause := range []string{
+		"alter column id set default 5, add column extra int",
+		"add column extra int, alter column id set default 5",
+		"alter column id drop default, add column extra int",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			base := mock.ctxt.tables["single_idx_t"]
+			idx := *base.Indexes[0]
+			idx.IndexName = "idx_id"
+			idx.Parts = []string{"id"}
+			base.Indexes = append(base.Indexes, &idx)
+			p, err := buildSingleStmt(mock, t, "alter table constraint_test.single_idx_t "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			for _, index := range base.Indexes {
+				assert.True(t, alter.Options.SkipIndexesCopy[index.IndexName], index.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterCopyRebuildsGeneratedColumnIndexes(t *testing.T) {
+	for _, generated := range []string{"id", "val"} {
+		t.Run(generated, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			base := mock.ctxt.tables["single_idx_t"]
+			col := FindColumn(base.Cols, generated)
+			col.GeneratedCol = &plan.GeneratedCol{OriginString: "1", Expr: &plan.Expr{}, IsStored: true}
+			idx := *base.Indexes[0]
+			idx.IndexName = "idx_id"
+			idx.Parts = []string{"id"}
+			base.Indexes = append(base.Indexes, &idx)
+			p, err := buildSingleStmt(mock, t, "alter table constraint_test.single_idx_t add column extra int")
+			if !assert.NoError(t, err) {
+				return
+			}
+			alter := p.GetDdl().GetAlterTable()
+			assert.False(t, alter.Options.SkipIndexesCopy["idx_val"])
+			assert.Equal(t, generated != "id", alter.Options.SkipIndexesCopy["idx_id"])
 		})
 	}
 }

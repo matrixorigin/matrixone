@@ -24,4 +24,18 @@ show create table p;
 select * from p order by id;
 insert into p values (3,30);
 select * from p order by id;
+
+-- A reused name must not cause the old primary key to validate a different source.
+create table chain_bad (id decimal(10,0) primary key, src decimal(10,0) not null, payload int, key ix(payload));
+insert into chain_bad values (1,8,10),(2,8,20);
+alter table chain_bad algorithm=copy, drop primary key, add primary key(src), drop column id, rename column src to mid, rename column mid to id;
+show create table chain_bad;
+select id,src,payload from chain_bad force index(ix) where payload in (10,20) order by id;
+insert into chain_bad values (3,9,30);
+select id,src,payload from chain_bad ignore index(ix) order by id;
+
+create table chain_ok (id decimal(10,0) primary key, src decimal(10,0) not null, payload int);
+insert into chain_ok values (1,8,10),(2,9,20);
+alter table chain_ok algorithm=copy, drop primary key, add primary key(src), drop column id, rename column src to mid, rename column mid to id;
+select id,payload from chain_ok order by id;
 drop database alter_copy_source_42;

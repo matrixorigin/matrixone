@@ -45,11 +45,11 @@ func TestAlterCopyDedupRequiresUnchangedValuesAndSources(t *testing.T) {
 			newDef := DeepCopyTableDef(old, true)
 			mapping := map[string]selectExpr{"a": {sexprType: exprColumnName, sexprStr: "a"}, "b": {sexprType: exprColumnName, sexprStr: "b"}}
 			tc.mutate(newDef, mapping)
-			require.Equal(t, tc.skipPK, skipPkDedup(old, newDef, mapping))
-			require.Equal(t, tc.skipUnique, skipUniqueIdxDedup(old, newDef, mapping)["u"])
+			require.Equal(t, tc.skipPK, skipPkDedup(old, newDef, mapping, nil))
+			require.Equal(t, tc.skipUnique, skipUniqueIdxDedup(old, newDef, mapping, nil)["u"])
 		})
 	}
 	fake := &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}}
-	require.True(t, skipPkDedup(&TableDef{}, fake, nil))
-	require.False(t, skipPkDedup(fake, &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}}, nil))
+	require.True(t, skipPkDedup(&TableDef{}, fake, nil, nil))
+	require.False(t, skipPkDedup(fake, &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}}, nil, nil))
 }

@@ -981,7 +981,7 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new, map[string]selectExpr{"id": {sexprType: exprColumnName, sexprStr: "id"}}))
+			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new, map[string]selectExpr{"id": {sexprType: exprColumnName, sexprStr: "id"}}, nil))
 		})
 	}
 }

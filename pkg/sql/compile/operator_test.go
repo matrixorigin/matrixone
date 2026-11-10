@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -296,9 +297,41 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 func TestDupOperatorPreInsertRejectZeroTemporal(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
+	op.PreserveAutoValues = true
 	result := dupOperator(op, 0, 1)
 	require.NotNil(t, result)
 	require.True(t, result.(*preinsert.PreInsert).RejectZeroTemporal)
+	require.True(t, result.(*preinsert.PreInsert).PreserveAutoValues)
+}
+
+func TestConstructPreInsertPreservesAutoValuesOnlyForCopyTarget(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	node := &plan.Node{Children: []int32{0}, PreInsertCtx: &plan.PreInsertCtx{
+		Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{Name: "t_copy"}, HasAutoCol: true,
+	}}
+	nodes := []*plan.Node{{Stats: &plan.Stats{}}}
+	for _, tc := range []struct {
+		name   string
+		copy   bool
+		target string
+		want   bool
+	}{
+		{"copy target", true, "t_copy", true},
+		{"other target", true, "index_table", false},
+		{"index backfill", false, "t_copy", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.WithValue(context.Background(), defines.AlterCopyOpt{}, &plan.AlterCopyOpt{TargetTableName: tc.target})
+			if tc.copy {
+				ctx = context.WithValue(ctx, defines.AlterTableCopy{}, tc.target)
+			}
+			proc.Ctx = ctx
+			op, err := constructPreInsert(nodes, node, nil, proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, op.PreserveAutoValues)
+		})
+	}
 }
 
 func TestRefreshZeroTemporalWritePolicy(t *testing.T) {

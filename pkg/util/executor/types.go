@@ -106,6 +106,7 @@ type StatementOption struct {
 	params                   []string
 	paramNulls               []bool
 	alterCopyOpt             *plan.AlterCopyOpt
+	alterTableCopyTarget     string
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64

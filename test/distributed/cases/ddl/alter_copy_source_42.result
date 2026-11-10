@@ -58,4 +58,34 @@ select * from p order by id;
 1  ¦  10  𝄀
 2  ¦  20  𝄀
 3  ¦  30
+create table chain_bad (id decimal(10,0) primary key, src decimal(10,0) not null, payload int, key ix(payload));
+insert into chain_bad values (1,8,10),(2,8,20);
+alter table chain_bad algorithm=copy, drop primary key, add primary key(src), drop column id, rename column src to mid, rename column mid to id;
+Duplicate entry '8' for key 'id'
+show create table chain_bad;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+chain_bad  ¦  CREATE TABLE `chain_bad` (
+  `id` decimal(10,0) NOT NULL,
+  `src` decimal(10,0) NOT NULL,
+  `payload` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` (`payload`)
+)
+select id,src,payload from chain_bad force index(ix) where payload in (10,20) order by id;
+➤ id[3,10,0]  ¦  src[3,10,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  8  ¦  10  𝄀
+2  ¦  8  ¦  20
+insert into chain_bad values (3,9,30);
+select id,src,payload from chain_bad ignore index(ix) order by id;
+➤ id[3,10,0]  ¦  src[3,10,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  8  ¦  10  𝄀
+2  ¦  8  ¦  20  𝄀
+3  ¦  9  ¦  30
+create table chain_ok (id decimal(10,0) primary key, src decimal(10,0) not null, payload int);
+insert into chain_ok values (1,8,10),(2,9,20);
+alter table chain_ok algorithm=copy, drop primary key, add primary key(src), drop column id, rename column src to mid, rename column mid to id;
+select id,payload from chain_ok order by id;
+➤ id[3,10,0]  ¦  payload[4,32,0]  𝄀
+8  ¦  10  𝄀
+9  ¦  20
 drop database alter_copy_source_42;

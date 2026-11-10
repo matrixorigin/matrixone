@@ -268,7 +268,6 @@ func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
-	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
 	alterPlan := &planpb.AlterTable{
 		Database:     origin.DbName,
 		TableDef:     origin,
@@ -280,9 +279,8 @@ func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 		"alter table t1 alter column note set default 'memo'",
 	)
 
-	pkAffected, err := AlterColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	err := alterColumn(mock.CurrentContext(), alterPlan, spec)
 	require.NoError(t, err)
-	require.False(t, pkAffected)
 	require.Contains(t, copyTable.Cols[3].Default.OriginString, "memo")
 }
 
@@ -323,7 +321,7 @@ func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 		},
 	}
 
-	skip := skipUniqueIdxDedup(oldTable, newTable, map[string]selectExpr{"title": {sexprType: exprColumnName, sexprStr: "title"}})
+	skip := skipUniqueIdxDedup(oldTable, newTable, map[string]selectExpr{"title": {sexprType: exprColumnName, sexprStr: "title"}}, nil)
 	require.Equal(t, map[string]bool{"uk_title": true}, skip)
 }
 
