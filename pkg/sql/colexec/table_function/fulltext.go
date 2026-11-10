@@ -984,26 +984,17 @@ func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFi
 	sqlProc := sqlexec.NewSqlProcess(proc)
 	sqlProc.RuntimeFilterSpecs = specs
 
-	vecbytes, err := sqlexec.WaitUniqueJoinKeys(sqlProc)
-	if err != nil || len(vecbytes) == 0 {
+	keys, err := sqlexec.WaitUniqueJoinKeys(sqlProc)
+	if err != nil || keys == nil {
 		return nil, err
 	}
-
-	keyvec := new(vector.Vector)
-	if err = keyvec.UnmarshalBinary(vecbytes); err != nil {
-		return nil, err
-	}
-	// No keyvec.Free here on purpose: UnmarshalBinary aliases vecbytes (it sets
-	// cantFreeData/cantFreeArea), so keyvec owns no mpool memory — the struct and
-	// the aliased bytes are reclaimed by GC. Calling Free(mp) would be a no-op for
-	// this zero-copy path, and tying its release to a specific mpool would be a
-	// cross-pool free hazard if the deserialization ever became owning.
+	defer keys.Release()
 
 	// docfilter picks and tags the doc_id filter structure (exact set for integer
 	// PKs, CBloomFilter otherwise); the reader reconstructs it at the allocation
 	// site. The caller need not know which structure is used.
-	payload, err := docfilter.BuildWithMemoryAdmission(
-		keyvec,
+	payload, err := docfilter.BuildKeysWithMemoryAdmission(
+		proc.Ctx, keys,
 		docfilter.AdmissionForService(proc.GetService()),
 	)
 	if err != nil {

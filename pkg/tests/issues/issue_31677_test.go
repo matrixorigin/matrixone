@@ -27,6 +27,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,7 +57,19 @@ func TestConcurrentRoleGrantCannotCommitCycleLegacyProtocol(t *testing.T) {
 }
 
 func TestConcurrentRoleGrantCannotCommitCycleTwoCN(t *testing.T) {
-	cluster, err := embed.StartTestCluster(embed.WithCNCount(2))
+	cluster, err := embed.StartTestCluster(
+		embed.WithCNCount(2),
+		embed.WithPreStart(func(svc embed.ServiceOperator) {
+			if svc.ServiceType() == metadata.ServiceType_CN {
+				svc.Adjust(func(cfg *embed.ServiceConfig) {
+					// Publish the generated SQL endpoint in the first heartbeat.
+					// Task storage may otherwise cache an empty address and dial
+					// the driver's default port during DROP ACCOUNT cleanup.
+					cfg.CN.SQLAddress = fmt.Sprintf("127.0.0.1:%d", cfg.CN.Frontend.Port)
+				})
+			}
+		}),
+	)
 	if cluster != nil {
 		defer func() { require.NoError(t, cluster.Close()) }()
 	}

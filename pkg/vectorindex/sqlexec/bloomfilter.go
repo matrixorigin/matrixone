@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,12 +31,9 @@ import (
 )
 
 // WaitUniqueJoinKeys blocks until it receives a RuntimeFilter_UNIQUEJOINKEYS message
-// that matches sqlproc.RuntimeFilterSpecs (if any). It returns the raw serialized
-// unique join key bytes from the build side.
-//
-// The caller is responsible for deserializing the bytes and deciding how to use
-// them (e.g. exact pk IN filter vs a membership filter based on its own threshold).
-func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
+// that matches sqlproc.RuntimeFilterSpecs (if any). The caller owns a retained
+// reference to the complete immutable key set and must Release it after use.
+func WaitUniqueJoinKeys(sqlproc *SqlProcess) (*keycodec.KeyPayload, error) {
 	if sqlproc.Proc == nil {
 		return nil, nil
 	}
@@ -54,8 +52,17 @@ func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 		sqlproc.Proc.GetMessageBoard(),
 	)
 	msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, sqlproc.GetContext())
-	if err != nil || ctxDone {
+	if err != nil {
 		return nil, err
+	}
+	if ctxDone {
+		if spec.MustApply {
+			if cause := context.Cause(sqlproc.GetContext()); cause != nil {
+				return nil, cause
+			}
+			return nil, moerr.NewInternalErrorf(sqlproc.GetContext(), "required runtime filter %d wait was canceled", spec.Tag)
+		}
+		return nil, nil
 	}
 
 	for i := range msgs {
@@ -64,11 +71,23 @@ func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 			continue
 		}
 		if m.Typ != message.RuntimeFilter_UNIQUEJOINKEYS {
+			if m.Typ == message.RuntimeFilter_DROP {
+				return nil, nil
+			}
+			if spec.MustApply && m.Typ == message.RuntimeFilter_PASS {
+				return nil, moerr.NewInternalErrorf(sqlproc.GetContext(), "required runtime filter %d is unavailable: producer returned PASS", spec.Tag)
+			}
 			continue
 		}
-		return m.Data, nil
+		if m.Keys == nil || (spec.MustApply && m.Keys.Rows() == 0) || !m.Keys.Retain() {
+			return nil, moerr.NewInvalidStateNoCtx("runtime filter has missing or released keys")
+		}
+		return m.Keys, nil
 	}
 
+	if spec.MustApply {
+		return nil, moerr.NewInternalErrorf(sqlproc.GetContext(), "required runtime filter %d did not provide an exact payload", spec.Tag)
+	}
 	return nil, nil
 }
 
@@ -99,7 +118,26 @@ func BuildExactPkFilterWithLimit(
 }
 
 func buildExactPkFilter(ctx context.Context, vec *vector.Vector, maxBytes int) (string, error) {
+	buf, err := appendExactPkFilter(ctx, vec, maxBytes, nil)
+	return string(buf), err
+}
+
+// BuildExactPkFilterKeys visits the complete key set without concatenating its
+// vectors. maxBytes bounds the entire predicate, including inter-chunk commas;
+// zero is reserved for callers that already impose a small cardinality limit.
+func BuildExactPkFilterKeys(ctx context.Context, keys *keycodec.KeyPayload, maxBytes int) (string, error) {
 	var buf []byte
+	err := keys.Visit(ctx, func(v *vector.Vector) (err error) {
+		buf, err = appendExactPkFilter(ctx, v, maxBytes, buf)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func appendExactPkFilter(ctx context.Context, vec *vector.Vector, maxBytes int, buf []byte) ([]byte, error) {
 	rowCount := vec.Length()
 	for i := 0; i < rowCount; i++ {
 		if vec.IsNull(uint64(i)) {
@@ -112,7 +150,7 @@ func buildExactPkFilter(ctx context.Context, vec *vector.Vector, maxBytes int) (
 		if maxBytes > 0 {
 			if literalBytes, bounded := exactPkLiteralBytes(vec, i); bounded &&
 				literalBytes > maxBytes-len(buf)-separatorBytes {
-				return "", moerr.NewInvalidInputf(
+				return nil, moerr.NewInvalidInputf(
 					ctx,
 					"ivf_search: exact primary-key filter exceeds %d bytes",
 					maxBytes,
@@ -125,17 +163,17 @@ func buildExactPkFilter(ctx context.Context, vec *vector.Vector, maxBytes int) (
 		var err error
 		buf, err = AppendVectorSQLLiteral(ctx, vec, i, buf)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if maxBytes > 0 && len(buf) > maxBytes {
-			return "", moerr.NewInvalidInputf(
+			return nil, moerr.NewInvalidInputf(
 				ctx,
 				"ivf_search: exact primary-key filter exceeds %d bytes",
 				maxBytes,
 			)
 		}
 	}
-	return string(buf), nil
+	return buf, nil
 }
 
 // exactPkLiteralBytes returns the exact encoded length for variable-width

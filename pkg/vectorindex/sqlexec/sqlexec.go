@@ -19,6 +19,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -82,10 +83,10 @@ type SqlProcess struct {
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
 	FulltextMembershipFilter []byte
 
-	// Optional raw runtime-filter payload from the build side for IVF probe path.
-	// This contains serialized unique join keys and must be converted by IVF code
-	// before it is exposed to entries table scans.
-	IvfRuntimeFilterData []byte
+	// Borrowed complete runtime-filter keys for the IVF probe path. The caller
+	// keeps a reference through Search; IVF converts the keys before exposing a
+	// filter to entries table scans.
+	IvfRuntimeFilterData *keycodec.KeyPayload
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string
