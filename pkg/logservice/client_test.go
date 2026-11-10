@@ -979,12 +979,28 @@ func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)
 		rand.Read(rec.Payload())
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, err := c.Append(ctx, rec)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		err = c.Truncate(ctx, 4)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+		psn, dsn, err := c.GetWALTruncate(ctx)
+		require.NoError(t, err)
+		writeCfg := cfg
+		writeCfg.ReadOnly = false
+		writer, err := NewClient(ctx, "", writeCfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, writer.Close()) }()
+		lsn, err := writer.Append(ctx, rec)
+		require.NoError(t, err)
+		err = c.TruncateWAL(ctx, lsn, dsn+1)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		gotPSN, gotDSN, err := c.GetWALTruncate(ctx)
+		require.NoError(t, err)
+		require.Equal(t, psn, gotPSN)
+		require.Equal(t, dsn, gotDSN)
 	}
 	RunClientTest(t, true, nil, fn)
 }

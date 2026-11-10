@@ -868,6 +868,9 @@ func (c *client) getRequiredLsnState(ctx context.Context) (Lsn, uint64, uint64, 
 }
 
 func (c *client) truncateWAL(ctx context.Context, psn, checkpointedDSN Lsn) error {
+	if c.readOnly() {
+		return moerr.NewInvalidInput(ctx, "incompatible client")
+	}
 	_, _, err := c.request(ctx, pb.TRUNCATE_WAL, nil, psn, 0, time.Time{},
 		func(r *pb.LogRequest) { r.CheckpointedDSN = checkpointedDSN })
 	return err
