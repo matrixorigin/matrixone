@@ -608,3 +608,35 @@ Review decision: this removes an intermediate output copy, not document
 validation or the final caller-owned output copy. It adds no path cache or new
 JSON decoder. Keep a regression proving long output survives reader closure
 and source mutation, and measure this change separately from admission reuse.
+
+### Reader and publication metadata accounting (candidate revision 34)
+
+Document backing, descriptors, row maps and retained cache capacity are already
+charged, but a live Go reader/window/cursor and the publication maps have their
+own heap footprint. A lease size field does not reserve that memory. Each SQL
+owner must therefore carry the existing statement memory admission into every
+retained handle. An explicit allocation-account selection takes precedence;
+otherwise the caller supplies the execution-generation transient-memory
+admission. Standalone callers without any statement account retain their
+existing standalone API; every SQL producer and receiver must provide one of
+the two. No boolean or user-provided bytes become admission authority.
+
+Reserve a conservative bounded metadata charge before creating each private
+owner, retained view, cursor, or query result. The owner charge follows the
+backing lease to its final release; handle charges end when that handle ceases
+to be retained. A cursor copies immutable row coordinates and retains the
+backing lease, rather than keeping an otherwise-closed reader object alive.
+A selected view also covers its row-map Vector and lease metadata; the actual
+row-map backing remains separately charged by the MPool. Publication and
+expression-binding maps/slices must have their own scoped reservations and
+release them on failure, cancellation, reset and free. Unused JSON_VALUE paths
+must not create these reservations or snapshots.
+
+Review decision: Go heap metadata is additional memory even when its payload
+is small; omitting it violates the stated accounting contract. Charges may be
+conservative rather than exact Go allocator/RSS measurements, but must cover
+all live control objects and avoid both double-charging the backing and hiding
+failed reservations. Tests must demonstrate account growth for retained
+views, cursors and results, independent lifetimes, zero final charge, admission
+failure atomicity, real SQL budget usage, and no new work for unrelated queries.
+All performance gates must be remeasured with these reservations enabled.
