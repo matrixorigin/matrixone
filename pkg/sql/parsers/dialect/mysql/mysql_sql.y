@@ -70,6 +70,17 @@ func sqlTaskInt64(v any) int64 {
     }
 }
 
+func rebaseSourceToken(v any) (uint64, bool) {
+    switch value := v.(type) {
+    case uint64:
+        return value, value != 0
+    case int64:
+        return uint64(value), value > 0
+    default:
+        return 0, false
+    }
+}
+
 const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
 
 func makeCharsetCastCharType(width int32, charsetName string) *tree.T {
@@ -437,6 +448,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     killOption tree.KillOption
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
+    rebaseSourceExpectation *tree.RebaseSourceExpectation
     pickKeys *tree.PickKeys
     diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
@@ -591,7 +603,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE BRANCH LOG REVERT REBASE DIFF PICK
+%token <str> CLONE BRANCH LOG REVERT REBASE DIFF PICK EXPECT
 %token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT SUMMARY
 
 // Sequence
@@ -839,6 +851,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <toAccountOpt> to_account_opt
 %type <boolVal> copy_grants_opt
 %type <conflictOpt> conflict_opt
+%type <rebaseSourceExpectation> rebase_source_expectation_opt
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
@@ -10701,8 +10714,23 @@ rebase_table_name_list:
         $$ = append($1, tree.Identifier(yylex.(*Lexer).GetDbOrTblName($3.Origin())))
     }
 
+rebase_source_expectation_opt:
+    {
+        $$ = nil
+    }
+|   FOR UPDATE EXPECT '(' INTEGRAL ',' INTEGRAL ')'
+    {
+        databaseID, validID := rebaseSourceToken($5)
+        epoch, validEpoch := rebaseSourceToken($7)
+        if !validID || !validEpoch {
+            yylex.Error("Rebase EXPECT requires positive database ID and epoch literals")
+            goto ret1
+        }
+        $$ = &tree.RebaseSourceExpectation{DatabaseID: databaseID, Epoch: epoch}
+    }
+
 branch_stmt:
-    DATA BRANCH REBASE DATABASE db_name FROM db_name table_snapshot_opt AGAINST db_name table_snapshot_opt BETWEEN db_name table_snapshot_opt AND db_name table_snapshot_opt rebase_table_selection_opt conflict_opt
+    DATA BRANCH REBASE DATABASE db_name FROM db_name table_snapshot_opt AGAINST db_name table_snapshot_opt BETWEEN db_name table_snapshot_opt AND db_name table_snapshot_opt rebase_table_selection_opt rebase_source_expectation_opt conflict_opt
     {
         t := tree.NewDataBranchRebase()
         t.Destination = tree.Identifier($5)
@@ -10711,7 +10739,8 @@ branch_stmt:
         t.FeatureBase = tree.RebaseDatabaseEndpoint{Database: tree.Identifier($13), AtTsExpr: $14}
         t.UpstreamBase = tree.RebaseDatabaseEndpoint{Database: tree.Identifier($16), AtTsExpr: $17}
         t.Tables = $18
-        t.ConflictOpt = $19
+        t.SourceExpectation = $19
+        t.ConflictOpt = $20
         $$ = t
     }
 |   DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
@@ -16959,6 +16988,7 @@ non_reserved_keyword:
 |   BITS_PER_CODE
 |   BRANCH
 |   REBASE
+|   EXPECT
 |   CATALOG
 |   CATALOGS
 |   CLONE

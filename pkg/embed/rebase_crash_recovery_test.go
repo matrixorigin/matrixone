@@ -35,6 +35,8 @@ type rebaseCrashIdentity struct {
 	BaseTS                 int64
 	Committed, Uncommitted [2]uint64
 	EdgeCount, PinCount    int
+	Inventory              *rebaseInventoryRecoveryIdentity `json:",omitempty"`
+	SourceDependency       *rebaseSourceRecoveryIdentity    `json:",omitempty"`
 }
 
 var nativeRebaseCrashPhase func(*testing.T, string, string, *sql.DB, context.Context, rebaseCrashIdentity)
@@ -50,6 +52,10 @@ func TestNativeRebaseCrashRecovery(t *testing.T) {
 }
 
 func runRebaseCrashRecovery(t *testing.T, native bool) {
+	runRebaseCrashRecoveryScenario(t, native, "")
+}
+
+func runRebaseCrashRecoveryScenario(t *testing.T, native bool, inventoryMode string) {
 	t.Helper()
 	if os.Getenv("MO_REBASE_CRASH_CHILD") != "" {
 		t.Fatal("parent selected in child")
@@ -75,6 +81,9 @@ func runRebaseCrashRecovery(t *testing.T, native bool) {
 		cmd.Env = append(os.Environ(), "MO_REBASE_CRASH_CHILD="+phase, "MO_REBASE_CRASH_ROOT="+root)
 		if native {
 			cmd.Env = append(cmd.Env, "MO_REBASE_NATIVE_CRASH=1")
+		}
+		if inventoryMode != "" {
+			cmd.Env = append(cmd.Env, "MO_REBASE_INVENTORY_RECOVERY="+inventoryMode)
 		}
 		cmd.Stdout, cmd.Stderr = log, log
 		if ready != nil {
@@ -112,8 +121,16 @@ func runRebaseCrashRecovery(t *testing.T, native bool) {
 	go func() {
 		var identity rebaseCrashIdentity
 		err := json.NewDecoder(r).Decode(&identity)
-		if err == nil && identity.BaseTS <= 0 {
-			err = fmt.Errorf("missing committed base")
+		if err == nil {
+			if inventoryMode == "" && identity.BaseTS <= 0 {
+				err = fmt.Errorf("missing committed base")
+			} else if (inventoryMode == "dependency-wal" || inventoryMode == "dependency-checkpoint") &&
+				(identity.SourceDependency == nil || identity.SourceDependency.ChangedID == 0) {
+				err = fmt.Errorf("missing committed source dependency identity")
+			} else if inventoryMode != "" && inventoryMode != "dependency-wal" && inventoryMode != "dependency-checkpoint" &&
+				(identity.Inventory == nil || identity.Inventory.SourceID == 0) {
+				err = fmt.Errorf("missing committed inventory identity")
+			}
 		}
 		ready <- err
 	}()
@@ -139,6 +156,19 @@ func runRebaseCrashRecovery(t *testing.T, native bool) {
 	case <-ctx.Done():
 		t.Fatal("recovery child did not finish")
 	}
+	if inventoryMode != "" {
+		data, err := os.ReadFile(filepath.Join(root, "identity.json"))
+		require.NoError(t, err)
+		var identity rebaseCrashIdentity
+		require.NoError(t, json.Unmarshal(data, &identity))
+		if identity.SourceDependency != nil {
+			t.Logf("source dependency recovery mode=%s SIGKILL and fresh-process verification passed", inventoryMode)
+			return
+		}
+		t.Logf("inventory recovery mode=%s source=%d retired=%d replacement=%d checkpoint=%t SIGKILL and fresh-process verification passed",
+			inventoryMode, identity.Inventory.SourceID, identity.Inventory.RetiredID,
+			identity.Inventory.ReplacementID, identity.Inventory.CheckpointCompleted)
+	}
 }
 
 func TestRebaseCrashHelper(t *testing.T) {
@@ -149,6 +179,10 @@ func TestRebaseCrashHelper(t *testing.T) {
 	require.Contains(t, []string{"prepare", "verify"}, phase)
 	root := os.Getenv("MO_REBASE_CRASH_ROOT")
 	require.NotEmpty(t, root)
+	inventoryMode := os.Getenv("MO_REBASE_INVENTORY_RECOVERY")
+	if inventoryMode != "" {
+		require.Contains(t, []string{"wal", "checkpoint", "dependency-wal", "dependency-checkpoint"}, inventoryMode)
+	}
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0700))
 	var identity rebaseCrashIdentity
 	if phase == "verify" {
@@ -158,6 +192,22 @@ func TestRebaseCrashHelper(t *testing.T) {
 	}
 	c, err := NewCluster(WithTesting(), WithCNCount(1), WithTestAdmissionContext(t.Context()), func(c *cluster) { c.id = 12345; c.options.dataPath = filepath.Join(root, "data") }, WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
+		if inventoryMode != "" && svc.ServiceType() == metadata.ServiceType_TN {
+			svc.Adjust(func(cfg *ServiceConfig) {
+				tn := cfg.TN_please_use_getTNServiceConfig
+				if tn == nil {
+					tn = cfg.TNCompatible
+				}
+				if tn != nil {
+					tn.Txn.EnableRebaseDataHistory = inventoryMode == "dependency-wal" || inventoryMode == "dependency-checkpoint"
+					// Separate forced checkpoint recovery from WAL recovery; no
+					// scheduled checkpoint should race either crash barrier.
+					tn.Ckp.ScanInterval.Duration = time.Hour
+					tn.Ckp.FlushInterval.Duration = time.Hour
+					tn.Ckp.IncrementalInterval.Duration = time.Hour
+				}
+			})
+		}
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			svc.Adjust(func(cfg *ServiceConfig) {
 				// A killed generation cannot acknowledge withdrawal. Allow the
@@ -200,6 +250,10 @@ func TestRebaseCrashHelper(t *testing.T) {
 		var n int
 		require.NoError(t, db.QueryRowContext(ctx, q).Scan(&n), q)
 		return n
+	}
+	if inventoryMode != "" {
+		runRebaseInventoryRecoveryPhase(t, phase, inventoryMode, root, cn, db, ctx, identity)
+		return
 	}
 	if os.Getenv("MO_REBASE_NATIVE_CRASH") == "1" {
 		if nativeRebaseCrashPhase == nil {

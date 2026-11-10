@@ -201,6 +201,7 @@ func init() {
 		"exists":                     EXISTS,
 		"exit":                       UNUSED,
 		"explain":                    EXPLAIN,
+		"expect":                     EXPECT,
 		"expansion":                  EXPANSION,
 		"extended":                   EXTENDED,
 		"expire":                     EXPIRE,

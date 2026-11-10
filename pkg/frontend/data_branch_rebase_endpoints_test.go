@@ -117,7 +117,7 @@ func TestRebaseSQLStatementContract(t *testing.T) {
 				} else {
 					require.Equal(t, tree.IdentifierList{"a", "b"}, r.Tables)
 				}
-				require.True(t, statementRequiresPersistentWriteAccess(nil, stmt, ""))
+				require.Equal(t, writePersistent, classifyStatementWrite(nil, stmt, ""))
 				require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 				require.True(t, isDataBranchStatement(stmt))
 				roundtrip, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tree.String(stmt, dialect.MYSQL), 1)

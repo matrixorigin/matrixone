@@ -43,6 +43,10 @@ type rebaseDatabaseRequest struct {
 	endpoints   [4]rebaseEndpoint
 	tables      []string
 	policy      rebaseConflictPolicy
+
+	// Public R1 requests never set this. Publication must borrow its caller's
+	// transaction so replay cannot commit separately from history/pointer CAS.
+	sourceExpectation *databaseInventoryToken
 }
 
 type rebaseBoundDatabase struct {
@@ -63,6 +67,14 @@ type rebaseDatabaseSummary struct {
 type rebaseAppliedObserver func(context.Context, string, string)
 
 var rebaseAppliedHook atomic.Pointer[rebaseAppliedObserver]
+var rebaseSourceExpectationForTest atomic.Bool
+
+// SetRebaseSourceExpectationForTest enables only the unqualified EXPECT
+// candidate in an exclusive SQL fixture. Production has no activation path.
+func SetRebaseSourceExpectationForTest(enabled bool) func() {
+	previous := rebaseSourceExpectationForTest.Swap(enabled)
+	return func() { rebaseSourceExpectationForTest.Store(previous) }
+}
 
 // SetRebaseTableAppliedHookForTest exposes the partial-apply boundary missing
 // from clone admission hooks. Tests must restore it and use the exclusive SQL
@@ -74,8 +86,21 @@ func SetRebaseTableAppliedHookForTest(hook func(context.Context, string, string)
 }
 
 func handleBranchRebase(execCtx *ExecCtx, ses *Session, stmt *tree.DataBranchRebase) error {
+	var expectation *databaseInventoryToken
+	if stmt.SourceExpectation != nil {
+		if !rebaseSourceExpectationForTest.Load() {
+			return moerr.NewNotSupported(execCtx.reqCtx, "Rebase EXPECT publication is disabled")
+		}
+		account, err := defines.GetAccountId(execCtx.reqCtx)
+		if err != nil {
+			return err
+		}
+		expectation = &databaseInventoryToken{accountID: account,
+			databaseID: stmt.SourceExpectation.DatabaseID, epoch: stmt.SourceExpectation.Epoch, tracked: true}
+	}
 	request := rebaseDatabaseRequest{
-		destination: stmt.Destination.String(),
+		destination:       stmt.Destination.String(),
+		sourceExpectation: expectation,
 		endpoints: [4]rebaseEndpoint{
 			{stmt.FeatureBase.Database.String(), stmt.FeatureBase.AtTsExpr},
 			{stmt.Feature.Database.String(), stmt.Feature.AtTsExpr},
@@ -135,6 +160,9 @@ func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabas
 		return summary, moerr.NewInvalidInput(ctx, "invalid Rebase request")
 	}
 	borrowOwner := ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN)
+	if request.sourceExpectation != nil && !borrowOwner {
+		return summary, moerr.NewNotSupported(ctx, "Rebase publication requires an explicit transaction")
+	}
 	if dataBranchPickTxnNotAllowed(ses) && !borrowOwner {
 		return summary, moerr.NewNotSupported(ctx, "Rebase requires an independent transaction or explicit BEGIN")
 	}
@@ -249,6 +277,12 @@ func executeRebaseDatabase(execCtx *ExecCtx, ses *Session, request rebaseDatabas
 	tables, reads, err := preflightRebaseTables(ctx, bh, sources, dag, request)
 	if err != nil {
 		return summary, err
+	}
+	if request.sourceExpectation != nil {
+		if err = reserveRebaseFeatureSource(ctx, admission.proc.GetSessionInfo().StorageEngine,
+			admission.proc.GetTxnOperator(), sources[1], *request.sourceExpectation); err != nil {
+			return summary, err
+		}
 	}
 	receipts, err := handleCloneDatabaseWithSource(execCtx, ses, bh, &sources[3].stmt, &sources[3].source)
 	if err != nil {

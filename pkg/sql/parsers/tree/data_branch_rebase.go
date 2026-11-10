@@ -14,7 +14,11 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
 	reuse.CreatePool[DataBranchRebase](func() *DataBranchRebase { return &DataBranchRebase{} },
@@ -24,6 +28,11 @@ func init() {
 type RebaseDatabaseEndpoint struct {
 	Database Identifier
 	AtTsExpr *AtTimeStamp
+}
+
+type RebaseSourceExpectation struct {
+	DatabaseID uint64
+	Epoch      uint64
 }
 
 func (e *RebaseDatabaseEndpoint) Format(ctx *FmtCtx) {
@@ -42,6 +51,7 @@ type DataBranchRebase struct {
 	FeatureBase, UpstreamBase RebaseDatabaseEndpoint
 	Tables                    IdentifierList
 	ConflictOpt               *ConflictOpt
+	SourceExpectation         *RebaseSourceExpectation
 }
 
 func NewDataBranchRebase() *DataBranchRebase         { return reuse.Alloc[DataBranchRebase](nil) }
@@ -67,6 +77,13 @@ func (s *DataBranchRebase) Format(ctx *FmtCtx) {
 		if len(s.Tables) != 0 {
 			ctx.WriteString(" tables (")
 			s.Tables.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		if s.SourceExpectation != nil {
+			ctx.WriteString(" for update expect (")
+			ctx.WriteString(strconv.FormatUint(s.SourceExpectation.DatabaseID, 10))
+			ctx.WriteString(", ")
+			ctx.WriteString(strconv.FormatUint(s.SourceExpectation.Epoch, 10))
 			ctx.WriteByte(')')
 		}
 		if s.ConflictOpt != nil {
