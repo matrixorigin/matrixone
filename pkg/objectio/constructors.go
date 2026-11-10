@@ -1063,19 +1063,56 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 	return ObjectMeta(buffer)
 }
 
-// OpenJSONReader retains a sealed cache column without copying or rescanning
-// its documents. Unmarked inputs use checked decoding and a private accounted
-// snapshot. No mutable cache-backed Vector escapes either path.
-func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.AllocationAccountSelection) (vector.JSONReader, error) {
+// JSONCachePinAdmission reserves physical non-MPool backing for the lifetime
+// of a reader owner and returns its unique release function.
+type JSONCachePinAdmission func(uint64) (release func(), err error)
+
+// OpenJSONReader retains a private cache column only after its complete backing
+// is admitted to the caller's account. Without a pin admission, it returns an
+// independently allocated snapshot. No mutable cache-backed Vector escapes.
+func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.AllocationAccountSelection, admissions ...JSONCachePinAdmission) (vector.JSONReader, error) {
 	if data == nil || mp == nil {
 		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires data and a pool")
 	}
-	if marked, ok := data.(*privateJSONVectorCacheData); ok {
-		return newCacheJSONReader(data, marked, selection)
+	private, isPrivate := data.(*privateJSONVectorCacheData)
+	if isPrivate {
+		capacity := data.Capacity()
+		if capacity < 0 {
+			return nil, moerr.NewInvalidInputNoCtx("invalid JSON cache backing capacity")
+		}
+		var releasePin func()
+		var err error
+		switch {
+		case selection != nil:
+			var pin *mpool.CapacityLease
+			pin, err = selection.ReservePinnedCapacity(uint64(capacity))
+			if err == nil {
+				releasePin = pin.Release
+			}
+		case len(admissions) > 0 && admissions[0] != nil:
+			releasePin, err = admissions[0](uint64(capacity))
+		}
+		if err != nil {
+			if releasePin != nil {
+				releasePin()
+			}
+			return nil, err
+		}
+		if releasePin != nil {
+			return newCacheJSONReader(data, private, selection, capacity, releasePin)
+		}
+		if len(admissions) > 0 && admissions[0] != nil {
+			return nil, moerr.NewInternalErrorNoCtx("JSON cache pin admission returned no release")
+		}
 	}
 	data.Retain()
 	defer data.Release()
-	buf := data.Bytes()
+	var buf []byte
+	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+		buf = marked.validatedVectorBackingForScope()
+	} else {
+		buf = data.Bytes()
+	}
 	if len(buf) < IOEntryHeaderSize {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -1085,7 +1122,7 @@ func OpenJSONReader(data fscache.Data, mp *mpool.MPool, selection *vector.Alloca
 	}
 	var source vector.Vector
 	defer source.Free(nil)
-	if err := mustVectorTo(&source, buf, false); err != nil {
+	if err := mustVectorTo(&source, buf, isPrivate); err != nil {
 		return nil, err
 	}
 	return vector.NewJSONReaderSnapshotWithAllocation(&source, mp, selection)

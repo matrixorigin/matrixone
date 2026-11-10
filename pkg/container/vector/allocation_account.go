@@ -317,6 +317,25 @@ func (s *AllocationAccountSelection) validate() error {
 	return nil
 }
 
+// ReservePinnedCapacity accounts for a non-MPool backing retained by a reader.
+// The caller owns the returned lease and releases it when the final retained
+// view or result no longer pins that physical allocation.
+func (s *AllocationAccountSelection) ReservePinnedCapacity(capacity uint64) (*mpool.CapacityLease, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	reservation, err := s.account.ReserveCapacityWithClass(capacity, s.capacityClass, s.owner, s.areaSite)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := reservation.Commit(capacity)
+	if err != nil {
+		reservation.Abort()
+		return nil, err
+	}
+	return lease, nil
+}
+
 // AllocationAccountSelection returns the immutable selection used by this
 // vector's future owned allocations. It is nil for unaccounted vectors and
 // views outside the retained HashBuild domain.

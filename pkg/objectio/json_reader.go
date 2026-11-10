@@ -36,23 +36,25 @@ type cacheJSONReader struct {
 	length    int
 }
 
-func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, selection *vector.AllocationAccountSelection) (vector.JSONReader, error) {
+func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker, selection *vector.AllocationAccountSelection, capacity int64, releasePin func()) (vector.JSONReader, error) {
 	data.Retain()
 	column := new(vector.Vector)
-	if err := mustVectorTo(column, marked.validatedVectorBackingForScope(), true); err != nil {
+	release := func() {
 		column.Free(nil)
 		data.Release()
+		releasePin()
+	}
+	if err := mustVectorTo(column, marked.validatedVectorBackingForScope(), true); err != nil {
+		release()
 		return nil, err
 	}
 	if column.GetType().Oid != types.T_json {
-		column.Free(nil)
-		data.Release()
+		release()
 		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires a JSON column")
 	}
-	lease, err := vector.NewRefCountedBufferLease(nil, data.Size(), func() { column.Free(nil); data.Release() })
+	lease, err := vector.NewRefCountedBufferLease(nil, capacity, release)
 	if err != nil {
-		column.Free(nil)
-		data.Release()
+		release()
 		return nil, err
 	}
 	return &cacheJSONReader{column: column, lease: lease, selection: selection, length: column.Length()}, nil

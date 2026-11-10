@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -40,6 +41,32 @@ func privateJSONColumnForTest(t *testing.T, source *vector.Vector) fscache.Data 
 	_, ok := data.(*privateJSONVectorCacheData)
 	require.True(t, ok)
 	return data
+}
+
+func testJSONCachePinAdmission(t *testing.T) JSONCachePinAdmission {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 30)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, account.Seal().Used)
+		require.Zero(t, registry.LiveAllocationMetadata())
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	})
+	return func(capacity uint64) (func(), error) {
+		reservation, err := account.ReserveCapacity(capacity, 1, 1)
+		if err != nil {
+			return nil, err
+		}
+		lease, err := reservation.Commit(capacity)
+		if err != nil {
+			reservation.Abort()
+			return nil, err
+		}
+		return lease.Release, nil
+	}
 }
 
 // A cache validator can receive bytes from an arbitrary caller. Admission must
@@ -128,7 +155,7 @@ func TestJSONCacheRehomeDoesNotExposeAdmittedBacking(t *testing.T) {
 	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
 	data := privateJSONColumnForTest(t, source)
 	defer data.Release()
-	reader, err := OpenJSONReader(data, mp, nil)
+	reader, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
 	require.NoError(t, err)
 	defer reader.Close()
 	// A full-range Slice must not reveal the embedded general marker.
@@ -189,7 +216,7 @@ func TestJSONCachePrivateConstructorRejectsAliasingAllocator(t *testing.T) {
 	require.NoError(t, err)
 	defer data.Release()
 	require.Zero(t, allocator.calls)
-	reader, err := OpenJSONReader(data, mp, nil)
+	reader, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
 	require.NoError(t, err)
 	defer reader.Close()
 	pos := bytes.Index(raw, []byte("ORIGINAL"))
@@ -216,7 +243,7 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
 	data := privateJSONColumnForTest(t, source)
-	reader, err := OpenJSONReader(data, mp, nil)
+	reader, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
 	require.NoError(t, err)
 	data.Release()
 	start := make(chan struct{})
@@ -250,6 +277,105 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 	}
 }
 
+func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
+	for _, insufficient := range []bool{false, true} {
+		t.Run(fmt.Sprintf("insufficient=%v", insufficient), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+			source := vector.NewVec(types.T_json.ToType())
+			defer source.Free(mp)
+			doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+			data := privateJSONColumnForTest(t, source)
+			defer func() {
+				if data != nil {
+					data.Release()
+				}
+			}()
+			capacity := uint64(data.Capacity())
+			require.Positive(t, capacity)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+			require.NoError(t, err)
+			limit := capacity
+			if insufficient {
+				limit--
+			}
+			account, err := registry.Open(limit)
+			require.NoError(t, err)
+			defer func() {
+				require.Zero(t, account.Seal().Used)
+				require.Zero(t, registry.LiveAllocationMetadata())
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			require.NoError(t, err)
+			fallbackCalled := false
+			reader, err := OpenJSONReader(data, mp, selection, func(uint64) (func(), error) {
+				fallbackCalled = true
+				return func() {}, nil
+			})
+			require.False(t, fallbackCalled, "an explicit account must not be charged twice")
+			if reader != nil {
+				defer reader.Close()
+			}
+			if insufficient {
+				require.Error(t, err)
+				require.Nil(t, reader)
+				require.Zero(t, account.Snapshot().Used)
+				require.Positive(t, data.Size(), "failed admission must retain the original owner")
+				data.Release()
+				data = nil
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, capacity, account.Snapshot().Used)
+			view, err := reader.Window(0, 1)
+			require.NoError(t, err)
+			defer view.Close()
+			cursor, err := view.OpenCursor()
+			require.NoError(t, err)
+			defer cursor.Close()
+			data.Release()
+			data = nil
+			reader.Close()
+			view.Close()
+			require.Equal(t, capacity, account.Snapshot().Used, "a surviving cursor must retain the one pin charge")
+			selected, err := cursor.QueryText(0, []byte("$.keep"), false)
+			require.NoError(t, err)
+			require.Equal(t, "ORIGINAL", selected.Text)
+			cursor.Close()
+			require.Zero(t, account.Snapshot().Used)
+		})
+	}
+}
+
+func TestCacheJSONReaderPinAdmissionFailureAndSnapshotFallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	source := vector.NewVec(types.T_json.ToType())
+	defer source.Free(mp)
+	doc, err := types.ParseStringToByteJson(`{"keep":1}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(source, doc, false, mp))
+	data := privateJSONColumnForTest(t, source)
+	defer data.Release()
+	releases := 0
+	reader, err := OpenJSONReader(data, mp, nil, func(uint64) (func(), error) {
+		return func() { releases++ }, context.Canceled
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, reader)
+	require.Equal(t, 1, releases, "failed pin admission must release partial capacity")
+	before := mp.CurrNB()
+	reader, err = OpenJSONReader(data, mp, nil)
+	require.NoError(t, err)
+	require.Greater(t, mp.CurrNB(), before, "an unaccounted pin must use an owned snapshot")
+	reader.Close()
+	require.Equal(t, before, mp.CurrNB())
+}
+
 func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 	for _, sealed := range []bool{false, true} {
 		mp := mpool.MustNewZero()
@@ -266,7 +392,7 @@ func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 				data = privateJSONColumnForTest(t, source)
 			}
 			before := mp.CurrNB()
-			reader, err := OpenJSONReader(data, mp, nil)
+			reader, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
 			data.Release()
 			require.NoError(t, err)
 			if sealed {
@@ -298,7 +424,7 @@ func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	require.NoError(t, err)
 	defer private.Close()
 	data := privateJSONColumnForTest(t, source)
-	cache, err := OpenJSONReader(data, mp, nil)
+	cache, err := OpenJSONReader(data, mp, nil, testJSONCachePinAdmission(t))
 	data.Release()
 	require.NoError(t, err)
 	defer cache.Close()
