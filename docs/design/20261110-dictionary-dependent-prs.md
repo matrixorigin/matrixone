@@ -354,3 +354,13 @@ adds held-borrower/retirement/close-race and row-map reuse controls, and reuses
 key equality/float/NULL/grouping oracles. Run owning checks, targeted races, SQL
 and pre-push SCA, then local Q1-Q22 six-suite qualification with accounting.
 Any new regression again stops product edits for diagnosis and requester review.
+
+
+## Approved owned-vector fast-path correction
+
+After the `31c018976f` qualification, the requester approved guarding workspace
+reclamation in `MaterializeOwned`. Invoke reclamation only for a live data/area
+lease. Owned flat scalar destinations retain the existing no-copy return;
+dictionary, borrowed validity and payload COW still follow their original paths.
+This removes an observed new scalar-join cost, not an asserted complete cause of
+Q21's regression. Reuse the ownership/COW controls, then requalify all22 locally.

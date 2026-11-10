@@ -349,7 +349,10 @@ func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
 // MaterializeOwned performs copy-on-write transactionally. Allocation failure
 // leaves the borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {
-	v.ReclaimDictionaryWorkspace()
+	// Ordinary scalar destinations have no workspace lease to reclaim.
+	if v != nil && (v.dataLease != nil || v.areaLease != nil) {
+		v.ReclaimDictionaryWorkspace()
+	}
 	if v.IsDictionary() {
 		return v.EnsureFlat(mp)
 	}
