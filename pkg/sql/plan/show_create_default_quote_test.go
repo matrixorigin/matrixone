@@ -67,8 +67,8 @@ func TestShowCreateTableStringDefaultRoundTrip(t *testing.T) {
 			for generation := 0; generation < 2; generation++ {
 				ddl, parsed, err := ConstructCreateTableSQL(&mock.ctxt, current, nil, false, nil)
 				require.NoError(t, err)
-				// CREATE LIKE consumes the returned AST rather than reparsing the
-				// displayed text. Both paths must use the same SQL mode.
+				// The display AST and a replay of the displayed text must
+				// agree under the caller's SQL mode.
 				require.NotNil(t, parsed)
 				fromAST, err := BuildPlan(&mock.ctxt, parsed, false)
 				parsed.Free()
@@ -100,6 +100,76 @@ func TestDefaultWithoutBackslashEscapesRejectsInvalidScalar(t *testing.T) {
 		t.Run(origin, func(t *testing.T) {
 			_, err := formatDefaultWithoutBackslashEscapes(origin)
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestShowCreateResultReplaysDefaultsInSessionMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	source, err := buildTestCreateTableStmt(mock, `create table show_mode_src (
+		id int, literal_tab varchar(32) default 'a\\t',
+		double_slash varchar(32) default 'a\\\\b',
+		trailing_slash varchar(32) default 'tail\\',
+		quotes varchar(32) default 'it''s "quoted"',
+		plain varchar(32) default 'plain')`)
+	require.NoError(t, err)
+	mock.ctxt.tables[source.Name] = source
+	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		t.Run(mode, func(t *testing.T) {
+			mock.ctxt.SetSqlModeOverride(mode)
+			show, err := mysql.ParseOneWithSQLMode(t.Context(), "show create table show_mode_src", 1, mode)
+			require.NoError(t, err)
+			defer show.Free()
+			shown, err := BuildPlan(&mock.ctxt, show, false)
+			require.NoError(t, err)
+			query := shown.GetQuery()
+			require.Equal(t, []string{"Table", "Create Table"}, query.GetHeadings())
+			root := query.GetNodes()[query.GetSteps()[0]]
+			require.Len(t, root.GetProjectList(), 2)
+			require.Equal(t, source.Name, root.ProjectList[0].GetLit().GetSval())
+			ddl := root.ProjectList[1].GetLit().GetSval()
+			replay, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode)
+			require.NoError(t, err, "public DDL: %q", ddl)
+			defer replay.Free()
+			rebuilt, err := BuildPlan(&mock.ctxt, replay, false)
+			require.NoError(t, err)
+			for _, name := range []string{"literal_tab", "double_slash", "trailing_slash", "quotes", "plain"} {
+				want := FindColumn(source.Cols, name)
+				got := FindColumn(rebuilt.GetDdl().GetCreateTable().TableDef.Cols, name)
+				require.NotNil(t, got, name)
+				require.True(t, proto.Equal(want.Default.Expr, got.Default.Expr),
+					"%s: source default %q, replay default %q", name, want.Default.OriginString, got.Default.OriginString)
+			}
+		})
+	}
+}
+
+func TestCreateLikePreservesEnumAndDefaultInSessionMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	source, err := buildTestCreateTableStmt(mock, `create table like_mode_src (
+		id int, e enum('line\nbreak','cr\rend','nul\0byte','q''uote','plain'),
+		v varchar(32) default 'a\\t')`)
+	require.NoError(t, err)
+	mock.ctxt.tables[source.Name] = source
+	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+	before := proto.Clone(source)
+	const wantDomain = "line\nbreak,cr\rend,nul\x00byte,q'uote,plain"
+	require.Equal(t, wantDomain, FindColumn(source.Cols, "e").Typ.Enumvalues)
+
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		t.Run(mode, func(t *testing.T) {
+			mock.ctxt.SetSqlModeOverride(mode)
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), "create table like_mode_dst like like_mode_src", 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			clone := built.GetDdl().GetCreateTable().TableDef
+			require.Equal(t, wantDomain, FindColumn(clone.Cols, "e").Typ.Enumvalues)
+			require.True(t, proto.Equal(FindColumn(source.Cols, "v").Default.Expr, FindColumn(clone.Cols, "v").Default.Expr))
+			require.True(t, proto.Equal(before, source), "CREATE LIKE must not mutate the source")
 		})
 	}
 }

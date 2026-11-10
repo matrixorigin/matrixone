@@ -40,7 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-// ConstructCreateTableSQL used to build CREATE Table statement
+// ConstructCreateTableSQL renders CREATE TABLE for replay in the caller's
+// session mode. Internal DDL reconstruction uses constructCreateTableSQL.
 func ConstructCreateTableSQL(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
@@ -48,7 +49,11 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+	sqlMode := ""
+	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
+	}
+	return constructCreateTableSQLWithFormat(ctx, tableDef, snapshot, useDbName, cloneStmt, true, false, sqlMode)
 }
 
 func constructCreateTableSQL(
@@ -59,29 +64,28 @@ func constructCreateTableSQL(
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
 ) (string, tree.Statement, error) {
-	sqlMode := ""
-	if ctx != nil {
-		sqlMode = *parserSQLModeFromContext(ctx)
-	}
-	return constructCreateTableSQLWithDefaultFormat(ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks, false, sqlMode)
+	// CREATE LIKE and ALTER COPY reconstruct catalog metadata, not display
+	// text. Keep their SQL and parser in ordinary mode independently of
+	// the caller so ordinary-mode spellings keep their original meaning.
+	return constructCreateTableSQLWithFormat(ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks, false, "")
 }
 
 // ConstructCreateTableSQLForSchemaHash preserves the 4.2 persisted DUMP
 // fingerprint. This is hash input, not executable DDL: its legacy default
 // escaping must not change when SHOW CREATE becomes replayable (#31066).
 func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
-	sql, _, err := constructCreateTableSQLWithDefaultFormat(nil, tableDef, nil, false, nil, true, true, "")
+	sql, _, err := constructCreateTableSQLWithFormat(nil, tableDef, nil, false, nil, true, true, "")
 	return sql, err
 }
 
-func constructCreateTableSQLWithDefaultFormat(
+func constructCreateTableSQLWithFormat(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
 	snapshot *Snapshot,
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
-	legacyDumpDefaults bool,
+	legacySchemaHash bool,
 	sqlMode string,
 ) (string, tree.Statement, error) {
 	var err error
@@ -176,7 +180,7 @@ func constructCreateTableSQLWithDefaultFormat(
 			buf.WriteString(",\n")
 		}
 
-		typeStr := FormatColType(col.Typ)
+		typeStr := formatColType(col.Typ, !legacySchemaHash, noBackslashEscapes)
 		if strings.HasPrefix(typeStr, "ENUM") {
 			typeStr = strings.ToLower(typeStr[:4]) + typeStr[4:]
 		} else {
@@ -213,7 +217,7 @@ func constructCreateTableSQLWithDefaultFormat(
 				}
 			} else if len(col.Default.OriginString) > 0 {
 				defaultSQL := strings.TrimSpace(col.Default.OriginString)
-				if legacyDumpDefaults {
+				if legacySchemaHash {
 					defaultSQL = formatDefaultExpr(col.Default.OriginString)
 				} else if noBackslashEscapes && strings.Contains(defaultSQL, "\\") {
 					defaultSQL, err = formatDefaultWithoutBackslashEscapes(defaultSQL)
@@ -791,11 +795,7 @@ func constructCreateTableSQLWithDefaultFormat(
 				case '\\':
 					return "\\\\"
 				case '\'':
-					// The byte sits inside a single-quoted SQL literal. Use quote
-					// doubling rather than a backslash escape: the SHOW CREATE
-					// result embeds this string in a double-quoted SELECT literal
-					// that consumes one level of backslashes, and '' survives that
-					// round-trip displayable and re-executable.
+					// A single quote inside the emitted DDL literal is doubled.
 					return "''"
 				default:
 					return fmt.Sprintf("%c", value)
@@ -815,7 +815,7 @@ func constructCreateTableSQLWithDefaultFormat(
 				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
+				line += " TERMINATED BY " + formatDDLString(param.Tail.Lines.TerminatedBy.Value, noBackslashEscapes)
 			}
 		}
 
@@ -1113,6 +1113,10 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	return formatColType(colType, false, false)
+}
+
+func formatColType(colType plan.Type, replayableEnum, noBackslashEscapes bool) string {
 	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
 		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
 	}
@@ -1151,10 +1155,14 @@ func FormatColType(colType plan.Type) string {
 		// format enum as ENUM ('e1', 'e2')
 		elems := make([]string, 0, len(elements))
 		for _, e := range elements {
-			e = EscapeFormat(e)
-			elems = append(elems, e)
+			if replayableEnum && types.T(colType.Id) == types.T_enum {
+				elems = append(elems, formatDDLString(e, noBackslashEscapes))
+			} else {
+				// Preserve the legacy type spelling used by the 4.2 hash.
+				elems = append(elems, "'"+EscapeFormat(e)+"'")
+			}
 		}
-		suffix = fmt.Sprintf("('%s')", strings.Join(elems, "','"))
+		suffix = "(" + strings.Join(elems, ",") + ")"
 
 	case types.T_timestamp, types.T_datetime, types.T_time:
 		if colType.Width > 0 {
@@ -1180,33 +1188,18 @@ func FormatColType(colType plan.Type) string {
 }
 
 // formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
-// string literal. A single quote is written as two single quotes (doubling)
-// rather than backslash-escaped: the
-// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
-// consumes one level of backslashes, and quote doubling survives that
-// round-trip both displayable and re-executable.
+// string literal under ordinary mode.
 func formatStrInSingleQuotes(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, `'`, `''`)
 }
 
-// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
-// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
-// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
-// would be an unparseable embedded newline. The backslashes are doubled because
-// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
-// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
-// that already shipped). \n and \r\n must stay distinct so a CRLF table is
-// recreatable as CRLF, not silently downgraded to LF.
-func formatLinesTerminatedBy(value string) string {
-	switch value {
-	case "\n":
-		return `\\n`
-	case "\r\n":
-		return `\\r\\n`
-	default:
-		return formatStrInSingleQuotes(value)
+// formatDDLString quotes a raw value for the parser that will replay the DDL.
+func formatDDLString(value string, noBackslashEscapes bool) string {
+	if noBackslashEscapes {
+		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 	}
+	return formatStrLit(value)
 }
 
 func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {

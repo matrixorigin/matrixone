@@ -947,13 +947,12 @@ func TestFormatStrInSingleQuotes(t *testing.T) {
 	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
 }
 
-// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
-// CRLF writable external table recreates as CRLF (not silently downgraded to
-// LF). Both render as doubled-backslash escape sequences; other values flow
-// through formatStrInSingleQuotes.
+// SHOW CREATE must keep LF and CRLF distinct. Render for one DDL parse;
+// the rewrite SELECT separately transports the entire DDL unchanged.
 func TestFormatLinesTerminatedBy(t *testing.T) {
-	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
-	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
-	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
-	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+	require.Equal(t, `'\n'`, formatDDLString("\n", false))
+	require.Equal(t, `'\r\n'`, formatDDLString("\r\n", false))
+	require.Equal(t, "'\n'", formatDDLString("\n", true))
+	require.Equal(t, "'\r\n'", formatDDLString("\r\n", true))
+	require.Equal(t, "'#EOL#'", formatDDLString("#EOL#", false))
 }

@@ -56,3 +56,17 @@ func TestTableDumpDefaultHashesPreserve42(t *testing.T) {
 		})
 	}
 }
+
+func TestTableDumpEnumHashPreserves42(t *testing.T) {
+	def := &plan.TableDef{Name: "source", Cols: []*plan.ColDef{{
+		Name:    "e",
+		Typ:     plan.Type{Id: int32(types.T_enum), Enumvalues: "line\nbreak,cr\rend,nul\x00byte,literal\\t"},
+		Default: &plan.Default{NullAbility: true},
+	}}}
+	got, err := tableSchemaHash(def)
+	require.NoError(t, err)
+	// The historical ENUM formatter escaped control bytes, but not a
+	// literal backslash. That spelling is part of the archive hash.
+	legacySQL := "CREATE TABLE `__table_dump_target__` (\n  `e` enum('line\\nbreak','cr\\rend','nul\\0byte','literal\\t') DEFAULT NULL\n)"
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(legacySQL))), got)
+}
