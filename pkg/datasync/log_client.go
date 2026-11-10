@@ -255,7 +255,12 @@ func (c *logClient) claimRequiredLsn(ctx context.Context) error {
 	if err := c.prepare(ctx); err != nil {
 		return err
 	}
-	leaderID, leaderTerm, err := c.client.GetLeaderState(ctx)
+	leaderCtx, cancel := context.WithTimeoutCause(ctx, contextTimeout, moerr.CauseLogClientGetLeaderID)
+	leaderID, leaderTerm, err := c.client.GetLeaderState(leaderCtx)
+	if err != nil {
+		err = moerr.AttachCause(leaderCtx, err)
+	}
+	cancel()
 	if err != nil {
 		return err
 	}

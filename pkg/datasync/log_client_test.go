@@ -197,6 +197,10 @@ func TestRequiredLsn(t *testing.T) {
 			appendFn(i)
 		}
 
+		claimCtx, claimCancel := context.WithCancel(context.Background())
+		defer claimCancel()
+		require.NoError(t, lc.claimRequiredLsn(claimCtx))
+
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 		require.NoError(t, lc.setRequiredLsn(ctx, 8))
