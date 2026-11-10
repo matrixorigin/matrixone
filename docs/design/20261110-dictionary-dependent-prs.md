@@ -207,3 +207,26 @@ Total. The earlier SF100 external-CPU exclusion is not acceptance evidence.
 If a new regression appears, investigate read-only and present its cause and
 proposed correction for approval BEFORE changing code. Publish results only as
 comments; keep draft until attributable target gains and regression gates pass.
+
+## Approved Q12 regression correction
+
+The requester approved three corrections after reviewing the failed SF10
+qualification: restore whole-bucket forwarding of existing selected input under
+its admitted destination/lifetime contract; expose only current-predicate column
+views over original surviving-row indices, caching immutable backing once per
+source column for that evaluation; resolve typed primitive comparison views once
+outside the row loop while preserving wrapper conversions when required.
+
+The selector publishes final output columns only after the ordered predicate
+chain finishes. Unknown executors retain the complete owned fallback. Partial
+construction and optional account-capacity refusal clean all temporary headers
+before the existing owned gather. The existing pool/handoff/cancel protocol and
+mixed-partition flat output remain unchanged; this does not enable partition
+view production. Tests distinguish empty EOF progress batches from forwarded
+data, assert reference-only views/backing reuse, preserve masked/null/NaN behavior,
+and exercise admitted/declined synchronous and asynchronous forwarding.
+
+Q1 partial-aggregation admission is a separately identified gap and is not changed
+by this three-part correction. No SQL precision, cache algorithm or join plan is
+changed. Requalify all22 locally; a new regression requires read-only diagnosis
+and requester approval before any further product correction.

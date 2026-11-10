@@ -24,17 +24,37 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
+type dictionaryRoutingSource struct {
+	*colexec.MockOperator
+	state      vm.DictionaryOutputState
+	allocation *vector.AllocationAccountSelection
+}
+
+func (s *dictionaryRoutingSource) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
+	return true, s.allocation
+}
+func (s *dictionaryRoutingSource) DictionaryOutputState() *vm.DictionaryOutputState { return &s.state }
+func (s *dictionaryRoutingSource) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return s.state.Normalize(input, proc.Mp())
+}
+
+type dictionaryRoutingSink struct{ *colexec.MockOperator }
+
+func (*dictionaryRoutingSink) AcceptsDictionary(child int) bool { return child == 0 }
+
 func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 	for _, tc := range []struct {
-		mode  plan.ShuffleType
-		async bool
-		name  string
+		mode    plan.ShuffleType
+		async   bool
+		forward bool
+		name    string
 	}{
-		{plan.ShuffleType_Hash, false, "hash"}, {plan.ShuffleType_Range, false, "range"}, {plan.ShuffleType_Hash, true, "async-hash"}, {plan.ShuffleType_Range, true, "async-range"},
+		{plan.ShuffleType_Hash, false, false, "hash"}, {plan.ShuffleType_Range, false, false, "range"}, {plan.ShuffleType_Hash, true, false, "async-hash"}, {plan.ShuffleType_Range, true, false, "async-range"}, {plan.ShuffleType_Range, false, true, "forward"}, {plan.ShuffleType_Range, true, true, "async-forward"},
 	} {
 		mode := tc.mode
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,13 +82,16 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, retained)
 			input.SetRowCount(4)
-			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			child := &dictionaryRoutingSource{MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}), allocation: selection}
 			arg := NewArgument()
 			arg.BucketNum = 4
 			arg.ShuffleType = int32(mode)
 			arg.ShuffleColMin = 0
 			arg.ShuffleColMax = 4
 			arg.DrainAllBuckets = true
+			if tc.forward {
+				arg.BucketNum = 1
+			}
 			if tc.async {
 				arg.BucketNum = 1
 				arg.DrainAllBuckets = false
@@ -82,6 +105,12 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 				arg.Release()
 			})
 			require.NoError(t, vm.Prepare(arg, proc))
+			if tc.forward {
+				sink := &dictionaryRoutingSink{colexec.NewMockOperator()}
+				sink.AppendChild(arg)
+				vm.ConfigureDictionaryBoundaries(sink)
+				require.True(t, arg.DictionaryOutputState().AllowsDictionaryOutput())
+			}
 			require.True(t, arg.AcceptsDictionary(0))
 			var values []int64
 			nulls := 0
@@ -91,7 +120,13 @@ func TestDictionaryOrdinaryShufflePartitionsAndAccounting(t *testing.T) {
 				if result.Batch == nil {
 					break
 				}
-				require.False(t, result.Batch.HasDictionary())
+				if result.Batch.IsEmpty() {
+					continue
+				} // Synchronous EOF progress is an empty control batch.
+				require.Equal(t, tc.forward, result.Batch.HasDictionary())
+				if tc.forward {
+					require.Same(t, input, result.Batch)
+				}
 				for row := 0; row < result.Batch.RowCount(); row++ {
 					require.True(t, vector.AllocationAccountSelectionsEqual(selection, result.Batch.Vecs[0].AllocationAccountSelection()))
 					if result.Batch.Vecs[0].IsNull(uint64(row)) {

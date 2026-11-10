@@ -134,6 +134,11 @@ func (shuffle *Shuffle) shuffleDictionaryKey(bat *batch.Batch, proc *process.Pro
 	default:
 		panic("unsupported shuffle type, wrong plan!")
 	}
+	for bucket, rows := range shuffle.ctr.sels {
+		if len(rows) == bat.RowCount() && bat.RowCount() > 0 {
+			return shuffle.routeSingleBucket(bat, int32(bucket), proc)
+		}
+	}
 	// Existing pool buffers own the flat gather before the child can be reused.
 	return nil, shuffle.enqueueBySels(bat, proc)
 }

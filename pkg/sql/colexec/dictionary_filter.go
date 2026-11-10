@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -147,6 +148,16 @@ func SelectBatchColumns(input *batch.Batch, positions []int, rows []int64, mp *m
 func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int, executors []ExpressionExecutor, account *vector.AllocationAccountSelection, scratch *[]int64, parameter *vector.FunctionParameterWrapper[bool], analyzer process.Analyzer, beforeEval func(int, int), frame *DictionaryInputFrame) ([]int64, bool, error) {
 	*scratch = (*scratch)[:0]
 	current := input
+	var bases []*vector.DictionaryBase
+	var declined []bool
+	defer func() {
+		for _, base := range bases {
+			if base != nil {
+				base.Release()
+			}
+		}
+	}()
+
 	if frame != nil {
 		frame.Begin(current, account, proc.Mp())
 		defer func() { frame.Observe(analyzer); frame.End() }()
@@ -165,22 +176,41 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 	}()
 	selected := false
 	for i := range executors {
-		if !ExpressionsAcceptDictionary(executors[i:i+1]) && current.HasDictionary() {
-			flat, err := current.FlatCopy(proc.Mp(), account)
+		rows := input.RowCount()
+		if selected {
+			rows = len(*scratch)
+		}
+		if beforeEval != nil {
+			beforeEval(i, rows)
+		}
+		if selected {
+			if owned != nil {
+				owned.Clean(proc.Mp())
+				owned = nil
+			}
+			if bases == nil {
+				bases = make([]*vector.DictionaryBase, len(input.Vecs))
+				declined = make([]bool, len(input.Vecs))
+			}
+			next, err := selectPredicateInput(proc, input, loaded, executors[i], *scratch, account, bases, declined)
 			if err != nil {
 				return nil, false, err
 			}
-			if owned != nil {
-				owned.Clean(proc.Mp())
+			owned, current = next, next
+			if frame != nil {
+				frame.Begin(current, account, proc.Mp())
+			}
+		} else if !ExpressionsAcceptDictionary(executors[i:i+1]) && current.HasDictionary() {
+			flat, err := current.FlatCopy(proc.Mp(), account)
+			if err != nil {
+				return nil, false, err
 			}
 			owned, current = flat, flat
 			if frame != nil {
 				frame.Begin(current, account, proc.Mp())
 			}
 		}
-		if beforeEval != nil {
-			beforeEval(i, current.RowCount())
-		}
+
 		if frame != nil {
 			frame.Bind(executors[i : i+1])
 		}
@@ -252,19 +282,104 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 		if len(matches) == 0 {
 			return *scratch, false, nil
 		}
-		if i+1 < len(executors) {
-			next, _, err := SelectBatchColumns(current, loaded, matches, proc.Mp(), account, ExpressionsAcceptDictionary(executors[i+1:]))
-			if err != nil {
-				return nil, false, err
-			}
-			if owned != nil {
-				owned.Clean(proc.Mp())
-			}
-			owned, current = next, next
-			if frame != nil {
-				frame.Begin(current, account, proc.Mp())
-			}
-		}
+
 	}
 	return *scratch, !selected, nil
+}
+
+// Collect only the current predicate's columns. Unknown executors retain the
+// full-schema owned fallback rather than guessing their dependencies.
+func predicateColumns(executor ExpressionExecutor, seen []bool, columns *[]int) bool {
+	switch e := executor.(type) {
+	case *ColumnExpressionExecutor:
+		if e.relIndex != 0 || e.colIndex < 0 || e.colIndex >= len(seen) {
+			return false
+		}
+		if !seen[e.colIndex] {
+			seen[e.colIndex] = true
+			*columns = append(*columns, e.colIndex)
+		}
+	case *FixedVectorExpressionExecutor:
+	case *FunctionExpressionExecutor:
+		for _, child := range e.parameterExecutor {
+			if !predicateColumns(child, seen, columns) {
+				return false
+			}
+		}
+	case *decimalTypedExecutor:
+		return predicateColumns(e.root, seen, columns)
+	case *decimalMulSubExecutor:
+		return predicateColumns(e.root, seen, columns)
+	case *decimalChainExecutor:
+		return predicateColumns(e.root, seen, columns)
+	case *memoExpressionExecutor:
+		return predicateColumns(e.state.executor, seen, columns)
+	case *memoRootExpressionExecutor:
+		return predicateColumns(e.executor, seen, columns)
+	default:
+		return false
+	}
+	return true
+}
+
+func selectPredicateInput(proc *process.Process, input *batch.Batch, loaded []int, executor ExpressionExecutor, rows []int64, account *vector.AllocationAccountSelection, bases []*vector.DictionaryBase, declined []bool) (result *batch.Batch, retErr error) {
+	var columns []int
+	if !predicateColumns(executor, make([]bool, len(input.Vecs)), &columns) {
+		result, _, err := SelectBatchColumns(input, loaded, rows, proc.Mp(), account, false)
+		return result, err
+	}
+	output := batch.NewOffHeapWithSize(len(input.Vecs))
+	defer func() {
+		if retErr != nil {
+			output.Clean(proc.Mp())
+			if errors.Is(retErr, mpool.ErrAllocationAccountCapacity) {
+				result, _, retErr = SelectBatchColumns(input, columns, rows, proc.Mp(), account, false)
+			}
+		}
+	}()
+	if err := output.SetAllocationAccount(account); err != nil {
+		return nil, err
+	}
+	output.Attrs = append(output.Attrs, input.Attrs...)
+	output.Recursive, output.ShuffleIDX = input.Recursive, input.ShuffleIDX
+	output.SetRowCount(len(rows))
+	if len(columns) == 0 {
+		return output, nil
+	}
+	selection, err := vector.NewRowSelection(rows, input.RowCount(), proc.Mp(), account)
+	if err != nil {
+		return nil, err
+	}
+	defer selection.Release()
+	for _, col := range columns {
+		source := input.Vecs[col]
+		if source == nil {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "predicate references unloaded column")
+		}
+		if source.IsDictionary() {
+			output.Vecs[col], err = source.SelectDictionary(selection, proc.Mp(), account)
+		} else {
+			if bases[col] == nil && !declined[col] {
+				var admitted bool
+				bases[col], admitted, err = vector.TryFreezeVector(source, proc.Mp(), account)
+				if err != nil {
+					return nil, err
+				}
+				declined[col] = !admitted
+			}
+			if bases[col] != nil {
+				output.Vecs[col], err = vector.NewDictionaryVector(bases[col], selection, proc.Mp(), account)
+			} else {
+				output.Vecs[col], err = vector.NewOffHeapVecWithTypeAndAllocation(*source.GetType(), account)
+				if err == nil {
+					err = output.Vecs[col].Union(source, rows, proc.Mp())
+					source.CopyExpressionMetadataTo(output.Vecs[col])
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return output, nil
 }

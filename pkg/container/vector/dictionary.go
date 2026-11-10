@@ -522,3 +522,12 @@ func (v *Vector) materializeDictionary(mp *mpool.MPool, account *AllocationAccou
 	}
 	return flat, nil
 }
+
+// TryResolveFixedReadView declines conversions which require the existing
+// parameter wrapper rather than a physical typed slice.
+func TryResolveFixedReadView[T any](v *Vector) (FixedReadView[T], bool) {
+	if v == nil || !typeCompatible[T](v.typ) {
+		return FixedReadView[T]{}, false
+	}
+	return ResolveFixedReadView[T](v), true
+}

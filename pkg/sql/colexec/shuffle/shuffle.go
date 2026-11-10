@@ -625,7 +625,7 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 
 func (shuffle *Shuffle) routeSingleBucket(bat *batch.Batch, shuffleIdx int32, proc *process.Process) (*batch.Batch, error) {
 	bat.ShuffleIDX = shuffleIdx
-	if !bat.HasDictionary() && (shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx) {
+	if (!bat.HasDictionary() || shuffle.ctr.dictionaryBoundary.AllowsDictionaryOutput()) && (shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx) {
 		return bat, nil
 	}
 	sels := shuffle.clearSels()

@@ -73,3 +73,43 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestPredicateSelectionRetainsOnlyReferencedColumns(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	input := batch.NewWithSize(2)
+	t.Cleanup(func() { input.Clean(mp) })
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int64{10, 20, 30}, nil, mp))
+	for _, value := range []string{"unreferenced payload first", "unreferenced payload second", "unreferenced payload third"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(value), false, mp))
+	}
+	input.SetRowCount(3)
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	bases := make([]*vector.DictionaryBase, 2)
+	declined := make([]bool, 2)
+	t.Cleanup(func() {
+		for _, base := range bases {
+			if base != nil {
+				base.Release()
+			}
+		}
+	})
+	first, err := selectPredicateInput(proc, input, nil, executor, []int64{2, 0}, nil, bases, declined)
+	require.NoError(t, err)
+	t.Cleanup(func() { first.Clean(mp) })
+	require.Nil(t, first.Vecs[1])
+	require.Nil(t, bases[1])
+	require.True(t, first.Vecs[0].IsDictionary())
+	base := bases[0]
+	second, err := selectPredicateInput(proc, input, nil, executor, []int64{1}, nil, bases, declined)
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Clean(mp) })
+	require.Same(t, base, bases[0])
+	require.Equal(t, int64(20), vector.GetFixedAtNoTypeCheck[int64](second.Vecs[0], 0))
+	require.Equal(t, int64(30), vector.GetFixedAtNoTypeCheck[int64](first.Vecs[0], 0))
+}
