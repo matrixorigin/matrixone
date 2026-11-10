@@ -32,19 +32,6 @@ import (
 
 // The waiter returns the exclusive successor of the applied timestamp. A
 // successful wait with a smaller (or zero) result is not snapshot admission.
-func waitM0RemoteReadSnapshot(ctx context.Context, cli client.TxnClient, snapshot timestamp.Timestamp) error {
-	if ctx == nil || cli == nil || snapshot.IsEmpty() {
-		return moerr.NewInternalErrorNoCtx("M0: remote snapshot watermark is unavailable")
-	}
-	applied, err := cli.WaitLogTailAppliedAt(ctx, snapshot.Prev())
-	if err != nil {
-		return err
-	}
-	if applied.Less(snapshot) {
-		return moerr.NewInternalErrorNoCtx("M0: remote logtail watermark precedes scan snapshot")
-	}
-	return nil
-}
 
 // The existing stamp includes a revision that changes even if a transaction
 // returns to the same snapshot. It detects stale generations but does not make

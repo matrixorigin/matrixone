@@ -15,6 +15,7 @@
 package m0read
 
 import (
+	"context"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -41,6 +42,11 @@ func TestEvolutionBindingAndLayout(t *testing.T) {
 	require.Error(t, ValidateEvolution(nil, owner))
 	for _, change := range []func(*api.M0EvolutionContract){
 		func(x *api.M0EvolutionContract) { x.FormatVersion++ },
+		func(x *api.M0EvolutionContract) { x.RootId = make([]byte, 16) },
+		func(x *api.M0EvolutionContract) { x.RootId = x.RootId[:15] },
+		func(x *api.M0EvolutionContract) { x.Columns[0] = nil },
+		func(x *api.M0EvolutionContract) { x.Columns[0].Semantics = nil },
+		func(x *api.M0EvolutionContract) { x.SchemaDigest = nil },
 		func(x *api.M0EvolutionContract) { x.AccountId++ },
 		func(x *api.M0EvolutionContract) { x.DatabaseId++ },
 		func(x *api.M0EvolutionContract) { x.RelationId++ },
@@ -73,8 +79,58 @@ func TestPlanEvolutionSchemaBinding(t *testing.T) {
 	def.Cols[0].Typ.Width++
 	_, err = ValidatePlanEvolution(def, 3)
 	require.Error(t, err, "same OID with changed SQL width must not match")
+	def.Cols[0].Typ.Width--
+	for _, change := range []struct {
+		name   string
+		mutate func(*plan.TableDef)
+	}{
+		{"nil column", func(d *plan.TableDef) { d.Cols[0] = nil }},
+		{"extra column", func(d *plan.TableDef) { d.Cols = append(d.Cols, &plan.ColDef{ColId: 30, Name: "extra"}) }},
+		{"missing column", func(d *plan.TableDef) { d.Cols = d.Cols[:1] }},
+		{"unsupported generated semantic", func(d *plan.TableDef) { d.Cols[0].GeneratedCol = &plan.GeneratedCol{} }},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			changed := proto.Clone(def).(*plan.TableDef)
+			change.mutate(changed)
+			_, err := ValidatePlanEvolution(changed, 3)
+			require.Error(t, err)
+		})
+	}
+	def.Cols = append(def.Cols, &plan.ColDef{Name: "__mo_rowid"})
+	_, err = ValidatePlanEvolution(def, 3)
+	require.NoError(t, err, "physical rowid is outside persistent user-column semantics")
 	def.Defs = nil
 	ordinary, err := ValidatePlanEvolution(def, 3)
 	require.NoError(t, err)
 	require.Nil(t, ordinary, "no contract is not authority")
+}
+
+func TestEvolutionCarrierAndCloneOwnership(t *testing.T) {
+	_, err := PlanEvolution(nil)
+	require.Error(t, err)
+	carrier := func(value string) *plan.TableDef_DefType {
+		return &plan.TableDef_DefType{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: "schema_extra", Value: value}}}}}
+	}
+	value := string(api.MustMarshalTblExtra(&api.SchemaExtra{}))
+	_, err = PlanEvolution(&plan.TableDef{Defs: []*plan.TableDef_DefType{carrier(value), carrier(value)}})
+	require.Error(t, err, "even duplicate empty carriers are contradictory metadata")
+	_, err = PlanEvolution(&plan.TableDef{Defs: []*plan.TableDef_DefType{carrier(string([]byte{0xff}))}})
+	require.Error(t, err, "malformed metadata must not become absent authority")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	require.False(t, IsCloneEvolution(ctx))
+	require.Nil(t, CloneEvolution(ctx))
+	original := &api.M0EvolutionContract{RootId: []byte("0123456789abcdef"), Columns: []*api.M0EvolutionColumn{{ColumnId: 11, Semantics: []byte("semantic")}}}
+	bound := WithCloneEvolution(ctx, original)
+	original.RootId[0] ^= 1
+	original.Columns[0].Semantics[0] ^= 1
+	require.True(t, IsCloneEvolution(bound))
+	require.Equal(t, byte('0'), CloneEvolution(bound).RootId[0])
+	require.Equal(t, byte('s'), CloneEvolution(bound).Columns[0].Semantics[0])
+	child := WithCloneEvolution(bound, nil)
+	require.True(t, IsCloneEvolution(child))
+	require.Nil(t, CloneEvolution(child), "an ordinary source must mask its enclosing clone authority")
+	require.NotNil(t, CloneEvolution(bound))
+	cancel()
+	require.ErrorIs(t, child.Err(), context.Canceled)
 }

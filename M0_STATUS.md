@@ -1,6 +1,38 @@
 # M0 restricted metadata-only ADD prototype
 
 
+
+## CI coverage repair, 2026-11-10
+
+This repair is based on published head `0695e8c1`. The default coverage producer
+previously omitted tagged tests for shared scan guards, cancellation/account
+binding and the generic physical object header. Those tests now execute in both
+modes. The scoped test fixture enables only the shared guard/watermark seams,
+restores them on exit, and does not install tagged planner/catalog authority.
+The real schema-binding validator remains covered by its tagged tests.
+
+The returned-watermark check is shared without changing its implementation;
+production registration is still M0-only. Existing test bodies and assertions
+are preserved. New counterexamples cover missing dispatch owners, incomplete
+or stale certificates, default bypass, malformed/duplicate contract carriers,
+clone-context isolation and schema/contract disagreement. No default reader
+policy, SQL behavior, recovery boundary or linter suppression was changed.
+
+Focused compile tests passed: 17 default roots and 19 M0 roots, with vet enabled.
+The contract/context and physical-header selections also passed in default.
+All nine M0 contract-package roots and both modes of incremental lint passed.
+The exact CI parser reproduces old-head coverage as 1035/1627 (63.61%). Combining
+that Linux baseline with source-compatible local default test increments gives
+1239/1634 (75.83%). This is a cross-platform projection, **not** a new-head CI
+verdict; the published candidate must obtain its own remote coverage result.
+
+The four official SCA `checkrecover` findings still require acceptance of
+matrixorigin/linter#56 followed by a fixed-tool dependency update. Upstream's
+current rules do not yet recognize those boundaries. Necessary panic and partial
+object cleanup semantics and the fixed tool version are preserved. No old-head
+failed job was blindly rerun. Linux qualification, review acceptance and QA
+remain separate.
+
 ## Relation-local snapshot integration, 2026-11-10
 
 This revision merges main `11d2e1ef7e1b3ed3a20e6d7f29f912e55118db5b`

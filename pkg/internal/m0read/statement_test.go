@@ -27,6 +27,7 @@ type statementTestView struct{}
 func (*statementTestView) Release() {}
 
 func TestStatementViewMasksParentWithoutChangingContext(t *testing.T) {
+	require.Nil(t, GetStatementReadView(nil))
 	ctx, cancel := context.WithCancel(defines.AttachAccountId(t.Context(), 42))
 	parent := WithStatementReadView(ctx, &statementTestView{})
 	require.NotNil(t, GetStatementReadView(parent))
@@ -37,4 +38,24 @@ func TestStatementViewMasksParentWithoutChangingContext(t *testing.T) {
 	require.Equal(t, uint32(42), account)
 	cancel()
 	require.ErrorIs(t, child.Err(), context.Canceled)
+}
+
+func TestRemoteMarkersStayLocalAndIndependent(t *testing.T) {
+	require.False(t, IsSingleRemote(nil))
+	require.False(t, NeedsRemoteMemberValidation(nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	require.False(t, IsSingleRemote(ctx))
+	require.False(t, NeedsRemoteMemberValidation(ctx))
+	single := WithSingleRemote(ctx)
+	require.True(t, IsSingleRemote(single))
+	require.False(t, NeedsRemoteMemberValidation(single))
+	member := WithRemoteMemberValidation(ctx)
+	require.True(t, NeedsRemoteMemberValidation(member))
+	require.False(t, IsSingleRemote(member))
+	both := WithRemoteMemberValidation(single)
+	require.True(t, IsSingleRemote(both))
+	require.True(t, NeedsRemoteMemberValidation(both))
+	cancel()
+	require.ErrorIs(t, both.Err(), context.Canceled)
+	require.False(t, IsSingleRemote(context.Background()))
 }

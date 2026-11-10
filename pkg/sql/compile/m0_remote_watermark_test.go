@@ -1,5 +1,3 @@
-//go:build mo_m0
-
 // Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,23 +19,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
-
-type m0WatermarkClient struct {
-	client.TxnClient
-	result timestamp.Timestamp
-	want   timestamp.Timestamp
-}
-
-func (c *m0WatermarkClient) WaitLogTailAppliedAt(ctx context.Context, target timestamp.Timestamp) (timestamp.Timestamp, error) {
-	if err := ctx.Err(); err != nil {
-		return timestamp.Timestamp{}, err
-	}
-	c.want = target
-	return c.result, nil
-}
 
 func TestM0RemoteReadSnapshotWatermark(t *testing.T) {
 	snapshot := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 3}
