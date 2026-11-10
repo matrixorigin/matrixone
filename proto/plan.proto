@@ -1780,7 +1780,8 @@ message AlterTable {
   repeated string updateFkSqls = 11;
   string RawSQL = 12;
   AlterCopyOpt Options = 13;
-  repeated string AffectedCols = 14;
+  reserved 14;
+  reserved "AffectedCols";
   AlterPartitionOption alterPartition = 15;
 }
 

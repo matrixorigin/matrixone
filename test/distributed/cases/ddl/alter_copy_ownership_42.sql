@@ -1,0 +1,51 @@
+-- COPY plugin backfill has one owner; unchanged data keeps the same scores.
+drop database if exists alter_copy_ownership_42;
+create database alter_copy_ownership_42;
+use alter_copy_ownership_42;
+set experimental_fulltext_index=1;
+create table ft(id int primary key, body text, payload int, fulltext key ft(body));
+insert into ft values(1,'apple',10),(2,'banana',20);
+set @ft_score=(select match(body) against('apple' in natural language mode) from ft where id=1);
+alter table ft algorithm=copy, modify id int not null, add extra int default 7;
+set @ft_after=(select match(body) against('apple' in natural language mode) from ft where id=1);
+select abs(cast(@ft_after as double)-cast(@ft_score as double))<0.000001 as same_score;
+alter table ft algorithm=copy, modify id bigint;
+set @ft_after=(select match(body) against('apple' in natural language mode) from ft where id=1);
+select abs(cast(@ft_after as double)-cast(@ft_score as double))<0.000001 as same_score;
+alter table ft algorithm=copy, rename column body to content, modify id bigint;
+set @ft_after=(select match(content) against('apple' in natural language mode) from ft where id=1);
+select abs(cast(@ft_after as double)-cast(@ft_score as double))<0.000001 as same_score;
+alter table ft algorithm=copy, add another int;
+set @ft_after=(select match(content) against('apple' in natural language mode) from ft where id=1);
+select abs(cast(@ft_after as double)-cast(@ft_score as double))<0.000001 as same_score;
+insert into ft(id,content,payload) values(3,'apple',30);
+select id from ft where match(content) against('apple' in boolean mode) order by id;
+update ft set content='pear' where id=1;
+select id from ft where match(content) against('apple' in boolean mode) order by id;
+delete from ft where id=3;
+select id from ft where match(content) against('apple' in boolean mode) order by id;
+-- Renaming a unique prefix retains both prefix length and uniqueness.
+create table prefix_case(id int primary key,a varchar(32),unique key uq(a(4)));
+insert into prefix_case values(1,'abcdef');
+alter table prefix_case algorithm=copy,rename column a to x;
+show create table prefix_case;
+insert into prefix_case values(2,'abcdzz');
+alter table prefix_case change x y varchar(32);
+show create table prefix_case;
+insert into prefix_case values(2,'abcdzz');
+-- Renaming a primary key preserves an implicit secondary-index locator.
+create table aliases(a bigint primary key,b bigint,key ib(b));
+insert into aliases values(1,10),(2,20);
+alter table aliases algorithm=copy,rename column a to x,drop primary key,add primary key(x);
+show create table aliases;
+select * from aliases force index(ib) where b=10;
+-- COPY must populate affected unique indexes in the legacy cluster-table path.
+create cluster table mo_catalog.alter_copy_owner_cluster(id int primary key,u int,unique key uq(u));
+insert into mo_catalog.alter_copy_owner_cluster(id,u,account_id) values(1,10,0),(2,20,0);
+alter table mo_catalog.alter_copy_owner_cluster algorithm=copy,modify id bigint;
+select id,u from mo_catalog.alter_copy_owner_cluster force index(uq) where u in(10,20) order by id;
+insert into mo_catalog.alter_copy_owner_cluster(id,u,account_id) values(3,10,0);
+insert into mo_catalog.alter_copy_owner_cluster(id,u,account_id) values(3,30,0);
+select id,u from mo_catalog.alter_copy_owner_cluster force index(uq) where u in(10,20,30) order by id;
+drop table mo_catalog.alter_copy_owner_cluster;
+drop database alter_copy_ownership_42;

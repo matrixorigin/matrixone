@@ -3997,7 +3997,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						},
 					},
 				}
-				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
+				if !IsFkBannedDatabase(schemaName) {
+					updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
+				}
 				delete(nameMapping, srcKey)
 				removed[srcKey] = true
 				nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
@@ -4222,7 +4224,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					detectSqls = append(detectSqls, sql)
 				}
-				updateSqls = append(updateSqls, fkData.UpdateSql)
+				if !IsFkBannedDatabase(databaseName) {
+					updateSqls = append(updateSqls, fkData.UpdateSql)
+				}
 			case *tree.UniqueIndex:
 				if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 					return nil, err
@@ -4562,10 +4566,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
-			updateSqls = append(
-				updateSqls,
-				getSqlForRenameTable(databaseName, oldName, newName)...,
-			)
+			if !IsFkBannedDatabase(databaseName) {
+				updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
+			}
 		case *tree.AlterOptionAlgorithm:
 			// algorithm hint already consumed by ResolveAlterTableAlgorithm
 			alterTable.Actions[i] = nil
@@ -4592,7 +4595,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// update new column info to copy_table_def
-			_, err := updateNewColumnInTableDef(
+			err := updateNewColumnInTableDef(
 				ctx,
 				alterTable.CopyTableDef,
 				FindColumn(tableDef.Cols, opt.NewColumn.Name.ColName()),
@@ -4639,11 +4642,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, err
 			}
 
-			updateSqls = append(updateSqls,
-				getSqlForRenameColumn(tableDef.DbName,
-					alterTable.TableDef.Name,
-					oldColNameOrigin,
-					newColNameOrigin)...)
+			if !IsFkBannedDatabase(databaseName) {
+				updateSqls = append(updateSqls,
+					getSqlForRenameColumn(tableDef.DbName,
+						alterTable.TableDef.Name,
+						oldColNameOrigin,
+						newColNameOrigin)...)
+			}
 
 			updateSqls = append(updateSqls, sqls...)
 

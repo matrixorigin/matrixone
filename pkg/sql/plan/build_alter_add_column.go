@@ -36,43 +36,43 @@ func AddColumn(
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterAddCol,
 	alterCtx *AlterTableContext,
-) (bool, error) {
+) error {
 
 	tableDef := alterPlan.CopyTableDef
 
 	if len(tableDef.Cols) == TableColumnCountLimit {
-		return false, moerr.NewErrTooManyFields(ctx.GetContext())
+		return moerr.NewErrTooManyFields(ctx.GetContext())
 	}
 
 	specNewColumn := spec.Column
 	// Check whether added column has existed.
 	newColName := specNewColumn.Name.ColName()
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
-		return false, moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
+		return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
 	// same reservation as CREATE TABLE: these names are hidden by name in
 	// external-scan star expansion and readers.
 	if catalog.IsReservedExternalColName(newColName) {
-		return false, moerr.NewInvalidInputf(ctx.GetContext(),
+		return moerr.NewInvalidInputf(ctx.GetContext(),
 			"column name %s is reserved for external table scans", newColName)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
-		return false, err
+		return err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
-		return false, err
+		return err
 	}
 	newCol, err := buildAddColumnAndConstraint(ctx, alterPlan, specNewColumn, colType)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err = handleAddColumnPosition(ctx.GetContext(), tableDef, newCol, spec.Position); err != nil {
-		return false, err
+		return err
 	}
 
 	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
@@ -82,7 +82,7 @@ func AddColumn(
 		}
 	}
 
-	return newCol.Primary, nil
+	return nil
 }
 
 // checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
@@ -372,51 +372,51 @@ func findPositionRelativeColumn(
 	return position, nil
 }
 
-// AddColumn will add a new column to the table.
+// DropColumn removes the column and its COPY source mapping.
 func DropColumn(
 	ctx CompilerContext,
 	alterPlan *plan.AlterTable,
 	colName string,
 	alterCtx *AlterTableContext,
-) (bool, error) {
+) error {
 
 	tableDef := alterPlan.CopyTableDef
 	// Check whether original column has existed.
 	column := FindColumn(tableDef.Cols, colName)
 	if column == nil || column.Hidden {
-		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
+		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
 	// We only support dropping column with single-value none Primary Key index covered now.
 	if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
-		return column.Primary, err
+		return err
 	}
 	if err := handleDropColumnWithPrimaryKey(ctx.GetContext(), colName, tableDef); err != nil {
-		return column.Primary, err
+		return err
 	}
 	// Check the column with foreign key.
 	if err := checkDropColumnWithForeignKey(ctx, tableDef, column); err != nil {
-		return column.Primary, err
+		return err
 	}
 	if err := checkVisibleColumnCnt(ctx.GetContext(), tableDef, 0, 1); err != nil {
-		return column.Primary, err
+		return err
 	}
 
 	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, colName); err != nil {
-		return column.Primary, err
+		return err
 	}
 
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
-		return column.Primary, err
+		return err
 	}
 
 	if err := handleDropColumnWithClusterBy(ctx.GetContext(), tableDef, column); err != nil {
-		return column.Primary, err
+		return err
 	}
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
-	return column.Primary, nil
+	return nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
@@ -499,7 +499,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 }
 
 func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {
-	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tbInfo.Pkey == nil || tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
 		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {

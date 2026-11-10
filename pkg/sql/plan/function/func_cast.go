@@ -36,7 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -1031,7 +1031,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return castToJSON(from, result, proc, length, selectList)
 	}
 	reportDataTooLong := allowTrailingSpaceTrim &&
-		(proc == nil || proc.Ctx == nil || proc.Ctx.Value(defines.AlterCopyOpt{}) == nil)
+		(proc == nil || executor.InternalInsertFromContext(proc.Ctx) == nil)
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
 	}

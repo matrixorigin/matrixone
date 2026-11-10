@@ -247,3 +247,11 @@ func MergeReindexParams(old map[string]string, update ReindexParamUpdate, algo s
 	}
 	return out, nil
 }
+
+// SourceSnapshotInitializer is implemented by indexes whose model must be built
+// from committed source rows. The returned statements replace all derived output
+// and cover the complete source snapshot; executing only a training/model stage
+// does not satisfy this contract. ISCP publishes that snapshot with the output.
+type SourceSnapshotInitializer interface {
+	SourceSnapshotInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error)
+}

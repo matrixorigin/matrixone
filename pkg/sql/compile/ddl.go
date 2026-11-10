@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -753,6 +754,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	var addIndex []*plan.IndexDef
 	var dropIndexMap = make(map[string]bool)
 	var alterIndex *plan.IndexDef
+	indexVisibilityUpdates := make(map[string]bool)
+	indexParamUpdates := make(map[string]string)
 
 	reqs := make([]*api.AlterTableReq, 0)
 	did := rel.GetDBID(c.proc.Ctx)
@@ -964,6 +967,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					indexVisibilityUpdates[indexdef.IndexName] = tableAlterIndex.Visible
 					// update the index visibility in mo_catalog.mo_indexes.
 					// Escape the index name the same as the AUTO_UPDATE / REINDEX
 					// branches: it is user-supplied and a backticked identifier may
@@ -1028,6 +1032,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					// 2. Update IndexDef and mo_catalog.mo_indexes.
 					alterIndex.IndexAlgoParams = newAlgoParams
 					oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+					indexParamUpdates[indexDef.IndexName] = newAlgoParams
 					// Escape the SQL string literals, same as the REINDEX branch
 					// below: algo_params is a JSON blob (JSON does not escape SQL
 					// quotes/backslashes) and the index name is user-supplied, so
@@ -1120,6 +1125,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if newAlgoParams != alterIndex.IndexAlgoParams {
 						alterIndex.IndexAlgoParams = newAlgoParams
 						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+						indexParamUpdates[indexDef.IndexName] = newAlgoParams
 						// Escape the SQL string literals: algo_params can carry
 						// user-supplied option values and JSON encoding does not
 						// escape single quotes, so an unescaped value could break
@@ -1223,15 +1229,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			t.Indexes = remainingIndexes
 
 			t.Indexes = append(t.Indexes, addIndex...)
-			if alterIndex != nil {
-				for i, idx := range t.Indexes {
-					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].Visible = alterIndex.Visible
-						// NOTE: algo param is same for all the indexDefs of the same indexName.
-						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
-						// so we don't need multiple `alterIndex`.
-						t.Indexes[i].IndexAlgoParams = alterIndex.IndexAlgoParams
-					}
+			for _, idx := range t.Indexes {
+				if visible, ok := indexVisibilityUpdates[idx.IndexName]; ok {
+					idx.Visible = visible
+				}
+				if params, ok := indexParamUpdates[idx.IndexName]; ok {
+					idx.IndexAlgoParams = params
 				}
 			}
 			newCt.Cts = append(newCt.Cts, t)
@@ -1305,13 +1308,22 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
-	// remove refChildTbls for drop foreign key clause
-	//remove the child table id -- tblId from the parent table -- fkTblId
+	// A parent tracks child tables, not individual foreign keys. Retain the
+	// child while any remaining key still refers to that parent.
+	removedParents := make(map[uint64]bool)
 	for _, fkTblId := range removeRefChildTbls {
+		if removedParents[fkTblId] || slices.ContainsFunc(newFkeys, func(fk *plan.ForeignKeyDef) bool {
+			return fk.ForeignTbl == fkTblId
+		}) {
+			continue
+		}
+		removedParents[fkTblId] = true
 		var fkRelation engine.Relation
+		childID := tblId
 		if fkTblId == 0 {
 			//fk self refer
 			fkRelation = rel
+			childID = 0
 		} else {
 			_, _, fkRelation, err = c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), fkTblId)
 			if err != nil {
@@ -1319,7 +1331,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 		}
 
-		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, childID)
 		if err != nil {
 			return err
 		}

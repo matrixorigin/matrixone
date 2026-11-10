@@ -259,6 +259,19 @@ func (exec *ISCPTaskExecutor) Cancel() error {
 	exec.stopLocked()
 	return nil
 }
+
+// A failed worker cannot safely release its admitted generations. Stop that
+// generation and let the task owner reload durable state before rescheduling.
+func (exec *ISCPTaskExecutor) abandonWorker(failed Worker) {
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	if !exec.running || exec.worker != failed || exec.isTerminated() {
+		return
+	}
+	exec.terminateLifetime()
+	exec.stopLocked()
+}
+
 func (exec *ISCPTaskExecutor) Restart() error {
 	exec.Stop()
 	err := exec.Start()
@@ -1127,36 +1140,48 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	)
 	return
 }
-func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) error {
+func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) (err error) {
 	tables := exec.getAllTables()
 	if len(tables) == 0 {
 		return nil
 	}
-	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables")
+	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables")
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
-	defer cancel()
+	var updates []watermarkFlush
 	defer func() {
 		if err != nil {
-			err2 := txn.Rollback(ctx)
-			if err2 != nil {
-				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
+			err = errors.Join(err, txn.Rollback(ctx))
+			return
+		}
+		if err = txn.Commit(ctx); err != nil {
+			return
+		}
+		for _, update := range updates {
+			update.table.mu.Lock()
+			current := update.table.jobs[JobKey{JobName: update.job.jobName, JobID: update.job.jobID}]
+			if current == update.job && current.currentLSN == update.lsn && current.state == ISCPJobState_Completed {
+				current.state = ISCPJobState_Pending
+				current.persistedWatermark = update.watermark
 			}
-		} else {
-			err = txn.Commit(ctx)
+			update.table.mu.Unlock()
 		}
 	}()
-	jobCount := 0
 	for _, table := range tables {
-		flushCount := table.tryFlushWatermark(ctx, txn, ttl)
-		jobCount += flushCount
+		var tableUpdates []watermarkFlush
+		tableUpdates, err = table.tryFlushWatermark(ctx, txn, ttl)
+		if err != nil {
+			return err
+		}
+		updates = append(updates, tableUpdates...)
 	}
 	logutil.Info(
 		"ISCP-Task flush watermark",
 		zap.Any("table count", len(tables)),
-		zap.Int("jobCount", jobCount),
+		zap.Int("jobCount", len(updates)),
 	)
 	return nil
 }

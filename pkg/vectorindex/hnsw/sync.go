@@ -41,17 +41,19 @@ import (
 var runTxn = sqlexec.RunTxn
 
 type HnswSync[T types.RealNumbers] struct {
-	indexes []*HnswModel[T]
-	idxcfg  vectorindex.IndexConfig
-	tblcfg  vectorindex.IndexTableConfig
-	uid     string
-	ts      int64
-	ninsert atomic.Int32
-	ndelete atomic.Int32
-	nupdate atomic.Int32
-	current *HnswModel[T]
-	last    *HnswModel[T]
-	idxname string
+	indexes         []*HnswModel[T]
+	idxcfg          vectorindex.IndexConfig
+	tblcfg          vectorindex.IndexTableConfig
+	uid             string
+	ts              int64
+	ninsert         atomic.Int32
+	ndelete         atomic.Int32
+	nupdate         atomic.Int32
+	current         *HnswModel[T]
+	last            *HnswModel[T]
+	idxname         string
+	replaceSnapshot bool
+	generationFloor int64
 }
 
 func (s *HnswSync[T]) RunOnce(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.VectorIndexCdc[T]) (err error) {
@@ -77,6 +79,26 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	idxdefs []*plan.IndexDef,
 	vectype int32,
 	dimension int32) (*HnswSync[T], error) {
+	return newHnswSync[T](sqlproc, db, tbl, idxname, idxdefs, vectype, dimension, false)
+}
+
+func NewHnswSnapshotSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
+	db string,
+	tbl string,
+	idxname string,
+	idxdefs []*plan.IndexDef,
+	vectype int32,
+	dimension int32) (*HnswSync[T], error) {
+	return newHnswSync[T](sqlproc, db, tbl, idxname, idxdefs, vectype, dimension, true)
+}
+
+func newHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
+	db string,
+	tbl string,
+	idxname string,
+	idxdefs []*plan.IndexDef,
+	vectype int32,
+	dimension int32, replace bool) (*HnswSync[T], error) {
 	var err error
 
 	var idxtblcfg vectorindex.IndexTableConfig
@@ -189,6 +211,13 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
 	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
 	sync.ts = sync.nextTimestamp()
+
+	if replace {
+		sync.generationFloor = sync.ts
+		sync.indexes = nil
+		sync.replaceSnapshot = true
+		return sync, nil
+	}
 
 	// save all model to local by LoadIndex and Unload
 	err = sync.DownloadAll(sqlproc)
@@ -592,7 +621,7 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 // index (ISCP job ownership): s.indexes (loaded at NewHnswSync) reflects the current persisted
 // max and no concurrent writer can insert between this read and the write.
 func (s *HnswSync[T]) nextTimestamp() int64 {
-	var maxTs int64
+	maxTs := s.generationFloor
 	for _, m := range s.indexes {
 		if m != nil && m.Timestamp > maxTs {
 			maxTs = m.Timestamp
@@ -616,10 +645,19 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 		}
 		dirty = append(dirty, idx)
 	}
-	if len(dirty) == 0 {
+	if len(dirty) == 0 && !s.replaceSnapshot {
 		return nil
 	}
 	err := runTxn(sqlproc, func(exec executor.TxnExecutor) error {
+		if s.replaceSnapshot {
+			for _, table := range []string{s.tblcfg.MetadataTable, s.tblcfg.IndexTable} {
+				res, err := exec.Exec("DELETE FROM "+sqlquote.QualifiedIdent(s.tblcfg.DbName, table)+" WHERE TRUE", sqlproc.StatementOption())
+				res.Close()
+				if err != nil {
+					return err
+				}
+			}
+		}
 		stmt := sqlproc.StatementOption()
 		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, s.tblcfg.DbName, s.tblcfg.IndexTable, 2000)
 		if err != nil {
