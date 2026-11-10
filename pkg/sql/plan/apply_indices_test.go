@@ -500,6 +500,254 @@ func TestHintedIndexAccessReturnsMetadataErrors(t *testing.T) {
 	}
 }
 
+func TestForceIndexJoinUsesLeadingCompositePrefix(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addEventIndexReproTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select r.ordinal, max(e.event_idx)
+		from (values row(0, 'owner_a', 'run_a', 1, 10),
+		            row(1, 'owner_b', 'run_b', 2, 10)) r(ordinal, uid, rid, lo, hi)
+		join event_index_repro e force index (idx_control)
+		  on e.user_id = r.uid and e.run_id = r.rid
+		 and e.event_type = 'user_intent'
+		 and e.event_idx > r.lo and e.event_idx <= r.hi
+		where e.run_id in ('run_a', 'run_b')
+		group by r.ordinal`)
+	require.NoError(t, err)
+	query := queryPlan.GetQuery()
+	require.NotNil(t, query)
+
+	var indexScan, baseScan *planpb.Node
+	for _, node := range query.Nodes {
+		if node.TableDef == nil || node.TableDef.Name != "event_index_repro" &&
+			node.IndexScanInfo.BelongToTable != "event_index_repro" {
+			continue
+		}
+		if node.IndexScanInfo.IsIndexScan {
+			indexScan = node
+		} else if node.NodeType == planpb.Node_TABLE_SCAN {
+			baseScan = node
+		}
+	}
+	require.NotNil(t, indexScan, "the VALUES keys must drive idx_control instead of a base-table-only scan")
+	require.Equal(t, "idx_control", indexScan.IndexScanInfo.IndexName)
+	require.NotNil(t, baseScan)
+	require.NotEmpty(t, baseScan.FilterList,
+		"event_type, event_idx, and run_id residuals must remain on the base scan")
+
+	require.Len(t, indexScan.RuntimeFilterProbeList, 1)
+	probe := indexScan.RuntimeFilterProbeList[0]
+	require.True(t, probe.MatchPrefix)
+	require.NotNil(t, probe.Expr)
+
+	var build *planpb.RuntimeFilterSpec
+	for _, node := range query.Nodes {
+		for _, candidate := range node.RuntimeFilterBuildList {
+			if candidate.Tag == probe.Tag {
+				build = candidate
+			}
+		}
+	}
+	require.NotNil(t, build, "the index probe must have a matching build contract")
+	require.True(t, build.MatchPrefix)
+	require.Equal(t,
+		planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+		build.KeyEncoding)
+	require.Len(t, build.KeyComponentProbeTypes, 2)
+	require.Equal(t, int32(types.T_varchar), build.KeyComponentProbeTypes[0].Id)
+	require.Equal(t, int32(types.T_varchar), build.KeyComponentProbeTypes[1].Id)
+	require.NotNil(t, build.BuildExpr.GetF())
+	require.Equal(t, function.SerialFullFunctionName, build.BuildExpr.GetF().Func.ObjName)
+	require.Len(t, build.BuildExpr.GetF().Args, 2)
+}
+
+func addEventIndexReproTableForTest(mock *MockOptimizer) {
+	idType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	ownerType := planpb.Type{Id: int32(types.T_varchar), Width: 128, NotNullable: true}
+	eventType := planpb.Type{Id: int32(types.T_varchar), Width: 32, NotNullable: true}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	mainTable := &planpb.TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     25460,
+		Name:      "event_index_repro",
+		Cols: []*planpb.ColDef{
+			{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &planpb.Default{}},
+			{ColId: 1, Name: "user_id", OriginName: "user_id", Typ: ownerType, Default: &planpb.Default{}},
+			{ColId: 2, Name: "run_id", OriginName: "run_id", Typ: ownerType, Default: &planpb.Default{}},
+			{ColId: 3, Name: "event_type", OriginName: "event_type", Typ: eventType, Default: &planpb.Default{}},
+			{ColId: 4, Name: "event_idx", OriginName: "event_idx", Typ: idType, Default: &planpb.Default{}},
+			{ColId: 5, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &planpb.Default{}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+		},
+		Indexes: []*planpb.IndexDef{{
+			IndexName:      "idx_control",
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "idx_control_table",
+			Parts: []string{
+				"user_id", "run_id", "event_type", "event_idx", catalog.CreateAlias("id"),
+			},
+			TableExist: true,
+		}},
+		Name2ColIndex: map[string]int32{
+			"id": 0, "user_id": 1, "run_id": 2, "event_type": 3, "event_idx": 4,
+		},
+	}
+	mock.ctxt.objects[mainTable.Name] = &ObjectRef{
+		SchemaName: "tpch", ObjName: mainTable.Name, Obj: int64(mainTable.TblId),
+	}
+	mock.ctxt.tables[mainTable.Name] = mainTable
+	mock.ctxt.id2name[mainTable.TblId] = mainTable.Name
+	mock.ctxt.pks[mainTable.Name] = []int{0}
+
+	addIndexHintIndexTableForTest(mock, "idx_control_table", 25461)
+	mock.ctxt.tables["idx_control_table"].Cols[1].Typ = idType
+}
+
+func TestIndexJoinCompositePrefixSafetyBoundaries(t *testing.T) {
+	t.Run("non-leading forced key is rejected", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+		leftDef.Indexes = []*planpb.IndexDef{{
+			IndexName:      "idx_b_a",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"b", "a", catalog.CreateAlias("id")},
+			TableExist:     true,
+		}}
+		require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
+			HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_b_a"},
+		}}))
+		join := builder.qry.Nodes[joinID]
+		nodeCount := len(builder.qry.Nodes)
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.Equal(t, leftScanID, join.Children[0])
+		require.Empty(t, join.RuntimeFilterBuildList)
+		require.Len(t, builder.qry.Nodes, nodeCount)
+	})
+
+	t.Run("forced partial unique key requires exact prefix filter", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+		leftDef.Indexes = []*planpb.IndexDef{{
+			IndexName:      "uidx_ab",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"a", "b"},
+			Unique:         true,
+			TableExist:     true,
+		}}
+		require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
+			HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"uidx_ab"},
+		}}))
+		join := builder.qry.Nodes[joinID]
+		nodeCount := len(builder.qry.Nodes)
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.Equal(t, leftScanID, join.Children[0])
+		require.Empty(t, join.RuntimeFilterBuildList)
+		require.Len(t, builder.qry.Nodes, nodeCount)
+	})
+
+	t.Run("forced complete unique key retains fallback", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+		leftDef.Indexes = []*planpb.IndexDef{{
+			IndexName:      "uidx_ab",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"a", "b"},
+			Unique:         true,
+			TableExist:     true,
+		}}
+		require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
+			HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"uidx_ab"},
+		}}))
+		join := builder.qry.Nodes[joinID]
+		leftTag := builder.qry.Nodes[leftScanID].BindingTags[0]
+		right := builder.qry.Nodes[join.Children[1]]
+		rightTag := right.BindingTags[0]
+		floatType := planpb.Type{Id: int32(types.T_float64)}
+		leftDef.Cols[1].Typ = floatType
+		leftDef.Cols[2].Typ = floatType
+		right.TableDef.Cols[0].Typ = floatType
+		right.TableDef.Cols[1].Typ = floatType
+		join.OnList[0].GetF().Args[0].Typ = floatType
+		join.OnList[0].GetF().Args[1].Typ = floatType
+		join.OnList = append(join.OnList, ftjMakeEqExpr(
+			t, ftjColExpr(leftDef, leftTag, 2), ftjColExpr(right.TableDef, rightTag, 0)))
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.NotEqual(t, leftScanID, join.Children[0])
+		require.Empty(t, join.RuntimeFilterBuildList)
+		indexJoin := builder.qry.Nodes[join.Children[0]]
+		indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+		require.Equal(t, "uidx_ab", indexScan.IndexScanInfo.IndexName)
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+	})
+}
+
+func TestIndexJoinPrefersCompleteKeyOverPartialPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prefixFirst bool
+	}{
+		{name: "broad prefix first", prefixFirst: true},
+		{name: "selective complete key first"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joinID, _, leftDef := makeIndexHintJoinBuilder(t)
+			leftDef.Cols = append(leftDef.Cols, &planpb.ColDef{
+				Name: "lookup", Typ: planpb.Type{Id: int32(types.T_int32)},
+			})
+			leftDef.Name2ColIndex["lookup"] = 3
+
+			join := builder.qry.Nodes[joinID]
+			leftScan := builder.qry.Nodes[join.Children[0]]
+			leftScan.Stats.TableCnt = 1_000_000
+			leftScan.Stats.Cost = 1_000_000
+			right := builder.qry.Nodes[join.Children[1]]
+			join.OnList = append(join.OnList, ftjMakeEqExpr(
+				t,
+				ftjColExpr(leftDef, leftScan.BindingTags[0], 3),
+				ftjColExpr(right.TableDef, right.BindingTags[0], 0),
+			))
+
+			broadPrefix := &planpb.IndexDef{
+				IndexName:      "idx_tenant_unused",
+				IndexTableName: "idx_join_a_table",
+				Parts:          []string{"a", "b", catalog.CreateAlias("id")},
+				TableExist:     true,
+			}
+			completeKey := &planpb.IndexDef{
+				IndexName:      "idx_lookup",
+				IndexTableName: "idx_join_b_table",
+				Parts:          []string{"lookup", catalog.CreateAlias("id")},
+				TableExist:     true,
+			}
+			if tc.prefixFirst {
+				leftDef.Indexes = []*planpb.IndexDef{broadPrefix, completeKey}
+			} else {
+				leftDef.Indexes = []*planpb.IndexDef{completeKey, broadPrefix}
+			}
+
+			_, err := builder.applyIndicesForJoins(
+				joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			indexJoin := builder.qry.Nodes[join.Children[0]]
+			require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+			indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+			require.Equal(t, "idx_lookup", indexScan.IndexScanInfo.IndexName,
+				"a selective complete-key lookup must not be displaced by catalog order")
+		})
+	}
+}
+
 func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
