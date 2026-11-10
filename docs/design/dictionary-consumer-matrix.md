@@ -8,13 +8,13 @@ No production capability or producer is enabled until its closure passes.
 | Closure | Current state | Required closure before admission |
 |---|---|---|
 | Function parameter wrappers | Implemented; vector owning-package tests pass | Fixed/varlen logical reads, conversion, cached-shape changes, raw-slice rejection |
-| Function overloads/executors | Primitive comparisons/string IN and integer arithmetic opt in by runtime shape; other calls normalize | SIMD/SQL acceptance pending; fused decimals normalize referenced operands only |
+| Function overloads/executors | Ordinary numeric/string comparisons, constant-bound BETWEEN, integer/string IN, floating/integer arithmetic, LIKE/substring/case/length and NULL predicates opt in by audited runtime shape; remaining calls normalize | SIMD/SQL acceptance pending; fused decimals normalize referenced operands only |
 | Vector/batch gather | Typed bulk gathers and selected preflight implemented; shared mappings/snapshots tested | Final selected pressure/cancellation and static review |
 | Hash preparation/probe | Selected key paths and canonical spill hash implemented/tested | Preserve unsupported type/mode boundaries |
 | HashBuild | Direct-column, non-dedup mode admitted and endpoint tested | Finish selected fault/pressure controls before producer rollout; computed keys and dedup stay flat |
 | HashJoin | Residual-free INNER/probe-side SEMI/ANTI admitted and endpoint tested; results stay flat | Other modes retain flat ingress; markers normalize through producer state |
 | Aggregates/Group | Basic non-DISTINCT aggregates admitted; decimal selected scalar/dense/general/bulk tested | DISTINCT, ordered/rollup/window and unknown aggregate contracts stay flat |
-| Shuffle | Owned synchronous complete-key input admitted/tested; output partitions remain flat | Legacy hash/range/async input keeps normalization; dictionary partitions remain #32387 |
+| Shuffle | Owned synchronous complete-key input admitted/tested; output partitions remain flat | Ordinary hash/range and local asynchronous ingress use selected key reads and existing accounted flat partition gathers; dictionary partition production remains #32387 |
 | Filter/Projection | Selected filters and forwarding projection enabled under account/capability admission | Pure forwarders propagate destination permission; unsupported modes stay flat |
 | Reader/TableScan | Selection callback and retained output enabled; persisted tombstone/late-row test passes | Exact/Top-K/workspace fallbacks retain old scheduling; SQL/performance acceptance pending |
 | Sort/window/frontend/spill/network | Explicit normalization | Keep existing formats and unknown-consumer default from #32405 |
@@ -151,3 +151,26 @@ normalization boundary. No SQL types, cache tiers/algorithm or join placement
 change. All six selected CHAR comparisons have independent expected values,
 repeats, trailing spaces and NULL controls. The first SF100 timing window was
 excluded for external CPU interference; it is not acceptance evidence.
+
+### Approved revised implementation checkpoint
+
+Shared input frames now own lazy contiguous-column gathers for projection,
+aggregate and sequential filter/scan expression forests. Every source batch or
+new selection domain invalidates ready slots regardless of header address reuse.
+Sibling physical-only kernels reuse the same column copy. SIMD/decimal kernels,
+casts and unconverted specialized functions retain contiguous operands and their
+existing numerical/diagnostic semantics; the frame does not change SQL types.
+Masked operands retain the established active-row compaction. Gather count, rows,
+logical bytes and scratch capacity are reported as work performed, not copies saved.
+
+Existing ordinary shuffle pools already preserve input allocation provenance.
+Selected key readers now use the unchanged hash/range functions, then gather
+payload directly into those flat pool buffers. Pending writes retain the child
+input until copied; no queue capacity, hash policy or handoff protocol changes.
+Repeated rows/NULL routing/account cleanup pass through real synchronous and
+asynchronous endpoints. No dictionary partition or join output views are enabled.
+
+Affected owning packages passed before adding the final observation counters;
+focused account/compiler and direct scalar controls passed afterward. Targeted
+ordinary-shuffle race validation and final static/SQL/performance acceptance are
+recorded separately in run artifacts. No revised performance result is claimed.

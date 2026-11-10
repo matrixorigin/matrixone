@@ -62,6 +62,13 @@ func (expr *FunctionExpressionExecutor) normalizeDictionaryParameters(parameters
 		if source.AllocationAccountSelection() != nil && expr.allocation == nil {
 			return nil, mpool.ErrAllocationAccountInvalid
 		}
+		if flat, found, err := expr.dictionaryFrame.materialize(source, expr.allocation, expr.m); found {
+			if err != nil {
+				return nil, err
+			}
+			expr.dictionaryParameters[i] = flat
+			continue
+		}
 		dst := expr.dictionaryScratch[i]
 		if dst == nil {
 			var err error

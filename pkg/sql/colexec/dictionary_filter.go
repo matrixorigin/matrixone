@@ -144,9 +144,13 @@ func SelectBatchColumns(input *batch.Batch, positions []int, rows []int64, mp *m
 // SelectPredicateRows preserves evaluation order and only evaluates survivors
 // of preceding predicates. Temporary views have one local owner. Final rows are
 // borrowed from scratch until the caller next evaluates this chain.
-func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int, executors []ExpressionExecutor, account *vector.AllocationAccountSelection, scratch *[]int64, parameter *vector.FunctionParameterWrapper[bool], analyzer process.Analyzer, beforeEval func(int, int)) ([]int64, bool, error) {
+func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int, executors []ExpressionExecutor, account *vector.AllocationAccountSelection, scratch *[]int64, parameter *vector.FunctionParameterWrapper[bool], analyzer process.Analyzer, beforeEval func(int, int), frame *DictionaryInputFrame) ([]int64, bool, error) {
 	*scratch = (*scratch)[:0]
 	current := input
+	if frame != nil {
+		frame.Begin(current, account, proc.Mp())
+		defer func() { frame.Observe(analyzer); frame.End() }()
+	}
 	var owned *batch.Batch
 	defer func() {
 		if owned != nil {
@@ -170,9 +174,15 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 				owned.Clean(proc.Mp())
 			}
 			owned, current = flat, flat
+			if frame != nil {
+				frame.Begin(current, account, proc.Mp())
+			}
 		}
 		if beforeEval != nil {
 			beforeEval(i, current.RowCount())
+		}
+		if frame != nil {
+			frame.Bind(executors[i : i+1])
 		}
 		value, err := executors[i].Eval(proc, []*batch.Batch{current}, nil)
 		if err != nil {
@@ -251,6 +261,9 @@ func SelectPredicateRows(proc *process.Process, input *batch.Batch, loaded []int
 				owned.Clean(proc.Mp())
 			}
 			owned, current = next, next
+			if frame != nil {
+				frame.Begin(current, account, proc.Mp())
+			}
 		}
 	}
 	return *scratch, !selected, nil

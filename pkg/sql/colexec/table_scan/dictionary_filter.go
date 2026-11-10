@@ -41,6 +41,6 @@ func (tableScan *TableScan) selectReaderFilter(proc *process.Process, bat *batch
 		}
 	}
 	rows, all, err := colexec.SelectPredicateRows(proc, bat, loaded, tableScan.ctr.allFilterExecutors, tableScan.OutputAllocation,
-		&tableScan.ctr.filterRows, &tableScan.ctr.filterBs, tableScan.OpAnalyzer, before)
+		&tableScan.ctr.filterRows, &tableScan.ctr.filterBs, tableScan.OpAnalyzer, before, &tableScan.ctr.dictionaryInputs)
 	return engine.ReaderFilterResult{Sels: rows, All: all}, err
 }

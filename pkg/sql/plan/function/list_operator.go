@@ -767,7 +767,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryBetweenInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -918,7 +919,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      0,
 				args: []types.T{
 					types.T_char,
 					types.T_char,
@@ -931,7 +933,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      1,
 				args: []types.T{
 					types.T_varchar,
 					types.T_varchar,
@@ -944,7 +947,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 2,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      2,
 				args: []types.T{
 					types.T_text,
 					types.T_text,
@@ -957,7 +961,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 3,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      3,
 				args: []types.T{
 					types.T_char,
 					types.T_char,
@@ -971,7 +976,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      4,
 				args: []types.T{
 					types.T_varchar,
 					types.T_varchar,
@@ -985,7 +991,8 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				dictionaryInput: dictionaryStringArguments,
+				overloadId:      5,
 				args: []types.T{
 					types.T_text,
 					types.T_text,
@@ -1010,7 +1017,7 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      0,
 				args:            []types.T{types.T_uint8, types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
@@ -1021,7 +1028,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      1,
 				args:            []types.T{types.T_uint16, types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1032,7 +1039,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      2,
 				args:            []types.T{types.T_uint32, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1043,7 +1050,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      3,
 				args:            []types.T{types.T_uint64, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1054,7 +1061,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      4,
 				args:            []types.T{types.T_int8, types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
@@ -1065,7 +1072,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      5,
 				args:            []types.T{types.T_int16, types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1076,7 +1083,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      6,
 				args:            []types.T{types.T_int32, types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1087,7 +1094,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      7,
 				args:            []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1098,7 +1105,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      8,
 				args:            []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1109,7 +1116,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      9,
 				args:            []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1120,7 +1127,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      10,
 				args:            []types.T{types.T_decimal64, types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1131,7 +1138,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      11,
 				args:            []types.T{types.T_decimal128, types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
@@ -1142,7 +1149,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      100,
 				args:            []types.T{types.T_decimal256, types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
@@ -1153,7 +1160,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      12,
 				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1164,7 +1171,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      13,
 				args:            []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
@@ -1175,7 +1182,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      14,
 				args:            []types.T{types.T_date, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
@@ -1186,7 +1193,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      15,
 				args:            []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
@@ -1197,7 +1204,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      16,
 				args:            []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
@@ -1208,7 +1215,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      17,
 				args:            []types.T{types.T_timestamp, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
@@ -1219,7 +1226,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      18,
 				args:            []types.T{types.T_blob, types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
@@ -1230,7 +1237,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      19,
 				args:            []types.T{types.T_uuid, types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
@@ -1241,7 +1248,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      20,
 				args:            []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
@@ -1252,7 +1259,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      21,
 				args:            []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
@@ -1263,7 +1270,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      22,
 				args:            []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
@@ -1274,7 +1281,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      23,
 				args:            []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
@@ -1285,7 +1292,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      24,
 				args:            []types.T{types.T_year, types.T_year},
 				retType: func(parameters []types.Type) types.Type {
@@ -1296,7 +1303,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      24,
 				args:            []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1307,7 +1314,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      25,
 				args:            []types.T{types.T_array_float64, types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1318,7 +1325,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      101,
 				args:            []types.T{types.T_enum, types.T_enum},
 				retType: func(parameters []types.Type) types.Type {
@@ -1329,7 +1336,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      102,
 				args:            []types.T{types.T_bit, types.T_bit},
 				retType: func(parameters []types.Type) types.Type {
@@ -1342,7 +1349,7 @@ var supportedOperators = []FuncNew{
 			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
 			// equality of the codes is equality of the values
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      103,
 				args:            []types.T{types.T_bf16, types.T_bf16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1353,7 +1360,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      104,
 				args:            []types.T{types.T_float16, types.T_float16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1364,7 +1371,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      105,
 				args:            []types.T{types.T_float8, types.T_float8},
 				retType: func(parameters []types.Type) types.Type {
@@ -1375,7 +1382,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      106,
 				args:            []types.T{types.T_float4, types.T_float4},
 				retType: func(parameters []types.Type) types.Type {
@@ -1397,7 +1404,7 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      0,
 				args:            []types.T{types.T_uint8, types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
@@ -1408,7 +1415,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      1,
 				args:            []types.T{types.T_uint16, types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1419,7 +1426,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      2,
 				args:            []types.T{types.T_uint32, types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1430,7 +1437,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      3,
 				args:            []types.T{types.T_uint64, types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1441,7 +1448,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      4,
 				args:            []types.T{types.T_int8, types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
@@ -1452,7 +1459,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      5,
 				args:            []types.T{types.T_int16, types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1463,7 +1470,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      6,
 				args:            []types.T{types.T_int32, types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1474,7 +1481,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      7,
 				args:            []types.T{types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1485,7 +1492,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      8,
 				args:            []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
@@ -1496,7 +1503,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      9,
 				args:            []types.T{types.T_float64, types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1507,7 +1514,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      10,
 				args:            []types.T{types.T_decimal64, types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
@@ -1518,7 +1525,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      11,
 				args:            []types.T{types.T_decimal128, types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
@@ -1529,7 +1536,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      100,
 				args:            []types.T{types.T_decimal256, types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
@@ -1540,7 +1547,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      12,
 				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1551,7 +1558,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      13,
 				args:            []types.T{types.T_char, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
@@ -1562,7 +1569,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      14,
 				args:            []types.T{types.T_date, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
@@ -1573,7 +1580,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      15,
 				args:            []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
@@ -1584,7 +1591,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      16,
 				args:            []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
@@ -1595,7 +1602,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      17,
 				args:            []types.T{types.T_timestamp, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
@@ -1606,7 +1613,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      18,
 				args:            []types.T{types.T_blob, types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
@@ -1617,7 +1624,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      19,
 				args:            []types.T{types.T_uuid, types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
@@ -1628,7 +1635,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      20,
 				args:            []types.T{types.T_text, types.T_text},
 				retType: func(parameters []types.Type) types.Type {
@@ -1639,7 +1646,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      21,
 				args:            []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
@@ -1650,7 +1657,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      22,
 				args:            []types.T{types.T_binary, types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
@@ -1661,7 +1668,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      23,
 				args:            []types.T{types.T_varbinary, types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
@@ -1672,7 +1679,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      24,
 				args:            []types.T{types.T_year, types.T_year},
 				retType: func(parameters []types.Type) types.Type {
@@ -1684,7 +1691,7 @@ var supportedOperators = []FuncNew{
 			},
 
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      102,
 				args:            []types.T{types.T_bit, types.T_bit},
 				retType: func(parameters []types.Type) types.Type {
@@ -1697,7 +1704,7 @@ var supportedOperators = []FuncNew{
 			// bf16/float16/float8/float4: stored values are canonical (one zero, no NaN), so
 			// equality of the codes is equality of the values
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      103,
 				args:            []types.T{types.T_bf16, types.T_bf16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1708,7 +1715,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      104,
 				args:            []types.T{types.T_float16, types.T_float16},
 				retType: func(parameters []types.Type) types.Type {
@@ -1719,7 +1726,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      105,
 				args:            []types.T{types.T_float8, types.T_float8},
 				retType: func(parameters []types.Type) types.Type {
@@ -1730,7 +1737,7 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				dictionaryInput: dictionaryStringInInputs,
+				dictionaryInput: dictionaryInInputs,
 				overloadId:      106,
 				args:            []types.T{types.T_float4, types.T_float4},
 				retType: func(parameters []types.Type) types.Type {
@@ -3297,7 +3304,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryNullPredicateInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -3322,7 +3330,8 @@ var supportedOperators = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
+				dictionaryInput: dictionaryNullPredicateInputs,
+				overloadId:      0,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},

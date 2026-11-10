@@ -63,7 +63,7 @@ func TestDictionaryPredicateOriginalRowsAndErrorOrder(t *testing.T) {
 			})
 			var scratch []int64
 			var parameter vector.FunctionParameterWrapper[bool]
-			got, all, err := SelectPredicateRows(proc, input, nil, executors, nil, &scratch, &parameter, nil, nil)
+			got, all, err := SelectPredicateRows(proc, input, nil, executors, nil, &scratch, &parameter, nil, nil, nil)
 			require.NoError(t, err)
 			require.False(t, all)
 			require.Equal(t, want, got)

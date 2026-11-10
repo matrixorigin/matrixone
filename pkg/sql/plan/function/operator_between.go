@@ -348,10 +348,26 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 		return nil
 	}
 	ivec := parameters[0]
-	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
 	rval := vector.GetFixedAtWithTypeCheck[T](parameters[2], 0)
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+	if ivec.IsDictionary() {
+		view := vector.ResolveFixedReadView[T](ivec)
+		for row := 0; row < length; row++ {
+			if view.AllNull || view.Nulls.Contains(uint64(row)) {
+				result.GetResultVector().GetNulls().Add(uint64(row))
+				continue
+			}
+			physical := int(view.Selection[row])
+			if view.Constant {
+				physical = 0
+			}
+			value := view.Values[physical]
+			res[row] = value >= lval && value <= rval
+		}
+		return nil
+	}
+	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
@@ -419,10 +435,26 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 		return nil
 	}
 	ivec := parameters[0]
-	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
 	rval := vector.GetFixedAtWithTypeCheck[T](parameters[2], 0)
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+	if ivec.IsDictionary() {
+		view := vector.ResolveFixedReadView[T](ivec)
+		for row := 0; row < length; row++ {
+			if view.AllNull || view.Nulls.Contains(uint64(row)) {
+				result.GetResultVector().GetNulls().Add(uint64(row))
+				continue
+			}
+			physical := int(view.Selection[row])
+			if view.Constant {
+				physical = 0
+			}
+			value := view.Values[physical]
+			res[row] = compareFunc(value, lval) >= 0 && compareFunc(value, rval) <= 0
+		}
+		return nil
+	}
+	icol := vector.MustFixedColWithTypeCheck[T](ivec)
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
@@ -491,10 +523,22 @@ func opBetweenBytesWithFunc(
 		return nil
 	}
 	ivec := parameters[0]
-	icol, iarea := vector.MustVarlenaRawData(ivec)
 	lval := parameters[1].GetBytesAt(0)
 	rval := parameters[2].GetBytesAt(0)
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+	if ivec.IsDictionary() {
+		values := vector.GenerateFunctionStrParameter(ivec)
+		for row := 0; row < length; row++ {
+			value, isNull := values.GetStrValue(uint64(row))
+			if isNull {
+				result.GetResultVector().GetNulls().Add(uint64(row))
+				continue
+			}
+			res[row] = compareFunc(value, lval) >= 0 && compareFunc(value, rval) <= 0
+		}
+		return nil
+	}
+	icol, iarea := vector.MustVarlenaRawData(ivec)
 
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {

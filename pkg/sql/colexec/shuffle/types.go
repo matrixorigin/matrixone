@@ -59,6 +59,9 @@ type Shuffle struct {
 // AcceptsDictionary admits synchronous complete-key routing whose data
 // partitions are copied into existing statement-accounted output buffers.
 func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
+	if child == 0 && !shuffle.OwnedOutput && len(shuffle.ShuffleKeyColumns) == 0 && shuffle.ShuffleExpr == nil && shuffle.BucketNum > 0 {
+		return shuffle.ShuffleType == int32(plan.ShuffleType_Hash) || shuffle.ShuffleType == int32(plan.ShuffleType_Range)
+	}
 	return child == 0 && shuffle.OwnedOutput && shuffle.DrainAllBuckets &&
 		len(shuffle.ShuffleKeyColumns) > 0 && shuffle.ShuffleExpr == nil &&
 		shuffle.ShuffleType == int32(plan.ShuffleType_Hash)
@@ -67,6 +70,11 @@ func (shuffle *Shuffle) AcceptsDictionary(child int) bool {
 // Marker forwarding can preserve a dictionary even though ordinary owned
 // partitions stay flat. Declare that edge so unknown destinations remain safe.
 func (shuffle *Shuffle) DictionaryOutput() (bool, *vector.AllocationAccountSelection) {
+	if !shuffle.OwnedOutput && shuffle.AcceptsDictionary(0) && len(shuffle.Children) > 0 {
+		if child, ok := shuffle.GetChildren(0).(vm.DictionaryProducer); ok {
+			return child.DictionaryOutput()
+		}
+	}
 	return shuffle.OwnedOutput, shuffle.outputAllocation
 }
 func (shuffle *Shuffle) DictionaryOutputState() *vm.DictionaryOutputState {

@@ -694,6 +694,7 @@ type FunctionExpressionExecutor struct {
 	// therefore compact row-aligned parameters, evaluate only selected rows, and
 	// scatter the result back to the original row positions. These buffers are
 	// allocated lazily and reused across batches.
+	dictionaryFrame          *DictionaryInputFrame
 	dictionaryParameters     []*vector.Vector
 	dictionaryScratch        []*vector.Vector
 	selectedRows             []int64

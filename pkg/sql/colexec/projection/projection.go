@@ -105,6 +105,15 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
+	if bat.HasDictionary() {
+		projection.ctr.dictionaryInputs.Begin(bat, projection.ctr.outputAllocation, proc.Mp())
+		projection.ctr.dictionaryInputs.Bind(projection.ctr.projExecutors)
+		defer func() {
+			projection.ctr.dictionaryInputs.Observe(projection.OpAnalyzer)
+			projection.ctr.dictionaryInputs.End()
+		}()
+	}
+
 	for i := range projection.ctr.projExecutors {
 		vec, err := projection.ctr.projExecutors[i].Eval(proc, batches, nil)
 		if err != nil {

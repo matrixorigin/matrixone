@@ -174,3 +174,36 @@ Append results as issue/PR comments. Collapse genuinely superseded result tables
 after publishing replacements; preserve source pins and raw evidence. Keep raw
 datasets, and retain loaded seeds while active comparisons need them. Q15/Q20
 rewrites, additional decimal SIMD, codecs and SF1000 remain outside this wave.
+
+## Approved scope revision: shared scalar support and useful producer paths
+
+The requester approved the revised combined #32385/#32386 coding plan after
+reviewing the first SF10 regressions. Broaden comparisons/BETWEEN/Boolean/null,
+fixed/string membership, ordinary numeric arithmetic/casts and shared string
+kernels through existing read views/templates. Audit every specialized branch;
+unknown and physical-only paths remain explicitly flat. Preserve flat/SIMD paths.
+
+Use the selected required-column approach: an execution-lane-local input frame
+owns fixed column slots and lazily bulk-gathers a requested contiguous operand
+once per batch/selection generation. Sibling unconditional expressions share it.
+Masked evaluation retains existing branch-local compaction and never shares
+across masks. Reused batch addresses start a fresh generation. Free all owned
+scratch before account terminal; never free borrowed source headers. No new
+OLAP cache tier, cross-query cache, SQL type, wire format or configuration.
+
+Complete ordinary join-shuffle selected INPUT consumption, retaining owned flat
+partition outputs and existing bounded queue/handoff/cancel protocols. Preserve
+accounting through pending writes and cleanup. Prove Q1/Q12 actual activation,
+not only synthetic owned-complete-key shuffle support or faster wall times.
+Skip absent metadata scans, preserve logical NULL/provenance and transactional
+partial-column rollback. PR C/#32387 output views and PR D/#32388 earlier filtering
+and late payload remain separate with the scope recorded above.
+
+Qualification remains local SF10 memory/disk and SF100 disk, all32 CPUs, matched
+cache/budgets, one cold plus five profiled warm full22 suites per process/config.
+No spills/swap/OOM, concurrent builds/profile analysis or benchmark result/data
+verification. Report per-query wall/CPU/instructions/allocation/I/O/retention and
+Total. The earlier SF100 external-CPU exclusion is not acceptance evidence.
+If a new regression appears, investigate read-only and present its cause and
+proposed correction for approval BEFORE changing code. Publish results only as
+comments; keep draft until attributable target gains and regression gates pass.

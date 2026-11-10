@@ -289,7 +289,8 @@ type container struct {
 	groupingAware bool
 
 	// x, y of `group by x, y`.
-	groupByEvaluate colexec.ExprEvalVector
+	dictionaryInputs colexec.DictionaryInputFrame
+	groupByEvaluate  colexec.ExprEvalVector
 	// m, n of `select agg1(m, n), agg2(m, n)`.
 	aggArgEvaluate []colexec.ExprEvalVector
 
@@ -736,6 +737,7 @@ func (ctr *container) freeGroupingRollups() {
 }
 
 func (ctr *container) free() {
+	ctr.dictionaryInputs.Free(ctr.mp)
 	// free container stuff, WTH is the Free0?
 	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
@@ -882,6 +884,15 @@ func (ctr *container) hashKeyVectors(vs []*vector.Vector) []*vector.Vector {
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
+	if bat.HasDictionary() {
+		group.ctr.dictionaryInputs.Begin(bat, group.ctr.expressionAllocation, proc.Mp())
+		group.ctr.dictionaryInputs.Bind(group.ctr.groupByEvaluate.Executor)
+		for i := range group.ctr.aggArgEvaluate {
+			group.ctr.dictionaryInputs.Bind(group.ctr.aggArgEvaluate[i].Executor)
+		}
+		defer func() { group.ctr.dictionaryInputs.Observe(group.OpAnalyzer); group.ctr.dictionaryInputs.End() }()
+	}
+
 	group.ctr.freeGroupingRollups()
 
 	// group.

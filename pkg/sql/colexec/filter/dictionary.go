@@ -92,7 +92,7 @@ func (filter *Filter) selectedCall(proc *process.Process, input *batch.Batch) (*
 		}
 	}
 	rows, all, err := colexec.SelectPredicateRows(proc, input, nil, filter.ctr.allExecutors, filter.ctr.outputAllocation,
-		&filter.ctr.selectedRows, &filter.ctr.bs, filter.OpAnalyzer, before)
+		&filter.ctr.selectedRows, &filter.ctr.bs, filter.OpAnalyzer, before, &filter.ctr.dictionaryInputs)
 	if err != nil {
 		return nil, err
 	}

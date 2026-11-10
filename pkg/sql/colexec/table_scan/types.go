@@ -35,6 +35,7 @@ import (
 var _ vm.Operator = new(TableScan)
 
 type container struct {
+	dictionaryInputs          colexec.DictionaryInputFrame
 	dictionaryBoundary        vm.DictionaryOutputState
 	maxAllocSize              int
 	buf                       *batch.Batch
@@ -220,6 +221,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err error) {
+	tableScan.ctr.dictionaryInputs.Free(proc.Mp())
 	tableScan.releaseLocalDomains()
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.Clean(proc.Mp())
@@ -276,6 +278,7 @@ func (tableScan *TableScan) ExecProjection(proc *process.Process, input *batch.B
 	batch := input
 	if tableScan.ProjectList != nil {
 		batch, err = tableScan.EvalProjection(input, proc)
+		tableScan.ObserveDictionaryInputs(tableScan.OpAnalyzer)
 	}
 
 	if err != nil {

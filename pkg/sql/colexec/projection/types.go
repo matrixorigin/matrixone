@@ -73,6 +73,7 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
+	dictionaryInputs   colexec.DictionaryInputFrame
 	dictionaryBoundary vm.DictionaryOutputState
 	outputAllocation   *vector.AllocationAccountSelection
 	buf                *batch.Batch
@@ -86,6 +87,7 @@ type container struct {
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	projection.ctr.dictionaryInputs.Free(proc.Mp())
 	projection.freeExpandOwned(proc)
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
@@ -107,6 +109,7 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
+	projection.ctr.dictionaryInputs.Free(proc.Mp())
 	projection.freeExpandOwned(proc)
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {

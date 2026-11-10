@@ -150,9 +150,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
-	if shuffle.OwnedOutput {
-		shuffle.ctr.dictionaryBoundary.BeginCall()
-	}
+	shuffle.ctr.dictionaryBoundary.BeginCall()
 	if !shuffle.DrainAllBuckets {
 		return shuffle.callLocal(proc)
 	}
@@ -627,7 +625,7 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 
 func (shuffle *Shuffle) routeSingleBucket(bat *batch.Batch, shuffleIdx int32, proc *process.Process) (*batch.Batch, error) {
 	bat.ShuffleIDX = shuffleIdx
-	if shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx {
+	if !bat.HasDictionary() && (shuffle.DrainAllBuckets || shuffleIdx == shuffle.CurrentShuffleIdx) {
 		return bat, nil
 	}
 	sels := shuffle.clearSels()
@@ -857,6 +855,9 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 }
 
 func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if bat.Vecs[ap.ShuffleColIdx].IsDictionary() {
+		return ap.shuffleDictionaryKey(bat, proc)
+	}
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
 		return ap.routeSingleBucket(bat, 0, proc)
@@ -1263,6 +1264,9 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 }
 
 func rangeShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if bat.Vecs[ap.ShuffleColIdx].IsDictionary() {
+		return ap.shuffleDictionaryKey(bat, proc)
+	}
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
 		ok, regIndex := allBatchInOneRange(ap, bat)

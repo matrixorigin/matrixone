@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
 )
 
@@ -49,6 +50,7 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 	executor, err := NewExpressionExecutor(proc, expression)
 	require.NoError(t, err)
 	t.Cleanup(executor.Free)
+	executor.(*FunctionExpressionExecutor).dictionaryInput = nil // Explicit physical-only compatibility control.
 	check := func(mask []bool) {
 		t.Helper()
 		result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
@@ -74,6 +76,26 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 	executor.ResetForNextQuery()
 	require.Nil(t, root.dictionaryScratch)
 	check(nil)
+	t.Run("logical-string-kernels", func(t *testing.T) {
+		for _, name := range []string{"lower", "upper", "length", "char_length"} {
+			t.Run(name, func(t *testing.T) {
+				direct, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, name, column))
+				require.NoError(t, err)
+				t.Cleanup(direct.Free)
+				value, err := direct.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.True(t, value.IsNull(3))
+				if name == "length" || name == "char_length" {
+					require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](value, 1))
+				} else if name == "lower" {
+					require.Equal(t, "aa", string(value.GetBytesAt(1)))
+				} else {
+					require.Equal(t, "AA", string(value.GetBytesAt(1)))
+				}
+				require.Empty(t, direct.(*FunctionExpressionExecutor).dictionaryScratch)
+			})
+		}
+	})
 	t.Run("accounted-build-retention", func(t *testing.T) {
 		registry, err := mpool.NewAllocationAccountRegistry(1, 32)
 		require.NoError(t, err)
@@ -103,13 +125,23 @@ func TestDictionaryFunctionFallbackAndMaskedArguments(t *testing.T) {
 }
 
 func TestDictionaryCharComparisonReadsSelectedRows(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(oid.String(), func(t *testing.T) { testDictionaryStringComparison(t, oid) })
+	}
+}
+
+func testDictionaryStringComparison(t *testing.T, oid types.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
-	typ := types.New(types.T_char, 10, 0)
+	typ := types.New(oid, 10, 0)
 	source := vector.NewVec(typ)
 	t.Cleanup(func() { source.Free(mp) })
-	for i, value := range []string{"AA  ", "B", "unused"} {
+	first := "AA"
+	if oid == types.T_char {
+		first = "AA  "
+	}
+	for i, value := range []string{first, "B", "unused"} {
 		require.NoError(t, vector.AppendBytes(source, []byte(value), i == 2, mp))
 	}
 	base, err := vector.FreezeVector(source, mp, nil)
@@ -152,4 +184,41 @@ func TestDictionaryCharComparisonReadsSelectedRows(t *testing.T) {
 			require.True(t, dict.IsDictionary())
 		})
 	}
+}
+
+func TestDictionaryBetweenPreservesNaNNullAndRepeatedRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp), testutil.WithFileService(nil))
+	typ := types.T_float64.ToType()
+	source := vector.NewVec(typ)
+	t.Cleanup(func() { source.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(source, []float64{math.NaN(), 1, 2, 0}, []bool{false, false, false, true}, mp))
+	base, err := vector.FreezeVector(source, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(base.Release)
+	rows, err := vector.NewRowSelection([]int64{0, 2, 1, 2, 3}, 4, mp, nil)
+	require.NoError(t, err)
+	t.Cleanup(rows.Release)
+	selected, err := vector.NewDictionaryVector(base, rows, mp, nil)
+	require.NoError(t, err)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = selected
+	input.SetRowCount(5)
+	t.Cleanup(func() { input.Clean(mp) })
+	col := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	lit := func(v float64) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: v}}}}
+	}
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "between", col, lit(1), lit(2)))
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	for row, want := range []bool{false, true, true, true} {
+		require.False(t, result.IsNull(uint64(row)))
+		require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, row))
+	}
+	require.True(t, result.IsNull(4))
+	require.Empty(t, executor.(*FunctionExpressionExecutor).dictionaryScratch)
 }

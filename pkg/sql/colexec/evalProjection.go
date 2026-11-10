@@ -22,6 +22,8 @@ import (
 )
 
 type Projection struct {
+	dictionaryInputs DictionaryInputFrame
+	inputAllocation  *vector.AllocationAccountSelection
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
 	ProjectExecutors []ExpressionExecutor
@@ -42,6 +44,7 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 	if len(projection.ProjectList) == 0 {
 		return
 	}
+	projection.inputAllocation = selection
 	projection.ProjectAllocSize = 0
 	if projection.ProjectExecutors == nil {
 		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
@@ -69,6 +72,11 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 		return bat, nil
 	}
 
+	if bat.HasDictionary() {
+		projection.dictionaryInputs.Begin(bat, projection.inputAllocation, proc.Mp())
+		projection.dictionaryInputs.Bind(projection.ProjectExecutors)
+		defer projection.dictionaryInputs.End()
+	}
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjectExecutors {
@@ -89,6 +97,7 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 }
 
 func (projection *Projection) ResetProjection(proc *process.Process) {
+	projection.dictionaryInputs.Free(proc.Mp())
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].ResetForNextQuery()
@@ -98,6 +107,7 @@ func (projection *Projection) ResetProjection(proc *process.Process) {
 }
 
 func (projection *Projection) FreeProjection(proc *process.Process) {
+	projection.dictionaryInputs.Free(proc.Mp())
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
 			projection.ProjectExecutors[i].Free()
@@ -112,4 +122,8 @@ func (projection *Projection) FreeProjection(proc *process.Process) {
 		projection.projectBat.Clean(proc.Mp())
 		projection.projectBat = nil
 	}
+}
+
+func (projection *Projection) ObserveDictionaryInputs(analyzer process.Analyzer) {
+	projection.dictionaryInputs.Observe(analyzer)
 }

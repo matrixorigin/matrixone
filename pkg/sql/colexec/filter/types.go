@@ -70,6 +70,7 @@ func (filter *Filter) Release() {
 }
 
 type container struct {
+	dictionaryInputs          colexec.DictionaryInputFrame
 	dictionaryBoundary        vm.DictionaryOutputState
 	viewOutput                *batch.Batch
 	selectedRows              []int64
@@ -97,6 +98,7 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
+	filter.ctr.dictionaryInputs.Free(proc.Mp())
 	if filter.ctr.viewOutput != nil {
 		filter.ctr.viewOutput.Clean(proc.Mp())
 		filter.ctr.viewOutput = nil
