@@ -243,3 +243,52 @@ failed reservations. Tests must demonstrate account growth for retained
 views, cursors and results, independent lifetimes, zero final charge, admission
 failure atomicity, real SQL budget usage, and no new work for unrelated queries.
 All performance gates must be remeasured with these reservations enabled.
+
+### Synchronous text selection (candidate revision 35)
+
+An already-live immutable reader may perform a synchronous text selection
+without constructing an independently retained cursor. The caller keeps the
+reader alive throughout the call, including against concurrent Close; separate
+reader handles remain safe for concurrent use. This operation returns only an
+owned string, value type and scalar status/error classification. It uses the
+existing validated row lookup, path parser and QueryWithExists implementation;
+it accepts neither arbitrary document bytes nor a trusted flag. The existing
+retained cursor API remains available for typed or longer-lived results.
+
+Provide both a path-bytes operation preserving the legacy NULL-before-path
+short circuit and a parsed-path operation for consumers that validate the path
+before checking document NULL. Both reuse the same selection and unquoting
+logic as the retained cursor. Synchronous scratch must remain on the stack or
+otherwise be charged; output must be independent of the retained backing.
+
+Review decision: the accounted benchmark measured cursor creation as a fixed
+cost on every short lookup. This optimization does not change admission or
+reduce validation of unselected descendants. Verify path/mask/error ordering,
+owned output, independent concurrent readers and allocation behavior, then
+repeat the matched performance gates.
+
+### Memory-only admission before spill setup (candidate revision 36)
+
+A JSON reader needs the existing query/CN memory generation but never obtains
+spill-disk authority. Allow it to capture a narrow transient-memory reservation
+function for that same generation without sampling the spill filesystem. Do
+not expose the underlying generation through that function. A subsequent
+ordinary resource-budget request must initialize spill capacity on that exact
+generation before returning a spill-capable handle; it samples the filesystem,
+applies existing epoch/explicit-cap rules, and sets the per-generation limit
+from the resulting live ledger. No spill reservation can precede promotion.
+
+The readiness state is generation-local, reset with the generation, and guarded
+by the existing process/budget synchronization. Only initialized generations
+may cross into a separately locked borrowed process. Full-budget callers that
+open a new generation and explicitly installed test generations keep their
+existing behavior. A closed generation remains closed; promotion must neither
+replace it nor move existing memory reservations. This adds no global cache or
+background task.
+
+Review decision: the small SQL profile attributed significant CPU to spill
+filesystem sampling initiated solely for JSON memory accounting. Deferring
+that unrelated work is acceptable only with evidence for exact-once promotion,
+current disk and explicit limits, no stale or premature spill authority,
+concurrent callers, borrowed processes, failure/cancellation and final account
+release. Validate common structure sizes and rerun the complete SQL gate.
