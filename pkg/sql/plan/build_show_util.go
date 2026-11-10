@@ -1572,7 +1572,7 @@ func formatDefaultWithoutBackslashEscapes(origin string) (string, error) {
 	}
 	clause, ok := selectStmt.Select.(*tree.SelectClause)
 	if !ok || len(clause.Exprs) != 1 || (clause.Exprs[0].As != nil && !clause.Exprs[0].As.Empty()) ||
-		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || len(clause.Windows) != 0 ||
+		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
 		selectStmt.With != nil || len(selectStmt.OrderBy) != 0 || selectStmt.Limit != nil {
 		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
 	}
