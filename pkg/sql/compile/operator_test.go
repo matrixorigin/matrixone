@@ -712,7 +712,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 			)
 			require.NoError(t, err)
 			defer stmt.Free()
-			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 			require.NoError(t, err)
 
 			var percentileFn *plan.Function
@@ -747,7 +747,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+	queryPlan, err := plan2.BuildPlan(ctx, stmt, false, nil)
 	require.NoError(t, err)
 
 	var percentileFn *plan.Function

@@ -115,9 +115,13 @@ func TestEwmBinderRejections(t *testing.T) {
 			"ewm halflife decay requires a strictly positive half-life constant",
 		},
 		{
-			"unknown string decay tag arity",
+			// issue #31952: a string decay without a trailing half-life
+			// slot is no longer force-read as the tag form at the checker;
+			// the non-tag literal joins the declared-decay §7 family
+			// that (n_nationkey, 'span', 5) already publishes
+			"unknown string decay without trailing arguments",
 			"select ewmmean(n_nationkey, 'span') over (order by n_nationkey) from nation",
-			"invalid argument function ewmmean",
+			"ewm statistics require a declared decay (alpha or 'halflife' half-life)",
 		},
 		{
 			"unknown string decay tag",
@@ -201,7 +205,7 @@ func TestEwmBinderMarkerDecayDefersEventTimeShape(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		defer stmts[0].Free()
-		return BuildPlan(opt.CurrentContext(), stmts[0], true)
+		return BuildPlan(opt.CurrentContext(), stmts[0], true, nil)
 	}
 	for _, sql := range []string{
 		"select ewmmean(n_nationkey, ?) over (order by n_nationkey desc) from nation",
@@ -240,6 +244,165 @@ func TestEwmBinderMarkerDecayDefersEventTimeShape(t *testing.T) {
 			require.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tc.want))
 		})
 	}
+}
+
+// TestEwmPreparedNestedConditionalDecay pins the bind acceptance of a
+// prepare-time decay marker nested inside a row-independent conditional
+// (issue #31952): IFNULL and CASE publish VARCHAR/TEXT transport while the
+// marker stays unresolved, so the overload check must read such a decay with
+// the same per-execution deferral a bare marker gets instead of classifying
+// the string type as the tag form — the boolean behind IFNULL(?, 0.5) is the
+// adjust policy, not a half-life. The conditional resolves per execution, so
+// the binder must also keep the row-mode ORDER BY latitude (§7) and flag the
+// plan execution-dependent for the per-execution configuration rebuild (§9).
+func TestEwmPreparedNestedConditionalDecay(t *testing.T) {
+	// the PREPARE binding path: markers bind as prepare-time parameter
+	// expressions instead of the execute statement's ?? rejection
+	runOnePreparedStmt := func(opt Optimizer, t testing.TB, sql string) (*Plan, error) {
+		stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		defer stmts[0].Free()
+		return BuildPlan(opt.CurrentContext(), stmts[0], true, nil)
+	}
+	accepts := []string{
+		// the reported shape: the ewmmean decay marker nested in IFNULL
+		"select ewmmean(n_nationkey, ifnull(?, 0.5), false) over (order by n_nationkey) from nation",
+		// the same marker as the CASE result branch
+		"select ewmmean(n_nationkey, case when ? > 0 then ? else 0.5 end, false) over " +
+			"(order by n_nationkey) from nation",
+		// the whole family shares the one overload checker
+		"select ewmvar(n_nationkey, ifnull(?, 0.5), false) over (order by n_nationkey) from nation",
+		"select ewmstd(n_nationkey, ifnull(?, 0.5), false) over (order by n_nationkey) from nation",
+		"select ewmcov(n_nationkey, n_regionkey, ifnull(?, 0.5), false) over (order by n_nationkey) from nation",
+		"select ewmcorr(n_nationkey, n_regionkey, ifnull(?, 0.5), false) over (order by n_nationkey) from nation",
+		// the conditional keeps the row-mode ORDER BY latitude a bare
+		// marker has: the decay kind resolves per execution
+		"select ewmmean(n_nationkey, ifnull(?, 0.5)) over (order by n_nationkey desc) from nation",
+		"select ewmmean(n_nationkey, ifnull(?, 0.5)) over (order by n_nationkey, n_regionkey) from nation",
+		// the full policy stack behind a conditional decay
+		"select ewmmean(n_nationkey, ifnull(?, 0.5), false, true, 2) over (order by n_nationkey) from nation",
+	}
+	for _, sql := range accepts {
+		t.Run("", func(t *testing.T) {
+			logicPlan, err := runOnePreparedStmt(
+				NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err,
+				"a row-independent conditional decay must prepare like a bare marker")
+			require.NotEmpty(t, logicPlan.GetQuery().Nodes)
+		})
+	}
+	// the conditional decay is execution-dependent: the prepared cache must
+	// rebuild the configuration at every EXECUTE (§9), exactly like a bare
+	// decay marker.
+	flagged, err := runOnePreparedStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"select ewmmean(n_nationkey, ifnull(?, 0.5), false) over (order by n_nationkey) from nation")
+	require.NoError(t, err)
+	require.True(t, PreparedPlanHasEwmParams(flagged),
+		"a conditional decay holds a marker and must stay execution-dependent")
+
+	// the controls stay bound: a nested marker behind an explicit numeric
+	// cast and a literal conditional decay keep preparing, while a
+	// column-dependent conditional decay and a literal non-tag string
+	// decay keep their §7 rejections.
+	preparedControl := func(sql string) func(t *testing.T) {
+		return func(t *testing.T) {
+			logicPlan, err := runOnePreparedStmt(
+				NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+			require.NotEmpty(t, logicPlan.GetQuery().Nodes)
+		}
+	}
+	t.Run("cast control prepares", preparedControl(
+		"select ewmmean(n_nationkey, ifnull(cast(? as double), 0.5), false) over (order by n_nationkey) from nation"))
+	t.Run("literal conditional control prepares", preparedControl(
+		"select ewmmean(n_nationkey, case when 1 > 0 then 0.5 else 0.25 end, false) over (order by n_nationkey) from nation"))
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		want     string
+		prepared bool
+	}{
+		{
+			// the marker keeps this an execution-time statement, so the
+			// constancy verdict is reached on the prepared binding path
+			"column-dependent conditional decay stays rejected",
+			"select ewmmean(n_nationkey, ifnull(?, n_nationkey), false) over (order by n_nationkey) from nation",
+			"ewm statistics require constant decay and policy arguments",
+			true,
+		},
+		{
+			"literal string decay stays rejected",
+			"select ewmmean(n_nationkey, 'span', false) over (order by n_nationkey) from nation",
+			"ewm statistics require a declared decay (alpha or 'halflife' half-life)",
+			false,
+		},
+		{
+			"literal tag without half-life stays rejected",
+			"select ewmmean(n_nationkey, 'halflife', false) over (order by n_nationkey) from nation",
+			"ewm halflife decay requires a strictly positive half-life constant",
+			false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			opt := NewMockOptimizer(true, newPlanTestProcess(t))
+			if tc.prepared {
+				_, err = runOnePreparedStmt(opt, t, tc.sql)
+			} else {
+				_, err = runOneStmt(opt, t, tc.sql)
+			}
+			require.Error(t, err)
+			require.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tc.want))
+		})
+	}
+}
+
+// TestEwmStringDecayRejectsCheckLevel pins the overload-checker view of the
+// string-typed decay transport (issue #31952): a VARCHAR decay is the tag
+// form only when the slot behind it can be a half-life; otherwise the
+// verdict defers to the per-execution boundary, so the reported
+// [DOUBLE, VARCHAR, BOOL] resolve tuple from IFNULL(?, 0.5) passes the
+// checker for every family name, the tag rows keep their shapes, and the
+// policy-slot string rejections stay.
+func TestEwmStringDecayRejectsCheckLevel(t *testing.T) {
+	ctx := context.Background()
+	floatType := types.T_float64.ToType()
+	varcharType := types.T_varchar.ToType()
+	boolType := types.T_bool.ToType()
+	for _, name := range []string{"ewmmean", "ewmvar", "ewmstd", "ewmcov", "ewmcorr"} {
+		t.Run(name, func(t *testing.T) {
+			// the reported tuple: a VARCHAR decay (the conditional's
+			// transport) with the adjust policy behind it; the cov family
+			// carries its second value column ahead of the same decay shape
+			decayArgs := []types.Type{floatType}
+			if name == "ewmcov" || name == "ewmcorr" {
+				decayArgs = append(decayArgs, floatType)
+			}
+			_, err := function.GetFunctionByName(ctx, name,
+				append(decayArgs, varcharType, boolType))
+			require.NoError(t, err,
+				"the IFNULL(?, 0.5) transport tuple must resolve like a bare marker")
+
+			// the tag form keeps its half-life slot for every name
+			_, err = function.GetFunctionByName(ctx, name,
+				append(append([]types.Type(nil), decayArgs...), varcharType, floatType))
+			require.NoError(t, err)
+		})
+	}
+	// the tag form resolves for the cov family's second value position too
+	_, err := function.GetFunctionByName(ctx, "ewmcov",
+		[]types.Type{floatType, floatType, varcharType, floatType})
+	require.NoError(t, err)
+	// a string slot in the policy positions stays rejected
+	_, err = function.GetFunctionByName(ctx, "ewmmean",
+		[]types.Type{floatType, floatType, varcharType})
+	require.Error(t, err)
+	_, err = function.GetFunctionByName(ctx, "ewmmean",
+		[]types.Type{floatType, varcharType, varcharType})
+	require.Error(t, err,
+		"a string behind a non-tag VARCHAR decay is a policy slot and stays out of scope")
 }
 
 // boundEwmWindowFn binds one statement and returns the window function
@@ -456,7 +619,7 @@ func TestEwmMarkerDecayBindsDecimal256HalfLife(t *testing.T) {
 			t.Fatalf("%+v", err)
 		}
 		defer stmts[0].Free()
-		return BuildPlan(opt.CurrentContext(), stmts[0], true)
+		return BuildPlan(opt.CurrentContext(), stmts[0], true, nil)
 	}
 	for _, sql := range []string{
 		"select ewmmean(n_nationkey, ?, cast(1 as decimal(65,0))) over (order by n_nationkey) from nation",

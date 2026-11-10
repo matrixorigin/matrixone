@@ -57,7 +57,7 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 			require.True(t, ok)
 			require.IsType(t, &tree.UnionClause{}, insertStmt.Rows.Select)
 
-			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 			require.NoError(t, err)
 			require.True(t, insertPlanHasNodeType(logicPlan, test.nodeType))
 		})
@@ -79,7 +79,7 @@ func TestParenthesizedInsertSetOperationSourceRemainsSupported(t *testing.T) {
 	require.True(t, ok)
 	require.IsType(t, &tree.ParenSelect{}, insertStmt.Rows.Select)
 
-	logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.NoError(t, err)
 	require.True(t, insertPlanHasNodeType(logicPlan, planpb.Node_UNION_ALL))
 }
@@ -111,7 +111,7 @@ func TestDirectInsertSetOperationReportsBranchWidthError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
 
-	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
 	require.ErrorContains(t, err, "SELECT statements have different number of columns")
 }
 

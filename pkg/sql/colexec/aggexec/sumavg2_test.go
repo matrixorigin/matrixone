@@ -97,7 +97,7 @@ func TestSumAvgScalarFill(t *testing.T) {
 				scalar, batch := newExec(), newExec()
 				defer scalar.Free()
 				defer batch.Free()
-				require.NoError(t, scalar.GroupGrow(2))
+				require.NoError(t, GrowWindowGroups(scalar, 2))
 				require.NoError(t, batch.GroupGrow(2))
 				// Group zero remains empty. Offset/NULL/constant paths must update
 				// only group one, including its count and SUM null bitmap.

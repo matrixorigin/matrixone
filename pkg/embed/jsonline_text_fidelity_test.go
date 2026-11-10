@@ -175,7 +175,10 @@ func TestJSONLineOutfileLoadPreservesTextAndRejectsInvalidUTF8(t *testing.T) {
 		require.Equal(t, []byte("{\"u\":\"file:///tmp/a-valid-b\"}\n"), validDatalinkBytes)
 
 		exec("create table " + database + ".bad_utf8 (s varchar(32))")
-		exec("insert into " + database + ".bad_utf8 values (cast(x'61FF62' as char))")
+		// Invalid UTF-8 reaches the column as raw bytes through the hex
+		// assignment contract. An explicit CAST(x'61FF62' AS CHAR) now
+		// yields NULL + Warning 1300 (#31921) and cannot store the bytes.
+		exec("insert into " + database + ".bad_utf8 values (x'61FF62')")
 		var sourceHex string
 		require.NoError(t, conn.QueryRowContext(ctx, "select hex(s) from "+database+".bad_utf8").Scan(&sourceHex))
 		require.Equal(t, "61FF62", sourceHex)

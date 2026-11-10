@@ -265,7 +265,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
 	// FSP is supplied as the single argument and overrides this below.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -290,7 +290,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	// SYSDATE() follows the same default FSP=0 rule as NOW() and
 	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+	if len(ivecs) == 1 && ivecs[0].Length() > 0 && !ivecs[0].IsConstNull() && !ivecs[0].IsNull(0) {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
@@ -496,9 +496,10 @@ const (
 	defaultExpr
 	typNormal
 	typWithLen
-	defExprInShowColumns       = 4 //default expr in the show columns.
-	generatedExprOrigin  uint8 = 5 // generated column expression origin string
-	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	defExprInShowColumns        = 4 //default expr in the show columns.
+	generatedExprOrigin   uint8 = 5 // generated column expression origin string
+	generatedExprExtra    uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
+	generatedDefaultExtra uint8 = 7 // expression default Extra: "DEFAULT_GENERATED" or ""
 )
 
 // Geometry subtype and SRID live in the column type's Scale and Width (see
@@ -566,10 +567,19 @@ func geometryShowColumnType(typ *types.Type) string {
 
 // columnDefaultValue renders a stored default for information_schema.COLUMNS
 // and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
-// its value, like MySQL. Other defaults keep their origin text.
-func columnDefaultValue(origin string) []byte {
+// its value, like MySQL. Expression-classified defaults keep their origin
+// text; literal-classified DECIMAL/BIT defaults render the resolved value at
+// the declared type (issue #31161), and every unrecognized shape falls back
+// to the origin text.
+func columnDefaultValue(def *plan.Default) []byte {
+	origin := def.OriginString
 	if origin == "" || strings.EqualFold(origin, "null") {
 		return nil
+	}
+	if !isExpressionDefault(def.Expr, origin) {
+		if rendered, ok := renderTypedLiteralDefault(def); ok {
+			return functionUtil.QuickStrToBytes(rendered)
+		}
 	}
 	n := len(origin)
 	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
@@ -593,10 +603,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 	tp, null := p2.GetValue(0)
 	if null {
-		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 6], but got NULL")
+		return moerr.NewNotSupported(proc.Ctx, "show visible bin, the second argument must be in [0, 7], but got NULL")
 	}
-	if tp > generatedExprExtra {
-		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 6], but got %d", tp))
+	if tp > generatedDefaultExtra {
+		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("show visible bin, the second argument must be in [0, 7], but got %d", tp))
 	}
 
 	var f func(s []byte) ([]byte, error)
@@ -618,7 +628,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return columnDefaultValue(def.OriginString), nil
+			return columnDefaultValue(def), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
@@ -670,7 +680,23 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return columnDefaultValue(def.OriginString), nil
+			return columnDefaultValue(def), nil
+		}
+	case generatedDefaultExtra:
+		// EXTRA for a column default: DEFAULT_GENERATED for an expression
+		// default, empty otherwise (issue #31161). The SQL surfaces compare
+		// length(...) > 0, so a literal default returns a non-NULL empty
+		// string.
+		f = func(s []byte) ([]byte, error) {
+			def := new(plan.Default)
+			err := types.Decode(s, def)
+			if err != nil {
+				return nil, err
+			}
+			if isExpressionDefault(def.Expr, def.OriginString) {
+				return functionUtil.QuickStrToBytes(defaultGeneratedExtra), nil
+			}
+			return []byte{}, nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
@@ -5360,6 +5386,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			return err
 		}
 		if isNull {
+			// Invalid bytes for the requested charset already produced NULL;
+			// attach the boundary diagnostic MySQL requires (Warning 1300).
+			appendBinaryToTextUtf8Warning(proc, value)
 			err = rs.AppendMustNullForBytesResult()
 		} else {
 			err = rs.AppendMustBytesValue(value)

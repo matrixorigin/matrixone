@@ -636,6 +636,10 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			if err != nil {
 				return err
 			}
+		} else {
+			// A hidden-key value is deliberately redacted. An empty pair of
+			// parentheses would instead suggest an empty IN set.
+			buf.WriteString("<opaque>")
 		}
 		buf.WriteString(")")
 	case function.EXISTS_ANY_PREDICATE:

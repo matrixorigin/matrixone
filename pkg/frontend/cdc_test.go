@@ -783,6 +783,93 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// setupCreateCDCTimestampTest stubs the source/sink connection probe and the
+// PITR admission so option validation reaches the StartTs/EndTs handling, and
+// returns a CreateCDC request builder that always carries a valid table level.
+func setupCreateCDCTimestampTest(t *testing.T) (newCreate func(option ...string) *tree.CreateCDC) {
+	pu := config.ParameterUnit{}
+	pu.TaskService = &testTaskService{}
+	setPu("", &pu)
+
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
+		return nil
+	})
+	t.Cleanup(stubCheckPitr.Reset)
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	t.Cleanup(stubCheckPitrWithExclude.Reset)
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
+	})
+	t.Cleanup(stubOpenDbConn.Reset)
+
+	levelOpt := []string{cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table}
+	return func(option ...string) *tree.CreateCDC {
+		return &tree.CreateCDC{
+			TaskName:  "task1",
+			SourceUri: "mysql://root:111@127.0.0.1:6001",
+			SinkType:  cdc.CDCSinkType_MySQL,
+			SinkUri:   "mysql://root:111@127.0.0.1:3306",
+			Tables:    "db1.t1:db1.t1",
+			Option:    append(levelOpt, option...),
+		}
+	}
+}
+
+// Test_doCreateCdc_startTsEndTsFractionalPrecision locks the documented
+// persistence contract in the frontend option-validation path: fractional
+// RFC3339 boundaries persist at full precision for both options.
+func Test_doCreateCdc_startTsEndTsFractionalPrecision(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	newCreate := setupCreateCDCTimestampTest(t)
+
+	var opts CDCCreateTaskOptions
+	create := newCreate(
+		cdc.CDCRequestOptions_StartTs, "2026-11-06T03:02:35.123Z",
+		cdc.CDCRequestOptions_EndTs, "2026-11-07T03:02:35.123456789Z",
+	)
+	require.NoError(t, opts.ValidateAndFill(context.Background(), ses, create))
+	require.Equal(t, "2026-11-06T03:02:35.123Z", opts.StartTs)
+	require.Equal(t, "2026-11-07T03:02:35.123456789Z", opts.EndTs)
+}
+
+// Test_doCreateCdc_startTsEndTsZoneDisclosureError locks the documented
+// diagnostic contract in the frontend option-validation path: an invalid
+// StartTs or EndTs value fails with an error that discloses the
+// session-time-zone interpretation of the unzoned format.
+func Test_doCreateCdc_startTsEndTsZoneDisclosureError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	newCreate := setupCreateCDCTimestampTest(t)
+
+	var opts CDCCreateTaskOptions
+	err := opts.ValidateAndFill(context.Background(), ses, newCreate(
+		cdc.CDCRequestOptions_StartTs, "123456",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+
+	err = opts.ValidateAndFill(context.Background(), ses, newCreate(
+		cdc.CDCRequestOptions_EndTs, "not-a-time",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+}
+
 type testTaskData struct {
 	metadata task.TaskMetadata
 	details  *task.Details
@@ -6212,6 +6299,18 @@ func TestCDCStrToTSRoundTripPreservesLogicalTime(t *testing.T) {
 	legacy, err := CDCStrToTS("2026-09-09T01:02:03.456789Z")
 	require.NoError(t, err)
 	require.Equal(t, int64(0), int64(legacy.Logical()))
+}
+
+// TestCDCStrToTSPersistedBoundaryZoneIndependent proves that the persisted
+// StartTs/EndTs boundary (RFC3339 with the offset applied at creation) is
+// re-parsed into the identical physical timestamp no matter which session
+// later loads the task row: CDCStrToTS takes no time zone.
+func TestCDCStrToTSPersistedBoundaryZoneIndependent(t *testing.T) {
+	fromUTC, err := CDCStrToTS("2025-01-02T03:04:05Z")
+	require.NoError(t, err)
+	fromCST, err := CDCStrToTS("2025-01-02T11:04:05+08:00")
+	require.NoError(t, err)
+	require.Equal(t, fromUTC, fromCST)
 }
 
 func TestCDCParseGranularityTuple(t *testing.T) {

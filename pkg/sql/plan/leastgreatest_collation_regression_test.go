@@ -51,7 +51,7 @@ func TestLeastGreatestCollationSQLNull(t *testing.T) {
 					stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+name+"("+call+")", 1)
 					require.NoError(t, err)
 					defer stmt.Free()
-					built, err := BuildPlan(ctx, stmt, false)
+					built, err := BuildPlan(ctx, stmt, false, nil)
 					require.NoError(t, err)
 					qry := built.GetQuery()
 					expr := qry.Nodes[qry.Steps[0]].ProjectList[0]
@@ -96,7 +96,7 @@ func TestLeastGreatestCollationPersistedAdmissionAndViewRead(t *testing.T) {
 			return nil, err
 		}
 		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false, nil)
 	}
 	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
 	typ.CollationVersion = 1

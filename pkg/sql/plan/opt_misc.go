@@ -247,6 +247,14 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 		// residual and enumerate every duplicate-key match.
 		return false
 	}
+	if _, protected := builder.materializedLockKeyProjects[node.NodeId]; protected {
+		// The barrier CHECK/FK FILTER consumes this project's computed
+		// unique lock-key columns positionally, and the restored row image
+		// exports them as columns to every downstream writer. Inlining the
+		// project would re-evaluate the key expression once per consumer
+		// after arbitration rows were already filtered.
+		return false
+	}
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
 		return false
 	}
@@ -2307,6 +2315,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
 			continue
 		}
+		// A case-insensitive collation makes LIKE fold case, while the
+		// byte-ordered =/prefix_eq rewrite cannot. Keep the folding LIKE
+		// predicate so index and scan paths agree (issue #31175).
+		if types.IsCaseInsensitiveCollation(uint8(fn.Args[0].Typ.Charset)) {
+			continue
+		}
 		if _, usable := prefixStringDomain(fn.Args[0].Typ); !usable {
 			continue
 		}
@@ -2401,7 +2415,7 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		node.Stats.ForceOneCN = force
+		node.Stats.ForceOneCN = force || CapturedExecutionIndexScan(node)
 	} else if node.NodeType == plan.Node_JOIN {
 		if node.JoinType == plan.Node_DEDUP && !node.Stats.HashmapStats.Shuffle {
 			force = true
@@ -2555,16 +2569,17 @@ func (builder *QueryBuilder) sortRollupMode() int {
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
+func (builder *QueryBuilder) optimizeFilters(rootID int32, pointBudget *uint64) (int32, compositePointCapture, error) {
+	points := compositePointCapture{remaining: pointBudget}
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
-		return rootID, err
+		return rootID, points, err
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false, &points)
 	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
@@ -2574,7 +2589,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID, nil
+	points.snapshot()
+	return rootID, points, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring
@@ -2609,7 +2625,7 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
+			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil, nil)
 			if e != nil {
 				err = e
 				return

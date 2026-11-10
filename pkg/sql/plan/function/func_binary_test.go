@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -4893,9 +4894,13 @@ func TestFindInSetEmptyStringListInt32ResultWrapper(t *testing.T) {
 func TestFindInSetListBoundaries(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	// Pin the boundary scan to the byte domain: under the default general_ci
+	// varchar charset the needle "A" fold-matches the member "a" (issue
+	// #31175), which the dedicated collation tests cover instead.
+	binary := types.T_varbinary.ToType()
 	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", "", "a", "b", "A", "x,y", "\xff", "a"}, []bool{false, false, false, false, false, false, false, false, false, true}),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", ",", "a,", ",a", "a,a", "a,,b", "a,A", "x,y", "\x00,\xff", "a"}, nil),
+		NewFunctionTestInput(binary, []string{"", "", "", "", "a", "b", "A", "x,y", "\xff", "a"}, []bool{false, false, false, false, false, false, false, false, false, true}),
+		NewFunctionTestInput(binary, []string{"", ",", "a,", ",a", "a,a", "a,,b", "a,A", "x,y", "\x00,\xff", "a"}, nil),
 	}
 	nulls := []bool{false, false, false, false, false, false, false, false, false, true}
 	for _, tc := range []struct {
@@ -4912,6 +4917,282 @@ func TestFindInSetListBoundaries(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
+}
+
+// Issue #31175: FIND_IN_SET honors the resolved collation of its string-list
+// operand, exactly as LOCATE/INSTR/POSITION already do. A case-insensitive
+// list collation folds membership; the legacy byte identity and binary lists
+// stay case-sensitive.
+func TestFindInSetHonorsCollationCaseFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+
+	t.Run("ci list folds membership", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"A", "B", "z", "a,b", ""}, nil),
+				NewFunctionTestInput(text, []string{"a,b", "a,b", "a,b", "a,b", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{1, 2, 0, 0, 0}, []bool{false, false, false, false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("legacy byte identity stays case sensitive", func(t *testing.T) {
+		legacy := types.T_varchar.ToType()
+		legacy.Charset = types.CharsetLegacy
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"A", "a"}, nil),
+				NewFunctionTestInput(legacy, []string{"a,b", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 1}, []bool{false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("binary list stays case sensitive", func(t *testing.T) {
+		binary := types.T_varbinary.ToType()
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"A", "a"}, nil),
+				NewFunctionTestInput(binary, []string{"a,b", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 1}, []bool{false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	// MySQL resolves the FIND_IN_SET comparison collation from both
+	// arguments: a binary needle that reaches the executor unconverted keeps
+	// the byte-wise membership test (issue #31175 review).
+	t.Run("binary needle stays case sensitive", func(t *testing.T) {
+		binary := types.T_varbinary.ToType()
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(binary, []string{"A", "a"}, nil),
+				NewFunctionTestInput(text, []string{"a,b", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 1}, []bool{false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("per row runtime binary needle stays byte ordered", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"A", "B"}, nil),
+				NewFunctionTestInput(text, []string{"a,b", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 2}, []bool{false, false}),
+			FindInSet,
+		)
+		require.NoError(t, caseData.parameters[0].SetRuntimeStringDomainAtWithMP(
+			0, types.RuntimeStringBinary, proc.Mp()))
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	// The sigma fold orbit (U+03A3/U+03C3/U+03C2) collapses in membership,
+	// matching MySQL's shared 0x03A3 weight (issue #31175 review).
+	t.Run("sigma family folds membership", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"ς", "σ"}, nil),
+				NewFunctionTestInput(text, []string{"σ,Σ", "Σ,ς"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{1, 1}, []bool{false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	// Issue #31175 review: a utf8mb4_general_ci list compares per-character
+	// collation weights, folding accented and dotless-i pairs (á=a, ı=I)
+	// without multi-character expansions (ß=s but ß≠ss).
+	t.Run("general ci list compares collation weights", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"á", "ı", "ß", "ß"}, nil),
+				NewFunctionTestInput(text, []string{"a,b", "I,x", "s,x", "ss,x"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{1, 1, 1, 0}, []bool{false, false, false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	// Issue #31175 review: a utf8mb4_unicode_ci list compares the same
+	// collation keys as =/IN: the U+00DF expansion matches "ss" and œ
+	// matches oe, while ı keeps its own weight and æ is not ae.
+	t.Run("unicode ci list compares collation keys", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"ß", "ı", "œ", "æ", "á"}, nil),
+				NewFunctionTestInput(ucaText, []string{"ss,x", "I,x", "oe,y", "ae,y", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{1, 0, 1, 0, 1}, []bool{false, false, false, false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	// MySQL compares FIND_IN_SET list members with the unpadded
+	// my_strnncoll, so trailing spaces stay significant even under a
+	// PAD SPACE collation: 'a' matches the member 'a' at position 2, not
+	// the member 'a ' at position 1 (issue #31175 review).
+	t.Run("unicode ci list keeps trailing spaces significant", func(t *testing.T) {
+		ucaText := types.T_varchar.ToType()
+		ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(ucaText, []string{"a", "a ", "a", "", "ß"}, nil),
+				NewFunctionTestInput(ucaText, []string{"a ,a", "a,b", "a , a", "a,,b", "ss,x"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{2, 0, 0, 2, 1}, []bool{false, false, false, false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	// The general_ci path already compares per-character weights with the
+	// space weight intact, so it never equated 'a ' with 'a' (control).
+	t.Run("general ci list keeps trailing spaces significant", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"a", "a "}, nil),
+				NewFunctionTestInput(text, []string{"a ,a", "a,b"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{2, 0}, []bool{false, false}),
+			FindInSet,
+		)
+		succeed, info := caseData.RunAndFree()
+		require.True(t, succeed, info)
+	})
+}
+
+// Issue #31175 round-18 review: the needle's comparison representation is
+// row-invariant, so the member loop must pay its transformation once per
+// row. Before the repair, this shape folded (general_ci) or re-keyed
+// (unicode_ci) the whole needle for every unsuccessful list member —
+// FIND_IN_SET(REPEAT('z',60000), REPEAT('a,',30000)) allocated roughly
+// 1.8e9 bytes of needle copies. The budget below sits two orders of
+// magnitude under that defect while staying far above the inherent
+// per-member member-side work, which continues.
+func TestFindInSetNeedlePreparedOncePerRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	ucaText := types.T_varchar.ToType()
+	ucaText.Charset = types.CharsetUTF8MB4UnicodeCI
+	const allocBudget = uint64(256 << 20)
+
+	run := func(t *testing.T, listType types.Type, needle, list string) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{needle}, nil),
+				NewFunctionTestInput(listType, []string{list}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0}, []bool{false}),
+			FindInSet,
+		)
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		succeed, info := caseData.RunAndFree()
+		runtime.ReadMemStats(&after)
+		require.True(t, succeed, info)
+		allocated := after.TotalAlloc - before.TotalAlloc
+		t.Logf("needle %d bytes, list %d bytes: evaluation allocated %d bytes",
+			len(needle), len(list), allocated)
+		require.LessOrEqual(t, allocated, allocBudget)
+	}
+
+	// No matching member: every member pays the comparison, so a
+	// per-member needle transformation shows its full cost here.
+	t.Run("general ci fold", func(t *testing.T) {
+		run(t, text, strings.Repeat("z", 60000), strings.Repeat("a,", 30000))
+	})
+	t.Run("unicode ci collation key", func(t *testing.T) {
+		run(t, ucaText, strings.Repeat("z", 20000), strings.Repeat("a,", 10000))
+	})
+}
+
+// Issue #31175 round-18 review: a long member scan probes the context
+// every 1024 members so it stays interruptible. A list well past the
+// probe interval with no matching member returns the context's error
+// instead of scanning to the end.
+func TestFindInSetMemberScanCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	list := strings.Repeat("a,", 3000)
+	build := func() FunctionTestCase {
+		return NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(text, []string{"z"}, nil),
+				NewFunctionTestInput(text, []string{list}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0}, []bool{false}),
+			FindInSet,
+		)
+	}
+
+	t.Run("cancelled context interrupts the scan", func(t *testing.T) {
+		caseData := build()
+		defer caseData.Free()
+		previous := proc.Ctx
+		ctx, cancel := context.WithCancel(previous)
+		cancel()
+		proc.Ctx = ctx
+		defer func() { proc.Ctx = previous }()
+		_, err := caseData.DebugRun()
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("live context completes the same scan", func(t *testing.T) {
+		caseData := build()
+		defer caseData.Free()
+		value, err := caseData.DebugRun()
+		require.NoError(t, err)
+		require.NotNil(t, value)
+	})
 }
 
 func TestFindInSetSetDefinition(t *testing.T) {

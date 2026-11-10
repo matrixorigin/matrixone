@@ -181,6 +181,8 @@ const (
 	ErrIndexVectorOutOfRange  uint16 = 20348
 	ErrIndexTooManyBadRecords uint16 = 20349
 	ErrIndexAllRowsBad        uint16 = 20350
+	ErrIndexInvalidJSON       uint16 = 20351
+	ErrIndexDatalink          uint16 = 20352
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -547,6 +549,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrIndexVectorOutOfRange:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector element is out of the range the index stores: %s"},
 	ErrIndexTooManyBadRecords:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store more than max_bad_records = %d rows; row %s: %s"},
 	ErrIndexAllRowsBad:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store any of the %d rows; row %s: %s"},
+	ErrIndexInvalidJSON:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the text the index parses as JSON is not valid JSON: %s"},
+	ErrIndexDatalink:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot read the datalink: %s"},
 	// Truncating/dropping an FK-referenced parent is a defined user error, not
 	// an internal failure. Texts, SQLSTATEs and MySQL numbers mirror the
 	// upstream table in mysql_error_define.go (ER_TRUNCATE_ILLEGAL_FK 1701
@@ -615,7 +619,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNoDB:                                     {ER_NO_DB_ERROR, []string{"3D000"}, "No database selected"},
 	ErrNoWorkingStore:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no working store"},
 	ErrNoHAKeeper:                               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot locate ha keeper"},
-	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn, shard %d already truncated to %d"},
+	ErrInvalidTruncateLsn:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid truncate lsn for shard %d at boundary %d"},
 	ErrNotLeaseHolder:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not lease holder, current lease holder ID %d"},
 	ErrDBAlreadyExists:                          {ER_DB_CREATE_EXISTS, []string{MySQLDefaultSqlState}, "database %s already exists"},
 	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{"42S01"}, "table %s already exists"},

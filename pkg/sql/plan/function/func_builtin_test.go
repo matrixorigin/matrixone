@@ -3562,6 +3562,27 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 	}
 }
 
+func TestTimestampFunctionsIgnoreNullPrecisionValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := vector.NewVec(types.T_int64.ToType())
+	defer arg.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(arg, int64(6), false, proc.Mp()))
+	arg.SetNull(0) // A reused non-constant vector can retain its previous data.
+	for _, tc := range []struct {
+		name string
+		fn   executeLogicOfOverload
+	}{{"now", builtInCurrentTimestamp}, {"sysdate", builtInSysdate}} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, tc.fn([]*vector.Vector{arg}, result, proc, 1, nil))
+			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
+		})
+	}
+}
+
 // TestBuiltInCurrentTimestampReadsStatementTimePerExecution reuses the same
 // overload ID while changing the statement timestamp. This mirrors repeated
 // executions of a cached NOW() plan and proves the value is read at execution
@@ -4313,7 +4334,11 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 		want  string
 	}{
 		{"x", typWithLen, "short type encoding"},
-		{string(encoded), 255, "the second argument must be in [0, 6]"},
+		{string(encoded), 255, "the second argument must be in [0, 7]"},
+		// Every default-decoding mode surfaces the payload decode error.
+		{"x", defaultExpr, "unexpected EOF"},
+		{"x", defExprInShowColumns, "unexpected EOF"},
+		{"x", generatedDefaultExtra, "unexpected EOF"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
@@ -4326,6 +4351,19 @@ func Test_BuiltIn_MoShowVisibleBinInvalidInput(t *testing.T) {
 			require.Zero(t, testCase.result.GetResultVector().Length())
 		})
 	}
+
+	// A NULL mode argument is rejected before any payload decoding.
+	t.Run("null mode", func(t *testing.T) {
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0}, []bool{true}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInMoShowVisibleBin)
+		t.Cleanup(testCase.Free)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		require.ErrorContains(t, testCase.fn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil),
+			"the second argument must be in [0, 7], but got NULL")
+		require.Zero(t, testCase.result.GetResultVector().Length())
+	})
 }
 
 func TestEmptyDomainVisibleMetadata(t *testing.T) {

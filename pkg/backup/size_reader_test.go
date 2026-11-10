@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -372,6 +373,241 @@ func TestBackupSizedCopyLogicalLocalSize(t *testing.T) {
 			require.NoError(t, err)
 			require.EqualValues(t, len(data), dst.size)
 			require.Equal(t, data, dst.data)
+		})
+	}
+}
+
+// emptyContentSHA256Hex is the well-known FIPS 180-4 SHA-256 digest of the
+// empty input, used as an independent oracle instead of deriving it from the
+// helper or the package's own hashing code.
+const emptyContentSHA256Hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// TestChecksumFileReadEOFProvesEmptyObject drives the package-local
+// checksumFile helper against read-open failures that surface EOF, like the
+// MinIO SDK does for a zero-length object, and pins which outcomes may
+// resolve to the empty-content checksum.
+func TestChecksumFileReadEOFProvesEmptyObject(t *testing.T) {
+	t.Run("verified_empty", func(t *testing.T) {
+		src := &backupSizedSource{size: 0, readErr: io.EOF}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.NoError(t, err)
+		want, err := hex.DecodeString(emptyContentSHA256Hex)
+		require.NoError(t, err)
+		require.Equal(t, want, sum)
+		require.Equal(t, 1, src.reads)
+		require.Equal(t, 1, src.stats)
+		require.Equal(t, "object", src.statName)
+	})
+	t.Run("non_empty_keeps_read_failure", func(t *testing.T) {
+		src := &backupSizedSource{size: 4, readErr: io.EOF}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, io.EOF)
+		require.Nil(t, sum)
+		require.Equal(t, 1, src.stats)
+	})
+	t.Run("negative_size_keeps_read_failure", func(t *testing.T) {
+		src := &backupSizedSource{size: -1, readErr: io.EOF}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, io.EOF)
+		require.Nil(t, sum)
+		require.Equal(t, 1, src.stats)
+	})
+	t.Run("missing_object_surfaces_stat_error", func(t *testing.T) {
+		src := &backupSizedSource{
+			size:    0,
+			readErr: io.EOF,
+			statErr: moerr.NewFileNotFoundNoCtx("object"),
+		}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+		require.Nil(t, sum)
+	})
+	t.Run("stat_error_surfaces", func(t *testing.T) {
+		statErr := errors.New("head not answerable")
+		src := &backupSizedSource{size: 0, readErr: io.EOF, statErr: statErr}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, statErr)
+		require.Nil(t, sum)
+	})
+	t.Run("stat_canceled_keeps_causality", func(t *testing.T) {
+		src := &backupSizedSource{size: 0, readErr: io.EOF, statErr: context.Canceled}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, sum)
+	})
+	t.Run("canceled_ctx_with_size_zero_stat_is_not_green", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		// The stub ignores ctx, so a zero-size stat must still not bypass
+		// the caller's cancellation causality.
+		src := &backupSizedSource{size: 0, readErr: io.EOF}
+		sum, err := checksumFile(ctx, src, "object")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, sum)
+	})
+	t.Run("read_canceled_is_not_probed", func(t *testing.T) {
+		src := &backupSizedSource{size: 0, readErr: context.Canceled}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, sum)
+		require.Zero(t, src.stats)
+	})
+	t.Run("read_eof_joined_with_cancel_keeps_causality", func(t *testing.T) {
+		src := &backupSizedSource{size: 0, readErr: errors.Join(io.EOF, context.Canceled)}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, sum)
+		// A cancellation carried by the read error keeps its cause without
+		// probing for emptiness.
+		require.Zero(t, src.stats)
+	})
+}
+
+// backupEOFAttachReadFS hands over a reader even though Read fails, which
+// callers must still close exactly once; implementations are free to do so.
+type backupEOFAttachReadFS struct {
+	fileservice.FileService
+	name      string
+	entrySize int64
+	readErr   error
+	reader    io.ReadCloser
+	onStat    func()
+	reads     int
+	stats     int
+}
+
+func (f *backupEOFAttachReadFS) Read(_ context.Context, vector *fileservice.IOVector) error {
+	f.reads++
+	if f.reader != nil {
+		*vector.Entries[0].ReadCloserForRead = f.reader
+	}
+	return f.readErr
+}
+
+func (f *backupEOFAttachReadFS) StatFile(context.Context, string) (*fileservice.DirEntry, error) {
+	f.stats++
+	if f.onStat != nil {
+		f.onStat()
+	}
+	return &fileservice.DirEntry{Name: f.name, Size: f.entrySize}, nil
+}
+
+type backupCloseCountingReader struct {
+	closeErr error
+	closes   int
+}
+
+func (backupCloseCountingReader) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (c *backupCloseCountingReader) Close() error {
+	c.closes++
+	return c.closeErr
+}
+
+func TestChecksumFileReadEOFAttachedReader(t *testing.T) {
+	t.Run("close_error_is_not_verified", func(t *testing.T) {
+		rc := &backupCloseCountingReader{closeErr: errors.New("close boom")}
+		src := &backupEOFAttachReadFS{
+			name: "object", entrySize: 0, readErr: io.EOF, reader: rc,
+		}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorContains(t, err, "close boom")
+		require.Nil(t, sum)
+		require.Equal(t, 1, rc.closes)
+		require.Equal(t, 1, src.reads)
+		require.Zero(t, src.stats)
+	})
+	t.Run("closed_once_then_proved_empty", func(t *testing.T) {
+		rc := &backupCloseCountingReader{}
+		src := &backupEOFAttachReadFS{
+			name: "object", entrySize: 0, readErr: io.EOF, reader: rc,
+		}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.NoError(t, err)
+		want, err := hex.DecodeString(emptyContentSHA256Hex)
+		require.NoError(t, err)
+		require.Equal(t, want, sum)
+		require.Equal(t, 1, rc.closes)
+		require.Equal(t, 1, src.stats)
+	})
+	t.Run("cancel_keeps_causality_over_close_error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		rc := &backupCloseCountingReader{closeErr: errors.New("close boom")}
+		src := &backupEOFAttachReadFS{
+			name: "object", entrySize: 0, readErr: io.EOF, reader: rc,
+		}
+		sum, err := checksumFile(ctx, src, "object")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, sum)
+		require.Equal(t, 1, rc.closes)
+	})
+	t.Run("non_empty_target_keeps_read_failure", func(t *testing.T) {
+		rc := &backupCloseCountingReader{}
+		src := &backupEOFAttachReadFS{
+			name: "object", entrySize: 7, readErr: io.EOF, reader: rc,
+		}
+		sum, err := checksumFile(t.Context(), src, "object")
+		require.ErrorIs(t, err, io.EOF)
+		require.Nil(t, sum)
+		require.Equal(t, 1, rc.closes)
+		require.Equal(t, 1, src.stats)
+	})
+}
+
+// TestChecksumFileReadEOFCausePrecedence pins the two root-reviewed cause
+// rules for a read-EOF target: a cancellation carried by the read error must
+// survive a later close failure instead of being replaced by it, and a
+// cancellation observed during the stat must be returned before any
+// substitute size-based read failure.
+func TestChecksumFileReadEOFCausePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal error
+		closeErr error
+	}{
+		{"canceled_clean_close", context.Canceled, nil},
+		{"canceled_close_failure", context.Canceled, errors.New("close boom")},
+		{"deadline_clean_close", context.DeadlineExceeded, nil},
+		{"deadline_close_failure", context.DeadlineExceeded, errors.New("close boom")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := &backupCloseCountingReader{closeErr: tc.closeErr}
+			src := &backupEOFAttachReadFS{
+				name: "object", entrySize: 0,
+				readErr: errors.Join(io.EOF, tc.terminal), reader: rc,
+			}
+			sum, err := checksumFile(t.Context(), src, "object")
+			require.ErrorIs(t, err, tc.terminal)
+			require.Nil(t, sum)
+			require.Equal(t, 1, rc.closes)
+			require.Zero(t, src.stats)
+			if tc.closeErr != nil {
+				// The close failure is recorded without replacing the read
+				// cancellation cause.
+				require.ErrorContains(t, err, "close boom")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		size int64
+	}{
+		{"nonzero_size", 7},
+		{"negative_size", -1},
+	} {
+		t.Run("stat_cancel_"+tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			src := &backupEOFAttachReadFS{
+				name: "object", entrySize: tc.size, readErr: io.EOF,
+			}
+			src.onStat = cancel
+			sum, err := checksumFile(ctx, src, "object")
+			require.ErrorIs(t, err, context.Canceled)
+			require.NotErrorIs(t, err, io.EOF)
+			require.Nil(t, sum)
+			require.Equal(t, 1, src.stats)
 		})
 	}
 }
