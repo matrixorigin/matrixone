@@ -153,3 +153,26 @@ never permits unchecked bytes into the trusted query path. Complete admission
 remains mandatory for every published document version, including unselected
 descendants. Tests must cover both overloads, active versus skipped corruption,
 error precedence, and allocation/cancellation failures before acceptance.
+
+### Accounted cache pins (candidate revision 30)
+
+A retained cache lease prevents eviction while any reader, window, selection or
+result remains live. Reporting its size is not itself an admission charge. The
+private cache reader must reserve the cache allocation's physical capacity
+against the existing statement account before retaining it; the last shared
+reader/result release returns that charge exactly once. An explicit vector
+allocation selection uses its existing capacity class and account. Where that
+selection is absent, the SQL scan supplies its existing execution-generation
+transient-memory admission. An internal caller that supplies neither cannot
+borrow the cache owner: it constructs an accounted private snapshot instead.
+
+Reservation failure or cancellation is terminal and must leave the cache
+reference, source version and all accounts unchanged. Selection and window
+views share the owner's single pin charge; row-mapping allocations retain their
+existing separate accounting. Only a requested JSON_VALUE scan installs the
+admission callback. The physical capacity, rather than logical payload length,
+is charged; no cache flag or lease alone grants immutability.
+
+Review decision: the earlier size-only cache lease does not meet statement
+accounting and is rejected. Accounted/unaccounted-call paths, bounded failure,
+retained result lifetime, and real SQL performance must be revalidated.
