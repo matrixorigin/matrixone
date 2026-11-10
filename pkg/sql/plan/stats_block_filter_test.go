@@ -46,8 +46,10 @@ func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
 		name     string
 		statsErr bool
 		disabled bool
+		ordinary bool
 	}{
 		{name: "missing"}, {name: "error", statsErr: true}, {name: "disabled", disabled: true},
+		{name: "ordinary", ordinary: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			compCtx := &zoneMapStatsTestCompilerContext{MockCompilerContext: &MockCompilerContext{ctx: ctx}}
@@ -55,7 +57,7 @@ func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
 				compCtx.err = errors.New("statistics unavailable")
 			}
 			builder := NewQueryBuilder(planpb.Query_SELECT, compCtx, false, false)
-			builder.optimizerHints = &OptimizerHints{blockFilter: 1}
+			builder.optimizerHints = &OptimizerHints{}
 			if tc.disabled {
 				builder.optimizerHints.blockFilter = 2
 			}
@@ -66,22 +68,35 @@ func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
 			oldB := bind("prefix_eq", compoundCol, MakePlan2StringConstExprWithType("composite"))
 			oldList := []*planpb.Expr{oldA, oldB}
 			newPrefix := prefix("new")
+			newPrefixIn := builder.replaceNonEqualCondition(
+				&planpb.IndexDef{Parts: []string{"k", catalog.CreateAlias(catalog.CPrimaryKeyColName)}},
+				makeStringInFilterExpr(1, 1, "a", "b"), 1, makeTestIndexTableDef(),
+			)
+			require.Equal(t, "prefix_in", newPrefixIn.GetF().Func.ObjName)
 			simple := bind("=", intCol, MakePlan2Int64ConstExprWithType(7))
+			volatile := bind(">", intCol, bind("rand"))
 			node := &planpb.Node{
 				NodeType: planpb.Node_TABLE_SCAN,
 				ObjRef:   &planpb.ObjectRef{Obj: 42},
 				TableDef: &planpb.TableDef{Name: catalog.IndexTableNamePrefix + "test", Pkey: &planpb.PrimaryKeyDef{PkeyColName: "compound", Names: []string{"id", "other"}},
 					Name2ColIndex: map[string]int32{"id": 0, "k": 1, "compound": 2, "other": 3},
 					Cols:          []*planpb.ColDef{{Name: "id", Typ: intCol.Typ}, {Name: "k", Typ: strCol.Typ}, {Name: "compound", Typ: compoundCol.Typ}, {Name: "other", Typ: intCol.Typ}}},
-				BindingTags: []int32{1}, FilterList: []*planpb.Expr{simple, newPrefix}, BlockFilterList: oldList,
+				BindingTags: []int32{1}, FilterList: []*planpb.Expr{simple, newPrefix, newPrefixIn, volatile}, BlockFilterList: oldList,
+			}
+			if tc.ordinary {
+				node.TableDef.Name = "ordinary"
 			}
 			for range 2 {
 				require.Equal(t, DefaultStats(), calcScanStats(node, builder))
 				if tc.disabled {
 					require.Empty(t, node.BlockFilterList)
 				} else {
-					require.Len(t, node.BlockFilterList, 3)
-					for _, expected := range []*planpb.Expr{oldA, oldB, simple} {
+					want := []*planpb.Expr{oldA, oldB, simple}
+					if !tc.ordinary {
+						want = append(want, newPrefix, newPrefixIn)
+					}
+					require.Len(t, node.BlockFilterList, len(want))
+					for _, expected := range want {
 						found := false
 						for _, actual := range node.BlockFilterList {
 							found = found || blockFilterSemanticallyEquivalent(expected, actual)
@@ -89,6 +104,7 @@ func TestMissingStatsPreservesExistingBlockFilters(t *testing.T) {
 						require.True(t, found, "existing and simple filters must survive")
 					}
 				}
+				require.Equal(t, []*planpb.Expr{simple, newPrefix, newPrefixIn, volatile}, node.FilterList)
 				require.Equal(t, []*planpb.Expr{oldA, oldB}, oldList, "must not overwrite a shared input slice")
 			}
 		})

@@ -1753,11 +1753,11 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
 		}
 		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。
-		// 简单比较仍下推；其余表达式保留既有成本策略及语义安全检查。
-		admit := isSimpleZoneMapFilter(filter)
+		// 简单比较和索引表过滤仍下推；其余表达式保留既有成本策略。
+		// 所有过滤仍须通过 ZoneMap 语义安全检查。
+		admit := isSimpleZoneMapFilter(filter) || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix)
 		if s != nil {
-			admit = admit || hint == 1 || currentBlockSel < 1 ||
-				strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix)
+			admit = admit || hint == 1 || currentBlockSel < 1
 		}
 		if hint != 2 && admit &&
 			ExprIsZonemappable(builder.GetContext(), filter) {
