@@ -30,6 +30,7 @@ import (
 func (loopJoin *LoopJoin) prepareMembership() {
 	ctr := &loopJoin.ctr
 	ctr.markProbeCol, ctr.markBuildCol = -1, -1
+	ctr.markWork = 0
 	if loopJoin.JoinType != plan.Node_MARK {
 		return
 	}
@@ -62,11 +63,26 @@ func (loopJoin *LoopJoin) prepareMembership() {
 	ctr.markType = typ
 }
 
-func (ctr *container) probeMembership(ap *LoopJoin, index *message.MembershipIndex, proc *process.Process, result *vm.CallResult) error {
+// Credit only completed, nonconstant fixed-width evaluation. A real NULL
+// predicate result can be FLAT; inspect the input key, not IsConst alone.
+func (ctr *container) creditMembershipWork(probe *vector.Vector, row int, rhs *vector.Vector, rows int, result *vector.Vector) {
+	if probe.IsConst() {
+		row = 0
+	}
+	if probe.IsConstNull() || probe.GetNulls().Contains(uint64(row)) || rhs.IsConst() || result.IsConst() {
+		return
+	}
+	credit := uint64(min(rows, result.Length()))
+	// Normally at most one probe's RHS work is pending. Also saturate locally
+	// so even malformed published counts cannot wrap a work increment.
+	ctr.markWork += min(credit, ^uint64(0)-ctr.markWork)
+}
+
+func (ctr *container) probeMembership(ap *LoopJoin, index *message.MembershipIndex, proc *process.Process, result *vm.CallResult, prefix int) error {
 	in := ctr.inBat
 	key := in.Vecs[ctr.markProbeCol]
 	start := ctr.probeIdx
-	end := min(in.RowCount(), start+colexec.DefaultBatchSize)
+	end := min(in.RowCount(), start+colexec.DefaultBatchSize-prefix)
 	for row := start; row < end; row++ {
 		matched, unknown, err := index.Probe(proc.Ctx, key, row)
 		if err != nil {
@@ -83,7 +99,7 @@ func (ctr *container) probeMembership(ap *LoopJoin, index *message.MembershipInd
 			}
 		}
 	}
-	ctr.resBat.SetRowCount(end - start)
+	ctr.resBat.SetRowCount(prefix + end - start)
 	ctr.probeIdx = end
 	if end == in.RowCount() {
 		ctr.inBat = nil

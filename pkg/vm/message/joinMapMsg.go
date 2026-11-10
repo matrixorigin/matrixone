@@ -150,7 +150,7 @@ func (sels *GroupSels) Get(k int32) []int32 {
 type JoinMap struct {
 	runtimeFilter_In bool
 	valid            bool
-	rowCnt           int64 // for debug purpose
+	rowCnt           int64 // Actual input count; HashBuild sets this before publication.
 	refCnt           int64
 	mpool            *mpool.MPool
 	shm              *hashmap.StrHashMap

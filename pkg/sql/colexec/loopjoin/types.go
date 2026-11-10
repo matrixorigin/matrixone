@@ -51,6 +51,7 @@ type container struct {
 	markProbeCol int
 	markBuildCol int
 	markType     types.Type
+	markWork     uint64 // Completed evaluator work, submitted before the next eligible probe.
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -160,6 +161,7 @@ func (ctr *container) cleanNonEqCondExecutor() {
 }
 
 func (ctr *container) cleanHashMap() {
+	ctr.markWork = 0
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil

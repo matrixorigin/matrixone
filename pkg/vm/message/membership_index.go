@@ -31,7 +31,7 @@ import (
 // MembershipIndex is an immutable single-column membership set. Keys are
 // borrowed from batches owned by its JoinMap; Free must precede batch cleanup.
 // Only the pointer-free slot array grows. Neither build nor probe encodes or
-// copies keys, including long strings, into unaccounted iterator buffers.
+// copies keys into unaccounted iterator buffers; only fixed-width keys qualify.
 type MembershipIndex struct {
 	slots   []uint64
 	batches []*batch.Batch
@@ -43,19 +43,10 @@ type MembershipIndex struct {
 }
 
 // SupportsMembershipType admits only domains whose same-type SQL equality is
-// exactly byte equality. In particular, floating point and scaled decimals
-// must not enter this path merely because their vectors have fixed width.
+// exactly byte equality and whose per-key work is bounded by eight bytes.
+// Variable-length keys, floats and decimals remain on the evaluator.
 func SupportsMembershipType(typ types.Type) bool {
-	if typ.IsIntOrUint() {
-		return true
-	}
-	switch typ.Oid {
-	case types.T_bool, types.T_char, types.T_varchar, types.T_text, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_datalink:
-		return true
-	default:
-		return false
-	}
+	return typ.IsIntOrUint() || typ.Oid == types.T_bool
 }
 
 func MembershipVectorMatches(vec *vector.Vector, typ types.Type) bool {
@@ -65,7 +56,7 @@ func MembershipVectorMatches(vec *vector.Vector, typ types.Type) bool {
 
 // NewMembershipIndex returns nil without error when optional indexing cannot
 // be admitted. The caller keeps all RHS batches for the evaluator fallback.
-func NewMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, typ types.Type, mp *mpool.MPool) (*MembershipIndex, error) {
+func NewMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, typ types.Type, expectedRows int64, mp *mpool.MPool) (*MembershipIndex, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -87,15 +78,16 @@ func NewMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, ty
 			return nil, nil
 		}
 	}
+	// Validate the count that admitted the work before reserving native memory.
+	if expectedRows < 0 || rows != uint64(expectedRows) {
+		return nil, nil
+	}
 	index := &MembershipIndex{batches: batches, col: col, seed: maphash.MakeSeed(), mp: mp, hasRows: rows != 0}
 	if rows == 0 {
 		return index, nil
 	}
-	slots := uint64(2)
-	for slots < rows*2 {
-		slots *= 2
-	}
-	if int64(slots*8) > min(int64(64<<20), mp.Cap()/8) {
+	slots := membershipSlotCount(rows, mp.Cap())
+	if slots == 0 {
 		return nil, nil
 	}
 	var err error
@@ -138,6 +130,22 @@ func NewMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, ty
 		return nil, err
 	}
 	return index, nil
+}
+
+// membershipSlotCount performs bounded admission from published row metadata,
+// without walking RHS batches. Zero means indexing cannot fit the allowance.
+func membershipSlotCount(rows uint64, capacity int64) uint64 {
+	if rows == 0 || rows > (64<<20)/16 {
+		return 0
+	}
+	slots := uint64(2)
+	for slots < rows*2 {
+		slots *= 2
+	}
+	if int64(slots*8) > min(int64(64<<20), capacity/8) {
+		return 0
+	}
+	return slots
 }
 
 // The release branch reports the native per-pool cap as ErrInternal, unlike

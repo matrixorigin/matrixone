@@ -37,7 +37,7 @@ delete from members;
 select id, id in (select id from members) as member,
        id not in (select id from members) as nonmember from probes order by id;
 
--- 字符串借用键：空串、长字符串、嵌入 NUL 和不相等的后缀。
+-- 字符串 evaluator 兼容控制：空串、长字符串、嵌入 NUL 和不相等的后缀。
 create table string_probes(id int, k varchar(8192));
 create table string_members(k varchar(8192));
 insert into string_probes values (1, ''), (2, repeat('x', 4096)), (3, concat('a', char(0), 'b')), (4, 'a'), (5, NULL);

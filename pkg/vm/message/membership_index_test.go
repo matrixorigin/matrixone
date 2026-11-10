@@ -15,7 +15,6 @@
 package message
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -41,12 +40,22 @@ func membershipIntBatch(t *testing.T, mp *mpool.MPool, vals []int32, nils []bool
 	return bat
 }
 
+// Pure constructor tests supply actual fixture cardinality. Real operator tests
+// must instead consume HashBuild's published count and earn evaluator work.
+func testMembershipIndex(ctx context.Context, batches []*batch.Batch, col int, typ types.Type, mp *mpool.MPool) (*MembershipIndex, error) {
+	var rows int64
+	for _, bat := range batches {
+		rows += int64(bat.RowCount())
+	}
+	return NewMembershipIndex(ctx, batches, col, typ, rows, mp)
+}
+
 func TestMembershipTruthTable(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		vals []int32
 		nils []bool
-		want [3][2]bool // probe 1, 2, NULL; matched/unknown
+		want [3][2]bool
 	}{
 		{"empty", nil, nil, [3][2]bool{}},
 		{"match-and-miss", []int32{1, 1}, nil, [3][2]bool{{true, false}, {false, false}, {false, true}}},
@@ -58,7 +67,7 @@ func TestMembershipTruthTable(t *testing.T) {
 			t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })
 			build := membershipIntBatch(t, mp, tc.vals, tc.nils)
 			probe := membershipIntBatch(t, mp, []int32{1, 2, 0}, []bool{false, false, true})
-			index, err := NewMembershipIndex(context.Background(), []*batch.Batch{build}, 0, types.T_int32.ToType(), mp)
+			index, err := testMembershipIndex(context.Background(), []*batch.Batch{build}, 0, types.T_int32.ToType(), mp)
 			require.NoError(t, err)
 			require.NotNil(t, index)
 			t.Cleanup(index.Free)
@@ -78,7 +87,7 @@ func TestMembershipSlotsZeroedAfterFree(t *testing.T) {
 	cases := []struct {
 		name  string
 		build *batch.Batch
-		want  [3][2]bool // probe 1, 2, NULL; matched/unknown
+		want  [3][2]bool
 		used  int
 	}{
 		{"duplicates", membershipIntBatch(t, mp, []int32{1, 1}, nil), [3][2]bool{{true, false}, {false, false}, {false, true}}, 1},
@@ -89,7 +98,7 @@ func TestMembershipSlotsZeroedAfterFree(t *testing.T) {
 	baseline := mp.AllocatedBytes()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			index, err := NewMembershipIndex(context.Background(), []*batch.Batch{tc.build}, 0, types.T_int32.ToType(), mp)
+			index, err := testMembershipIndex(context.Background(), []*batch.Batch{tc.build}, 0, types.T_int32.ToType(), mp)
 			require.NoError(t, err)
 			require.NotNil(t, index)
 			defer index.Free()
@@ -100,14 +109,12 @@ func TestMembershipSlotsZeroedAfterFree(t *testing.T) {
 					used++
 				}
 			}
-			require.Equal(t, tc.used, used, "only this build's distinct non-NULL key may occupy a slot")
+			require.Equal(t, tc.used, used)
 			for row, want := range tc.want {
 				match, unknown, err := index.Probe(context.Background(), probe.Vecs[0], row)
 				require.NoError(t, err)
 				require.Equal(t, want, [2]bool{match, unknown})
 			}
-			// Dirty every slot before freeing it, including previously empty slots.
-			// A later allocation must be zeroed without relying on address reuse.
 			for i := range index.slots {
 				index.slots[i] = ^uint64(0)
 			}
@@ -116,42 +123,32 @@ func TestMembershipSlotsZeroedAfterFree(t *testing.T) {
 	}
 }
 
-func TestMembershipBorrowedStringsAndConstVectors(t *testing.T) {
+func TestMembershipConstFixedVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })
-	key := append(bytes.Repeat([]byte{'k'}, 4096), 0, 'x')
-	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink} {
-		t.Run(oid.String(), func(t *testing.T) {
-			typ := oid.ToType()
-			vec, err := vector.NewConstBytes(typ, key, 256, mp)
-			require.NoError(t, err)
-			t.Cleanup(func() { vec.Free(mp) })
-			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vec
-			bat.SetRowCount(256)
-			base := mp.AllocatedBytes()
-			index, err := NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, typ, mp)
-			require.NoError(t, err)
-			require.NotNil(t, index)
-			t.Cleanup(index.Free)
-			require.Equal(t, index.Size(), mp.AllocatedBytes()-base)
-			require.Equal(t, int64(4096), index.Size())
-			match, unknown, err := index.Probe(context.Background(), vec, 255)
-			require.NoError(t, err)
-			require.True(t, match)
-			require.False(t, unknown)
-			probe := vector.NewVec(typ)
-			t.Cleanup(func() { probe.Free(mp) })
-			require.NoError(t, vector.AppendBytes(probe, key[:len(key)-1], false, mp))
-			match, unknown, err = index.Probe(context.Background(), probe, 0)
-			require.NoError(t, err)
-			require.False(t, match)
-			require.False(t, unknown)
-			require.Zero(t, testing.AllocsPerRun(100, func() {
-				_, _, _ = index.Probe(context.Background(), vec, 255)
-			}))
-		})
-	}
+	vec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 256, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(mp) })
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(256)
+	base := mp.AllocatedBytes()
+	index, err := testMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, index)
+	t.Cleanup(index.Free)
+	require.Equal(t, int64(4096), index.Size())
+	require.Equal(t, base+index.Size(), mp.AllocatedBytes())
+	match, unknown, err := index.Probe(context.Background(), vec, 255)
+	require.NoError(t, err)
+	require.True(t, match)
+	require.False(t, unknown)
+	miss := membershipIntBatch(t, mp, []int32{2}, nil)
+	match, unknown, err = index.Probe(context.Background(), miss.Vecs[0], 0)
+	require.NoError(t, err)
+	require.False(t, match)
+	require.False(t, unknown)
+	require.Zero(t, testing.AllocsPerRun(100, func() { _, _, _ = index.Probe(context.Background(), vec, 255) }))
 }
 
 func TestMembershipFixedDomainsAndProbeCancellation(t *testing.T) {
@@ -174,7 +171,7 @@ func TestMembershipFixedDomainsAndProbeCancellation(t *testing.T) {
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vec
 			bat.SetRowCount(1)
-			index, err := NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, tc.typ.ToType(), mp)
+			index, err := testMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, tc.typ.ToType(), mp)
 			require.NoError(t, err)
 			require.NotNil(t, index)
 			t.Cleanup(index.Free)
@@ -189,8 +186,7 @@ func TestMembershipFixedDomainsAndProbeCancellation(t *testing.T) {
 			require.False(t, match)
 			require.True(t, unknown)
 			for _, at := range []int{1, 2} {
-				ctx := &membershipCancelContext{Context: context.Background(), at: at}
-				_, _, err = index.Probe(ctx, vec, 0)
+				_, _, err = index.Probe(&membershipCancelContext{Context: context.Background(), at: at}, vec, 0)
 				require.ErrorIs(t, err, context.Canceled)
 			}
 		})
@@ -208,7 +204,7 @@ func TestMembershipCollisionsAndBatchReferences(t *testing.T) {
 		}
 		batches = append(batches, membershipIntBatch(t, mp, vals, nil))
 	}
-	index, err := NewMembershipIndex(context.Background(), batches, 0, types.T_int32.ToType(), mp)
+	index, err := testMembershipIndex(context.Background(), batches, 0, types.T_int32.ToType(), mp)
 	require.NoError(t, err)
 	require.NotNil(t, index)
 	t.Cleanup(index.Free)
@@ -227,18 +223,24 @@ func TestMembershipEligibilityAndBudget(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })
 	bat := membershipIntBatch(t, mp, []int32{1}, nil)
-	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_decimal64.ToType(), types.T_json.ToType(), types.T_array_float32.ToType()} {
-		index, err := NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, typ, mp)
+	for _, oid := range []types.T{types.T_float32, types.T_float64, types.T_decimal64, types.T_json, types.T_array_float32,
+		types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink} {
+		index, err := testMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, oid.ToType(), mp)
 		require.NoError(t, err)
 		require.Nil(t, index)
 	}
 	for _, col := range []int{-1, 1} {
-		index, err := NewMembershipIndex(context.Background(), []*batch.Batch{bat}, col, types.T_int32.ToType(), mp)
+		index, err := testMembershipIndex(context.Background(), []*batch.Batch{bat}, col, types.T_int32.ToType(), mp)
 		require.NoError(t, err)
 		require.Nil(t, index)
 	}
+	for _, count := range []int64{-1, 0, 2} {
+		index, err := NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), count, mp)
+		require.NoError(t, err)
+		require.Nil(t, index, "published count must match actual data")
+	}
 	bat.Vecs[0].GetGrouping().Add(0)
-	index, err := NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
+	index, err := testMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
 	require.NoError(t, err)
 	require.Nil(t, index)
 	bat.Vecs[0].GetGrouping().Clear()
@@ -247,16 +249,24 @@ func TestMembershipEligibilityAndBudget(t *testing.T) {
 	t.Cleanup(func() { vec.Free(mp) })
 	large := batch.NewWithSize(1)
 	large.Vecs[0] = vec
-	large.SetRowCount(8193) // rounds above the 128 KiB per-index allowance
+	large.SetRowCount(8193)
 	base := mp.AllocatedBytes()
-	index, err = NewMembershipIndex(context.Background(), []*batch.Batch{large}, 0, types.T_int32.ToType(), mp)
+	index, err = testMembershipIndex(context.Background(), []*batch.Batch{large}, 0, types.T_int32.ToType(), mp)
+	require.NoError(t, err)
+	require.Nil(t, index)
+	require.Equal(t, base, mp.AllocatedBytes())
+	// A single physical constant can expose oversized logical metadata without
+	// introducing a large UT fixture or scanning its logical rows.
+	large.SetRowCount((64<<20)/16 + 1)
+	vec.SetLength(large.RowCount())
+	index, err = testMembershipIndex(context.Background(), []*batch.Batch{large}, 0, types.T_int32.ToType(), mp)
 	require.NoError(t, err)
 	require.Nil(t, index)
 	require.Equal(t, base, mp.AllocatedBytes())
 	blocker, err := mp.Alloc(1<<20, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { mp.Free(blocker) })
-	index, err = NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
+	index, err = testMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
 	require.NoError(t, err)
 	require.Nil(t, index)
 	require.Equal(t, int64(1<<20), mp.CurrNB())
@@ -285,8 +295,7 @@ func TestMembershipCancellationReleasesPartialBuild(t *testing.T) {
 	bat := membershipIntBatch(t, mp, []int32{1, 2}, nil)
 	base := mp.AllocatedBytes()
 	for _, at := range []int{1, 2, 3, 4, 5, 6} {
-		ctx := &membershipCancelContext{Context: context.Background(), at: at}
-		index, err := NewMembershipIndex(ctx, []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
+		index, err := testMembershipIndex(&membershipCancelContext{Context: context.Background(), at: at}, []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Nil(t, index)
 		require.Equal(t, base, mp.AllocatedBytes())
@@ -297,7 +306,7 @@ func TestMembershipConcurrentBuildersShareCap(t *testing.T) {
 	mp, err := mpool.NewMPool("membership-concurrent", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()) })
-	vec, err := vector.NewConstBytes(types.T_varchar.ToType(), bytes.Repeat([]byte{'k'}, 4096), 256, mp)
+	vec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 256, mp)
 	require.NoError(t, err)
 	t.Cleanup(func() { vec.Free(mp) })
 	bat := batch.NewWithSize(1)
@@ -317,11 +326,11 @@ func TestMembershipConcurrentBuildersShareCap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			indexes[i], errs[i] = NewMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_varchar.ToType(), mp)
+			indexes[i], errs[i] = testMembershipIndex(context.Background(), []*batch.Batch{bat}, 0, types.T_int32.ToType(), mp)
 		}()
 	}
 	close(start)
-	wg.Wait() // every admitted index remains live until after the assertions
+	wg.Wait()
 	t.Cleanup(func() {
 		for _, index := range indexes {
 			if index != nil {

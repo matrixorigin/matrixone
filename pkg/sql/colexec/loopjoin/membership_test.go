@@ -123,16 +123,15 @@ func TestMarkMembershipEvaluatorEquivalence(t *testing.T) {
 		{"all-null", []int32{0}, []uint64{0}, [][2]bool{{false, true}, {false, true}, {false, true}}},
 	} {
 		for _, indexed := range []bool{false, true} {
-			t.Run(tc.name+map[bool]string{false: "/evaluator", true: "/index"}[indexed], func(t *testing.T) {
+			t.Run(tc.name+map[bool]string{false: "/evaluator", true: "/candidate"}[indexed], func(t *testing.T) {
 				proc, join, build := newMembershipOperators(t, mpool.MustNewZero())
 				membershipInputs(t, proc, join, build, []int32{1, 2, 0}, tc.right, []uint64{2}, tc.nulls)
 				if !indexed {
 					join.ctr.markProbeCol = -1
 				}
 				require.Equal(t, tc.want, membershipResults(t, proc, join))
-				if len(tc.right) > 0 && indexed {
-					require.Positive(t, join.ctr.mp.Size())
-					require.Nil(t, join.ctr.joinBat, "index path must not materialize pairwise evaluation batches")
+				if len(tc.right) > 0 {
+					require.Zero(t, join.ctr.mp.Size(), "three probes cannot amortize an index")
 				}
 			})
 		}
@@ -149,8 +148,9 @@ func TestMarkMembershipResetAndBudgetFallback(t *testing.T) {
 	t.Cleanup(func() { mp.Free(blocker) })
 	jm, err := message.ReceiveJoinMap(1, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	require.NoError(t, err)
-	index, err := jm.GetMembershipIndex(proc.Ctx, 0, types.T_int32.ToType())
+	index, bytes, err := jm.GetMembershipIndex(proc.Ctx, 0, types.T_int32.ToType(), 64)
 	require.NoError(t, err)
+	require.Zero(t, bytes)
 	require.Nil(t, index)
 	// Release the competing allocation before the evaluator allocates its
 	// mandatory result storage. The disabled index and RHS remain published.
@@ -165,8 +165,10 @@ func TestMarkMembershipResetAndBudgetFallback(t *testing.T) {
 	join.GetChildren(0).Free(proc, false, nil)
 	build.GetChildren(0).Free(proc, false, nil)
 	proc.SetMessageBoard(proc.GetMessageBoard().Reset())
-	membershipInputs(t, proc, join, build, []int32{1, 2}, []int32{2}, nil, nil)
-	require.Equal(t, [][2]bool{{false, false}, {true, false}}, membershipResults(t, proc, join))
+	left, want := make([]int32, 34), make([][2]bool, 34)
+	left[33], want[33] = 2, [2]bool{true, false}
+	membershipInputs(t, proc, join, build, left, []int32{2}, nil, nil)
+	require.Equal(t, want, membershipResults(t, proc, join))
 	require.Positive(t, join.ctr.mp.Size(), "new generation must retry indexing and clear old NULL facts")
 }
 
@@ -176,26 +178,32 @@ func TestMarkMembershipNativeAllocationFailure(t *testing.T) {
 			mp, err := mpool.NewMPool("mark-native-failure", 1<<20, mpool.NoFixed)
 			require.NoError(t, err)
 			proc, join, build := newMembershipOperators(t, mp)
-			membershipInputs(t, proc, join, build, []int32{1, 2, 0}, []int32{1, 0}, []uint64{2}, []uint64{1})
+			left, want := membershipSwitchInput()
+			membershipInputs(t, proc, join, build, left, []int32{1, 0}, []uint64{34}, []uint64{1})
 			spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr}
 			join.ctr.expr = spy
 			fault.EnableDomain(fault.DomainTest)
 			t.Cleanup(func() { fault.DisableDomain(fault.DomainTest) })
-			// First native allocation is the 32-byte index; unlike a cap
-			// rejection, the allocator fails after both reservations succeed.
-			require.NoError(t, fault.AddFaultPointInDomain(context.Background(), fault.DomainTest,
-				"simple_c_allocator_calloc", "1:1::", "echo", 32, failure, false))
+			// Arm only after the real evaluator prefix: earlier evaluator
+			// allocations must not consume a one-shot allocator failure.
+			spy.onResult = func(*vector.Vector) {
+				if spy.calls == 32 {
+					require.NoError(t, fault.AddFaultPointInDomain(context.Background(), fault.DomainTest,
+						"simple_c_allocator_calloc", "1:1::", "echo", 32, failure, false))
+				}
+			}
 			if failure == "oom" {
-				require.Equal(t, [][2]bool{{true, false}, {false, true}, {false, true}}, membershipResults(t, proc, join))
-				require.Positive(t, spy.calls, "native OOM must execute the real evaluator fallback")
+				require.Equal(t, want, membershipResults(t, proc, join))
+				require.Equal(t, 35, spy.calls, "native OOM must execute the real evaluator tail")
 				require.NotNil(t, join.ctr.joinBat)
 			} else {
 				_, err := vm.Exec(join, proc)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 				require.ErrorContains(t, err, failure)
-				require.Zero(t, spy.calls, "unrelated allocator errors must not be downgraded")
+				require.Equal(t, 32, spy.calls, "unrelated allocator errors must not be downgraded after the prefix")
 			}
 			require.Zero(t, join.ctr.mp.Size())
+			require.Zero(t, join.OpAnalyzer.GetOpStats().MemorySize)
 			require.Len(t, join.ctr.mp.GetBatches(), 1)
 		})
 	}
@@ -208,9 +216,10 @@ func TestMarkMembershipOutputAllocationErrorIsNotFallback(t *testing.T) {
 	membershipInputs(t, proc, join, build, []int32{1}, []int32{1}, nil, nil)
 	jm, err := message.ReceiveJoinMap(1, false, 0, proc.GetMessageBoard(), proc.Ctx)
 	require.NoError(t, err)
-	index, err := jm.GetMembershipIndex(proc.Ctx, 0, types.T_int32.ToType())
+	index, bytes, err := jm.GetMembershipIndex(proc.Ctx, 0, types.T_int32.ToType(), 32)
 	require.NoError(t, err)
 	require.NotNil(t, index)
+	require.Equal(t, index.Size(), bytes)
 	join.ResultCols = []colexec.ResultPos{colexec.NewResultPos(-1, 0)}
 	join.ctr.resBat = batch.NewWithSize(1)
 	join.ctr.resBat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
@@ -242,6 +251,7 @@ func TestMarkMembershipEligibility(t *testing.T) {
 		}, false},
 		{"residual", func(j *LoopJoin) { j.NonEqCond.GetF().Func.Obj = int64(function.AND) << 32 }, false},
 		{"float", func(j *LoopJoin) { j.NonEqCond = membershipCondition(t, types.T_float64.ToType()) }, false},
+		{"string", func(j *LoopJoin) { j.NonEqCond = membershipCondition(t, types.T_varchar.ToType()) }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			join := &LoopJoin{JoinType: plan.Node_MARK, NonEqCond: membershipCondition(t, types.T_int32.ToType())}
@@ -286,10 +296,8 @@ func TestMarkNullProbeEvaluatorReturnsFlatNulls(t *testing.T) {
 		want[i] = [2]bool{false, true}
 	}
 	membershipInputs(t, proc, join, build, values, []int32{1, 0}, nullRows, []uint64{1})
-	// This is the real evaluator control, not a claim that the unimplemented
-	// adaptive gate rejects NULL work. In particular, no const-result fake
-	// replaces FunctionExpressionExecutor below.
-	join.ctr.markProbeCol = -1
+	// Keep admission enabled: real FLAT NULL results must not earn work.
+	// No const-result fake replaces FunctionExpressionExecutor.
 	observed := 0
 	spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr, onResult: func(vec *vector.Vector) {
 		observed++
@@ -302,6 +310,7 @@ func TestMarkNullProbeEvaluatorReturnsFlatNulls(t *testing.T) {
 	require.Equal(t, want, membershipResults(t, proc, join))
 	require.Equal(t, probes, observed)
 	require.Zero(t, join.ctr.mp.Size())
+	require.Zero(t, join.OpAnalyzer.GetOpStats().MemorySize)
 }
 
 func TestMarkMembershipPreservesEvaluatorEarlyMatch(t *testing.T) {
@@ -342,7 +351,6 @@ func TestMarkMembershipUnrelatedErrorAndCancellation(t *testing.T) {
 		t.Run(map[bool]string{false: "unrelated-error", true: "cancel-during-evaluator"}[cancel], func(t *testing.T) {
 			proc, join, build := newMembershipOperators(t, mpool.MustNewZero())
 			membershipInputs(t, proc, join, build, []int32{2, 3}, []int32{1}, nil, nil)
-			join.ctr.markProbeCol = -1
 			spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr}
 			join.ctr.expr = spy
 			want := errors.New("injected evaluator failure")
@@ -358,27 +366,27 @@ func TestMarkMembershipUnrelatedErrorAndCancellation(t *testing.T) {
 			_, err := vm.Exec(join, proc)
 			require.ErrorIs(t, err, want)
 			require.Equal(t, 1, spy.calls)
+			require.Zero(t, join.ctr.mp.Size())
+			require.Zero(t, join.OpAnalyzer.GetOpStats().MemorySize)
 		})
 	}
 }
 
-func TestMarkMembershipAvoidsEvaluatorAndEmptyProbeBuild(t *testing.T) {
+func TestMarkMembershipLowWorkAndEmptyProbeBuild(t *testing.T) {
 	for _, empty := range []bool{false, true} {
-		t.Run(map[bool]string{false: "indexed", true: "empty-probe"}[empty], func(t *testing.T) {
+		t.Run(map[bool]string{false: "low-work", true: "empty-probe"}[empty], func(t *testing.T) {
 			proc, join, build := newMembershipOperators(t, mpool.MustNewZero())
 			left := []int32{1, 2}
 			if empty {
 				left = nil
 			}
 			membershipInputs(t, proc, join, build, left, []int32{1}, nil, nil)
-			spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr, err: errors.New("must not evaluate")}
+			spy := &membershipEvalSpy{ExpressionExecutor: join.ctr.expr}
 			join.ctr.expr = spy
 			result := membershipResults(t, proc, join)
 			require.Len(t, result, len(left))
-			require.Zero(t, spy.calls)
-			if empty {
-				require.Zero(t, join.ctr.mp.Size())
-			}
+			require.Equal(t, len(left), spy.calls)
+			require.Zero(t, join.ctr.mp.Size())
 		})
 	}
 }

@@ -1,8 +1,8 @@
 # 4.1.6-hotfix：有界 NULL-aware membership 索引
 
-关联 issue：#32263。版本：v7 草案，2026-11-10。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
+关联 issue：#32263。版本：v7，2026-11-10；设计已技术批准，已按方案实施。实施 PR：[32315](https://github.com/matrixorigin/matrixone/pull/32315)。
 
-**状态：DRAFT / 待技术评审与批准。** MARK 成本准入/类型范围/统计仍为 v4 行为；已 merge 最新目标 `a5a8ed45fc`（包含#32085和#32431）。此前已修取消同步并补SQL/真实evaluator控制；本轮仅删除现有索引的重复清零并补所有者合同/测试，不实施渐进准入或统计状态机。v6已被独立review明确暂不批准；v7仍需确切版本技术结论，不把局部修复、旧测试或工作授权当作架构批准或中途切换证明。
+**状态：v7设计已技术批准 / 已按方案实施，不代表实现或整PR已获reviewer批准。** 已批准的不可变版本为 [`e4a87c73b9f745334cef8a23c2feadd072e5312b`](https://github.com/ck89119/matrixone/blob/e4a87c73b9f745334cef8a23c2feadd072e5312b/docs/design/CLAUDE_32263_null_aware_membership.md)，独立reviewer为XuPeng-SH，明确技术结论见[评审记录](https://github.com/matrixorigin/matrixone/pull/32315#pullrequestreview-5840520483)。该review当时仍对两个实现缺陷Request changes。实施按已批准方案完成渐进准入、固定宽度域和一次性统计；新路径的验证、性能取舍与限制记录在PR中，不能沿用v4通过结果冒充新路径验收。
 
 v2 明确独立 pipeline 的取消隔离：builder 取消只禁用共享优化，不取消仍有效的兄弟消费者。
 v3 闭合原生物理分配失败：MPool 在 calloc 返回错误时回滚已准入的 pool/global 配额并返回原错，确保可选索引仍发布终态。
@@ -14,11 +14,11 @@ v7 根据 [重复清零意见](https://github.com/matrixorigin/matrixone/pull/32
 ## 评审门禁与版本记录
 
 - 整体范围包含 JoinMap 共享状态/等待/生命周期、执行热点容量，以及 MPool 的 native 分配失败返回与配额补偿；存在明确复杂度触发，不以 bug fix 名称豁免。
-- 首个提交 `936c5ce664` 同时引入设计与实现。当前没有可引用的、针对确切版本的独立技术批准记录。早先对工作计划的聊天授权不应被重新描述成完整设计技术批准。
-- 批准前不实施本方案的成本状态机、类型收缩或统计改动；修复已有 v4 测试本身不代表本方案已实施。原性能/统计两条线程仍未解决。
-- 批准记录必须包含：被评审的 commit permalink、reviewer、技术结论/已接受取舍及可引用记录。当前均为待补，不补造历史。
+- 首个提交 `936c5ce664` 同时引入设计与实现。当时缺少确切版本的独立设计批准；后续v7已取得下述明确技术结论。早先对工作计划的聊天授权仍不应被重新描述成完整设计技术批准。
+- 批准前不实施本方案的成本状态机、类型收缩或统计改动；修复已有 v4 测试本身不代表本方案已实施。设计批准本身不解决原性能/统计缺陷，必须由实现及证据闭合。
+- 批准记录：v7确切commit与reviewer/可引用结论见开头链接；结论为“Design v7 is technically accepted with its stated tradeoffs and reuse of existing owners”。接受复用JoinMap/先evaluator/整数Boolean/按RHS预留/唯一builder计费，32B仍须实现后用性能矩阵验证；不是v4实现或整PR合并批准。
 - 技术评审应覆盖本文完整方案，而不仅是局部修复；批准后实现必须对照该确切版本，实质偏离需再评审。
-- 2026-11-10，XuPeng-SH针对v6确切commit `096a24944259c2d150e9e2399b86785a46a2550c` 给出REQUEST_CHANGES，明确暂不批准：认可共享信用/先evaluator/整数Boolean/唯一builder计费方向，接受按RHS行数预留及32B需实现后实测的取舍，但反对重复归零。v7修订该职责并单独交付局部删除；这不是v7已获批准。
+- 2026-11-10，XuPeng-SH针对v6确切commit `096a24944259c2d150e9e2399b86785a46a2550c` 给出REQUEST_CHANGES，明确暂不批准：认可共享信用/先evaluator/整数Boolean/唯一builder计费方向，接受按RHS行数预留及32B需实现后实测的取舍，但反对重复归零。v7随后修订该职责并单独交付局部删除；这一局部修复本身不构成批准，后续确切版本的独立技术接受见开头记录。
 - 现有正常、race、BVT 和性能证据只证明对应旧实现/控制；新增 SQL 在 v4 通过也不能作为 v7 成本门禁、中途切换或统计的通过证明。
 
 ## 设计范围与评审结论
@@ -62,7 +62,7 @@ reviewer 在 v4 上报告：2M 条相同 RHS、1 个早命中 probe 的 NOT IN �
 - 原始字节仅用于已证明等价的同型整数/Boolean 域；整数的字节顺序只影响 hash，不影响同型相等。
 - 空 probe 不建立索引。空 build 保留既有 emptyProbe 行为。
 
-## 渐进成本准入与中途切换（v7 待实现）
+## 渐进成本准入与中途切换（v7）
 
 ### 成本定义与边界
 
@@ -89,8 +89,8 @@ reviewer 在 v4 上报告：2M 条相同 RHS、1 个早命中 probe 的 NOT IN �
 
 - reviewer 的1/256早命中 + 2M RHS，在正常 bounded RHS batches 下只访问前面少量批，E不足32B，因此不建32 MiB表；即使内部 fixture 只有一条巨大 RHS batch，单 probe 也不会在其最后一行结束后再建表。
 - 大 probe/miss 在真实比较达到阈值后复用共享索引，保留最终期望 O(P+B) 的收益；承认先期会支付最多约 T 的行工作，并用原3k/6k以及多批 probe 对照量化。
-- 同机交替运行 exact base / v4 / 待批准版本，保持相同目标 planner/function metadata（当前目标a5a8ed45fc，未修清零的v4组合实现f25fb60cd8）；不得以不同非空推导选择出的另一种join充当公平成本对照。固定资源、预热和测量次数，报告中位数、离散程度、建表次数、native bytes 与 Go allocations。低收益场景的确定性 oracle 是“没有建表/没有整表预扫描”，不是 UT/BVT 的毫秒阈值。
-- 本轮尚未实施或测量本方案。若32B使高 probe 收益丢失或仍出现明显退化，应更新设计/取舍并重新评审，不能把阈值调参藏在实现或弱化测试里。
+- 同机交替运行 exact base / pre-adaptive / v7，保持相同目标 planner/function metadata（实施验证目标cbb7da471a；pre-adaptive仅将e4a87c73b9的六个MARK生产文件覆盖到同一目标，保留已批准的清零修复）；不得以不同非空推导选择出的另一种join充当公平成本对照。固定资源、预热和测量次数，报告中位数、离散程度、建表次数、native bytes 与 Go allocations。低收益场景的确定性 oracle 是“没有建表/没有整表预扫描”，不是 UT/BVT 的毫秒阈值。
+- 实施后必须取得本方案的独立性能证据。若32B使高probe收益丢失或仍出现明显退化，应更新设计/取舍并重新评审，不能把阈值调参藏在实现或弱化测试里。
 
 ## 数据布局与容量
 
@@ -131,7 +131,7 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 
 当前分支 `Compile.Reset/clear` 先清理 scopes，后重置 message board；multi-CN 的 board Reset 返回新 board，不立即销毁其它 fragment 仍可访问的旧 board。遵循此已有生命周期，不支持在活跃消费者持有引用时强行调用 FreeMemory。
 
-## 算子内存统计（v7 待实现）
+## 算子内存统计（v7）
 
 - MPool 准入和算子观测是两件事。保持现有 cap/AllocatedBytes/物理 Free 契约；补齐 analyzer 不通过二次物理预留来“统计”。
 - 唯一成功 builder 在发布不可变 index 后，从内部 API 得到 `newlyPublishedBytes = index.Size()`；等待者、已有 index 重用、成本不足、预算拒绝、OOM、取消或其它失败均得到0。没有独立的全局统计表或每消费者计费位。
@@ -171,7 +171,7 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 - SQL 高工作量控制：复用 mark_membership.sql 的表，增加65个非 NULL miss（2..66）、1个 match（1）、1个 NULL probe，RHS=(1,NULL)，总67行、66个非 NULL 唯一ID。单 JoinMap 的非 NULL miss 可提供130行信用，大于T=64。prepared 聚合分别执行含NULL、去NULL、空RHS三代，mo-tester生成预期并正常比较两次；三代(total,distinct_ids,IN true/false/null,NOT IN true/false/null)独立预期为(67,66,1,0,66,0,1,66)、(67,66,1,65,1,65,1,1)、(67,66,0,67,0,67,0,0)。无百万行fixture或耗时断言。
 - 公共路径证据：本方案实施后，在固定单CN/worker配置下重跑上述正常SQL，记录真实MARK计划及EXPLAIN ANALYZE；不能只凭输入行数或SQL结果宣称已选择索引。若实际计划/并行分片未触发，应修正测试配置/输入并说明，而不是把evaluator通过当作fast path通过。typed算子的确定性切换断言不可省略。
 - 成本状态 UT：以2–3个 RHS 行在pure helper覆盖 T-1/T/T+1；有未消费 probe 才构建，空/单 probe结束不构建。真实算子不能手工塞completedWork或绕过阈值。多消费者共享一个饱和预算与一次构建，复用fixture、不新增集群或sleep。
-- NULL成本 UT：真实FunctionExpressionExecutor计算至少33个NULL probe对(1,NULL)的等值结果，记录真实FLAT/NULL输出；不使用合成const NULL结果的fake。启用候选路径后必须断言信用仍为0、index nil、native index bytes及新增MemorySize为0；另用真实const RHS与非NULL miss验证保守信用规则。当前新增的强制evaluator控制只证明FLAT/NULL这个反例，不算已通过尚未实现的信用/选择断言。
+- NULL成本 UT：真实FunctionExpressionExecutor计算至少33个NULL probe对(1,NULL)的等值结果，记录真实FLAT/NULL输出；不使用合成const NULL结果的fake。启用候选路径后必须断言信用仍为0、index nil、native index bytes及新增MemorySize为0；另用真实const RHS与非NULL miss验证保守信用规则。验收时必须保留优化资格，不能强制禁用快路径后宣称信用门禁通过。
 - 真实切换 UT：复用HashBuild→LoopJoin链与真实evaluator spy；RHS=(1,NULL)、B=2、T=64，按顺序输入32个非NULL miss、match=1、另一个miss、NULL。前32行全部经真实evaluator，信用达64；在第33行前恰好构建一次，尾部3行走index，结果为32个UNKNOWN前缀后接TRUE/UNKNOWN/UNKNOWN。逐个核对probe ID、marker/null、总35行，断言真实evaluator调用32次、索引非nil及一次native统计；IN/NOT IN公共输出另由SQL证明。不能只用helper Probe结果、手工信用或路径布尔值代替这条链。
 - 续传 UT：同一Call前缀+尾部完整；保留DefaultBatchSize+1最小边界，覆盖切换前后批满、下一批和Reset/Prepare新JoinMap。两代分别重新积累信用，旧NULL事实、借用index及一次性统计不能残留。
 - 统计 UT：真实 HashBuild→多个 LoopJoin，成功发布前/后检查各 OpAnalyzer.MemorySize，合计恰好一份 index.Size；重复 Call 不增加，fallback为0，发布后取消/输出错误仍保留历史统计，Reset/Free后native归零但不抹历史，下一代Prepare重置。不能只检查 JoinMap.Size。
@@ -180,4 +180,4 @@ builder 不另起 goroutine；其消费者已有引用保护 borrowed RHS。等�
 - 静态/包级：Go 1.26.4、匹配 native artifacts；变更包测试及消费者、vet/lint；共享状态定向/所属包 race；变更覆盖率 ≥75%。
 - 依赖方向：`go list -deps -test ./...` 必须成功，batch 自包测试及 aggexec 消费者必须通过；不能只测新增 helper 所在包，以免漏掉反向测试依赖。
 
-未完成证据不得标为通过。v7 确切版本获得独立技术批准后才实施渐进准入、类型收缩与统计方案；本草案不抹掉旧实现两条未解决 review。既有 native allocator 错误返回/配额补偿纳入本次整体设计评审，但不继续扩展 allocator 框架；若需 wire、其它类型范围或新的全局资源机制，先更新范围并重新评审。
+未完成证据不得标为通过。v7已获确切版本独立技术批准，本轮对照其实施渐进准入、类型收缩与统计；设计接受不代替实现复审，也不代表CI全绿。既有 native allocator 错误返回/配额补偿纳入本次整体设计评审，但不继续扩展 allocator 框架；若需 wire、其它类型范围或新的全局资源机制，先更新范围并重新评审。

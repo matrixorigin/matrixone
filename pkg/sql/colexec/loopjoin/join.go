@@ -196,34 +196,41 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 	inbat := ctr.inBat
 	mpbat := ctr.mp.GetBatches()
 	count := inbat.RowCount()
-	if ctr.markProbeCol >= 0 && ctr.markProbeCol < len(inbat.Vecs) &&
-		message.MembershipVectorMatches(inbat.Vecs[ctr.markProbeCol], ctr.markType) {
-		index, err := ctr.mp.GetMembershipIndex(proc.Ctx, ctr.markBuildCol, ctr.markType)
-		if err != nil {
-			return err
-		}
-		if index != nil {
-			return ctr.probeMembership(ap, index, proc, result)
-		}
-	}
-	if ctr.joinBat == nil {
-		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(inbat, proc.Mp())
-	}
+	membershipEligible := ctr.markProbeCol >= 0 && ctr.markProbeCol < len(inbat.Vecs) &&
+		message.MembershipVectorMatches(inbat.Vecs[ctr.markProbeCol], ctr.markType)
 
 	rowCountIncrease := 0
 	for i := ctr.probeIdx; i < count; i++ {
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}
-		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
-			if rowCountIncrease >= colexec.DefaultBatchSize {
-				result.Batch = ctr.resBat
-				ctr.resBat.SetRowCount(rowCountIncrease)
-				ctr.probeIdx = i
-				ctr.batIdx = 0
-				return nil
+		if ap.JoinType == plan.Node_MARK && ctr.expr != nil && rowCountIncrease >= colexec.DefaultBatchSize {
+			result.Batch = ctr.resBat
+			ctr.resBat.SetRowCount(rowCountIncrease)
+			ctr.probeIdx = i
+			ctr.batIdx = 0
+			return nil
+		}
+		if membershipEligible {
+			ctr.probeIdx = i
+			index, newlyPublished, err := ctr.mp.GetMembershipIndex(proc.Ctx, ctr.markBuildCol, ctr.markType, ctr.markWork)
+			ctr.markWork = 0
+			if newlyPublished != 0 {
+				// Only this synchronous builder owns these bytes. Account before
+				// probing/output so a later error cannot erase a real allocation.
+				ap.OpAnalyzer.Alloc(newlyPublished)
 			}
-
+			if err != nil {
+				return err
+			}
+			if index != nil {
+				return ctr.probeMembership(ap, index, proc, result, rowCountIncrease)
+			}
+		}
+		if ctr.joinBat == nil {
+			ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(inbat, proc.Mp())
+		}
+		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
 			hasTrue := false
 			hasNull := false
 			for idx := 0; idx < len(mpbat); idx++ {
@@ -241,6 +248,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 					return err
 				}
 
+				if membershipEligible && ctr.markBuildCol < len(bat.Vecs) {
+					ctr.creditMembershipWork(inbat.Vecs[ctr.markProbeCol], i, bat.Vecs[ctr.markBuildCol], bat.RowCount(), vec)
+				}
 				rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 				if vec.IsConst() {
 					v, null := rs.GetValue(0)
